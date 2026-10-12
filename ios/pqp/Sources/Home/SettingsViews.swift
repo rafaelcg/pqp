@@ -19,6 +19,8 @@ struct AccountSettingsView: View {
     /// `Form` section is torn down when that section scrolls away. See the note
     /// on that view.
     @State private var exportFile: URL?
+    /// Chamar a atenção is offered in Settings only while its flag is on.
+    @State private var nudgeAvailable = false
 
     // Resolved through `String(localized:)` rather than left as bare literals:
     // `Text(someString)` is the *verbatim* initialiser, so a picker built from
@@ -79,6 +81,22 @@ struct AccountSettingsView: View {
                         get: { preferences.showLinkEmbeds ?? true },
                         set: { preferences.showLinkEmbeds = $0 }
                     ))
+                    if nudgeAvailable {
+                        // Both directions at once, so "off" cannot be used to
+                        // poke people who cannot poke back.
+                        Toggle(isOn: Binding(
+                            get: { NudgeRules.allowed(preferences) },
+                            set: { preferences.allowNudges = $0 }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Let people nudge me")
+                                Text("Off, nobody shakes your phone and you can't nudge anybody either.")
+                                    .font(Typography.caption)
+                                    .foregroundStyle(Palette.paperMuted)
+                            }
+                        }
+                        .accessibilityIdentifier("settings.allowNudges")
+                    }
                 }
 
                 VideoQualitySection()
@@ -119,6 +137,7 @@ struct AccountSettingsView: View {
             .background(Palette.ink)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .task { nudgeAvailable = await session.api.funConfig().nudge }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }.tint(Palette.paperMuted)
@@ -187,7 +206,7 @@ struct AccountSettingsView: View {
             await session.refreshCurrentUser()
             saved = true
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         saving = false
     }
@@ -420,7 +439,7 @@ private struct HandleRow: View {
             // VERBATIM. "That handle is taken" is not a property of the string —
             // only the unique index can say it — so the local mirror cannot
             // produce this sentence and must not paraphrase it.
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }
@@ -520,7 +539,7 @@ private struct AvatarRow: View {
             // memory matches every other field it holds.
             await session.refreshCurrentUser()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -532,7 +551,7 @@ private struct AvatarRow: View {
             _ = try await session.api.deleteAvatar()
             await session.refreshCurrentUser()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }
@@ -902,7 +921,7 @@ struct WebhooksView: View {
             webhooks = try await session.api.webhooks(channelId: channel.id)
             error = nil
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         loading = false
     }
@@ -913,7 +932,7 @@ struct WebhooksView: View {
         do {
             webhooks.append(try await session.api.createWebhook(channelId: channel.id, name: trimmed))
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -922,7 +941,7 @@ struct WebhooksView: View {
             try await session.api.deleteWebhook(id: webhook.id)
             webhooks.removeAll { $0.id == webhook.id }
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }

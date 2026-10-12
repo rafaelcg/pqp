@@ -34,6 +34,13 @@ export interface ContextMenuItemDef {
   icon?: LucideIcon;
   /** Tick on the right. Used for exclusive choices like notification level. */
   checked?: boolean;
+  /**
+   * A small non-interactive mark at the end of the row, such as the `BetaTag`
+   * beside "Fórum" in the Texto section's "+" menu. Read as part of the row's
+   * name, so keep it a word or two; the label alone must still say what the
+   * row does.
+   */
+  trailing?: ReactNode;
 }
 
 /**

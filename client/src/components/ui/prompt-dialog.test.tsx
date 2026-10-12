@@ -165,6 +165,7 @@ describe("ChannelOverviewSection name field", () => {
             imageUrl: "",
             slowmodeSeconds: 0,
             voiceRoomSize: "auto",
+            defaultSort: "activity",
           }}
           onDraftChange={(next) => drafts.push(next)}
           iconOpen={false}

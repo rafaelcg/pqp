@@ -9,6 +9,8 @@ import gg.pqp.app.core.Reaction
 import gg.pqp.app.core.ReplyRef
 import gg.pqp.app.core.ServerSummary
 import gg.pqp.app.core.VoiceParticipant
+import gg.pqp.app.core.WebhookEmbed
+import gg.pqp.app.core.WebhookEmbedField
 import gg.pqp.app.watch.LiveStreamPayload
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.elementNames
@@ -59,6 +61,13 @@ class ModelShapeTest {
             emptySet<String>(),
             orphans,
         )
+    }
+
+    @Test
+    fun `WebhookEmbed matches webhookEmbedSchema`() {
+        val webhooks = "packages/shared/src/webhooks.ts"
+        assertSubsetOfSchema(WebhookEmbed.serializer(), webhooks, "webhookEmbedSchema")
+        assertSubsetOfSchema(WebhookEmbedField.serializer(), webhooks, "webhookEmbedFieldSchema")
     }
 
     @Test

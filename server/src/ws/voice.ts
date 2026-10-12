@@ -1190,6 +1190,18 @@ function recheckRoomTransport(
   return decision;
 }
 
+/**
+ * Test hook: pin a room on this process as if a seat here had opened it,
+ * without a socket. For the token mint's view of a replica that holds seats
+ * in a room another replica has just promoted.
+ */
+export function pinRoomTransportLocallyForTests(
+  voiceChannelId: string,
+  transport: VoiceRoomTransport,
+): void {
+  roomTransports.set(voiceChannelId, transport);
+}
+
 /** Test hook: forget every pinned room transport. */
 export function resetVoiceRoomTransports(): void {
   roomTransports.clear();
@@ -4627,11 +4639,14 @@ const lastRosterKeyframeAt = new Map<string, number>();
 const lastAudienceKeyframeAt = new Map<string, number>();
 
 /**
- * With the registry on: the participants this process last DESCRIBED for
- * each channel, by peer id, whichever frame carried them (whole or delta).
- * The next roster run diffs the freshly read rows against this and sends
- * `joined` / `updated` / `left`, which is how a change made on the OTHER
- * instance becomes a delta here: it is in the rows and not in this entry.
+ * The participants this process last DESCRIBED for each channel, by peer id,
+ * whichever frame carried them (whole or delta). The next roster run diffs
+ * the room it reads against this and sends `joined` / `updated` / `left`.
+ * With the registry on that is how a change made on the OTHER instance
+ * becomes a delta here: it is in the rows and not in this entry. With it off
+ * the room is this process's own map, and the diff is what keeps a delta's
+ * `size` honest while a join's seat is in the map but its event is not yet
+ * queued (see `sendRoster`).
  *
  * It is exactly "what the receivers hold", not "what the room is": a run
  * that writes nothing (no audience) leaves it alone, and a run that wrote a
@@ -4644,8 +4659,7 @@ const lastAudienceKeyframeAt = new Map<string, number>();
  * a picture the diff must not be built on or half the room reads as `left`),
  * a process restart, and a channel forgotten through `forgetSentRoster`.
  * Dropped when the room is announced empty, so it is bounded by the rooms
- * this process is currently describing. Never written with the registry
- * off, where the event queue is the delta and this map stays empty.
+ * this process is currently describing.
  */
 const sentRosters = new Map<string, Map<string, VoiceParticipant>>();
 
@@ -5161,40 +5175,6 @@ interface RosterDelta {
 }
 
 /**
- * Fold a window's events into the three lists the wire carries, or null when
- * the window cannot be described incrementally.
- *
- * Null for three reasons, each of which falls back to a whole roster:
- *
- *  - a `roster` event is present, which is the caller saying "something
- *    changed and I cannot name the peer";
- *  - the window is empty, which no local request produces (each queues an
- *    event) and is answered with a whole roster rather than an assumption;
- *  - nothing at all changed, in which case there is nothing to send either
- *    way and the caller decides.
- *
- * Registry off only. With the rows as the truth the delta is `diffSentRoster`.
- */
-function foldRoomEvents(events: readonly VoiceRoomEvent[]): RosterDelta | null {
-  if (events.length === 0 || events.some((event) => event.kind === "roster")) {
-    return null;
-  }
-  const joined: VoiceParticipant[] = [];
-  const updated: VoiceParticipant[] = [];
-  const left: string[] = [];
-  for (const event of events) {
-    if (event.kind === "joined") {
-      joined.push(event.peer);
-    } else if (event.kind === "updated") {
-      updated.push(event.peer);
-    } else if (event.kind === "left") {
-      left.push(event.peerId);
-    }
-  }
-  return { joined, updated, left };
-}
-
-/**
  * Whether two projections of the same peer would draw the same tile.
  *
  * Every field of a participant is a primitive (strings, booleans, null), so
@@ -5215,8 +5195,9 @@ function sameParticipant(a: VoiceParticipant, b: VoiceParticipant): boolean {
 }
 
 /**
- * The registry's delta: what changed between the roster this process last
- * sent for the channel and the rows it has just read, and, in the same
+ * The delta, on both paths: what changed between the roster this process last
+ * sent for the channel and the room it has just read (the rows with the
+ * registry on, this process's own map with it off), and, in the same
  * synchronous step, the replacement of that memory with what is about to go
  * out. Null when there is nothing to diff against, which is a whole roster.
  *
@@ -5225,9 +5206,8 @@ function sameParticipant(a: VoiceParticipant, b: VoiceParticipant): boolean {
  * because it is what the receivers now hold. An empty room
  * drops it too, so a channel costs nothing once its call is over.
  *
- * The lists are ABSOLUTE statements about one peer each, the same contract
- * `foldRoomEvents` produces, so a receiver cannot tell which path built its
- * frame. A peer whose row and local copy disagree only in a field the tile
+ * The lists are ABSOLUTE statements about one peer each, so a receiver cannot
+ * tell which path built its frame. A peer whose row and local copy disagree only in a field the tile
  * does not draw still lands in `updated`; that is a few bytes, and it is the
  * price of never having to name here which fields matter.
  */
@@ -5267,6 +5247,36 @@ function diffSentRoster(
     }
   }
   return { joined, updated, left };
+}
+
+/**
+ * Registry off: every peer the window's queue named is restated in the delta
+ * even when the diff found nothing new about them, as the folded queue always
+ * did. A refused change is the case that needs it: a server-muted member's
+ * own unmute is turned down by queuing an `updated` for a seat that did not
+ * change, and that frame is what snaps their client back to muted. Only seats
+ * still in the room, and only as `updated` when the diff did not already
+ * report them, so `size` stays exactly what applying the frame produces.
+ */
+function restateQueuedPeers(
+  delta: RosterDelta,
+  events: readonly VoiceRoomEvent[],
+  participants: readonly VoiceParticipant[],
+): void {
+  const named = new Set(
+    [...delta.joined, ...delta.updated].map((peer) => peer.peerId),
+  );
+  const current = new Map(participants.map((peer) => [peer.peerId, peer]));
+  for (const event of events) {
+    if (event.kind !== "joined" && event.kind !== "updated") {
+      continue;
+    }
+    const peer = current.get(event.peer.peerId);
+    if (peer && !named.has(peer.peerId)) {
+      delta.updated.push(peer);
+      named.add(peer.peerId);
+    }
+  }
 }
 
 /**
@@ -5438,27 +5448,47 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
     // be due a snapshot while the audience is still happily patching, and
     // then the delta is still needed.
     //
-    // Two sources, one shape. With the registry off the delta is this
-    // process's own event queue; with it on, the rows diffed against what
-    // this process last sent. The diff also REPLACES that memory, which is
+    // One shape from either source: the room just read (the rows with the
+    // registry on, this process's map with it off) diffed against what this
+    // process last sent. The diff also REPLACES that memory, which is
     // why it runs only when there is an audience to send to: a run that
     // writes nothing must leave "what the receivers hold" untouched. With
     // no audience the memory is dropped instead, so a channel deleted while
     // its room emptied on another machine does not keep its last roster
     // here forever; the cost is one whole roster if the lookup merely blipped.
+    //
+    // WITH THE REGISTRY OFF THIS USED TO BE THE EVENT QUEUE FOLDED, and the
+    // queue and the room map are not written in one step: a join puts its
+    // seat in the map, then awaits the first-join stamp and the welcome's
+    // reads, and only then queues `joined`. A run for an
+    // earlier change that lands in that gap reads a room one seat larger
+    // than the events it would fold, so a folded delta's `size` disagreed
+    // with what applying it produced, every receiver refused it, every later
+    // delta was a gap, and with nobody else changing the room no keyframe
+    // ever came (the sidebar froze at one seat, call-stage-strip.spec.ts on
+    // CI, 2026-10-11). The diff is against what this process last SENT, so
+    // its `size` is right by construction whatever the queue lags behind; a
+    // `roster` event (a change nobody could name) still asks for a whole
+    // roster, and every seat the queue named is still restated
+    // (`restateQueuedPeers`), exactly as the fold did.
     let delta: RosterDelta | null = null;
     if (!audience) {
       sentRosters.delete(voiceChannelId);
     } else if (registryOn()) {
       delta = diffSentRoster(voiceChannelId, participants, rowsRead);
     } else {
-      delta = foldRoomEvents(events);
+      delta = diffSentRoster(voiceChannelId, participants, true);
+      if (events.some((event) => event.kind === "roster")) {
+        delta = null;
+      } else if (delta) {
+        restateQueuedPeers(delta, events, participants);
+      }
     }
-    // Registry only, by construction: a folded queue is never empty-handed.
-    // A diff that is means the rows say what the last frame said (a bus hint
-    // about a change this process had already read and sent), and there is
-    // nothing to write: no frame, no sequence number, no keyframe clock. The
-    // sockets are exactly as caught up as they were.
+    // A delta that is empty-handed means the room is what the last frame
+    // said (registry on: a bus hint about a change this process had already
+    // read and sent; registry off: a window whose queue named nobody still
+    // seated), and there is nothing to write: no frame, no sequence number,
+    // no keyframe clock. The sockets are exactly as caught up as they were.
     const unchanged =
       delta !== null &&
       delta.joined.length === 0 &&

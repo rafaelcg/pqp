@@ -115,6 +115,12 @@ vi.mock("../services/automod.js", () => ({
   recordAutomodHit: async () => {},
 }));
 
+// The locked-post read. "Not a post" unless a case says otherwise; the real
+// read is proved on Postgres in services/forum-guards.test.ts.
+vi.mock("../services/forum-guards.js", () => ({
+  forumPostLockState: vi.fn(async () => null),
+}));
+
 vi.mock("../services/slow-mode.js", () => ({
   chargeSlowMode: async (channelId: string, userId: string, seconds: number) => {
     const key = `${channelId}:${userId}`;
@@ -164,6 +170,7 @@ const { computeMemberPermissions, listServerMemberIds } = await import(
   "../services/permissions.js"
 );
 const { setBusTransport } = await import("../lib/bus.js");
+const { forumPostLockState } = await import("../services/forum-guards.js");
 const { createMessage, findMessageByNonce, getReplyParent } = await import(
   "../services/messages.js"
 );
@@ -1483,6 +1490,56 @@ describe("message-rejected", () => {
     await post(sender, "user-a", channelId, { nonce: "second" });
 
     expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+  });
+
+  it("refuses a message to a forum as no-access, before anything is created", async () => {
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: "33333333-3333-4333-8333-333333333333",
+      type: "forum",
+      slowmode_seconds: 0,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES,
+    );
+    const sender = recordingSocket();
+
+    await post(sender, "user-a", nextChannelId());
+
+    const [rejected] = framesOfType(sender.received, "message-rejected");
+    expect(rejected).toMatchObject({ reason: "no-access" });
+    expect(createMessage).not.toHaveBeenCalled();
+  });
+
+  it("refuses a reply in a locked forum post, and lets staff through without asking", async () => {
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: "33333333-3333-4333-8333-333333333333",
+      type: "thread",
+      slowmode_seconds: 0,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES,
+    );
+    vi.mocked(forumPostLockState).mockResolvedValue({ locked: true });
+    const member = recordingSocket();
+
+    await post(member, "user-a", nextChannelId());
+
+    const [rejected] = framesOfType(member.received, "message-rejected");
+    expect(rejected).toMatchObject({ reason: "locked" });
+    expect(createMessage).not.toHaveBeenCalled();
+
+    vi.mocked(forumPostLockState).mockClear();
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES | Permission.MANAGE_MESSAGES,
+    );
+    const staff = recordingSocket();
+    await post(staff, "user-b", nextChannelId(), { nonce: "staff" });
+
+    expect(framesOfType(staff.received, "message-rejected")).toHaveLength(0);
+    expect(forumPostLockState).not.toHaveBeenCalled();
+    vi.mocked(forumPostLockState).mockResolvedValue(null);
   });
 });
 

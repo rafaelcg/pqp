@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./preferences", () => ({
   queuePreferenceSync: vi.fn(),
+  isPreferencePending: vi.fn(() => false),
+  preferenceWrittenSince: vi.fn(() => false),
 }));
 
 import { queuePreferenceSync } from "./preferences";

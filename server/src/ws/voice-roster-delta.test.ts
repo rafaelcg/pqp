@@ -79,6 +79,24 @@ vi.mock("../services/servers.js", () => ({
   getServerVoiceProfile: async () => ({ isCommunity: false, memberCount: 500 }),
 }));
 
+/**
+ * The first-join stamp is a database write that sits between a seat entering
+ * the room map and its join being queued for the roster, which is the window
+ * the overlapping-join test needs to hold open. Resolves at once unless a test
+ * asks to hold it.
+ */
+const activation = vi.hoisted(() => ({
+  hold: false,
+  held: [] as Array<() => void>,
+}));
+
+vi.mock("../services/activation.js", () => ({
+  recordActivationStep: () =>
+    activation.hold
+      ? new Promise<void>((resolve) => activation.held.push(resolve))
+      : Promise.resolve(),
+}));
+
 vi.mock("../voice/admin.js", () => ({
   evictSfuRoom: vi.fn(() => Promise.resolve()),
   evictSfuUser: vi.fn(() => Promise.resolve()),
@@ -355,6 +373,53 @@ describe("voice roster deltas", () => {
     // And the mute really travelled, not just the membership.
     const muted = [...watcher.belief.values()].filter((p) => p.muted);
     expect(muted.map((p) => p.userId)).toEqual([inRoom[3]!.user.id]);
+  });
+
+  it("converges when a roster runs while another join is still being seated", async () => {
+    // A seat enters the room map before its join queues the `joined` event:
+    // the first-join stamp (a database write) and the welcome's own reads sit
+    // in between. A roster run for an EARLIER join that lands in that window
+    // used to read a room one larger than the events it folded, so its `size`
+    // could not match what applying it produced: every receiver refused it,
+    // and every later delta was then a gap. With nobody changing the room
+    // afterward no keyframe came either, and the sidebar stayed frozen at the
+    // call's first seat (call-stage-strip.spec.ts on CI, 2026-10-11: six new
+    // accounts joining one after another on a slow runner).
+    const channel = randomUUID();
+    const watcher = client(channel);
+    const host = client(channel);
+    await join(host);
+    await expectConverged(watcher, channel);
+
+    activation.hold = true;
+    const first = client(channel);
+    const second = client(channel);
+    const firstJoin = join(first);
+    await flush();
+    const secondJoin = join(second);
+    await flush();
+    activation.hold = false;
+    // Both seats are in the map now and neither join has been announced.
+    // Let the first finish while the second is still being seated.
+    expect(activation.held).toHaveLength(2);
+    activation.held.shift()!();
+    await firstJoin;
+    activation.held.shift()!();
+    await secondJoin;
+    await flush();
+
+    await expectConverged(watcher, channel);
+    expect(watcher.belief.size).toBe(3);
+    // On deltas, not on a snapshot that happened to paper over a refusal.
+    expect(watcher.framesOfType("voice-roster")).toHaveLength(1);
+
+    // And it keeps patching afterwards rather than waiting for a keyframe.
+    await setMuted(first, true);
+    await expectConverged(watcher, channel);
+    const firstSeat = [...watcher.belief.values()].find(
+      (p) => p.userId === first.user.id,
+    );
+    expect(firstSeat?.muted).toBe(true);
   });
 
   it("carries a moderator mute as a delta about that person alone", async () => {

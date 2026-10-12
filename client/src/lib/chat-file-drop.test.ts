@@ -66,3 +66,42 @@ describe("chatDropVerdict", () => {
     ).toEqual({ mode: "refuse", reason: "attachmentsOff" });
   });
 });
+
+describe("chatDropVerdict on a forum", () => {
+  const forum = { ...ok, channelType: "forum", forumPostingEnabled: true };
+
+  it("accepts a drop on the list: it becomes a new post with the file attached", () => {
+    expect(chatDropVerdict(forum)).toEqual({ mode: "accept" });
+  });
+
+  it("refuses while new posts are paused, and says so", () => {
+    expect(chatDropVerdict({ ...forum, forumPostingEnabled: false })).toEqual({
+      mode: "refuse",
+      reason: "forumPaused",
+    });
+  });
+
+  it("does not claim the forum is paused before the flag has answered", () => {
+    expect(chatDropVerdict({ ...forum, forumPostingEnabled: null })).toEqual({
+      mode: "off",
+    });
+    expect(chatDropVerdict({ ...ok, channelType: "forum" })).toEqual({ mode: "off" });
+  });
+
+  it("keeps the shared refusals and their order", () => {
+    expect(chatDropVerdict({ ...forum, attachmentsEnabled: false })).toEqual({
+      mode: "refuse",
+      reason: "attachmentsOff",
+    });
+    expect(chatDropVerdict({ ...forum, canSend: false })).toEqual({
+      mode: "refuse",
+      reason: "cannotSend",
+    });
+  });
+
+  it("leaves a text channel's verdict alone whatever the forum flag says", () => {
+    expect(
+      chatDropVerdict({ ...ok, channelType: "text", forumPostingEnabled: false }),
+    ).toEqual({ mode: "accept" });
+  });
+});

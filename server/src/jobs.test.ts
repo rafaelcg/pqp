@@ -35,6 +35,9 @@ vi.mock("./services/retention.js", () => ({
 vi.mock("./services/slow-mode.js", () => ({
   sweepSlowModeClocks: vi.fn(async () => 0),
 }));
+vi.mock("./services/forums.js", () => ({
+  sweepForumPostShells: vi.fn(async () => 0),
+}));
 vi.mock("./services/connections.js", () => ({
   sweepExpiredConnectionStates: vi.fn(async () => 0),
 }));
@@ -75,6 +78,34 @@ vi.mock("./services/watch-parties.js", () => ({
 vi.mock("./ws/watch-party-events.js", () => ({
   broadcastWatchParty: vi.fn(async () => undefined),
 }));
+// Stories: `story-media.test.ts` pins what the sweep and the video job do.
+vi.mock("./services/story-media.js", () => ({
+  STORY_SWEEP_INTERVAL_MS: 60_000,
+  STORY_VIDEO_INTERVAL_MS: 5_000,
+  sweepStories: vi.fn(async () => ({
+    expired: 0,
+    orphaned: 0,
+    mediaDeleted: 0,
+    mediaFailed: 0,
+    rowsDeleted: 0,
+  })),
+  processStoryVideos: vi.fn(async () => ({ storyId: null, outcome: "idle" as const })),
+}));
+vi.mock("./services/stories.js", () => ({
+  storyAudienceTargets: vi.fn(async () => ({ serverIds: [], friends: false })),
+}));
+vi.mock("./ws/stories.js", () => ({
+  notifyStoriesUpdate: vi.fn(),
+  notifyStoryAudiences: vi.fn(),
+}));
+// The mixed channel list's migration job: `channel-layout.test.ts` pins what
+// it does on a real Postgres; here only that it runs once a minute.
+vi.mock("./services/channel-layout.js", () => ({
+  CHANNEL_LAYOUT_JOB_INTERVAL_MS: 60_000,
+  runChannelLayoutMigrations: vi.fn(async () => []),
+  listSidebarChannelIds: vi.fn(async () => []),
+}));
+vi.mock("./ws/chat.js", () => ({ notifyChannelsUpdate: vi.fn(async () => {}) }));
 
 import {
   sweepOrphanedAttachments,
@@ -88,12 +119,15 @@ import { pruneAuditLog } from "./services/audit.js";
 import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
+import { sweepForumPostShells } from "./services/forums.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
 import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
 import { startSpeechJobPoller } from "./services/speech-worker.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 import { sweepWatchPartyHosts } from "./services/watch-parties.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
+import { processStoryVideos, sweepStories } from "./services/story-media.js";
+import { runChannelLayoutMigrations } from "./services/channel-layout.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -102,6 +136,7 @@ import {
   ATTACHMENT_SWEEP_INTERVAL_MS,
   CHANNEL_SESSION_REMINDER_INTERVAL_MS,
   DAILY_MS,
+  FORUM_SHELL_SWEEP_INTERVAL_MS,
   PENDING_DELETION_SWEEP_INTERVAL_MS,
   startColdJobs,
   type ColdJobs,
@@ -174,11 +209,14 @@ describe("cold jobs", () => {
     // sweep; 17 before the server-create idempotency key prune; 19 with the
     // Baú translation sweep (a minute, asserted below); 20 with the speech
     // job poller (its own test above: adaptive, not a fixed cadence); 21 with
-    // the Baú video subtitles sweep (a minute, asserted below). Bump
-    // this when a job is added, and assert the new job's cadence below
+    // the Baú video subtitles sweep (a minute, asserted below); 22 with the
+    // forum shell sweep (five minutes, asserted below); 24 with the stories
+    // sweep (a minute) and the stories video job (5 s), both asserted below;
+    // 25 with the channel layout migration job (a minute, asserted below).
+    // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(21);
+    expect(jobs.count).toBe(25);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -193,13 +231,27 @@ describe("cold jobs", () => {
     expect(recordVoiceOccupancySample).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(OCCUPANCY_SAMPLE_INTERVAL_MS * 3);
     expect(recordVoiceOccupancySample).toHaveBeenCalledTimes(4);
+    // The forum shell sweep has no boot pass, and four minutes is not one
+    // of its ticks yet.
+    expect(sweepForumPostShells).not.toHaveBeenCalled();
     // Four minutes have passed: four ticks of the translation sweep.
     expect(sweepCommunityHomeTranslations).toHaveBeenCalledTimes(4);
     // And four of the video subtitles sweep, on the same minute.
     expect(sweepCommunityHomeCaptions).toHaveBeenCalledTimes(4);
+    // The stories expiry sweep: a minute, so four. It has no boot run: a
+    // minute is the whole grace the 24 h promise allows anyway.
+    expect(sweepStories).toHaveBeenCalledTimes(4);
+    // The channel layout migration job: a minute, no boot run (the flag is a
+    // dashboard flip, and a minute is what the dashboard note promises).
+    expect(runChannelLayoutMigrations).toHaveBeenCalledTimes(4);
+    // The stories video job: every 5 s, idle here, so once per tick.
+    expect(processStoryVideos).toHaveBeenCalledTimes(48);
 
     await vi.advanceTimersByTimeAsync(PENDING_DELETION_SWEEP_INTERVAL_MS);
     expect(sweepPendingAccountDeletions).toHaveBeenCalledTimes(1);
+    // Nine minutes in: one five-minute tick of the forum shell sweep.
+    expect(FORUM_SHELL_SWEEP_INTERVAL_MS).toBe(5 * 60_000);
+    expect(sweepForumPostShells).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(ATTACHMENT_SWEEP_INTERVAL_MS);
     // Boot sweep plus the first hourly tick.

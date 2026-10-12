@@ -5,6 +5,7 @@ import {
   Link2,
   Lock,
   MessageSquare,
+  MessagesSquare,
   Mic,
   Minus,
   Paperclip,
@@ -14,6 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
+import { legacyTypeRank } from "@pqp/shared";
 import type {
   DiscordImportPlan,
   MappedAwayReason,
@@ -59,6 +61,8 @@ const MAPPED_AWAY_KEYS: Record<MappedAwayReason, MessageKey> = {
   slowmode: "importDiscord.mapped.slowmode",
   bitrate: "importDiscord.mapped.bitrate",
   forumTags: "importDiscord.mapped.forumTags",
+  forumTagsTrimmed: "importDiscord.mapped.forumTagsTrimmed",
+  forumSettings: "importDiscord.mapped.forumSettings",
   threads: "importDiscord.mapped.threads",
   directory: "importDiscord.mapped.directory",
   serverIcon: "importDiscord.mapped.serverIcon",
@@ -83,17 +87,19 @@ export function DiscordImportPreview({
   const categories = plan.channels
     .filter((channel) => channel.type === "category")
     .sort((a, b) => a.position - b.position);
-  const topText = plan.channels
-    .filter((channel) => channel.type === "text" && channel.parentTemplateId == null)
-    .sort((a, b) => a.position - b.position);
-  const topVoice = plan.channels
-    .filter((channel) => channel.type === "voice" && channel.parentTemplateId == null)
-    .sort((a, b) => a.position - b.position);
+  // Channels in no category, in Discord's order (one sequence, text first),
+  // drawn above the categories with no header: how Discord shows them and
+  // how the channel list draws them once categories are the only headers.
+  const loose = plan.channels
+    .filter((channel) => channel.type !== "category" && channel.parentTemplateId == null)
+    .sort(
+      (a, b) =>
+        legacyTypeRank(a.type) - legacyTypeRank(b.type) || a.position - b.position,
+    );
   const cosmeticRoles = plan.roles;
 
   const comingCount =
-    topText.length +
-    topVoice.length +
+    loose.length +
     categories.length +
     plan.channels.filter((channel) => channel.parentTemplateId != null).length +
     (cosmeticRoles.length > 0 ? 1 : 0);
@@ -124,9 +130,9 @@ export function DiscordImportPreview({
           </p>
         </div>
         <div className="max-h-72 overflow-y-auto px-1 py-3">
-          {topText.length > 0 && (
-            <PreviewSection label={t("chrome.text")}>
-              {topText.map((channel) => (
+          {loose.length > 0 && (
+            <div className="mb-3 last:mb-0" data-preview-loose="">
+              {loose.map((channel) => (
                 <PreviewChannelRow
                   key={channel.templateId}
                   channel={channel}
@@ -134,22 +140,10 @@ export function DiscordImportPreview({
                   style={nextComing()}
                 />
               ))}
-            </PreviewSection>
-          )}
-          {topVoice.length > 0 && (
-            <PreviewSection label={t("chrome.voice")}>
-              {topVoice.map((channel) => (
-                <PreviewChannelRow
-                  key={channel.templateId}
-                  channel={channel}
-                  reduced={reduced}
-                  style={nextComing()}
-                />
-              ))}
-            </PreviewSection>
+            </div>
           )}
           {categories.length > 0 && (
-            <PreviewSection label={t("chrome.categories")}>
+            <div className="mb-3 last:mb-0">
               {categories.map((category) => {
                 const children = plan.channels
                   .filter(
@@ -182,7 +176,7 @@ export function DiscordImportPreview({
                   </div>
                 );
               })}
-            </PreviewSection>
+            </div>
           )}
           {cosmeticRoles.length > 0 && (
             <PreviewSection label={t("importDiscord.preview.rolesSection")}>
@@ -282,30 +276,69 @@ function PreviewChannelRow({
   style: CSSProperties;
 }) {
   const { t } = useTranslation();
-  const Icon = channel.isPrivate ? Lock : channel.type === "voice" ? Mic : Hash;
+  const Icon = channel.isPrivate
+    ? Lock
+    : channel.type === "voice"
+      ? Mic
+      : channel.type === "forum"
+        ? MessagesSquare
+        : Hash;
+  const tags = channel.tags ?? [];
   return (
     <div
       className={cn(
-        "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-paper-muted",
+        "rounded-md px-2 py-1.5 text-sm text-paper-muted",
         !reduced && "animate-rise",
       )}
       style={reduced ? undefined : style}
     >
-      <Icon
-        className={cn(
-          "h-3.5 w-3.5 shrink-0",
-          channel.isPrivate ? "text-warning" : "text-paper-muted",
+      <div className="flex items-center gap-1.5">
+        <Icon
+          className={cn(
+            "h-3.5 w-3.5 shrink-0",
+            channel.isPrivate ? "text-warning" : "text-paper-muted",
+          )}
+        />
+        <span className="truncate">{channel.name}</span>
+        {channel.isPrivate && (
+          <span className="ml-auto shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">
+            {t("importDiscord.preview.private")}
+          </span>
         )}
-      />
-      <span className="truncate">{channel.name}</span>
-      {channel.isPrivate && (
-        <span className="ml-auto shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">
-          {t("importDiscord.preview.private")}
-        </span>
+      </div>
+      {tags.length > 0 && (
+        <ul className="mt-1 flex flex-wrap gap-1 pl-5">
+          {tags.slice(0, PREVIEW_TAG_CAP).map((tag) => (
+            <li
+              key={tag.name}
+              title={tag.moderated ? t("importDiscord.preview.tagStaff") : undefined}
+              className={cn(
+                "inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] leading-tight",
+                tag.moderated
+                  ? "border-paper-muted/50 bg-ink-3/70 text-paper"
+                  : "border-ink-4 bg-ink-3/40 text-paper-muted",
+              )}
+            >
+              {tag.emoji && <span aria-hidden="true">{tag.emoji}</span>}
+              <span className="truncate">{tag.name}</span>
+              {tag.moderated && (
+                <span className="sr-only">{t("importDiscord.preview.tagStaff")}</span>
+              )}
+            </li>
+          ))}
+          {tags.length > PREVIEW_TAG_CAP && (
+            <li className="rounded-full px-1.5 py-0.5 text-[11px] leading-tight text-paper-muted">
+              +{tags.length - PREVIEW_TAG_CAP}
+            </li>
+          )}
+        </ul>
       )}
     </div>
   );
 }
+
+/** A forum with 20 tags would own the scroll box; the rest is "+N". */
+const PREVIEW_TAG_CAP = 8;
 
 const NOT_IN_TEMPLATE_ICONS: Record<NotInTemplateReason, LucideIcon> = {
   members: Users,

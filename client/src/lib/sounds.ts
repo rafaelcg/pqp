@@ -40,7 +40,8 @@ export type SoundCue =
   | "voiceJoin"
   | "voiceLeave"
   | "incomingCall"
-  | "outgoingCall";
+  | "outgoingCall"
+  | "nudge";
 
 type SampleCue = "message" | "mention" | "voiceJoin" | "voiceLeave";
 
@@ -52,6 +53,8 @@ export interface SoundState {
   voiceLeave: boolean;
   incomingCall: boolean;
   outgoingCall: boolean;
+  /** Chamar a atenção. Synthesised, never a sample (`playNudge`). */
+  nudge: boolean;
 }
 
 const DEFAULT_STATE: SoundState = {
@@ -62,6 +65,7 @@ const DEFAULT_STATE: SoundState = {
   voiceLeave: true,
   incomingCall: true,
   outgoingCall: true,
+  nudge: true,
 };
 
 const SAMPLE_URLS: Record<SampleCue, readonly string[]> = {
@@ -141,6 +145,7 @@ function readState(value: unknown): SoundState {
     outgoingCall: isBoolean(record.outgoingCall)
       ? record.outgoingCall
       : DEFAULT_STATE.outgoingCall,
+    nudge: isBoolean(record.nudge) ? record.nudge : DEFAULT_STATE.nudge,
   };
 }
 
@@ -186,6 +191,7 @@ function toPreferences(current: SoundState): SoundPreferences {
     voiceLeave: current.voiceLeave,
     incomingCall: current.incomingCall,
     outgoingCall: current.outgoingCall,
+    nudge: current.nudge,
   };
 }
 
@@ -833,11 +839,88 @@ const loopTokens: Record<"incomingCall" | "outgoingCall", number> = {
   outgoingCall: 0,
 };
 
+/**
+ * CHAMAR A ATENÇÃO, synthesised (the design's recipe, ours end to end: no
+ * sample, nothing copied). Two short wooden knocks, a triangle falling from
+ * 260 to 90 Hz, then half a second of buzzy rattle: a square wave sliding from
+ * 150 to 118 Hz through a resonant lowpass at 950 Hz, amplitude-modulated at
+ * 28 Hz, which is what reads as a phone buzzing on a table. Every envelope
+ * starts from 0.0001 and ramps exponentially so nothing clicks. Played at a
+ * quarter of full scale through the master bus, so the chosen output device
+ * and volume apply; about 0.8 s long.
+ */
+export const NUDGE_CUE_GAIN = 0.25;
+
+function playNudge(): void {
+  const ctx = ensureContext();
+  if (!ctx || !master) {
+    return;
+  }
+  if (ctx.state === "suspended") {
+    void ctx.resume().catch(() => {});
+  }
+  try {
+    const t = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.value = NUDGE_CUE_GAIN;
+    out.connect(master);
+    for (const delay of [0, 0.11]) {
+      const knock = ctx.createOscillator();
+      const knockEnv = ctx.createGain();
+      knock.type = "triangle";
+      knock.frequency.setValueAtTime(260, t + delay);
+      knock.frequency.exponentialRampToValueAtTime(90, t + delay + 0.09);
+      knockEnv.gain.setValueAtTime(0.0001, t + delay);
+      knockEnv.gain.exponentialRampToValueAtTime(0.9, t + delay + 0.004);
+      knockEnv.gain.exponentialRampToValueAtTime(0.0001, t + delay + 0.114);
+      knock.connect(knockEnv).connect(out);
+      knock.start(t + delay);
+      knock.stop(t + delay + 0.14);
+    }
+    const start = t + 0.24;
+    const buzz = ctx.createOscillator();
+    const lowpass = ctx.createBiquadFilter();
+    const tremolo = ctx.createGain();
+    const env = ctx.createGain();
+    const lfo = ctx.createOscillator();
+    const lfoDepth = ctx.createGain();
+    buzz.type = "square";
+    buzz.frequency.setValueAtTime(150, start);
+    buzz.frequency.linearRampToValueAtTime(118, start + 0.5);
+    lowpass.type = "lowpass";
+    lowpass.frequency.value = 950;
+    lowpass.Q.value = 2;
+    lfo.type = "sine";
+    lfo.frequency.value = 28;
+    lfoDepth.gain.value = 0.5;
+    tremolo.gain.value = 0.5;
+    lfo.connect(lfoDepth).connect(tremolo.gain);
+    env.gain.setValueAtTime(0.0001, start);
+    env.gain.exponentialRampToValueAtTime(0.45, start + 0.03);
+    env.gain.setValueAtTime(0.45, start + 0.38);
+    env.gain.exponentialRampToValueAtTime(0.0001, start + 0.55);
+    buzz.connect(lowpass).connect(tremolo).connect(env).connect(out);
+    buzz.start(start);
+    lfo.start(start);
+    buzz.stop(start + 0.58);
+    lfo.stop(start + 0.58);
+    buzz.onended = () => {
+      out.disconnect();
+    };
+  } catch {
+    // A cue must never throw into the message path.
+  }
+}
+
 export function playCue(cue: SoundCue): void {
   if (!isCueEnabled(state, cue)) {
     return;
   }
   unlockSounds();
+  if (cue === "nudge") {
+    playNudge();
+    return;
+  }
   if (cue === "incomingCall" || cue === "outgoingCall") {
     // Preview: one burst, not a loop. Token so a real call started during
     // the preview is not killed when this timeout fires.
@@ -854,7 +937,60 @@ export function playCue(cue: SoundCue): void {
     }
     return;
   }
+  const synth = synthOverrides.get(cue);
+  if (synth && playSynth(synth)) {
+    return;
+  }
   enqueueSample(cue);
+}
+
+/**
+ * A sound drawn in code rather than read from a file: given the context and
+ * the cue bus (which carries the output volume and device), it schedules its
+ * own nodes from `ctx.currentTime`.
+ */
+export type SynthCue = (ctx: AudioContext, destination: AudioNode) => void;
+
+const synthOverrides = new Map<SoundCue, SynthCue>();
+
+/**
+ * A look that brings its own sound for a cue (Modo 2005's "message"). Same
+ * gate as the sample it replaces: the global mute and that cue's own switch.
+ * `null` gives the cue back its sample.
+ */
+export function setSynthCueOverride(cue: SoundCue, synth: SynthCue | null): void {
+  if (synth) {
+    synthOverrides.set(cue, synth);
+  } else {
+    synthOverrides.delete(cue);
+  }
+}
+
+function playSynth(synth: SynthCue): boolean {
+  const ctx = ensureContext();
+  if (!ctx || !master) {
+    return false;
+  }
+  if (ctx.state === "suspended") {
+    void ctx.resume().catch(() => {});
+  }
+  try {
+    synth(ctx, master);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A synthesized sound that is not one of the cues (Modo 2005's sign-in
+ * chime). Respects the global mute only; the caller owns its own switch.
+ */
+export function playSynthSound(synth: SynthCue): void {
+  if (!state.enabled) {
+    return;
+  }
+  playSynth(synth);
 }
 
 export function playActivitySound(mentions: number): void {

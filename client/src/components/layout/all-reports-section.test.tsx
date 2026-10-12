@@ -71,6 +71,7 @@ function makeReport(overrides: Partial<AllReport>): AllReport {
     contentSnapshot: null,
     channelId: null,
     channelName: null,
+    storyId: null,
     resolvedAt: null,
     resolvedByName: null,
     resolutionNote: null,

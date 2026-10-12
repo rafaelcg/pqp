@@ -29,6 +29,11 @@ enum DeepLinkTarget: Equatable, Sendable {
     /// `/app/server/<sid>/bau/<postId>`. The channel list is the landing and it
     /// pushes the Baú scrolled to the post. `/bau` with no post is `.bau`.
     case bauPost(serverId: String, postId: String)
+    /// A forum post, `/app/server/<sid>/channel/<forumId>/post/<postId>`: the
+    /// web's permalink (copy link) and the forum's own deep link. A push for
+    /// a reply in a post names the post as a plain channel instead, which the
+    /// shell resolves through `GET /api/forum-posts/:id`.
+    case forumPost(serverId: String, forumId: String, postId: String)
 }
 
 /// Turns links and notification paths into `DeepLinkTarget`s, and nothing else.
@@ -92,6 +97,13 @@ enum DeepLink {
             let postId = segments[3]
             guard !serverId.isEmpty, !postId.isEmpty else { return nil }
             return .bauPost(serverId: serverId.lowercased(), postId: postId.lowercased())
+
+        case 6 where segments[0] == "server" && segments[2] == "channel" && segments[4] == "post":
+            let serverId = segments[1]
+            let forumId = segments[3]
+            let postId = segments[5]
+            guard !serverId.isEmpty, !forumId.isEmpty, !postId.isEmpty else { return nil }
+            return .forumPost(serverId: serverId, forumId: forumId, postId: postId)
 
         case 4 where segments[0] == "server" && segments[2] == "channel":
             let serverId = segments[1]

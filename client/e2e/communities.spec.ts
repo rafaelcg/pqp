@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { openApp, openServerSettings } from "./fixtures";
+import { clearQualityBar } from "./community-quality-seed";
 
 /**
  * The Communities directory, driven end to end.
@@ -27,6 +28,8 @@ const DEV_TOKEN = "dev-local-token";
 const OWNER = "comm-owner";
 /** …and a third, purely to be the member that clears the floor. */
 const FILLER = "comm-filler";
+/** …and a fourth, because the directory browses rooms with three people. */
+const FILLER_TWO = "comm-filler-two";
 
 test.setTimeout(90_000);
 
@@ -57,7 +60,7 @@ async function ensureAccount(suffix: string): Promise<void> {
   });
 }
 
-/** A listed community with two members, owned by `OWNER`. */
+/** A listed community that clears the quality bar, owned by `OWNER`. */
 async function seedCommunity(
   name: string,
   category: string,
@@ -71,7 +74,10 @@ async function seedCommunity(
   if (!created.ok) {
     throw new Error(`could not create ${name}: ${created.status}`);
   }
-  const { server } = (await created.json()) as { server: { id: string } };
+  const { server, channels } = (await created.json()) as {
+    server: { id: string };
+    channels: { id: string; type: string }[];
+  };
 
   const invite = await fetch(`${API}/api/servers/${server.id}/invites`, {
     method: "POST",
@@ -82,6 +88,12 @@ async function seedCommunity(
   await fetch(`${API}/api/invites/${made.code}/join`, {
     method: "POST",
     headers: headers(FILLER),
+  });
+  await clearQualityBar({
+    serverId: server.id,
+    channels,
+    owner: OWNER,
+    thirdMember: FILLER_TWO,
   });
 
   const patched = await fetch(`${API}/api/servers/${server.id}/community`, {
@@ -176,7 +188,7 @@ test.describe("Communities", () => {
     // The member count is the directory's only ordering key and the only thing
     // on a card that is not owner-written, so it is worth pinning that it is a
     // real number rather than a placeholder.
-    await expect(card(page, "Eu odeio acordar cedo")).toContainText("2 members");
+    await expect(card(page, "Eu odeio acordar cedo")).toContainText("3 members");
     // Every card carries its own report control. A public directory that can
     // only be complained about through a support address is what the research
     // doc's §08 says not to ship.
@@ -274,6 +286,8 @@ test.describe("Communities", () => {
   }) => {
     await openApp(page);
     await openServerSettings(page);
+    // A door of its own in the settings rail, not the foot of Overview.
+    await page.getByRole("tab", { name: "Community" }).click();
 
     const section = page.locator("[data-community-settings]");
     await expect(section).toBeVisible();
@@ -307,6 +321,52 @@ test.describe("Communities", () => {
 
     await address.check();
     await expect(directory).toBeEnabled();
+  });
+
+  test("turning the address on asks about the directory right there, and lists on a yes", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await openServerSettings(page);
+    await page.getByRole("tab", { name: "Community" }).click();
+
+    const section = page.locator("[data-community-settings]");
+    const address = section.getByRole("checkbox", {
+      name: "Turn on the public address",
+    });
+    const directory = section.getByRole("checkbox", {
+      name: "Show in the pqp directory",
+    });
+    const offer = section.locator("[data-directory-offer]");
+
+    await expect(address).not.toBeChecked();
+    await expect(offer).toHaveCount(0);
+
+    // THE MOMENT. Ticking the address is when the directory question makes
+    // sense, so it lights up right under it, still unticked, with the one line
+    // that says who can then find the room and where reports go.
+    await address.check();
+    await expect(offer).toBeVisible();
+    await expect(offer).toContainText("without an invite");
+    await expect(offer).toContainText("people who run pqp");
+    await expect(directory).not.toBeChecked();
+
+    await directory.check();
+    const saved = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PATCH" &&
+        /\/api\/servers\/[^/]+\/community$/.test(response.url()),
+    );
+    await section.getByRole("button", { name: "Save", exact: true }).click();
+    const body = (await (await saved).json()) as {
+      community: { isCommunity: boolean; isListed: boolean };
+    };
+    expect(body.community).toMatchObject({ isCommunity: true, isListed: true });
+    await expect(section).toContainText("Saved.");
+    // Saved: nothing just happened any more, so the box goes quiet and the
+    // switch stays where the owner put it.
+    await expect(offer).toHaveCount(0);
+    await expect(directory).toBeChecked();
   });
 
   test("the create call to action hands you the make-a-community form", async ({
@@ -396,5 +456,6 @@ test.describe("Communities", () => {
     await openServerSettings(page);
     await expect(page.getByText(/Community name/i).first()).toBeVisible();
     await expect(page.locator("[data-community-settings]")).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "Community" })).toHaveCount(0);
   });
 });

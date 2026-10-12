@@ -1,5 +1,10 @@
 import { useEffect, useRef } from "react";
 import { applyAudioOutputDevice } from "@/lib/audio-devices";
+import {
+  checkOutputDevice,
+  playElement,
+  trackPlaybackElement,
+} from "@/lib/audio-playback-health";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 
 /**
@@ -53,6 +58,17 @@ function PeerAudio({
   const stream = screenAudio ? peer.screenAudioStream : peer.stream;
   const audioRef = useRef<HTMLAudioElement>(null);
 
+  // Followed for as long as it is mounted, so a stuck element (an autoplay
+  // refusal, a pause the phone did on its own) is a fault the call can see
+  // and repair. See `lib/audio-playback-health.ts`.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+    return trackPlaybackElement(audio, peer.peerId);
+  }, [peer.peerId]);
+
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) {
@@ -60,10 +76,10 @@ function PeerAudio({
     }
     audio.srcObject = stream;
     if (stream) {
-      void audio.play().catch(() => {
-        // Autoplay can be blocked until the page has been interacted with;
-        // joining voice is itself an interaction, so this is rare.
-      });
+      // Autoplay is refused on a page nobody has touched yet, which a call
+      // resumed after a reload is. `playElement` arms a retry on the next
+      // press when `voice_audio_self_heal` is on.
+      void playElement(audio);
     }
   }, [stream]);
 
@@ -151,6 +167,26 @@ export function VoiceAudioSinks({
   serverMutedPeerIds = [],
   speakLockedPeerIds = [],
 }: VoiceAudioSinksProps) {
+  // The chosen output going away mid-call (headset unplugged, Bluetooth gone)
+  // used to leave every element pointed at nothing. Checked when the choice
+  // changes, when the call gains its first sound, and on every device change.
+  const hasPeers = peers.length > 0;
+  useEffect(() => {
+    if (!hasPeers || !outputDeviceId) {
+      return;
+    }
+    void checkOutputDevice(outputDeviceId);
+    const devices = typeof navigator === "undefined" ? undefined : navigator.mediaDevices;
+    if (typeof devices?.addEventListener !== "function") {
+      return;
+    }
+    const onChange = () => {
+      void checkOutputDevice(outputDeviceId);
+    };
+    devices.addEventListener("devicechange", onChange);
+    return () => devices.removeEventListener("devicechange", onChange);
+  }, [hasPeers, outputDeviceId]);
+
   return (
     <>
       {peers.map((peer) => (

@@ -106,9 +106,15 @@ export async function deleteWebhook(webhookId: string): Promise<DbWebhook | null
 export async function getWebhookForExecution(
   id: string,
   token: string,
-): Promise<DbWebhook | null> {
-  const result = await getPool().query<DbWebhook>(
-    `SELECT ${WEBHOOK_COLUMNS} FROM webhooks WHERE id = $1 AND token = $2`,
+): Promise<(DbWebhook & { channel_type: string }) | null> {
+  // The channel's type rides along, so the execute route can tell a forum
+  // from a text channel without a second round trip on every delivery.
+  const result = await getPool().query<DbWebhook & { channel_type: string }>(
+    `SELECT ${WEBHOOK_COLUMNS.split(", ").map((column) => `w.${column}`).join(", ")},
+            c.type AS channel_type
+       FROM webhooks w
+       JOIN channels c ON c.id = w.channel_id
+      WHERE w.id = $1 AND w.token = $2`,
     [id, token],
   );
   return result.rows[0] ?? null;
@@ -120,11 +126,46 @@ export async function getWebhookForExecution(
  * the normal compose path — nothing here claims an upload or unfurls a
  * link, matching how `createMessage` leaves the same fields empty for a
  * message no client has round-tripped through yet.
+ *
+ * `channelId` is the webhook's own channel unless the caller says otherwise,
+ * which only the forum path does: a webhook on a forum writes each item into
+ * the post it just created, or into the post `?thread_id=` names
+ * (`services/forum-webhooks.ts`). A forum never holds a message itself.
  */
 export async function executeWebhook(
   webhook: DbWebhook,
   body: ExecuteWebhookBody,
+  channelId: string = webhook.channel_id,
 ): Promise<HydratedMessage> {
+  return (await insertWebhookMessage(webhook, body, channelId, false))!;
+}
+
+/**
+ * A `?thread_id=` reply: the same INSERT, written only while the post is open.
+ * The check is in the statement, with the post row taken FOR SHARE, so a
+ * moderator's lock either commits first (and this writes nothing) or waits
+ * for this reply to land: there is no window between reading the lock and
+ * writing past it. Null when the post is locked.
+ */
+export async function executeWebhookIntoOpenPost(
+  webhook: DbWebhook,
+  body: ExecuteWebhookBody,
+  postId: string,
+): Promise<HydratedMessage | null> {
+  return insertWebhookMessage(webhook, body, postId, true);
+}
+
+async function insertWebhookMessage(
+  webhook: DbWebhook,
+  body: ExecuteWebhookBody,
+  channelId: string,
+  openPostOnly: boolean,
+): Promise<HydratedMessage | null> {
+  const guard = openPostOnly
+    ? `WHERE EXISTS (SELECT 1 FROM forum_posts
+                      WHERE channel_id = $1 AND locked_at IS NULL
+                      FOR SHARE)`
+    : "";
   const result = await getPool().query<{
     id: string;
     channel_id: string;
@@ -137,11 +178,12 @@ export async function executeWebhook(
     webhook_avatar_url: string | null;
   }>(
     `INSERT INTO messages (channel_id, author_id, body, webhook_embeds, webhook_username, webhook_avatar_url)
-     VALUES ($1, $2, $3, $4, $5, $6)
+     SELECT $1::uuid, $2::uuid, $3::text, $4::jsonb, $5::text, $6::text
+     ${guard}
      RETURNING id, channel_id, author_id, body, created_at, edited_at,
                webhook_embeds, webhook_username, webhook_avatar_url`,
     [
-      webhook.channel_id,
+      channelId,
       webhook.pseudo_user_id,
       body.content ?? "",
       body.embeds ? JSON.stringify(body.embeds) : null,
@@ -149,7 +191,10 @@ export async function executeWebhook(
       body.avatar_url ?? null,
     ],
   );
-  const row = result.rows[0]!;
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
   return {
     ...row,
     author_name: webhook.name,

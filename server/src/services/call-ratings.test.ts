@@ -20,7 +20,12 @@ if (DATABASE_URL) {
 
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("./users.js");
-const { callRatingSummary, recordCallRating } = await import(
+const {
+  callRatingAudioHealthCounts,
+  callRatingSummary,
+  recordCallRating,
+  resetCallRatingAudioHealthCounts,
+} = await import(
   "./call-ratings.js"
 );
 
@@ -189,5 +194,42 @@ describeDb("call ratings", () => {
     const summary = await callRatingSummary(7);
     expect(summary.total).toBe(1);
     expect(summary.average).toBe(1);
+  });
+  it("tallies audioHealth on every score, though the row keeps it only on a low one", async () => {
+    resetCallRatingAudioHealthCounts();
+    const user = await rater("clerk-ah");
+    const mediaQuality = (audioHealth: Record<string, unknown>) => ({
+      outboundScreenShare: null,
+      inboundScreenShare: null,
+      packetLossPercent: 0,
+      rttMsMedian: 20,
+      relayed: false,
+      reconnectCount: 0,
+      audioHealth,
+    });
+    const healed = { detected: 1, autoFixed: 1, asked: 0, manualFixed: 0, unresolved: 0 };
+    const stuck = { detected: 2, autoFixed: 0, asked: 1, manualFixed: 0, unresolved: 1 };
+    await recordCallRating(user.id, input(5, { mediaQuality: mediaQuality({ micNotSending: healed }) }));
+    await recordCallRating(
+      user.id,
+      input(1, { note: "n escuto", mediaQuality: mediaQuality({ inboundStalled: stuck }) }),
+    );
+
+    expect(callRatingAudioHealthCounts()).toEqual({
+      "micNotSending.calls": 1,
+      "micNotSending.detected": 1,
+      "micNotSending.autoFixed": 1,
+      "inboundStalled.calls": 1,
+      "inboundStalled.lowRated": 1,
+      "inboundStalled.detected": 2,
+      "inboundStalled.asked": 1,
+      "inboundStalled.unresolved": 1,
+    });
+    const rows = await getPool().query<{ rating: number; media_quality: { audioHealth?: unknown } | null }>(
+      `SELECT rating, media_quality FROM call_ratings WHERE user_id = $1 ORDER BY rating`,
+      [user.id],
+    );
+    expect(rows.rows[0]!.media_quality?.audioHealth).toEqual({ inboundStalled: stuck });
+    expect(rows.rows[1]!.media_quality).toBeNull();
   });
 });

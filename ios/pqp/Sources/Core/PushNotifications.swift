@@ -39,6 +39,8 @@ enum PushPresentation {
             return channelId != visibleChannelId
         case .channel(_, let channelId):
             return channelId != visibleChannelId
+        case .forumPost(_, _, let postId):
+            return postId != visibleChannelId
         case .invite, .server, .bau, .bauPost, .none:
             return true
         }

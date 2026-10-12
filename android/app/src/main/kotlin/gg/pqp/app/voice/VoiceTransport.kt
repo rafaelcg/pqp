@@ -71,6 +71,19 @@ interface VoiceTransport {
     /** This device is capturing and publishing its screen. */
     val isSharingScreen: Boolean
 
+    /**
+     * The phone's own sound (a game, a video) is going out with the share,
+     * mixed into the microphone. See [PcmRing] for why it rides the mic.
+     */
+    val isSharingScreenAudio: Boolean
+
+    /**
+     * A moderator holds this device's microphone. Separate from [setMuted]
+     * because the two differ while a share carries the game's sound: a
+     * self-mute keeps the game going out, a moderator's mute stops everything.
+     */
+    fun setSelfServerMuted(muted: Boolean)
+
     fun start(localPeerId: String, ice: List<IceServer>)
 
     /**

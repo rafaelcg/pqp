@@ -133,7 +133,7 @@ class SessionStore(
         restoreJob = scope.launch {
             _phase.value = SessionPhase.Launching
             val me = withTimeoutOrNull(LAUNCH_DEADLINE_MS) {
-                runCatching { api.me() }.getOrElse { error ->
+                runSuspendCatching { api.me() }.getOrElse { error ->
                     when {
                         error is ApiException && error.isUnauthorized -> null
                         else -> {
@@ -181,6 +181,18 @@ class SessionStore(
         val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
         _phase.value = SessionPhase.Ready(
             updated.copy(ageGate = current.ageGate, preferences = current.preferences),
+        )
+    }
+
+    /**
+     * Chamar a atenção's opt-out, reflected into the session the moment it is
+     * chosen, so every screen reads one value and a remount never shows the
+     * one from launch. The write itself is `NudgePreference`'s.
+     */
+    fun applyAllowNudges(allow: Boolean) {
+        val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
+        _phase.value = SessionPhase.Ready(
+            current.copy(preferences = (current.preferences ?: MePreferences()).copy(allowNudges = allow)),
         )
     }
 

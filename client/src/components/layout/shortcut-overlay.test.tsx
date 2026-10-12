@@ -11,7 +11,9 @@ import { defaultShortcutBindings } from "@/lib/keyboard-shortcuts";
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
-function mount(props: { pushToTalkOn?: boolean; onClose?: () => void } = {}) {
+function mount(
+  props: { pushToTalkOn?: boolean; forumKeys?: boolean; onClose?: () => void } = {},
+) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -81,5 +83,18 @@ describe("ShortcutOverlay backdrop", () => {
       title.dispatchEvent(down);
     });
     expect(down.defaultPrevented).toBe(false);
+  });
+});
+
+describe("ShortcutOverlay forum keys", () => {
+  it("lists the forum group only where a forum exists", () => {
+    mount();
+    expect(document.querySelector('[data-shortcut-group="forum"]')).toBeNull();
+    act(() => root?.unmount());
+    host?.remove();
+    mount({ forumKeys: true });
+    const group = document.querySelector('[data-shortcut-group="forum"]');
+    expect(group).not.toBeNull();
+    expect(group!.querySelectorAll("kbd").length).toBeGreaterThanOrEqual(6);
   });
 });

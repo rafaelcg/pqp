@@ -35,6 +35,7 @@ import {
   type ServerRole,
 } from "@/lib/api";
 import { displayRoleName } from "@/lib/role-labels";
+import { loadServerStoriesEnabled } from "@/lib/stories/config";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 
 const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
@@ -63,6 +64,7 @@ const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
   MANAGE_WEBHOOKS: "roles.perm.MANAGE_WEBHOOKS",
   START_WATCH_PARTY: "roles.perm.START_WATCH_PARTY",
   MANAGE_MUSIC: "roles.perm.MANAGE_MUSIC",
+  POST_STORIES: "roles.perm.POST_STORIES",
 };
 
 /** One-liners for flags whose names collide or oversell. Labels stay for the rest. */
@@ -87,6 +89,7 @@ const FLAG_HINT: Partial<Record<PermissionFlagKey, MessageKey>> = {
   MANAGE_WEBHOOKS: "roles.permHint.MANAGE_WEBHOOKS",
   START_WATCH_PARTY: "roles.permHint.START_WATCH_PARTY",
   MANAGE_MUSIC: "roles.permHint.MANAGE_MUSIC",
+  POST_STORIES: "roles.permHint.POST_STORIES",
 };
 
 /** Display order. Bit numbers stay as defined in `@pqp/shared`. */
@@ -123,6 +126,7 @@ const PERMISSION_GROUPS = [
       "READ_MESSAGE_HISTORY",
       "ADD_REACTIONS",
       "MENTION_EVERYONE",
+      "POST_STORIES",
     ],
   },
   {
@@ -152,6 +156,15 @@ const UNENFORCED_FLAGS = new Set<PermissionFlagKey>([
   "ATTACH_FILES",
   "READ_MESSAGE_HISTORY",
 ]);
+
+/**
+ * Bits for a feature behind a per-server runtime flag: enforced, but drawn
+ * only where the feature is on, so a server without stories never sees a
+ * toggle for something it cannot use.
+ */
+function flagGatedOff(key: PermissionFlagKey, storiesOn: boolean): boolean {
+  return key === "POST_STORIES" && !storiesOn;
+}
 
 const EVERYONE_LOCKED_KEYS = new Set<PermissionFlagKey>([
   "ADMINISTRATOR",
@@ -229,6 +242,19 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<RoleEditorTab>("display");
+  const [storiesOn, setStoriesOn] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void loadServerStoriesEnabled(serverId).then((on) => {
+      if (alive) {
+        setStoriesOn(on);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [serverId]);
 
   const selected = roles.find((role) => role.id === selectedId) ?? null;
   const availableTabs = tabsFor(selected);
@@ -597,7 +623,9 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                 />
               </div>
               {PERMISSION_GROUPS.map((group) => {
-                const keys = group.keys.filter((key) => !UNENFORCED_FLAGS.has(key));
+                const keys = group.keys.filter(
+                  (key) => !UNENFORCED_FLAGS.has(key) && !flagGatedOff(key, storiesOn),
+                );
                 if (keys.length === 0) {
                   return null;
                 }

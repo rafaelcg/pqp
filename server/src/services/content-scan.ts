@@ -737,3 +737,21 @@ export function scanAllowsAttachment(result: ScanResult): boolean {
   }
   return true;
 }
+
+/**
+ * Which report reason a scan verdict files under. One mapping for every
+ * surface that scans (chat attachments, Baú media), so a moderator reading the
+ * queue sees the same reason for the same labels wherever the upload came from.
+ */
+export function scanReportReason(
+  labels: readonly string[],
+): "illegal_content" | "violence" | "other" {
+  if (
+    labels.includes("illegal") ||
+    labels.includes("csam_suspected") ||
+    labels.includes("minor_present")
+  ) {
+    return "illegal_content";
+  }
+  return labels.includes("gore") ? "violence" : "other";
+}

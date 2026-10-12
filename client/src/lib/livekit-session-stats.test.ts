@@ -145,9 +145,22 @@ vi.mock("livekit-client", () => {
 });
 
 const { connectLiveKit } = await import("./livekit-session");
-const { describeLimitation, sampleVoiceStats } = await import(
-  "./voice-stats-probe"
-);
+const { setAudioSelfHealForTests } = await import("./audio-self-heal-flag");
+const {
+  describeLimitation,
+  sampleVoiceStats: sampleCoalesced,
+  resetVoiceStatsSamplingForTests,
+} = await import("./voice-stats-probe");
+
+/**
+ * One scan per call. `sampleVoiceStats()` hands a caller inside
+ * `MIN_SAMPLE_GAP_MS` the scan it just took, and every call in this file
+ * stands for its own tick, so each one starts clean.
+ */
+function sampleVoiceStats() {
+  resetVoiceStatsSamplingForTests();
+  return sampleCoalesced();
+}
 
 const SESSION: VoiceSessionInfo = {
   backend: "livekit",
@@ -593,5 +606,100 @@ describe("what an SFU presenter is sending", () => {
     await session();
     const snapshot = await sampleVoiceStats();
     expect(snapshot.senders).toEqual([]);
+  });
+});
+
+describe("what the audio self-repair reads off an SFU room", () => {
+  beforeEach(() => setAudioSelfHealForTests(true));
+  afterEach(() => setAudioSelfHealForTests(false));
+
+  function voiceParticipant(
+    identity: string,
+    speaking: boolean,
+    received: () => number,
+    extra: { trackName?: string; isSubscribed?: boolean } = {},
+  ) {
+    const pub = {
+      source: Track.Source.Microphone,
+      trackSid: `TR_mic_${identity}`,
+      trackName: extra.trackName ?? "",
+      isSubscribed: extra.isSubscribed ?? true,
+      audioTrack: {
+        getReceiverStats: async () => ({ type: "audio", timestamp: 1, packetsReceived: received() }),
+      },
+    };
+    return {
+      identity,
+      isSpeaking: speaking,
+      videoTrackPublications: new Map(),
+      audioTrackPublications: new Map([[pub.trackSid, pub]]),
+    } as unknown as FakeRemoteParticipant;
+  }
+
+  it("pairs the server's speaking detector with the packets that actually arrived", async () => {
+    await session();
+    let packets = 100;
+    newestRoom().remoteParticipants.set("rafa", voiceParticipant("rafa", true, () => packets));
+    // The archive copy is never subscribed, so it is never judged.
+    newestRoom().remoteParticipants.set(
+      "host",
+      voiceParticipant("host", true, () => 0, { trackName: "mic-archive" }),
+    );
+
+    const first = await sampleVoiceStats();
+    expect(first.audio?.receivers).toEqual([
+      { peerId: "rafa", trackId: null, packetsDelta: null, audioLevel: null, remoteSpeaking: true },
+    ]);
+    packets = 100;
+    const second = await sampleVoiceStats();
+    expect(second.audio?.receivers[0]).toMatchObject({ peerId: "rafa", packetsDelta: 0, remoteSpeaking: true });
+  });
+
+  it("reads at most eight speakers a tick, in turns, and the rest are not judged", async () => {
+    await session();
+    const reads = new Map<string, number>();
+    for (let i = 0; i < 10; i += 1) {
+      const id = `p${i}`;
+      newestRoom().remoteParticipants.set(
+        id,
+        voiceParticipant(id, true, () => {
+          reads.set(id, (reads.get(id) ?? 0) + 1);
+          return 50;
+        }),
+      );
+    }
+    const first = await sampleVoiceStats();
+    expect(reads.size).toBe(8);
+    const skipped = first.audio!.receivers.filter((row) => row.remoteSpeaking === false);
+    expect(skipped.map((row) => row.peerId)).toEqual(["p8", "p9"]);
+    await sampleVoiceStats();
+    // The two left out last time are read this time.
+    expect(reads.get("p8")).toBe(1);
+    expect(reads.get("p9")).toBe(1);
+  });
+
+  it("an unsubscribed voice reads as nothing arriving, and video sampling survives a participant without audio maps", async () => {
+    await session();
+    newestRoom().remoteParticipants.set(
+      "rafa",
+      voiceParticipant("rafa", true, () => 0, { isSubscribed: false }),
+    );
+    newestRoom().remoteParticipants.set("cam", remote("cam", [screenPublication()]));
+    const snapshot = await sampleVoiceStats();
+    // Heard speaking by the server, no subscription here: that is evidence.
+    expect(snapshot.audio?.receivers[0]).toMatchObject({ peerId: "rafa", packetsDelta: 0 });
+    expect(snapshot.receivers).toHaveLength(1);
+  });
+
+  it("reads no receiver of a participant who is not speaking, and nothing at all with the flag off", async () => {
+    await session();
+    const reads = vi.fn(() => 10);
+    newestRoom().remoteParticipants.set("rafa", voiceParticipant("rafa", false, reads));
+    const quiet = await sampleVoiceStats();
+    expect(quiet.audio?.receivers[0]).toMatchObject({ remoteSpeaking: false, packetsDelta: null });
+    expect(reads).not.toHaveBeenCalled();
+    setAudioSelfHealForTests(false);
+    const off = await sampleVoiceStats();
+    expect(off.audio?.receivers ?? []).toEqual([]);
   });
 });

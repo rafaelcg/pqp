@@ -73,6 +73,13 @@ interface FriendsViewProps {
   onOpenNav?: () => void;
   /** Extra content for the quiet state — the SSO server suggestions ride here. */
   extras?: ReactNode;
+  /**
+   * Conversas (`conversations_home`): drawn at the top of the panel, under the
+   * first-run card, while the account has no conversation at all. Handed the
+   * view's own "add a friend" so its button opens the same field the header's
+   * does.
+   */
+  hero?: (actions: { openAdd: () => void }) => ReactNode;
   /** Absent for an account past its first run, which is nearly all of them. */
   firstRun?: FriendsFirstRun;
 }
@@ -82,6 +89,7 @@ export function FriendsView({
   onOpenConversation,
   onOpenNav,
   extras,
+  hero,
   firstRun,
 }: FriendsViewProps) {
   const { t } = useTranslation();
@@ -366,6 +374,8 @@ export function FriendsView({
           />
         )}
 
+        {hero?.({ openAdd: () => setAdding(true) })}
+
         {loading ? (
           <FriendsSkeleton />
         ) : tab === "pending" ? (
@@ -466,7 +476,9 @@ export function FriendsView({
     // encouragement, it is a layout that looks unfinished. And the one line
     // that was left said the card's own sentence again in different words ("@"
     // there, "identificador" here), so while the card is up this says nothing.
-    if (showFirstRun) {
+    // The Conversas hero above already offers Adicionar amigo, for the same
+    // reason.
+    if (showFirstRun || hero) {
       return null;
     }
     return (

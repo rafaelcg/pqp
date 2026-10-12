@@ -41,7 +41,8 @@ struct CallStageView: View {
                 Spacer(minLength: 0)
                 ScreenSharePresenterBanner(
                     isSharing: call.screenShare.isSharing,
-                    errorMessage: call.screenShare.errorMessage
+                    errorMessage: call.screenShare.errorMessage,
+                    isPictureOnly: call.transport == .mesh
                 )
                 .padding(.bottom, 8)
                 if let message = call.errorMessage {
@@ -314,7 +315,8 @@ struct CallStageView: View {
                 ScreenShareControlButton(
                     isSharing: call.screenShare.isSharing,
                     identifier: "call.share",
-                    onTap: { call.screenShare.noteTapped() }
+                    onTap: { call.screenShare.noteTapped() },
+                    showsCaption: true
                 )
             }
 
@@ -340,6 +342,9 @@ struct CallStageView: View {
             .accessibilityIdentifier("call.hangup")
             .accessibilityLabel("Hang up")
         }
+        // Room for the share control's caption under its circle; see
+        // `ScreenShareControlButton.caption`.
+        .padding(.bottom, ScreenShareControlButton.captionReserve)
     }
 }
 

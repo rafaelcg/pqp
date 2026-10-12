@@ -133,11 +133,33 @@ describeDb("audience mode routes", () => {
     const { serverId } = await makeServer();
     expect((await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body).toEqual({
       audienceMode: true,
+      audioSelfHeal: true,
     });
     process.env.AUDIENCE_MODE = "false";
     expect((await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body).toEqual({
       audienceMode: false,
+      audioSelfHeal: true,
     });
+  });
+
+  it("GET /api/voice/config answers audioSelfHeal without a server, and follows its variable", async () => {
+    const previous = process.env.VOICE_AUDIO_SELF_HEAL;
+    try {
+      delete process.env.VOICE_AUDIO_SELF_HEAL;
+      expect((await call(owner, "GET", "/api/voice/config")).body).toMatchObject({
+        audioSelfHeal: true,
+      });
+      process.env.VOICE_AUDIO_SELF_HEAL = "false";
+      expect((await call(owner, "GET", "/api/voice/config")).body).toMatchObject({
+        audioSelfHeal: false,
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.VOICE_AUDIO_SELF_HEAL;
+      } else {
+        process.env.VOICE_AUDIO_SELF_HEAL = previous;
+      }
+    }
   });
 
   it("the owner turns it on from inside the call, the room is locked, the audit log says so, and off is audited too", async () => {

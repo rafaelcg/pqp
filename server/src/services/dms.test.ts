@@ -41,6 +41,7 @@ const {
   openConversation,
   resolveRingableConversation,
   restoreDmParticipants,
+  UNREAD_COUNT_CAP,
 } = await import("./dms.js");
 const { findTimeoutForChannel, issueTimeout } = await import("./sanctions.js");
 const { blockUser } = await import("./blocks.js");
@@ -357,6 +358,43 @@ describeDb("conversations", () => {
     expect(afterRead?.unread).toEqual({ count: 0, mentions: 0 });
   });
 
+  it("stops counting unread at the cap, keeps the newest mentions, and leaves the rest of the row alone", async () => {
+    const { channelId } = await openConversation(alice.id, [bob.id]);
+    // One mention far back (outside the newest UNREAD_COUNT_CAP), then more
+    // than the cap of plain lines, then a fresh mention. Written in one
+    // statement so the test does not take a send per row.
+    await getPool().query(
+      `INSERT INTO messages (channel_id, author_id, body, created_at)
+       SELECT $1, $2, 'linha ' || g, now() - interval '1 hour' + g * interval '1 second'
+         FROM generate_series(1, $3::int) g`,
+      [channelId, bob.id, UNREAD_COUNT_CAP + 40],
+    );
+    const old = await getPool().query<{ id: string }>(
+      `INSERT INTO messages (channel_id, author_id, body, created_at)
+       VALUES ($1, $2, 'velha @alice', now() - interval '2 hours') RETURNING id`,
+      [channelId, bob.id],
+    );
+    await getPool().query(
+      `INSERT INTO message_mentions (message_id, user_id) VALUES ($1, $2)`,
+      [old.rows[0]!.id, alice.id],
+    );
+    await say(channelId, bob.id, "e agora @alice");
+
+    const summary = await getConversation(channelId, alice.id);
+    expect(summary?.unread.count).toBe(UNREAD_COUNT_CAP);
+    // The recent mention is counted; the one buried under 140 lines is not.
+    expect(summary?.unread.mentions).toBe(1);
+    expect(summary?.lastMessage?.preview).toBe("e agora @alice");
+
+    // Under the cap nothing changed: exact counts, as before.
+    await markChannelRead(channelId, alice.id);
+    await say(channelId, bob.id, "oi");
+    expect((await getConversation(channelId, alice.id))?.unread).toEqual({
+      count: 1,
+      mentions: 0,
+    });
+  });
+
   // ----------------------------------------------------------- lastMessage
 
   it("lastMessage is the newest message, not the first", async () => {
@@ -371,6 +409,28 @@ describeDb("conversations", () => {
       preview: "three",
       isAttachment: false,
       isGif: false,
+    });
+  });
+
+  it("says when the last message is a nudge, so the row can read as one", async () => {
+    const { channelId } = await openConversation(alice.id, [bob.id]);
+    await say(channelId, bob.id, "oi");
+    let [summary] = await listConversations(alice.id);
+    expect(summary?.lastMessage?.systemKind).toBeNull();
+
+    // Stored the way the nudge handler stores it: a `📳` body plus the kind.
+    await say(channelId, bob.id, "📳");
+    await getPool().query(
+      `UPDATE messages SET system_kind = 'nudge'
+        WHERE id = (SELECT id FROM messages WHERE channel_id = $1
+                     ORDER BY created_at DESC LIMIT 1)`,
+      [channelId],
+    );
+    [summary] = await listConversations(alice.id);
+    expect(summary?.lastMessage).toMatchObject({
+      authorId: bob.id,
+      preview: "📳",
+      systemKind: "nudge",
     });
   });
 

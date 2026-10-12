@@ -108,6 +108,9 @@ final class BauPlayback {
     @ObservationIgnored private var floor = BauActivePlayer()
     @ObservationIgnored private var retained: [UUID: BauVideoSession] = [:]
     @ObservationIgnored private var weChangedTheAudioSession = false
+    /// Players that are not an `AVPlayer` (a YouTube embed,
+    /// `BauYoutubePlayer.swift`), by id, with how to make each one stop.
+    @ObservationIgnored private var embeds: [UUID: @MainActor () -> Void] = [:]
 
     /// The session already playing this URL (a card that was thrown away and
     /// rebuilt while its video kept going), or a fresh one.
@@ -122,10 +125,28 @@ final class BauPlayback {
     /// Called by a session the moment it starts playing.
     func claim(_ session: BauVideoSession, callActive: Bool) {
         retained[session.id] = session
-        if let displaced = floor.claim(session.id) {
-            retained[displaced]?.yieldTheFloor()
-        }
+        if let displaced = floor.claim(session.id) { displace(displaced) }
         activateAudio(callActive: callActive)
+    }
+
+    /// An embedded player started. Same floor and same audio rule as an
+    /// uploaded video; `pause` is how another video starting stops it.
+    func claimEmbed(_ id: UUID, callActive: Bool, pause: @escaping @MainActor () -> Void) {
+        embeds[id] = pause
+        if let displaced = floor.claim(id) { displace(displaced) }
+        activateAudio(callActive: callActive)
+    }
+
+    /// An embedded player stopped, or is going away.
+    func releaseEmbed(_ id: UUID) {
+        guard embeds.removeValue(forKey: id) != nil else { return }
+        floor.release(id)
+        if floor.current == nil { deactivateAudio() }
+    }
+
+    private func displace(_ id: UUID) {
+        retained[id]?.yieldTheFloor()
+        embeds.removeValue(forKey: id)?()
     }
 
     /// Called when a session stops playing (pause, end, failure).
@@ -141,6 +162,8 @@ final class BauPlayback {
         for session in retained.values where !session.isFullScreen {
             session.stopCompletely()
         }
+        // An embed's own pause keeps a full-screen player going.
+        for pause in Array(embeds.values) { pause() }
     }
 
     private func activateAudio(callActive: Bool) {
@@ -515,8 +538,16 @@ struct BauInlineVideo: View {
     let url: URL
     let name: String
     var postID: String?
+    /// The author's cover, or nil to show the video's own first frame.
+    var posterURL: URL?
 
     @State private var session: BauVideoSession?
+    /// The person tapped the cover (or the video was already playing when the
+    /// card was rebuilt): from here on the player itself is what shows.
+    @State private var coverDismissed = false
+    /// The cover of this URL was tapped before its session existed: play it
+    /// once it does. Scoped to the URL, so a tap never plays another video.
+    @State private var playWhenReady: URL?
     /// Tracked apart from the session: `onAppear` can fire before the task
     /// below has produced one.
     @State private var cardVisible = false
@@ -545,6 +576,7 @@ struct BauInlineVideo: View {
                 Palette.surfaceRaised.overlay { ProgressView().tint(Palette.paperMuted) }
             }
         }
+        .overlay { cover }
         .frame(maxWidth: .infinity)
         .aspectRatio(16 / 9, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
@@ -559,9 +591,20 @@ struct BauInlineVideo: View {
                 old.stopCompletely()
             }
             session = next
+            // Decided per video: a new URL (a replaced video, a re-signed one)
+            // shows its cover again. Kept dismissed only when this very URL is
+            // already playing (`session(for:)` returns a live session only for
+            // the same URL, as in PiP or a rebuilt card) or its tap is waiting.
+            coverDismissed = next.isPlaying || playWhenReady == url
             next.callActive = callActive
             if cardVisible { next.cardDidAppear() }
             await next.prepareIfNeeded()
+            // A task for a URL the card has already moved past must not eat
+            // the pending tap: the task for the new URL plays it.
+            if !Task.isCancelled, playWhenReady == url {
+                playWhenReady = nil
+                playIfStillHere(next)
+            }
         }
         .onChange(of: callActive, initial: true) { _, now in session?.callActive = now }
         .onAppear {
@@ -572,6 +615,71 @@ struct BauInlineVideo: View {
             cardVisible = false
             session?.cardDidDisappear()
         }
+    }
+}
+
+extension BauInlineVideo {
+    /// The author's cover with a play badge, drawn over the player until the
+    /// first tap. The player keeps loading underneath, so the tap starts
+    /// playback at once when it is ready. A cover that fails to load is
+    /// dropped rather than left as a blank square, so the first frame shows as
+    /// it always did; a broken file keeps its own open-out fallback.
+    @ViewBuilder
+    fileprivate var cover: some View {
+        if let posterURL, !coverDismissed, session?.status != .failed {
+            AsyncImage(url: posterURL) { phase in
+                switch phase {
+                case .success(let image):
+                    Button(action: playFromCover) {
+                        ZStack {
+                            Palette.surfaceRaised
+                            image.resizable().scaledToFill()
+                            Circle()
+                                .fill(Palette.signal)
+                                .frame(width: 56, height: 56)
+                                .overlay(
+                                    Image(systemName: "play.fill")
+                                        .font(.system(size: 22, weight: .bold))
+                                        .foregroundStyle(Palette.inkDeep)
+                                        .offset(x: 1)
+                                )
+                                .shadow(color: Palette.signal.opacity(0.35), radius: 14, y: 6)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(name.isEmpty ? Text("Play video") : Text(name))
+                    .accessibilityIdentifier("bau.media.cover")
+                case .failure:
+                    EmptyView()
+                default:
+                    // While the cover loads, hide the first frame so it does
+                    // not flash and then swap.
+                    Palette.surfaceRaised
+                }
+            }
+        }
+    }
+
+    private func playFromCover() {
+        coverDismissed = true
+        guard let session else {
+            // Tapped before the task above made a session: it plays this one
+            // as soon as it has it, instead of losing the tap.
+            playWhenReady = url
+            return
+        }
+        Task { @MainActor in
+            await session.prepareIfNeeded()
+            playIfStillHere(session)
+        }
+    }
+
+    /// Play only while the card is on screen and still holds this session: a
+    /// slow load must not start sound in a card that was scrolled away or
+    /// that moved on to another video meanwhile.
+    private func playIfStillHere(_ played: BauVideoSession) {
+        guard cardVisible, session === played else { return }
+        played.player?.play()
     }
 }
 

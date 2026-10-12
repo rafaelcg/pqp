@@ -40,6 +40,7 @@ class SendHoldTest {
         assertEquals(MessageRejectReason.NoAccess, MessageRejectReason.fromWire("no-access"))
         assertEquals(MessageRejectReason.CannotSend, MessageRejectReason.fromWire("cannot-send"))
         assertEquals(MessageRejectReason.Undeliverable, MessageRejectReason.fromWire("undeliverable"))
+        assertEquals(MessageRejectReason.Locked, MessageRejectReason.fromWire("locked"))
         // A token from a newer server is not a crash and not a dropped frame:
         // the row still comes down, under a generic sentence.
         assertNull(MessageRejectReason.fromWire("some-future-reason"))
