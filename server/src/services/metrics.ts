@@ -460,6 +460,13 @@ export interface AdminMetrics {
     byRoute: Record<string, number>;
   };
   /**
+   * The Retrospectiva's per-person counters (`services/user-stats.ts`), as
+   * seen by THIS process. The sampler runs where the cold jobs run, the music
+   * flush where the sockets are, so read both machines. `blindTicks` above 0
+   * on the process running the jobs means it cannot see any seat.
+   */
+  userStats: UserStatsMetrics;
+  /**
    * `read-cache.ts`'s counters, cumulative since boot: `coalesce` calls that
    * found a fresh entry (`hits`), that had to run the loader (`misses`),
    * that joined an already-running load instead of starting a second one
@@ -475,13 +482,6 @@ export interface AdminMetrics {
    * channel's watch-party state. Off (falling back to `misses` for
    * everything) when `READ_CACHE=off`.
    */
-  /**
-   * The Retrospectiva's per-person counters (`services/user-stats.ts`), as
-   * seen by THIS process. The sampler runs where the cold jobs run, the music
-   * flush where the sockets are, so read both machines. `blindTicks` above 0
-   * on the process running the jobs means it cannot see any seat.
-   */
-  userStats: UserStatsMetrics;
   readCache: {
     hits: number;
     misses: number;
