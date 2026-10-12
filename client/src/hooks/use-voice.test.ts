@@ -4819,3 +4819,140 @@ describe("a microphone that goes quiet on its own", () => {
     expect(getUserMedia).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * Deafening and the mic are coupled the way Discord couples them.
+ *
+ * The user-panel buttons, the in-call mute button, Ctrl+Shift+D and the
+ * desktop global shortcut all call `toggleDeafen` / `toggleMute` here.
+ */
+describe("deafen restores the mic the person had", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    sfuMuteCalls.length = 0;
+    vi.mocked(connectLiveKit).mockClear();
+  });
+
+  async function connected(transport: "mesh" | "livekit" = "mesh") {
+    const { transport: rt, sent } = createTransport();
+    const voice = createVoiceController(rt);
+    if (transport === "livekit") {
+      voice.setSessionProvider(async () => sfuSession());
+    }
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome(transport));
+    await settle();
+    return { voice, sent };
+  }
+
+  it("puts an open mic back when hearing returns", async () => {
+    const { voice } = await connected();
+    voice.toggleDeafen();
+    expect(voice.getState().isDeafened).toBe(true);
+    expect(voice.getState().isMuted).toBe(true);
+    voice.toggleDeafen();
+    expect(voice.getState().isDeafened).toBe(false);
+    expect(voice.getState().isMuted).toBe(false);
+  });
+
+  it("leaves a muted mic muted across deafen and undeafen", async () => {
+    const { voice } = await connected();
+    voice.toggleMute();
+    voice.toggleDeafen();
+    voice.toggleDeafen();
+    expect(voice.getState().isDeafened).toBe(false);
+    expect(voice.getState().isMuted).toBe(true);
+    expect(voice.getState().isTransmitting).toBe(false);
+  });
+
+  it("keeps a mute chosen while deafened", async () => {
+    const { voice } = await connected();
+    voice.toggleDeafen();
+    voice.setMuted(true);
+    voice.toggleDeafen();
+    expect(voice.getState().isDeafened).toBe(false);
+    expect(voice.getState().isMuted).toBe(true);
+  });
+
+  it("undeafens when the mic button unmutes", async () => {
+    const { voice } = await connected();
+    voice.toggleMute();
+    voice.toggleDeafen();
+    voice.toggleMute();
+    expect(voice.getState().isDeafened).toBe(false);
+    expect(voice.getState().isMuted).toBe(false);
+  });
+
+  it("reopens an open mic after a room switch and undeafen", async () => {
+    const other = "00000000-0000-4000-8000-0000000000ee";
+    const { voice } = await connected();
+    voice.toggleDeafen();
+    await voice.join(other, { startMuted: false });
+    voice.handleSignaling(welcome("mesh", [], other));
+    await settle();
+    voice.toggleDeafen();
+    expect(voice.getState().isDeafened).toBe(false);
+    expect(voice.getState().isMuted).toBe(false);
+  });
+
+  it("stays muted through a room switch and the undeafen after it", async () => {
+    const other = "00000000-0000-4000-8000-0000000000ee";
+    const { voice } = await connected();
+    voice.toggleMute();
+    voice.toggleDeafen();
+    await voice.join(other, { startMuted: false });
+    voice.handleSignaling(welcome("mesh", [], other));
+    await settle();
+    expect(voice.getState().isDeafened).toBe(true);
+    expect(voice.getState().isMuted).toBe(true);
+    voice.toggleDeafen();
+    expect(voice.getState().isDeafened).toBe(false);
+    expect(voice.getState().isMuted).toBe(true);
+  });
+
+  it("does not publish an open mic on the SFU when undeafen restores a mute", async () => {
+    const { voice } = await connected("livekit");
+    voice.toggleMute();
+    // The stub records. Clearing after this is what makes the next expect
+    // mean "undeafen did not open it", rather than "nothing was called".
+    expect(sfuMuteCalls.at(-1)).toBe(true);
+    sfuMuteCalls.length = 0;
+    voice.toggleDeafen();
+    voice.toggleDeafen();
+    expect(voice.getState().isMuted).toBe(true);
+    expect(sfuMuteCalls).not.toContain(false);
+  });
+
+  it("publishes the mic on the SFU when undeafen restores an open one", async () => {
+    const { voice } = await connected("livekit");
+    sfuMuteCalls.length = 0;
+    voice.toggleDeafen();
+    voice.toggleDeafen();
+    expect(voice.getState().isMuted).toBe(false);
+    expect(sfuMuteCalls).toContain(false);
+  });
+
+  it("keeps a moderator mute that arrived during a room switch", async () => {
+    const other = "00000000-0000-4000-8000-0000000000ee";
+    const { voice } = await connected();
+    voice.toggleDeafen();
+    await voice.join(other, { startMuted: false });
+    const arrived = welcome("mesh", [], other);
+    voice.handleSignaling({
+      ...arrived,
+      self: { ...arrived.self, serverMuted: true },
+    });
+    await settle();
+    expect(voice.getState().isDeafened).toBe(true);
+    expect(voice.getState().self?.serverMuted).toBe(true);
+    voice.handleSignaling({
+      type: "peer-updated",
+      peer: { ...arrived.self, serverMuted: false, muted: true },
+    } as never);
+    expect(voice.getState().self?.serverMuted).toBe(false);
+    voice.toggleDeafen();
+    expect(voice.getState().isDeafened).toBe(false);
+    expect(voice.getState().isMuted).toBe(true);
+  });
+});

@@ -208,6 +208,9 @@ export function UserPanel({
     !onPhone &&
     !compact &&
     !hideDownloadHint;
+  // Deafen forces the mic off, so both slashes show. Undeafen can leave the
+  // mic slash up: that is the mute from before, not a second deafen.
+  const micShownOff = serverMuted || isMuted || isDeafened;
 
   // Re-seed the draft from the truth: when the menu opens, and whenever the
   // saved value moves under it (another tab, another device, or this write
@@ -595,11 +598,11 @@ export function UserPanel({
         label={
           serverMuted
             ? t("voice.control.serverMuted")
-            : isMuted
+            : micShownOff
               ? t("userPanel.unmute")
               : t("userPanel.mute")
         }
-        name={isMuted ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
+        name={micShownOff ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
         detail={
           !inVoice
             ? t("userPanel.joinToUse")
@@ -609,7 +612,9 @@ export function UserPanel({
                 : t("voice.control.listenOnlyLocked")
               : serverMuted
                 ? t("voice.serverMuted.self")
-                : undefined
+                : isDeafened
+                  ? t("voice.control.unmuteAlsoHears")
+                  : undefined
         }
       >
         <span className="inline-flex">
@@ -619,16 +624,16 @@ export function UserPanel({
             className="h-8 w-8 shrink-0"
             onClick={onToggleMute}
             disabled={!inVoice || !canSpeak || serverMuted}
-            aria-pressed={isMuted}
+            aria-pressed={micShownOff}
             aria-label={
               serverMuted
                 ? t("voice.control.serverMuted")
-                : isMuted
+                : micShownOff
                   ? t("userPanel.unmuteMic")
                   : t("userPanel.muteMic")
             }
           >
-            {isMuted ? (
+            {micShownOff ? (
               <MicOff
                 className={cn("h-4 w-4", serverMuted ? "text-warning" : "text-danger")}
               />

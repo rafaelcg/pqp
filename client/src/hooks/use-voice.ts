@@ -17,6 +17,14 @@ import {
   type VoiceAudienceState,
   watchersWithoutSeat,
 } from "@pqp/shared";
+import {
+  deafenToggle,
+  micLock,
+  muteSet,
+  muteToggle,
+  type MicDeafen,
+  type MicLocks,
+} from "@/lib/deafen-mute";
 import { publishLiveReactions } from "@/lib/live-reactions";
 import { notifyIncomingCall } from "@/lib/notifications";
 import { receiveMusic, setMusicSession } from "@/lib/music-store";
@@ -1719,7 +1727,17 @@ export function createVoiceController(transport: RealtimeTransport) {
    * server resets a seat). That must not unmute them, and it must not win
    * over this snapshot when we publish the next track.
    */
-  let preservedSelfVoice: { muted: boolean; deafened: boolean } | null = null;
+  let preservedSelfVoice: {
+    muted: boolean;
+    deafened: boolean;
+    muteBeforeDeafen: boolean | null;
+  } | null = null;
+  /**
+   * Mic choice to put back when deafen ends. See `deafen-mute.ts`.
+   * The buttons, the shortcut and the desktop hotkey all write this
+   * through the same two toggles.
+   */
+  let muteBeforeDeafen: boolean | null = null;
   /** HMAC from the last `welcome`. Sent on the next join so the server can reattach. */
   let resumeToken: string | null = null;
   /**
@@ -1971,9 +1989,38 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  function readMicDeafen(): MicDeafen {
+    return {
+      muted: state.isMuted,
+      deafened: state.isDeafened,
+      muteBeforeDeafen,
+    };
+  }
+
+  function writeMicDeafen(next: MicDeafen) {
+    state.isMuted = next.muted;
+    state.isDeafened = next.deafened;
+    muteBeforeDeafen = next.muteBeforeDeafen;
+  }
+
+  function micLocks(): MicLocks {
+    return {
+      canSpeak: state.canSpeak,
+      serverMuted: state.self?.serverMuted === true,
+    };
+  }
+
   function applyPreservedSelfVoice() {
     if (!preservedSelfVoice) {
       return;
+    }
+    // A moderator mute or a lost SPEAK during the switch latches `true`
+    // after this snapshot was taken. Replaying the snapshot would forget
+    // that, and undeafen would open the mic once the lock lifts. A toggle
+    // that clears the memory also drops the snapshot, so a `true` still
+    // here is that lock.
+    if (muteBeforeDeafen !== true) {
+      muteBeforeDeafen = preservedSelfVoice.muteBeforeDeafen;
     }
     if (preservedSelfVoice.deafened) {
       state.isDeafened = true;
@@ -2432,7 +2479,12 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.canStream = canStream;
     state.speakReason = canSpeak ? null : speakReason;
     if (!canSpeak) {
-      state.isMuted = true;
+      writeMicDeafen(
+        micLock(readMicDeafen(), {
+          canSpeak: false,
+          serverMuted: micLocks().serverMuted,
+        }),
+      );
       applyMute();
     }
     if (!canStream) {
@@ -3464,9 +3516,14 @@ export function createVoiceController(transport: RealtimeTransport) {
     // Not gated on the flag having changed: `welcome` and `peer-updated`
     // assign `self` wholesale before this runs, so the flag may already
     // read true while the mic is still open.
-    if (serverMuted && !state.isMuted) {
-      state.isMuted = true;
-      applyMute();
+    if (serverMuted) {
+      const wasMuted = state.isMuted;
+      writeMicDeafen(
+        micLock(readMicDeafen(), { canSpeak: state.canSpeak, serverMuted: true }),
+      );
+      if (!wasMuted) {
+        applyMute();
+      }
     }
   }
 
@@ -5018,6 +5075,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     resumeToken = null;
     switchingRooms = false;
     preservedSelfVoice = null;
+    muteBeforeDeafen = null;
     joinGeneration++;
     intendedChannelId = null;
     ringOnWelcomeChannelId = null;
@@ -6175,6 +6233,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         preservedSelfVoice = {
           muted: state.isMuted,
           deafened: state.isDeafened,
+          muteBeforeDeafen,
         };
       }
       if (switching) {
@@ -6241,6 +6300,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // not consent to unmute, and the server seat is born unmuted.
       if (fromIdle) {
         state.isMuted = options?.startMuted ?? state.isMuted;
+        muteBeforeDeafen = state.isDeafened ? state.isMuted : null;
       } else {
         applyPreservedSelfVoice();
       }
@@ -6291,6 +6351,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           audienceSeat = true;
           state.isAudienceSeat = true;
           state.isMuted = true;
+          if (state.isDeafened) {
+            muteBeforeDeafen = true;
+          }
           applyMuteToPipeline();
           sendJoin(voiceChannelId);
           return;
@@ -6373,6 +6436,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         pipeline = null;
         micUnavailable = true;
         state.isMuted = true;
+        if (state.isDeafened) {
+          muteBeforeDeafen = true;
+        }
         applyMuteToPipeline();
         state.notice = translateMessage("voice.notice.listenOnly", {
           reason: micErrorMessage(err),
@@ -6698,14 +6764,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       preservedSelfVoice = null;
-      // Undeafening is the only way back to an unmuted mic while deafened,
-      // there is no way back at all while the room says listen only, and a
-      // moderator's mute is not ours to lift either: the server would refuse
-      // the declaration and nobody would play us anyway.
-      state.isMuted =
-        state.isDeafened || !state.canSpeak || state.self?.serverMuted
-          ? true
-          : muted;
+      // A listen-only seat and a moderator mute are not ours to lift. An
+      // unmute while deafened also undeafens; an explicit mute while
+      // deafened is what undeafen restores.
+      writeMicDeafen(muteSet(readMicDeafen(), muted, micLocks()));
       applyMute();
       emit();
     },
@@ -6724,18 +6786,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       preservedSelfVoice = null;
-      // Locked, not toggled: the button is disabled for this, and a shortcut
-      // or a desktop menu item that reaches here must get the same answer.
+      // Same answer for the button, the shortcut and the desktop menu.
+      // Unmute while deafened also undeafens. A speak lock does not move.
       if (!state.canSpeak) {
         return;
       }
-      const serverMuted = state.self?.serverMuted === true;
-      if (state.isDeafened) {
-        state.isDeafened = false;
-        state.isMuted = serverMuted;
-      } else {
-        state.isMuted = serverMuted ? true : !state.isMuted;
-      }
+      writeMicDeafen(muteToggle(readMicDeafen(), micLocks()));
       applyMute();
       emit();
     },
@@ -6766,11 +6822,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       preservedSelfVoice = null;
-      state.isDeafened = !state.isDeafened;
-      // Deafening also mutes; undeafening restores an open mic, unless the
-      // room never allowed one or a moderator has it pinned.
-      state.isMuted =
-        state.isDeafened || !state.canSpeak || state.self?.serverMuted === true;
+      // Deafening mutes for the duration. Undeafen restores the mic from
+      // before that, including a mute chosen while deafened.
+      writeMicDeafen(deafenToggle(readMicDeafen(), micLocks()));
       applyMute();
       emit();
     },

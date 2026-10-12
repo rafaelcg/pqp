@@ -1122,6 +1122,7 @@
   "voice.idle.disconnected_many": "Te desconectamos de la llamada porque estuviste solo {count} minutos.",
   "voice.control.deafen": "Desactivar audio",
   "voice.control.undeafen": "Activar audio",
+  "voice.control.unmuteAlsoHears": "También activa el audio",
   "voice.control.share": "Compartir pantalla",
   "voice.control.watchParty": "Watch party",
   "voice.control.watchPartyHint": "Comparte la pestaña de YouTube (o del reproductor) en Chrome, con el audio de esa pestaña. No elijas la pantalla completa.",

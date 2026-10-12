@@ -1118,6 +1118,7 @@
   "voice.idle.disconnected_other": "Você foi desconectado da call porque ficou {count} minutos sozinho.",
   "voice.control.deafen": "Desligar o áudio",
   "voice.control.undeafen": "Ligar o áudio",
+  "voice.control.unmuteAlsoHears": "Também liga o áudio",
   "voice.control.share": "Compartilhar a tela",
   "voice.control.watchParty": "Watch party",
   "voice.control.watchPartyHint": "Compartilha a guia do YouTube (ou do player) no Chrome, com o áudio da guia. Não escolhe a tela inteira.",

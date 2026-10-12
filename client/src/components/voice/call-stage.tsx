@@ -2961,6 +2961,8 @@ export function CallControls({
     audienceHost !== null && (audienceHost.available || voiceState.audience !== null);
 
   const showMute = !collapsed || !pushToTalk;
+  // Same rule as the user panel: deafen shows the mic slash too.
+  const micShownOff = voiceState.isMuted || voiceState.isDeafened;
 
   return (
     <div
@@ -3169,7 +3171,7 @@ export function CallControls({
                 ? t("voice.control.listenOnlyLocked")
                 : voiceState.self?.serverMuted
                   ? t("voice.control.serverMuted")
-                  : voiceState.isMuted
+                  : micShownOff
                     ? t("voice.control.unmute")
                     : t("voice.control.mute")
           }
@@ -3178,7 +3180,9 @@ export function CallControls({
               ? t("voice.audience.lockedDetail")
               : !listenOnly && voiceState.self?.serverMuted
                 ? t("voice.serverMuted.self")
-                : undefined
+                : voiceState.isDeafened && !listenOnly
+                  ? t("voice.control.unmuteAlsoHears")
+                  : undefined
           }
         >
           {/* Neither a listen-only lock nor a moderator's mute is this
@@ -3189,7 +3193,7 @@ export function CallControls({
           <span className="inline-flex">
             <button
               type="button"
-              aria-pressed={voiceState.isMuted}
+              aria-pressed={micShownOff}
               disabled={listenOnly || voiceState.self?.serverMuted === true}
               data-mic-toggle=""
               data-speak-locked={
@@ -3202,7 +3206,7 @@ export function CallControls({
                     ? t("voice.control.listenOnlyLocked")
                     : voiceState.self?.serverMuted
                     ? t("voice.control.serverMuted")
-                    : voiceState.isMuted
+                    : micShownOff
                       ? t("voice.control.unmute")
                       : t("voice.control.mute")
               }
@@ -3211,7 +3215,7 @@ export function CallControls({
                 size,
                 !listenOnly && voiceState.self?.serverMuted
                   ? "bg-warning/20 text-warning"
-                  : voiceState.isMuted
+                  : micShownOff
                     ? "bg-danger/20 text-danger"
                     : "bg-ink-3 text-paper hover:bg-ink-4",
                 listenOnly && "opacity-60",
@@ -3220,7 +3224,7 @@ export function CallControls({
             >
               {!listenOnly && voiceState.self?.serverMuted ? (
                 <ShieldBan className={iconSize} />
-              ) : voiceState.isMuted ? (
+              ) : micShownOff ? (
                 <MicOff className={iconSize} />
               ) : (
                 <Mic className={iconSize} />

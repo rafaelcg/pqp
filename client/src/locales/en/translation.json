@@ -1118,6 +1118,7 @@
   "voice.idle.disconnected_other": "You were disconnected from the call because you were alone for {count} minutes.",
   "voice.control.deafen": "Deafen",
   "voice.control.undeafen": "Undeafen",
+  "voice.control.unmuteAlsoHears": "Also turns sound back on",
   "voice.control.share": "Share your screen",
   "voice.control.watchParty": "Watch party",
   "voice.control.watchPartyHint": "Share the YouTube (or player) tab in Chrome, with that tab's audio. Don't pick the whole screen.",
