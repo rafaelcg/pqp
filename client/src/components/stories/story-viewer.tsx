@@ -51,6 +51,7 @@ import {
   replyToStory,
   saveStoryToBau,
   setStoryReaction,
+  unmuteStoryAuthor,
 } from "@/lib/stories/api";
 import { emitStoriesRefresh, onStoriesSignal } from "@/lib/stories/events";
 import {
@@ -60,7 +61,7 @@ import {
 } from "@/lib/stories/format";
 import { commitSeenStories, noteStoriesSeen } from "@/lib/stories/seen-store";
 import { flushStoryViews, queueStoryViews } from "@/lib/stories/views-queue";
-import { ringAudienceKey, type ViewerRequest } from "@/lib/stories/ui-store";
+import { ringAudienceKey, showStoriesNotice, type ViewerRequest } from "@/lib/stories/ui-store";
 import {
   createViewerState,
   currentPerson,
@@ -946,7 +947,20 @@ export function StoryViewer({
   async function runMute(target: StoryAuthor) {
     try {
       await muteStoryAuthor(target.id);
-      showToast(t("stories.menu.muted", { name: target.displayName }));
+      // Muting hides every ring of theirs, so nothing on screen leads back,
+      // and muting the last person closes the viewer: the way back is a
+      // notice over the app, not a toast inside the card.
+      showStoriesNotice(t("stories.menu.muted", { name: target.displayName }), {
+        label: t("stories.menu.undo"),
+        run: () => {
+          void unmuteStoryAuthor(target.id)
+            .then(() => {
+              showStoriesNotice(t("stories.menu.unmuted", { name: target.displayName }));
+              emitStoriesRefresh();
+            })
+            .catch(() => showStoriesNotice(t("stories.own.failed")));
+        },
+      });
       const ids = state.people.find((entry) => entry.authorId === target.id)?.storyIds ?? [];
       dispatch({ type: "remove", storyIds: ids });
       emitStoriesRefresh();

@@ -5283,6 +5283,8 @@
   "stories.menu.mute": "Mute {name}'s stories",
   "stories.menu.muteHint": "They leave your strip. {name} won't know.",
   "stories.menu.muted": "{name}'s stories muted",
+  "stories.menu.undo": "Undo",
+  "stories.menu.unmuted": "{name}'s stories are back",
   "stories.menu.report": "Report story",
   "stories.menu.modSection": "{server} moderation",
   "stories.menu.modRemove": "Remove from {server}",

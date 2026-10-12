@@ -5283,6 +5283,8 @@
   "stories.menu.mute": "Silenciar stories de {name}",
   "stories.menu.muteHint": "Some da tua faixa. {name} não fica sabendo.",
   "stories.menu.muted": "Stories de {name} silenciados",
+  "stories.menu.undo": "Desfazer",
+  "stories.menu.unmuted": "Stories de {name} de volta",
   "stories.menu.report": "Denunciar story",
   "stories.menu.modSection": "Moderação do {server}",
   "stories.menu.modRemove": "Tirar do {server}",
