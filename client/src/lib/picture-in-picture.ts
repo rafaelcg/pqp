@@ -121,14 +121,17 @@ export type PictureInPictureToggle =
   | "unsupported"
   | "refused";
 
-/** A standard PiP request that has not settled yet, per element. */
+/**
+ * Per element, a promise that settles once every standard PiP request in
+ * flight on it has settled, landed or refused. It never rejects.
+ */
 const pendingRequests = new WeakMap<PipVideo, Promise<unknown>>();
 
 /**
- * Runs `check` now, and once more when a PiP request still in flight on
- * `video` settles. The browser sets `pictureInPictureElement` only when the
- * request lands, so a share that went away during that gap would otherwise
- * leave a window open that nothing on the page closes.
+ * Runs `check` now, and once more when the PiP requests still in flight on
+ * `video` have all settled. The browser sets `pictureInPictureElement` only
+ * when a request lands, so a share that went away during that gap would
+ * otherwise leave a window open that nothing on the page closes.
  */
 export function afterPictureInPictureRequest(
   video: PipVideo,
@@ -137,7 +140,7 @@ export function afterPictureInPictureRequest(
   check();
   const pending = pendingRequests.get(video);
   if (pending) {
-    void pending.then(check, () => {});
+    void pending.then(check);
   }
 }
 
@@ -158,14 +161,15 @@ export async function togglePictureInPicture(
         return "exited";
       }
       const request = video.requestPictureInPicture!();
-      pendingRequests.set(video, request);
-      try {
-        await request;
-      } finally {
-        if (pendingRequests.get(video) === request) {
+      // Joined with any request already in flight, so a check waits for all.
+      const settled = Promise.allSettled([pendingRequests.get(video), request]);
+      pendingRequests.set(video, settled);
+      void settled.then(() => {
+        if (pendingRequests.get(video) === settled) {
           pendingRequests.delete(video);
         }
-      }
+      });
+      await request;
       return "entered";
     }
     if (support === "webkit") {

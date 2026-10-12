@@ -203,7 +203,7 @@ describe("afterPictureInPictureRequest", () => {
     expect(check).toHaveBeenCalledTimes(1);
   });
 
-  it("does not check again after a refused request, and does not throw", async () => {
+  it("checks again after a refused request, without throwing", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const { doc } = standardPlatform();
     let refuse: () => void = () => {};
@@ -218,8 +218,41 @@ describe("afterPictureInPictureRequest", () => {
     afterPictureInPictureRequest(video, check);
     refuse();
     expect(await entering).toBe("refused");
-    await Promise.resolve();
-    expect(check).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(check).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for every overlapping request, even when the later one is refused first", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { doc } = standardPlatform();
+    const settle: Array<{ land: () => void; refuse: () => void }> = [];
+    const video: ReturnType<typeof fakeVideo> = fakeVideo({
+      requestPictureInPicture: () =>
+        new Promise<void>((resolve, reject) => {
+          settle.push({
+            land: () => {
+              doc.pictureInPictureElement = video;
+              resolve();
+            },
+            refuse: () => reject(new DOMException("busy", "InvalidStateError")),
+          });
+        }),
+    });
+    const first = togglePictureInPicture(video, doc);
+    const second = togglePictureInPicture(video, doc);
+    // The share goes away while both are in flight.
+    afterPictureInPictureRequest(video, () => {
+      if (isInPictureInPicture(video, doc)) {
+        void togglePictureInPicture(video, doc);
+      }
+    });
+    settle[1].refuse();
+    expect(await second).toBe("refused");
+    settle[0].land();
+    expect(await first).toBe("entered");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(doc.exitPictureInPicture).toHaveBeenCalledTimes(1);
+    expect(isInPictureInPicture(video, doc)).toBe(false);
   });
 });
 
