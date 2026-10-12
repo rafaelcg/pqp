@@ -36,6 +36,12 @@ enum PermissionBit {
     /// `packages/shared/src/permissions.ts`: start the stream in a
     /// `watch_party` channel. Everyone else there is the audience.
     static let startWatchParty: UInt64 = 1 << 23
+
+    /// `Permission.POST_STORIES` = `1n << 25n`: post a story to this server.
+    /// Server level only (an overwrite would mean nothing), on for @everyone
+    /// by default. The strip's `canPost` and `GET /api/stories/audiences`
+    /// already answer with it applied; this mirror is for parity and tests.
+    static let postStories: UInt64 = 1 << 25
 }
 
 /**

@@ -211,6 +211,9 @@ enum RealtimeEvent: Sendable {
     case forumPostRemoved(forumId: String, postId: String)
     /// `nudge-refused`: a chamar a atenção this socket sent did not land.
     case nudgeRefused(NudgeRefusal)
+    /// `stories-update`: content-free, refetch the strip it names. Never sent
+    /// on a view, a reaction or an expiry.
+    case storiesUpdate(StoriesUpdate)
     case other
 }
 
@@ -996,6 +999,13 @@ actor RealtimeClient {
         }
     }
 
+    /// `stories-update`: `{scope, serverId?, removedStoryIds?}`.
+    private struct StoriesUpdateFrame: Decodable {
+        let scope: String
+        let serverId: String?
+        let removedStoryIds: [String]?
+    }
+
     /// `voice-note-updated`: `{channelId, messageId, attachmentId,
     /// playbackReady}`, exactly the shape in `packages/shared/src/chat.ts`. No
     /// message body rides on it.
@@ -1172,6 +1182,20 @@ actor RealtimeClient {
                 attachmentId: frame.attachmentId, userId: frame.userId,
                 listenedAt: frame.listenedAt
             ))
+            return
+        }
+
+        if probe.type == "stories-update" {
+            // Decoded on its own: `removedStoryIds` is in no other frame, and
+            // the scope/serverId pairing is the contract's to enforce.
+            guard let frame = try? Coding.decoder.decode(StoriesUpdateFrame.self, from: data),
+                  ["server", "friends", "own"].contains(frame.scope),
+                  (frame.scope == "server") == (frame.serverId != nil)
+            else { return }
+            continuation?.yield(.storiesUpdate(StoriesUpdate(
+                scope: frame.scope, serverId: frame.serverId,
+                removedStoryIds: frame.removedStoryIds ?? []
+            )))
             return
         }
 

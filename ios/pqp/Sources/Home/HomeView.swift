@@ -765,6 +765,8 @@ struct HubView: View {
     @State private var showingCreateServer = false
     @State private var newServerName = ""
     @State private var showingNewConversation = false
+    /// Stories from friends, at the top of the conversations: Amigos only.
+    @State private var friendStories = StoryStripModel(scope: .friends)
     /// Typing or pasting a code, for the invite that did not arrive as a
     /// tappable link — read out loud over voice chat, or copied out of a
     /// message. The empty-servers card has promised this since it shipped.
@@ -1247,6 +1249,13 @@ struct HubView: View {
     @ViewBuilder
     private var conversationSection: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Friends' stories, above the conversations they lead to (with the
+            // Conversas tabs on they live at the top of that tab instead).
+            // Only with the friends flag on; the author's own bubble shows
+            // alone only for somebody with friends to post to.
+            StoryStripView(model: friendStories, showsOwnBubbleAlone: model.friendCount > 0)
+                .padding(.horizontal, Metrics.hPadding)
+                .task { await friendStories.start(session: session) }
             HStack {
                 SectionLabel(text: String(localized: "Direct messages"))
                 Spacer()

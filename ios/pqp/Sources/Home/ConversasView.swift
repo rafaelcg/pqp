@@ -20,6 +20,8 @@ struct ConversasView: View {
     @State private var addingFriend = false
     /// The friend a "Say hi" on the empty screen is opening a conversation with.
     @State private var opening: String?
+    /// Friends' stories, under the title and above search: Amigos only.
+    @State private var friendStories = StoryStripModel(scope: .friends)
 
     private var visible: [DmSummary] {
         ConversationList.filter(model.conversations, query: query, filter: filter)
@@ -101,6 +103,7 @@ struct ConversasView: View {
         .navigationDestination(isPresented: $addingFriend) {
             FriendsView(opensAddImmediately: true)
         }
+        .task { await friendStories.start(session: session) }
         // Coming back from a conversation re-reads the list: the screen behind
         // marked itself read server-side, and this is what clears its count.
         .onAppear {
@@ -114,6 +117,13 @@ struct ConversasView: View {
     private var list: some View {
         let split = ConversationList.splitPinned(visible, pinnedIds: model.pinnedConversationIds)
         return List {
+            // Friends' stories first, the Telegram place for them: what your
+            // people are up to, one row above who wrote to you.
+            StoryStripView(model: friendStories, showsOwnBubbleAlone: model.friendCount > 0)
+                .listRowInsets(EdgeInsets(top: 2, leading: Metrics.hPadding, bottom: 4, trailing: Metrics.hPadding))
+                .listRowBackground(Palette.ink)
+                .listRowSeparator(.hidden)
+
             chips
                 .listRowInsets(EdgeInsets(top: 4, leading: Metrics.hPadding, bottom: 6, trailing: Metrics.hPadding))
                 .listRowBackground(Palette.ink)
