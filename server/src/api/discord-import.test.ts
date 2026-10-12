@@ -49,6 +49,13 @@ const { getPool, initDb, closePool } = await import("../db.js");
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { upsertUser } = await import("../services/users.js");
 const { safeFetch, FetchTooLargeError } = await import("../lib/safe-fetch.js");
+const { createServer: createPqpServer } = await import("../services/servers.js");
+const {
+  resetFeatureFlagsForTests,
+  setGlobalFlag,
+  setServerFlagOverride,
+  startFeatureFlags,
+} = await import("../lib/flags.js");
 
 interface Actor {
   id: string;
@@ -105,13 +112,18 @@ describeDb("discord layout import API", () => {
 
   afterAll(async () => {
     await new Promise<void>((done) => server.close(() => done()));
+    resetFeatureFlagsForTests();
     await closePool();
   });
 
   beforeEach(async () => {
     resetApiRateLimits();
     vi.mocked(safeFetch).mockReset();
-    await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
+    resetFeatureFlagsForTests();
+    await getPool().query(
+      `TRUNCATE users, feature_flags, feature_flag_overrides, feature_flag_audit
+       RESTART IDENTITY CASCADE`,
+    );
     const row = await upsertUser({
       clerkId: "clerk_import_api",
       displayName: "Importer",
@@ -438,5 +450,156 @@ describeDb("discord layout import API", () => {
     expect(BigInt(boostersRow?.allow ?? "0") & Permission.VIEW_CHANNEL).toBe(
       Permission.VIEW_CHANNEL,
     );
+  });
+
+  describe("Discord forums", () => {
+    const FORUM_TEMPLATE = guildTemplate([
+      { id: 1, type: 4, name: "Help", position: 0, parent_id: null },
+      {
+        id: 2,
+        type: 15,
+        name: "questions",
+        position: 0,
+        parent_id: 1,
+        topic: "Search before you ask",
+        available_tags: [
+          { id: "11", name: "Bug", moderated: false, emoji_name: "🐛" },
+          { id: "12", name: "Official", moderated: true },
+          { id: "13", name: "bug" },
+          { id: "14", name: "Pog", emoji_id: "123456789012345678", emoji_name: "pog" },
+        ],
+        default_sort_order: 1,
+      },
+      {
+        id: 3,
+        type: 15,
+        name: "ideas",
+        position: 1,
+        parent_id: null,
+        available_tags: Array.from({ length: 25 }, (_, i) => ({ name: `tag ${i}` })),
+      },
+      { id: 4, type: 0, name: "general", position: 0, parent_id: null },
+    ]);
+
+    type Applied = {
+      server: { id: string };
+      channels: Array<{ id: string; name: string; type: string; isPrivate: boolean }>;
+    };
+
+    it("flattens a forum to a text channel while the flag is off, and writes no tags", async () => {
+      await startFeatureFlags();
+      fetchOk(FORUM_TEMPLATE);
+      const preview = await call<{
+        channels: Array<{ name: string; type: string }>;
+        mappedAway: Array<{ reason: string }>;
+      }>(user, "POST", "/api/import/discord/preview", { source: "abcd1234" });
+      expect(preview.status).toBe(200);
+      expect(preview.body.channels.find((c) => c.name === "ideas")?.type).toBe("text");
+      expect(preview.body.mappedAway.some((m) => m.reason === "flattenForum")).toBe(true);
+
+      const res = await call<Applied>(user, "POST", "/api/import/discord/apply", {
+        source: "abcd1234",
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.channels.some((c) => c.type === "forum")).toBe(false);
+      const tags = await getPool().query(`SELECT 1 FROM forum_tags`);
+      expect(tags.rows).toHaveLength(0);
+    });
+
+    it("ignores a per-server override: only the global flag counts for an import", async () => {
+      const other = await createPqpServer("Outro", user.id);
+      await setServerFlagOverride("forum_channels", other.server.id, true, {
+        kind: "dashboard",
+      });
+      await startFeatureFlags();
+      fetchOk(FORUM_TEMPLATE);
+      const res = await call<Applied>(user, "POST", "/api/import/discord/apply", {
+        source: "abcd1234",
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.channels.some((c) => c.type === "forum")).toBe(false);
+    });
+
+    it("creates forums with their tags in one transaction when the flag is global on", async () => {
+      await setGlobalFlag("forum_channels", true, { kind: "dashboard" });
+      await startFeatureFlags();
+      fetchOk(FORUM_TEMPLATE);
+
+      const preview = await call<{
+        channels: Array<{ name: string; type: string; tags?: unknown[] }>;
+        mappedAway: Array<{ reason: string; name?: string }>;
+      }>(user, "POST", "/api/import/discord/preview", { source: "abcd1234" });
+      expect(preview.body.channels.find((c) => c.name === "ideas")).toMatchObject({
+        type: "forum",
+      });
+      expect(preview.body.mappedAway).toContainEqual({
+        reason: "forumSettings",
+        name: "questions",
+      });
+      expect(preview.body.mappedAway).toContainEqual({
+        reason: "forumTagsTrimmed",
+        name: "ideas",
+      });
+
+      const res = await call<Applied>(user, "POST", "/api/import/discord/apply", {
+        source: "abcd1234",
+      });
+      expect(res.status).toBe(201);
+      const forums = res.body.channels.filter((c) => c.type === "forum");
+      expect(forums.map((c) => c.name).sort()).toEqual(["ideas", "questions"]);
+
+      const questions = forums.find((c) => c.name === "questions")!;
+      const rows = await getPool().query<{
+        name: string;
+        emoji: string | null;
+        moderated: boolean;
+        position: number;
+      }>(
+        `SELECT name, emoji, moderated, position FROM forum_tags
+          WHERE forum_id = $1 ORDER BY position`,
+        [questions.id],
+      );
+      expect(rows.rows).toEqual([
+        { name: "Bug", emoji: "🐛", moderated: false, position: 0 },
+        { name: "Official", emoji: null, moderated: true, position: 1 },
+        { name: "Pog", emoji: null, moderated: false, position: 2 },
+      ]);
+
+      const ideas = forums.find((c) => c.name === "ideas")!;
+      const count = await getPool().query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM forum_tags WHERE forum_id = $1`,
+        [ideas.id],
+      );
+      expect(count.rows[0]?.n).toBe(20);
+
+      const row = await getPool().query<{ topic: string | null; parent_id: string | null }>(
+        `SELECT topic, parent_id FROM channels WHERE id = $1`,
+        [questions.id],
+      );
+      expect(row.rows[0]?.topic).toBe("Search before you ask");
+      expect(row.rows[0]?.parent_id).not.toBeNull();
+    });
+
+    it("imports a private Discord forum as a private forum", async () => {
+      await setGlobalFlag("forum_channels", true, { kind: "dashboard" });
+      await startFeatureFlags();
+      fetchOk(
+        guildTemplate([
+          {
+            id: 1,
+            type: 15,
+            name: "staff-forum",
+            position: 0,
+            parent_id: null,
+            permission_overwrites: [{ id: 0, type: 0, allow: "0", deny: DISCORD_VIEW }],
+          },
+        ]),
+      );
+      const res = await call<Applied>(user, "POST", "/api/import/discord/apply", {
+        source: "abcd1234",
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.channels[0]).toMatchObject({ type: "forum", isPrivate: true });
+    });
   });
 });
