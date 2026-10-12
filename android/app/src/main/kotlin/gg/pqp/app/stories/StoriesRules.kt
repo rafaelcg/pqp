@@ -98,6 +98,31 @@ object StoriesRules {
         return maxOf(1, (width * ratio).toInt()) to maxOf(1, (height * ratio).toInt())
     }
 
+    /**
+     * `BitmapFactory`'s `inSampleSize` for a photo of this size: the largest
+     * power of two that still leaves the long side at least twice the story's
+     * 1440 px, so the decode never holds a full 48 MP frame and the final
+     * scale still has pixels to spare. 1 for anything already small.
+     */
+    fun sampleSize(width: Int, height: Int, target: Int = IMAGE_MAX_EDGE * 2): Int {
+        var sample = 1
+        val long = maxOf(width, height)
+        while (long / (sample * 2) >= target) sample *= 2
+        return sample
+    }
+
+    /**
+     * How far to turn a photo for its EXIF orientation tag (1 normal, 3 upside
+     * down, 6 and 8 the two sideways shots a phone camera writes). Mirrored
+     * variants are rare outside selfie apps and are drawn unturned.
+     */
+    fun rotationDegrees(exifOrientation: Int): Int = when (exifOrientation) {
+        3 -> 180
+        6 -> 90
+        8 -> 270
+        else -> 0
+    }
+
     /** Why a picked file cannot be a story, said before anything is uploaded. */
     enum class MediaRefusal { WrongType, TooBig, TooLong }
 
@@ -128,6 +153,21 @@ object StoriesRules {
             friends = friends || (server == null && options.friends.enabled && options.friends.canPost),
         )
     }
+
+    /**
+     * The audience with a call sticker's server in it. The composer ticks it
+     * (visibly) as soon as a room is picked, and "Quem vê" locks that row; this
+     * is the one rule both use, so what is sent is what was shown.
+     */
+    fun withSticker(targets: StoryAudienceTargets, stickerServerId: String?): StoryAudienceTargets =
+        if (stickerServerId == null || stickerServerId in targets.serverIds) {
+            targets
+        } else {
+            targets.copy(serverIds = targets.serverIds + stickerServerId)
+        }
+
+    /** Whether a server's row in "Quem vê" may be unticked. Not the call's own server. */
+    fun canUntick(serverId: String, stickerServerId: String?): Boolean = serverId != stickerServerId
 
     /** At least one audience, and at most ten servers (`STORY_MAX_SERVER_AUDIENCES`). */
     fun canPost(targets: StoryAudienceTargets): Boolean =

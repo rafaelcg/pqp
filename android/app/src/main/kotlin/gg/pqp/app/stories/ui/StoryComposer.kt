@@ -153,12 +153,20 @@ fun StoryComposer(
     var replies by remember { mutableStateOf(true) }
     var post by remember { mutableStateOf<PostState>(PostState.Idle) }
 
-    LaunchedEffect(Unit) {
-        store.refreshConfig()
-        runCatching { session.api.storyAudiences() }.onSuccess {
-            options = it
-            targets = StoriesRules.defaultAudience(it, contextServerId, fromFriends = contextServerId == null)
-        }
+    // Who may see the story. Without this list "Seguir" cannot open "Quem vê",
+    // so a failed read says so and offers a retry instead of leaving a button
+    // that never wakes up.
+    var audienceAttempt by remember { mutableStateOf(0) }
+    var audienceFailed by remember { mutableStateOf(false) }
+    LaunchedEffect(audienceAttempt) {
+        if (audienceAttempt == 0) store.refreshConfig()
+        audienceFailed = false
+        runCatching { session.api.storyAudiences() }
+            .onSuccess {
+                options = it
+                targets = StoriesRules.defaultAudience(it, contextServerId, fromFriends = contextServerId == null)
+            }
+            .onFailure { audienceFailed = true }
     }
 
     val tooLong = { seconds: Long -> context.getString(R.string.stories_compose_too_long, (seconds / 1000).toInt()) }
@@ -234,16 +242,24 @@ fun StoryComposer(
     val requestId = remember(mode, media, text, background, caption, callChannel, targets, replies) {
         java.util.UUID.randomUUID().toString()
     }
+    // A call sticker has to go to the server its room is in (the contract
+    // refuses anything else). That server is ticked the moment the room is
+    // picked, where the person can see it, and locked in "Quem vê" with a line
+    // saying why: never added behind their back at send time.
+    val stickerServerId = callChannel?.takeIf { mode == ComposeMode.Call }?.serverId
+    LaunchedEffect(stickerServerId) {
+        targets = StoriesRules.withSticker(targets, stickerServerId)
+    }
+
     val doPost: () -> Unit = {
         post = PostState.Posting
         scope.launch {
             val sticker = callChannel?.takeIf { mode == ComposeMode.Call }?.let {
                 StorySticker(type = "call", serverId = it.serverId, channelId = it.id)
             }
-            // The call has to be in a server the story goes to.
-            val audience = sticker?.serverId?.let { serverId ->
-                if (serverId in targets.serverIds) targets else targets.copy(serverIds = targets.serverIds + serverId)
-            } ?: targets
+            // Already ticked and shown (see above); this only keeps what is
+            // sent identical to what the sheet showed.
+            val audience = StoriesRules.withSticker(targets, stickerServerId)
             val prepared = media.takeIf { mode == ComposeMode.Camera }
             val request = if (prepared != null) {
                 CreateStoryRequest(
@@ -291,7 +307,11 @@ fun StoryComposer(
     }
 
     Dialog(
-        onDismissRequest = onDismiss,
+        // Not while posting: closing mid-post would cancel the upload or the
+        // publish and leave a story that never goes live (the server sweeps
+        // those, but the person would think it was posted). A failed post
+        // unlocks it, and a retry reuses the same requestId.
+        onDismissRequest = { if (post != PostState.Posting) onDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         Box(
@@ -329,7 +349,11 @@ fun StoryComposer(
                     .imePadding(),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(Spacing.sm)) {
-                    IconButton(onClick = onDismiss, modifier = Modifier.testTag("stories.composer.close")) {
+                    IconButton(
+                        onClick = onDismiss,
+                        enabled = post != PostState.Posting,
+                        modifier = Modifier.testTag("stories.composer.close"),
+                    ) {
                         Icon(PqpIcons.Close, contentDescription = stringResource(R.string.stories_viewer_close), tint = Color.White)
                     }
                     Text(
@@ -414,6 +438,26 @@ fun StoryComposer(
                         }
                     },
                 )
+                if (audienceFailed && options == null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.gutter)
+                            .testTag("stories.composer.audienceFailed"),
+                    ) {
+                        Text(
+                            stringResource(R.string.stories_audience_failed),
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        androidx.compose.material3.TextButton(
+                            onClick = { audienceAttempt += 1 },
+                            modifier = Modifier.testTag("stories.composer.audienceRetry"),
+                        ) { Text(stringResource(R.string.connection_retry), color = Palette.Signal) }
+                    }
+                }
                 Button(
                     onClick = { choosingAudience = true },
                     enabled = ready && options != null,
@@ -432,6 +476,7 @@ fun StoryComposer(
                 options = options ?: StoryAudienceOptions(),
                 targets = targets,
                 onTargets = { targets = it },
+                lockedServerId = stickerServerId,
                 replies = replies,
                 onReplies = { replies = it },
                 post = post,
@@ -663,6 +708,8 @@ private fun AudienceSheet(
     options: StoryAudienceOptions,
     targets: StoryAudienceTargets,
     onTargets: (StoryAudienceTargets) -> Unit,
+    /** The server a call sticker's room is in: shown ticked and cannot be unticked. */
+    lockedServerId: String?,
     replies: Boolean,
     onReplies: (Boolean) -> Unit,
     post: PostState,
@@ -687,16 +734,19 @@ private fun AudienceSheet(
             Spacer(Modifier.height(Spacing.sm))
             options.servers.forEach { server ->
                 val checked = server.serverId in targets.serverIds
+                // The call sticker's own server: ticked, locked, and saying why.
+                val locked = !StoriesRules.canUntick(server.serverId, lockedServerId)
                 AudienceRow(
                     title = server.serverName,
-                    subtitle = when (server.blockedReason) {
-                        "no_permission" -> stringResource(R.string.stories_audience_no_permission)
-                        "timed_out" -> stringResource(R.string.stories_audience_timed_out)
-                        "account_too_new" -> stringResource(R.string.stories_audience_too_new)
+                    subtitle = when {
+                        locked -> stringResource(R.string.stories_audience_call_locked)
+                        server.blockedReason == "no_permission" -> stringResource(R.string.stories_audience_no_permission)
+                        server.blockedReason == "timed_out" -> stringResource(R.string.stories_audience_timed_out)
+                        server.blockedReason == "account_too_new" -> stringResource(R.string.stories_audience_too_new)
                         else -> pluralStringResource(R.plurals.stories_audience_members, server.memberCount, server.memberCount)
                     },
-                    checked = checked,
-                    enabled = server.canPost,
+                    checked = checked || locked,
+                    enabled = server.canPost && !locked,
                     onToggle = {
                         val ids = if (checked) targets.serverIds - server.serverId else targets.serverIds + server.serverId
                         onTargets(targets.copy(serverIds = ids))

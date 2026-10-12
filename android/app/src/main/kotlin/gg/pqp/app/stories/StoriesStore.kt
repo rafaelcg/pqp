@@ -57,7 +57,8 @@ class StoriesStore(
     private var noticesAsked = false
 
     private val seenLocally = mutableSetOf<String>()
-    private val pendingViews = linkedSetOf<String>()
+    private val views = ViewBatcher()
+    private var viewFailures = 0
     private var flushJob: Job? = null
     private var expiryJob: Job? = null
 
@@ -117,25 +118,39 @@ class StoriesStore(
         publish()
         // The author never counts as their own viewer; do not ask.
         if (ownId != null && (raw.values.mapNotNull { it.own }.any { storyId in it.storyIds })) return
-        pendingViews += storyId
-        if (pendingViews.size >= 50) flush() else scheduleFlush()
+        views.add(storyId)
+        if (views.size >= 50) flush() else scheduleFlush(FLUSH_MS)
     }
 
-    private fun scheduleFlush() {
+    private fun scheduleFlush(afterMs: Long) {
         if (flushJob?.isActive == true) return
         flushJob = scope.launch {
-            delay(FLUSH_MS)
+            delay(afterMs)
             flush()
         }
     }
 
+    /**
+     * Send one batch. A failed batch goes back in the queue (a few attempts
+     * per id, see [ViewBatcher]) and the next try waits a little longer; a
+     * success sends whatever queued up meanwhile.
+     */
     private fun flush() {
-        val ids = pendingViews.toList()
-        pendingViews.clear()
+        val ids = views.take()
         if (ids.isEmpty()) return
         scope.launch {
             runCatching { session.api.markStoriesViewed(ids) }
-                .onFailure { Log.w(TAG, "views failed: ${it.message}") }
+                .onSuccess {
+                    views.succeeded(ids)
+                    viewFailures = 0
+                    if (!views.isEmpty) scheduleFlush(FLUSH_MS)
+                }
+                .onFailure {
+                    Log.w(TAG, "views failed: ${it.message}")
+                    views.failed(ids)
+                    viewFailures += 1
+                    if (!views.isEmpty) scheduleFlush(ViewBatcher.backoffMs(viewFailures))
+                }
         }
     }
 
@@ -212,7 +227,8 @@ class StoriesStore(
             if (phase !is SessionPhase.Ready) {
                 raw.clear()
                 seenLocally.clear()
-                pendingViews.clear()
+                views.clear()
+                viewFailures = 0
                 noticesAsked = false
                 _notice.value = null
                 _removed.value = emptySet()

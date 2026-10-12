@@ -1013,6 +1013,8 @@
     <string name="stories_audience_no_permission">A staff só libera story pra quem tem cargo</string>
     <string name="stories_audience_timed_out">Tu tá de castigo aqui</string>
     <string name="stories_audience_too_new">Conta nova posta aqui depois de 72 h</string>
+    <string name="stories_audience_call_locked">A call é nesse servidor, então ele fica marcado</string>
+    <string name="stories_audience_failed">Não deu pra carregar quem vê.</string>
     <string name="stories_audience_replies">Deixar responderem</string>
     <string name="stories_audience_replies_hint">Resposta chega nas tuas Conversas</string>
     <string name="stories_audience_post">Postar story</string>
