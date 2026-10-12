@@ -207,14 +207,14 @@ sealed interface ChannelPushRoute {
 /**
  * The routing decision for a channel push, without a NavController, so it is
  * tested on the JVM. [channel] is the row from the server's channel list, null
- * when the id is not in it (a thread, a post, or a failed fetch). [forumOf]
- * answers, for an id that is not in the list, which forum it is a post of (by
- * asking `GET /api/forum-posts/:id`), or null for an ordinary thread.
+ * when the id is not in it (a thread, a post, or a failed fetch). [lookup]
+ * answers, for an id that is not in the list, whether it is a forum post (by
+ * asking `GET /api/forum-posts/:id`).
  */
 suspend fun channelPushRoute(
     channel: gg.pqp.app.core.Channel?,
     channels: List<gg.pqp.app.core.Channel>?,
-    forumOf: suspend () -> String?,
+    lookup: suspend () -> PostLookup,
 ): ChannelPushRoute {
     if (channel != null) {
         return when {
@@ -223,7 +223,26 @@ suspend fun channelPushRoute(
             else -> ChannelPushRoute.Stay
         }
     }
-    val forumId = forumOf() ?: return ChannelPushRoute.Chat
-    val forumName = channels?.firstOrNull { it.id == forumId }?.name.orEmpty()
-    return ChannelPushRoute.Post(forumId, forumName)
+    return when (val found = lookup()) {
+        is PostLookup.Post -> ChannelPushRoute.Post(
+            found.forumId,
+            channels?.firstOrNull { it.id == found.forumId }?.name.orEmpty(),
+        )
+        // The server said "no such post": an ordinary thread, its chat as before.
+        PostLookup.NotAPost -> ChannelPushRoute.Chat
+        // Nobody knows which it is. A chat opened on a post id would hide the
+        // post behind an untitled transcript, so the tap stays on the list.
+        PostLookup.Failed -> ChannelPushRoute.Stay
+    }
+}
+
+/** What `GET /api/forum-posts/:id` said about an id that is not in the channel list. */
+sealed interface PostLookup {
+    data class Post(val forumId: String) : PostLookup
+
+    /** 404: not a post (a chat thread, or gone). */
+    data object NotAPost : PostLookup
+
+    /** The network or the server failed: unknown. */
+    data object Failed : PostLookup
 }

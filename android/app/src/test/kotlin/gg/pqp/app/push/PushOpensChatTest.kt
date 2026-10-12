@@ -32,7 +32,7 @@ class PushOpensChatTest {
     @Test
     fun `a forum push opens the forum, and never asks the server about a post`() = runTest {
         var asked = false
-        val route = channelPushRoute(channel("forum"), null) { asked = true; null }
+        val route = channelPushRoute(channel("forum"), null) { asked = true; PostLookup.NotAPost }
         assertEquals(ChannelPushRoute.Forum, route)
         assertFalse(asked)
     }
@@ -42,10 +42,12 @@ class PushOpensChatTest {
         val forum = channel("forum", id = "f1", name = "ajuda")
         assertEquals(
             ChannelPushRoute.Post("f1", "ajuda"),
-            channelPushRoute(null, listOf(forum)) { "f1" },
+            channelPushRoute(null, listOf(forum)) { PostLookup.Post("f1") },
         )
-        // A thread (or a failed lookup) opens its chat, as it always did.
-        assertEquals(ChannelPushRoute.Chat, channelPushRoute(null, listOf(forum)) { null })
+        // A thread opens its chat, as it always did.
+        assertEquals(ChannelPushRoute.Chat, channelPushRoute(null, listOf(forum)) { PostLookup.NotAPost })
+        // An unknown answer never opens a chat on what may be a post's id.
+        assertEquals(ChannelPushRoute.Stay, channelPushRoute(null, listOf(forum)) { PostLookup.Failed })
     }
 
     @Test

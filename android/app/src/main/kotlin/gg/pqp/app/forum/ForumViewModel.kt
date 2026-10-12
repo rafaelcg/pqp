@@ -204,7 +204,15 @@ class ForumViewModel(
         val ticket = ++generation
         pageJob?.cancel()
         val hadPosts = !_state.value.isEmpty
-        _state.value = _state.value.copy(loading = !hadPosts, loadError = false, moreError = false)
+        // A load-more from the old filters may still be out; its answer is
+        // dropped by the ticket, so the flag is cleared here or paging would
+        // stay "in progress" for good.
+        _state.value = _state.value.copy(
+            loading = !hadPosts,
+            loadError = false,
+            moreError = false,
+            loadingMore = false,
+        )
         pageJob = viewModelScope.launch {
             val page = try {
                 backend.page(forumId, query())
@@ -299,8 +307,10 @@ class ForumViewModel(
 
     fun setQuery(text: String) {
         val q = text.trim().take(ForumLimits.SEARCH_MAX)
-        if (q == _state.value.filters.q) return
+        // Cancelled first: a query still in its debounce must not land after
+        // the field was cleared or closed.
         searchJob?.cancel()
+        if (q == _state.value.filters.q) return
         searchJob = viewModelScope.launch {
             if (searchDebounceMs > 0) delay(searchDebounceMs)
             _state.value = _state.value.copy(filters = _state.value.filters.copy(q = q))
@@ -319,7 +329,10 @@ class ForumViewModel(
 
     /** "Atualizar" on the pill: everything held back, in place. */
     fun flush() {
+        val overflowed = _state.value.list.queueOverflowed
         _state.value = _state.value.copy(list = ForumList.flush(_state.value.list, upsertContext()))
+        // More arrived than the queue holds: what was dropped comes with page 1.
+        if (overflowed) refreshInPlace()
     }
 
     /** The reader opened [postId] (null: came back to the list). */
@@ -396,8 +409,9 @@ class ForumViewModel(
     }
 
     override fun onCleared() {
-        // Everything the list showed is read now.
-        backend.markRead(forumId)
+        // Everything the list showed is read now; a list that never loaded
+        // showed nothing, and leaves the cursor where it was.
+        if (markedRead) backend.markRead(forumId)
     }
 
     companion object {

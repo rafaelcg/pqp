@@ -258,8 +258,10 @@ fun ForumPostScreen(
                 menuOpen = false
                 val link = forumPostLink(Backend.appUrl, serverId ?: "", forumId, postId)
                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                clipboard?.setPrimaryClip(ClipData.newPlainText(post.title, link))
-                model.linkCopied()
+                if (clipboard != null) {
+                    clipboard.setPrimaryClip(ClipData.newPlainText(post.title, link))
+                    model.linkCopied()
+                }
             },
             onResolve = { menuOpen = false; model.toggleResolved() },
             onPin = { menuOpen = false; model.togglePinned() },

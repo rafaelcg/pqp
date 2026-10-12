@@ -56,6 +56,11 @@ data class ForumListState(
      * reader returns to the top.
      */
     val queued: List<ForumPostSummary> = emptyList(),
+    /**
+     * More arrived while held than [ForumList.QUEUE_MAX]: the oldest were
+     * dropped, so applying the queue is not enough and page 1 is read again.
+     */
+    val queueOverflowed: Boolean = false,
 ) {
     fun find(postId: String): ForumPostSummary? =
         pinned.firstOrNull { it.id == postId } ?: posts.firstOrNull { it.id == postId }
@@ -126,6 +131,7 @@ object ForumList {
             nextCursor = if (keepsTail) state.nextCursor else fresh.nextCursor,
             viewer = state.viewer + fresh.viewer,
             queued = state.queued.filterNot { it.id in shown },
+            queueOverflowed = state.queueOverflowed,
         )
     }
 
@@ -279,19 +285,20 @@ object ForumList {
                 // It left the filter. Under the reader's hand it stays put,
                 // updated, until they let go.
                 return if (ctx.hold) {
-                    base.copy(posts = base.posts.replacing(post))
+                    base.copy(posts = base.posts.replacing(post), queued = base.queued.replacing(post))
                 } else {
                     base.copy(posts = base.posts.without(post.id))
                 }
             }
             val moved = filters.sort == ForumSort.Activity && post.lastActivityAt > old.lastActivityAt
-            if (!moved || index == 0) return base.copy(posts = base.posts.replacing(post))
+            // A queued copy follows the edit too, or the pill would put the
+            // old words back when it applies the move.
+            if (!moved || index == 0) {
+                return base.copy(posts = base.posts.replacing(post), queued = base.queued.replacing(post))
+            }
             if (ctx.hold) {
                 // The words update now; the move waits for the pill.
-                return base.copy(
-                    posts = base.posts.replacing(post),
-                    queued = base.queued.without(post.id) + post,
-                )
+                return enqueue(base.copy(posts = base.posts.replacing(post)), post)
             }
             val rest = base.posts.without(post.id)
             return base.copy(posts = insertSorted(rest, post, filters.sort, true) ?: rest)
@@ -300,11 +307,25 @@ object ForumList {
         if (!passes) return base.copy(queued = base.queued.without(post.id))
         // A reply cannot move a post under "Mais novos", and an old post the
         // pages did not reach yet arrives with them.
-        if (filters.sort == ForumSort.Created && !brandNew) return base
+        // A post coming down from the pins is known, not new: it goes back to
+        // its place in either order.
+        if (filters.sort == ForumSort.Created && !brandNew && !wasPinned) return base
         val placed = insertSorted(base.posts, post, filters.sort, base.nextCursor == null)
             ?: return base.copy(queued = base.queued.without(post.id))
-        if (ctx.hold) return base.copy(queued = base.queued.without(post.id) + post)
+        if (ctx.hold) return enqueue(base, post)
         return base.copy(posts = placed)
+    }
+
+    /** The most a held list queues; past it the pill refreshes page 1 instead of replaying. */
+    const val QUEUE_MAX = 50
+
+    private fun enqueue(state: ForumListState, post: ForumPostSummary): ForumListState {
+        val next = state.queued.without(post.id) + post
+        return if (next.size > QUEUE_MAX) {
+            state.copy(queued = next.takeLast(QUEUE_MAX), queueOverflowed = true)
+        } else {
+            state.copy(queued = next)
+        }
     }
 
     /** One `forum-post-removed`: gone from every list, the queue included. */
@@ -333,7 +354,7 @@ object ForumList {
         val free = ctx.copy(hold = false)
         // Queued posts were counted when they were queued; applying them is
         // not a second arrival.
-        var next = state.copy(queued = emptyList(), counts = null)
+        var next = state.copy(queued = emptyList(), counts = null, queueOverflowed = false)
         for (post in state.queued) {
             val onScreen = next.posts.any { it.id == post.id }
             if (onScreen && ctx.filters.sort == ForumSort.Activity) {

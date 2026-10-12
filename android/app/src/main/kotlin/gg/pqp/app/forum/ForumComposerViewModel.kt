@@ -21,15 +21,21 @@ import gg.pqp.app.core.channelBits
 import gg.pqp.app.core.hasPermission
 import gg.pqp.app.core.serverPermissions
 import java.util.UUID
+import gg.pqp.app.core.SessionPhase
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -115,12 +121,33 @@ class ForumComposerViewModel(
     private val _state = MutableStateFlow(ForumComposerState())
     val state: StateFlow<ForumComposerState> = _state.asStateFlow()
 
-    private val _published = MutableSharedFlow<ForumPostSummary>(extraBufferCapacity = 1)
-    /** The new post, once: the screen opens it. */
-    val published: SharedFlow<ForumPostSummary> = _published.asSharedFlow()
+    /**
+     * The new post, once: the screen opens it. A channel, not a shared flow,
+     * so an answer that lands while the screen is stopped waits for it
+     * instead of being dropped (and the composer staying open on a post that
+     * already exists).
+     */
+    private val _published = Channel<ForumPostSummary>(Channel.BUFFERED)
+    val published: Flow<ForumPostSummary> = _published.receiveAsFlow()
 
-    /** One nonce per post, kept across retries so a lost answer cannot make two. */
-    private var nonce = UUID.randomUUID().toString()
+    /**
+     * Drafts and the pending nonce are this account's, in this forum: see
+     * [ForumPrefs]. Read once; the composer never outlives its account.
+     */
+    private val draftKey: String =
+        "${(session.phase.value as? SessionPhase.Ready)?.me?.id ?: "anon"}.$forumId"
+
+    /**
+     * One nonce per post, kept across retries (and across a composer closed
+     * mid-request, through [ForumPrefs]) so a lost answer cannot make two.
+     */
+    private var nonce = prefs?.pendingNonce(draftKey) ?: UUID.randomUUID().toString()
+
+    /** At most this many picked files are read into memory at once. */
+    private val reads = Semaphore(ATTACH_READS)
+
+    /** Picks reserved but not yet on the strip, so a batch cannot pass the cap. */
+    private var reserved = 0
     private var similarJob: Job? = null
     private var draftJob: Job? = null
 
@@ -128,7 +155,7 @@ class ForumComposerViewModel(
     private var posted = false
 
     init {
-        val draft = prefs?.draft(forumId)
+        val draft = prefs?.draft(draftKey)
         val title = initialTitle?.trim()?.takeIf { it.isNotEmpty() }
         _state.value = when {
             title != null -> ForumComposerState(
@@ -148,15 +175,23 @@ class ForumComposerViewModel(
         if (_state.value.title.length >= SIMILAR_MIN_CHARS) searchSimilar(_state.value.title)
     }
 
-    private suspend fun loadContext() {
-        val tags = runCatching { session.api.forumTags(forumId) }.getOrNull()
-        val settings = runCatching { session.api.forumSettings(forumId) }.getOrNull()
-        val config = if (files != null) {
-            runCatching { attachmentApi.config(serverId) }.getOrDefault(AttachmentConfig())
-        } else {
-            AttachmentConfig()
+    private suspend fun loadContext() = coroutineScope {
+        // Four independent reads side by side: the composer is ready at the
+        // slowest one's latency, not at their sum.
+        val tagsAsync = async { runCatching { session.api.forumTags(forumId) }.getOrNull() }
+        val settingsAsync = async { runCatching { session.api.forumSettings(forumId) }.getOrNull() }
+        val configAsync = async {
+            if (files != null) {
+                runCatching { attachmentApi.config(serverId) }.getOrDefault(AttachmentConfig())
+            } else {
+                AttachmentConfig()
+            }
         }
-        val snapshot = runCatching { session.api.serverPermissions(serverId) }.getOrNull()
+        val snapshotAsync = async { runCatching { session.api.serverPermissions(serverId) }.getOrNull() }
+        val tags = tagsAsync.await()
+        val settings = settingsAsync.await()
+        val config = configAsync.await()
+        val snapshot = snapshotAsync.await()
         val bits = snapshot?.channelBits(forumId) ?: 0L
         val known = tags.orEmpty().map { it.id }.toSet()
         _state.value = _state.value.copy(
@@ -236,14 +271,16 @@ class ForumComposerViewModel(
         draftJob = viewModelScope.launch {
             delay(DRAFT_DEBOUNCE_MS)
             val s = _state.value
-            store.saveDraft(forumId, ForumDraft(s.title, s.body, s.tagIds))
+            store.saveDraft(draftKey, ForumDraft(s.title, s.body, s.tagIds))
         }
     }
 
     /** Closing keeps the draft (never asks); this is the button that throws it away. */
     fun discard() {
         draftJob?.cancel()
-        prefs?.clearDraft(forumId)
+        prefs?.clearDraft(draftKey)
+        prefs?.clearPendingNonce(draftKey)
+        nonce = UUID.randomUUID().toString()
         _state.value = _state.value.copy(title = "", body = "", tagIds = emptyList(), attachments = emptyList(), similar = emptyList(), error = null, draftRestored = false)
     }
 
@@ -252,7 +289,7 @@ class ForumComposerViewModel(
         val store = prefs ?: return
         draftJob?.cancel()
         val s = _state.value
-        store.saveDraft(forumId, ForumDraft(s.title, s.body, s.tagIds))
+        store.saveDraft(draftKey, ForumDraft(s.title, s.body, s.tagIds))
     }
 
     fun dismissError() {
@@ -269,10 +306,22 @@ class ForumComposerViewModel(
         val reader = files ?: return
         val current = _state.value
         if (!current.attachmentsEnabled) return
+        // The slot is taken before the file is read, so a batch of picks past
+        // the cap is refused up front instead of read into memory first.
+        if (current.attachments.size + reserved >= gg.pqp.app.attachments.MAX_ATTACHMENTS_PER_MESSAGE) {
+            _state.value = current.copy(attachmentRefusal = AttachmentRefusal.TooMany)
+            return
+        }
+        reserved += 1
         val localId = UUID.randomUUID().toString()
         _state.value = current.copy(attachmentRefusal = null)
         viewModelScope.launch {
-            val local = reader.read(uri, current.maxAttachmentBytes)
+            // Read a couple at a time: each read holds the whole file.
+            val local = try {
+                reads.withPermit { reader.read(uri, current.maxAttachmentBytes) }
+            } finally {
+                reserved -= 1
+            }
             if (local == null) {
                 _state.value = _state.value.copy(attachmentRefusal = AttachmentRefusal.Unreadable)
                 return@launch
@@ -353,16 +402,22 @@ class ForumComposerViewModel(
                 attachmentIds = attachmentIdsFor(s.attachments).takeIf { it.isNotEmpty() },
                 nonce = nonce,
             )
+            // Written down before the request leaves: if the composer is closed
+            // mid-flight the server may still make the post, and the next try
+            // from the restored draft must be the same post, not a second one.
+            prefs?.savePendingNonce(draftKey, nonce)
             runCatching { session.api.createForumPost(forumId, request) }
                 .onSuccess { created ->
                     draftJob?.cancel()
-                    prefs?.clearDraft(forumId)
+                    prefs?.clearDraft(draftKey)
+                    prefs?.clearPendingNonce(draftKey)
                     posted = true
                     nonce = UUID.randomUUID().toString()
                     _state.value = _state.value.copy(publishing = false)
-                    _published.tryEmit(created.post)
+                    _published.trySend(created.post)
                 }
                 .onFailure { failure ->
+                    if (failure is CancellationException) throw failure
                     val error = errorFor(failure)
                     // A decision about the post (AutoMod, a missing tag) is
                     // final for this nonce; a wait or a dropped connection is
@@ -371,6 +426,7 @@ class ForumComposerViewModel(
                         error !is ForumComposerError.RateLimited
                     ) {
                         nonce = UUID.randomUUID().toString()
+                        prefs?.clearPendingNonce(draftKey)
                     }
                     _state.value = _state.value.copy(publishing = false, error = error)
                 }
@@ -412,6 +468,7 @@ class ForumComposerViewModel(
 
     companion object {
         private const val SIMILAR_MIN_CHARS = 4
+        private const val ATTACH_READS = 2
         private const val SIMILAR_DEBOUNCE_MS = 300L
         private const val DRAFT_DEBOUNCE_MS = 400L
 

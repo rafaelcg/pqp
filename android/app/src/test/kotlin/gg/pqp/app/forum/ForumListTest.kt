@@ -135,6 +135,36 @@ class ForumListTest {
     }
 
     @Test
+    fun `an unpinned post goes back to its place under either order`() {
+        val start = ForumList.fromPage(page(post("c", "11:00"), post("a", "09:00"), pinned = listOf(post("b", "10:00", pinned = true))))
+        val created = free.copy(filters = ForumFilters(sort = ForumSort.Created))
+        assertEquals(listOf("c", "b", "a"), ids(ForumList.upsert(start, post("b", "10:00"), created)))
+        assertEquals(listOf("c", "b", "a"), ids(ForumList.upsert(start, post("b", "10:00"), free)))
+    }
+
+    @Test
+    fun `an edit to a queued post reaches the queue, so the pill does not put the old words back`() {
+        val start = ForumList.fromPage(page(post("b", "10:00"), post("a", "09:00")))
+        val queued = ForumList.upsert(start, post("a", "09:00", activity = "12:00", replies = 1), held)
+        val resolved = post("a", "09:00", activity = "12:00", replies = 1, resolved = true)
+        val edited = ForumList.upsert(queued, resolved, held)
+        val flushed = ForumList.flush(edited, held)
+        assertEquals(listOf("a", "b"), ids(flushed))
+        assertTrue(flushed.posts.first().resolved)
+    }
+
+    @Test
+    fun `the queue is bounded and says so, so the pill reads page 1 instead`() {
+        var state = ForumList.fromPage(page(post("a", "09:00")))
+        repeat(ForumList.QUEUE_MAX + 5) { i ->
+            state = ForumList.upsert(state, post("n$i", "10:%02d".format(i % 60)).copy(createdAt = "2026-10-12T00:%02d:%02d.000Z".format(i / 60, i % 60)), held)
+        }
+        assertEquals(ForumList.QUEUE_MAX, state.queued.size)
+        assertTrue(state.queueOverflowed)
+        assertTrue(!ForumList.flush(state, held).queueOverflowed)
+    }
+
+    @Test
     fun `a removed post goes everywhere, the queue and the counts too`() {
         val start = ForumList.fromPage(page(post("b", "10:00"), post("a", "09:00")))
         val queued = ForumList.upsert(start, post("c", "11:00"), held)

@@ -59,6 +59,7 @@ import gg.pqp.app.onboarding.ui.OnboardingFlow
 import gg.pqp.app.push.PushController
 import gg.pqp.app.push.ChannelPushRoute
 import gg.pqp.app.push.channelPushRoute
+import gg.pqp.app.push.PostLookup
 import gg.pqp.app.forum.forumPost
 import gg.pqp.app.push.PushPrompt
 import gg.pqp.app.social.SocialRepository
@@ -911,7 +912,15 @@ private suspend fun navigateToPush(
             // on top, so back goes to the list; a thread opens its chat as it
             // always did. A type this build cannot draw stays on the list.
             val route = channelPushRoute(channel, channels) {
-                runCatching { session.api.forumPost(target.channelId).post.forumId }.getOrNull()
+                try {
+                    PostLookup.Post(session.api.forumPost(target.channelId).post.forumId)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: gg.pqp.app.core.ApiException) {
+                    if (e.status == 404) PostLookup.NotAPost else PostLookup.Failed
+                } catch (e: Exception) {
+                    PostLookup.Failed
+                }
             }
             when (route) {
                 ChannelPushRoute.Stay -> return

@@ -13,6 +13,11 @@ import androidx.core.content.edit
  *
  * A miss or a malformed value reads as "nothing saved"; nothing here may stop
  * a forum from opening.
+ *
+ * Drafts and pending nonces are keyed by account as well as forum (the
+ * composer passes `<userId>.<forumId>`): unpublished words must not open in
+ * somebody else's composer after a sign-out on a shared phone. Nothing in this
+ * file reaches a backup: `sharedpref` is excluded in both backup rule files.
  */
 class ForumPrefs(context: Context) {
 
@@ -42,6 +47,22 @@ class ForumPrefs(context: Context) {
 
     fun clearDraft(forumId: String) {
         prefs.edit { remove("draft.$forumId") }
+    }
+
+    /**
+     * The nonce of a create that left without an answer (the composer was
+     * closed mid-request). Kept with the draft so the retry is the SAME post
+     * to the server, which answers a known nonce with the post it already
+     * made instead of a second one.
+     */
+    fun pendingNonce(key: String): String? = prefs.getString("nonce.$key", null)
+
+    fun savePendingNonce(key: String, nonce: String) {
+        prefs.edit { putString("nonce.$key", nonce) }
+    }
+
+    fun clearPendingNonce(key: String) {
+        prefs.edit { remove("nonce.$key") }
     }
 
     companion object {

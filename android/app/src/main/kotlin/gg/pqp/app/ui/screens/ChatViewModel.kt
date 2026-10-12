@@ -51,6 +51,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -931,8 +932,15 @@ class ChatViewModel(
      * messages it added; 0 at the start of history or on a failure.
      */
     suspend fun loadOlderNow(): Int {
+        if (_state.value.loadingOlder) {
+            // The list's own pager has a page out: wait for it and let the
+            // caller look again, rather than reading "busy" as "no more".
+            val before = _state.value.messages.size
+            val settled = _state.first { !it.loadingOlder }
+            return (settled.messages.size - before).coerceAtLeast(if (settled.hasMore) 1 else 0)
+        }
         val current = _state.value
-        if (current.loadingOlder || !current.hasMore) return 0
+        if (!current.hasMore) return 0
         val oldest = current.messages.firstOrNull()?.id ?: return 0
         _state.value = current.copy(loadingOlder = true)
         val page = runCatching { session.api.messages(channelId, before = oldest) }.getOrNull()

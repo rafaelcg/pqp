@@ -84,6 +84,9 @@ class ForumPostViewModel(
     private val _jumps = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val jumps: SharedFlow<String> = _jumps.asSharedFlow()
 
+    /** The detail answered, so the reader saw the post: only then does leaving mark it read. */
+    private var loaded = false
+
     private val viewerId: String?
         get() = (session.phase.value as? SessionPhase.Ready)?.me?.id
 
@@ -114,6 +117,7 @@ class ForumPostViewModel(
         )
         // After the detail, never before: its cursor is the one this visit
         // replaces, and the "Novas" divider is measured against it.
+        this@ForumPostViewModel.loaded = true
         SocialRepository.of(session).markRead(postId)
 
         val tags = runCatching { session.api.forumTags(loaded.post.forumId) }.getOrNull()
@@ -219,7 +223,8 @@ class ForumPostViewModel(
         rollback: () -> Unit = {},
     ) {
         val before = _state.value.post ?: return
-        _state.value = _state.value.copy(post = optimistic(before))
+        val drawn = optimistic(before)
+        _state.value = _state.value.copy(post = drawn)
         viewModelScope.launch {
             runCatching { request() }
                 .onSuccess { updated ->
@@ -227,8 +232,14 @@ class ForumPostViewModel(
                     after(updated)
                 }
                 .onFailure { failure ->
-                    _state.value = _state.value.copy(post = before)
-                    rollback()
+                    if (_state.value.post == drawn) {
+                        _state.value = _state.value.copy(post = before)
+                        rollback()
+                    } else {
+                        // Something newer was drawn since (a second action, a
+                        // frame): the snapshot is stale, the server is not.
+                        refreshDetail()
+                    }
                     _notices.tryEmit(noticeFor(failure))
                 }
         }
@@ -332,17 +343,23 @@ class ForumPostViewModel(
         )
     }
 
+    /** Bumped per tap, so only the newest tap's answer is drawn. */
+    private var followTicket = 0
+
     fun toggleFollow() {
         val viewer = _state.value.viewer ?: return
         val follow = !viewer.following
+        val ticket = ++followTicket
         _state.value = _state.value.copy(viewer = viewer.copy(following = follow))
         viewModelScope.launch {
             runCatching { session.api.setForumPostFollow(postId, follow) }
                 .onSuccess {
+                    if (ticket != followTicket) return@onSuccess
                     _state.value = _state.value.copy(viewer = _state.value.viewer?.copy(following = it.following))
                     _notices.tryEmit(if (it.following) ForumNotice.Following else ForumNotice.Unfollowed)
                 }
                 .onFailure {
+                    if (ticket != followTicket) return@onFailure
                     _state.value = _state.value.copy(viewer = viewer)
                     _notices.tryEmit(ForumNotice.SaveFailed)
                 }
@@ -368,6 +385,6 @@ class ForumPostViewModel(
 
     override fun onCleared() {
         // Everything on screen is read now, the replies that landed meanwhile too.
-        SocialRepository.of(session).markRead(postId)
+        if (loaded) SocialRepository.of(session).markRead(postId)
     }
 }
