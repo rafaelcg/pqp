@@ -477,6 +477,13 @@ class ForumComposerViewModel(
                 _state.value = _state.value.copy(requireTag = fresh.requireTag)
             }
         }
+        // The tags too: a read that failed on open left the picker empty, and
+        // the refusal is only fixable once the tags are on screen.
+        viewModelScope.launch {
+            runCatching { session.api.forumTags(forumId) }.getOrNull()?.let { fresh ->
+                _state.value = _state.value.copy(tags = fresh.sortedBy { it.position })
+            }
+        }
     }
 
     private fun errorFor(failure: Throwable): ForumComposerError {
