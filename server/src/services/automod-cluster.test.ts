@@ -159,6 +159,7 @@ describeDb("automod across two machines", () => {
         serverId,
         channelId: chatId,
         authorId,
+        parentChannelId: null,
         memberPerms: 0n,
         body: "isso e uma bolacha",
       });
@@ -196,6 +197,7 @@ describeDb("automod across two machines", () => {
       serverId,
       channelId: chatId,
       authorId,
+      parentChannelId: null,
       memberPerms: 0n,
       body: "bolacha",
     };
@@ -247,6 +249,7 @@ describeDb("automod across two machines", () => {
       serverId,
       channelId: chatId,
       authorId,
+      parentChannelId: null,
       memberPerms: 0n,
       body: "bolacha",
     };
@@ -290,6 +293,7 @@ describeDb("automod across two machines", () => {
       serverId,
       channelId: chatId,
       authorId,
+      parentChannelId: null,
       memberPerms: 0n,
       body: "bolacha",
     };
@@ -342,6 +346,7 @@ describeDb("automod across two machines", () => {
       serverId,
       channelId: chatId,
       authorId,
+      parentChannelId: null,
       memberPerms: 0n,
       body: "bolacha",
     };

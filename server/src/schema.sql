@@ -5590,3 +5590,25 @@ CREATE TABLE IF NOT EXISTS webhook_forum_settings (
   dedupe_window_hours INTEGER NOT NULL DEFAULT 72
     CHECK (dedupe_window_hours BETWEEN 0 AND 720)
 );
+
+-- A webhook post a moderator deleted, remembered by its dedupe key so the feed
+-- re-sending the same item inside the window does not bring it back. Without
+-- this, deleting a feed post was undone by the feed's next poll: the dedupe
+-- lookup reads `forum_posts`, and the delete had just removed the only row
+-- that named the key. The window counts from the deleted post's creation,
+-- exactly as it does for a live post; the forum shell sweep drops rows past
+-- the longest window (720 h). Written only by the post DELETE route, in the
+-- delete's own transaction, never by a shell discard (a failed create must
+-- stay retryable).
+CREATE TABLE IF NOT EXISTS forum_dedupe_tombstones (
+  forum_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  dedupe_key TEXT NOT NULL,
+  -- The deleted post's id, answered as `channel_id` to a repeat. No FK: the
+  -- post is gone by definition.
+  post_id UUID NOT NULL,
+  post_created_at TIMESTAMPTZ NOT NULL,
+  deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (forum_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_forum_dedupe_tombstones_age
+  ON forum_dedupe_tombstones (post_created_at);

@@ -1104,6 +1104,157 @@ describeDb("forum posts", () => {
     expect((await call(alice, "DELETE", `/api/forum-posts/${id}`)).status).toBe(404);
   });
 
+  // ------------------------------------------------------------ hardening
+
+  const golpeRule = (exemptChannelIds: string[] = []) =>
+    createAutomodRule(serverId, {
+      kind: "keywords",
+      enabled: true,
+      keywords: ["golpe"],
+      allowList: [],
+      mentionLimit: 5,
+      exemptRoleIds: [],
+      exemptChannelIds,
+      customMessage: "",
+      alertChannelId: null,
+      timeoutMinutes: 0,
+      blockPqpInvites: false,
+    } as Parameters<typeof createAutomodRule>[1]);
+
+  it("a post AutoMod refuses on its title costs no send budget", async () => {
+    await golpeRule();
+    // Twelve refusals: more than the whole send burst (10).
+    for (let i = 0; i < 12; i += 1) {
+      const refused = await post(bob, `Golpe ${i}`);
+      expect(refused.status).toBe(422);
+      expect(refused.body.reason).toBe("automod");
+    }
+    expect((await post(bob, "Pergunta honesta")).status).toBe(201);
+  });
+
+  it("an exempted forum covers its posts on edit too, without AutoMod looking the parent up", async () => {
+    await golpeRule([forumId]);
+    const created = await post(bob, "Sobre golpe", { body: "como evitar golpe" });
+    expect(created.status).toBe(201);
+    const reply = await postChannelMessage({
+      author: bob as never,
+      channelId: created.body.post.id,
+      body: "resposta",
+    });
+    expect(reply.ok).toBe(true);
+    const replyId = reply.ok ? reply.message.id : "";
+    // The edit route hands AutoMod the parent it read in its access check.
+    expect(
+      (await call(bob, "PATCH", `/api/messages/${replyId}`, { body: "outro golpe" })).status,
+    ).toBe(200);
+    // An ordinary channel is still filtered on edit.
+    const general = await getPool().query<{ id: string }>(
+      `SELECT id FROM channels WHERE server_id = $1 AND type = 'text' LIMIT 1`,
+      [serverId],
+    );
+    const plain = await postChannelMessage({
+      author: bob as never,
+      channelId: general.rows[0]!.id,
+      body: "oi",
+    });
+    const plainId = plain.ok ? plain.message.id : "";
+    expect(
+      (await call(bob, "PATCH", `/api/messages/${plainId}`, { body: "golpe" })).status,
+    ).toBe(422);
+  });
+
+  it("forum audit rows commit with their change: a failed audit undoes it, and the retry writes both", async () => {
+    // Refuse chosen audit actions at the database, the way a real failure of
+    // that INSERT would land: inside whatever transaction it runs in.
+    await getPool().query(`
+      CREATE TABLE IF NOT EXISTS forum_test_audit_fail (action TEXT PRIMARY KEY);
+      CREATE OR REPLACE FUNCTION forum_test_audit_fail() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM forum_test_audit_fail WHERE action = NEW.action) THEN
+          RAISE EXCEPTION 'audit refused for the test';
+        END IF;
+        RETURN NEW;
+      END $$;
+      DROP TRIGGER IF EXISTS forum_test_audit_fail ON audit_log;
+      CREATE TRIGGER forum_test_audit_fail BEFORE INSERT ON audit_log
+        FOR EACH ROW EXECUTE FUNCTION forum_test_audit_fail();`);
+    const fail = (action: string) =>
+      getPool().query(`INSERT INTO forum_test_audit_fail (action) VALUES ($1)`, [action]);
+    const heal = () => getPool().query(`DELETE FROM forum_test_audit_fail`);
+    const audits = async (action: string) =>
+      (await getPool().query(`SELECT 1 FROM audit_log WHERE action = $1`, [action])).rowCount;
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const postId = (await post(bob, "Vai ser fixado")).body.post.id;
+
+      // Pin.
+      await fail("forum.post_pin");
+      expect(
+        (await call(alice, "PATCH", `/api/forum-posts/${postId}`, { pinned: true })).status,
+      ).toBe(500);
+      const notPinned = await getPool().query<{ pinned_at: Date | null }>(
+        `SELECT pinned_at FROM forum_posts WHERE channel_id = $1`,
+        [postId],
+      );
+      expect(notPinned.rows[0]?.pinned_at).toBeNull();
+      await heal();
+      expect(
+        (await call(alice, "PATCH", `/api/forum-posts/${postId}`, { pinned: true })).status,
+      ).toBe(200);
+      expect(await audits("forum.post_pin")).toBe(1);
+
+      // Tags.
+      await fail("forum.tags_update");
+      const tagsRefused = await call(alice, "PUT", `/api/channels/${forumId}/forum-tags`, {
+        tags: [{ name: "Bug", moderated: false }],
+      });
+      expect(tagsRefused.status).toBe(500);
+      expect((await getPool().query(`SELECT 1 FROM forum_tags`)).rowCount).toBe(0);
+      await heal();
+      await putTags([{ name: "Bug", moderated: false }]);
+      expect(await audits("forum.tags_update")).toBe(1);
+
+      // Settings.
+      await fail("forum.settings_update");
+      expect(
+        (
+          await call(alice, "PATCH", `/api/channels/${forumId}/forum-settings`, {
+            requireTag: true,
+          })
+        ).status,
+      ).toBe(500);
+      expect((await call(bob, "GET", `/api/channels/${forumId}/forum-settings`)).body).toEqual({
+        settings: { requireTag: false, defaultSort: "activity" },
+      });
+      await heal();
+      expect(
+        (
+          await call(alice, "PATCH", `/api/channels/${forumId}/forum-settings`, {
+            requireTag: true,
+          })
+        ).status,
+      ).toBe(200);
+      expect(await audits("forum.settings_update")).toBe(1);
+
+      // Delete: the post survives a failed audit, so the retry can still
+      // delete it and write the row.
+      await fail("forum.post_delete");
+      expect((await call(alice, "DELETE", `/api/forum-posts/${postId}`)).status).toBe(500);
+      expect((await call(bob, "GET", `/api/forum-posts/${postId}`)).status).toBe(200);
+      await heal();
+      expect((await call(alice, "DELETE", `/api/forum-posts/${postId}`)).status).toBe(204);
+      expect(await audits("forum.post_delete")).toBe(1);
+      expect((await call(bob, "GET", `/api/forum-posts/${postId}`)).status).toBe(404);
+    } finally {
+      error.mockRestore();
+      await getPool().query(`
+        DROP TRIGGER IF EXISTS forum_test_audit_fail ON audit_log;
+        DROP FUNCTION IF EXISTS forum_test_audit_fail();
+        DROP TABLE IF EXISTS forum_test_audit_fail;`);
+    }
+  });
+
   it("the cached first page shows a new post the moment it is published", async () => {
     await post(bob, "Primeiro");
     expect((await list(carol)).posts).toHaveLength(1);

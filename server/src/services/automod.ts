@@ -504,15 +504,6 @@ export async function deleteAutomodRule(
   return (result.rowCount ?? 0) > 0;
 }
 
-/** The parent of a thread or forum post; null for any other channel. */
-async function threadParentId(channelId: string): Promise<string | null> {
-  const result = await getPool().query<{ parent_id: string | null }>(
-    `SELECT parent_id FROM channels WHERE id = $1 AND type = 'thread'`,
-    [channelId],
-  );
-  return result.rows[0]?.parent_id ?? null;
-}
-
 async function memberRoleIds(serverId: string, userId: string): Promise<string[]> {
   const result = await getPool().query<{ role_id: string }>(
     `SELECT role_id FROM member_roles WHERE server_id = $1 AND user_id = $2`,
@@ -528,11 +519,15 @@ export interface AutomodCheckInput {
    * The channel `channelId` sits under when it is a thread or a forum post,
    * null when it is not. A rule's channel exemption covers that channel's
    * threads and posts too: exempting `#memes` (or a forum) and then filtering
-   * the threads inside it is not what anybody meant. Left undefined, it is
-   * read from the database, and only when some rule actually has a channel
-   * exemption to compare it with.
+   * the threads inside it is not what anybody meant.
+   *
+   * REQUIRED, and never looked up here. Every caller already holds the
+   * channel row (the send path, the edit route's access check, the forum
+   * routes), so a lookup could only ever repeat what it knows, and it used to
+   * run for every ordinary channel on a server with an exempting rule. Pass
+   * null for anything that is not a thread or a post.
    */
-  parentChannelId?: string | null;
+  parentChannelId: string | null;
   authorId: string;
   /** The author's resolved permissions in this channel. */
   memberPerms: bigint;
@@ -564,17 +559,7 @@ export async function checkAutomod(
   ) {
     return null;
   }
-  const parentChannelId =
-    input.parentChannelId !== undefined
-      ? input.parentChannelId
-      : rules.some(
-            (rule) =>
-              rule.enabled &&
-              rule.exemptChannelIds.length > 0 &&
-              !rule.exemptChannelIds.includes(input.channelId),
-          )
-        ? await threadParentId(input.channelId)
-        : null;
+  const parentChannelId = input.parentChannelId;
   const enabled = rules.filter(
     (rule) =>
       rule.enabled &&

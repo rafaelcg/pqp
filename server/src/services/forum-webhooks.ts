@@ -24,6 +24,7 @@ import {
   bumpForumPostActivity,
   createForumPostShell,
   discardForumPostShell,
+  findDedupeTombstone,
   ForumError,
   getForumPostRow,
   getForumPostSummary,
@@ -314,6 +315,23 @@ async function findDuplicate(
   return result.rows[0]?.channel_id ?? null;
 }
 
+/**
+ * The answer to a repeat of an item a moderator deleted: 200 and
+ * `X-Pqp-Deduplicated: 1`, as for any repeat, naming the deleted post, with
+ * nothing written. Not an error: a feed tool that sees one re-sends, which
+ * is the very loop the tombstone exists to end.
+ */
+function removedAnswer(postId: string): ForumWebhookResult {
+  return {
+    message: null,
+    postId,
+    post: null,
+    ignoredTags: [],
+    deduplicated: true,
+    reply: false,
+  };
+}
+
 /** How long a repeat waits for the first copy's opening message to land. */
 const DUPLICATE_WAIT_MS = 3_000;
 const DUPLICATE_POLL_MS = 100;
@@ -465,7 +483,10 @@ export const FORUM_WEBHOOK_POST_BUCKET = {
 const POST_BUCKET_RETRY_SECONDS = Math.ceil(FORUM_WEBHOOK_POST_REFILL_MS / 1000);
 
 export interface ForumWebhookResult {
-  /** The opening message, or the reply. Null only for a repeat whose opening was deleted. */
+  /**
+   * The opening message, or the reply. Null for a repeat whose opening was
+   * deleted, or whose whole post a moderator deleted (a tombstone).
+   */
   message: ReturnType<typeof mapMessage> | null;
   /** The post written to (or answered from the dedupe window). */
   postId: string;
@@ -597,6 +618,10 @@ async function createPostFromWebhook(
         return answer;
       }
     }
+    const removed = await findDedupeTombstone(forum.id, dedupeKey, windowHours);
+    if (removed) {
+      return removedAnswer(removed);
+    }
   }
 
   if (!(await spendPostToken(webhook.id))) {
@@ -617,6 +642,11 @@ async function createPostFromWebhook(
     dedupeKey,
     dedupeWindowHours: windowHours,
   });
+  if (shell.kind === "removed") {
+    // A moderator deleted this item inside the window, and a copy raced past
+    // the lookup above; the lock's own check caught it.
+    return removedAnswer(shell.postId);
+  }
   if (shell.kind !== "created") {
     // Another execute of the same item won the lock a moment ago.
     const answer = await duplicateAnswer(shell.postId);

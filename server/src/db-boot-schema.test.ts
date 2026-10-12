@@ -72,6 +72,7 @@ const FORUM_TABLES = [
   "forum_post_follows",
   "forum_settings",
   "webhook_forum_settings",
+  "forum_dedupe_tombstones",
 ];
 /**
  * A database that last ran the schema before forums: the type CHECK without
