@@ -853,8 +853,8 @@
     <string name="forum_deleted_author">Conta excluída</string>
     <string name="forum_preview_deleted">A mensagem original foi apagada</string>
     <string name="forum_preview_voice">Mensagem de voz</string>
-    <string name="forum_preview_image">📷 Imagem</string>
-    <string name="forum_preview_video">🎬 Vídeo</string>
+    <string name="forum_preview_image">Imagem</string>
+    <string name="forum_preview_video">Vídeo</string>
     <plurals name="forum_preview_files">
         <item quantity="one">%1$d arquivo</item>
         <item quantity="other">%1$d arquivos</item>

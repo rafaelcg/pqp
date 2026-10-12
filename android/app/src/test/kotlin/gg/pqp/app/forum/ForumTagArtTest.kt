@@ -86,4 +86,17 @@ class ForumTagArtTest {
             },
         )
     }
+
+    @Test
+    fun `the image and video preview lines carry no emoji, the card draws an icon`() {
+        listOf("values/strings.xml", "values-pt-rBR/strings.xml").forEach { file ->
+            val text = File(RepoSources.root, "android/app/src/main/res/$file").readText()
+            listOf("forum_preview_image", "forum_preview_video").forEach { name ->
+                val value = Regex("""name="$name">([^<]*)<""").find(text)?.groupValues?.get(1)
+                assertNotNull("$name missing from $file", value)
+                assertTrue("$name in $file still carries a glyph: $value", value!!.all { it.isLetter() })
+            }
+        }
+        assertNotNull(ForumTagIcons.vector("video"))
+    }
 }
