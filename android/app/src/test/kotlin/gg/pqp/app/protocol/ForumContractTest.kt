@@ -66,6 +66,25 @@ class ForumContractTest {
         assertEquals(schemaKeys, ForumPostSummary.serializer().descriptor.elementNames.toSet())
     }
 
+    /**
+     * The three things #1131 added for the phones (forum QA P9, P11, P18): who
+     * marked the answer, the live tags/settings frame, and which half AutoMod
+     * refused. Each is read by name, so a rename fails here.
+     */
+    @Test
+    fun `the 1131 additions are the shared names the phone reads`() {
+        val answer = RepoSources.objectKeys(forums, "forumAcceptedAnswerSchema").toSet()
+        assertTrue(answer.containsAll(setOf("markedById", "markedByName")))
+        assertEquals(setOf("type", "forumId", "tags", "settings"), RepoSources.objectKeys(forums, "forumConfigUpdateSchema").toSet())
+        assertTrue(RepoSources.read(forums).contains("\"forum-config-update\""))
+
+        val chat = "packages/shared/src/chat.ts"
+        val rejected = RepoSources.objectKeys(chat, "forumPostRejectedBodySchema").toSet()
+        assertTrue(rejected.containsAll(setOf("reason", "automodMessage", "field")))
+        assertTrue(RepoSources.stripComments(RepoSources.read(chat)).contains("field: z.enum([\"title\", \"body\"])"))
+        assertTrue(RepoSources.read(chat).contains("\"forum-config-update\""))
+    }
+
     @Test
     fun `the caps match shared`() {
         assertEquals(RepoSources.numberConstant(forums, "FORUM_MAX_TAGS"), ForumLimits.MAX_TAGS)

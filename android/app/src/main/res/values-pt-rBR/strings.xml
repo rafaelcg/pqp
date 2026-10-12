@@ -767,6 +767,8 @@
     <string name="conversas_preview_voice">Mensagem de voz · %1$s</string>
     <string name="conversas_preview_gif">Enviou um GIF</string>
     <string name="conversas_preview_attachment">Enviou um arquivo</string>
+    <string name="conversas_preview_nudge_sent">Tu chamou a atenção 📳</string>
+    <string name="conversas_preview_nudge_received">Chamou tua atenção! 📳</string>
     <string name="conversas_new">Nova conversa</string>
     <string name="conversas_new_description">Escolhe uma pessoa. Marca mais gente e vira grupo (até %1$d).</string>
     <string name="conversas_new_online">Online agora</string>
@@ -882,6 +884,8 @@
     <string name="forum_solution_unmark">Tirar a solução</string>
     <string name="forum_solution_title">Solução</string>
     <string name="forum_solution_jump">Ir pra resposta</string>
+    <string name="forum_solution_marked_by">marcada por %1$s</string>
+    <string name="forum_solution_marked_by_you">marcada por ti</string>
     <string name="forum_solution_deleted">A resposta marcada foi apagada.</string>
     <string name="forum_reply_placeholder_short">Responder no post</string>
     <string name="forum_locked">Esse post tá fechado. Só a staff responde aqui.</string>
@@ -934,6 +938,7 @@
     <string name="forum_composer_slow_mode">Slow mode. Espera %1$ds pra postar de novo.</string>
     <string name="forum_composer_rate_limited">Muitos posts em pouco tempo. Tenta de novo em %1$d min.</string>
     <string name="forum_composer_automod_title">O AutoMod bloqueou esse título.</string>
+    <string name="forum_composer_automod_body">O AutoMod bloqueou esse texto.</string>
     <string name="forum_composer_automod_post">O AutoMod bloqueou esse post.</string>
     <string name="forum_composer_cannot_send">Tu não pode postar nesse fórum agora.</string>
     <string name="forum_composer_uploading">Esperando o arquivo terminar de subir.</string>
@@ -1015,6 +1020,7 @@
     <string name="stories_sticker_call">Chama pra call</string>
     <string name="stories_call_picker_body">Quem tocar entra direto. O card mostra quem tá lá dentro na hora.</string>
     <string name="stories_call_picker_none">Nenhuma sala de voz nos servidores marcados.</string>
+    <string name="stories_call_not_in_room">Tu não tá no %1$s. O card só deixa entrar enquanto tu tá na call.</string>
     <string name="stories_call_picker_empty">vazia</string>
     <string name="stories_call_default_text">bora pra call?</string>
     <string name="stories_audience_title">Quem vê</string>

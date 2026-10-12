@@ -56,6 +56,7 @@ import {
   putForumTags,
 } from "@/lib/forum-api";
 import { fetchForumConfig } from "@/lib/api";
+import { loadForumConfig } from "@/hooks/use-forum-config";
 import { readCursorOnce } from "@/lib/forum-visit";
 import {
   subscribeForumFrames,
@@ -688,6 +689,18 @@ export function ForumPane({
         if (frame.forumId !== forumId) {
           return;
         }
+        // Staff saved tags or settings: an open composer follows them now,
+        // not at the next reload (forum QA P11).
+        if (frame.type === "forum-config-update") {
+          if (frame.tags) {
+            setTags(frame.tags);
+            setTagsLoaded(true);
+          }
+          if (frame.settings) {
+            setSettings(frame.settings);
+          }
+          return;
+        }
         if (frame.type === "forum-post-upsert") {
           const before = listRef.current;
           const wasShown =
@@ -862,10 +875,17 @@ export function ForumPane({
   // ----------------------------------------------------------- composer
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerTitle, setComposerTitle] = useState<string | null>(null);
-  const openComposer = useCallback((title: string | null = null) => {
-    setComposerTitle(title);
-    setComposerOpen(true);
-  }, []);
+  const openComposer = useCallback(
+    (title: string | null = null) => {
+      setComposerTitle(title);
+      setComposerOpen(true);
+      // The flag is operator data flipped with no deploy: ask again as a
+      // post starts, so a pause made since this tab opened shows before the
+      // person has written the whole thing (forum QA P11).
+      void loadForumConfig(server.id).catch(() => {});
+    },
+    [server.id],
+  );
   const canCompose = canPost && creationEnabled;
 
   // A drop on the forum starts a post with the files attached.
@@ -1702,6 +1722,18 @@ export function ForumPane({
         onOpenPost={(postId) => {
           setComposerOpen(false);
           openPostById(postId);
+        }}
+        onRefused={(kind) => {
+          // The server knew better than the screen: read the rule again, so
+          // the paused line or "pelo menos 1" shows without a reload.
+          if (kind === "paused") {
+            setFetchedEnabled(false);
+            void loadForumConfig(server.id).catch(() => {});
+          } else {
+            fetchForumSettings(forumId)
+              .then(({ settings: next }) => setSettings(next))
+              .catch(() => {});
+          }
         }}
         onPublished={(post, viewer) => {
           setComposerOpen(false);

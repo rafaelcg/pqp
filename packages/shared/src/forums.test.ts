@@ -19,6 +19,7 @@ import {
   forumPostListResponseSchema,
   forumPostSummarySchema,
   forumSettingsSchema,
+  forumTagNameKey,
   listForumPostsQuerySchema,
   putForumTagsSchema,
   updateForumPostSchema,
@@ -223,7 +224,7 @@ describe("writes", () => {
     expect(updateForumPostSchema.safeParse({ tagIds: [TAG_A, TAG_A] }).success).toBe(false);
   });
 
-  it("tags: at most 20, names unique case-insensitively", () => {
+  it("tags: at most 20, names unique across case, accents and spaces", () => {
     expect(
       putForumTagsSchema.safeParse({
         tags: [
@@ -232,6 +233,16 @@ describe("writes", () => {
         ],
       }).success,
     ).toBe(false);
+    expect(
+      putForumTagsSchema.safeParse({
+        tags: [
+          { name: "Dúvida", moderated: false },
+          { name: "duvida", moderated: false },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(forumTagNameKey("  Dúvida   Rápida ")).toBe(forumTagNameKey("duvida rapida"));
+    expect(forumTagNameKey("Bug")).not.toBe(forumTagNameKey("Bugs"));
     expect(
       putForumTagsSchema.safeParse({
         tags: Array.from({ length: FORUM_MAX_TAGS + 1 }, (_, i) => ({
