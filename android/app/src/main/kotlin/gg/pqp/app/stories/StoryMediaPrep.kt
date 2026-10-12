@@ -52,12 +52,12 @@ object StoryMediaPrep {
         val type = context.contentResolver.getType(uri).orEmpty()
         when {
             type.startsWith("video/") -> prepareVideo(context, uri, type, maxBytes)
-            type.startsWith("image/") -> prepareImage(context, uri)
+            type.startsWith("image/") -> prepareImage(context, uri, maxBytes)
             else -> PrepResult.Refused(StoriesRules.MediaRefusal.WrongType)
         }
     }
 
-    private fun prepareImage(context: Context, uri: Uri): PrepResult {
+    private fun prepareImage(context: Context, uri: Uri, maxBytes: Long): PrepResult {
         val bitmap = runCatching { decode(context, uri) }.getOrNull() ?: return PrepResult.Unreadable
         val (width, height) = StoriesRules.scaledSize(bitmap.width, bitmap.height)
         val scaled = if (width != bitmap.width || height != bitmap.height) {
@@ -67,7 +67,10 @@ object StoryMediaPrep {
         }
         val out = ByteArrayOutputStream()
         scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
-        return PrepResult.Ready(PreparedMedia(out.toByteArray(), "image/jpeg", width, height, null, uri))
+        val bytes = out.toByteArray()
+        // A 1440 px JPEG is far under any real cap, but a deployment may set one lower.
+        if (bytes.size > maxBytes) return PrepResult.Refused(StoriesRules.MediaRefusal.TooBig)
+        return PrepResult.Ready(PreparedMedia(bytes, "image/jpeg", width, height, null, uri))
     }
 
     private fun decode(context: Context, uri: Uri): Bitmap? =
@@ -83,8 +86,39 @@ object StoryMediaPrep {
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             }
         } else {
-            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+            decodeLegacy(context, uri)
         }
+
+    /**
+     * Android 8.x (API 26 and 27), which has no `ImageDecoder`. Two things
+     * `ImageDecoder` does for free have to be done by hand: decode no bigger
+     * than needed (bounds first, then a power-of-two sample, so a 48 MP photo
+     * never becomes 190 MB of pixels), and stand the picture up from its EXIF
+     * orientation, because re-encoding drops the tag that said how to turn it.
+     */
+    private fun decodeLegacy(context: Context, uri: Uri): Bitmap? {
+        val resolver = context.contentResolver
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = StoriesRules.sampleSize(bounds.outWidth, bounds.outHeight)
+        }
+        val bitmap = resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) } ?: return null
+        val orientation = runCatching {
+            resolver.openInputStream(uri)?.use {
+                android.media.ExifInterface(it).getAttributeInt(
+                    android.media.ExifInterface.TAG_ORIENTATION,
+                    android.media.ExifInterface.ORIENTATION_NORMAL,
+                )
+            }
+        }.getOrNull() ?: android.media.ExifInterface.ORIENTATION_NORMAL
+        val degrees = StoriesRules.rotationDegrees(orientation)
+        if (degrees == 0) return bitmap
+        val turn = android.graphics.Matrix().apply { postRotate(degrees.toFloat()) }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, turn, true)
+            .also { if (it !== bitmap) bitmap.recycle() }
+    }
 
     private fun prepareVideo(context: Context, uri: Uri, type: String, maxBytes: Long): PrepResult {
         val retriever = MediaMetadataRetriever()

@@ -194,6 +194,75 @@ class StoriesTest {
     }
 
     @Test
+    fun `a call sticker's server is ticked where the person can see it, and locked`() {
+        val friendsOnly = StoryAudienceTargets(friends = true)
+        // Picking a room in "qg" ticks "qg"; the sheet then shows exactly this.
+        assertEquals(
+            StoryAudienceTargets(serverIds = listOf("qg"), friends = true),
+            StoriesRules.withSticker(friendsOnly, "qg"),
+        )
+        // Already ticked: nothing changes, no duplicate.
+        val ticked = StoryAudienceTargets(serverIds = listOf("qg"))
+        assertEquals(ticked, StoriesRules.withSticker(ticked, "qg"))
+        // No sticker: the audience is exactly what the person ticked.
+        assertEquals(friendsOnly, StoriesRules.withSticker(friendsOnly, null))
+        // The call's server cannot be unticked; every other row can.
+        assertFalse(StoriesRules.canUntick("qg", stickerServerId = "qg"))
+        assertTrue(StoriesRules.canUntick("val", stickerServerId = "qg"))
+        assertTrue(StoriesRules.canUntick("qg", stickerServerId = null))
+    }
+
+    @Test
+    fun `old phones decode a big photo sampled down, and turn it upright`() {
+        assertEquals(1, StoriesRules.sampleSize(1080, 1920))
+        // A 12 MP phone photo is under twice the story size halved: decoded whole.
+        assertEquals(1, StoriesRules.sampleSize(4032, 3024))
+        assertEquals(2, StoriesRules.sampleSize(8000, 6000))
+        assertEquals(4, StoriesRules.sampleSize(12000, 9000))
+        // Never sampled below twice the story size.
+        listOf(4032, 8000, 12000).forEach { long ->
+            assertTrue(long / StoriesRules.sampleSize(long, long * 3 / 4) >= StoriesRules.IMAGE_MAX_EDGE * 2)
+        }
+        assertEquals(90, StoriesRules.rotationDegrees(6))
+        assertEquals(180, StoriesRules.rotationDegrees(3))
+        assertEquals(270, StoriesRules.rotationDegrees(8))
+        assertEquals(0, StoriesRules.rotationDegrees(1))
+    }
+
+    @Test
+    fun `a failed view batch is retried, a few times, then let go`() {
+        val views = ViewBatcher(maxBatch = 2, maxAttempts = 3)
+        listOf("a", "b", "c").forEach(views::add)
+        val first = views.take()
+        assertEquals(listOf("a", "b"), first)
+        assertEquals(1, views.size)
+        // The network ate it: back in the queue, behind what was already there.
+        views.failed(first)
+        assertEquals(listOf("c", "a"), views.take())
+        assertEquals(listOf("b"), views.take())
+        // "a" and "b" fail twice more; on the third failure they are dropped.
+        views.failed(listOf("a", "b"))
+        assertEquals(listOf("a", "b"), views.take())
+        views.failed(listOf("a", "b"))
+        assertTrue(views.isEmpty)
+    }
+
+    @Test
+    fun `a success clears the attempt count, and the retry waits a little longer each time`() {
+        val views = ViewBatcher(maxBatch = 10, maxAttempts = 2)
+        views.add("a")
+        views.failed(views.take())
+        views.succeeded(views.take())
+        // Fresh again: one failure no longer drops it.
+        views.add("a")
+        views.failed(views.take())
+        assertEquals(listOf("a"), views.take())
+        assertEquals(2_000L, ViewBatcher.backoffMs(1))
+        assertEquals(4_000L, ViewBatcher.backoffMs(2))
+        assertEquals(30_000L, ViewBatcher.backoffMs(9))
+    }
+
+    @Test
     fun `posting needs an audience, and at most ten servers`() {
         assertFalse(StoriesRules.canPost(StoryAudienceTargets()))
         assertTrue(StoriesRules.canPost(StoryAudienceTargets(friends = true)))

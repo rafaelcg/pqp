@@ -1020,6 +1020,8 @@
     <string name="stories_audience_no_permission">Staff only allow stories for some roles</string>
     <string name="stories_audience_timed_out">You\'re timed out here</string>
     <string name="stories_audience_too_new">New accounts post here after 72 h</string>
+    <string name="stories_audience_call_locked">The call is in this server, so it stays ticked</string>
+    <string name="stories_audience_failed">Couldn\'t load who can see it.</string>
     <string name="stories_audience_replies">Allow replies</string>
     <string name="stories_audience_replies_hint">Replies land in your Chats</string>
     <string name="stories_audience_post">Post story</string>
