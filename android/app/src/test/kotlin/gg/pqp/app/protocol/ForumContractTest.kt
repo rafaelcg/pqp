@@ -19,6 +19,7 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -94,6 +95,20 @@ class ForumContractTest {
         ).forEach { token ->
             assertTrue("forums.ts no longer names $token", source.contains("\"$token\""))
         }
+    }
+
+    @Test
+    fun `a video post carries its clip in thumbnailVideoUrl, an older API omits it`() {
+        val base = """"id":"p","forumId":"f","title":"clip","createdAt":"2026-10-11T20:00:00.000Z",
+            "lastActivityAt":"2026-10-11T20:00:00.000Z","openingKind":"attachment","attachmentCount":1"""
+        val video = PqpJson.decodeFromString<ForumPostSummary>(
+            """{$base,"thumbnailUrl":null,"thumbnailVideoUrl":"https://x/clip.mp4?sig=1"}""",
+        )
+        assertEquals("https://x/clip.mp4?sig=1", video.thumbnailVideoUrl)
+        assertNull(video.thumbnailUrl)
+
+        assertNull(PqpJson.decodeFromString<ForumPostSummary>("""{$base}""").thumbnailVideoUrl)
+        assertNull(PqpJson.decodeFromString<ForumPostSummary>("""{$base,"thumbnailVideoUrl":null}""").thumbnailVideoUrl)
     }
 
     @Test

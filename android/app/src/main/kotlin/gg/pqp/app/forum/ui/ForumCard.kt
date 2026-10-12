@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,12 +15,14 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -31,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -51,6 +55,7 @@ import gg.pqp.app.R
 import gg.pqp.app.forum.ForumPostSummary
 import gg.pqp.app.forum.ForumTag
 import gg.pqp.app.forum.ForumUnread
+import gg.pqp.app.ui.chat.rememberVideoFirstFrame
 import gg.pqp.app.ui.theme.Motion
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
@@ -140,8 +145,10 @@ fun ForumPostCard(
                     }
                     Text(
                         text = post.title,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Medium,
+                        // The line people scan: 16sp, heavier than the rest of the
+                        // card read or not, heavier still unread (the web card).
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = if (bold) FontWeight.Bold else FontWeight.SemiBold,
                         color = if (bold) colors.onSurface else colors.onSurfaceVariant,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -150,6 +157,11 @@ fun ForumPostCard(
                         post.openingDeleted -> stringResource(R.string.forum_preview_deleted)
                         post.openingKind == "voice" -> stringResource(R.string.forum_preview_voice)
                         !post.preview.isNullOrBlank() -> previewText(post.preview)
+                        // One picture or one clip says what it is; several say how many.
+                        post.attachmentCount == 1 && post.thumbnailUrl != null ->
+                            stringResource(R.string.forum_preview_image)
+                        post.attachmentCount == 1 && post.thumbnailVideoUrl != null ->
+                            stringResource(R.string.forum_preview_video)
                         post.attachmentCount > 0 ->
                             pluralStringResource(R.plurals.forum_preview_files, post.attachmentCount, post.attachmentCount)
                         else -> null
@@ -173,18 +185,9 @@ fun ForumPostCard(
                     Spacer(Modifier.height(Spacing.sm))
                     CardFooter(post, tagsById, newReplies, time)
                 }
-                post.thumbnailUrl?.let { url ->
+                if (post.thumbnailUrl != null || post.thumbnailVideoUrl != null) {
                     Spacer(Modifier.width(Spacing.md))
-                    AsyncImage(
-                        model = url,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(Thumbnail)
-                            .clip(MaterialTheme.shapes.small)
-                            .background(colors.surfaceContainerHigh)
-                            .border(Sizes.hairline, colors.outline, MaterialTheme.shapes.small),
-                    )
+                    ForumThumbnail(imageUrl = post.thumbnailUrl, videoUrl = post.thumbnailVideoUrl)
                 }
             }
         }
@@ -204,6 +207,63 @@ fun ForumPostCard(
         }
     }
 }
+
+/**
+ * The question's first picture, or, for a post that is one clip, that clip's
+ * first frame under a small play badge (same slot, same corner, same hairline).
+ * The picture wins when a post has both; a clip that will not give a frame
+ * keeps the plate and the badge, which still say "video".
+ */
+@Composable
+private fun ForumThumbnail(imageUrl: String?, videoUrl: String?) {
+    val colors = MaterialTheme.colorScheme
+    val shape = MaterialTheme.shapes.small
+    Box(
+        modifier = Modifier
+            .size(Thumbnail)
+            .clip(shape)
+            .background(colors.surfaceContainerHigh)
+            .border(Sizes.hairline, colors.outline, shape),
+    ) {
+        if (imageUrl != null) {
+            AsyncImage(
+                model = imageUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            // 3x the dp side is sharp on any phone without a full-size decode.
+            val frame = rememberVideoFirstFrame(videoUrl, VIDEO_FRAME_PX, VIDEO_FRAME_PX)
+            if (frame != null) {
+                Image(
+                    bitmap = frame,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .testTag("forum.card.playBadge"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = PqpIcons.Play,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
+    }
+}
+
+private const val VIDEO_FRAME_PX = 168
 
 @Composable
 private fun CardFooter(
