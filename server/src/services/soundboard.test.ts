@@ -32,6 +32,13 @@ vi.mock("../lib/s3.js", () => ({
   },
   presignGet: (key: string) => `https://bucket.test/${key}?get=1`,
   headObject: async (key: string) => s3.objects.get(key) ?? null,
+  copyObject: async (from: string, to: string) => {
+    const source = s3.objects.get(from);
+    if (!source) {
+      throw new Error("NoSuchKey");
+    }
+    s3.objects.set(to, { ...source });
+  },
   getObjectPrefix: async (key: string) =>
     s3.objects.has(key) ? new Uint8Array(16) : null,
   deleteObject: async (key: string) => {
@@ -57,6 +64,7 @@ const {
   countSoundboardSlotsUsed,
   createSoundboardUpload,
   deleteSoundboardSound,
+  soundboardClipKey,
   sweepPendingUploads,
   updateSoundboardSound,
 } = await import("./soundboard.js");
@@ -119,7 +127,9 @@ describeDb("soundboard upload ledger", () => {
       [key],
     );
     expect(pending.rowCount).toBe(0);
-    expect(s3.deleted).toEqual([]);
+    // The clip is a copy; the upload file is deleted once the row exists.
+    expect(s3.deleted).toEqual([key]);
+    expect(s3.objects.has(soundboardClipKey(key))).toBe(true);
   });
 
   it("answers a repeated claim of the same key with the same sound", async () => {
@@ -163,7 +173,8 @@ describeDb("soundboard upload ledger", () => {
       `UPDATE soundboard_pending_uploads SET cleanup_until = NOW() - INTERVAL '1 second'`,
     );
     expect(await sweepPendingUploads()).toBe(1);
-    expect(s3.deleted).toEqual([key]);
+    // The refused claim's copy, then the upload the sweep owned.
+    expect(s3.deleted).toEqual([soundboardClipKey(key), key]);
     const gone = await getPool().query(`SELECT 1 FROM soundboard_pending_uploads`);
     expect(gone.rowCount).toBe(0);
   });
@@ -180,8 +191,9 @@ describeDb("soundboard upload ledger", () => {
     await claim(claimed);
     await upload();
     expect(await sweepPendingUploads()).toBe(0);
-    expect(s3.deleted).toEqual([]);
-    expect(s3.objects.has(claimed)).toBe(true);
+    // Only the claimed upload's own file, deleted by its claim.
+    expect(s3.deleted).toEqual([claimed]);
+    expect(s3.objects.has(soundboardClipKey(claimed))).toBe(true);
   });
 
   it("counts pending uploads in the cap from the table", async () => {
@@ -209,7 +221,7 @@ describeDb("soundboard upload ledger", () => {
     const key = await upload();
     const sound = await claim(key);
     expect(await deleteSoundboardSound(serverId, sound.id)).toBe(sound.name);
-    expect(s3.deleted).toEqual([key]);
+    expect(s3.deleted).toEqual([key, soundboardClipKey(key)]);
     expect(await deleteSoundboardSound(serverId, sound.id)).toBeNull();
   });
 
@@ -338,5 +350,22 @@ describeDb("soundboard upload ledger", () => {
         name: "nothing",
       }),
     ).toBeNull();
+  });
+
+  it("stores a copy, so a second PUT through the upload's signature cannot reach the clip", async () => {
+    const key = await upload();
+    const { sound } = await claimSoundboardSound({ serverId, userId, key, name: "copied", emoji: "x" });
+    const stored = await getPool().query<{ storage_key: string }>(
+      `SELECT storage_key FROM soundboard_sounds WHERE id = $1`,
+      [sound.id],
+    );
+    expect(stored.rows[0]!.storage_key).not.toBe(key);
+    expect(stored.rows[0]!.storage_key).toContain(".clip.");
+    // The upload file is gone; a late PUT would only recreate it there.
+    expect(s3.objects.has(key)).toBe(false);
+    expect(s3.objects.has(stored.rows[0]!.storage_key)).toBe(true);
+    // A repeated claim answers with the same clip and does not need the file.
+    const again = await claimSoundboardSound({ serverId, userId, key, name: "copied", emoji: "x" });
+    expect(again).toMatchObject({ created: false, sound: { id: sound.id } });
   });
 });

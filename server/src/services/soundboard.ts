@@ -12,6 +12,7 @@ import {
 import { getPool } from "../db.js";
 import { publishToCluster, subscribeToCluster } from "../lib/bus.js";
 import {
+  copyObject,
   deleteObject,
   getObjectPrefix,
   headObject,
@@ -80,6 +81,23 @@ export function soundboardObjectKey(
 export function isSoundboardKey(serverId: string, key: string): boolean {
   const root = prefix(serverId);
   return key.startsWith(root) && !key.includes("..") && key.length > root.length;
+}
+
+/**
+ * Where a claimed clip lives. The upload key's signed PUT stays valid for its
+ * whole TTL, so a clip read and checked at that key could be overwritten
+ * with different audio of the same size after the claim. The claim copies
+ * the upload here, checks the copy, and stores this key, which no signature
+ * can write to. Derived from the upload key so a repeated claim finds the
+ * same row.
+ */
+export function soundboardClipKey(uploadKey: string): string {
+  const dot = uploadKey.lastIndexOf(".");
+  return `${uploadKey.slice(0, dot)}.clip${uploadKey.slice(dot)}`;
+}
+
+function isUploadKey(serverId: string, key: string): boolean {
+  return isSoundboardKey(serverId, key) && !key.includes(".clip.");
 }
 
 function toSound(row: SoundRow): SoundboardSound {
@@ -325,13 +343,16 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
-if (typeof setInterval === "function") {
-  setInterval(() => {
-    if (!isStorageConfigured()) {
-      return;
-    }
-    void sweepPendingUploads().catch(() => undefined);
-  }, 60_000).unref?.();
+/**
+ * The upload ledger's sweep, as a cold job (`jobs.ts`): run by the worker,
+ * or by the single process when there is no split. Nothing to do without
+ * storage.
+ */
+export async function sweepSoundboardUploads(): Promise<void> {
+  if (!isStorageConfigured()) {
+    return;
+  }
+  await sweepPendingUploads();
 }
 
 export async function createSoundboardUpload(input: {
@@ -415,20 +436,43 @@ export async function claimSoundboardSound(input: {
   if (!isStorageConfigured()) {
     throw new SoundboardError("storage");
   }
-  if (!isSoundboardKey(input.serverId, input.key)) {
+  if (!isUploadKey(input.serverId, input.key)) {
     throw new SoundboardError("missing");
   }
+  const clipKey = soundboardClipKey(input.key);
 
-  const head = await headObject(input.key);
+  // A repeated claim of an upload that already became a clip: the upload
+  // file is gone, so answer from the row before touching storage.
+  const already = await getPool().query<SoundRow>(
+    `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
+            duration_ms, volume
+       FROM soundboard_sounds
+      WHERE storage_key = $1 AND server_id = $2`,
+    [clipKey, input.serverId],
+  );
+  if (already.rows[0]) {
+    return { sound: toSound(already.rows[0]), created: false };
+  }
+
+  // Copy first, then check the copy: what is checked is what is stored.
+  try {
+    await copyObject(input.key, clipKey);
+  } catch {
+    throw new SoundboardError("missing");
+  }
+  const discardCopy = () => deleteObject(clipKey).catch(() => undefined);
+  const head = await headObject(clipKey);
   if (!head) {
     throw new SoundboardError("missing");
   }
   const contentType = head.contentType as SoundboardContentType;
   if (contentType !== "audio/mpeg" && contentType !== "audio/ogg") {
+    await discardCopy();
     throw new SoundboardError("type");
   }
-  const bytes = await getObjectPrefix(input.key, SOUNDBOARD_MAX_BYTES);
+  const bytes = await getObjectPrefix(clipKey, SOUNDBOARD_MAX_BYTES);
   if (!bytes) {
+    await discardCopy();
     throw new SoundboardError("missing");
   }
   const durationMs = audioDurationMs(bytes, contentType);
@@ -439,6 +483,7 @@ export async function claimSoundboardSound(input: {
     SOUNDBOARD_MAX_DURATION_MS,
   );
   if (rejection) {
+    await discardCopy();
     await dropUnclaimedObject(input.key).catch(() => undefined);
     throw new SoundboardError(rejection);
   }
@@ -447,6 +492,8 @@ export async function claimSoundboardSound(input: {
   // Set when the claim loses its slot: the file is dropped once the pooled
   // client is back, never while it is held.
   let dropAfter = false;
+  // Set when this claim created the row: the upload file is no longer needed.
+  let created = false;
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -468,11 +515,13 @@ export async function claimSoundboardSound(input: {
                 duration_ms, volume
            FROM soundboard_sounds
           WHERE storage_key = $1 AND server_id = $2`,
-        [input.key, input.serverId],
+        [clipKey, input.serverId],
       );
       await client.query("ROLLBACK");
       const row = done.rows[0];
       if (!row) {
+        // The sweep took the upload: this copy belongs to nobody.
+        await discardCopy();
         throw new SoundboardError("missing");
       }
       return { sound: toSound(row), created: false };
@@ -498,7 +547,7 @@ export async function claimSoundboardSound(input: {
         input.serverId,
         input.name,
         input.emoji,
-        input.key,
+        clipKey,
         contentType,
         head.contentLength,
         // Within the measuring tolerance of the cap counts as at the cap.
@@ -508,6 +557,7 @@ export async function claimSoundboardSound(input: {
       ],
     );
     await client.query("COMMIT");
+    created = true;
     return { sound: toSound(inserted.rows[0]!), created: true };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -522,7 +572,7 @@ export async function claimSoundboardSound(input: {
                 duration_ms, volume
            FROM soundboard_sounds
           WHERE storage_key = $1 AND server_id = $2`,
-        [input.key, input.serverId],
+        [clipKey, input.serverId],
       );
       const row = existing.rows[0];
       if (row) {
@@ -535,7 +585,13 @@ export async function claimSoundboardSound(input: {
   } finally {
     client.release();
     if (dropAfter) {
+      await discardCopy();
       await dropUnclaimedObject(input.key).catch(() => undefined);
+    }
+    if (created) {
+      // Best effort. A later PUT through the still-valid signature can only
+      // write here, where nothing reads.
+      await deleteObject(input.key).catch(() => undefined);
     }
   }
 }

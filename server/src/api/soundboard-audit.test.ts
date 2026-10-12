@@ -37,6 +37,13 @@ vi.mock("../lib/s3.js", () => ({
   presignPut: (key: string) => `https://bucket.test/${key}?sig=1`,
   presignGet: (key: string) => `https://bucket.test/${key}?get=1`,
   headObject: async (key: string) => s3.objects.get(key) ?? null,
+  copyObject: async (from: string, to: string) => {
+    const source = s3.objects.get(from);
+    if (!source) {
+      throw new Error("NoSuchKey");
+    }
+    s3.objects.set(to, source);
+  },
   getObjectPrefix: async (key: string) => (s3.objects.has(key) ? new Uint8Array(16) : null),
   deleteObject: async (key: string) => {
     s3.objects.delete(key);
