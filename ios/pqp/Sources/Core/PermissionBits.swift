@@ -24,6 +24,14 @@ enum PermissionBit {
     /// the compose button asks the same question of the same snapshot.
     static let manageServer: UInt64 = 1 << 5
 
+    /// `Permission.MANAGE_CHANNELS` = `1n << 4n`. With MANAGE_MESSAGES below,
+    /// what makes somebody staff in a forum: pin, close, delete a post, and
+    /// the staff-only tags (`forumPerms` on the server).
+    static let manageChannels: UInt64 = 1 << 4
+
+    /// `Permission.MANAGE_MESSAGES` = `1n << 8n`.
+    static let manageMessages: UInt64 = 1 << 8
+
     /// `Permission.START_WATCH_PARTY` = `1n << 23n` in
     /// `packages/shared/src/permissions.ts`: start the stream in a
     /// `watch_party` channel. Everyone else there is the audience.

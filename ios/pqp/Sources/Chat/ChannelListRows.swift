@@ -49,6 +49,8 @@ struct ChannelRow: View {
     /// apart.
     private var glyph: String {
         if channel.isWatchParty { return "movieclapper" }
+        // The web's `MessagesSquare`: conversations, not a `#`.
+        if channel.isForum { return "bubble.left.and.bubble.right" }
         return channel.isVoice ? "speaker.wave.2" : "number"
     }
 

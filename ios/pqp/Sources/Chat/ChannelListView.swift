@@ -22,17 +22,22 @@ struct ChannelListView: View {
     /// Set when a Baú post link brought us here: push the Baú on top of this
     /// list, scrolled to the post it names.
     let initialBau: BauFocus?
+    /// Set when a forum link or a push for a post brought us here: push the
+    /// forum on top of this list, and the post on top of the forum.
+    let initialForum: ForumFocus?
 
     init(
         server: Server,
         initialChannel: Channel? = nil,
         opensBau: Bool = false,
-        initialBau: BauFocus? = nil
+        initialBau: BauFocus? = nil,
+        initialForum: ForumFocus? = nil
     ) {
         self.server = server
         self.initialChannel = initialChannel
         self.opensBau = opensBau
         self.initialBau = initialBau
+        self.initialForum = initialForum
         _current = State(initialValue: server)
         _collapsed = State(initialValue: CollapsedSections().load(serverId: server.id))
     }
@@ -138,6 +143,8 @@ struct ChannelListView: View {
     @State private var hasSeededInitialChannel = false
     @State private var openedBau: BauFocus?
     @State private var hasSeededInitialBau = false
+    @State private var openedForum: ForumFocus?
+    @State private var hasSeededInitialForum = false
 
     /**
      A WATCH PARTY IS NOT A VOICE ROW, AND THIS IS WHERE THAT IS ENFORCED.
@@ -176,19 +183,22 @@ struct ChannelListView: View {
         listed.filter(\.isCategory).sorted { $0.position < $1.position }
     }
     /// Channels with no category, which the sidebar shows above the grouped
-    /// ones, matching the web client's layout.
-    private var looseText: [Channel] { listed.filter { $0.isText && $0.parentId == nil } }
+    /// ones, matching the web client's layout. A forum sits with the text
+    /// channels, as on the web.
+    private var looseText: [Channel] {
+        listed.filter { ($0.isText || $0.isForum) && $0.parentId == nil }
+    }
     private var looseVoice: [Channel] { listed.filter { $0.isVoice && $0.parentId == nil } }
 
     private func children(of category: Channel) -> [Channel] {
         Self.children(of: category, in: listed)
     }
 
-    /// Only types this build can open: a type it does not know (a forum) is
-    /// hidden, not drawn as a row that goes nowhere.
+    /// Only types this build can open (a chat or a forum): a type it does not
+    /// know is hidden, not drawn as a row that goes nowhere.
     static func children(of category: Channel, in listed: [Channel]) -> [Channel] {
         listed
-            .filter { $0.parentId == category.id && $0.opensAsChat }
+            .filter { $0.parentId == category.id && $0.isListed }
             .sorted { $0.position < $1.position }
     }
 
@@ -416,7 +426,7 @@ struct ChannelListView: View {
         let inCall = isCurrentCall(channel)
         VStack(alignment: .leading, spacing: 0) {
             NavigationLink {
-                chat(for: channel)
+                destination(for: channel)
             } label: {
                 ChannelRow(
                     channel: channel,
@@ -505,7 +515,14 @@ struct ChannelListView: View {
                 Task { await refreshBau() }
             }
         }
-        .navigationDestination(item: $openedChannel) { channel in chat(for: channel) }
+        .navigationDestination(item: $openedChannel) { channel in destination(for: channel) }
+        .navigationDestination(item: $openedForum) { focus in
+            if let forum = channels.first(where: { $0.id == focus.forumId && $0.isForum }) {
+                ForumHomeView(forum: forum, server: current, initialPostId: focus.postId)
+            }
+        }
+        // A forum link: once the list knows the forum (cached or fetched).
+        .onChange(of: channels) { _, _ in openForumIfAsked() }
         .navigationDestination(isPresented: $showingBau) {
             if let config = communityHome {
                 CommunityHomeView(server: current, config: config, chatDestination: { AnyView(chat(for: $0)) })
@@ -725,6 +742,29 @@ struct ChannelListView: View {
         // Coming back from a chat re-reads the counts: the chat marked itself
         // read on the server, and this is what clears its badge locally.
         .onAppear { Task { await refreshUnread() } }
+    }
+
+    /// Where a row goes: a forum's list, or a chat.
+    @ViewBuilder
+    private func destination(for channel: Channel) -> some View {
+        if channel.isForum {
+            ForumHomeView(forum: channel, server: current)
+        } else {
+            chat(for: channel)
+        }
+    }
+
+    /// The forum a link named, pushed once, without a slide (the same rule as
+    /// a restored channel). A forum this account cannot see, or one that is
+    /// gone, leaves the list where it is.
+    private func openForumIfAsked() {
+        guard let initialForum, !hasSeededInitialForum,
+              channels.contains(where: { $0.id == initialForum.forumId && $0.isForum })
+        else { return }
+        hasSeededInitialForum = true
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { openedForum = initialForum }
     }
 
     /// A channel's chat screen. Only text channels are recorded as the last

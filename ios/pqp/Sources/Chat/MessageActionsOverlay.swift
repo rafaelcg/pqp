@@ -43,6 +43,10 @@ struct MessageActionsOverlay: View {
     var onEdit: () -> Void
     var onDelete: () -> Void
     var onDismiss: () -> Void
+    /// In a forum post, for its author and staff: mark this reply as the
+    /// answer, or take that back. Nil everywhere else.
+    var solution: ForumSolutionAction? = nil
+    var onToggleSolution: () -> Void = {}
 
     /// The menu opens *during* a press that has not ended yet, so the finger is
     /// still down on what is now the backdrop. Without this the lift reads as
@@ -147,6 +151,18 @@ struct MessageActionsOverlay: View {
                 onDismiss()
             }
 
+            if let solution {
+                divider
+                row(
+                    solution == .mark ? "Mark as solution" : "Unmark solution",
+                    icon: solution == .mark ? "checkmark.seal" : "xmark.seal",
+                    tint: solution == .mark ? Palette.success : Palette.paper
+                ) {
+                    onToggleSolution()
+                    onDismiss()
+                }
+            }
+
             if canStartThreads {
                 divider
                 // Start or open — the server route is idempotent, so both are
@@ -246,4 +262,10 @@ enum Haptics {
     static func selection() {
         UISelectionFeedbackGenerator().selectionChanged()
     }
+}
+
+/// What the long-press menu offers about a forum post's answer.
+enum ForumSolutionAction: Equatable {
+    case mark
+    case unmark
 }
