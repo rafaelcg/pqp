@@ -10989,6 +10989,202 @@
         }
       }
     },
+    "Organize channels" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Organizar canais"
+          }
+        }
+      }
+    },
+    "Remove from category" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tirar da categoria"
+          }
+        }
+      }
+    },
+    "Text channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canal de texto"
+          }
+        }
+      }
+    },
+    "Voice channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canal de voz"
+          }
+        }
+      }
+    },
+    "Private channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canal privado"
+          }
+        }
+      }
+    },
+    "Create channel in %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Criar canal em %@"
+          }
+        }
+      }
+    },
+    "Couldn't move it. The list changed, try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra mover. A lista mudou, tenta de novo."
+          }
+        }
+      }
+    },
+    "Couldn't move it. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra mover. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Voice rooms" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salas de voz"
+          }
+        }
+      }
+    },
+    "Rename category" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Renomear categoria"
+          }
+        }
+      }
+    },
+    "Category name" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome da categoria"
+          }
+        }
+      }
+    },
+    "Empty. Drag a channel here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vazia. Arrasta um canal pra cá."
+          }
+        }
+      }
+    },
+    "Move up" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover para cima"
+          }
+        }
+      }
+    },
+    "Move down" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover para baixo"
+          }
+        }
+      }
+    },
+    "Hold ≡ and drag a channel or a category. Nothing is saved until you tap Done." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Segura o ≡ e arrasta um canal ou uma categoria. Só salva quando tu toca em Concluir."
+          }
+        }
+      }
+    },
+    "%@ moved to position %lld of %lld." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ foi pra posição %lld de %lld."
+          }
+        }
+      }
+    },
+    "%@ moved to %@, position %lld of %lld." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ foi pra %@, posição %lld de %lld."
+          }
+        }
+      }
+    },
+    "%@ is outside the categories, position %lld of %lld." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ficou fora das categorias, posição %lld de %lld."
+          }
+        }
+      }
+    },
+    "organize.done" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concluir"
+          }
+        }
+      }
+    },
     "📷 Image" : {
       "localizations" : {
         "pt-BR" : {

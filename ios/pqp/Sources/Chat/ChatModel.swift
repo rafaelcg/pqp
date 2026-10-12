@@ -914,7 +914,7 @@ final class ChatModel {
         // transcript's: if this channel is one you have just lost, the server
         // has already evicted this socket from it, so nothing more arrives here
         // either way.
-        case .friendActivity, .permissionsUpdate, .communityHomeUpdate,
+        case .friendActivity, .permissionsUpdate, .communityHomeUpdate, .channelsUpdate,
              .presence, .activity, .other, .storiesUpdate,
              .voiceWelcome, .voicePeerJoined, .voicePeerUpdated, .voicePeerLeft, .voiceRoster,
              .voiceSpeakChanged, .voiceRoomFull, .voiceTransportUnsupported,
