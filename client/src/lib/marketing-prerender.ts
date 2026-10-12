@@ -20,7 +20,9 @@
  * the workspace and cannot import the catalogues or `@pqp/shared`. The strings
  * below are duplicates of `streamersPage.*`, and `marketing-prerender.test.ts`
  * pins each one against the JSON, and the button's address against
- * `STREAMERS_WAITLIST_HREF`.
+ * `STREAMERS_WAITLIST_HREF`. The `/tela`, `/vs-discord` and `/download` strings
+ * are generated into `marketing-prerender-copy.ts` by
+ * `scripts/gen-prerender-copy.mjs`, pinned by the same test.
  */
 
 import {
@@ -29,6 +31,11 @@ import {
   type MarketingLocale,
   type MarketingPage,
 } from "./marketing-meta";
+import {
+  DOWNLOAD_PRERENDER_COPY,
+  TELA_PRERENDER_COPY,
+  VS_DISCORD_PRERENDER_COPY,
+} from "./marketing-prerender-copy";
 
 /** The catalogue keys this block reads, in the order it reads them. */
 export const STREAMERS_PRERENDER_KEYS = [
@@ -286,6 +293,56 @@ export const CONTACT_PRERENDER_SOURCE_URL = "https://github.com/rafaelcg/pqp";
 export const STREAMERS_PRERENDER_CTA_HREF =
   "/app?intent=watch-party-waitlist&from=streamers";
 
+/**
+ * Where the create-room buttons of `/tela` and `/vs-discord` lead without
+ * script. The live button opens the sign-up modal with `forceRedirectUrl="/app"`,
+ * and is a plain link to `/app` for a signed-in reader.
+ */
+export const CREATE_ROOM_PRERENDER_HREF = "/app";
+
+/**
+ * The iOS beta button on `/vs-discord`. The live page links the TestFlight URL,
+ * which a build secret may override, so the static block links the join page
+ * that reads the same value.
+ */
+export const IOS_BETA_PRERENDER_HREF = "/beta";
+
+/** `RELEASES_PAGE_URL` in `downloads.ts`, pinned by the test. Every desktop row links it until the bundle resolves the asset URLs. */
+export const DOWNLOAD_PRERENDER_RELEASES_URL =
+  "https://github.com/rafaelcg/pqp/releases/latest";
+
+/** `SIGNPATH_CREDIT`, `SIGNPATH_URL` and `SIGNPATH_TERMS_URL` in `downloads.ts`, pinned by the test. The credit is never translated. */
+export const DOWNLOAD_PRERENDER_SIGNPATH = {
+  credit:
+    "Free code signing provided by SignPath.io, certificate by SignPath Foundation",
+  url: "https://signpath.org",
+  terms: "https://signpath.org/terms",
+} as const;
+
+/** The repository's Electron workflow, the same address `code-signing-policy.tsx` links. */
+export const DOWNLOAD_PRERENDER_WORKFLOW_URL = `${CONTACT_PRERENDER_SOURCE_URL}/blob/main/.github/workflows/electron.yml`;
+
+/** `CODE_SIGNING_COMMITTERS` and `CODE_SIGNING_APPROVERS` in `code-signing-policy.tsx`, pinned by the test. */
+export const DOWNLOAD_PRERENDER_TEAM = {
+  committers: [
+    { name: "Rafael Cammarano Guglielmi", handle: "rafaelcg" },
+    { name: "André", handle: "AndreCamm" },
+  ],
+  approvers: [{ name: "Rafael Cammarano Guglielmi", handle: "rafaelcg" }],
+} as const;
+
+/** The verdicts of the `/vs-discord` table, in the live page's row order. */
+const VS_DISCORD_ROWS = [
+  ["price", "yes", "yes"],
+  ["openSource", "yes", "no"],
+  ["selfHost", "yes", "no"],
+  ["ageGate", "yes", "yes"],
+  ["apps", "partial", "yes"],
+  ["ecosystem", "partial", "yes"],
+  ["maturity", "partial", "yes"],
+  ["region", "yes", "yes"],
+] as const;
+
 /** The element the block is written into, exactly as `index.html` has it. */
 const ROOT_OPEN = '<div id="root">';
 
@@ -345,6 +402,147 @@ function contactBlock(locale: MarketingLocale): string {
   ].join("");
 }
 
+const OPEN_PAGE = (locale: MarketingLocale, width: string) =>
+  `<div id="pre-page" lang="${locale}" class="min-h-full bg-surface-0 px-4 py-12 text-text"><main class="mx-auto ${width}">`;
+const CLOSE_PAGE = `</main></div>`;
+const BUTTON =
+  "inline-flex rounded-[var(--radius-control)] bg-accent px-6 py-3 font-semibold text-on-accent";
+
+function telaBlock(locale: MarketingLocale): string {
+  const c = TELA_PRERENDER_COPY[locale];
+  const e = escapeHtml;
+  const cta = `<p class="mt-6"><a href="${CREATE_ROOM_PRERENDER_HREF}" class="${BUTTON}">${e(c["tela.cta.create"])}</a></p>`;
+  const options = (["pqp", "jitsi", "teamspeak", "meet"] as const)
+    .map((id) => {
+      const ours =
+        id === "pqp"
+          ? ` <span class="text-xs font-semibold uppercase tracking-[0.16em] text-accent">${e(c["tela.options.ours"])}</span>`
+          : "";
+      return `<li class="mt-6"><h3 class="font-display text-xl font-bold">${e(c[`tela.option.${id}.name`])}${ours}</h3><p class="mt-1 text-text-secondary">${e(c[`tela.option.${id}.body`])}</p><dl class="mt-2"><dt class="text-xs font-semibold uppercase tracking-[0.16em]">${e(c["tela.options.goodFor"])}</dt><dd class="mt-1">${e(c[`tela.option.${id}.good`])}</dd><dt class="mt-2 text-xs font-semibold uppercase tracking-[0.16em]">${e(c["tela.options.limit"])}</dt><dd class="mt-1 text-text-secondary">${e(c[`tela.option.${id}.limit`])}</dd></dl></li>`;
+    })
+    .join("");
+  const steps = (["1", "2", "3"] as const)
+    .map((n) => `<li class="mt-3">${n}. ${e(c[`tela.how.${n}`])}</li>`)
+    .join("");
+  const faq = (["download", "vpn", "people", "free", "mobile", "data", "why"] as const)
+    .map(
+      (id) =>
+        `<div class="mt-4"><dt class="font-display font-bold">${e(c[`tela.faq.${id}.q`])}</dt><dd class="mt-1 text-text-secondary">${e(c[`tela.faq.${id}.a`])}${id === "data" ? ` <a href="/privacy" class="underline">${e(c["tela.faq.data.link"])}</a>` : ""}</dd></div>`,
+    )
+    .join("");
+  return [
+    OPEN_PAGE(locale, "max-w-3xl"),
+    `<h1 class="font-display text-4xl font-bold tracking-tight">${e(c["tela.hero.title"])}</h1>`,
+    `<p class="mt-5 text-lg text-text-secondary">${e(c["tela.hero.lede"])}</p>`,
+    cta,
+    `<p class="mt-4 text-sm text-text-tertiary">${e(c["tela.hero.note"])}</p>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.options.title"])}</h2><p class="mt-2 text-sm text-text-secondary">${e(c["tela.hero.disclosure"])}</p><ul>${options}</ul><p class="mt-4 text-xs text-text-tertiary">${e(c["tela.options.asOf"])}</p></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.how.title"])}</h2><ol>${steps}</ol></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.faq.title"])}</h2><dl>${faq}</dl></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.cta.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["tela.cta.body"])}</p>${cta}<p class="mt-4"><a href="/vs-discord" class="underline">${e(c["tela.cta.compare"])}</a></p></section>`,
+    CLOSE_PAGE,
+  ].join("");
+}
+
+function vsDiscordBlock(locale: MarketingLocale): string {
+  const c = VS_DISCORD_PRERENDER_COPY[locale];
+  const e = escapeHtml;
+  const cta = `<a href="${CREATE_ROOM_PRERENDER_HREF}" class="${BUTTON}">${e(c["vsDiscord.cta.create"])}</a>`;
+  // The live cell prefixes a visually hidden verdict word when the phrase does
+  // not already start with it (`VerdictCell` in `vs-discord-page.tsx`).
+  const cell = (verdict: "yes" | "no" | "partial", body: string) => {
+    const word = c[`vsDiscord.chip.${verdict}`];
+    const prefix = body.toLowerCase().startsWith(word.toLowerCase())
+      ? ""
+      : `<span class="sr-only">${e(word)}: </span>`;
+    return `${prefix}${e(body)}`;
+  };
+  const rows = VS_DISCORD_ROWS.map(
+    ([id, pqp, discord]) =>
+      `<tr><th scope="row" class="py-2 pr-4 align-top">${e(c[`vsDiscord.row.${id}.label`])}</th><td class="py-2 pr-4 align-top">${cell(pqp, c[`vsDiscord.row.${id}.pqp`])}</td><td class="py-2 align-top text-text-secondary">${cell(discord, c[`vsDiscord.row.${id}.discord`])}</td></tr>`,
+  ).join("");
+  const faq = (["why", "when", "how", "catch"] as const)
+    .map(
+      (id) =>
+        `<div class="mt-4"><dt class="font-display font-bold">${e(c[`vsDiscord.faq.${id}.q`])}</dt><dd class="mt-1 text-text-secondary">${e(c[`vsDiscord.faq.${id}.a`])}</dd></div>`,
+    )
+    .join("");
+  // Spanish readers are outside Brazil, and the live page drops the card about
+  // the Brazilian suspension for them.
+  const featured =
+    locale === "es"
+      ? `<p class="mt-8">${cta}</p>`
+      : `<section class="mt-12"><h2 class="text-xs font-semibold uppercase tracking-[0.22em]">${e(c["vsDiscord.row.screen.label"])}</h2><div class="mt-4"><p class="font-display text-lg font-bold">pqp: ${e(c["vsDiscord.chip.works"])}</p><p class="mt-1 text-text-secondary">${e(c["vsDiscord.featured.pqpDetail"])}</p><p class="mt-4">${cta}</p></div><div class="mt-6"><p class="font-display text-lg font-bold">Discord: ${e(c["vsDiscord.chip.suspended"])}</p><p class="mt-1 text-text-secondary">${e(c["vsDiscord.featured.discordDetail"])}</p></div><p class="mt-4 text-xs text-text-tertiary">${e(c["vsDiscord.hero.disclaimer"])}</p></section>`;
+  return [
+    OPEN_PAGE(locale, "max-w-3xl"),
+    `<h1 class="font-display text-4xl font-extrabold tracking-tight">pqp vs Discord <span class="mt-3 block text-xl font-bold">${e(c["vsDiscord.hero.tagline"])}</span></h1>`,
+    `<p class="mt-5 text-lg text-text-secondary">${e(c["vsDiscord.hero.body"])}</p>`,
+    featured,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.table.title"])}</h2><table class="mt-4 w-full text-left text-sm"><caption class="sr-only">${e(c["vsDiscord.table.caption"])}</caption><thead><tr><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.feature"])}</th><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.pqp"])}</th><th scope="col" class="py-2">${e(c["vsDiscord.table.col.discord"])}</th></tr></thead><tbody>${rows}</tbody></table></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.faq.title"])}</h2><dl>${faq}</dl></section>`,
+    `<section id="ios-beta" class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.closing.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["vsDiscord.closing.body"])}</p><p class="mt-6">${cta} <a href="${IOS_BETA_PRERENDER_HREF}" class="ml-3 underline">${e(c["vsDiscord.cta.beta"])}</a></p><p class="mt-6 text-sm text-text-secondary">${e(c["vsDiscord.closing.tela.lead"])} <a href="/tela" class="underline">${e(c["vsDiscord.closing.tela.link"])}</a></p></section>`,
+    CLOSE_PAGE,
+  ].join("");
+}
+
+function downloadBlock(locale: MarketingLocale): string {
+  const c = DOWNLOAD_PRERENDER_COPY[locale];
+  const e = escapeHtml;
+  const external = (href: string, label: string) =>
+    `<a href="${e(href)}" rel="noopener" class="underline">${e(label)}</a>`;
+  const releases = (label: string) => external(DOWNLOAD_PRERENDER_RELEASES_URL, label);
+  const row = (name: string, links: string) =>
+    `<li class="mt-2"><span class="font-semibold">${e(name)}</span>: ${links}</li>`;
+  const people = (members: readonly { name: string; handle: string }[]) =>
+    members
+      .map((m) => `<li>${e(m.name)} ${external(`https://github.com/${m.handle}`, `@${m.handle}`)}</li>`)
+      .join("");
+  return [
+    OPEN_PAGE(locale, "max-w-3xl"),
+    `<p class="font-display text-lg font-bold text-accent">pqp</p>`,
+    `<h1 class="mt-4 font-display text-4xl font-extrabold tracking-tight">${e(c["downloadPage.title"])}</h1>`,
+    `<p class="mt-5 text-lg text-text-secondary">${e(c["downloadPage.body"])}</p>`,
+    `<p class="mt-6"><a href="/app" class="underline">${e(c["downloadPage.web.cta"])}</a></p>`,
+    `<section class="mt-12"><h2 class="text-xs font-semibold uppercase tracking-[0.2em]">${e(c["downloadPage.all"])}</h2><ul class="mt-3">`,
+    row(c["downloadPage.windows"], `${releases(c["downloadPage.list.download"])} · ${releases(c["download.windows.portableShort"])}`),
+    row(c["downloadPage.mac"], `${releases(c["download.mac.appleSiliconShort"])} · ${releases(c["download.mac.intelShort"])}`),
+    row(c["downloadPage.linux"], `${releases(c["download.linux.appImage"])} · ${releases(c["download.linux.deb"])} · ${releases(c["download.linux.flatpak"])}`),
+    row(c["downloadPage.ios"], `<a href="/beta" class="underline">${e(c["downloadPage.list.ios"])}</a>`),
+    row(c["downloadPage.android"], `<a href="/android" class="underline">${e(c["downloadPage.list.android"])}</a>`),
+    `</ul><p class="mt-4 text-xs">${releases(c["download.other"])}</p></section>`,
+    `<section id="code-signing" class="mt-16"><h2 class="font-display text-3xl font-extrabold">${e(c["codeSigning.title"])}</h2>`,
+    `<p class="mt-4 text-text-secondary">${e(c["codeSigning.status"])}</p>`,
+    `<blockquote lang="en" class="mt-4 font-medium">${e(DOWNLOAD_PRERENDER_SIGNPATH.credit)}</blockquote>`,
+    `<p class="mt-4 text-sm text-text-secondary">${e(c["codeSigning.creditNote"])}</p>`,
+    `<p class="mt-4 text-text-secondary">${e(c["codeSigning.unsigned"])}</p>`,
+    `<p class="mt-2 text-sm">${external(DOWNLOAD_PRERENDER_SIGNPATH.url, c["codeSigning.link.signpath"])} · ${external(DOWNLOAD_PRERENDER_SIGNPATH.terms, c["codeSigning.link.terms"])}</p>`,
+    `<h3 class="mt-10 text-xl font-semibold">${e(c["codeSigning.team.title"])}</h3><dl class="mt-3">`,
+    `<dt class="font-medium">${e(c["codeSigning.team.committers"])}</dt><dd class="mt-1 text-sm text-text-secondary">${e(c["codeSigning.team.committers.desc"])}</dd><dd class="mt-2"><ul>${people(DOWNLOAD_PRERENDER_TEAM.committers)}</ul></dd>`,
+    `<dt class="mt-4 font-medium">${e(c["codeSigning.team.approvers"])}</dt><dd class="mt-1 text-sm text-text-secondary">${e(c["codeSigning.team.approvers.desc"])}</dd><dd class="mt-2"><ul>${people(DOWNLOAD_PRERENDER_TEAM.approvers)}</ul></dd></dl>`,
+    `<h3 class="mt-10 text-xl font-semibold">${e(c["codeSigning.how.title"])}</h3><ul class="mt-3 list-disc pl-5"><li>${e(c["codeSigning.how.build"])}</li><li>${e(c["codeSigning.how.approve"])}</li><li>${e(c["codeSigning.how.scope"])}</li></ul>`,
+    `<p class="mt-3 text-sm">${external(CONTACT_PRERENDER_SOURCE_URL, c["codeSigning.link.repo"])} · ${external(DOWNLOAD_PRERENDER_WORKFLOW_URL, c["codeSigning.link.workflow"])}</p>`,
+    `<h3 class="mt-10 text-xl font-semibold">${e(c["codeSigning.privacy.title"])}</h3>`,
+    `<p class="mt-3 text-text-secondary">${e(c["codeSigning.privacy.installer"])}</p><p class="mt-3 text-text-secondary">${e(c["codeSigning.privacy.app"])}</p><p class="mt-3 text-text-secondary">${e(c["codeSigning.privacy.signpath"])}</p>`,
+    `<p class="mt-3 text-sm"><a href="/privacy" class="underline">${e(c["codeSigning.privacy.link"])}</a></p>`,
+    `</section>`,
+    CLOSE_PAGE,
+  ].join("");
+}
+
+/** Which block a page gets. Aliases share their page's block. */
+const BLOCKS: Partial<Record<MarketingPage, (locale: MarketingLocale) => string>> = {
+  "/streamers": streamersBlock,
+  "/criadores": streamersBlock,
+  "/contact": contactBlock,
+  "/contato": contactBlock,
+  "/tela": telaBlock,
+  "/vs-discord": vsDiscordBlock,
+  "/download": downloadBlock,
+};
+
+/** The pages that carry a no-JS body. */
+export const PRERENDERED_MARKETING_PAGES = Object.keys(BLOCKS) as MarketingPage[];
+
 /**
  * `html` with the page's no-JS body written into `#root`, or `html` unchanged
  * for a page that has none, a document with no `#root`, or a `#root` that
@@ -355,9 +553,8 @@ export function injectMarketingBody(
   page: MarketingPage,
   locale: MarketingLocale,
 ): string {
-  const isStreamers = page === "/streamers" || page === "/criadores";
-  const isContact = page === "/contact" || page === "/contato";
-  if (!isStreamers && !isContact) {
+  const block = BLOCKS[page];
+  if (!block) {
     return html;
   }
   const at = html.indexOf(ROOT_OPEN);
@@ -365,6 +562,5 @@ export function injectMarketingBody(
     return html;
   }
   const insertAt = at + ROOT_OPEN.length;
-  const body = isContact ? contactBlock(locale) : streamersBlock(locale);
-  return html.slice(0, insertAt) + body + html.slice(insertAt);
+  return html.slice(0, insertAt) + block(locale) + html.slice(insertAt);
 }
