@@ -887,6 +887,21 @@ export function checkTagChange(
 }
 
 /**
+ * Whether "require a tag" actually binds this poster. A rule nobody can meet
+ * is not a rule: with no tags at all, or only staff-only ones for a member,
+ * the composer has nothing to offer, so refusing the post for a missing tag
+ * would dead-end the forum until staff add one. The composer says the same
+ * thing (`forum.composer.tagsNoneToPick`), so the two stay in step.
+ */
+export function tagRequirementBinds(
+  requireTag: boolean,
+  forumTags: readonly ForumTagRef[],
+  isStaff: boolean,
+): boolean {
+  return requireTag && forumTags.some((tag) => isStaff || !tag.moderated);
+}
+
+/**
  * Replace a forum's tag list (the PUT). An entry with `id` edits that tag, one
  * without creates a tag, a tag missing from the list is deleted along with
  * its post links. One transaction, under a per-forum advisory lock so two

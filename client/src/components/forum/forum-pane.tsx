@@ -1,8 +1,6 @@
 import {
   type Channel,
   type ForumPostSummary,
-  type ForumSettings,
-  type ForumTag,
 } from "@pqp/shared";
 import {
   AlertTriangle,
@@ -51,12 +49,11 @@ import type { DroppedItems } from "@/lib/file-drop";
 import {
   fetchForumPost,
   fetchForumPosts,
-  fetchForumSettings,
-  fetchForumTags,
   putForumTags,
 } from "@/lib/forum-api";
 import { fetchForumConfig } from "@/lib/api";
 import { loadForumConfig } from "@/hooks/use-forum-config";
+import { useForumRules } from "@/hooks/use-forum-rules";
 import { readCursorOnce } from "@/lib/forum-visit";
 import {
   subscribeForumFrames,
@@ -311,32 +308,18 @@ export function ForumPane({
   }, [forumId]);
 
   // ------------------------------------------------------------ tags etc.
-  const [tags, setTags] = useState<ForumTag[]>([]);
-  // Only an answered read may stand for "this forum has no tags": the
-  // starter tags replace the whole list, and building that from a failed
-  // read would delete the forum's real tags.
-  const [tagsLoaded, setTagsLoaded] = useState(false);
-  const [settings, setSettings] = useState<ForumSettings | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    setTags([]);
-    setTagsLoaded(false);
-    setSettings(null);
-    fetchForumTags(forumId)
-      .then(({ tags: next }) => {
-        if (!cancelled) {
-          setTags(next);
-          setTagsLoaded(true);
-        }
-      })
-      .catch(() => {});
-    fetchForumSettings(forumId)
-      .then(({ settings: next }) => !cancelled && setSettings(next))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [forumId]);
+  // Only an answered read may stand for "this forum has no tags": the starter
+  // tags replace the whole list, and building that from a failed read would
+  // delete the forum's real tags (`tagsLoaded`).
+  const {
+    tags,
+    status: tagsStatus,
+    settings,
+    refresh: refreshForumRules,
+    retryTags,
+    applyTags,
+  } = useForumRules(forumId);
+  const tagsLoaded = tagsStatus === "ready";
   const tagsById = useMemo(() => new Map(tags.map((tag) => [tag.id, tag])), [tags]);
 
   // The flag, when the shell did not pass it. Unknown reads as on: a forum
@@ -689,16 +672,8 @@ export function ForumPane({
         if (frame.forumId !== forumId) {
           return;
         }
-        // Staff saved tags or settings: an open composer follows them now,
-        // not at the next reload (forum QA P11).
+        // Staff saved tags or settings: `useForumRules` holds them (forum QA P11).
         if (frame.type === "forum-config-update") {
-          if (frame.tags) {
-            setTags(frame.tags);
-            setTagsLoaded(true);
-          }
-          if (frame.settings) {
-            setSettings(frame.settings);
-          }
           return;
         }
         if (frame.type === "forum-post-upsert") {
@@ -881,10 +856,12 @@ export function ForumPane({
       setComposerOpen(true);
       // The flag is operator data flipped with no deploy: ask again as a
       // post starts, so a pause made since this tab opened shows before the
-      // person has written the whole thing (forum QA P11).
+      // person has written the whole thing (forum QA P11). The tags and the
+      // require-a-tag switch are read again for the same reason.
       void loadForumConfig(server.id).catch(() => {});
+      refreshForumRules();
     },
-    [server.id],
+    [server.id, refreshForumRules],
   );
   const canCompose = canPost && creationEnabled;
 
@@ -900,9 +877,10 @@ export function ForumPane({
       setComposerFiles({ files: droppedFiles, folders: [] });
       setComposerTitle(null);
       setComposerOpen(true);
+      refreshForumRules();
     }
     droppedTakenRef.current?.();
-  }, [droppedFiles, canCompose]);
+  }, [droppedFiles, canCompose, refreshForumRules]);
 
   // -------------------------------------------------------------- toast
   const [toast, setToast] = useState<{
@@ -1088,7 +1066,7 @@ export function ForumPane({
         ],
       });
       const added = next.length - tags.length;
-      setTags(next);
+      applyTags(next);
       // The suggestion row goes away with the tags it offered, so say what
       // happened and where they live now (forum QA P1).
       notify(
@@ -1644,6 +1622,11 @@ export function ForumPane({
           forumName={channel.name}
           serverId={server.id}
           tags={tags}
+          tagsStatus={tagsStatus}
+          onRefreshTags={refreshForumRules}
+          onRetryTags={retryTags}
+          canManageTags={canManage}
+          onOpenTagSettings={onOpenSettings ? () => onOpenSettings("tags") : undefined}
           tagsById={tagsById}
           viewerId={viewerId}
           isStaff={isStaff}
@@ -1712,6 +1695,17 @@ export function ForumPane({
         forumName={channel.name}
         serverId={server.id}
         tags={tags}
+        tagsStatus={tagsStatus}
+        onRetryTags={retryTags}
+        canManageTags={canManage}
+        onOpenTagSettings={
+          onOpenSettings
+            ? () => {
+                setComposerOpen(false);
+                onOpenSettings("tags");
+              }
+            : undefined
+        }
         requireTag={settings?.requireTag ?? false}
         isStaff={isStaff}
         initialTitle={composerTitle}
@@ -1730,9 +1724,8 @@ export function ForumPane({
             setFetchedEnabled(false);
             void loadForumConfig(server.id).catch(() => {});
           } else {
-            fetchForumSettings(forumId)
-              .then(({ settings: next }) => setSettings(next))
-              .catch(() => {});
+            // A tag now required: the tags may be what changed too.
+            refreshForumRules();
           }
         }}
         onPublished={(post, viewer) => {

@@ -53,6 +53,7 @@ import {
   fetchForumPost,
   setForumPostFollow,
   updateForumPost,
+  type ForumTagsStatus,
 } from "@/lib/forum-api";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
@@ -82,6 +83,14 @@ export interface ForumPostViewProps {
   forumName: string;
   serverId: string;
   tags: readonly ForumTag[];
+  /** Whether `tags` is an answered read: a failed one is not "no tags". */
+  tagsStatus?: ForumTagsStatus;
+  /** The tags are read again as the editor opens (a saved list is not replayed). */
+  onRefreshTags?: () => void;
+  onRetryTags?: () => void;
+  /** MANAGE_CHANNELS: an empty editor links to the Tags settings. */
+  canManageTags?: boolean;
+  onOpenTagSettings?: () => void;
   tagsById: ReadonlyMap<string, ForumTag>;
   viewerId: string | null;
   /** MANAGE_MESSAGES or MANAGE_CHANNELS on the forum. */
@@ -163,31 +172,48 @@ function PostIconButton({
 }
 
 /** Edit tags: the same toggle chips as the composer, staff tags for staff. */
-function EditTagsDialog({
+export function EditTagsDialog({
   open,
   tags,
+  tagsStatus = "ready",
   current,
   isStaff,
+  canManageTags = false,
+  onRefresh,
+  onRetry,
+  onOpenSettings,
   onClose,
   onSave,
 }: {
   open: boolean;
   tags: readonly ForumTag[];
+  tagsStatus?: ForumTagsStatus;
   current: readonly string[];
   isStaff: boolean;
+  canManageTags?: boolean;
+  onRefresh?: () => void;
+  onRetry?: () => void;
+  onOpenSettings?: () => void;
   onClose: () => void;
   onSave: (tagIds: string[]) => void;
 }) {
   const { t } = useTranslation();
   const [picked, setPicked] = useState<string[]>([...current]);
+  const refreshRef = useRef(onRefresh);
+  refreshRef.current = onRefresh;
   useEffect(() => {
     if (open) {
       setPicked([...current]);
+      refreshRef.current?.();
     }
     // Reseed per opening only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   const atMax = picked.length >= FORUM_MAX_TAGS_PER_POST;
+  // A member never puts on or takes off a staff tag; one already on the post
+  // still shows, unchangeable. With none of those the dialog would be a title
+  // and two buttons around nothing, so it says why instead.
+  const shown = tags.filter((tag) => !(tag.moderated && !isStaff) || picked.includes(tag.id));
   return (
     <Dialog
       open={open}
@@ -199,19 +225,47 @@ function EditTagsDialog({
           <Button variant="ghost" onClick={onClose}>
             {t("forum.edit.cancel")}
           </Button>
-          <Button onClick={() => onSave(picked)}>{t("forum.edit.save")}</Button>
+          <Button disabled={shown.length === 0} onClick={() => onSave(picked)}>
+            {t("forum.edit.save")}
+          </Button>
         </div>
       }
     >
-      <div className="flex flex-wrap gap-1.5 px-5 py-4">
-        {tags.map((tag) => {
+      {shown.length === 0 && (
+        <div
+          data-forum-edit-tags-empty={tagsStatus === "ready" ? "none" : tagsStatus}
+          className="flex flex-col items-start gap-2 px-5 py-4 text-sm text-text-secondary"
+        >
+          <p role={tagsStatus === "error" ? "alert" : "status"}>
+            {tagsStatus === "loading"
+              ? t("common.loading")
+              : tagsStatus === "error"
+                ? t("forum.editTags.loadError")
+                : t("forum.editTags.none")}
+          </p>
+          {tagsStatus === "error" && onRetry && (
+            <Button size="sm" variant="secondary" onClick={onRetry}>
+              {t("forum.retry")}
+            </Button>
+          )}
+          {tagsStatus === "ready" && canManageTags && onOpenSettings && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                onClose();
+                onOpenSettings();
+              }}
+            >
+              {t("forum.empty.setupTags")}
+            </Button>
+          )}
+        </div>
+      )}
+      <div className={cn("flex flex-wrap gap-1.5 px-5 py-4", shown.length === 0 && "hidden")}>
+        {shown.map((tag) => {
           const on = picked.includes(tag.id);
-          // A member never puts on or takes off a staff tag; one already on
-          // the post still shows, unchangeable.
           const locked = tag.moderated && !isStaff;
-          if (locked && !on) {
-            return null;
-          }
           const disabled = locked || (!on && atMax);
           return (
             <button
@@ -332,6 +386,11 @@ export function ForumPostView({
   forumName,
   serverId,
   tags,
+  tagsStatus = "ready",
+  onRefreshTags,
+  onRetryTags,
+  canManageTags = false,
+  onOpenTagSettings,
   tagsById,
   viewerId,
   isStaff,
@@ -643,6 +702,12 @@ export function ForumPostView({
   }
 
   const [editTagsOpen, setEditTagsOpen] = useState(false);
+  // The action opens a dialog of toggle chips: with no chip this person could
+  // toggle, and nobody to send to the settings, it would open an empty box.
+  const canEditTags =
+    tagsStatus !== "ready" ||
+    canManageTags ||
+    tags.some((tag) => !tag.moderated || isStaff || post.tagIds.includes(tag.id));
   const [deleteOpen, setDeleteOpen] = useState(false);
   async function confirmDelete() {
     setDeleteOpen(false);
@@ -658,12 +723,16 @@ export function ForumPostView({
     { id: "heading-post", label: t("forum.menu.post"), heading: true },
     ...(canEdit
       ? [
-          {
-            id: "edit-tags",
-            label: t("forum.editTags"),
-            icon: Tags,
-            onSelect: () => setEditTagsOpen(true),
-          },
+          ...(canEditTags
+            ? [
+                {
+                  id: "edit-tags",
+                  label: t("forum.editTags"),
+                  icon: Tags,
+                  onSelect: () => setEditTagsOpen(true),
+                },
+              ]
+            : []),
           {
             id: "edit-title",
             label: t("forum.editTitle"),
@@ -1097,8 +1166,13 @@ export function ForumPostView({
       <EditTagsDialog
         open={editTagsOpen}
         tags={tags}
+        tagsStatus={tagsStatus}
         current={post.tagIds}
         isStaff={isStaff}
+        canManageTags={canManageTags}
+        onRefresh={onRefreshTags}
+        onRetry={onRetryTags}
+        onOpenSettings={onOpenTagSettings}
         onClose={() => setEditTagsOpen(false)}
         onSave={(tagIds) => {
           setEditTagsOpen(false);
