@@ -891,6 +891,8 @@
     <string name="forum_solution_unmark">Unmark solution</string>
     <string name="forum_solution_title">Solution</string>
     <string name="forum_solution_jump">Go to answer</string>
+    <string name="forum_solution_marked_by">marked by %1$s</string>
+    <string name="forum_solution_marked_by_you">marked by you</string>
     <string name="forum_solution_deleted">The marked answer was deleted.</string>
     <string name="forum_reply_placeholder_short">Reply to the post</string>
     <string name="forum_locked">This post is closed. Only staff can reply.</string>
@@ -943,6 +945,7 @@
     <string name="forum_composer_slow_mode">Slow mode. Wait %1$ds to post again.</string>
     <string name="forum_composer_rate_limited">Too many posts in a short time. Try again in %1$d min.</string>
     <string name="forum_composer_automod_title">AutoMod blocked this title.</string>
+    <string name="forum_composer_automod_body">AutoMod blocked this text.</string>
     <string name="forum_composer_automod_post">AutoMod blocked this post.</string>
     <string name="forum_composer_cannot_send">You can\'t post in this forum right now.</string>
     <string name="forum_composer_uploading">Waiting for the file to finish uploading.</string>

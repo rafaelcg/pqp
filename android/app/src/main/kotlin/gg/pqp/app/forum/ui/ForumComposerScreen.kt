@@ -316,7 +316,14 @@ private fun ErrorBanner(error: ForumComposerError?, waitSeconds: Int) {
         is ForumComposerError.SlowMode -> if (waitSeconds > 0) stringResource(R.string.forum_composer_slow_mode, waitSeconds) else null
         is ForumComposerError.RateLimited -> stringResource(R.string.forum_composer_rate_limited, error.minutes)
         is ForumComposerError.Automod -> listOfNotNull(
-            stringResource(R.string.forum_composer_automod_post),
+            // Which half AutoMod refused, so it says "esse título".
+            stringResource(
+                when (error.field) {
+                    "title" -> R.string.forum_composer_automod_title
+                    "body" -> R.string.forum_composer_automod_body
+                    else -> R.string.forum_composer_automod_post
+                },
+            ),
             error.message,
         ).joinToString(" ")
         is ForumComposerError.CannotPost -> error.message ?: stringResource(R.string.forum_composer_cannot_send)
