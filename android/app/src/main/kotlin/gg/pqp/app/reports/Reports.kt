@@ -46,6 +46,8 @@ enum class ReportReason(val wire: String, val label: Int) {
     SexualContent("sexual_content", R.string.report_reason_sexual_content),
     SelfHarm("self_harm", R.string.report_reason_self_harm),
     IllegalContent("illegal_content", R.string.report_reason_illegal_content),
+    // Routed to the pqp team, never to the server's staff, whatever is reported.
+    MinorSexual("minor_sexual", R.string.report_reason_minor_sexual),
     Other("other", R.string.report_reason_other),
 }
 

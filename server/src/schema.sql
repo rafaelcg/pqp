@@ -2472,14 +2472,25 @@ CREATE INDEX IF NOT EXISTS idx_servers_community_directory
 -- stated purpose — which is the one thing a message report cannot reach: the
 -- communities that got Orkut's operators criminally charged were rooms whose
 -- names were the offence, and most of them never hosted a conversation at all.
+--
+-- `story` joined the list with stories (see the stories block at the end of
+-- this file). Rewritten only when the constraint does not already allow it, so
+-- a boot that changes nothing here does not drop and re-validate it, and
+-- without the old catch-all handler: a failure here must stop the boot rather
+-- than leave the table with no subject CHECK at all.
 DO $$
 BEGIN
-  ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_subject_type_check;
-  ALTER TABLE reports
-    ADD CONSTRAINT reports_subject_type_check
-    CHECK (subject_type IN ('message', 'user', 'server'));
-EXCEPTION
-  WHEN others THEN NULL;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'reports'::regclass
+       AND conname = 'reports_subject_type_check'
+       AND pg_get_constraintdef(oid) LIKE '%story%'
+  ) THEN
+    ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_subject_type_check;
+    ALTER TABLE reports
+      ADD CONSTRAINT reports_subject_type_check
+      CHECK (subject_type IN ('message', 'user', 'server', 'story'));
+  END IF;
 END $$;
 
 -- The reported community. A SEPARATE COLUMN FROM `server_id`, and the separation
@@ -5612,3 +5623,255 @@ CREATE TABLE IF NOT EXISTS forum_dedupe_tombstones (
 );
 CREATE INDEX IF NOT EXISTS idx_forum_dedupe_tombstones_age
   ON forum_dedupe_tombstones (post_created_at);
+
+-- ============================================================ stories
+--
+-- A photo, a short video or a text card that lives for 24 hours, posted to
+-- one or more servers the author is in and/or to their friends
+-- (`packages/shared/src/stories.ts` is the wire contract). Behind the runtime
+-- flags `stories` (per server) and `stories_friends` (global), both off.
+--
+-- The promise this schema keeps is that the bytes go away: `expires_at` is
+-- read by every query (a late sweep never shows an expired story), the media
+-- is deleted by the sweep a minute after expiry, and the row a week after
+-- that. The exceptions are deliberate and are the only way a story outlives
+-- its day: an open report, a report resolved in the last 30 days, a flagged
+-- or refused scan (`hold_until`), and an illegal-content match
+-- (`hold_forever`, never deleted by anything automatic; see
+-- docs/CONTENT_SAFETY.md before touching one).
+CREATE TABLE IF NOT EXISTS stories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- SET NULL, not CASCADE: account deletion removes the author's stories and
+  -- their bytes itself (services/account.ts), and a story something HOLDS (a
+  -- report, a scan flag, an illegal-content match) must outlive the account
+  -- as evidence. A NULL author is never served: every read joins `users`.
+  author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('image', 'video', 'text')),
+  -- pending: minted, waiting for its bytes. processing: a video whose frames
+  -- are being checked. live: visible until expires_at. expired: past it.
+  -- deleted: by its author, by an operator, or refused by the scanner.
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'processing', 'live', 'expired', 'deleted')),
+  caption TEXT CHECK (char_length(caption) <= 200),
+  text_body TEXT CHECK (char_length(text_body) <= 280),
+  -- A palette key (`STORY_BACKGROUNDS`), text kind only. No CHECK so a new
+  -- colour is a client change, not a constraint swap.
+  background TEXT,
+  -- `{ "type": "call", "serverId", "channelId" }`; phase 2 adds types.
+  sticker JSONB,
+  replies_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  -- stories/<authorId>/<storyId>/<uuid>.<jpg|webp|png|mp4>, never client chosen.
+  media_storage_key TEXT UNIQUE,
+  media_content_type TEXT,
+  media_byte_size INTEGER,
+  media_width INTEGER,
+  media_height INTEGER,
+  media_duration_ms INTEGER,
+  -- Video only: stories/<authorId>/<storyId>/poster.jpg, a frame at 0.5 s.
+  poster_storage_key TEXT UNIQUE,
+  scan_status TEXT NOT NULL DEFAULT 'unscanned'
+    CHECK (scan_status IN ('unscanned', 'pass', 'flagged', 'rejected', 'error', 'skipped')),
+  scan_provider TEXT,
+  scan_score REAL,
+  scan_labels JSONB,
+  scanned_at TIMESTAMPTZ,
+  -- The video job's lease: a row claimed longer ago than the lease is taken
+  -- again, so a worker that died mid-job does not strand the story.
+  processing_claimed_at TIMESTAMPTZ,
+  processing_attempts INTEGER NOT NULL DEFAULT 0,
+  processing_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ,
+  -- published_at + 24 hours.
+  expires_at TIMESTAMPTZ,
+  deleted_at TIMESTAMPTZ,
+  -- A flagged or refused scan holds the bytes until this time. NULL = none.
+  hold_until TIMESTAMPTZ,
+  -- An illegal-content match. Never auto-deleted at any age.
+  hold_forever BOOLEAN NOT NULL DEFAULT FALSE,
+  media_deleted_at TIMESTAMPTZ,
+  CHECK ((kind = 'text') = (media_storage_key IS NULL)),
+  CHECK (kind <> 'text' OR (text_body IS NOT NULL AND background IS NOT NULL)),
+  CHECK (status <> 'live' OR (published_at IS NOT NULL AND expires_at IS NOT NULL))
+);
+
+-- An author's live stories, for the strip's own ring and the viewer.
+CREATE INDEX IF NOT EXISTS idx_stories_author_live
+  ON stories (author_id, expires_at DESC) WHERE status = 'live';
+-- The expiry sweep's first step.
+CREATE INDEX IF NOT EXISTS idx_stories_expiry
+  ON stories (expires_at) WHERE status = 'live';
+-- Orphans (never published) and the video job's claim.
+CREATE INDEX IF NOT EXISTS idx_stories_pending
+  ON stories (created_at) WHERE status IN ('pending', 'processing');
+-- The media sweep: bytes not yet deleted.
+CREATE INDEX IF NOT EXISTS idx_stories_media_sweep
+  ON stories (expires_at)
+  WHERE media_deleted_at IS NULL AND media_storage_key IS NOT NULL;
+-- A create's idempotency key (`createStorySchema.requestId`): a retried
+-- create answers the story it already made instead of posting another.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS request_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_stories_author_request
+  ON stories (author_id, request_id) WHERE request_id IS NOT NULL;
+
+-- The posting budget (`STORY_POSTS_PER_DAY`), counted per author.
+CREATE INDEX IF NOT EXISTS idx_stories_author_created
+  ON stories (author_id, created_at DESC);
+
+-- Where a story is visible. server_id NULL = the author's friends, evaluated
+-- at read time (unfriending removes access at once, nothing to undo).
+-- `expires_at` is copied from the story when it goes live, so the strip reads
+-- one index; NULL until then, which keeps a pending story out of every strip.
+-- `removed_*` is a moderator taking it out of THIS server only.
+CREATE TABLE IF NOT EXISTS story_audiences (
+  story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ,
+  removed_at TIMESTAMPTZ,
+  removed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  removed_reason TEXT CHECK (char_length(removed_reason) <= 200)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_story_audience_server
+  ON story_audiences (story_id, server_id) WHERE server_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_story_audience_friends
+  ON story_audiences (story_id) WHERE server_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_story_audience_strip
+  ON story_audiences (server_id, expires_at DESC) WHERE removed_at IS NULL;
+-- Every story's own audiences (reads, and the cascade when a story row goes).
+-- The two unique indexes above are partial, so neither serves `story_id = $1`.
+CREATE INDEX IF NOT EXISTS idx_story_audience_story ON story_audiences (story_id);
+
+-- One row per viewer per story. The author's own views are never written.
+-- One reaction per viewer, changeable; a reaction never creates a message.
+CREATE TABLE IF NOT EXISTS story_views (
+  story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  viewer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  viewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  reaction TEXT CHECK (reaction IN ('gg', 'fire', 'joy', 'wow', 'skull', 'clap')),
+  reacted_at TIMESTAMPTZ,
+  replied_at TIMESTAMPTZ,
+  PRIMARY KEY (story_id, viewer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_story_views_viewer
+  ON story_views (viewer_id, viewed_at DESC);
+-- The author's viewers sheet, newest first, keyset on (viewed_at, viewer_id).
+CREATE INDEX IF NOT EXISTS idx_story_views_recent
+  ON story_views (story_id, viewed_at DESC, viewer_id DESC);
+
+-- "Silenciar stories do Caio": hides an author from the muter's strips. The
+-- author is never told, and their view list is unaffected.
+CREATE TABLE IF NOT EXISTS story_mutes (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  muted_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, muted_user_id),
+  CHECK (user_id <> muted_user_id)
+);
+
+-- The one-time in-app card an author gets when staff remove their story from
+-- a server ("A staff tirou teu story do X", with the reason). No push. The
+-- server's name is a snapshot so the card still reads after a rename.
+CREATE TABLE IF NOT EXISTS story_notices (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'removed' CHECK (kind IN ('removed')),
+  story_id UUID REFERENCES stories(id) ON DELETE SET NULL,
+  server_id UUID REFERENCES servers(id) ON DELETE SET NULL,
+  server_name TEXT,
+  reason TEXT CHECK (char_length(reason) <= 200),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  acked_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_story_notices_open
+  ON story_notices (user_id, created_at DESC) WHERE acked_at IS NULL;
+-- `story_id ... ON DELETE SET NULL` looks notices up by story.
+CREATE INDEX IF NOT EXISTS idx_story_notices_story
+  ON story_notices (story_id) WHERE story_id IS NOT NULL;
+
+-- Which processes can check a video's frames (ffmpeg present), refreshed by
+-- each one's stories job. `GET /api/stories/config` reads it so that, with a
+-- scanner configured, video is offered only while something can scan it,
+-- rather than posted unscanned or left waiting forever.
+CREATE TABLE IF NOT EXISTS story_media_processors (
+  instance_id TEXT PRIMARY KEY,
+  seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- A DM reply quotes the story it answers. SET NULL when the story row is
+-- finally deleted; the quote reads "Story expirou" long before that. Added
+-- without the constraint first, then the constraint NOT VALID: every existing
+-- row is NULL, and validating would scan all of `messages` under lock for
+-- nothing. The index is built CONCURRENTLY at boot (`CONCURRENT_INDEXES` in
+-- db.ts), because without it every story row deletion scans `messages`.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS story_id UUID;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'messages'::regclass
+       AND conname = 'messages_story_id_fkey'
+  ) THEN
+    ALTER TABLE messages
+      ADD CONSTRAINT messages_story_id_fkey
+      FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE SET NULL
+      NOT VALID;
+  END IF;
+END $$;
+
+-- Story reports (`subject_type = 'story'`, allowed by
+-- `reports_subject_type_check` above). The subject is the story; the caption
+-- or text is copied into `story_snapshot` (never `content_snapshot`, which the
+-- table's first CHECK reserves for message reports). A story with an open
+-- report, or one resolved in the last 30 days, is held by the sweep.
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS reported_story_id UUID
+  REFERENCES stories(id) ON DELETE SET NULL;
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS story_snapshot TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'reports'::regclass
+       AND conname = 'reports_story_subject_check'
+  ) THEN
+    ALTER TABLE reports
+      ADD CONSTRAINT reports_story_subject_check
+      -- One-directional, like `reports_server_subject_check`: the story row
+      -- is deleted long before the report, and the report must survive it.
+      CHECK (subject_type = 'story' OR reported_story_id IS NULL);
+  END IF;
+END $$;
+
+-- The story-report indexes (dedupe and the sweep's hold check) are built
+-- CONCURRENTLY at boot (`CONCURRENT_INDEXES` in db.ts), so adding them never
+-- blocks writes to `reports` while the existing rows are scanned.
+
+-- POST_STORIES (bit 25 = 33554432): post a story to the server. On for
+-- @everyone by default, like SEND_MESSAGES, so staff can take it away per
+-- role; listed communities too (they add a 72 h account age rule in code).
+-- Also ORed onto the seeded Manager and Admin cargos, whose stored masks mean
+-- "everything", so they keep meaning it. One-shot via data_migrations: an
+-- owner who later turns the bit off must never see it come back.
+DO $$
+DECLARE
+  post_stories CONSTANT BIGINT := 33554432;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'post_stories_bit_2026_10'
+  ) THEN
+    RETURN;
+  END IF;
+
+  WITH changed AS (
+    UPDATE roles
+       SET permissions = permissions | post_stories
+     WHERE (permissions & post_stories) = 0
+       AND (is_everyone OR system_key IN ('manager', 'admin'))
+    RETURNING server_id
+  )
+  UPDATE servers
+     SET permissions_version = permissions_version + 1
+   WHERE id IN (SELECT DISTINCT server_id FROM changed);
+
+  INSERT INTO data_migrations (name) VALUES ('post_stories_bit_2026_10');
+END $$;

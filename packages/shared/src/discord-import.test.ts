@@ -601,14 +601,15 @@ describe("mapDiscordPermissions", () => {
     expect(
       mapImportedRolePermissions(DiscordPermission.ADMINISTRATOR),
     ).toBe(0n);
+    // POST_STORIES has no Discord bit, so @everyone always gets pqp's default.
     expect(
       mapImportedEveryonePermissions(
         DiscordPermission.ADMINISTRATOR | DiscordPermission.SEND_MESSAGES,
       ),
-    ).toBe(Permission.SEND_MESSAGES);
+    ).toBe(Permission.SEND_MESSAGES | Permission.POST_STORIES);
     expect(
       mapImportedEveryonePermissions(DiscordPermission.MANAGE_GUILD),
-    ).toBe(0n);
+    ).toBe(Permission.POST_STORIES);
     expect(
       mapImportedOverwriteBits(
         DiscordPermission.VIEW_CHANNEL |

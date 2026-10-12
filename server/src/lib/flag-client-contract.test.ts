@@ -434,3 +434,28 @@ describe("forum_channels against the forum config the client reads", () => {
     expect(dashboard).toMatch(/\bforum_channels:\s*"/);
   });
 });
+
+/**
+ * Stories: `stories` per server, `stories_friends` global, both off. No
+ * `(field)` in `clientVia` until a client reads the config (the generic check
+ * above would rightly fail a field nobody reads); the route halves are pinned
+ * by the stories server tests. What is pinned here is the registry the
+ * dashboard draws, and that the operator gets a note before flipping either.
+ */
+describe("the stories flags", () => {
+  it("stories is per server and off; stories_friends is global and off", () => {
+    expect(FEATURE_FLAGS.stories.perServer).toBe(true);
+    expect(FEATURE_FLAGS.stories.codeDefault).toBe(false);
+    expect(FEATURE_FLAGS.stories_friends.perServer).toBe(false);
+    expect(FEATURE_FLAGS.stories_friends.codeDefault).toBe(false);
+  });
+
+  it("the dashboard has a note for both", () => {
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bstories:\s*"/);
+    expect(dashboard).toMatch(/\bstories_friends:\s*"/);
+  });
+});

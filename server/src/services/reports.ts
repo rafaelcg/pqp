@@ -112,7 +112,7 @@ export class ReportFloodError extends Error {
 
 interface ReportRow {
   id: string;
-  subject_type: "message" | "user" | "server";
+  subject_type: "message" | "user" | "server" | "story";
   context_kind: ReportContextKind;
   reason: ReportReason;
   details: string | null;
@@ -126,6 +126,7 @@ interface ReportRow {
   content_snapshot: string | null;
   channel_id: string | null;
   channel_label: string | null;
+  reported_story_id: string | null;
   resolved_at: Date | null;
   resolver_name: string | null;
   resolution_note: string | null;
@@ -136,7 +137,9 @@ const REPORT_COLUMNS = `
   r.id::text AS id, r.subject_type, r.context_kind, r.reason, r.details,
   r.status, r.created_at, r.reporter_id, reporter.display_name AS reporter_name,
   r.reported_user_id, r.subject_label, r.reported_message_id::text AS reported_message_id,
-  r.content_snapshot, r.channel_id::text AS channel_id, r.channel_label,
+  COALESCE(r.content_snapshot, r.story_snapshot) AS content_snapshot,
+  r.channel_id::text AS channel_id, r.channel_label,
+  r.reported_story_id::text AS reported_story_id,
   r.resolved_at, resolver.display_name AS resolver_name, r.resolution_note`;
 
 const REPORT_JOINS = `
@@ -165,6 +168,7 @@ function toReport(row: ReportRow): Report {
     contentSnapshot: row.content_snapshot,
     channelId: row.channel_id,
     channelName: row.channel_label,
+    storyId: row.reported_story_id,
     resolvedAt: row.resolved_at?.toISOString() ?? null,
     resolvedByName: row.resolver_name,
     resolutionNote: row.resolution_note,
@@ -445,6 +449,27 @@ async function resolveServerSubject(
   };
 }
 
+/**
+ * A MINOR IN SEXUAL CONTENT NEVER GOES TO A SERVER'S OWN QUEUE.
+ *
+ * Whatever was reported and wherever, `minor_sexual` is filed to the instance
+ * queue: `context_kind = 'none'` and no `server_id`, which is exactly the set
+ * `listInstanceReports` reads and `listServerReports` cannot. A server's owner
+ * and admins must not be the ones holding, or closing, that accusation; it is
+ * the one category with a legal clock on it (docs/CONTENT_SAFETY.md). The
+ * channel and the snapshot still travel, so the instance moderator sees what
+ * was reported and where.
+ */
+function routeByReason(
+  reason: ReportReason,
+  subject: ResolvedSubject,
+): ResolvedSubject {
+  if (reason !== "minor_sexual" || subject.serverId === null) {
+    return subject;
+  }
+  return { ...subject, contextKind: "none", serverId: null };
+}
+
 export interface CreateReportResult {
   report: Report;
   /**
@@ -468,12 +493,14 @@ export async function createReport(
 ): Promise<CreateReportResult> {
   await assertUnderFloodCap(input.reporterId);
 
-  const subject =
+  const subject = routeByReason(
+    input.reason,
     input.subjectType === "message"
       ? await resolveMessageSubject(input.messageId, input.reporterId)
       : input.subjectType === "server"
         ? await resolveServerSubject(input)
-        : await resolveUserSubject(input);
+        : await resolveUserSubject(input),
+  );
 
   const params = [
     input.reporterId,

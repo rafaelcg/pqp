@@ -975,6 +975,13 @@ export const messageSchema = z.object({
    * renders as its plaintext `body`. Defaulted so an older API still parses.
    */
   systemKind: messageSystemKindSchema,
+  /**
+   * The story this message replies to (`POST /api/stories/:storyId/reply`),
+   * or null. The quote is drawn from `GET /api/stories/:storyId/card`, which
+   * stops carrying the picture and the caption once the story expires.
+   * Absent on the wire for every other message: read it as `storyId ?? null`.
+   */
+  storyId: z.string().uuid().nullable().optional(),
 });
 
 export const MESSAGE_MAX_LENGTH = 4000;

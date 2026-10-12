@@ -5,7 +5,7 @@ import { z } from "zod";
  *
  * Names follow Discord's published flags so the 8-step overwrite algorithm
  * (https://docs.discord.com/developers/topics/permissions) maps 1:1. The bit
- * *numbers* are ours (0–23). Never do this math in JS `number` — `1 << 31`
+ * *numbers* are ours (0–25). Never do this math in JS `number` — `1 << 31`
  * overflows; always `bigint`.
  *
  * On the wire, bitfields are decimal strings. In Postgres they are `BIGINT`.
@@ -50,12 +50,20 @@ export const Permission = {
    * everyone may remove their own. See `musicWriteAllowed` in music.ts.
    */
   MANAGE_MUSIC: 1n << 24n,
+  /**
+   * Post a story to this server (24 h, see stories.ts). Server level only: a
+   * story belongs to a server, never to a channel, so a channel overwrite of
+   * this bit means nothing and the editors hide it there. On for `@everyone`
+   * by default; in a listed community the server also requires a 72 h old
+   * account, which is a rule and not a bit.
+   */
+  POST_STORIES: 1n << 25n,
 } as const;
 
 export type PermissionBit = (typeof Permission)[keyof typeof Permission];
 
 /** Every defined bit. Owner and Administrator resolve to this. */
-export const PERMISSION_ALL = (1n << 25n) - 1n;
+export const PERMISSION_ALL = (1n << 26n) - 1n;
 
 /**
  * Default `@everyone` mask: chat, react, attach, history, voice, own nick,
@@ -71,7 +79,8 @@ export const PERMISSION_DEFAULT_EVERYONE =
   Permission.SPEAK |
   Permission.STREAM |
   Permission.CHANGE_NICKNAME |
-  Permission.ADD_REACTIONS;
+  Permission.ADD_REACTIONS |
+  Permission.POST_STORIES;
 
 /** What a timeout leaves: you can still see the channel and scroll back. */
 export const PERMISSION_TIMEOUT_KEEP =
@@ -240,6 +249,7 @@ export const PERMISSION_FLAGS = [
   { bit: Permission.MANAGE_WEBHOOKS, key: "MANAGE_WEBHOOKS" },
   { bit: Permission.START_WATCH_PARTY, key: "START_WATCH_PARTY" },
   { bit: Permission.MANAGE_MUSIC, key: "MANAGE_MUSIC" },
+  { bit: Permission.POST_STORIES, key: "POST_STORIES" },
 ] as const;
 
 export type PermissionFlagKey = (typeof PERMISSION_FLAGS)[number]["key"];
