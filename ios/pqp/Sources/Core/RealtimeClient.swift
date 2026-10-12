@@ -13,7 +13,10 @@ enum RealtimeEvent: Sendable {
     case reaction(channelId: String, messageId: String, emoji: String, userId: String, added: Bool, displayName: String?)
     case typing(channelId: String, userId: String, displayName: String)
     case presence(channelId: String, users: [PresenceUser])
-    case activity(channelId: String, serverId: String?, mention: Bool)
+    /// `channel-activity`. `preview` is set only for a conversation, and only
+    /// when the reader has in-app previews on: the server leaves the text out
+    /// otherwise. See `ConversationActivityPreview`.
+    case activity(channelId: String, serverId: String?, mention: Bool, preview: ConversationActivityPreview?)
     /// A thread on `messageId` was created, or gained a message. Fanned out to
     /// viewers of the PARENT channel — `channelId` is the parent, not the
     /// thread — and deliberately content-free: the thread's own messages travel
@@ -876,6 +879,12 @@ actor RealtimeClient {
         let users: [PresenceUser]?
         let serverId: String?
         let mention: Bool?
+        /// `channel-activity` for a conversation: the redacted preview line
+        /// and who wrote it. All three absent for a server channel, and for a
+        /// reader with in-app previews off.
+        let preview: String?
+        let authorName: String?
+        let authorId: String?
         // Voice
         let peerId: String?
         let voiceChannelId: String?
@@ -932,6 +941,7 @@ actor RealtimeClient {
         enum CodingKeys: String, CodingKey {
             case type, nonce, message, channelId, messageId, emoji, userId
             case displayName, added, users, serverId, mention
+            case preview, authorName, authorId
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
             case candidate, limit, transport, version, resumed, resumeToken
             case canSpeak, canStream
@@ -1233,8 +1243,15 @@ actor RealtimeClient {
             event = .presence(channelId: channelId, users: users)
         case "channel-activity":
             guard let channelId = envelope.channelId else { return }
+            let preview = envelope.authorId.map { authorId in
+                ConversationActivityPreview(
+                    authorId: authorId,
+                    authorName: envelope.authorName ?? "",
+                    preview: envelope.preview
+                )
+            }
             event = .activity(channelId: channelId, serverId: envelope.serverId,
-                              mention: envelope.mention ?? false)
+                              mention: envelope.mention ?? false, preview: preview)
         case "thread-update":
             guard let channelId = envelope.channelId, let messageId = envelope.messageId,
                   let thread = envelope.thread else { return }

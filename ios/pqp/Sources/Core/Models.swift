@@ -483,14 +483,68 @@ struct DmUnread: Codable, Hashable, Sendable {
     let mentions: Int
 }
 
+/// The conversation list's preview line, as `GET /api/dms` sends it
+/// (`dmSummarySchema.lastMessage` in packages/shared/src/dm.ts).
+///
+/// Already redacted and cut to 140 characters by the server; never raw
+/// markdown. The "tu:" and group-author prefixes are the reader's to add, which
+/// is why the author rides along.
+struct DmLastMessage: Codable, Hashable, Sendable {
+    let authorId: String
+    let authorName: String
+    let preview: String
+    /// The message was attachments only, and `preview` is empty.
+    let isAttachment: Bool
+    let isGif: Bool
+    /// Optional on the wire: a server older than voice notes omits both.
+    var isVoice: Bool? = nil
+    var voiceDurationMs: Int? = nil
+}
+
 struct DmSummary: Codable, Identifiable, Hashable, Sendable {
     let channelId: String
     let kind: String
     let participants: [PublicUser]
-    let lastMessageAt: Date?
-    let unread: DmUnread
+    var lastMessageAt: Date?
+    var unread: DmUnread
+    /// Nil when nobody has spoken yet, when the reader turned in-app previews
+    /// off (the server leaves the text out rather than trusting the client to
+    /// hide it), or on a server older than the field.
+    var lastMessage: DmLastMessage?
 
     var id: String { channelId }
+
+    init(
+        channelId: String,
+        kind: String,
+        participants: [PublicUser],
+        lastMessageAt: Date?,
+        unread: DmUnread,
+        lastMessage: DmLastMessage? = nil
+    ) {
+        self.channelId = channelId
+        self.kind = kind
+        self.participants = participants
+        self.lastMessageAt = lastMessageAt
+        self.unread = unread
+        self.lastMessage = lastMessage
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case channelId, kind, participants, lastMessageAt, unread, lastMessage
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        channelId = try c.decode(String.self, forKey: .channelId)
+        kind = try c.decode(String.self, forKey: .kind)
+        participants = try c.decode([PublicUser].self, forKey: .participants)
+        lastMessageAt = try c.decodeIfPresent(Date.self, forKey: .lastMessageAt)
+        unread = try c.decode(DmUnread.self, forKey: .unread)
+        // Lenient on purpose: a preview this build cannot read costs the
+        // preview line, never the whole conversation list.
+        lastMessage = (try? c.decodeIfPresent(DmLastMessage.self, forKey: .lastMessage)) ?? nil
+    }
 
     /// Group conversations have no name of their own; the participants are it.
     var title: String {
@@ -733,6 +787,10 @@ struct UserPreferences: Codable, Hashable, Sendable {
     /// device-local `SessionStore.onboardedKey`: it runs before there is an
     /// account to ask.
     var onboardedAt: String?
+    /// Conversations pinned by this account, in order: the web rail's pins
+    /// and the Fixadas section of the Conversas list, one list on every
+    /// device. Replaced as a whole on write, at most 15.
+    var pinnedConversations: [String]?
 }
 
 struct PreferencesResponse: Codable, Sendable { let preferences: UserPreferences }
