@@ -5343,6 +5343,8 @@
   "stories.menu.mute": "Silenciar historias de {name}",
   "stories.menu.muteHint": "Desaparecen de tu fila. {name} no se entera.",
   "stories.menu.muted": "Historias de {name} silenciadas",
+  "stories.menu.undo": "Deshacer",
+  "stories.menu.unmuted": "Las historias de {name} volvieron",
   "stories.menu.report": "Denunciar historia",
   "stories.menu.modSection": "Moderación de {server}",
   "stories.menu.modRemove": "Quitar de {server}",
