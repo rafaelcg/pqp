@@ -237,15 +237,9 @@ export function deleteObjectsInBackground(keys: string[]): void {
  * the ledger. Both tables cascade away with the server, and with them the
  * only record of the keys, so they are read before the delete like the rest.
  */
-/**
- * Read inside the delete transaction, after the server row is locked: an
- * upload ticket's foreign key check takes `FOR KEY SHARE` on that row, so an
- * upload in flight is waited for and read here, and one that starts later
- * fails on the missing server.
- */
 async function serverSoundboardKeys(
-  db: Pick<PoolClient, "query">,
   serverId: string,
+  db: Pick<PoolClient, "query"> = getPool(),
 ): Promise<string[]> {
   if (!isStorageConfigured()) {
     return [];
@@ -1037,11 +1031,13 @@ export async function deleteServer(
       [serverId],
     );
     if ((locked.rowCount ?? 0) > 0) {
+      // Read under the server lock: an upload ticket takes the same lock, so
+      // none can slip in between this read and the cascade.
+      keys.push(...(await serverSoundboardKeys(serverId, client)));
       const members = await client.query<{ user_id: string }>(
         `SELECT user_id FROM server_members WHERE server_id = $1`,
         [serverId],
       );
-      keys.push(...(await serverSoundboardKeys(client, serverId)));
       await client.query(`DELETE FROM servers WHERE id = $1`, [serverId]);
       memberIds = members.rows.map((row) => row.user_id);
     }
