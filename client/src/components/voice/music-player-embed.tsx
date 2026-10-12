@@ -10,6 +10,13 @@ import {
 } from "@/lib/music-duck";
 import { musicRelatedTracks } from "@/lib/music-related";
 import {
+  applyCaptionsPref,
+  getMusicCaptions,
+  publishMusicCaptionTracks,
+  setMusicCaptionsApply,
+  startMusicCaptionsSync,
+} from "@/lib/music-captions";
+import {
   expectedPositionMs,
   fillAutoplayBuffer,
   clearCurrentEnded,
@@ -333,6 +340,28 @@ export function shouldAdvanceOnEnded(
   return Boolean(playingVideoId && roomVideoId && playingVideoId === roomVideoId);
 }
 
+/**
+ * WHEN TO PUT THE VIEWER'S CAPTIONS ON AGAIN.
+ *
+ * Once per room track AND video, and only when the player is on the room's
+ * video: a late PLAYING from the outgoing video, or one from a wrong video
+ * the repair is about to replace, would read the wrong track list and then
+ * leave the right video on YouTube's default. Every load, the repair's
+ * reload of the same room track included, clears the stored key
+ * (`resetCaptions` in `loadRoomTrack`), so a reload always syncs again.
+ */
+export function captionsSyncKey(
+  loadedVideoId: string | undefined,
+  current: { id: string; videoId: string } | null | undefined,
+  lastKey: string | null,
+): string | null {
+  if (!current || !loadedVideoId || loadedVideoId !== current.videoId) {
+    return null;
+  }
+  const key = `${current.id}:${current.videoId}`;
+  return key === lastKey ? null : key;
+}
+
 export function shouldReportPositionSample(playerState: number): boolean {
   return playerState !== YT_STATE.ENDED;
 }
@@ -387,7 +416,12 @@ export function MusicPlayer({
   mutedRef.current = muted;
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
+  const localeRef = useRef<string>(locale);
+  localeRef.current = locale;
+  /** The room track the captions were last read for, and how to stop it. */
+  const captionsFor = useRef<string | null>(null);
+  const captionsCancel = useRef<(() => void) | null>(null);
   const videoId = music.state?.current?.videoId ?? null;
   const trackId = music.state?.current?.id ?? null;
   const status = music.state?.status ?? "paused";
@@ -437,6 +471,16 @@ export function MusicPlayer({
               setSeekApply((positionMs) => {
                 event.target.seekTo(positionMs / 1000, true);
               });
+              setMusicCaptionsApply(() => {
+                const captions = getMusicCaptions();
+                applyCaptionsPref(
+                  event.target,
+                  captions,
+                  captions.tracks ?? [],
+                  captions.translations,
+                  localeRef.current,
+                );
+              });
               setReady(true);
             },
             onStateChange: (event) => {
@@ -468,6 +512,27 @@ export function MusicPlayer({
                 }
               } else if (event.data === YT_STATE.PLAYING) {
                 onNeedsTap(false);
+                // Once per room track: a new video gets YouTube's default
+                // captions back, so the viewer's choice goes on again.
+                let loadedVideo: string | undefined;
+                try {
+                  loadedVideo = event.target.getVideoData().video_id;
+                } catch {
+                  loadedVideo = undefined;
+                }
+                const captionsKey = captionsSyncKey(
+                  loadedVideo,
+                  snap.state?.current,
+                  captionsFor.current,
+                );
+                if (captionsKey) {
+                  captionsFor.current = captionsKey;
+                  captionsCancel.current?.();
+                  captionsCancel.current = startMusicCaptionsSync(
+                    event.target,
+                    () => localeRef.current,
+                  );
+                }
                 /*
                  * Out of ENDED, so this machine's player is not at the end
                  * any more and the mark is stale. The store clears it when
@@ -521,6 +586,9 @@ export function MusicPlayer({
       playerRef.current = null;
       setPositionProbe(null);
       setSeekApply(null);
+      setMusicCaptionsApply(null);
+      captionsCancel.current?.();
+      publishMusicCaptionTracks(null);
       try {
         player?.destroy();
       } catch {
@@ -529,6 +597,14 @@ export function MusicPlayer({
       mount.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Forget the captions of what was loaded; the next PLAYING reads them. */
+  const resetCaptions = useCallback(() => {
+    captionsCancel.current?.();
+    captionsCancel.current = null;
+    captionsFor.current = null;
+    publishMusicCaptionTracks(null);
   }, []);
 
   /**
@@ -540,12 +616,16 @@ export function MusicPlayer({
    */
   const loadRoomTrack = useCallback(
     (player: YTPlayer, id: string, playing: boolean) => {
+      // A load, including the repair's reload of the SAME room track,
+      // starts the video on YouTube's default captions, so the next
+      // matching PLAYING must read the tracks and apply the choice again.
+      resetCaptions();
       const seconds = expectedPositionMs(musicRef.current) / 1000;
       // A player that throws here cannot play this track, and saying so is
       // better than leaving a stale picture with no explanation.
       setFailed(!applyRoomTrack(player, id, playing, seconds));
     },
-    [],
+    [resetCaptions],
   );
 
   const tryRepair = useWrongVideoRepair(trackId);
@@ -569,6 +649,8 @@ export function MusicPlayer({
     if (!ready || !player) {
       return;
     }
+    // The menu must not offer the last video's tracks for this one.
+    resetCaptions();
     const command = musicEmbedCommand(videoId, status);
     if (command === "stop") {
       try {
