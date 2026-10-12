@@ -4,6 +4,7 @@ export * from "./audience-mode.js";
 export * from "./audit.js";
 export * from "./auth.js";
 export * from "./avatars.js";
+export * from "./channel-layout.js";
 export * from "./channel-sessions.js";
 export * from "./chat.js";
 export * from "./chat-text.js";

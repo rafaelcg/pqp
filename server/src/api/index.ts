@@ -42,6 +42,10 @@ import {
   createChannelMessageSchema,
   createChannelSchema,
   moveChannelSchema,
+  channelLayoutSchema,
+  channelNameIssue,
+  CHANNEL_LAYOUT_OFF,
+  CHANNEL_LAYOUT_STALE,
   createDmSchema,
   createGifAttachmentSchema,
   createInviteSchema,
@@ -164,6 +168,19 @@ import {
   setVoiceAudienceSpeakerSchema,
 } from "@pqp/shared";
 import { z } from "zod";
+import {
+  ChannelLayoutError,
+  ChannelLayoutServerMissing,
+  applyChannelLayout,
+  getChannelLayoutConfig,
+  legacyCreateParent,
+  listSidebarChannelIds,
+  migrateChannelLayout,
+  revertChannelLayout,
+} from "../services/channel-layout.js";
+
+/** Operator: migrate or revert one server's channel list (see `operatorChannelLayout`). */
+const ADMIN_CHANNEL_LAYOUT_PATH = "/api/admin/channel-layout";
 import {
   createLiveKitSession,
   getServerVoiceBackend,
@@ -2324,6 +2341,13 @@ router.get(OPERATOR_CHANNELS_PATH, async ({ url, user }) => {
   return operatorChannels(url.searchParams.get("serverId"));
 });
 
+router.post(ADMIN_CHANNEL_LAYOUT_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return operatorChannelLayout(req);
+});
+
 router.put(OPERATOR_SERVER_LIVE_HLS_PATH, async ({ req, user }) => {
   if (!isInstanceModerator(user)) {
     throw new NotFound("Not found");
@@ -2475,6 +2499,13 @@ const ADMIN_MACHINE_ROUTES: {
       return operatorSetServerLiveHls(body.serverId, body, null);
     },
   },
+  // The mixed channel list's data: "do the QG now" (dry run first) and undo.
+  // Both are reversible and both keep a snapshot.
+  {
+    method: "POST",
+    path: ADMIN_CHANNEL_LAYOUT_PATH,
+    run: async (req) => operatorChannelLayout(req),
+  },
   // The waitlist: one read, and the one write that is not already the
   // availability flip above ("Ativar" IS that flip, with low latency beside
   // it, and approves the server's rows as a side effect of turning it on).
@@ -2571,6 +2602,42 @@ async function operatorChannels(serverId: string | null) {
     throw new NotFound("Server not found");
   }
   return list;
+}
+
+const adminChannelLayoutSchema = z.object({
+  serverId: z.string().uuid(),
+  action: z.enum(["migrate", "revert"]),
+  dryRun: z.boolean().optional(),
+});
+
+/**
+ * Migrate one server's channel list now (the job would within a minute once
+ * the flag is on, but the QG goes by hand, dry run first), or revert it to the
+ * snapshot. A migrate after a revert is allowed here and only here.
+ */
+async function operatorChannelLayout(req: IncomingMessage) {
+  const body = adminChannelLayoutSchema.parse(await readJsonBody(req));
+  try {
+    const result =
+      body.action === "migrate"
+        ? await migrateChannelLayout(body.serverId, {
+            dryRun: body.dryRun,
+            allowReverted: true,
+          })
+        : await revertChannelLayout(body.serverId);
+    if (result.status === "migrated" || result.status === "noop" || result.status === "reverted") {
+      pingChannels(body.serverId, {
+        channelIds: await listSidebarChannelIds(body.serverId),
+        carriesChildren: true,
+      });
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof ChannelLayoutServerMissing) {
+      throw new NotFound(error.message);
+    }
+    throw error;
+  }
 }
 
 async function operatorSetServerLiveHls(
@@ -3863,6 +3930,7 @@ router.post("/api/servers", async ({ req, user }) => {
     body.name,
     user.id,
     idempotencyKey,
+    { locale: body.locale },
   );
   const payload = {
     server: { ...mapServer(server), role: "owner" as const },
@@ -6119,6 +6187,74 @@ router.get(
   },
 );
 
+/**
+ * Which channel list to draw. `mixed` is the `mixed_channel_list` flag for
+ * this server AND a finished migration, so a client never draws a half state;
+ * `version` goes back as the PUT's `baseVersion`. Clients ask on server open
+ * and after each `channels-update`. A 404 (an older API) means the old list.
+ */
+router.get(
+  "/api/servers/:serverId/channel-layout",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    return getChannelLayoutConfig(serverId!);
+  },
+);
+
+/**
+ * The whole sidebar order in one atomic write (the drag on the web, Organizar
+ * canais on the phones). 409 `channel_layout_stale` with the caller's fresh
+ * list when the list moved since `baseVersion`; 409 `channel_layout_off` when
+ * the server is not in the mixed layout. Channels the caller cannot see keep
+ * their place. Same permission as `PATCH /move`: MANAGE_CHANNELS server-wide.
+ */
+router.put(
+  "/api/servers/:serverId/channel-layout",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_CHANNELS);
+    const body = channelLayoutSchema.parse(await readJsonBody(req));
+    const config = await getChannelLayoutConfig(serverId!);
+    if (!config.mixed) {
+      throw new HttpErrorWithDetail(409, CHANNEL_LAYOUT_OFF, {
+        version: config.version,
+      });
+    }
+    let result: Awaited<ReturnType<typeof applyChannelLayout>>;
+    try {
+      result = await applyChannelLayout(serverId!, user.id, body);
+    } catch (error) {
+      if (error instanceof ChannelLayoutError) {
+        throw new HttpError(400, error.message);
+      }
+      throw error;
+    }
+    const channels = (await listChannels(serverId!, user.id)).map(mapChannel);
+    if (result.status === "stale") {
+      throw new HttpErrorWithDetail(409, CHANNEL_LAYOUT_STALE, {
+        channels,
+        version: result.version,
+      });
+    }
+    if (result.moved > 0) {
+      // Before the audit write, for the same reason as on create. Every
+      // sidebar row is named (a server may have no category at all), so each
+      // member who can see any of it refetches, and nobody else hears.
+      pingChannels(serverId!, {
+        channelIds: await listSidebarChannelIds(serverId!),
+      });
+      await logAudit({
+        serverId: serverId!,
+        actorId: user.id,
+        action: "channel.reorder",
+        targetType: "server",
+        targetId: serverId!,
+        changes: [{ key: "moved", old: null, new: result.moved }],
+      });
+    }
+    return { channels, version: result.version };
+  },
+);
+
 router.post(
   "/api/servers/:serverId/channels",
   async ({ req, user }, { serverId }) => {
@@ -6129,13 +6265,32 @@ router.post(
     if (body.type === "forum" && !forumChannelsEnabled(serverId!)) {
       throw new Forbidden(FORUM_CHANNELS_OFF);
     }
-    const channel = await createChannel(
-      serverId!,
-      body.name,
-      body.type,
-      body.isPrivate ?? false,
-      body.topic ?? null,
-    );
+    // ABSENT `parentId` is an older client (the legacy-create rule): on a
+    // server in the mixed layout its channel goes to the end of the first
+    // category, where that client draws it. `null` is a current client
+    // asking for no category, and is honoured.
+    const parentId =
+      body.parentId !== undefined
+        ? body.parentId
+        : body.type === "category"
+          ? null
+          : await legacyCreateParent(serverId!);
+    let channel: Awaited<ReturnType<typeof createChannel>>;
+    try {
+      channel = await createChannel(
+        serverId!,
+        body.name,
+        body.type,
+        body.isPrivate ?? false,
+        body.topic ?? null,
+        parentId,
+      );
+    } catch (error) {
+      if (error instanceof InvalidChannelMoveError) {
+        throw new HttpError(400, error.message);
+      }
+      throw error;
+    }
     if (channel.is_private) {
       await addChannelMember(channel.id, user.id);
     }
@@ -6187,6 +6342,17 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
   );
   await refuseForumPost(channel);
   const body = updateChannelSchema.parse(await readJsonBody(req));
+  // The schema takes any name up to 100; the rule is per type. A category is
+  // a label ("Salas de voz"), a channel is still a slug.
+  if (body.name !== undefined) {
+    if (channel.type === "category") {
+      body.name = body.name.trim();
+    }
+    const issue = channelNameIssue(channel.type, body.name);
+    if (issue) {
+      throw new HttpError(400, issue);
+    }
+  }
   const privacyChanged =
     body.isPrivate !== undefined && body.isPrivate !== channel.is_private;
   // A privacy flip changes who can see the channel, so the people who are

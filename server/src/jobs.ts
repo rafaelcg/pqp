@@ -74,6 +74,47 @@ import {
   sweepStories,
 } from "./services/story-media.js";
 import { notifyStoriesUpdate, notifyStoryAudiences } from "./ws/stories.js";
+import {
+  CHANNEL_LAYOUT_JOB_INTERVAL_MS,
+  listSidebarChannelIds,
+  runChannelLayoutMigrations,
+} from "./services/channel-layout.js";
+import { countChannelLayout } from "./services/channel-layout-metrics.js";
+import { notifyChannelsUpdate } from "./ws/chat.js";
+
+let channelLayoutRunning = false;
+
+/**
+ * The data follows the `mixed_channel_list` flag: every minute, up to 200
+ * servers the flag is on for and that were never migrated get their loose
+ * channels moved into "Canais" (services/channel-layout.ts). No deploy, no
+ * restart: an override on the dashboard is picked up on the next tick. One run
+ * at a time per process; across processes the advisory lock and the primary
+ * key make a duplicate a no-op. Open sidebars refetch through
+ * `channels-update`, over the bus where this runs without sockets.
+ */
+async function migrateChannelLayoutsJob(): Promise<void> {
+  if (channelLayoutRunning) {
+    return;
+  }
+  channelLayoutRunning = true;
+  try {
+    const changed = await runChannelLayoutMigrations();
+    for (const serverId of changed) {
+      const channelIds = await listSidebarChannelIds(serverId);
+      await notifyChannelsUpdate(serverId, { channelIds, carriesChildren: true }).catch(
+        (error: unknown) => {
+          console.error("[channel-layout] nudge failed:", error);
+        },
+      );
+    }
+  } catch (error) {
+    countChannelLayout("jobFailures");
+    console.error("[channel-layout] migration job failed:", error);
+  } finally {
+    channelLayoutRunning = false;
+  }
+}
 
 /**
  * Hourly, because the grace period is an hour: running more often only finds
@@ -300,6 +341,7 @@ export function startColdJobs(): ColdJobs {
   const stoppers: Stopper[] = [
     every(ATTACHMENT_SWEEP_INTERVAL_MS, "attachments", sweepAttachments),
     every(DAILY_MS, "audit", pruneAuditLog),
+    every(CHANNEL_LAYOUT_JOB_INTERVAL_MS, "channel-layout", migrateChannelLayoutsJob),
     // A resolved report holds a copy of reported content, so this is a privacy
     // sweep rather than a disk one. Open reports are never touched.
     every(DAILY_MS, "reports", pruneResolvedReports),

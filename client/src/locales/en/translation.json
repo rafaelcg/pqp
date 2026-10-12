@@ -2348,6 +2348,7 @@
   "serverSettings.audit.action.channel.update": "updated a channel",
   "serverSettings.audit.action.channel.delete": "deleted a channel",
   "serverSettings.audit.action.channel.move": "reordered a channel",
+  "serverSettings.audit.action.channel.reorder": "reorganized the channel list",
   "serverSettings.audit.action.message.delete": "deleted someone's message",
   "serverSettings.audit.action.message.bulk_delete": "cleared messages from the channel",
   "serverSettings.audit.action.story.remove": "removed a story from the server",

@@ -1127,19 +1127,79 @@ export type PublicInvitePreview = z.infer<typeof publicInvitePreviewSchema>;
 
 export const createServerSchema = z.object({
   name: z.string().min(1).max(100),
+  /**
+   * The creator's UI language, which names the one category a new server
+   * starts with while `mixed_channel_list` is on ("Canais", "Channels",
+   * "Canales"). Optional: an older client sends nothing and the server falls
+   * back to the owner's saved locale, then to Portuguese.
+   */
+  locale: z.enum(["pt-BR", "en", "es"]).optional(),
 });
+
+/** Longest category name `categoryNameSchema` accepts. */
+export const CATEGORY_NAME_MAX_LENGTH = 32;
+
+/**
+ * A category is a label, not a slug: "Salas de voz" and "Jogos & Música" are
+ * fine, while a text channel still follows the `^[a-z0-9-_]+$` rule. Trimmed,
+ * 1 to 32 characters, no control characters or line breaks.
+ */
+export const categoryNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(CATEGORY_NAME_MAX_LENGTH)
+  .regex(/^[^\p{Cc}\u2028\u2029]+$/u, "No control characters");
+
+const CHANNEL_NAME_RE = /^[a-z0-9-_]+$/i;
+
+/**
+ * Why `name` is not a valid name for a row of `type`, or null when it is.
+ * Create and rename both ask, so a category can be renamed to the same words
+ * it could have been created with.
+ */
+export function channelNameIssue(type: string, name: string): string | null {
+  if (type === "category") {
+    const parsed = categoryNameSchema.safeParse(name);
+    return parsed.success
+      ? null
+      : `Category names are 1 to ${CATEGORY_NAME_MAX_LENGTH} characters`;
+  }
+  return CHANNEL_NAME_RE.test(name) ? null : "Use letters, numbers, - or _";
+}
 
 export const createChannelSchema = z
   .object({
-    name: z
-      .string()
-      .min(1)
-      .max(100)
-      .regex(/^[a-z0-9-_]+$/i, "Use letters, numbers, - or _"),
+    /** Per type: see `channelNameIssue` (a category may have spaces). */
+    name: z.string().min(1).max(100),
     type: channelTypeSchema,
     isPrivate: z.boolean().optional().default(false),
     /** Optional short description, stored as the channel topic. */
     topic: z.string().trim().max(200).optional(),
+    /**
+     * The category to create it in, or `null` for no category. ABSENT is not
+     * null: an older client never sends the key, and on a server in the mixed
+     * layout its channel goes to the end of the first category instead of a
+     * loose area that client cannot draw (the legacy-create rule). Every
+     * current client sends the key. Never set for a category.
+     */
+    parentId: z.string().uuid().nullable().optional(),
+  })
+  .transform((value) =>
+    value.type === "category" ? { ...value, name: value.name.trim() } : value,
+  )
+  .superRefine((value, ctx) => {
+    const issue = channelNameIssue(value.type, value.name);
+    if (issue) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue, path: ["name"] });
+    }
+    if (value.type === "category" && value.parentId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "A category cannot be nested under another category",
+        path: ["parentId"],
+      });
+    }
   })
   // Permission-overwrite inheritance from a category to its children does
   // not exist yet (gap #22), so a "private category" would restrict nothing
@@ -1151,12 +1211,11 @@ export const createChannelSchema = z
   });
 
 export const updateChannelSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .max(100)
-    .regex(/^[a-z0-9-_]+$/i)
-    .optional(),
+  /**
+   * Checked against the channel's own type by the route
+   * (`channelNameIssue`): a category takes spaces, a channel does not.
+   */
+  name: z.string().min(1).max(100).optional(),
   isPrivate: z.boolean().optional(),
   topic: z.string().max(200).nullable().optional(),
   imageUrl: z
@@ -1196,6 +1255,52 @@ export const moveChannelSchema = z.object({
   parentId: z.string().uuid().nullable(),
   index: z.number().int().min(0),
 });
+
+/**
+ * `PUT /api/servers/:serverId/channel-layout`: the whole sidebar order in one
+ * write. `baseVersion` is the `version` the client last read; a server whose
+ * layout moved since answers 409 `channel_layout_stale` with its fresh list,
+ * so two managers dragging at once never silently overwrite each other.
+ *
+ * `categoryIds` is every category, in order (categories are never private,
+ * so a manager always sees them all). `groups` is each parent's channels in
+ * order, `parentId: null` for the loose ones above the first category. A
+ * channel the caller cannot see (a private room, a watch party room the web
+ * does not list) is simply left out and keeps its place.
+ */
+export const channelLayoutSchema = z.object({
+  baseVersion: z.number().int().min(0),
+  categoryIds: z.array(z.string().uuid()).max(100),
+  groups: z
+    .array(
+      z.object({
+        parentId: z.string().uuid().nullable(),
+        channelIds: z.array(z.string().uuid()).max(500),
+      }),
+    )
+    .max(101),
+});
+
+export type ChannelLayoutInput = z.infer<typeof channelLayoutSchema>;
+
+/**
+ * `GET /api/servers/:serverId/channel-layout`. `mixed` is true only when the
+ * `mixed_channel_list` flag is on for the server AND its data has been
+ * migrated, so a client never draws a half state. `version` is what a
+ * `PUT` sends back as `baseVersion`. A client that gets a 404 (an older
+ * server) draws the old layout.
+ */
+export const channelLayoutConfigSchema = z.object({
+  mixed: z.boolean(),
+  version: z.number().int().min(0),
+});
+
+export type ChannelLayoutConfig = z.infer<typeof channelLayoutConfigSchema>;
+
+/** The 409 body of a stale `PUT .../channel-layout`. */
+export const CHANNEL_LAYOUT_STALE = "channel_layout_stale";
+/** The 409 body of a `PUT .../channel-layout` on a server not in the mixed layout. */
+export const CHANNEL_LAYOUT_OFF = "channel_layout_off";
 
 /**
  * WS nudge: a server's channel list changed (a channel was created, renamed,

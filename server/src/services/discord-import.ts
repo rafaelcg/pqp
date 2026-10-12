@@ -22,6 +22,8 @@ import {
   putObject,
 } from "../lib/s3.js";
 import { logAudit } from "./audit.js";
+import { isEnabled } from "../lib/flags.js";
+import { MIXED_CHANNEL_LIST_FLAG, recordChannelLayoutNoop } from "./channel-layout.js";
 import { scanAllowsAttachment, scanImage } from "./content-scan.js";
 import {
   claimServerIdempotencyKey,
@@ -372,6 +374,13 @@ export async function createServerFromImport(
     );
 
     await seedDefaultRoles(client, server.id);
+
+    // With the mixed channel list on for everyone, an import keeps Discord's
+    // loose channels loose (that is what Discord shows) and is recorded as
+    // already in shape, so the migration job never folds them into "Canais".
+    if (isEnabled(MIXED_CHANNEL_LIST_FLAG)) {
+      await recordChannelLayoutNoop(client, server.id);
+    }
 
     if (plan.everyonePermissions) {
       await client.query(

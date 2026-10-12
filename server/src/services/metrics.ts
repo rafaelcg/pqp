@@ -12,6 +12,7 @@ import {
   type StreamAlertMetrics,
 } from "./stream-alerts.js";
 import { nudgeMetrics, type NudgeMetrics } from "./nudge.js";
+import { channelLayoutReport, type ChannelLayoutReport } from "./channel-layout.js";
 import {
   communityHomeTranslationMetrics,
   type CommunityHomeTranslationMetrics,
@@ -369,6 +370,15 @@ export interface AdminMetrics {
    * the 30 s cache.
    */
   nudge: NudgeMetrics;
+  /**
+   * The mixed channel list (`services/channel-layout.ts`): the flag's global
+   * answer, servers migrated and reverted (from the table), and since this
+   * process started: migrations, no-ops, reverts, full-order PUTs, stale PUTs
+   * refused, and the two legacy rules for older clients (a per-type move index
+   * translated, a create with no parentId sent to the first category). Live,
+   * never from the 30 s cache.
+   */
+  channelLayout: ChannelLayoutReport;
   /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
@@ -1231,6 +1241,7 @@ type CachedMetrics = Omit<
   | "stories"
   | "streamAlerts"
   | "nudge"
+  | "channelLayout"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -2017,6 +2028,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     communityHomeTranslation,
     communityHomeCaptions,
     stories,
+    channelLayout,
   ] = await Promise.all([
     getCachedMetrics(),
     checkReady(),
@@ -2026,6 +2038,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     communityHomeTranslationMetrics(),
     communityHomeCaptionsMetrics(),
     storiesMetrics(),
+    channelLayoutReport(),
   ]);
   const runtime = runtimeSnapshot();
   const cluster = await clusterMetrics(runtime);
@@ -2044,6 +2057,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     stories,
     streamAlerts: streamAlertMetrics(),
     nudge: nudgeMetrics(),
+    channelLayout,
   };
 }
 

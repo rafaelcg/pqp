@@ -690,6 +690,21 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/stories/config + GET /api/stories/friends",
   },
+  mixed_channel_list: {
+    description:
+      "Lista de canais só com categorias: tipos misturados em cada categoria, a ordem que o gerente escolher, e um servidor novo nasce com a categoria Canais.",
+    env: "MIXED_CHANNEL_LIST",
+    parseEnv: exactTrue,
+    // Off: the QG first (override, then the operator's migrate), a day on web
+    // and on the phones already in the stores, then a few servers, then on.
+    codeDefault: false,
+    // Every reader knows the server: the config route, the migration job (it
+    // reads the overrides to find its work) and the legacy-create rule. The
+    // global answer alone also decides how a NEW server is born.
+    perServer: true,
+    // No `(field)`: the clients that read `mixed` land after the server.
+    clientVia: "GET /api/servers/:id/channel-layout",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

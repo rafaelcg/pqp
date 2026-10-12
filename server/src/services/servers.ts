@@ -14,6 +14,13 @@ import {
 import { coalesce, invalidate as invalidateReadCache } from "../lib/read-cache.js";
 import { deleteObject, isStorageConfigured } from "../lib/s3.js";
 import { recordActivationStep } from "./activation.js";
+import { isEnabled } from "../lib/flags.js";
+import {
+  MIXED_CHANNEL_LIST_FLAG,
+  bumpChannelLayoutVersion,
+  seedDefaultCategory,
+} from "./channel-layout.js";
+import { countChannelLayout } from "./channel-layout-metrics.js";
 import {
   claimServerIdempotencyKey,
   recordServerIdempotencyKey,
@@ -120,13 +127,30 @@ async function channelAttachmentKeys(
   return result.rows.map((row) => row.storage_key);
 }
 
+/** Every type that sits in a channel group (loose or inside a category). */
+export const SIDEBAR_CHANNEL_TYPES = ["text", "forum", "voice", "watch_party"];
+
 /**
  * The types that share one top-level sibling group (one numbering of
- * `position`). The sidebar lists forums among the text channels, so a forum
- * and a text channel are numbered together; numbered apart, a new forum and
- * the first text channel would both sit at position 0 of one visible list.
+ * `position`): every channel type in one loose sequence, categories in their
+ * own. Until 2026-10 the loose group was split by type; see
+ * `channel_top_level_unify_2026_10` in schema.sql and
+ * `legacyPositionGroupTypes` for the old split, which only the legacy move
+ * rule still reads.
  */
 export function positionGroupTypes(type: string): string[] {
+  if (type === "category" || type === "thread") {
+    return [type];
+  }
+  return SIDEBAR_CHANNEL_TYPES;
+}
+
+/**
+ * The OLD top-level split, as an older client still counts it: text and
+ * forums together, voice, watch party. `PATCH /move` reads an index into the
+ * loose area against this split (the legacy-move rule in `moveChannel`).
+ */
+export function legacyPositionGroupTypes(type: string): string[] {
   return type === "text" || type === "forum" ? ["text", "forum"] : [type];
 }
 
@@ -208,6 +232,17 @@ export function deleteObjectsInBackground(keys: string[]): void {
   })();
 }
 
+async function ownerLocaleFor(
+  db: Pick<PoolClient, "query">,
+  userId: string,
+): Promise<string | null> {
+  const result = await db.query<{ locale: string | null }>(
+    `SELECT settings->>'locale' AS locale FROM user_preferences WHERE user_id = $1`,
+    [userId],
+  );
+  return result.rows[0]?.locale ?? null;
+}
+
 export async function listServersForUser(userId: string): Promise<DbServer[]> {
   const result = await getPool().query<DbServer>(
     `SELECT ${SERVER_COLUMNS.split(", ")
@@ -226,6 +261,7 @@ export async function createServer(
   name: string,
   ownerId: string,
   idempotencyKey?: string | null,
+  options: { locale?: string | null } = {},
 ): Promise<{ server: DbServer; channels: ChannelRow[]; replayed: boolean }> {
   const client = await getPool().connect();
   try {
@@ -286,12 +322,27 @@ export async function createServer(
 
     await seedDefaultRoles(client, server.id);
 
+    // With the mixed channel list on for the whole instance, a new server
+    // starts with one category ("Canais", "Channels", "Canales", from the
+    // creator's language) holding #general and Lobby, and is recorded as
+    // migrated so the job never touches it. Off, the two channels are loose,
+    // exactly as before.
+    let category: ChannelRow | null = null;
+    if (isEnabled(MIXED_CHANNEL_LIST_FLAG)) {
+      const locale = options.locale ?? (await ownerLocaleFor(client, ownerId));
+      const seeded = await seedDefaultCategory(client, server.id, locale);
+      const read = await client.query<ChannelRow>(
+        `SELECT ${CHANNEL_COLUMNS} FROM channels WHERE id = $1`,
+        [seeded.categoryId],
+      );
+      category = read.rows[0] ?? null;
+    }
     const channelsResult = await client.query<ChannelRow>(
-      `INSERT INTO channels (server_id, name, type, position, is_private) VALUES
-         ($1, 'general', 'text', 0, FALSE),
-         ($1, 'Lobby', 'voice', 1, FALSE)
+      `INSERT INTO channels (server_id, name, type, position, is_private, parent_id) VALUES
+         ($1, 'general', 'text', 0, FALSE, $2),
+         ($1, 'Lobby', 'voice', 1, FALSE, $2)
        RETURNING ${CHANNEL_COLUMNS}`,
-      [server.id],
+      [server.id, category?.id ?? null],
     );
 
     if (idempotencyKey) {
@@ -303,7 +354,11 @@ export async function createServer(
     // counts, so a user whose first act is making their own server is not a
     // hole in the funnel. On the pool, after the commit.
     await recordActivationStep(ownerId, "first_join");
-    return { server, channels: channelsResult.rows, replayed: false };
+    return {
+      server,
+      channels: category ? [category, ...channelsResult.rows] : channelsResult.rows,
+      replayed: false,
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -417,34 +472,67 @@ export async function listChannels(
   return all.filter((channel) => visibleIds.has(channel.id));
 }
 
+/**
+ * Create a channel at the end of its group. `parentId` is the category to put
+ * it in, or null for no category (a category itself is always null: they never
+ * nest). The route resolves the legacy-create rule (`legacyCreateParent`)
+ * before calling, so here null always means loose.
+ *
+ * One transaction that starts by bumping the server's layout version, which
+ * takes the server row's lock: two creates, or a create racing a full-order
+ * PUT, are serialised and never read the same MAX(position).
+ */
 export async function createChannel(
   serverId: string,
   name: string,
   type: "text" | "voice" | "category" | "watch_party" | "forum",
   isPrivate = false,
   topic: string | null = null,
+  parentId: string | null = null,
 ): Promise<ChannelRow> {
-  // Top-level text, top-level voice, and categories are three separate
-  // sibling groups sharing the `parent_id IS NULL` scope — the client renders
-  // them as three separate lists rather than one interleaved one, so `type`
-  // has to be part of the group key here or a new voice channel could land
-  // between two text channels' positions for no visible reason. A channel
-  // moved into a real category leaves this scope entirely; that group mixes
-  // types together, matching how the sidebar nests them under one heading.
-  const positionResult = await getPool().query<{ max: number | null }>(
-    `SELECT MAX(position) as max FROM channels
-     WHERE server_id = $1 AND parent_id IS NULL AND type = ANY($2::text[])`,
-    [serverId, positionGroupTypes(type)],
-  );
-  const position = (positionResult.rows[0]?.max ?? -1) + 1;
+  if (type === "category" && parentId !== null) {
+    throw new InvalidChannelMoveError(
+      "A category cannot be nested under another category",
+    );
+  }
+  const client = await getPool().connect();
+  let channel: ChannelRow;
+  try {
+    await client.query("BEGIN");
+    await bumpChannelLayoutVersion(client, serverId);
+    if (parentId !== null) {
+      const parent = await client.query<{ type: string }>(
+        `SELECT type FROM channels WHERE id = $1 AND server_id = $2`,
+        [parentId, serverId],
+      );
+      if (parent.rows[0]?.type !== "category") {
+        throw new InvalidChannelMoveError("Not a category in this server");
+      }
+    }
+    // Inside a category the group is the category; at the top level it is
+    // every loose channel (one mixed sequence) or the categories.
+    const positionResult = await client.query<{ max: number | null }>(
+      `SELECT MAX(position) as max FROM channels
+       WHERE server_id = $1 AND parent_id IS NOT DISTINCT FROM $2
+         AND type = ANY($3::text[])`,
+      [serverId, parentId, positionGroupTypes(type)],
+    );
+    const position = (positionResult.rows[0]?.max ?? -1) + 1;
 
-  const result = await getPool().query<ChannelRow>(
-    `INSERT INTO channels (server_id, name, type, position, is_private, topic)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING ${CHANNEL_COLUMNS}`,
-    [serverId, name, type, position, isPrivate, topic || null],
-  );
-  const channel = result.rows[0]!;
+    const result = await client.query<ChannelRow>(
+      `INSERT INTO channels (server_id, name, type, position, is_private, topic, parent_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING ${CHANNEL_COLUMNS}`,
+      [serverId, name, type, position, isPrivate, topic || null, parentId],
+    );
+    channel = result.rows[0]!;
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
   // `finally`, not a plain call after the `if`: the INSERT above already
   // committed, so the channel row exists regardless of what happens next.
   // If `applyPrivateChannelOverwrites` or `bumpPermissionsVersion` throws,
@@ -537,26 +625,45 @@ export async function moveChannel(
     }
 
     const oldParentId = row.parent_id;
+    await bumpChannelLayoutVersion(client, serverId);
 
     // The destination group, in order, with the moved channel spliced in —
     // every existing member of this group already has parent_id = parentId,
     // so writing it for the whole list is correct for them too, not just for
     // the one that is actually moving.
     //
-    // Top-level (parentId null) additionally scopes by the moved channel's own
-    // type: text, voice and categories are three separate lists in the
-    // sidebar, not one interleaved one, so "top-level" alone is not a single
-    // sibling group there the way it is inside a real category, which mixes
-    // types together under one heading.
-    const destination = await client.query<{ id: string }>(
-      `SELECT id FROM channels
+    // Top-level (parentId null) is two groups: the categories, and every
+    // loose channel in one mixed sequence.
+    const destination = await client.query<{ id: string; type: string }>(
+      `SELECT id, type FROM channels
        WHERE server_id = $1 AND id <> $2 AND parent_id IS NOT DISTINCT FROM $3
-         AND ($3 IS NOT NULL OR type = ANY($4::text[]))
-       ORDER BY position ASC`,
+         AND type = ANY($4::text[])
+       ORDER BY position ASC, id ASC`,
       [serverId, channelId, parentId, positionGroupTypes(row.type)],
     );
     const destIds = destination.rows.map((r) => r.id);
-    const clampedIndex = Math.max(0, Math.min(index, destIds.length));
+    let clampedIndex = Math.max(0, Math.min(index, destIds.length));
+    if (parentId === null && row.type !== "category") {
+      // THE LEGACY-MOVE RULE. Every caller of this route counts the loose
+      // area the old way, one list per type (the web before the redesign,
+      // iOS 1.0.21's "Top level" at index 0): `index` is a slot among the
+      // loose siblings of the moved channel's OLD type group. Converted to
+      // the one sequence: before the first of those siblings for 0, else
+      // right after the (index-1)th; with none of them, at the end.
+      const legacy = legacyPositionGroupTypes(row.type);
+      const sameGroup = destination.rows
+        .map((r, at) => ({ at, legacy: legacy.includes(r.type) }))
+        .filter((r) => r.legacy)
+        .map((r) => r.at);
+      if (sameGroup.length === 0) {
+        clampedIndex = destIds.length;
+      } else if (index <= 0) {
+        clampedIndex = sameGroup[0]!;
+      } else {
+        clampedIndex = sameGroup[Math.min(index, sameGroup.length) - 1]! + 1;
+      }
+      countChannelLayout("legacyMoveTranslated");
+    }
     destIds.splice(clampedIndex, 0, channelId);
 
     for (let i = 0; i < destIds.length; i++) {
@@ -574,8 +681,8 @@ export async function moveChannel(
       const vacated = await client.query<{ id: string }>(
         `SELECT id FROM channels
          WHERE server_id = $1 AND id <> $2 AND parent_id IS NOT DISTINCT FROM $3
-           AND ($3 IS NOT NULL OR type = ANY($4::text[]))
-         ORDER BY position ASC`,
+           AND type = ANY($4::text[])
+         ORDER BY position ASC, id ASC`,
         [serverId, channelId, oldParentId, positionGroupTypes(row.type)],
       );
       for (let i = 0; i < vacated.rows.length; i++) {
@@ -632,6 +739,9 @@ export async function updateChannel(
     ],
   );
   const updated = result.rows[0] ?? null;
+  if (updated?.server_id && updated.type === "category" && updates.name !== undefined) {
+    await bumpChannelLayoutVersion(getPool(), updated.server_id);
+  }
   if (updated && updates.isPrivate !== undefined && updated.server_id) {
     await applyPrivateChannelOverwrites(
       getPool(),
@@ -726,11 +836,16 @@ export async function deleteChannel(
     // Read the children (and the server they belong to) before the delete —
     // parent_id is still set, and a plain channel has none, so this is a
     // no-op read for the common case.
-    const before = await client.query<{ server_id: string | null }>(
-      `SELECT server_id FROM channels WHERE id = $1`,
+    const before = await client.query<{ server_id: string | null; type: string }>(
+      `SELECT server_id, type FROM channels WHERE id = $1`,
       [channelId],
     );
     const serverId = before.rows[0]?.server_id ?? null;
+    // A sidebar row going away reshapes the list; a thread (a forum post)
+    // does not, and must not turn a manager's drag into a 409.
+    if (serverId && before.rows[0]?.type !== "thread") {
+      await bumpChannelLayoutVersion(client, serverId);
+    }
     const orphaned = serverId
       ? await client.query<{ id: string; type: string }>(
           `SELECT id, type FROM channels WHERE parent_id = $1 ORDER BY position ASC`,
@@ -744,35 +859,27 @@ export async function deleteChannel(
     const deleted = (result.rowCount ?? 0) > 0;
 
     if (deleted && serverId && orphaned.rows.length > 0) {
-      // Keyed by sibling group, not by bare type: a forum leaving a category
-      // joins the text channels' numbering (`positionGroupTypes`).
-      const newcomersByType = new Map<string, string[]>();
-      for (const row of orphaned.rows) {
-        const group = positionGroupTypes(row.type)[0]!;
-        const list = newcomersByType.get(group) ?? [];
-        list.push(row.id);
-        newcomersByType.set(group, list);
-      }
-      // One pass per type: the newcomers append, in the order they held
-      // inside the category, after whatever top-level channels of that same
-      // type already existed — the ordinary "join the back of the line"
-      // outcome, and the only one that leaves every position in the group
-      // unique afterwards.
-      for (const [type, newcomers] of newcomersByType) {
-        const existing = await client.query<{ id: string }>(
-          `SELECT id FROM channels
-           WHERE server_id = $1 AND parent_id IS NULL AND type = ANY($2::text[])
-             AND id <> ALL($3::uuid[])
-           ORDER BY position ASC`,
-          [serverId, positionGroupTypes(type), newcomers],
-        );
-        const ordered = [...existing.rows.map((r) => r.id), ...newcomers];
-        for (let i = 0; i < ordered.length; i++) {
-          await client.query(`UPDATE channels SET position = $1 WHERE id = $2`, [
-            i,
-            ordered[i],
-          ]);
-        }
+      // The newcomers append, in the order they held inside the category,
+      // after whatever loose channels already existed: one mixed sequence
+      // (`positionGroupTypes`), so they render on top with no header, in the
+      // order they had. The only outcome that leaves every position in the
+      // group unique afterwards.
+      const newcomers = orphaned.rows
+        .filter((row) => row.type !== "thread")
+        .map((row) => row.id);
+      const existing = await client.query<{ id: string }>(
+        `SELECT id FROM channels
+         WHERE server_id = $1 AND parent_id IS NULL AND type = ANY($2::text[])
+           AND id <> ALL($3::uuid[])
+         ORDER BY position ASC, id ASC`,
+        [serverId, SIDEBAR_CHANNEL_TYPES, newcomers],
+      );
+      const ordered = [...existing.rows.map((r) => r.id), ...newcomers];
+      for (let i = 0; i < ordered.length; i++) {
+        await client.query(`UPDATE channels SET position = $1 WHERE id = $2`, [
+          i,
+          ordered[i],
+        ]);
       }
     }
 

@@ -471,18 +471,12 @@ describeDb("forum guards", () => {
       await getPool().query(`DELETE FROM channels WHERE id = $1`, [forumId]);
       const forum = await createChannel(serverId, "ajuda", "forum");
       const text = await createChannel(serverId, "memes", "text");
-      expect((await topLevel()).map((row) => [row.id, row.position])).toEqual([
-        [generalId, 0],
-        [forum.id, 1],
-        [text.id, 2],
-      ]);
+      // One loose sequence for every type (Lobby sits in it too), so these
+      // read the order, not the numbers.
+      expect((await topLevel()).map((row) => row.id)).toEqual([generalId, forum.id, text.id]);
 
       await moveChannel(serverId, forum.id, null, 0);
-      expect((await topLevel()).map((row) => [row.id, row.position])).toEqual([
-        [forum.id, 0],
-        [generalId, 1],
-        [text.id, 2],
-      ]);
+      expect((await topLevel()).map((row) => row.id)).toEqual([forum.id, generalId, text.id]);
     });
   });
 
