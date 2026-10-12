@@ -82,8 +82,11 @@ describe("tag names", () => {
   it("takes a unicode emoji and nothing else", () => {
     expect(acceptTagEmoji("🐛")).toBe("🐛");
     expect(acceptTagEmoji("🛠️")).toBe("🛠️");
+    expect(acceptTagEmoji("1️⃣")).toBe("1️⃣");
+    expect(acceptTagEmoji("🇧🇷")).toBe("🇧🇷");
     expect(acceptTagEmoji(":pepe:")).toBeNull();
     expect(acceptTagEmoji("abc")).toBeNull();
+    expect(acceptTagEmoji("?!")).toBeNull();
     expect(acceptTagEmoji("")).toBeNull();
   });
 });

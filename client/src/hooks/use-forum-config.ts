@@ -31,6 +31,8 @@ export interface ForumConfigState {
 }
 
 const OFF_UNKNOWN: ForumConfigState = { enabled: false, loaded: false };
+/** One more ask after a failed first one (not after a 404, which is an answer). */
+export const FORUM_CONFIG_RETRY_MS = 5_000;
 
 const settled = new Map<string, ForumConfig>();
 const inflight = new Map<string, Promise<ForumConfig>>();
@@ -110,15 +112,23 @@ export function useForumConfig(
   serverId: string | null | undefined,
 ): ForumConfigState {
   // An answer already in hand is used on the first render, so switching back
-  // to a server never blinks its "Fórum" entry or its paused line.
-  const [config, setConfig] = useState<ForumConfigState>(() => stateFor(serverId));
+  // to a server never blinks its "Fórum" entry or its paused line. The state
+  // carries the server it answers for: on the render where the server id
+  // changes, the effect below has not run yet, and the previous server's
+  // answer must not be read as this one's.
+  const [held, setHeld] = useState(() => ({
+    serverId: serverId ?? null,
+    config: stateFor(serverId),
+  }));
+  const config =
+    held.serverId === (serverId ?? null) ? held.config : stateFor(serverId);
   useEffect(() => {
     if (!serverId) {
-      setConfig(OFF_UNKNOWN);
+      setHeld({ serverId: null, config: OFF_UNKNOWN });
       return;
     }
     registerRefresh();
-    const update = () => setConfig(stateFor(serverId));
+    const update = () => setHeld({ serverId, config: stateFor(serverId) });
     let forKey = listeners.get(serverId);
     if (!forKey) {
       forKey = new Set();
@@ -127,12 +137,25 @@ export function useForumConfig(
     const set = forKey;
     set.add(update);
     update();
+    let retry: ReturnType<typeof setTimeout> | null = null;
     if (!settled.has(serverId)) {
       void loadForumConfig(serverId).catch(() => {
-        // Off until the next refresh.
+        // A blip, not an answer: ask once more shortly rather than leave
+        // "Fórum" missing from the "+" until the next refresh pass.
+        retry = setTimeout(() => {
+          retry = null;
+          if (!settled.has(serverId)) {
+            void loadForumConfig(serverId).catch(() => {
+              // Off until the next refresh.
+            });
+          }
+        }, FORUM_CONFIG_RETRY_MS);
       });
     }
     return () => {
+      if (retry !== null) {
+        clearTimeout(retry);
+      }
       set.delete(update);
       if (set.size === 0 && listeners.get(serverId) === set) {
         listeners.delete(serverId);

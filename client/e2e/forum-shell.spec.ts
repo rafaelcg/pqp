@@ -652,7 +652,11 @@ test.describe("forum shell", () => {
     });
     await expect(owner.page.getByText(COPY.stillGone)).toHaveCount(0);
 
-    // And with forums off for the server, the Texto "+" is still one click.
+    // And with forums off for the server, the Texto "+" is still the
+    // one-click text channel, not the menu.
+    await expect(
+      owner.page.getByRole("button", { name: /^(New text channel|Novo canal de texto)$/ }),
+    ).toBeVisible();
     await expect(owner.page.getByRole("button", { name: COPY.newInText })).toHaveCount(0);
     await owner.context.close();
   });

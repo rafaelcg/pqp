@@ -292,9 +292,11 @@ export function ChannelSettingsDialog({
   }, [open, channel?.id, serverId, canManageChannels, canManageRoles, t]);
 
   // --- forums --- tags and the two switches, read once per opening (and on
-  // "Tentar de novo"). Everyone who can open the sheet on a forum may read
-  // them; only the Tags section and the default sort write.
-  const forumChannelId = open && isForum ? (channel?.id ?? null) : null;
+  // "Tentar de novo"), and only for someone who can change them: the Tags
+  // section and the default sort are MANAGE_CHANNELS, and a sheet opened
+  // for permissions alone has no use for either.
+  const forumChannelId =
+    open && isForum && canManageChannels ? (channel?.id ?? null) : null;
   useEffect(() => {
     if (!forumChannelId) {
       return;
@@ -428,22 +430,28 @@ export function ChannelSettingsDialog({
     }
     setSaving(true);
     setSaveError(null);
+    // Each write is folded into the sheet as soon as it lands, so a switch
+    // that fails after the list saved leaves only the switch unsaved, and
+    // "Salvar" again sends only the switch.
+    let baseline = forum.baseline;
+    const wantsRequireTag = tagDraft.requireTag;
     try {
-      let tags = null;
-      if (tagsChanged(forum.baseline, tagDraft)) {
-        ({ tags } = await putForumTags(current.id, toPutBody(tagDraft)));
+      if (tagsChanged(baseline, tagDraft)) {
+        const { tags } = await putForumTags(current.id, toPutBody(tagDraft));
+        baseline = draftFromServer(tags, baseline.requireTag);
+        const saved = baseline;
+        setForum((previous) => ({ ...previous, status: "ready", baseline: saved }));
+        setTagDraft({ ...saved, requireTag: wantsRequireTag });
       }
-      let settings = forum.settings;
-      if (tagDraft.requireTag !== forum.baseline.requireTag) {
-        ({ settings } = await updateForumSettings(current.id, {
-          requireTag: tagDraft.requireTag,
-        }));
+      if (wantsRequireTag !== baseline.requireTag) {
+        const { settings } = await updateForumSettings(current.id, {
+          requireTag: wantsRequireTag,
+        });
+        baseline = { ...baseline, requireTag: settings.requireTag };
+        const saved = baseline;
+        setForum({ status: "ready", settings, baseline: saved });
+        setTagDraft(saved);
       }
-      const baseline = tags
-        ? draftFromServer(tags, settings.requireTag)
-        : { ...forum.baseline, requireTag: settings.requireTag };
-      setForum({ status: "ready", settings, baseline });
-      setTagDraft(baseline);
       setConfirmLeave(false);
     } catch {
       setSaveError(t("forum.saveFailed"));
@@ -465,38 +473,50 @@ export function ChannelSettingsDialog({
     }
     setSaving(true);
     setSaveError(null);
+    // Two writes, each reconciled the moment it lands: the channel row first,
+    // then (a forum only) the default sort. A sort that fails after the row
+    // saved leaves only the sort unsaved, never a saved name the sheet still
+    // calls unsaved, which a "Desfazer" would then appear to undo.
+    const sortChanged =
+      current.type === "forum" &&
+      forum.status === "ready" &&
+      draft.defaultSort !== forum.settings.defaultSort;
+    const channelChanged = isOverviewDirty(
+      { ...draft, defaultSort: forum.settings.defaultSort },
+      current,
+      forum.settings.defaultSort,
+    );
+    let channel = current;
     try {
-      const { channel: updated } = await updateChannel(current.id, {
-        // Only a changed name is sent. A channel copied from a Discord
-        // template can carry a name the rename rules never allowed, and
-        // resending it would refuse a save that only touched the topic.
-        ...(name !== current.name ? { name } : {}),
-        topic: draft.topic.trim() || null,
-        imageUrl: draft.imageUrl.trim() || null,
-        ...(current.kind === "server" &&
-        (current.type === "text" ||
-          current.type === "forum" ||
-          isVoiceRoomChannelType(current.type))
-          ? { slowmodeSeconds: draft.slowmodeSeconds }
-          : {}),
-        ...(showsVoiceRoomSize(current)
-          ? { voiceTransport: fromVoiceRoomSizeOption(draft.voiceRoomSize) }
-          : {}),
-      });
-      let defaultSort = forum.settings.defaultSort;
-      if (
-        current.type === "forum" &&
-        forum.status === "ready" &&
-        draft.defaultSort !== forum.settings.defaultSort
-      ) {
+      if (channelChanged) {
+        ({ channel } = await updateChannel(current.id, {
+          // Only a changed name is sent. A channel copied from a Discord
+          // template can carry a name the rename rules never allowed, and
+          // resending it would refuse a save that only touched the topic.
+          ...(name !== current.name ? { name } : {}),
+          topic: draft.topic.trim() || null,
+          imageUrl: draft.imageUrl.trim() || null,
+          ...(current.kind === "server" &&
+          (current.type === "text" ||
+            current.type === "forum" ||
+            isVoiceRoomChannelType(current.type))
+            ? { slowmodeSeconds: draft.slowmodeSeconds }
+            : {}),
+          ...(showsVoiceRoomSize(current)
+            ? { voiceTransport: fromVoiceRoomSizeOption(draft.voiceRoomSize) }
+            : {}),
+        }));
+        onChannelUpdated(channel);
+        // The sort the person picked stays in the draft until it is saved too.
+        setDraft(draftFromChannel(channel, draft.defaultSort));
+      }
+      if (sortChanged) {
         const { settings } = await updateForumSettings(current.id, {
           defaultSort: draft.defaultSort,
         });
-        defaultSort = settings.defaultSort;
         setForum((previous) => ({ ...previous, settings }));
+        setDraft(draftFromChannel(channel, settings.defaultSort));
       }
-      onChannelUpdated(updated);
-      setDraft(draftFromChannel(updated, defaultSort));
       setConfirmLeave(false);
     } catch (err) {
       setSaveError(

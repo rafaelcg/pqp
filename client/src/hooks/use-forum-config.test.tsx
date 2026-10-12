@@ -9,6 +9,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 const {
+  FORUM_CONFIG_RETRY_MS,
   loadForumConfig,
   resetForumConfigForTests,
   settledForumConfig,
@@ -107,6 +108,38 @@ describe("useForumConfig", () => {
     expect(fetchForumConfigMock).toHaveBeenCalledTimes(1);
     expect(settledForumConfig("s1")).toEqual({ enabled: true, loaded: true });
     expect(settledForumConfig(null)).toEqual({ enabled: false, loaded: false });
+  });
+
+  it("never reads the previous server's answer as the new one's", async () => {
+    fetchForumConfigMock.mockResolvedValueOnce({ enabled: true });
+    mount("s1");
+    await flush();
+    expect(seen.at(-1)).toEqual({ enabled: true, loaded: true });
+    seen.length = 0;
+    fetchForumConfigMock.mockReturnValueOnce(new Promise(() => {}));
+    act(() => root!.render(<Probe serverId="s2" />));
+    // Every render for s2, the very first included, says "not known yet".
+    expect(seen.every((one) => one.loaded === false)).toBe(true);
+  });
+
+  it("asks once more after a blip instead of waiting for the refresh pass", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchForumConfigMock
+        .mockRejectedValueOnce(Object.assign(new Error("down"), { status: 0 }))
+        .mockResolvedValueOnce({ enabled: true });
+      mount("s1");
+      await flush();
+      expect(seen.at(-1)).toEqual({ enabled: false, loaded: false });
+      await act(async () => {
+        vi.advanceTimersByTime(FORUM_CONFIG_RETRY_MS);
+      });
+      await flush();
+      expect(fetchForumConfigMock).toHaveBeenCalledTimes(2);
+      expect(seen.at(-1)).toEqual({ enabled: true, loaded: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("has nothing to say without a server", () => {

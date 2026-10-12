@@ -83,10 +83,16 @@ export function clampTagName(value: string): string {
  */
 export function acceptTagEmoji(value: string): string | null {
   const trimmed = value.trim();
-  if (!trimmed || trimmed.startsWith(":") || /[a-z0-9]/i.test(trimmed)) {
+  if (!trimmed || trimmed.length > FORUM_TAG_EMOJI_MAX) {
     return null;
   }
-  return trimmed.length <= FORUM_TAG_EMOJI_MAX ? trimmed : null;
+  // A pictograph, a flag (regional indicators) or a keycap ("1️⃣"), and
+  // nothing a keyboard types on its own: no `:name:`, no letters, no "?!".
+  const isEmoji =
+    /\p{Extended_Pictographic}|\p{Regional_Indicator}|⃣/u.test(trimmed) &&
+    !/^[\p{L}\p{P}\s]+$/u.test(trimmed) &&
+    !trimmed.startsWith(":");
+  return isEmoji ? trimmed : null;
 }
 
 let localKeySeq = 0;

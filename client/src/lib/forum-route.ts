@@ -15,11 +15,16 @@ import type { ForumPostSummary, ThreadSummary } from "@pqp/shared";
  *   2. as a chat thread among the server's active threads: open its parent
  *      channel with the thread panel on top.
  *
+ * Both are asked at once, so a chat-thread link does not wait a round trip
+ * for the post lookup to say no; the post wins when both answer.
+ *
  * Anything else (a thread that has gone quiet and left the active list, a
  * post this viewer cannot see, a deleted channel) is `null`, which keeps the
- * honest "no longer exists or is private" line. Every lookup failing is also
- * `null`, never an exception: a 404 from an API that predates forums is the
- * normal answer for step 1 on an old server.
+ * honest "no longer exists or is private" line. A 404 or 403 from the post
+ * lookup is that kind of answer (and the normal one from an API that
+ * predates forums). Anything else, a 5xx or the network, is NOT proof the
+ * thing is gone: when no lookup found it, that failure is thrown, so the
+ * caller says "could not load" rather than "does not exist".
  */
 export type RoutedThread =
   | { kind: "forum-post"; forumId: string; post: ForumPostSummary }
@@ -37,24 +42,35 @@ export async function resolveRoutedThread(
     fetchThreads: () => Promise<{ threads: Record<string, ThreadSummary[]> }>;
   },
 ): Promise<RoutedThread | null> {
-  try {
-    const { post } = await fetchPost(id);
+  const [postAnswer, threadsAnswer] = await Promise.allSettled([
+    fetchPost(id),
+    fetchThreads(),
+  ]);
+  if (postAnswer.status === "fulfilled") {
+    const { post } = postAnswer.value;
     if (post.id === id && listedChannelIds.has(post.forumId)) {
       return { kind: "forum-post", forumId: post.forumId, post };
     }
-  } catch {
-    // Not a post, or not one this viewer can reach: try the next kind.
   }
-  try {
-    const { threads } = await fetchThreads();
-    for (const list of Object.values(threads)) {
+  if (threadsAnswer.status === "fulfilled") {
+    for (const list of Object.values(threadsAnswer.value.threads)) {
       const thread = list.find((one) => one.channelId === id);
       if (thread && listedChannelIds.has(thread.parentChannelId)) {
         return { kind: "thread", thread };
       }
     }
-  } catch {
-    // Nothing more to try.
+  }
+  if (postAnswer.status === "rejected" && !isNotThere(postAnswer.reason)) {
+    throw postAnswer.reason;
+  }
+  if (threadsAnswer.status === "rejected") {
+    throw threadsAnswer.reason;
   }
   return null;
+}
+
+/** A refusal that means "not a post, or not one you can see". */
+function isNotThere(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  return status === 404 || status === 403;
 }

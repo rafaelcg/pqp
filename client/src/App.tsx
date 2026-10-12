@@ -3873,6 +3873,12 @@ function MainAppContent({
   } | null>(null);
   /** Files dropped on a forum, waiting for the pane to open Novo post with them. */
   const [forumDroppedFiles, setForumDroppedFiles] = useState<File[] | null>(null);
+  /**
+   * Goes up on every channel open and every route applied, so a link lookup
+   * that resolves late can tell the reader has moved on since it started.
+   */
+  const navigationSeqRef = useRef(0);
+  const routeApplySeqRef = useRef(0);
 
   /**
    * Open a channel by id, whatever kind it is.
@@ -3890,6 +3896,7 @@ function MainAppContent({
       }
       setSelectedChannelId(channelId);
       selectedChannelIdRef.current = channelId;
+      navigationSeqRef.current += 1;
       // Not at the live end until this channel's list says so, after its
       // history has loaded.
       messageListLiveEndRef.current = null;
@@ -7835,6 +7842,7 @@ function MainAppContent({
       const targetChannelId = usedFallback ? null : channelId;
       const targetMessageId = usedFallback ? null : messageId;
       const targetPostId = usedFallback ? null : postId;
+      const routeApply = ++routeApplySeqRef.current;
 
       setChannelsLoading(true);
       beginChannelLoad(targetServerId);
@@ -7857,6 +7865,7 @@ function MainAppContent({
         // a forum post or a chat thread (the list never carries threads), so
         // a permalink, a search hit or a push into one opens it over its
         // parent instead of stopping at "no longer exists".
+        const navigationBefore = navigationSeqRef.current;
         const routedThread =
           targetChannelId && !requested
             ? await resolveRoutedThread(targetChannelId, {
@@ -7865,6 +7874,14 @@ function MainAppContent({
                 fetchThreads: () => fetchServerThreads(targetServerId),
               })
             : null;
+        // The lookup is a round trip or two. If the reader went somewhere
+        // else meanwhile (a click, another link), that is where they stay.
+        if (
+          navigationSeqRef.current !== navigationBefore ||
+          routeApplySeqRef.current !== routeApply
+        ) {
+          return;
+        }
         if (targetChannelId && !requested && !routedThread) {
           setAppError("That channel no longer exists or is private.");
         }

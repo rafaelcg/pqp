@@ -136,6 +136,49 @@ describe("ChannelSettingsDialog on a forum", () => {
     expect(document.body.textContent).not.toContain("unsaved change");
   });
 
+  it("keeps a saved tag list saved when the switch after it fails", async () => {
+    api.putForumTags.mockImplementation(async (_id: string, body: { tags: unknown[] }) => ({
+      tags: (body.tags as Array<{ id?: string; name: string; emoji?: string | null; moderated: boolean }>).map(
+        (tag, position) => ({
+          id: tag.id ?? "a0000000-0000-4000-8000-000000000009",
+          name: tag.name,
+          emoji: tag.emoji ?? null,
+          moderated: tag.moderated,
+          position,
+          postCount: 0,
+        }),
+      ),
+    }));
+    api.updateForumSettings.mockRejectedValueOnce(new Error("down"));
+    await mount(forum);
+    // A new tag and the switch, together.
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="New tag name"]')!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(input, "Games");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => input.form!.requestSubmit());
+    const toggle = [...document.querySelectorAll('[role="switch"]')].find((one) =>
+      /Require at least one tag/.test(one.getAttribute("aria-label") ?? one.textContent ?? ""),
+    ) as HTMLElement;
+    await act(async () => toggle.click());
+    expect(document.body.textContent).toContain("2 unsaved changes");
+    const save = () =>
+      [...document.querySelectorAll("button")].find((one) => one.textContent === "Save")!;
+    await act(async () => save().click());
+    expect(api.putForumTags).toHaveBeenCalledOnce();
+    // The list is saved; only the switch is left, and a retry sends only it.
+    expect(document.body.textContent).toContain("1 unsaved change");
+    api.updateForumSettings.mockResolvedValue({
+      settings: { requireTag: true, defaultSort: "activity" },
+    });
+    await act(async () => save().click());
+    expect(api.putForumTags).toHaveBeenCalledOnce();
+    expect(api.updateForumSettings).toHaveBeenLastCalledWith(forum.id, { requireTag: true });
+    expect(document.body.textContent).not.toContain("unsaved change");
+  });
+
   it("says the tags could not load and offers a retry, without breaking the sheet", async () => {
     api.fetchForumTags.mockRejectedValueOnce(Object.assign(new Error("Not found"), { status: 404 }));
     await mount(forum);

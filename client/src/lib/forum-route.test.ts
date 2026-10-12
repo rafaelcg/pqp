@@ -47,18 +47,17 @@ const thread: ThreadSummary = {
 };
 
 const notFound = () => Promise.reject(Object.assign(new Error("Not found"), { status: 404 }));
+const down = () => Promise.reject(Object.assign(new Error("Bad gateway"), { status: 502 }));
 
 describe("resolveRoutedThread", () => {
-  it("opens a post over its forum, without asking about threads", async () => {
-    const fetchThreads = vi.fn();
+  it("opens a post over its forum", async () => {
     await expect(
       resolveRoutedThread(POST, {
         listedChannelIds: new Set([FORUM, TEXT]),
         fetchPost: async () => ({ post }),
-        fetchThreads,
+        fetchThreads: async () => ({ threads: {} }),
       }),
     ).resolves.toEqual({ kind: "forum-post", forumId: FORUM, post });
-    expect(fetchThreads).not.toHaveBeenCalled();
   });
 
   it("falls through to a chat thread when the id is not a post (the old dead link)", async () => {
@@ -71,6 +70,23 @@ describe("resolveRoutedThread", () => {
     ).resolves.toEqual({ kind: "thread", thread });
   });
 
+  it("asks both at once, so a thread link does not wait for the post lookup", async () => {
+    let releasePost: () => void = () => {};
+    const fetchThreads = vi.fn(async () => ({ threads: { [TEXT]: [thread] } }));
+    const pending = resolveRoutedThread(THREAD, {
+      listedChannelIds: new Set([TEXT]),
+      fetchPost: () =>
+        new Promise((_, reject) => {
+          releasePost = () => reject(Object.assign(new Error("Not found"), { status: 404 }));
+        }),
+      fetchThreads,
+    });
+    // The thread lookup started before the post lookup answered.
+    expect(fetchThreads).toHaveBeenCalledOnce();
+    releasePost();
+    await expect(pending).resolves.toEqual({ kind: "thread", thread });
+  });
+
   it("does not open a post whose forum this viewer cannot list", async () => {
     await expect(
       resolveRoutedThread(POST, {
@@ -81,13 +97,43 @@ describe("resolveRoutedThread", () => {
     ).resolves.toBeNull();
   });
 
-  it("is null, never a throw, when every lookup fails", async () => {
+  it("is null when the post lookup says not found or forbidden and no thread matches", async () => {
+    for (const status of [404, 403]) {
+      await expect(
+        resolveRoutedThread(THREAD, {
+          listedChannelIds: new Set([TEXT]),
+          fetchPost: () => Promise.reject(Object.assign(new Error("no"), { status })),
+          fetchThreads: async () => ({ threads: {} }),
+        }),
+      ).resolves.toBeNull();
+    }
+  });
+
+  it("throws, rather than calling it missing, when a lookup failed for another reason", async () => {
+    await expect(
+      resolveRoutedThread(POST, {
+        listedChannelIds: new Set([FORUM]),
+        fetchPost: down,
+        fetchThreads: async () => ({ threads: {} }),
+      }),
+    ).rejects.toThrow("Bad gateway");
     await expect(
       resolveRoutedThread(THREAD, {
         listedChannelIds: new Set([TEXT]),
         fetchPost: notFound,
         fetchThreads: () => Promise.reject(new Error("down")),
       }),
-    ).resolves.toBeNull();
+    ).rejects.toThrow("down");
+  });
+
+  it("still finds a thread when only the post lookup failed", async () => {
+    await expect(
+      resolveRoutedThread(THREAD, {
+        listedChannelIds: new Set([TEXT]),
+        fetchPost: down,
+        fetchThreads: async () => ({ threads: { [TEXT]: [thread] } }),
+      }),
+    ).resolves.toEqual({ kind: "thread", thread });
   });
 });
+
