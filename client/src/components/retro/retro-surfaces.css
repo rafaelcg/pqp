@@ -274,6 +274,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  /* Never squeezed: on a phone the toolbar scrolls sideways instead, or the
+     pt-BR labels ("Chamar a atenção") ran into each other at 390 px. */
+  flex-shrink: 0;
   gap: 0.125rem;
   min-width: 3.625rem;
   padding: 0.25rem 0.5rem;
