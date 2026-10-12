@@ -120,7 +120,8 @@ function mapOutsideCode(body: string, rewrite: (text: string) => string): string
 
 /**
  * `:pog:` to `<:pog:id>` for every name this server has, outside code. A name
- * the server does not have stays exactly as typed.
+ * the server does not have stays exactly as typed. When two entries share a
+ * name, the later one wins.
  */
 export function expandCustomEmoji(
   body: string,
@@ -140,7 +141,25 @@ export function expandCustomEmoji(
 
 /** The other direction, for an edit box: a person edits `:pog:`, never a uuid. */
 export function collapseCustomEmojiTokens(body: string): string {
-  return body.replace(new RegExp(CUSTOM_EMOJI_TOKEN_PATTERN), ":$1:");
+  return mapOutsideCode(body, (text) =>
+    text.replace(new RegExp(CUSTOM_EMOJI_TOKEN_PATTERN), ":$1:"),
+  );
+}
+
+/**
+ * The `name` and `id` of every token in a body, outside code. An edit expands
+ * with these on top of the server's list, so a token keeps its emoji after a
+ * rename, and before the list has loaded.
+ */
+export function customEmojiTokensIn(body: string): Array<Pick<ServerEmoji, "id" | "name">> {
+  const found: Array<Pick<ServerEmoji, "id" | "name">> = [];
+  mapOutsideCode(body, (text) => {
+    for (const match of text.matchAll(new RegExp(CUSTOM_EMOJI_TOKEN_PATTERN))) {
+      found.push({ name: match[1]!, id: match[2]! });
+    }
+    return text;
+  });
+  return found;
 }
 
 /**

@@ -75,7 +75,11 @@ import {
   CustomEmojiProvider,
   useCustomEmojiScope,
 } from "@/components/chat/custom-emoji";
-import { collapseCustomEmojiTokens, expandCustomEmoji } from "@/lib/server-emoji";
+import {
+  collapseCustomEmojiTokens,
+  customEmojiTokensIn,
+  expandCustomEmoji,
+} from "@/lib/server-emoji";
 import { ThreadChip } from "@/components/chat/thread-chip";
 import {
   ContextMenu,
@@ -4467,6 +4471,9 @@ function EditComposer({
   const { t } = useTranslation();
   const { list: customEmoji } = useCustomEmojiScope();
   const [editableInitial] = useState(() => collapseCustomEmojiTokens(initialValue));
+  // The tokens the message already holds win over the server's current
+  // names, so `:old:` saves back to the emoji it named after a rename.
+  const [heldTokens] = useState(() => customEmojiTokensIn(initialValue));
   const [value, setValue] = useState(editableInitial);
   const [busy, setBusy] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -4505,7 +4512,7 @@ function EditComposer({
     }
     setBusy(true);
     try {
-      await onSubmit(expandCustomEmoji(trimmed, customEmoji));
+      await onSubmit(expandCustomEmoji(trimmed, [...customEmoji, ...heldTokens]));
     } finally {
       setBusy(false);
     }
