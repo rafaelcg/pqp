@@ -972,7 +972,7 @@ final class ChatModel {
              .callIncoming, .callRingCancelled, .callDeclined,
              // A forum's list frames are the forum screen's. An open post
              // reads its own state from them in `ForumPostModel`.
-             .forumPostUpsert, .forumPostRemoved:
+             .forumPostUpsert, .forumPostRemoved, .forumConfigUpdate:
             break
         }
     }

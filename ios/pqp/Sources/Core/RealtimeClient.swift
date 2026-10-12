@@ -214,6 +214,9 @@ enum RealtimeEvent: Sendable {
     /// A forum post was deleted. Sent to the forum's viewers and to the
     /// post's own, so an open post can say so.
     case forumPostRemoved(forumId: String, postId: String)
+    /// Staff saved the forum's tags or its settings: the new copy, whichever
+    /// half changed, so an open composer follows without reopening.
+    case forumConfigUpdate(forumId: String, tags: [ForumTag]?, settings: ForumSettings?)
     /// `nudge-refused`: a chamar a atenção this socket sent did not land.
     case nudgeRefused(NudgeRefusal)
     /// `stories-update`: content-free, refetch the strip it names. Never sent
@@ -1106,6 +1109,15 @@ actor RealtimeClient {
         let postId: String
     }
 
+    /// `forum-config-update`: `{forumId, tags?, settings?}`. Either half may be
+    /// absent; a half this build cannot read drops the whole frame, which
+    /// leaves the copy read on open, and the server still enforces the rule.
+    private struct ForumConfigUpdateFrame: Decodable {
+        let forumId: String
+        let tags: [ForumTag]?
+        let settings: ForumSettings?
+    }
+
     private struct WatchPartyUpdateFrame: Decodable {
         let channelId: String
         let party: WatchPartyPayload?
@@ -1455,6 +1467,10 @@ actor RealtimeClient {
             guard let frame = try? Coding.decoder.decode(ForumPostRemovedFrame.self, from: data)
             else { return }
             event = .forumPostRemoved(forumId: frame.forumId, postId: frame.postId)
+        case "forum-config-update":
+            guard let frame = try? Coding.decoder.decode(ForumConfigUpdateFrame.self, from: data)
+            else { return }
+            event = .forumConfigUpdate(forumId: frame.forumId, tags: frame.tags, settings: frame.settings)
         case "offer":
             guard let from = envelope.from, let sdp = envelope.sdp else { return }
             event = .voiceOffer(from: from, sdp: sdp)

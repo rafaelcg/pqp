@@ -713,7 +713,7 @@ struct ChatView: View {
                         // opened at its first unread): the answer still sits
                         // right under the title rather than nowhere.
                         if model.hasMore, let answer = forumPost.acceptedAnswer {
-                            ForumSolutionCard(answer: answer) {
+                            ForumSolutionCard(answer: answer, viewerId: session.currentUser?.id) {
                                 jumpToForumAnswer(proxy)
                             }
                         }
@@ -811,7 +811,7 @@ struct ChatView: View {
                         // really the first loaded message.
                         if let forumPost, index == 0, !model.hasMore {
                             if let answer = forumPost.acceptedAnswer {
-                                ForumSolutionCard(answer: answer) {
+                                ForumSolutionCard(answer: answer, viewerId: session.currentUser?.id) {
                                     jumpToForumAnswer(proxy)
                                 }
                             }

@@ -1251,6 +1251,26 @@
         }
       }
     },
+    "AutoMod blocked this text." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O AutoMod bloqueou esse texto."
+          }
+        }
+      }
+    },
+    "AutoMod blocked this title." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O AutoMod bloqueou esse título."
+          }
+        }
+      }
+    },
     "AutoMod blocked this post." : {
       "localizations" : {
         "pt-BR" : {
@@ -3805,6 +3825,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cria um pra sua turma. Convites abrem neste app também."
+          }
+        }
+      }
+    },
+    "marked by %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "marcada por %@"
+          }
+        }
+      }
+    },
+    "marked by you" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "marcada por ti"
           }
         }
       }
