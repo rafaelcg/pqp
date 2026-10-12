@@ -814,6 +814,156 @@ describe("screen share audio", () => {
     });
   });
 
+  /**
+   * PQP-31. Windows 11 desktop, Chromium loopback (native sound off): the
+   * picker's sound box was ticked, the loopback device would not open, and
+   * Chromium rejected the whole capture. A shell with `silentRetry` gives the
+   * same surface back without sound; the share goes out and says so.
+   */
+  describe("a desktop share whose sound will not open", () => {
+    function loopbackShell(overrides: Record<string, unknown> = {}) {
+      return {
+        isElectron: true,
+        platform: "win32",
+        sharePickerOffersAudio: true,
+        capabilities: {
+          displayMedia: true,
+          systemAudio: "loopback",
+          restrictOwnAudio: true,
+          pickerOffersAudio: true,
+          silentRetry: true,
+          version: "0.2.7",
+        },
+        shareSilentRetryArm: vi.fn(async () => true),
+        ...overrides,
+      };
+    }
+
+    function installShell(shell: unknown) {
+      (globalThis as { window?: unknown }).window = {
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        pqpDesktop: shell,
+      };
+    }
+
+    function audioFailsOnce(surface = "monitor") {
+      let attempt = 0;
+      displayMedia = async () => {
+        attempt += 1;
+        if (attempt === 1) {
+          const err = new Error("Could not start audio source");
+          err.name = "NotReadableError";
+          throw err;
+        }
+        return fakeCapture("cap-silent", false, surface);
+      };
+    }
+
+    beforeEach(() => {
+      setOsCanExcludeCallAudioForTests(true);
+    });
+
+    afterEach(() => {
+      delete (globalThis as { window?: unknown }).window;
+    });
+
+    it("shares the same surface without sound and says so, instead of failing", async () => {
+      const shell = loopbackShell();
+      installShell(shell);
+      audioFailsOnce();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(displayMediaCalls).toHaveLength(2);
+      expect((displayMediaCalls[0] as { audio?: unknown }).audio).not.toBe(false);
+      expect(shell.shareSilentRetryArm).toHaveBeenCalledTimes(1);
+      const retry = displayMediaCalls[1] as { audio?: unknown; systemAudio?: unknown; video?: unknown };
+      expect(retry.audio).toBe(false);
+      expect(retry.systemAudio).toBe("exclude");
+      // The picture request is untouched: same frame rate, size and cursor.
+      expect(retry.video).toEqual((displayMediaCalls[0] as { video?: unknown }).video);
+
+      const state = voice.getState();
+      expect(state.isSharingScreen).toBe(true);
+      expect(state.isSharingScreenAudio).toBe(false);
+      expect(state.error).toBeNull();
+      expect(state.screenShareAudioFailed).toBe(false);
+      expect(state.notice ?? "").toMatch(/sem som|without sound|sin sonido/);
+      expect(state.notice ?? "").toMatch(/Chrome/);
+    });
+
+    it("falls back to the old banner when the shell has nothing to retry", async () => {
+      // The failed request did not carry loopback (or the memory expired):
+      // the arm says no and nothing is asked a second time.
+      const shell = loopbackShell({ shareSilentRetryArm: vi.fn(async () => false) });
+      installShell(shell);
+      audioFailsOnce();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(displayMediaCalls).toHaveLength(1);
+      expect(voice.getState().isSharingScreen).toBe(false);
+      expect(voice.getState().screenShareAudioFailed).toBe(true);
+    });
+
+    it("keeps today's behaviour in a shell built before silentRetry", async () => {
+      // 0.2.6 and older: a second getDisplayMedia would open the picker again,
+      // so the page must not ask; the banner's one-click button stays.
+      const shell = loopbackShell({
+        capabilities: {
+          displayMedia: true,
+          systemAudio: "loopback",
+          restrictOwnAudio: true,
+          pickerOffersAudio: true,
+          version: "0.2.6",
+        },
+      });
+      installShell(shell);
+      audioFailsOnce();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(shell.shareSilentRetryArm).not.toHaveBeenCalled();
+      expect(displayMediaCalls).toHaveLength(1);
+      expect(voice.getState().error).not.toBeNull();
+      expect(voice.getState().screenShareAudioFailed).toBe(true);
+    });
+
+    it("never retries a picker the person cancelled", async () => {
+      const shell = loopbackShell();
+      installShell(shell);
+      displayMedia = async () => {
+        const err = new Error("Permission denied");
+        err.name = "NotAllowedError";
+        throw err;
+      };
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(shell.shareSilentRetryArm).not.toHaveBeenCalled();
+      expect(displayMediaCalls).toHaveLength(1);
+      expect(voice.getState().screenShareAudioFailed).toBe(false);
+    });
+
+    it("shows the original error when the silent retry fails too", async () => {
+      const shell = loopbackShell();
+      installShell(shell);
+      displayMedia = async () => {
+        const err = new Error("Could not start audio source");
+        err.name = "NotReadableError";
+        throw err;
+      };
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(displayMediaCalls).toHaveLength(2);
+      expect(voice.getState().isSharingScreen).toBe(false);
+      expect(voice.getState().error).not.toBeNull();
+      expect(voice.getState().screenShareAudioFailed).toBe(true);
+    });
+  });
+
   it("strips mixer audio when restrictOwnAudio came back false", async () => {
     displayMedia = async () =>
       fakeCapture("cap-leak", true, "monitor", { restrictOwnAudio: false });
