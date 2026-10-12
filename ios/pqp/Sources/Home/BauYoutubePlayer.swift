@@ -157,12 +157,14 @@ final class BauYoutubeSession: NSObject {
     let id = UUID()
     let videoId: String
     private(set) var failed = false
+    /// The web view was let go; the card shows its poster until the next tap.
+    private(set) var isTornDown = false
     @ObservationIgnored var callActive = false
     @ObservationIgnored private(set) var isFullScreen = false
     @ObservationIgnored private(set) var webView: WKWebView?
     @ObservationIgnored private var fullscreenObservation: NSKeyValueObservation?
     @ObservationIgnored private var orientationOwner: UUID?
-    @ObservationIgnored private var pauseWhenFullScreenEnds = false
+    @ObservationIgnored private var letGoWhenFullScreenEnds = false
     /// Another video displaced this one and its pause is on the way.
     @ObservationIgnored private var yielding = false
 
@@ -206,10 +208,10 @@ final class BauYoutubeSession: NSObject {
 
     /// Pause, and give up the floor. Kept for full screen: the card leaving
     /// the feed under a full-screen player is not the person leaving it, so
-    /// the pause waits until the full screen ends.
+    /// the player is let go when the full screen ends instead.
     func pause() {
         guard !isFullScreen else {
-            pauseWhenFullScreenEnds = true
+            letGoWhenFullScreenEnds = true
             return
         }
         forcePause()
@@ -224,11 +226,12 @@ final class BauYoutubeSession: NSObject {
 
     /// The card is back on screen: a pause it asked for on the way out no
     /// longer applies.
-    func cardDidAppear() { pauseWhenFullScreenEnds = false }
+    func cardDidAppear() { letGoWhenFullScreenEnds = false }
 
     /// Stop and let go of the web view and its page, so a feed scrolled past
     /// several played videos does not keep a WebKit view for each.
     func tearDown() {
+        isTornDown = true
         forcePause()
         fullscreenObservation = nil
         if let webView {
@@ -279,9 +282,11 @@ final class BauYoutubeSession: NSObject {
                 orientationOwner = nil
                 WatchOrientation.leaveBauVideo(owner)
             }
-            if pauseWhenFullScreenEnds {
-                pauseWhenFullScreenEnds = false
-                forcePause()
+            // The card left the feed under the full screen: finish what its
+            // disappearance started, and the card shows its poster again.
+            if letGoWhenFullScreenEnds {
+                letGoWhenFullScreenEnds = false
+                tearDown()
             }
         }
     }
@@ -371,7 +376,7 @@ struct BauYoutubeVideo: View {
             Group {
                 if let session, session.failed {
                     failure
-                } else if let session {
+                } else if let session, !session.isTornDown {
                     BauYoutubeSurface(session: session)
                 } else {
                     poster
@@ -395,8 +400,8 @@ struct BauYoutubeVideo: View {
         .onAppear { session?.cardDidAppear() }
         .onDisappear {
             // Scrolled away: the card goes back to its poster and the web view
-            // is let go. Under a full screen it is kept, and paused when the
-            // full screen ends.
+            // is let go. Under a full screen it is kept until the full screen
+            // ends, and let go then.
             guard let session else { return }
             if session.isFullScreen {
                 session.pause()
