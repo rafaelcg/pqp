@@ -228,6 +228,7 @@ import {
 } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
 import { toggleMusicOpen, useMusicDock } from "@/lib/music-store";
+import { isAutomatedBrowser } from "@/lib/hints";
 import { Menu } from "@/components/ui/menu";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { SoundboardControl } from "@/components/voice/soundboard-control";
@@ -242,7 +243,6 @@ import {
 } from "@/components/voice/soundboard-float";
 import { useSoundboardMark } from "@/lib/soundboard";
 import { useVoiceConfig } from "@/hooks/use-voice-config";
-import { shouldSuppressHints } from "@/lib/hints";
 import { shouldShowMusicPip, useMusicPipSpent } from "@/lib/music-pip";
 import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
@@ -2966,7 +2966,7 @@ export function CallControls({
   // two do not share a key, and why "spent" is a store rather than a read.
   const musicPip = shouldShowMusicPip({
     seen: useMusicPipSpent(),
-    automated: shouldSuppressHints(),
+    automated: isAutomatedBrowser(),
     canSpeak: voiceState.canSpeak,
     playing: musicDock.on,
   });

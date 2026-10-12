@@ -4,7 +4,6 @@ import {
   isHintSeen,
   rememberHint,
   shouldPersistHints,
-  shouldSuppressHints,
 } from "./hints";
 
 function memory(seed: Record<string, string> = {}) {
@@ -19,14 +18,12 @@ function memory(seed: Record<string, string> = {}) {
 }
 
 describe("hints store", () => {
-  it("never persists on localhost, and the cards stay off there", () => {
+  it("never persists on localhost, so a developer sees every card again", () => {
     expect(shouldPersistHints("localhost", memory())).toBe(false);
     expect(shouldPersistHints("127.0.0.1", memory())).toBe(false);
     expect(shouldPersistHints("pqp.gg", memory())).toBe(true);
-    expect(shouldSuppressHints("localhost", memory())).toBe(true);
-    expect(shouldSuppressHints("pqp.gg", memory())).toBe(false);
+    // The developer who has seen enough: one key, and localhost remembers.
     expect(shouldPersistHints("localhost", memory({ "pqp:hints-persist": "1" }))).toBe(true);
-    expect(shouldSuppressHints("localhost", memory({ "pqp:hints-persist": "1" }))).toBe(false);
     const storage = memory({ "x": "1" });
     expect(isHintSeen("x", storage, false)).toBe(false);
     rememberHint("y", storage, false);

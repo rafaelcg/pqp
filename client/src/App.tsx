@@ -172,7 +172,6 @@ import {
   useUpdateWaiting,
 } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
-import { shouldSuppressHints } from "@/lib/hints";
 import { isNotifyOfferSeen } from "@/lib/notify-offer-hint";
 import { startNotifyDefaultsConfig } from "@/lib/notify-defaults-config";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
@@ -1596,10 +1595,10 @@ function MainAppContent({
    * it for a card nobody can see buries every tip behind it.
    */
   const [wantsMobileBeta, setWantsMobileBeta] = useState(() =>
-    !shouldSuppressHints() && shouldShowMobileBetaHint(),
+    shouldShowMobileBetaHint(),
   );
   const [wantsWhatsNew, setWantsWhatsNew] = useState(
-    () => !shouldSuppressHints() && !isWhatsNewSeen(),
+    () => !isAutomatedBrowser() && !isWhatsNewSeen(),
   );
   const [wantsComposerFormatHint] = useState(() =>
     featureHintEligible("composerFormat"),
@@ -1624,17 +1623,17 @@ function MainAppContent({
   // has to know too, or the corner stays "taken" by a card that never draws
   // and every attached tip behind it (share, music) waits for good. Same for
   // a card that HAS drawn and was then dismissed, which is what the
-  // `onDismiss` below is: localhost keeps the cards off unless
-  // `pqp:hints-persist` is set, so a dismissed card cannot steal the corner
-  // on every reload.
+  // `onDismiss` below is: on localhost `lib/hints.ts` remembers no dismissal
+  // on purpose, so this card wanted the corner on every load and the in-call
+  // tips could not be drawn once.
   const [wantsCargosHint, setWantsCargosHint] = useState(
-    () => !shouldSuppressHints() && !isCargosHintSeen(),
+    () => !isAutomatedBrowser() && !isCargosHintSeen(),
   );
   // The one-time "Ativar notificações" card. Like the cargos card it decides
   // for itself whether it was seen, and the queue has to know too: a card that
   // wants the corner and never draws would hold every tip behind it.
   const [wantsNotifyOfferCard, setWantsNotifyOfferCard] = useState(
-    () => !shouldSuppressHints() && !isNotifyOfferSeen(),
+    () => !isAutomatedBrowser() && !isNotifyOfferSeen(),
   );
   const notifyOfferReady = useNotifyOfferReady();
   const [wantsChannelPinHint] = useState(() =>
@@ -10327,7 +10326,7 @@ function MainAppContent({
     !sidebarIconsOnly &&
     shouldOfferVoiceCleanNudge({
       dismissed: Boolean(user?.preferences?.voiceCleanNudgeDismissedAt),
-      automated: shouldSuppressHints(),
+      automated: isAutomatedBrowser(),
       inCall: voiceState.status === "connected",
       micOn: !voiceState.isMuted,
       presentingWatchParty:

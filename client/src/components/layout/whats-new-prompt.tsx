@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { CornerCard } from "@/components/layout/corner-card";
 import { Button } from "@/components/ui/button";
-import { shouldSuppressHints } from "@/lib/hints";
+import { isAutomatedBrowser } from "@/lib/hints";
 import { useTranslation } from "@/lib/i18n";
 import {
   WHATS_NEW_PACK_ID,
@@ -32,7 +32,7 @@ export function WhatsNewPrompt({
     isWhatsNewSeen() ? null : { pack: WHATS_NEW_PACK_ID },
   );
   const [open, setOpen] = useState(true);
-  const automated = shouldSuppressHints();
+  const automated = isAutomatedBrowser();
   const close = () => {
     setOpen(false);
     onDismiss?.();
