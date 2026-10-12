@@ -271,6 +271,9 @@ describe("soundboard add dialog", () => {
           <button type="button" data-testid="reopen" onClick={() => setOpen(true)}>
             reopen
           </button>
+          <button type="button" data-testid="shut" onClick={() => setOpen(false)}>
+            shut
+          </button>
           <SoundboardAddDialog
             open={open}
             serverId="s1"
@@ -326,6 +329,31 @@ describe("soundboard add dialog", () => {
       expect(document.body.querySelector("form")).not.toBeNull();
       // The clip does exist, so the list is told to refresh.
       expect(onAddedAfterClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops the stored key when the parent closes the dialog mid-save", async () => {
+      upload.mockImplementationOnce(async (input: { onUploaded: (key: string) => void }) => {
+        input.onUploaded("k1");
+        throw new ApiError(0, "Network error reaching API.");
+      });
+      await mount(<Reopenable />);
+      await chooseFile();
+      type(nameInput(), "Buzina");
+      await submit();
+      let reject!: (error: unknown) => void;
+      upload.mockReturnValueOnce(new Promise((_, r) => (reject = r)));
+      await submit();
+      expect(upload.mock.calls[1]![0].uploadedKey).toBe("k1");
+      // Closed by the parent, not the dialog: no reset of the form runs.
+      await act(async () => {
+        document.body.querySelector<HTMLButtonElement>('[data-testid="shut"]')!.click();
+      });
+      await reopen();
+      // The server refused the key, but into a session that is over.
+      await act(async () => reject(new ApiError(400, "Invalid request")));
+      upload.mockResolvedValueOnce({ id: "x" });
+      await submit();
+      expect(upload.mock.calls[2]![0].uploadedKey).toBeUndefined();
     });
 
     it("shows nothing from a failed upload that outlived its dialog", async () => {

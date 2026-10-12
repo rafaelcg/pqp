@@ -99,6 +99,9 @@ export function SoundboardAddDialog({
   function endSession(): void {
     sessionRef.current += 1;
     inspectSeq.current += 1;
+    // A save still in flight answers into a session that is over, so it can
+    // no longer tell a refusal from a lost answer here: start the next fresh.
+    uploadedRef.current = null;
     previewSeq.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
@@ -118,7 +121,6 @@ export function SoundboardAddDialog({
   }, [open]);
 
   function reset(): void {
-    uploadedRef.current = null;
     setName("");
     setFile(null);
     setContentType(null);
