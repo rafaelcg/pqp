@@ -17,8 +17,9 @@ import { useTranslation } from "@/lib/i18n";
  * window whatever this component does.
  *
  * `onUnavailable` fires when the playlist refuses (401, 403 or 404: the
- * window ended, the flag went off, the party ended) or the native player
- * gives up. The panel decides what that means by asking the server
+ * window ended, the flag went off, the party ended), the master playlist
+ * cannot be loaded at all, media errors keep coming back, or the native
+ * player gives up. The panel decides what that means by asking the server
  * again. `onPlaying` fires whenever the picture is moving, so the panel can
  * tell a run of failures apart from failures with good playback between them.
  *
@@ -28,6 +29,17 @@ import { useTranslation } from "@/lib/i18n";
  * No quality menu: hls.js picks the rung for the player's size.
  * `children` are the panel's overlays (the live badge, the countdown).
  */
+/**
+ * At most this many media recoveries inside `MEDIA_RECOVERY_WINDOW_MS`. A
+ * stream that keeps failing to decode (a bad init segment after the presenter
+ * restarted is the usual cause) would otherwise loop on `recoverMediaError`
+ * with a black player until the window ends. Counted in time rather than
+ * reset on a loaded fragment, because a fragment still LOADS when it is the
+ * decoding that fails.
+ */
+const MEDIA_RECOVERY_MAX = 3;
+const MEDIA_RECOVERY_WINDOW_MS = 60_000;
+
 export function LivePreviewPlayer({
   url,
   mode,
@@ -109,6 +121,7 @@ export function LivePreviewPlayer({
         capLevelToPlayerSize: true,
       });
       let networkRetries = 0;
+      const mediaRecoveries: number[] = [];
       hls.on(Hls.Events.ERROR, (_event, data) => {
         // A refused PLAYLIST means the capability or the session is over. A
         // missing segment is ordinary live churn and is left to hls.js.
@@ -124,14 +137,36 @@ export function LivePreviewPlayer({
         if (!data.fatal) {
           return;
         }
+        // The master playlist never loaded (a 429, a 5xx, a timeout).
+        // `startLoad` does not fetch a manifest again, so retrying it here
+        // would leave a black player with no further error until the window
+        // ended. Hand it to the panel, which mints a fresh URL and starts over.
+        if (
+          data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
+          data.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT ||
+          data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR
+        ) {
+          fail(`manifest:${data.details}`);
+          return;
+        }
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRetries < 3) {
           networkRetries += 1;
           hls.startLoad();
           return;
         }
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-          hls.recoverMediaError();
-          return;
+          const at = Date.now();
+          while (
+            mediaRecoveries.length > 0 &&
+            at - mediaRecoveries[0]! > MEDIA_RECOVERY_WINDOW_MS
+          ) {
+            mediaRecoveries.shift();
+          }
+          if (mediaRecoveries.length < MEDIA_RECOVERY_MAX) {
+            mediaRecoveries.push(at);
+            hls.recoverMediaError();
+            return;
+          }
         }
         fail(`${data.type}:${data.details}`);
       });
