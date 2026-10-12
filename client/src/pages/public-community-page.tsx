@@ -321,8 +321,6 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
   );
   const renderPreview = (auth: LivePreviewAuth) => (
     <LivePreviewPanel
-      // A new community is a new preview: nothing carried over from the last.
-      key={community.slug}
       source={{ kind: "community", slug: community.slug }}
       landing={publicCommunityPath(community.slug)}
       surface="community"

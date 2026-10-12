@@ -103,15 +103,16 @@ type Tab = "chat" | "about" | "upcoming";
  * countdown, and at the end the sign-up. Under the threshold it shows no
  * media and offers no account anywhere on screen.
  */
-export function LivePreviewPanel({
-  source,
-  landing,
-  surface,
-  community,
-  auth,
-  onSignUpIntent,
-  onLiveChange,
-}: {
+export function LivePreviewPanel(props: LivePreviewPanelProps) {
+  // One preview per source: a new community or invite under the same mount
+  // (the browser's back button between two invites) starts from nothing, so
+  // no phase, channel or player carries over to the new name.
+  const { source } = props;
+  const sourceKey = source.kind === "community" ? `c:${source.slug}` : `i:${source.code}`;
+  return <LivePreviewPanelForSource key={sourceKey} {...props} />;
+}
+
+interface LivePreviewPanelProps {
   source: LivePreviewSource;
   /** The acquisition landing to record for a sign-up from here. */
   landing: string;
@@ -124,7 +125,17 @@ export function LivePreviewPanel({
   onSignUpIntent?: () => void;
   /** Whether a party is live, so the page around the entry can make room for it. */
   onLiveChange?: (live: boolean) => void;
-}) {
+}
+
+function LivePreviewPanelForSource({
+  source,
+  landing,
+  surface,
+  community,
+  auth,
+  onSignUpIntent,
+  onLiveChange,
+}: LivePreviewPanelProps) {
   const { t } = useTranslation();
   const [channels, setChannels] = useState<LivePreviewListedChannel[] | null>(null);
   const [upcoming, setUpcoming] = useState<LivePreviewUpcoming[]>([]);

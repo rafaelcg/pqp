@@ -102,23 +102,25 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+function render(slug: string) {
+  root!.render(
+    <MemoryRouter>
+      <LivePreviewPanel
+        source={{ kind: "community", slug }}
+        landing={`/c/${slug}`}
+        surface="community"
+        community={{ ...COMMUNITY, slug }}
+        auth={devLivePreviewAuth(() => {})}
+      />
+    </MemoryRouter>,
+  );
+}
+
 async function mount() {
   host = document.createElement("div");
   siteRoot!.append(host);
   root = createRoot(host);
-  await act(async () => {
-    root!.render(
-      <MemoryRouter>
-        <LivePreviewPanel
-          source={{ kind: "community", slug: COMMUNITY.slug! }}
-          landing="/c/sala-do-rafa"
-          surface="community"
-          community={COMMUNITY}
-          auth={devLivePreviewAuth(() => {})}
-        />
-      </MemoryRouter>,
-    );
-  });
+  await act(async () => render(COMMUNITY.slug!));
 }
 
 /** The full-screen live page, portalled to <body>; null while only the entry card shows. */
@@ -190,5 +192,15 @@ describe("LivePreviewPanel", () => {
     expect(page()?.dataset.livePreview).toBe("starting");
     await act(async () => api.failures[0]!(new Error("boom")));
     expect(page()?.dataset.livePreview).toBe("error");
+  });
+
+  it("starts over when the page moves to another community under the same mount", async () => {
+    await mount();
+    await watchNow();
+    await answerStart(0, okResult());
+    expect(page()?.dataset.livePreview).toBe("watching");
+    await act(async () => render("outra-sala"));
+    expect(page()).toBeNull();
+    expect(siteRoot!.inert).toBe(false);
   });
 });

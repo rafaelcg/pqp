@@ -1223,9 +1223,6 @@ function ClerkAppGate() {
                       <ClerkLivePreviewAuth redirectUrl={redirectUrl}>
                         {(auth) => (
                           <LivePreviewPanel
-                            // A new invite is a new preview: no phase,
-                            // channel or player carried over from the last.
-                            key={inviteCode}
                             source={{ kind: "invite", code: inviteCode }}
                             landing="/app"
                             surface="invite"
