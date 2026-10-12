@@ -179,20 +179,30 @@ export function phaseOnWatch(memory: PreviewAgeMemory): LivePreviewPhase {
   return memory === "passed" ? { kind: "starting" } : { kind: "age" };
 }
 
-/** The phase a start answer puts the panel in. */
+/**
+ * The phase a start answer puts the panel in.
+ *
+ * The end of the window is the server's `remainingMs` counted from when the
+ * answer arrived on THIS device, never the server's absolute `expiresAt`
+ * against the device clock. A phone whose clock runs ahead (set by hand, a
+ * dead clock battery) would otherwise read a fresh window as already over and
+ * never play a frame, while the server has already started it. `expiresAt` in
+ * the phase is therefore on the device's own clock, which is the clock the
+ * countdown reads.
+ */
 export function phaseAfterStart(
   result: LivePreviewStartResult,
   now: number = Date.now(),
 ): LivePreviewPhase {
   switch (result.kind) {
     case "ok":
-      return result.body.expiresAt <= now
+      return result.body.remainingMs <= 0
         ? { kind: "ended" }
         : {
             kind: "watching",
             hlsUrl: result.body.stream.hlsUrl,
             mode: result.body.stream.mode ?? "conventional",
-            expiresAt: result.body.expiresAt,
+            expiresAt: now + result.body.remainingMs,
           };
     case "ended":
       return { kind: "ended" };

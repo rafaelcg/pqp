@@ -174,10 +174,33 @@ describe("a start answer becomes a phase", () => {
       mode: "conventional",
       expiresAt: body.expiresAt,
     });
-    expect(phaseAfterStart({ kind: "ok", body }, body.expiresAt)).toEqual({ kind: "ended" });
+    expect(phaseAfterStart({ kind: "ok", body: { ...body, remainingMs: 0 } }, NOW)).toEqual({
+      kind: "ended",
+    });
     expect(phaseAfterStart({ kind: "ended" }, NOW)).toEqual({ kind: "ended" });
     expect(phaseAfterStart({ kind: "gone" }, NOW)).toEqual({ kind: "gone" });
     expect(phaseAfterStart({ kind: "retry" }, NOW)).toEqual({ kind: "error" });
+  });
+
+  it("times the window on the device's own clock, whatever that clock says", () => {
+    // A phone an hour ahead of the server: the absolute `expiresAt` is
+    // already in its past, but the window has five minutes left.
+    const ahead = NOW + 60 * 60 * 1000;
+    expect(phaseAfterStart({ kind: "ok", body }, ahead)).toEqual({
+      kind: "watching",
+      hlsUrl: body.stream.hlsUrl,
+      mode: "conventional",
+      expiresAt: ahead + body.remainingMs,
+    });
+    // A phone an hour behind: the countdown is the real five minutes, not
+    // an hour and five.
+    const behind = NOW - 60 * 60 * 1000;
+    expect(phaseAfterStart({ kind: "ok", body: { ...body, remainingMs: 120_000 } }, behind)).toEqual({
+      kind: "watching",
+      hlsUrl: body.stream.hlsUrl,
+      mode: "conventional",
+      expiresAt: behind + 120_000,
+    });
   });
 
   it("counts down in whole seconds", () => {
