@@ -1420,6 +1420,8 @@ private fun MessageActionsSheet(
     extraActions: List<ChatMessageAction> = emptyList(),
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // A nudge line: delete and report only (`MessagePermissions.isSystemLine`).
+    val systemLine = MessagePermissions.isSystemLine(message)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -1431,58 +1433,60 @@ private fun MessageActionsSheet(
                 .navigationBarsPadding()
                 .padding(bottom = Spacing.lg),
         ) {
-            FlowRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.gutter),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
-            ) {
-                QUICK_REACTIONS.forEach { emoji ->
-                    val mine = message.reactions.any { it.emoji == emoji && it.me }
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(MaterialTheme.shapes.small)
-                            .background(
-                                if (mine) {
-                                    MaterialTheme.colorScheme.primaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceContainer
-                                },
-                            )
-                            .clickable { onReact(emoji) },
-                    ) {
-                        Text(text = emoji, style = MaterialTheme.typography.titleMedium)
+            if (!systemLine) {
+                FlowRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.gutter),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    QUICK_REACTIONS.forEach { emoji ->
+                        val mine = message.reactions.any { it.emoji == emoji && it.me }
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(
+                                    if (mine) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainer
+                                    },
+                                )
+                                .clickable { onReact(emoji) },
+                        ) {
+                            Text(text = emoji, style = MaterialTheme.typography.titleMedium)
+                        }
                     }
                 }
-            }
 
-            Spacer(Modifier.height(Spacing.md))
-            ChromeDivider()
+                Spacer(Modifier.height(Spacing.md))
+                ChromeDivider()
 
-            SheetAction(
-                icon = PqpIcons.Reply,
-                label = stringResource(R.string.chat_reply),
-                testTag = "message.reply-action",
-                onClick = onReply,
-            )
-            extraActions.forEach { action ->
                 SheetAction(
-                    icon = action.icon,
-                    label = action.label,
-                    testTag = action.testTag,
-                    onClick = action.onClick,
+                    icon = PqpIcons.Reply,
+                    label = stringResource(R.string.chat_reply),
+                    testTag = "message.reply-action",
+                    onClick = onReply,
                 )
-            }
-            if (onMessageAuthor != null) {
-                SheetAction(
-                    icon = PqpIcons.Messages,
-                    label = stringResource(R.string.conversas_message_author, message.authorName),
-                    testTag = "message.dm-author",
-                    onClick = onMessageAuthor,
-                )
+                extraActions.forEach { action ->
+                    SheetAction(
+                        icon = action.icon,
+                        label = action.label,
+                        testTag = action.testTag,
+                        onClick = action.onClick,
+                    )
+                }
+                if (onMessageAuthor != null) {
+                    SheetAction(
+                        icon = PqpIcons.Messages,
+                        label = stringResource(R.string.conversas_message_author, message.authorName),
+                        testTag = "message.dm-author",
+                        onClick = onMessageAuthor,
+                    )
+                }
             }
             if (canEdit) {
                 SheetAction(
@@ -1492,7 +1496,7 @@ private fun MessageActionsSheet(
                     onClick = onEdit,
                 )
             }
-            if (canPin) {
+            if (canPin && !systemLine) {
                 SheetAction(
                     icon = if (message.pinnedAt == null) PqpIcons.Pin else PqpIcons.Unpin,
                     label = stringResource(
