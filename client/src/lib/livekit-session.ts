@@ -818,7 +818,10 @@ export async function connectLiveKit({
         track.attach(element);
         delivery.attached(publication);
         releaseEarlyShareRequest(publication);
-        if (!pipWatches.has(element)) {
+        if (
+          !pipWatches.has(element) &&
+          typeof element.addEventListener === "function"
+        ) {
           const doc = typeof document === "undefined" ? undefined : document;
           const watch = {
             inPip: false,
