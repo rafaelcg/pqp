@@ -408,10 +408,13 @@ export function applyForumRemoved(
   state: ForumListState,
   postId: string,
 ): ForumListState {
+  // A post still waiting behind the pill counts too: it is in the header's
+  // totals (counted when it was queued) and in the pill, and both drop now.
   const previous =
     state.pinned.find((one) => one.id === postId) ??
-    state.posts.find((one) => one.id === postId);
-  if (!previous && !state.queued.some((one) => one.id === postId)) {
+    state.posts.find((one) => one.id === postId) ??
+    state.queued.find((one) => one.id === postId);
+  if (!previous) {
     return state;
   }
   const counts =

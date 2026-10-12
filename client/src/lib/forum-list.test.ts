@@ -257,6 +257,29 @@ describe("forum list reducer", () => {
     expect(applyForumRemoved(base, id(99))).toBe(base);
   });
 
+  it("removing a post still behind the pill lowers the pill and the counts", () => {
+    const held = applyForumUpsert(base, post(40), {
+      filters: activity,
+      viewerId: ME,
+      hold: true,
+    });
+    const twoQueued = applyForumUpsert(held, post(41), {
+      filters: activity,
+      viewerId: ME,
+      hold: true,
+    });
+    expect(twoQueued.queued).toHaveLength(2);
+    expect(twoQueued.counts).toEqual({ posts: 5, open: 5 });
+
+    const removed = applyForumRemoved(twoQueued, id(40));
+    expect(removed.queued.map((one) => one.id)).toEqual([id(41)]);
+    expect(removed.counts).toEqual({ posts: 4, open: 4 });
+    // Applying what is left is one arrival, not two.
+    const flushed = flushForumQueue(removed, { filters: activity, viewerId: ME });
+    expect(order(flushed)).toEqual(["Post 41", "Post 3", "Post 2", "Post 1"]);
+    expect(flushed.counts).toEqual({ posts: 4, open: 4 });
+  });
+
   it("dedupes a later page", () => {
     const partial = forumListFromPage(page([post(3), post(2)], { nextCursor: "c" }));
     const next = appendForumPage(partial, page([post(2), post(1)]));
