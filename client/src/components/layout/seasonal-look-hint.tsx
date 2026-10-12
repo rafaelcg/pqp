@@ -9,6 +9,8 @@ import { useTheme } from "@/hooks/use-theme";
 import {
   appearanceForcesDark,
   getAppearance,
+  isRetroLookOn,
+  setRetroLook,
   type AppearancePreference,
 } from "@/lib/appearance";
 import { chooseLook } from "@/lib/choose-look";
@@ -68,7 +70,12 @@ export function SeasonalLookHint({
   const { resolved } = useTheme();
   const { preference: accentPreference } = useAccentHue();
   const [open, setOpen] = useState(true);
-  const [previous, setPrevious] = useState<AppearancePreference | null>(null);
+  // The look before Try it, and whether Modo 2005 was painted over it, so Undo
+  // gives back exactly what was on screen.
+  const [previous, setPrevious] = useState<{
+    look: AppearancePreference;
+    retro: boolean;
+  } | null>(null);
   const remembered = useRef(false);
   const { appearance } = useAppearance();
   // The account can carry the look from another device, adopted after this
@@ -131,7 +138,10 @@ export function SeasonalLookHint({
               variant="ghost"
               className="rounded-full px-3"
               onClick={() => {
-                chooseLook(previous);
+                chooseLook(previous.look);
+                if (previous.retro) {
+                  setRetroLook(true);
+                }
                 close();
               }}
             >
@@ -144,7 +154,7 @@ export function SeasonalLookHint({
               size="sm"
               className="cta-lift rounded-full px-4"
               onClick={() => {
-                setPrevious(getAppearance());
+                setPrevious({ look: getAppearance(), retro: isRetroLookOn() });
                 chooseLook(look);
               }}
             >
