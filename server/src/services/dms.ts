@@ -400,6 +400,7 @@ interface DmRow {
   last_message_has_attachments: boolean | null;
   last_message_first_attachment_type: string | null;
   last_message_voice_duration_ms: number | null;
+  last_message_system_kind: string | null;
 }
 
 /**
@@ -481,10 +482,11 @@ export async function listConversations(
               lastmsg.author_name AS last_message_author_name,
               lastmsg.has_attachments AS last_message_has_attachments,
               lastmsg.first_attachment_type AS last_message_first_attachment_type,
-              lastmsg.voice_duration_ms AS last_message_voice_duration_ms
+              lastmsg.voice_duration_ms AS last_message_voice_duration_ms,
+              lastmsg.system_kind AS last_message_system_kind
        FROM counts
        LEFT JOIN LATERAL (
-         SELECT lm.id, LEFT(lm.body, 2000) AS body, lm.author_id,
+         SELECT lm.id, LEFT(lm.body, 2000) AS body, lm.author_id, lm.system_kind,
                 u2.display_name AS author_name,
                 EXISTS (
                   SELECT 1 FROM message_attachments ma
@@ -545,6 +547,7 @@ export async function listConversations(
               isGifAttachment: row.last_message_first_attachment_type === "image/gif",
               voiceDurationMs: row.last_message_voice_duration_ms,
             }),
+            systemKind: row.last_message_system_kind === "nudge" ? "nudge" : null,
           }
         : null,
   }));

@@ -98,4 +98,13 @@ describe("which face the strip shows", () => {
     );
     expect(stripView(strip({ firstRunHint: true, items: [item("a", 60)] }), base).kind).toBe("strip");
   });
+
+  it("Conversas with friends keeps the Teu story bubble when nothing is live (§3.4)", () => {
+    const slot = stripView(strip({}), { ...base, ownSlot: true });
+    expect(slot).toEqual({ kind: "strip", own: null, items: [] });
+    // No friends (no slot asked for), or nobody may post: still no row.
+    expect(stripView(strip({}), base).kind).toBe("hidden");
+    expect(stripView(strip({ canPost: false }), { ...base, ownSlot: true }).kind).toBe("hidden");
+    expect(stripView(strip({ enabled: false }), { ...base, ownSlot: true }).kind).toBe("hidden");
+  });
 });

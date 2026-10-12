@@ -40,6 +40,7 @@ struct ChannelListView: View {
         self.initialForum = initialForum
         _current = State(initialValue: server)
         _collapsed = State(initialValue: CollapsedSections().load(serverId: server.id))
+        _layoutConfig = State(initialValue: ChannelLayoutMemory().load(serverId: server.id))
         _stories = State(initialValue: StoryStripModel(scope: .server(id: server.id, name: server.name)))
     }
 
@@ -133,6 +134,26 @@ struct ChannelListView: View {
     @State private var showingNewChannel = false
     @State private var newChannelName = ""
     @State private var newChannelIsVoice = false
+    /// Which list to draw, from `GET …/channel-layout`: the mixed one only
+    /// when the server says `mixed`. Seeded from the last answer this device
+    /// saw (`ChannelLayoutMemory`), re-read on load, on every
+    /// `channels-update` and when the app comes back to the foreground.
+    @State private var layoutConfig: ChannelLayoutConfig
+    /// Keeps the quiet refreshes of the list from overlapping.
+    @State private var refreshGate = ChannelRefreshGate()
+    /// The order to take back if the next list read fails, set while a save
+    /// whose outcome is unknown is being settled. Any read that completes
+    /// (this one or a queued follow-up) resolves it.
+    @State private var rollbackIfReadFails: [Channel]?
+    /// Organizar canais is open.
+    @State private var organizing = false
+    /// A refused or stale move, said once in an alert.
+    @State private var layoutNotice: String?
+    /// The category "+" picked a type: the name alert is open for it.
+    @State private var newChannelTarget: NewChannelTarget?
+    @State private var newChannelTargetName = ""
+    @State private var showingNewCategory = false
+    @State private var newCategoryName = ""
     @State private var renaming: Channel?
     @State private var renameText = ""
     @State private var confirmingLeave = false
@@ -368,6 +389,124 @@ struct ChannelListView: View {
 
     @ViewBuilder
     private var sections: some View {
+        if isMixed {
+            mixedSections
+        } else {
+            legacySections
+        }
+    }
+
+    // MARK: - Mixed list (categories are the only headers)
+
+    private var isMixed: Bool { layoutConfig.mixed }
+
+    /// Reorder, create in a category, Criar categoria: MANAGE_CHANNELS
+    /// server-wide, the same permission `PATCH /move` and the PUT check.
+    /// The role covers owner and admin before the bits have loaded.
+    private var canManageChannels: Bool {
+        isManager || (watchPartyPermissions?.can(PermissionBit.manageChannels) ?? false)
+    }
+
+    /// The mixed list from these channels: categories and every type this
+    /// build can open. Watch parties never become rows (`listed`), and a type
+    /// this build does not know is left out, which the PUT allows: the server
+    /// keeps whatever a client did not send exactly where it was.
+    private func mixedLayout(of channels: [Channel]) -> SidebarLayout<Channel> {
+        ChannelLayoutRules.build(
+            channels.filter { !$0.isWatchParty && ($0.isCategory || $0.isListed) },
+            mixed: true
+        )
+    }
+
+    private var sidebarLayout: SidebarLayout<Channel> { mixedLayout(of: channels) }
+
+    /// Loose channels on top with no header, then each category in the
+    /// server's order, every type mixed. An empty category is drawn only for
+    /// someone who can put a channel in it.
+    @ViewBuilder
+    private var mixedSections: some View {
+        let layout = sidebarLayout
+        ForEach(layout.loose) { channel in
+            channelEntry(channel)
+        }
+        ForEach(layout.categories, id: \.category.id) { entry in
+            if canManageChannels || !entry.children.isEmpty {
+                mixedCategory(entry)
+            }
+        }
+        if showsCreateWatchParty {
+            createWatchPartyRow.padding(.top, 8)
+        }
+        if canManageChannels {
+            CreateCategoryRow {
+                newCategoryName = ""
+                showingNewCategory = true
+            }
+            .padding(.top, 8)
+        }
+    }
+
+    @ViewBuilder
+    private func mixedCategory(_ entry: SidebarCategory<Channel>) -> some View {
+        let category = entry.category
+        let isCollapsed = collapsed.contains(category.id)
+        HStack(spacing: 0) {
+            ChannelSectionHeader(
+                title: category.name,
+                isCollapsed: isCollapsed,
+                summary: summary(of: entry.children),
+                onToggle: { toggleSection(category.id) }
+            )
+            if canManageChannels {
+                Menu {
+                    createMenu(in: category)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Palette.paperMuted)
+                        .frame(width: 36, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel(Text("Create channel in \(category.name)"))
+                .accessibilityIdentifier("channels.categoryCreate.\(category.name)")
+            }
+        }
+        .padding(.top, 10)
+        .contextMenu { channelActions(for: category) }
+
+        // Folding never hides where you are: the call this phone is in stays
+        // on screen under its folded category.
+        ForEach(isCollapsed ? entry.children.filter { isCurrentCall($0) } : entry.children) { channel in
+            channelEntry(channel)
+        }
+    }
+
+    @ViewBuilder
+    private func createMenu(in category: Channel) -> some View {
+        Button {
+            startNewChannel(in: category, type: "text", isPrivate: false)
+        } label: {
+            Label("Text channel", systemImage: "number")
+        }
+        Button {
+            startNewChannel(in: category, type: "voice", isPrivate: false)
+        } label: {
+            Label("Voice channel", systemImage: "speaker.wave.2")
+        }
+        Button {
+            startNewChannel(in: category, type: "text", isPrivate: true)
+        } label: {
+            Label("Private channel", systemImage: "lock")
+        }
+    }
+
+    private func startNewChannel(in category: Channel, type: String, isPrivate: Bool) {
+        newChannelTargetName = ""
+        newChannelTarget = NewChannelTarget(parentId: category.id, type: type, isPrivate: isPrivate)
+    }
+
+    @ViewBuilder
+    private var legacySections: some View {
         if !textChannels.isEmpty {
             channelSection(key: CollapsedSections.textKey, title: String(localized: "Text"), members: textChannels)
         }
@@ -495,6 +634,12 @@ struct ChannelListView: View {
                     Button { showingInvites = true } label: {
                         Label("Invite people", systemImage: "person.badge.plus")
                     }
+                    if isMixed && canManageChannels {
+                        Button { organizing = true } label: {
+                            Label("Organize channels", systemImage: "arrow.up.arrow.down")
+                        }
+                        .accessibilityIdentifier("channels.organize")
+                    }
                     if isManager {
                         Button { showingNewChannel = true } label: {
                             Label("New channel", systemImage: "plus.square")
@@ -516,6 +661,7 @@ struct ChannelListView: View {
                     Image(systemName: "ellipsis")
                 }
                 .tint(Palette.paper)
+                .accessibilityIdentifier("channels.menu")
             }
         }
         .sheet(isPresented: $composingBau) {
@@ -600,8 +746,44 @@ struct ChannelListView: View {
         .sheet(item: $threadsFor) { channel in ThreadListView(channel: channel) }
     }
 
-    var body: some View {
+    /// The mixed list's sheets and alerts. Split out of `body` for the same
+    /// type-checker reason as `channelScroll`.
+    private var withLayoutChrome: some View {
         navigatedList
+        .sheet(isPresented: $organizing) { organizer }
+        .alert(layoutNotice ?? "", isPresented: Binding(
+            get: { layoutNotice != nil },
+            set: { if !$0 { layoutNotice = nil } }
+        )) {
+            Button("Got it") { layoutNotice = nil }
+        }
+        .alert("New channel", isPresented: Binding(
+            get: { newChannelTarget != nil },
+            set: { if !$0 { newChannelTarget = nil } }
+        )) {
+            TextField("Channel name", text: $newChannelTargetName)
+            Button("Cancel", role: .cancel) { newChannelTarget = nil }
+            Button("Create") {
+                let target = newChannelTarget
+                let name = newChannelTargetName
+                newChannelTarget = nil
+                guard let target else { return }
+                Task { await createChannel(in: target, name: name) }
+            }
+        }
+        .alert("Create category", isPresented: $showingNewCategory) {
+            TextField("Voice rooms", text: $newCategoryName)
+            Button("Cancel", role: .cancel) {}
+            Button("Create") {
+                let name = newCategoryName
+                Task { await createCategoryFromList(name) }
+            }
+            .disabled(CategoryName.normalized(newCategoryName) == nil)
+        }
+    }
+
+    var body: some View {
+        withLayoutChrome
         .alert("New channel", isPresented: $showingNewChannel) {
             TextField("Channel name", text: $newChannelName)
             Button("Cancel", role: .cancel) { newChannelName = "" }
@@ -685,6 +867,11 @@ struct ChannelListView: View {
                 // would have to move it the other way.
                 case .communityHomeUpdate(let serverId) where serverId == server.id:
                     Task { await refreshBau() }
+                // The list changed (somebody created, moved, renamed or
+                // reordered). Re-read it and which list to draw: the mixed
+                // one may have just been switched on for this server.
+                case .channelsUpdate(let serverId) where serverId == server.id:
+                    Task { await refreshChannelList() }
                 // A broadcast started or stopped in a channel this account may
                 // see. `stream == nil` is a stop, and it has to remove the
                 // pill: a badge that survives the end of the show sends people
@@ -754,6 +941,8 @@ struct ChannelListView: View {
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
             scheduleAvailabilityRetry(immediate: true)
+            // A `channels-update` sent while the socket was asleep is gone.
+            Task { await refreshChannelList() }
         }
         // Coming back from a chat re-reads the counts: the chat marked itself
         // read on the server, and this is what clears its badge locally.
@@ -864,14 +1053,18 @@ struct ChannelListView: View {
         // The server only accepts letters, numbers, - and _; spaces are the
         // obvious thing a person types, so they become hyphens rather than a
         // validation error.
-        let name = newChannelName
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: " ", with: "-")
+        // A category is a label, so it keeps its spaces ("Salas de voz").
+        let trimmed = newChannelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = type == "category" ? trimmed : trimmed.replacingOccurrences(of: " ", with: "-")
         newChannelName = ""
         guard !name.isEmpty else { return }
+        // In the mixed list a channel made from the server menu goes to the
+        // end of the first category, where people look, rather than to a
+        // headerless loose area above it. The old list keeps it loose.
+        let parentId = isMixed ? sidebarLayout.categories.first?.category.id : nil
         do {
             let channel = try await session.api.createChannel(
-                serverId: server.id, name: name, type: type, isPrivate: false
+                serverId: server.id, name: name, type: type, isPrivate: false, parentId: parentId
             )
             channels.append(channel)
         } catch {
@@ -988,6 +1181,220 @@ struct ChannelListView: View {
         }
     }
 
+    // MARK: - Mixed list: reading and saving the order
+
+    private enum LayoutAnswer {
+        case config(ChannelLayoutConfig)
+        /// 404: a server older than the mixed list. Draw the old one.
+        case legacy
+        /// Any other failure: keep drawing whatever was drawn.
+        case unknown
+    }
+
+    private func fetchLayoutAnswer() async -> LayoutAnswer {
+        do {
+            if let config = try await session.api.channelLayoutConfig(serverId: server.id) {
+                return .config(config)
+            }
+            return .legacy
+        } catch {
+            return .unknown
+        }
+    }
+
+    private func adopt(_ answer: LayoutAnswer) {
+        let next: ChannelLayoutConfig
+        switch answer {
+        case .config(let config): next = config
+        case .legacy: next = .legacy
+        case .unknown: return
+        }
+        adoptLayout(next)
+    }
+
+    private func adoptLayout(_ next: ChannelLayoutConfig) {
+        guard next != layoutConfig else { return }
+        withAnimation(.channelList(reduceMotion: reduceMotion)) { layoutConfig = next }
+        ChannelLayoutMemory().save(next, serverId: server.id)
+    }
+
+    /// Quietly re-read the list and which list to draw, after a
+    /// `channels-update` or a return to the foreground. No spinner and no
+    /// error state: the list on screen is still the last thing the server
+    /// said, which is a better answer than a failure.
+    private func refreshChannelList() async {
+        // One at a time; a burst of frames collapses into one follow-up read.
+        await refreshGate.run { _ = await readChannelList() }
+    }
+
+    /// True when the list itself was read.
+    private func readChannelList() async -> Bool {
+        async let fresh: [Channel]? = try? session.api.channels(serverId: server.id)
+        async let answer = fetchLayoutAnswer()
+        let layout = await answer
+        let channels = await fresh
+        withAnimation(.channelList(reduceMotion: reduceMotion)) {
+            if let channels { self.channels = channels }
+            adopt(layout)
+        }
+        if let channels {
+            let visible = Set(channels.map(\.id))
+            unread = unread.filter { visible.contains($0.key) }
+        }
+        if let before = rollbackIfReadFails {
+            rollbackIfReadFails = nil
+            if channels == nil { rollbackOrder(before) }
+        }
+        return channels != nil
+    }
+
+    /// Sends a whole order (Organizar canais, or one quick move from a row's
+    /// menu), drawn at once and put back if the server refuses it. A 409
+    /// because the list moved adopts the server's list and version.
+    private func saveLayout(_ next: SidebarLayout<Channel>, baseVersion: Int) async -> ChannelLayoutSaveOutcome {
+        let payload = ChannelLayoutRules.payload(next, baseVersion: baseVersion)
+        let before = channels
+        withAnimation(.channelList(reduceMotion: reduceMotion)) {
+            channels = ChannelLayoutRules.apply(next, to: channels)
+        }
+        do {
+            switch try await session.api.applyChannelLayout(serverId: server.id, payload: payload) {
+            case .saved(let fresh, let version):
+                // Null read-back: saved, keep the order drawn above.
+                if let fresh { channels = fresh }
+                adoptLayout(ChannelLayoutConfig(mixed: true, version: version))
+                return .saved
+            case .stale(let fresh, let version):
+                withAnimation(.channelList(reduceMotion: reduceMotion)) { channels = fresh }
+                adoptLayout(ChannelLayoutConfig(mixed: true, version: version))
+                return .stale(mixedLayout(of: fresh), version: version)
+            case .off:
+                rollbackOrder(before)
+                adoptLayout(.legacy)
+                return .off
+            case .invalid(let message):
+                rollbackOrder(before)
+                return .failed(message)
+            }
+        } catch {
+            await reconcileAfterUnknownSave(before)
+            return .failed(error.userFacingMessage ?? String(localized: "Couldn't move it. Try again."))
+        }
+    }
+
+    /// Puts back only the order that was staged, on top of whatever list is
+    /// drawn now: a channel a refresh or a create added meanwhile stays.
+    private func rollbackOrder(_ before: [Channel]) {
+        withAnimation(.channelList(reduceMotion: reduceMotion)) {
+            channels = ChannelLayoutRules.apply(mixedLayout(of: before), to: channels)
+        }
+    }
+
+    /// The PUT neither said yes nor no (the connection dropped): the server
+    /// may have kept the order. Read the truth instead of guessing, and take
+    /// the staged order back only when that read fails too.
+    private func reconcileAfterUnknownSave(_ before: [Channel]) async {
+        // Through the same gate as every other refresh, so an older read in
+        // flight cannot land on top of this one. Whichever read completes
+        // next, this call's or the queued follow-up, settles it: a list that
+        // was read replaces the staged order, a failed read takes it back.
+        rollbackIfReadFails = before
+        await refreshChannelList()
+    }
+
+    /// "Move to…" from a row's menu in the mixed list: the end of that
+    /// category, or the end of the loose area. One PUT, like the organizer.
+    private func moveInMixedList(_ channel: Channel, to parentId: String?) async {
+        let layout = sidebarLayout
+        let end = parentId.flatMap { id in
+            layout.categories.first { $0.category.id == id }?.children.count
+        } ?? layout.loose.count
+        guard let next = ChannelLayoutRules.move(
+            layout, id: channel.id, to: LayoutTarget(parentId: parentId, index: end)
+        ) else { return }
+        switch await saveLayout(next, baseVersion: layoutConfig.version) {
+        case .saved, .off:
+            break
+        case .stale:
+            layoutNotice = String(localized: "Couldn't move it. The list changed, try again.")
+        case .failed(let message):
+            layoutNotice = message
+        }
+    }
+
+    /// The list version right after one of this screen's own writes, for the
+    /// organizer's next PUT. Nil when it could not be read.
+    private func freshLayoutVersion() async -> Int? {
+        guard let config = try? await session.api.channelLayoutConfig(serverId: server.id) else { return nil }
+        return config.version
+    }
+
+    private func createCategory(named name: String) async throws -> Channel {
+        let category = try await session.api.createChannel(
+            serverId: server.id, name: name, type: "category", isPrivate: false
+        )
+        withAnimation(.channelList(reduceMotion: reduceMotion)) {
+            if !channels.contains(where: { $0.id == category.id }) { channels.append(category) }
+        }
+        return category
+    }
+
+    private func createCategoryFromList(_ raw: String) async {
+        guard let name = CategoryName.normalized(raw) else { return }
+        do {
+            _ = try await createCategory(named: name)
+        } catch {
+            if let shown = error.userFacingMessage { layoutNotice = shown }
+        }
+    }
+
+    private func renameCategory(_ category: Channel, to name: String) async throws -> Channel {
+        let updated = try await session.api.renameChannel(id: category.id, name: name)
+        if let index = channels.firstIndex(where: { $0.id == updated.id }) {
+            channels[index] = updated
+        }
+        return updated
+    }
+
+    /// A channel made from a category's "+": in that category, and the
+    /// category unfolds so the new row is seen. A private one opens "who can
+    /// see this" straight away, because nobody else can until it is set.
+    private func createChannel(in target: NewChannelTarget, name raw: String) async {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: " ", with: "-")
+        guard !name.isEmpty else { return }
+        do {
+            let channel = try await session.api.createChannel(
+                serverId: server.id, name: name, type: target.type,
+                isPrivate: target.isPrivate, parentId: target.parentId
+            )
+            withAnimation(.channelList(reduceMotion: reduceMotion)) {
+                if !channels.contains(where: { $0.id == channel.id }) { channels.append(channel) }
+                if let parentId = target.parentId, collapsed.contains(parentId) {
+                    collapsed = CollapsedSections().toggle(parentId, serverId: server.id)
+                }
+            }
+            if target.isPrivate { memberPickerFor = channel }
+        } catch {
+            if let shown = error.userFacingMessage { layoutNotice = shown }
+        }
+    }
+
+    private var organizer: some View {
+        ChannelOrganizerView(
+            layout: sidebarLayout,
+            baseVersion: layoutConfig.version,
+            save: { layout, version in await saveLayout(layout, baseVersion: version) },
+            createCategory: { name in
+                let category = try await createCategory(named: name)
+                return (category, await freshLayoutVersion())
+            },
+            renameCategory: { category, name in
+                let updated = try await renameCategory(category, to: name)
+                return (updated, await freshLayoutVersion())
+            }
+        )
+    }
+
     private func commitRename() async {
         guard let target = renaming else { return }
         let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1034,7 +1441,23 @@ struct ChannelListView: View {
                     Label("Who can see this", systemImage: "person.2.badge.key")
                 }
             }
-            if !channel.isCategory && !categories.isEmpty {
+            if channel.isCategory && isMixed && canManageChannels {
+                Button { organizing = true } label: {
+                    Label("Organize channels", systemImage: "arrow.up.arrow.down")
+                }
+            }
+            if !channel.isCategory && !categories.isEmpty && isMixed {
+                Menu {
+                    if channel.parentId != nil {
+                        Button("Remove from category") { Task { await moveInMixedList(channel, to: nil) } }
+                    }
+                    ForEach(categories.filter { $0.id != channel.parentId }) { category in
+                        Button(category.name) { Task { await moveInMixedList(channel, to: category.id) } }
+                    }
+                } label: {
+                    Label("Move to…", systemImage: "folder")
+                }
+            } else if !channel.isCategory && !categories.isEmpty {
                 Menu {
                     if channel.parentId != nil {
                         Button("Top level") { Task { await move(channel, to: nil) } }
@@ -1086,11 +1509,13 @@ struct ChannelListView: View {
         async let permissionsTask: PermissionsSnapshot? = try? session.api.fetchMemberPermissions(serverId: server.id)
         async let channelsTask = session.api.channels(serverId: server.id)
         async let partiesTask: [WatchPartyPayload]? = try? session.api.fetchServerWatchParties(serverId: server.id)
+        async let layoutTask = fetchLayoutAnswer()
 
         let config = await configTask
         let permissions = await permissionsTask
         if let config { liveHlsConfig = config }
         if let permissions { watchPartyPermissions = permissions }
+        adopt(await layoutTask)
 
         do {
             channels = try await channelsTask
@@ -1260,4 +1685,11 @@ struct ChannelListView: View {
             watchPartyPermissions = permissions
         }
     }
+}
+
+/// What a category's "+" asked for: the type, and where it goes.
+struct NewChannelTarget: Equatable {
+    let parentId: String?
+    let type: String
+    let isPrivate: Bool
 }

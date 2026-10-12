@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { messageSchema } from "@pqp/shared";
@@ -57,7 +57,12 @@ afterEach(() => {
   host = null;
 });
 
-function mount(props: { unreadSince?: string | null; onToggleAnswer?: (id: string) => void }) {
+function mount(props: {
+  unreadSince?: string | null;
+  onToggleAnswer?: (id: string) => void;
+  messages?: ChatMessage[];
+  afterOpening?: ReactNode;
+}) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -65,7 +70,7 @@ function mount(props: { unreadSince?: string | null; onToggleAnswer?: (id: strin
     root!.render(
       <TooltipProvider>
         <MessageList
-          messages={MESSAGES}
+          messages={props.messages ?? MESSAGES}
           currentUserId={ME}
           channelId={CHANNEL}
           onToggleReaction={() => {}}
@@ -74,6 +79,7 @@ function mount(props: { unreadSince?: string | null; onToggleAnswer?: (id: strin
             authorId: ME,
             acceptedAnswerId: null,
             onToggleAnswer: props.onToggleAnswer,
+            afterOpening: props.afterOpening,
           }}
         />
       </TooltipProvider>,
@@ -120,6 +126,22 @@ describe("forum post transcript", () => {
     expect(item).toBeTruthy();
     act(() => item!.click());
     expect(onToggleAnswer).toHaveBeenCalledWith(MESSAGES[2]!.id);
+  });
+
+  it("gives the first reply its own header when something sits under the question", () => {
+    // The OP answers themself a minute later: one block in a plain chat.
+    const own = [
+      message(1, ME, "Rafa", "2026-10-12T08:00:00.000Z"),
+      message(2, ME, "Rafa", "2026-10-12T08:01:00.000Z"),
+    ];
+    mount({ messages: own });
+    expect(rowOf(2).hasAttribute("data-group-start")).toBe(false);
+    act(() => root?.unmount());
+    host?.remove();
+
+    mount({ messages: own, afterOpening: <div data-testid="replies">1 reply</div> });
+    expect(host!.querySelector('[data-testid="replies"]')).not.toBeNull();
+    expect(rowOf(2).hasAttribute("data-group-start")).toBe(true);
   });
 
   it("does not offer it on the opening message", () => {

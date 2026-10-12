@@ -4,6 +4,7 @@ import {
   publicUserSchema,
   unreadCountsSchema,
 } from "./api.js";
+import { messageSystemKindSchema } from "./nudge.js";
 
 /**
  * Direct messages, group DMs, and blocking: the wire contract for the first
@@ -109,6 +110,12 @@ export const dmSummarySchema = z.object({
        */
       isVoice: z.boolean().optional(),
       voiceDurationMs: z.number().int().nonnegative().nullable().optional(),
+      /**
+       * A system message (`"nudge"`): the row says what happened instead of
+       * the stored body. Nullish and `.catch(null)` for the same mixed-version
+       * reason as the fields above.
+       */
+      systemKind: messageSystemKindSchema,
     })
     .nullable()
     .optional(),

@@ -522,6 +522,84 @@ private struct GifGrid: View {
     }
 }
 
+/// One embed a webhook sent (Discord's shape): the coloured edge, the title as
+/// the link, the description, the fields, the footer. Plain text throughout,
+/// and no image, the same as the web's card for a webhook embed.
+struct WebhookEmbedCard: View {
+    let embed: WebhookEmbed
+
+    private var link: URL? {
+        guard let raw = embed.url, let url = URL(string: raw),
+              url.scheme == "https" || url.scheme == "http" else { return nil }
+        return url
+    }
+
+    private var edge: Color {
+        guard let packed = embed.color else { return Palette.signal }
+        return Color(
+            red: Double((packed >> 16) & 0xFF) / 255,
+            green: Double((packed >> 8) & 0xFF) / 255,
+            blue: Double(packed & 0xFF) / 255
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(edge)
+                .frame(width: 3)
+
+            VStack(alignment: .leading, spacing: 4) {
+                if let title = embed.title, !title.isEmpty {
+                    Text(title)
+                        .font(Typography.bodyMedium)
+                        .foregroundStyle(link == nil ? Palette.paper : Palette.signal)
+                        .lineLimit(3)
+                }
+                if let description = embed.description, !description.isEmpty {
+                    Text(description)
+                        .font(Typography.callout)
+                        .foregroundStyle(Palette.paperMuted)
+                        .lineLimit(8)
+                }
+                ForEach(Array((embed.fields ?? []).enumerated()), id: \.offset) { _, field in
+                    VStack(alignment: .leading, spacing: 1) {
+                        if !field.name.isEmpty {
+                            Text(field.name)
+                                .font(Typography.caption.weight(.semibold))
+                                .foregroundStyle(Palette.paper)
+                        }
+                        if !field.value.isEmpty {
+                            Text(field.value)
+                                .font(Typography.callout)
+                                .foregroundStyle(Palette.paperMuted)
+                        }
+                    }
+                }
+                if let footer = embed.footer?.text, !footer.isEmpty {
+                    Text(footer)
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.paperMuted)
+                        .lineLimit(1)
+                }
+            }
+            .padding(10)
+
+            Spacer(minLength: 0)
+        }
+        .background(Palette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+        .frame(maxWidth: 300, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let link { UIApplication.shared.open(link) }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(link == nil ? [] : .isLink)
+        .accessibilityIdentifier("message.webhookEmbed")
+    }
+}
+
 /// A link unfurl, as the server resolved it.
 ///
 /// The accent bar on the leading edge is the same device the web client uses,
@@ -554,11 +632,22 @@ struct EmbedCard: View {
                         .lineLimit(3)
                 }
                 if let imageUrl = embed.imageUrl, let url = URL(string: imageUrl) {
+                    // Sized from the unfurl's recorded dimensions when it has
+                    // them, so the card does not grow by a picture's height
+                    // after the transcript has already been positioned.
+                    let box = MediaBox.fitted(
+                        width: embed.imageWidth, height: embed.imageHeight, maxWidth: 240, maxHeight: 160
+                    )
                     AsyncImage(url: url) { image in
                         image.resizable().scaledToFit()
                     } placeholder: {
-                        EmptyView()
+                        if box == nil {
+                            EmptyView()
+                        } else {
+                            Palette.ink.opacity(0.4)
+                        }
                     }
+                    .frame(width: box?.width, height: box?.height)
                     .frame(maxWidth: 240, maxHeight: 160)
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .padding(.top, 2)

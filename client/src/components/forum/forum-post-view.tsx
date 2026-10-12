@@ -27,6 +27,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Plus,
   RotateCcw,
   Tags,
   Trash2,
@@ -307,6 +308,22 @@ function SolutionCard({
         </button>
       )}
     </section>
+  );
+}
+
+/** "23 RESPOSTAS" and a rule: where the question ends and the replies begin. */
+function RepliesDivider({ count }: { count: number }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="mx-4 mb-1 mt-3 flex items-center gap-3 sm:mx-5"
+      data-forum-replies-divider=""
+    >
+      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.12em] tabular-nums text-text-tertiary">
+        {t("forum.post.repliesDivider", { count })}
+      </span>
+      <span aria-hidden className="h-px flex-1 bg-border" />
+    </div>
   );
 }
 
@@ -759,7 +776,8 @@ export function ForumPostView({
 
   const hasHeaderChips =
     Boolean(post.resolvedAt || post.lockedAt || post.pinnedAt) ||
-    post.tagIds.length > 0;
+    post.tagIds.length > 0 ||
+    (canEdit && tags.length > 0);
 
   const topBar = (
       <div className="flex h-12 items-center gap-1 px-2 sm:px-3">
@@ -891,7 +909,20 @@ export function ForumPostView({
             </Badge>
           )}
           <ForumTagList tagIds={post.tagIds} tagsById={tagsById} max={FORUM_MAX_TAGS_PER_POST} />
-          {canEdit && tags.length > 0 && (
+          {canEdit && tags.length > 0 && post.tagIds.length === 0 && (
+            // No tags yet: a lone pencil read as "edit the title" or as
+            // nothing at all (forum QA P12). Say what it adds.
+            <button
+              type="button"
+              onClick={() => setEditTagsOpen(true)}
+              data-forum-add-tags=""
+              className="inline-flex h-5 items-center gap-1 rounded-full border border-dashed border-border-strong px-2 text-[11px] text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:border-text-tertiary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-9 max-sm:px-3 max-sm:text-xs"
+            >
+              <Plus className="h-3 w-3" aria-hidden />
+              {t("forum.post.addTags")}
+            </button>
+          )}
+          {canEdit && tags.length > 0 && post.tagIds.length > 0 && (
             <Tooltip label={t("forum.editTags")}>
               <button
                 type="button"
@@ -977,7 +1008,15 @@ export function ForumPostView({
   const decor = {
     authorId: post.authorId,
     acceptedAnswerId: post.acceptedAnswerId,
-    afterOpening: answer ? <SolutionCard answer={answer} onJump={jumpToAnswer} viewerId={viewerId} /> : null,
+    // Under the question: its answer, then where the replies start (mock 02,
+    // forum QA P5). Neither on a post nobody answered yet.
+    afterOpening:
+      answer || post.replyCount > 0 ? (
+        <>
+          {answer && <SolutionCard answer={answer} onJump={jumpToAnswer} viewerId={viewerId} />}
+          {post.replyCount > 0 && <RepliesDivider count={post.replyCount} />}
+        </>
+      ) : null,
     onToggleAnswer: canEdit ? toggleAnswer : undefined,
     landAtTop: firstVisit,
     listHeader: isPhone ? titleBlock : null,

@@ -74,6 +74,24 @@ describe("ForumPostCard", () => {
     expect(html).toContain("+5 new");
   });
 
+  it("draws a phone's pinned post as one line: pin, title, status glyphs", () => {
+    const html = render({ pinnedRow: true, narrow: true });
+    expect(html).toContain("data-forum-pinned-row");
+    // Status still named, as glyphs; no preview, tags or numbers.
+    expect(html).toContain('aria-label="Closed"');
+    expect(html).toContain('aria-label="Resolved"');
+    expect(html).not.toContain("Desde ontem");
+    expect(html).not.toContain("+2");
+    expect(html).not.toContain("lari_gg:");
+    // The whole row is still the post's link, with the full accessible name.
+    expect(html).toMatch(/<a [^>]*aria-label="Valorant fecha sozinho, /);
+  });
+
+  it("draws the tiny avatar's monogram on a disc", () => {
+    const html = render({ pinnedRow: true });
+    expect(html).toMatch(/rounded-full[^"]*bg-surface-3[^"]*">L</);
+  });
+
   it("says Novo with a word, not only a colour", () => {
     expect(render({ unread: { kind: "new" } })).toContain(">New<");
   });

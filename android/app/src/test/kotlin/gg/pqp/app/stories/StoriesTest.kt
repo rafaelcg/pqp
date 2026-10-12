@@ -338,4 +338,22 @@ class StoriesTest {
             "\"/api/servers/:serverId/stories/:storyId\"",
         ).forEach { route -> assertTrue("missing $route", api.contains(route)) }
     }
+
+    @Test
+    fun `a notice is asked again only after the spacing`() {
+        assertTrue(StoriesRules.noticeAskDue(0L, 1_000_000L))
+        assertFalse(StoriesRules.noticeAskDue(1_000_000L, 1_000_000L + StoriesRules.NOTICE_REASK_MS - 1))
+        assertTrue(StoriesRules.noticeAskDue(1_000_000L, 1_000_000L + StoriesRules.NOTICE_REASK_MS))
+    }
+
+    @Test
+    fun `the story clock runs in real time whatever the animator scale says`() {
+        val viewer = RepoSources.stripComments(
+            RepoSources.read("android/app/src/main/kotlin/gg/pqp/app/stories/ui/StoryViewer.kt"),
+        )
+        assertTrue(
+            "The progress clock must not be scaled by Remove animations (spec 15)",
+            viewer.contains("withContext(RealTimeClock) { progress.animateTo(1f"),
+        )
+    }
 }

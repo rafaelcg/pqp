@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { StoryCallLive } from "@pqp/shared";
 import { useTranslation } from "@/lib/i18n";
 import {
+  clearStoriesNotice,
   closeStoryComposer,
   closeStoryViewer,
   ringAudienceKey,
@@ -116,6 +117,15 @@ export function StoriesHost({ me, bauEnabled, voiceRooms, onJoinCall, onOpenRole
     [ui.composer?.context],
   );
 
+  const notice = ui.notice;
+  useEffect(() => {
+    if (!notice) {
+      return;
+    }
+    const timer = window.setTimeout(() => clearStoriesNotice(notice.key), notice.action ? 5000 : 2000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   if (!me) {
     return null;
   }
@@ -136,6 +146,7 @@ export function StoriesHost({ me, bauEnabled, voiceRooms, onJoinCall, onOpenRole
       {ui.composer && (
         <StoryComposer
           request={ui.composer}
+          meId={me.id}
           voiceRooms={
             ui.composer.context.kind === "server" &&
             voiceRooms?.serverId === ui.composer.context.serverId
@@ -146,6 +157,31 @@ export function StoriesHost({ me, bauEnabled, voiceRooms, onJoinCall, onOpenRole
           onPosted={flyIntoRing}
         />
       )}
+      {notice &&
+        createPortal(
+          <div
+            key={notice.key}
+            role="status"
+            className="story-pill fixed bottom-6 left-1/2 z-[70] flex max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-3 rounded-full bg-surface-2 px-4 py-2 text-sm font-semibold text-text shadow-[var(--shadow-2)]"
+            style={{ animationDuration: notice.action ? "5s" : "2s" }}
+          >
+            <span className="min-w-0 truncate">{notice.text}</span>
+            {notice.action && (
+              <button
+                type="button"
+                onClick={() => {
+                  const run = notice.action?.run;
+                  clearStoriesNotice(notice.key);
+                  run?.();
+                }}
+                className="shrink-0 rounded-full px-1 font-bold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                {notice.action.label}
+              </button>
+            )}
+          </div>,
+          document.body,
+        )}
       {posted !== null &&
         createPortal(
           <div

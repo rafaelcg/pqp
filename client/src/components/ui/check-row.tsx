@@ -1,4 +1,5 @@
 import { Check } from "lucide-react";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -14,6 +15,7 @@ export function CheckRow({
   description,
   title,
   swatch,
+  icon,
   className,
 }: {
   checked: boolean;
@@ -24,6 +26,12 @@ export function CheckRow({
   description?: string;
   title?: string;
   swatch?: string | null;
+  /**
+   * A fixed-width slot before the label (an emoji, a glyph). Pass it on every
+   * row of a list, `null` where a row has none, so the labels line up: a tag
+   * without an emoji used to start where the others' emoji did.
+   */
+  icon?: ReactNode;
   className?: string;
 }) {
   return (
@@ -49,6 +57,14 @@ export function CheckRow({
             style={{ backgroundColor: swatch ?? "currentColor" }}
             aria-hidden
           />
+        ) : null}
+        {icon !== undefined ? (
+          <span
+            aria-hidden
+            className="grid w-5 shrink-0 place-items-center text-sm text-text-tertiary"
+          >
+            {icon}
+          </span>
         ) : null}
         {description ? (
           <span className="min-w-0">

@@ -217,6 +217,16 @@ describe("applyConversationMessage", () => {
     };
   }
 
+  it("keeps a live nudge's kind on the row, so it reads like it will after a reload", () => {
+    const list = [summary("b", { lastMessageAt: OLDER })];
+    const next = applyConversationMessage(list, sent({ body: "📳", systemKind: "nudge" }), {
+      previewsOn: true,
+    });
+    expect(next[0]?.lastMessage).toMatchObject({ preview: "📳", systemKind: "nudge" });
+    const plain = applyConversationMessage(list, sent(), { previewsOn: true });
+    expect(plain[0]?.lastMessage?.systemKind).toBeNull();
+  });
+
   it("moves the row and replaces its preview with the redacted message", () => {
     // The author's own send and a message in the open conversation reach the
     // client only as a broadcast. The row has to read as it will after a
@@ -364,6 +374,20 @@ describe("formatMessagePreview", () => {
         isGroup: false,
       }),
     ).toBe("you: bora hoje?");
+  });
+
+  it("a nudge reads as what happened, never as its bare 📳 body", () => {
+    const nudge = message({ preview: "📳", systemKind: "nudge" });
+    expect(formatMessagePreview(nudge, { viewerId: VIEWER, isGroup: false })).toBe(
+      "Nudged you! 📳",
+    );
+    expect(
+      formatMessagePreview({ ...nudge, authorId: VIEWER }, { viewerId: VIEWER, isGroup: false }),
+    ).toBe("You nudged them 📳");
+    // A row from an older server has no kind: the body is all there is.
+    expect(
+      formatMessagePreview(message({ preview: "📳" }), { viewerId: VIEWER, isGroup: false }),
+    ).toBe("📳");
   });
 
   it("a group message is prefixed with the author's first name", () => {
