@@ -70,31 +70,31 @@ describe("resolveRoutedThread", () => {
     ).resolves.toEqual({ kind: "thread", thread });
   });
 
-  it("asks both at once, so a thread link does not wait for the post lookup", async () => {
-    let releasePost: () => void = () => {};
-    const fetchThreads = vi.fn(async () => ({ threads: { [TEXT]: [thread] } }));
-    const pending = resolveRoutedThread(THREAD, {
-      listedChannelIds: new Set([TEXT]),
-      fetchPost: () =>
-        new Promise((_, reject) => {
-          releasePost = () => reject(Object.assign(new Error("Not found"), { status: 404 }));
-        }),
-      fetchThreads,
-    });
-    // The thread lookup started before the post lookup answered.
-    expect(fetchThreads).toHaveBeenCalledOnce();
-    releasePost();
-    await expect(pending).resolves.toEqual({ kind: "thread", thread });
+  it("opens a thread the sidebar already holds without a single request", async () => {
+    const fetchPost = vi.fn();
+    const fetchThreads = vi.fn();
+    await expect(
+      resolveRoutedThread(THREAD, {
+        listedChannelIds: new Set([TEXT]),
+        heldThreads: { [TEXT]: [thread] },
+        fetchPost,
+        fetchThreads,
+      }),
+    ).resolves.toEqual({ kind: "thread", thread });
+    expect(fetchPost).not.toHaveBeenCalled();
+    expect(fetchThreads).not.toHaveBeenCalled();
   });
 
-  it("opens a post at once, even while the thread lookup is still out", async () => {
+  it("opens a post with one request, never asking for the thread list", async () => {
+    const fetchThreads = vi.fn();
     await expect(
       resolveRoutedThread(POST, {
         listedChannelIds: new Set([FORUM]),
         fetchPost: async () => ({ post }),
-        fetchThreads: () => new Promise(() => {}),
+        fetchThreads,
       }),
     ).resolves.toEqual({ kind: "forum-post", forumId: FORUM, post });
+    expect(fetchThreads).not.toHaveBeenCalled();
   });
 
   it("does not open a post whose forum this viewer cannot list", async () => {

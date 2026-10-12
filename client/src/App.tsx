@@ -7870,18 +7870,14 @@ function MainAppContent({
           targetChannelId && !requested
             ? await resolveRoutedThread(targetChannelId, {
                 listedChannelIds: new Set(list.map((one) => one.id)),
+                // The sidebar already holds this server's active threads, so
+                // the usual thread link opens without a request.
+                heldThreads:
+                  selectedServerIdRef.current === targetServerId
+                    ? threadsByChannelRef.current
+                    : {},
                 fetchPost: fetchForumPost,
-                // The sidebar already holds this server's active threads;
-                // ask the server only when the link is not among them.
-                fetchThreads: async () => {
-                  const held = threadsByChannelRef.current;
-                  const known = Object.values(held).some((rows) =>
-                    rows.some((row) => row.channelId === targetChannelId),
-                  );
-                  return known && selectedServerIdRef.current === targetServerId
-                    ? { threads: held }
-                    : fetchServerThreads(targetServerId);
-                },
+                fetchThreads: () => fetchServerThreads(targetServerId),
               })
             : null;
         // The lookup is a round trip or two. If the reader went somewhere
