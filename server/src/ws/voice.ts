@@ -5250,6 +5250,36 @@ function diffSentRoster(
 }
 
 /**
+ * Registry off: every peer the window's queue named is restated in the delta
+ * even when the diff found nothing new about them, as the folded queue always
+ * did. A refused change is the case that needs it: a server-muted member's
+ * own unmute is turned down by queuing an `updated` for a seat that did not
+ * change, and that frame is what snaps their client back to muted. Only seats
+ * still in the room, and only as `updated` when the diff did not already
+ * report them, so `size` stays exactly what applying the frame produces.
+ */
+function restateQueuedPeers(
+  delta: RosterDelta,
+  events: readonly VoiceRoomEvent[],
+  participants: readonly VoiceParticipant[],
+): void {
+  const named = new Set(
+    [...delta.joined, ...delta.updated].map((peer) => peer.peerId),
+  );
+  const current = new Map(participants.map((peer) => [peer.peerId, peer]));
+  for (const event of events) {
+    if (event.kind !== "joined" && event.kind !== "updated") {
+      continue;
+    }
+    const peer = current.get(event.peer.peerId);
+    if (peer && !named.has(peer.peerId)) {
+      delta.updated.push(peer);
+      named.add(peer.peerId);
+    }
+  }
+}
+
+/**
  * THE ROSTER TO SEND WHEN THE ROWS CANNOT BE READ (registry on, Postgres
  * down). It used to be this instance's own peers alone, sent as a whole
  * `voice-roster`, which a client treats as authoritative: everybody seated
@@ -5439,7 +5469,8 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
     // CI, 2026-10-11). The diff is against what this process last SENT, so
     // its `size` is right by construction whatever the queue lags behind; a
     // `roster` event (a change nobody could name) still asks for a whole
-    // roster, exactly as the fold did.
+    // roster, and every seat the queue named is still restated
+    // (`restateQueuedPeers`), exactly as the fold did.
     let delta: RosterDelta | null = null;
     if (!audience) {
       sentRosters.delete(voiceChannelId);
@@ -5449,14 +5480,15 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
       delta = diffSentRoster(voiceChannelId, participants, true);
       if (events.some((event) => event.kind === "roster")) {
         delta = null;
+      } else if (delta) {
+        restateQueuedPeers(delta, events, participants);
       }
     }
-    // A diff that is empty-handed means the room is what the last frame said
-    // (a bus hint about a change this process had already read and sent, or
-    // a join a previous run already reported because its seat was in the map
-    // before its event was queued), and there is nothing to write: no frame,
-    // no sequence number, no keyframe clock. The sockets are exactly as
-    // caught up as they were.
+    // A delta that is empty-handed means the room is what the last frame
+    // said (registry on: a bus hint about a change this process had already
+    // read and sent; registry off: a window whose queue named nobody still
+    // seated), and there is nothing to write: no frame, no sequence number,
+    // no keyframe clock. The sockets are exactly as caught up as they were.
     const unchanged =
       delta !== null &&
       delta.joined.length === 0 &&
