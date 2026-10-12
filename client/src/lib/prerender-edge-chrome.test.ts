@@ -30,6 +30,14 @@ function ctx(edgeConfig: unknown, path = "/tela") {
   };
 }
 
+/** Settles everything handed to `waitUntil`, including work added while waiting. */
+async function drain(pending: Promise<unknown>[]) {
+  for (let seen = -1; seen !== pending.length; ) {
+    seen = pending.length;
+    await Promise.all(pending);
+  }
+}
+
 async function freshMiddleware() {
   vi.resetModules();
   return (await import("../../functions/_middleware")).onRequest;
@@ -123,7 +131,7 @@ describe("the marketing chrome at the edge", () => {
       expect(Date.now() - started).toBeLessThan(1_500);
     }
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    await Promise.all(pending);
+    await drain(pending);
     await onRequest(slow);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -150,6 +158,20 @@ describe("the marketing chrome at the edge", () => {
     } finally {
       now.mockRestore();
     }
+  });
+
+  it("keeps the API's answer when the colo cache write stalls", async () => {
+    vi.stubGlobal("caches", {
+      default: {
+        match: async () => undefined,
+        put: () => new Promise<void>(() => undefined),
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ enabled: true })));
+    const onRequest = await freshMiddleware();
+    const config = { apiUrl: "https://api.test", supportPage: false, playStore: false };
+    expect(await (await onRequest(ctx(config))).text()).toContain('href="/#communities"');
+    expect(await (await onRequest(ctx(config))).text()).toContain('href="/#communities"');
   });
 
   it("links the iOS beta the build resolved on /vs-discord", async () => {
@@ -198,7 +220,7 @@ describe("the marketing chrome at the edge", () => {
     onRequest = await freshMiddleware();
     const stale = { ...ctx(config), waitUntil: (p: Promise<unknown>) => pending.push(p) };
     expect(await (await onRequest(stale)).text()).toContain('href="/#communities"');
-    await Promise.all(pending);
+    await drain(pending);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.parse(store.get(key) ?? "{}").enabled).toBe(false);
   });

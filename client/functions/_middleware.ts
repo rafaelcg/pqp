@@ -213,7 +213,8 @@ async function askCommunities(
       return null;
     }
     const enabled = ((await response.json()) as { enabled?: unknown }).enabled === true;
-    await coloCache()
+    // Best effort, and outside the deadline: a slow write never hides the answer.
+    const put = coloCache()
       ?.put(
         COMMUNITIES_CACHE_KEY,
         new Response(JSON.stringify({ enabled, at: Date.now() }), {
@@ -221,6 +222,9 @@ async function askCommunities(
         }),
       )
       .catch(() => undefined);
+    if (put) {
+      context.waitUntil?.(put);
+    }
     return enabled;
   } catch {
     return null;
