@@ -49,6 +49,19 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pollTick, setPollTick] = useState(0);
+  // Another server on the same mounted page: nothing of the last one may stay
+  // on screen (or be acted on against the new id) until its list arrives.
+  const [shownServer, setShownServer] = useState(serverId);
+  if (shownServer !== serverId) {
+    setShownServer(serverId);
+    setSounds(null);
+    setMaxSounds(SOUNDBOARD_MAX_SOUNDS);
+    setSlotsUsed(null);
+    setAdding(false);
+    setEditingId(null);
+    setConfirmId(null);
+    setError(null);
+  }
 
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const reloadSeq = useRef(0);

@@ -167,6 +167,30 @@ describe("soundboard settings list", () => {
   });
 });
 
+describe("switching servers on the same page", () => {
+  it("clears the last server's clips until the new server's list arrives", async () => {
+    await mount();
+    expect(document.body.textContent).toContain("Buzina");
+    let answer: (page: unknown) => void = () => undefined;
+    const api = await import("@/lib/api");
+    const spy = vi
+      .spyOn(api, "fetchSoundboard")
+      .mockImplementation(() => new Promise((resolve) => (answer = resolve)) as never);
+    try {
+      await act(async () => {
+        root!.render(<SoundboardSettingsSection serverId="s2" />);
+      });
+      expect(document.body.textContent).not.toContain("Buzina");
+      await act(async () => {
+        answer({ sounds: [clip("z", "Apito")], maxSounds: 6, slotsUsed: 1 });
+      });
+      expect(document.body.textContent).toContain("Apito");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe("renaming", () => {
   it("saves the new name with Enter, updates the row and returns focus to the pencil", async () => {
     await mount();
