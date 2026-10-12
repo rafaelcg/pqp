@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PUBLIC_TESTFLIGHT_URL } from "./testflight";
 
 /**
  * The middleware learns the footer's three run-time switches from
@@ -12,9 +13,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const INDEX = readFileSync(path.resolve(here, "../../index.html"), "utf8");
 
-function ctx(edgeConfig: unknown) {
+function ctx(edgeConfig: unknown, path = "/tela") {
   return {
-    request: new Request("https://pqp.gg/tela"),
+    request: new Request(`https://pqp.gg${path}`),
     env: {
       ASSETS: {
         fetch: async () =>
@@ -125,6 +126,20 @@ describe("the marketing chrome at the edge", () => {
     await Promise.all(pending);
     await onRequest(slow);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("links the iOS beta the build resolved on /vs-discord", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ enabled: false })));
+    const rotated = "https://testflight.apple.com/join/rotated1";
+    let onRequest = await freshMiddleware();
+    const withOverride = { apiUrl: "", supportPage: false, playStore: true, iosBetaUrl: rotated };
+    expect(await (await onRequest(ctx(withOverride, "/vs-discord"))).text()).toContain(
+      `href="${rotated}"`,
+    );
+
+    onRequest = await freshMiddleware();
+    const body = await (await onRequest(ctx(null, "/vs-discord"))).text();
+    expect(body).toContain(`href="${PUBLIC_TESTFLIGHT_URL}"`);
   });
 
   it("answers from the colo cache and refreshes a stale entry in the background", async () => {

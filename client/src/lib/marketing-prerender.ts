@@ -302,10 +302,11 @@ export const STREAMERS_PRERENDER_CTA_HREF =
 export const CREATE_ROOM_PRERENDER_HREF = "/app";
 
 /**
- * The iOS beta button on `/vs-discord`: `PUBLIC_TESTFLIGHT_URL` in
- * `testflight.ts`, pinned by the test. The live page reads `testflightUrl()`,
- * and the `VITE_TESTFLIGHT_URL` build secret overrides it there. The edge cannot
- * see that secret, so when it is set this link can drift from the live button.
+ * The iOS beta button on `/vs-discord` when the edge config does not say:
+ * `PUBLIC_TESTFLIGHT_URL` in `testflight.ts`, pinned by the test. The live page
+ * reads `testflightUrl()`, which the `VITE_TESTFLIGHT_URL` build secret
+ * overrides; the build writes that result into `/edge-config.json`, and the
+ * middleware passes it in as `MarketingChrome.iosBetaUrl`.
  */
 export const IOS_BETA_PRERENDER_HREF = "https://testflight.apple.com/join/envnP5vV";
 
@@ -441,7 +442,7 @@ function telaBlock(locale: MarketingLocale): string {
   ].join("");
 }
 
-function vsDiscordBlock(locale: MarketingLocale): string {
+function vsDiscordBlock(locale: MarketingLocale, chrome: MarketingChrome): string {
   const c = VS_DISCORD_PRERENDER_COPY[locale];
   const e = escapeHtml;
   const cta = `<a href="${CREATE_ROOM_PRERENDER_HREF}" class="${BUTTON}">${e(c["vsDiscord.cta.create"])}</a>`;
@@ -477,7 +478,7 @@ function vsDiscordBlock(locale: MarketingLocale): string {
     featured,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.table.title"])}</h2><table class="mt-4 w-full text-left text-sm"><caption class="sr-only">${e(c["vsDiscord.table.caption"])}</caption><thead><tr><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.feature"])}</th><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.pqp"])}</th><th scope="col" class="py-2">${e(c["vsDiscord.table.col.discord"])}</th></tr></thead><tbody>${rows}</tbody></table></section>`,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.faq.title"])}</h2><dl>${faq}</dl></section>`,
-    `<section id="ios-beta" class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.closing.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["vsDiscord.closing.body"])}</p><p class="mt-6">${cta} <a href="${IOS_BETA_PRERENDER_HREF}" rel="noopener noreferrer" class="ml-3 underline">${e(c["vsDiscord.cta.beta"])}</a></p><p class="mt-6 text-sm text-text-secondary">${e(c["vsDiscord.closing.tela.lead"])} <a href="/tela" class="underline">${e(c["vsDiscord.closing.tela.link"])}</a></p></section>`,
+    `<section id="ios-beta" class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.closing.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["vsDiscord.closing.body"])}</p><p class="mt-6">${cta} <a href="${e(chrome.iosBetaUrl || IOS_BETA_PRERENDER_HREF)}" rel="noopener noreferrer" class="ml-3 underline">${e(c["vsDiscord.cta.beta"])}</a></p><p class="mt-6 text-sm text-text-secondary">${e(c["vsDiscord.closing.tela.lead"])} <a href="/tela" class="underline">${e(c["vsDiscord.closing.tela.link"])}</a></p></section>`,
     CLOSE_PAGE,
   ].join("");
 }
@@ -527,7 +528,9 @@ function downloadBlock(locale: MarketingLocale): string {
 }
 
 /** Which block a page gets. Aliases share their page's block. */
-const BLOCKS: Partial<Record<MarketingPage, (locale: MarketingLocale) => string>> = {
+const BLOCKS: Partial<
+  Record<MarketingPage, (locale: MarketingLocale, chrome: MarketingChrome) => string>
+> = {
   "/streamers": streamersBlock,
   "/criadores": streamersBlock,
   "/contact": contactBlock,
@@ -543,7 +546,8 @@ export const PRERENDERED_MARKETING_PAGES = Object.keys(BLOCKS) as MarketingPage[
 /**
  * The three things the live nav and footer decide at run time, as the edge
  * learns them. Every one defaults to off, so a reader that cannot be told
- * never gets a link the live page would not show.
+ * never gets a link the live page would not show. It also carries the iOS
+ * beta link `/vs-discord` shows, which the build decides.
  */
 export interface MarketingChrome {
   /** `useCommunitiesEnabled()`: the API's `COMMUNITIES_ENABLED`. */
@@ -552,6 +556,8 @@ export interface MarketingChrome {
   supportPage: boolean;
   /** `playStoreUrl() !== null`: the build did not hide the Play listing. */
   playStore: boolean;
+  /** `testflightUrl()` as the build resolved it. Unset falls back to `IOS_BETA_PRERENDER_HREF`. */
+  iosBetaUrl?: string;
 }
 
 export const NO_MARKETING_CHROME: MarketingChrome = {
@@ -657,7 +663,7 @@ export function injectMarketingBody(
   const body = [
     `<div id="pre-page" lang="${locale}" class="min-h-full bg-surface-0 px-4 py-12 text-text">`,
     navBlock(locale, chrome),
-    block(locale),
+    block(locale, chrome),
     footerBlock(locale, chrome),
     `</div>`,
   ].join("");

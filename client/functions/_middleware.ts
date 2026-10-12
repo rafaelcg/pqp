@@ -278,6 +278,10 @@ async function marketingChrome(context: PagesContext): Promise<MarketingChrome> 
     communities,
     supportPage: config?.supportPage === true,
     playStore: config?.playStore === true,
+    iosBetaUrl:
+      typeof config?.iosBetaUrl === "string" && config.iosBetaUrl.trim()
+        ? config.iosBetaUrl.trim()
+        : undefined,
   };
 }
 

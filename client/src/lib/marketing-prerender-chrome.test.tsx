@@ -6,6 +6,7 @@ import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { loadLocale } from "@/lib/i18n";
 import { edgeConfigFrom } from "./edge-config";
+import { PUBLIC_TESTFLIGHT_URL } from "./testflight";
 import { injectMarketingHead, type MarketingPage } from "./marketing-meta";
 import {
   injectMarketingBody,
@@ -189,19 +190,36 @@ describe("the static nav and footer", () => {
 
 describe("edgeConfigFrom", () => {
   it("records the two footer switches the way the bundle decides them", () => {
-    expect(edgeConfigFrom({})).toEqual({ apiUrl: "", supportPage: false, playStore: true });
+    expect(edgeConfigFrom({})).toEqual({
+      apiUrl: "",
+      supportPage: false,
+      playStore: true,
+      iosBetaUrl: PUBLIC_TESTFLIGHT_URL,
+    });
     expect(
       edgeConfigFrom({
         VITE_API_URL: "https://api.pqp.gg",
         VITE_SPONSOR_URL: "https://github.com/sponsors/rafaelcg",
         VITE_PLAY_STORE_URL: "",
       }),
-    ).toEqual({ apiUrl: "https://api.pqp.gg", supportPage: true, playStore: true });
+    ).toEqual({
+      apiUrl: "https://api.pqp.gg",
+      supportPage: true,
+      playStore: true,
+      iosBetaUrl: PUBLIC_TESTFLIGHT_URL,
+    });
     // A single space hides the Play badge (`play-store.ts`).
     expect(edgeConfigFrom({ VITE_PIX_KEY: "key", VITE_PLAY_STORE_URL: " " })).toEqual({
       apiUrl: "",
       supportPage: true,
       playStore: false,
+      iosBetaUrl: PUBLIC_TESTFLIGHT_URL,
     });
+  });
+
+  it("records the iOS beta link the bundle shows", () => {
+    const rotated = "https://testflight.apple.com/join/rotated1";
+    expect(edgeConfigFrom({ VITE_TESTFLIGHT_URL: ` ${rotated} ` }).iosBetaUrl).toBe(rotated);
+    expect(edgeConfigFrom({ VITE_TESTFLIGHT_URL: " " }).iosBetaUrl).toBe(PUBLIC_TESTFLIGHT_URL);
   });
 });

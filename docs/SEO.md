@@ -368,7 +368,8 @@ page (crawl paths need internal links, and the footer already links
   communities config says so, the support page when the build had a sponsor
   URL or Pix key, and the Google Play label when the build kept the listing
   (the last two come from `/edge-config.json`). Each is left out when the edge
-  cannot tell. That block is hidden by CSS in any browser that runs the head
+  cannot tell. The `/vs-discord` iOS beta link is the build's `testflightUrl()`,
+  also from `/edge-config.json`. That block is hidden by CSS in any browser that runs the head
   script, and React replaces it, so people never see it.
   `marketing-prerender.test.ts` fails when one of those pages loses its block,
   when its strings drift from the catalogues, or when the React page renders a

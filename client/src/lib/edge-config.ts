@@ -1,5 +1,6 @@
 import { playStoreUrlFrom } from "./play-store";
 import { supportLinksFrom, type SupportLinksEnv } from "./support-links";
+import { testflightUrlFrom } from "./testflight";
 
 /**
  * `/edge-config.json`: what the build knows that the Pages middleware needs.
@@ -13,11 +14,14 @@ export interface EdgeConfig {
   supportPage: boolean;
   /** The footer says "Google Play" (`playStoreUrl() !== null`). */
   playStore: boolean;
+  /** The iOS beta link `/vs-discord` shows (`testflightUrl()`). */
+  iosBetaUrl: string;
 }
 
 export type EdgeConfigEnv = SupportLinksEnv & {
   readonly VITE_API_URL?: string;
   readonly VITE_PLAY_STORE_URL?: string;
+  readonly VITE_TESTFLIGHT_URL?: string;
 };
 
 export function edgeConfigFrom(env: EdgeConfigEnv): EdgeConfig {
@@ -25,5 +29,6 @@ export function edgeConfigFrom(env: EdgeConfigEnv): EdgeConfig {
     apiUrl: env.VITE_API_URL ?? "",
     supportPage: supportLinksFrom(env) !== null,
     playStore: playStoreUrlFrom(env.VITE_PLAY_STORE_URL) !== null,
+    iosBetaUrl: testflightUrlFrom(env.VITE_TESTFLIGHT_URL),
   };
 }
