@@ -365,10 +365,8 @@ struct ForumTagToggle: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                if let emoji = tag.emoji, !emoji.isEmpty {
-                    Text(verbatim: emoji).font(.system(size: 13))
-                }
-                Text(verbatim: tag.name)
+                ForumTagGlyph(tag: tag, size: 13)
+                Text(verbatim: tag.displayName)
                     .font(.system(size: 14, weight: .medium))
                 if tag.moderated {
                     Image(systemName: "shield.lefthalf.filled")
