@@ -68,6 +68,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -97,6 +104,7 @@ import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.reports.ReportTarget
 import gg.pqp.app.reports.ui.ReportSheet
+import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.stories.StoriesRules
 import gg.pqp.app.stories.StoriesStore
 import gg.pqp.app.stories.Story
@@ -113,6 +121,12 @@ import gg.pqp.app.ui.theme.Spacing
 import kotlin.math.absoluteValue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** The story clock runs in real time whatever the animator duration scale says. */
+private object RealTimeClock : androidx.compose.ui.MotionDurationScale {
+    override val scaleFactor: Float = 1f
+}
 
 /** One person's stories, as the strip hands them to the viewer. */
 data class StoryDeck(val author: StoryAuthor, val storyIds: List<String>)
@@ -284,7 +298,11 @@ private fun DeckPage(
 
     var holding by remember { mutableStateOf(false) }
     var typing by remember { mutableStateOf(false) }
-    var sheetOpen by remember { mutableStateOf(false) }
+    // The story the viewers sheet was opened FOR. A tap that advanced the deck
+    // while a lagging sheet came up must not make the sheet (and its Apagar)
+    // belong to the next story.
+    var sheetStory by remember { mutableStateOf<Story?>(null) }
+    val sheetOpen = sheetStory != null
     var menuOpen by remember { mutableStateOf(false) }
     var reporting by remember { mutableStateOf<Story?>(null) }
     var confirmingDelete by remember { mutableStateOf<Story?>(null) }
@@ -313,7 +331,11 @@ private fun DeckPage(
         }
         val total = StoriesRules.displayMs(current)
         val left = ((1f - progress.value) * total).toInt().coerceAtLeast(1)
-        progress.animateTo(1f, tween(left, easing = LinearEasing))
+        // A clock, not an animation: Compose scales every animateTo by the
+        // system animator duration scale, and at 0 ("Remove animations") the
+        // tween would finish in one frame, skipping every photo and text
+        // story before it is seen. Pin the scale to 1 for this one.
+        withContext(RealTimeClock) { progress.animateTo(1f, tween(left, easing = LinearEasing)) }
         advance()
     }
 
@@ -326,6 +348,10 @@ private fun DeckPage(
     }
 
     val chromeAlpha by animateFloatAsState(if (holding) 0f else 1f, tween(200), label = "story-chrome")
+    val nextLabel = stringResource(R.string.stories_viewer_next)
+    val previousLabel = stringResource(R.string.stories_viewer_previous)
+    val pauseLabel = stringResource(R.string.stories_viewer_pause)
+    val resumeLabel = stringResource(R.string.stories_viewer_resume)
 
     Box(modifier.fillMaxSize().background(Color.Black)) {
         when {
@@ -340,6 +366,15 @@ private fun DeckPage(
                 Box(
                     Modifier
                         .fillMaxSize()
+                        // The tap zones are invisible to TalkBack, so the same
+                        // moves are offered as custom actions.
+                        .semantics {
+                            customActions = listOf(
+                                CustomAccessibilityAction(nextLabel) { advance(); true },
+                                CustomAccessibilityAction(previousLabel) { back(); true },
+                                CustomAccessibilityAction(if (holding) resumeLabel else pauseLabel) { holding = !holding; true },
+                            )
+                        }
                         .pointerInput(story.id) {
                             detectTapGestures(
                                 onPress = {
@@ -454,7 +489,7 @@ private fun DeckPage(
                         )
                     }
                     if (story.own != null) {
-                        OwnFooter(story = story, onOpenViewers = { sheetOpen = true })
+                        OwnFooter(story = story, onOpenViewers = { sheetStory = story })
                     } else {
                         ReplyFooter(
                             session = session,
@@ -467,15 +502,15 @@ private fun DeckPage(
         }
     }
 
-    if (sheetOpen && story != null) {
+    sheetStory?.let { target ->
         StoryViewersSheet(
             session = session,
             store = store,
-            story = story,
-            onDismiss = { sheetOpen = false },
+            story = target,
+            onDismiss = { sheetStory = null },
             onDelete = {
-                sheetOpen = false
-                confirmingDelete = story
+                sheetStory = null
+                confirmingDelete = target
             },
         )
     }
@@ -585,7 +620,9 @@ private fun Header(
             IconButton(onClick = onToggleMute) {
                 Icon(
                     if (muted) PqpIcons.Deafened else PqpIcons.Listening,
-                    contentDescription = null,
+                    contentDescription = stringResource(
+                        if (muted) R.string.stories_viewer_sound_on else R.string.stories_viewer_sound_off,
+                    ),
                     tint = Color.White,
                 )
             }
@@ -975,7 +1012,13 @@ private fun ReplyFooter(session: SessionStore, story: Story, onFocus: (Boolean) 
                         focus.clearFocus()
                         scope.launch {
                             val ok = runCatching { session.api.replyToStory(story.id, body, nonce) }.isSuccess
-                            if (ok) pendingReply = null
+                            if (ok) {
+                                pendingReply = null
+                                // The reply may have opened a conversation the
+                                // list has never held, and no frame tells the
+                                // person who sent it.
+                                SocialRepository.of(session).refreshConversations()
+                            }
                             delay(1_200)
                             text = if (ok) "" else body
                         }
@@ -1013,6 +1056,7 @@ private fun ReactionRow(selected: String?, onReact: (String) -> Unit) {
 @Composable
 private fun ReactionChip(reaction: String, selected: Boolean, onClick: () -> Unit) {
     val glyph = StoriesRules.reactionGlyph(reaction)
+    val reactLabel = stringResource(R.string.stories_viewer_react, glyph)
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
@@ -1020,6 +1064,11 @@ private fun ReactionChip(reaction: String, selected: Boolean, onClick: () -> Uni
             .clip(CircleShape)
             .background(if (reaction == "gg") Palette.Signal.copy(alpha = 0.18f) else Color.Transparent)
             .then(if (selected) Modifier.border(2.dp, Palette.Signal, CircleShape) else Modifier)
+            .semantics {
+                role = Role.Button
+                this.selected = selected
+                contentDescription = reactLabel
+            }
             .clickable(onClick = onClick)
             .testTag("stories.react.$reaction"),
     ) {

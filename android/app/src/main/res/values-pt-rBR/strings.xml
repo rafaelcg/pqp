@@ -460,7 +460,7 @@
     <string name="report_subject_user">Denunciar %1$s</string>
     <string name="report_subject_community">Denunciar a comunidade %1$s</string>
     <string name="report_body_message">Quem modera vai ver uma cópia desta mensagem, quem enviou e o que você escrever abaixo.</string>
-    <string name="report_body_user">Quem modera vai ver quem você denunciou e o que você escrever abaixo. Nenhuma mensagem vai junto.</string>
+    <string name="report_body_user">Quem modera vai ver quem tu denunciou e o que tu escrever abaixo. Nenhuma mensagem vai junto.</string>
     <string name="report_body_community">Isso vai para quem cuida do pqp, não para o dono da comunidade. Conta o que tem de errado.</string>
     <string name="report_reason_prompt">O que aconteceu?</string>
     <string name="report_reason_spam">Spam</string>
@@ -478,7 +478,7 @@
     <string name="report_sending">Enviando\u2026</string>
     <string name="report_failed">Não deu para enviar esta denúncia. Tente de novo daqui a pouco.</string>
     <string name="report_sent_title">Denúncia enviada</string>
-    <string name="report_sent_body">Quem modera vai olhar. Seu nome não é mostrado para quem você denunciou.</string>
+    <string name="report_sent_body">Quem modera vai olhar. Teu nome não aparece pra quem tu denunciou.</string>
     <string name="report_done">Pronto</string>
 
     <string name="chance_heads">Cara</string>
@@ -973,11 +973,20 @@
     <string name="stories_viewer_more">Mais</string>
     <string name="stories_viewer_send">Mandar</string>
     <string name="stories_viewer_paused">Pausado</string>
+    <string name="stories_viewer_next">Próximo story</string>
+    <string name="stories_viewer_previous">Story anterior</string>
+    <string name="stories_viewer_pause">Pausar</string>
+    <string name="stories_viewer_resume">Continuar</string>
+    <string name="stories_viewer_sound_on">Ligar o som</string>
+    <string name="stories_viewer_sound_off">Tirar o som</string>
+    <string name="stories_viewer_react">Reagir com %1$s</string>
+    <string name="stories_compose_background">Fundo %1$d</string>
     <string name="stories_viewers_title">Visto por %1$d</string>
     <plurals name="stories_viewers_meta">
         <item quantity="one">%1$d reação · some em %2$s</item>
         <item quantity="other">%1$d reações · some em %2$s</item>
     </plurals>
+    <string name="stories_viewers_meta_none">Sem reações · some em %1$s</string>
     <string name="stories_viewers_none">Ninguém viu ainda</string>
     <string name="stories_viewers_replied">respondeu</string>
     <string name="stories_own_delete">Apagar</string>
