@@ -320,11 +320,21 @@ export interface CaptionsChoice {
   /** What `setMusicCaptions` gets; null is off. */
   lang: string | null;
   checked: boolean;
+  /** First of the long tail, which the menu sets apart with a separator. */
+  startsRest?: boolean;
 }
 
 /**
+ * Languages pinned under the viewer's own, in this order, when the video has
+ * them. pqp's audience is overwhelmingly Brazilian, and a TED talk carries
+ * sixty tracks in YouTube's English alphabetical order.
+ */
+export const PINNED_CAPTION_LANGUAGES = ["pt", "en", "es"] as const;
+
+/**
  * The menu: Off, then the viewer's own language (a track, or YouTube's
- * translation into it), then every other track the video has.
+ * translation into it), the language they last picked, and the pinned
+ * popular ones; then every other track, sorted by name in the UI language.
  */
 export function musicCaptionsChoices(input: {
   state: MusicCaptionsState;
@@ -366,7 +376,6 @@ export function musicCaptionsChoices(input: {
       checked: active?.translationLanguage?.languageCode === translateInto,
     });
   }
-  const mine = (track: CaptionTrack) => primary(track.languageCode) === primary(uiLocale);
   // The choice is a language, and `findTrack` takes a person's track over a
   // generated one, so a generated track is only a row of its own when its
   // language has no person's track to pick instead.
@@ -377,20 +386,41 @@ export function musicCaptionsChoices(input: {
         (other) => other.languageCode === track.languageCode && other.kind !== "asr",
       ),
   );
-  const ordered = [...listed.filter(mine), ...listed.filter((track) => !mine(track))];
-  for (const track of ordered) {
+  const toChoice = (track: CaptionTrack): CaptionsChoice => {
     const name = input.languageName(track.languageCode, track.displayName);
-    const checked =
-      active !== null &&
-      !active.translationLanguage &&
-      active.languageCode === track.languageCode;
-    choices.push({
+    return {
       id: `track:${track.languageCode}:${track.kind}`,
       label: track.kind === "asr" ? input.generatedLabel(name) : name,
       lang: track.languageCode,
-      checked,
-    });
+      checked:
+        active !== null &&
+        !active.translationLanguage &&
+        active.languageCode === track.languageCode,
+    };
+  };
+  const pinned = [
+    ...new Set(
+      [uiLocale, s.lang, ...PINNED_CAPTION_LANGUAGES].flatMap((lang) =>
+        lang === null ? [] : [primary(lang)],
+      ),
+    ),
+  ];
+  for (const language of pinned) {
+    for (const track of listed) {
+      if (primary(track.languageCode) === language) {
+        choices.push(toChoice(track));
+      }
+    }
   }
+  const collator = new Intl.Collator(uiLocale);
+  const rest = listed
+    .filter((track) => !pinned.includes(primary(track.languageCode)))
+    .map(toChoice)
+    .sort((a, b) => collator.compare(a.label, b.label));
+  if (rest.length > 0 && choices.length > 1) {
+    rest[0] = { ...rest[0], startsRest: true };
+  }
+  choices.push(...rest);
   return choices;
 }
 

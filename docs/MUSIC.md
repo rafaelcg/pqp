@@ -382,7 +382,10 @@ track. The captions button opens a menu with these rows:
 1. Desligadas.
 2. The viewer's UI language: the video's track, or YouTube's translation
    into it when the video has none.
-3. Every other track the video has. Language names come from
+3. The language the viewer last picked, then Portuguese, English and
+   Spanish (`PINNED_CAPTION_LANGUAGES`), when the video has them.
+4. A separator, then every other track, sorted by name in the UI language.
+   A TED talk has about 60 tracks. Language names come from
    `Intl.DisplayNames`, not from YouTube.
 
 The choice is saved per browser (`pqp:music-captions`,

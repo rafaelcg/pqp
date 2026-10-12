@@ -41,12 +41,17 @@ export function MusicCaptionsButton({ className }: { className?: string }) {
     });
     return [
       { id: "captions-heading", label: t("music.captions.title"), heading: true },
-      ...choices.map<ContextMenuItemDef>((choice) => ({
-        id: choice.id,
-        label: choice.label,
-        checked: choice.checked,
-        onSelect: () => setMusicCaptions(choice.lang),
-      })),
+      ...choices.flatMap<ContextMenuItemDef>((choice) => [
+        ...(choice.startsRest
+          ? [{ id: "captions-rest", label: "", separator: true }]
+          : []),
+        {
+          id: choice.id,
+          label: choice.label,
+          checked: choice.checked,
+          onSelect: () => setMusicCaptions(choice.lang),
+        },
+      ]),
     ];
   }, [captions, locale, t, tracks]);
 

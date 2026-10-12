@@ -295,4 +295,35 @@ describe("musicCaptionsChoices", () => {
     ]);
   });
 
+  it("pins the popular languages, then sorts the long tail apart", () => {
+    const tracks = [track("ja"), track("de"), track("es"), track("fr"), track("en"), track("pt-BR")];
+    const choices = musicCaptionsChoices({
+      state: { on: false, lang: null, tracks, translations: [] },
+      uiLocale: "pt-BR",
+      ...labels,
+    });
+    expect(choices.map((choice) => [choice.label, choice.startsRest ?? false])).toEqual([
+      ["Desligadas", false],
+      ["pt-BR", false],
+      ["en", false],
+      ["es", false],
+      ["de", true],
+      ["fr", false],
+      ["ja", false],
+    ]);
+    const saved = musicCaptionsChoices({
+      state: { on: true, lang: "ja", tracks, translations: [] },
+      uiLocale: "pt-BR",
+      ...labels,
+    });
+    expect(saved.map((choice) => [choice.label, choice.checked])).toEqual([
+      ["Desligadas", false],
+      ["pt-BR", false],
+      ["ja", true],
+      ["en", false],
+      ["es", false],
+      ["de", false],
+      ["fr", false],
+    ]);
+  });
 });
