@@ -44,6 +44,14 @@ export const AUDIT_ACTIONS = [
    * `message.delete`).
    */
   "message.bulk_delete",
+  /**
+   * A moderator took a story out of THIS server (`MANAGE_MESSAGES`). Only
+   * this server's slice: the same story may still be up for the author's
+   * friends or in other servers, which this server's staff do not own. The
+   * target is the author; the story id travels in `changes`. Never the media
+   * or the caption.
+   */
+  "story.remove",
   "server.update",
   "server.retention_update",
   /**
@@ -174,6 +182,23 @@ export const AUDIT_ACTIONS = [
    * safety: read once when a room opens, never moves a running call.
    */
   "channel.sfu_region_update",
+  // --- forums (forums.ts) ---
+  //
+  // Staff acting on a post: pin or unpin, lock or unlock, delete, and editing
+  // the title, tags or resolved state of SOMEBODY ELSE's post (an author
+  // editing their own post is not a moderator action and writes nothing).
+  // Target is the post's channel; `changes` carries old and new. A deleted
+  // post's row keeps the title in `changes`, since the target is gone.
+  "forum.post_pin",
+  "forum.post_lock",
+  "forum.post_delete",
+  "forum.post_edit",
+  /** The forum's tag list replaced (PUT). Target is the forum. */
+  "forum.tags_update",
+  /** The forum's settings (`requireTag`, `defaultSort`). Target is the forum. */
+  "forum.settings_update",
+  /** A forum webhook's tag allowlist, default tags or dedupe window (P1b). */
+  "webhook.forum_settings",
   /**
    * A soundboard clip added, renamed or re-levelled, or deleted. Audio is
    * not scanned, so "who put this clip on the server" has to have an answer.

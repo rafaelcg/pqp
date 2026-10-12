@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
 import {
   BauPostCardView,
+  posterImageUrl,
   posterKind,
 } from "./bau-post-card";
 
@@ -21,6 +22,7 @@ function card(over: Partial<CommunityHomePostCard> = {}): CommunityHomePostCard 
     },
     mediaKind: null,
     mediaUrl: null,
+    posterUrl: null,
     visibility: "free",
     locked: false,
     pinned: false,
@@ -54,6 +56,28 @@ describe("posterKind", () => {
     // An upload whose url could not be signed still says "video" with a plate.
     expect(posterKind({ mediaKind: "video", mediaUrl: null })).toBe("frame");
   });
+
+  it("a video with a cover its author chose shows the cover as a picture", () => {
+    expect(
+      posterKind({
+        mediaKind: "video",
+        mediaUrl: "https://x/v.mp4",
+        posterUrl: "https://x/capa.jpg",
+      }),
+    ).toBe("image");
+    expect(
+      posterImageUrl({
+        mediaKind: "video",
+        mediaUrl: "https://x/v.mp4",
+        posterUrl: "https://x/capa.jpg",
+      }),
+    ).toBe("https://x/capa.jpg");
+    // Never the video file as an <img>.
+    expect(posterImageUrl({ mediaKind: "video", mediaUrl: "https://x/v.mp4" })).toBeNull();
+    expect(posterImageUrl({ mediaKind: "image", mediaUrl: "https://x/a.png" })).toBe(
+      "https://x/a.png",
+    );
+  });
 });
 
 describe("BauPostCardView", () => {
@@ -71,6 +95,20 @@ describe("BauPostCardView", () => {
     expect(html).toContain("Tues");
     expect(html).toContain("Open in Baú");
     expect(html).toContain('href="https://pqp.gg/app/server/s/bau/p"');
+  });
+
+  it("a video post with a cover shows the cover, not the video, and keeps the play badge", () => {
+    const html = render(
+      card({
+        mediaKind: "video",
+        mediaUrl: "https://bucket/a.mp4?sig=1",
+        posterUrl: "https://bucket/capa.jpg?sig=1",
+      }),
+    );
+    expect(html).toContain('data-bau-card-media="image"');
+    expect(html).toContain('src="https://bucket/capa.jpg?sig=1"');
+    expect(html).not.toContain("<video");
+    expect(html).toContain("data-bau-card-play");
   });
 
   it("an image post has a picture and no play badge", () => {

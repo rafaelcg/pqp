@@ -10,13 +10,14 @@ import { openApp, openServerSettings } from "./fixtures";
  * still sticks, and the dialog still closes the way every other dialog closes.
  *
  * The suite's account owns its server (`ensureServer` creates it), so this
- * exercises the owner's five sections. The admin's two are pinned server-side
+ * exercises the owner's sections. The admin's two are pinned server-side
  * instead — see `server-images.test.ts` and the audit-log tests.
  */
 
 /** Every section, in rail order. The list IS the assertion. */
 const SECTIONS = [
   "Overview",
+  "Community",
   "Access",
   "Roles",
   "Moderation",
@@ -52,7 +53,7 @@ test.describe("server settings sections", () => {
     await page.getByRole("tab", { name: "Overview", exact: true }).focus();
     await page.keyboard.press("ArrowDown");
     await expect(
-      page.getByRole("tab", { name: "Access", exact: true }),
+      page.getByRole("tab", { name: "Community", exact: true }),
     ).toHaveAttribute("aria-selected", "true");
 
     await page.keyboard.press("End");

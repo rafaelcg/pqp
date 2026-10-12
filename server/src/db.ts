@@ -1408,12 +1408,45 @@ ON CONFLICT (id) DO UPDATE SET schema_hash = EXCLUDED.schema_hash, applied_at = 
  * A build that was interrupted leaves an INVALID index behind, which
  * `IF NOT EXISTS` would happily keep; it is dropped and rebuilt instead.
  */
-const CONCURRENT_INDEXES: ReadonlyArray<{ name: string; definition: string }> = [
+const CONCURRENT_INDEXES: ReadonlyArray<{
+  name: string;
+  definition: string;
+  unique: boolean;
+}> = [
   {
     // Idempotent sends: see the `messages.nonce` comment in schema.sql.
     name: "idx_messages_nonce",
+    unique: true,
     definition:
       "ON messages (channel_id, author_id, nonce) WHERE nonce IS NOT NULL",
+  },
+  {
+    // Story replies: the `ON DELETE SET NULL` behind `messages.story_id` looks
+    // messages up by story when a story row is deleted, a week after it
+    // expires. Partial, so it holds only the replies.
+    name: "idx_messages_story",
+    unique: false,
+    definition: "ON messages (story_id) WHERE story_id IS NOT NULL",
+  },
+  {
+    // A reporter's open report about a story: a second tap is a duplicate.
+    name: "idx_reports_open_story_dedupe",
+    unique: true,
+    definition:
+      "ON reports (reporter_id, reported_story_id) WHERE status = 'open' AND subject_type = 'story'",
+  },
+  {
+    // The scanner's open report about a story: one per story, whatever races.
+    name: "idx_reports_open_story_automated",
+    unique: true,
+    definition:
+      "ON reports (reported_story_id) WHERE status = 'open' AND subject_type = 'story' AND reporter_id IS NULL",
+  },
+  {
+    // The stories sweep's hold check: "is anybody still looking at this story".
+    name: "idx_reports_story",
+    unique: false,
+    definition: "ON reports (reported_story_id) WHERE reported_story_id IS NOT NULL",
   },
 ];
 
@@ -1435,7 +1468,7 @@ async function ensureConcurrentIndexes(
       await query(`DROP INDEX CONCURRENTLY IF EXISTS ${index.name}`);
     }
     await query(
-      `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ${index.name} ${index.definition}`,
+      `CREATE ${index.unique ? "UNIQUE " : ""}INDEX CONCURRENTLY IF NOT EXISTS ${index.name} ${index.definition}`,
     );
   }
 }
@@ -1557,7 +1590,11 @@ export interface DbChannel {
   id: string;
   server_id: string;
   name: string;
-  type: "text" | "voice" | "category" | "thread" | "watch_party";
+  /**
+   * `forum` holds posts (each a `thread` under it) and never a message of its
+   * own; see packages/shared/src/forums.ts.
+   */
+  type: "text" | "voice" | "category" | "thread" | "watch_party" | "forum";
   position: number;
   is_private: boolean;
   topic: string | null;
@@ -1598,6 +1635,10 @@ export interface DbMessage {
   mention_everyone?: boolean;
   mention_here?: boolean;
   chance?: unknown;
+  /** `messages.system_kind`: `nudge`, or null for an ordinary message. */
+  system_kind?: string | null;
+  /** The story a DM reply quotes (`messages.story_id`). */
+  story_id?: string | null;
 }
 
 export interface DbInvite {

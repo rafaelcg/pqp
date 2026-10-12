@@ -204,7 +204,9 @@ object RepoSources {
      */
     fun objectKeys(relativePath: String, schemaName: String): List<String> {
         val source = stripComments(read(relativePath))
-        val start = Regex("""const\s+$schemaName\s*=\s*z\.object\(\{""").find(source)
+        // `z\n  .object({` too: a schema with a `.refine` after it is often
+        // formatted that way.
+        val start = Regex("""const\s+$schemaName\s*=\s*z\s*\.object\(\{""").find(source)
             ?: error("No z.object named $schemaName in $relativePath")
 
         val keys = mutableListOf<String>()

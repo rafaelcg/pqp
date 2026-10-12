@@ -1119,8 +1119,15 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
 
     const back = await presenterJoinsAndShares(a, userId, channel);
     expect(back.peerId).not.toBe(presenter.peerId);
+    // Wait for the END of the rebind, not for the box to be asked: after the
+    // box answers, `rebindLlSession` still writes the presenter row and only
+    // then logs `voice.hlsLlRebound` and moves `llStreamFor`. Waiting on the
+    // box call alone raced that write and failed on busy CI runners with the
+    // log assertion below seeing 12 calls and no rebind.
     await waitFor(
-      () => box.remuxRebinds.some((call) => call.presenterIdentity === back.peerId),
+      () =>
+        box.remuxRebinds.some((call) => call.presenterIdentity === back.peerId) &&
+        logEvent.mock.calls.some(([event]) => event === "voice.hlsLlRebound"),
       "the box to follow the reloaded page",
     );
 

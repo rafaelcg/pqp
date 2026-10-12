@@ -133,6 +133,7 @@ describeDb("communities", () => {
   let joiner: { id: string; clerk_id: string };
   let banned: { id: string; clerk_id: string };
   let filler: { id: string; clerk_id: string };
+  let fillerTwo: { id: string; clerk_id: string };
   let operator: { id: string; clerk_id: string };
 
   beforeAll(async () => {
@@ -168,18 +169,23 @@ describeDb("communities", () => {
     joiner = await makeUser("joiner");
     banned = await makeUser("banned");
     filler = await makeUser("filler");
+    fillerTwo = await makeUser("filler-two");
     operator = await makeUser("operator");
   });
 
   afterEach(() => {
     delete process.env.COMMUNITIES_ENABLED;
+    delete process.env.DEFAULT_COMMUNITY_SLUG;
+    delete process.env.COMMUNITY_LISTING_NUDGE;
   });
 
   /**
-   * A listed community that clears the member floor.
+   * A listed community that clears the directory's quality bar.
    *
-   * `filler` is added so the row has two members — see COMMUNITY_MEMBER_FLOOR.
-   * Every test that browses needs this, and forgetting it is the single most
+   * `filler` and `fillerTwo` are added so the row has three people, and the
+   * owner says something today, so it has a recent human message. See
+   * DIRECTORY_MIN_HUMAN_MEMBERS and DIRECTORY_ACTIVE_WINDOW_DAYS. Every test
+   * that browses needs both, and forgetting either is the single most
    * confusing way for one of these to fail (an empty grid, no error).
    */
   async function makeCommunity(
@@ -203,6 +209,13 @@ describeDb("communities", () => {
       suspended?: boolean;
       extraMembers?: { id: string }[];
       /**
+       * How long ago the last message was written, in days. `null` writes
+       * none. Defaults to a message today.
+       */
+      lastMessageDaysAgo?: number | null;
+      /** Who wrote it. Defaults to the owner. */
+      messageAuthor?: { id: string };
+      /**
        * The public address. Written straight in rather than derived, because
        * these rows bypass `updateCommunitySettings` — which is itself under
        * test and must not be the thing that sets up its own fixtures. Null
@@ -213,7 +226,10 @@ describeDb("communities", () => {
   ): Promise<string> {
     const created = await createChatServer(name, owner.id);
     const serverId = created.server.id;
-    for (const member of options.extraMembers ?? [{ id: filler.id }]) {
+    for (const member of options.extraMembers ?? [
+      { id: filler.id },
+      { id: fillerTwo.id },
+    ]) {
       await getPool().query(
         `INSERT INTO server_members (server_id, user_id, role)
          VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING`,
@@ -243,6 +259,18 @@ describeDb("communities", () => {
           (options.listed ?? true),
       ],
     );
+    const daysAgo =
+      options.lastMessageDaysAgo === undefined ? 0 : options.lastMessageDaysAgo;
+    if (daysAgo !== null) {
+      await getPool().query(
+        `INSERT INTO messages (channel_id, author_id, body, created_at)
+         SELECT c.id, $2, 'oi', NOW() - make_interval(days => $3::int)
+           FROM channels c
+          WHERE c.server_id = $1 AND c.type = 'text'
+          ORDER BY c.position LIMIT 1`,
+        [serverId, (options.messageAuthor ?? owner).id, daysAgo],
+      );
+    }
     return serverId;
   }
 
@@ -531,7 +559,7 @@ describeDb("communities", () => {
       );
       expect(res.body.communities.map((c) => c.id)).toEqual([big, small]);
       expect(res.body.communities[0]!.memberCount).toBe(4);
-      expect(res.body.communities[1]!.memberCount).toBe(2);
+      expect(res.body.communities[1]!.memberCount).toBe(3);
     });
 
     it("keeps the member count true across joins, leaves and cascades", async () => {
@@ -547,18 +575,18 @@ describeDb("communities", () => {
             )
           ).rows[0]!.member_count,
         );
-      expect(await count()).toBe(2);
-
-      await call(joiner, "POST", `/api/communities/${serverId}/join`);
       expect(await count()).toBe(3);
 
+      await call(joiner, "POST", `/api/communities/${serverId}/join`);
+      expect(await count()).toBe(4);
+
       await call(joiner, "POST", `/api/servers/${serverId}/leave`);
-      expect(await count()).toBe(2);
+      expect(await count()).toBe(3);
 
       // A deleted account takes its membership with it via ON DELETE CASCADE,
       // which no application code ever sees.
       await getPool().query(`DELETE FROM users WHERE id = $1`, [filler.id]);
-      expect(await count()).toBe(1);
+      expect(await count()).toBe(2);
     });
 
     it("marks a community the caller is already in as joined", async () => {
@@ -637,6 +665,212 @@ describeDb("communities", () => {
   });
 
   // -------------------------------------------------------- bans and pulls
+
+  describe("the quality bar", () => {
+    const browse = async (as = joiner) =>
+      (
+        await call<{ communities: CommunityCard[] }>(
+          as,
+          "GET",
+          "/api/communities",
+        )
+      ).body.communities.map((c) => c.name);
+
+    it("hides a listed room with fewer than three people, without unlisting it", async () => {
+      await makeCommunity("Dois só", { extraMembers: [{ id: filler.id }] });
+      await makeCommunity("Três", {});
+      expect(await browse()).toEqual(["Três"]);
+
+      // A read-time filter, never a write: the owner's switch is untouched.
+      const row = await getPool().query<{ is_community_listed: boolean }>(
+        `SELECT is_community_listed FROM servers WHERE name = 'Dois só'`,
+      );
+      expect(row.rows[0]!.is_community_listed).toBe(true);
+    });
+
+    it("does not count the house cast, webhooks or labelled bots as people", async () => {
+      await getPool().query(
+        `UPDATE users SET is_character = TRUE WHERE id = $1`,
+        [fillerTwo.id],
+      );
+      await makeCommunity("Com personagem");
+      expect(await browse()).toEqual([]);
+
+      await getPool().query(
+        `UPDATE users SET is_character = FALSE, is_bot = TRUE WHERE id = $1`,
+        [fillerTwo.id],
+      );
+      expect(await browse()).toEqual([]);
+
+      await getPool().query(`UPDATE users SET is_bot = FALSE WHERE id = $1`, [
+        fillerTwo.id,
+      ]);
+      expect(await browse()).toEqual(["Com personagem"]);
+    });
+
+    it("hides a room nobody wrote in for thirty days, and one that never talked", async () => {
+      await makeCommunity("Parado", { lastMessageDaysAgo: 31 });
+      await makeCommunity("Mudo", { lastMessageDaysAgo: null });
+      await makeCommunity("Vivo", { lastMessageDaysAgo: 29 });
+      expect(await browse()).toEqual(["Vivo"]);
+    });
+
+    it("only counts messages a person wrote", async () => {
+      await getPool().query(
+        `UPDATE users SET is_character = TRUE WHERE id = $1`,
+        [operator.id],
+      );
+      await makeCommunity("Só o elenco fala", {
+        extraMembers: [{ id: filler.id }, { id: fillerTwo.id }, { id: operator.id }],
+        messageAuthor: operator,
+      });
+      expect(await browse()).toEqual([]);
+    });
+
+    it("lets the instance's default community through whatever its numbers", async () => {
+      await makeCommunity("QG do pqp", {
+        slug: "qg-do-pqp",
+        extraMembers: [],
+        lastMessageDaysAgo: null,
+      });
+      expect(await browse()).toEqual([]);
+
+      process.env.DEFAULT_COMMUNITY_SLUG = "qg-do-pqp";
+      expect(await browse()).toEqual(["QG do pqp"]);
+    });
+
+    it("still finds a room under the bar by search", async () => {
+      await makeCommunity("Acabou de nascer", {
+        extraMembers: [],
+        lastMessageDaysAgo: null,
+      });
+      const searched = await call<{ communities: CommunityCard[] }>(
+        joiner,
+        "GET",
+        "/api/communities?q=nascer",
+      );
+      expect(searched.body.communities.map((c) => c.name)).toEqual([
+        "Acabou de nascer",
+      ]);
+    });
+
+    it("puts rooms that talked this week first, biggest first inside each group", async () => {
+      await makeCommunity("Grande e quieta", {
+        extraMembers: [
+          { id: filler.id },
+          { id: fillerTwo.id },
+          { id: joiner.id },
+          { id: banned.id },
+        ],
+        lastMessageDaysAgo: 10,
+      });
+      await makeCommunity("Pequena e viva", { lastMessageDaysAgo: 1 });
+      await makeCommunity("Média e viva", {
+        extraMembers: [{ id: filler.id }, { id: fillerTwo.id }, { id: joiner.id }],
+        lastMessageDaysAgo: 2,
+      });
+      await makeCommunity("Pequena e quieta", { lastMessageDaysAgo: 20 });
+
+      expect(await browse(operator)).toEqual([
+        "Média e viva",
+        "Pequena e viva",
+        "Grande e quieta",
+        "Pequena e quieta",
+      ]);
+    });
+
+    it("keeps hiding a room the viewer is banned from", async () => {
+      const serverId = await makeCommunity("Vetado");
+      await getPool().query(
+        `INSERT INTO server_bans (server_id, user_id) VALUES ($1, $2)`,
+        [serverId, banned.id],
+      );
+      expect(await browse(banned)).toEqual([]);
+      expect(await browse(joiner)).toEqual(["Vetado"]);
+    });
+  });
+
+  describe("the owner's listing nudge", () => {
+    const ask = async (as = owner) =>
+      call<{
+        listingNudge: { serverId: string; name: string; iconUrl: string | null } | null;
+      }>(as, "GET", "/api/communities/listing-nudge");
+
+    it("asks the owner about an addressed, unlisted room that passes the bar", async () => {
+      const serverId = await makeCommunity("Endereço sem diretório", {
+        inDirectory: false,
+      });
+      const res = await ask();
+      expect(res.status).toBe(200);
+      expect(res.body.listingNudge).toEqual({
+        serverId,
+        name: "Endereço sem diretório",
+        iconUrl: null,
+      });
+    });
+
+    it("asks nobody but the owner", async () => {
+      const serverId = await makeCommunity("Só do dono", { inDirectory: false });
+      await getPool().query(
+        `UPDATE server_members SET role = 'admin' WHERE server_id = $1 AND user_id = $2`,
+        [serverId, filler.id],
+      );
+      expect((await ask(filler)).body.listingNudge).toBeNull();
+      expect((await ask(joiner)).body.listingNudge).toBeNull();
+    });
+
+    it("never invites an empty shell", async () => {
+      await makeCommunity("Casca", {
+        inDirectory: false,
+        extraMembers: [],
+        lastMessageDaysAgo: null,
+      });
+      await makeCommunity("Casca quieta", {
+        inDirectory: false,
+        lastMessageDaysAgo: 45,
+      });
+      expect((await ask()).body.listingNudge).toBeNull();
+    });
+
+    it("says nothing about a room already listed, one without an address, or a suspended one", async () => {
+      await makeCommunity("Já listada");
+      await makeCommunity("Privada", { listed: false });
+      await makeCommunity("Suspensa", { inDirectory: false, suspended: true });
+      expect((await ask()).body.listingNudge).toBeNull();
+    });
+
+    it("picks the biggest qualifying room when there are several", async () => {
+      await makeCommunity("Menor", { inDirectory: false });
+      const bigger = await makeCommunity("Maior", {
+        inDirectory: false,
+        extraMembers: [{ id: filler.id }, { id: fillerTwo.id }, { id: joiner.id }],
+      });
+      expect((await ask()).body.listingNudge?.serverId).toBe(bigger);
+    });
+
+    it("asks once: the preference the card stamps silences it on every device", async () => {
+      await makeCommunity("Uma vez", { inDirectory: false });
+      expect((await ask()).body.listingNudge).not.toBeNull();
+
+      const patched = await call(owner, "PATCH", "/api/me/preferences", {
+        communityListingNudgeAt: new Date().toISOString(),
+      });
+      expect(patched.status).toBe(200);
+      expect((await ask()).body.listingNudge).toBeNull();
+    });
+
+    it("answers null with the runtime flag off, and 404 with communities off", async () => {
+      await makeCommunity("Desligado", { inDirectory: false });
+      process.env.COMMUNITY_LISTING_NUDGE = "off";
+      const off = await ask();
+      expect(off.status).toBe(200);
+      expect(off.body.listingNudge).toBeNull();
+
+      delete process.env.COMMUNITY_LISTING_NUDGE;
+      delete process.env.COMMUNITIES_ENABLED;
+      expect((await ask()).status).toBe(404);
+    });
+  });
 
   describe("exclusions", () => {
     it("hides a community the viewer is banned from, everywhere", async () => {
@@ -1636,7 +1870,7 @@ describeDb("communities", () => {
       expect(res.body.community.name).toBe("Valorant Brasil");
       expect(res.body.community.tagline).toBe("a gente perde junto");
       expect(res.body.community.category).toBe("games");
-      expect(res.body.community.memberCount).toBe(2);
+      expect(res.body.community.memberCount).toBe(3);
       expect(res.body.community.createdMonth).toMatch(/^\d{4}-\d{2}$/);
     });
 

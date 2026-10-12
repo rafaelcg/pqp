@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  copyObject,
   deleteObject,
   getObjectPrefix,
   headObject,
@@ -446,6 +447,31 @@ describeMinio("round trip against real storage", () => {
     expect(await headObject(key)).toBeNull();
     // Deleting twice is a success, which is what lets the sweeper retry.
     await expect(deleteObject(key)).resolves.toBeUndefined();
+  });
+
+  it("copies an object inside the bucket (Salvar no Baú), awkward key and all", async () => {
+    const source = `stories/${randomUUID()}/a b+c(1).jpg`;
+    const destination = `community-home/${randomUUID()}/copy.jpg`;
+    const body = "pretend jpeg";
+    const put = await fetch(presignPut(source, "image/jpeg", Buffer.byteLength(body), 300), {
+      method: "PUT",
+      headers: { "Content-Type": "image/jpeg" },
+      body,
+    });
+    expect(put.status).toBe(200);
+
+    await copyObject(source, destination);
+    expect(await headObject(destination)).toEqual({
+      contentLength: Buffer.byteLength(body),
+      contentType: "image/jpeg",
+    });
+    // The story's own object goes on schedule; the copy stays.
+    await deleteObject(source);
+    const get = await fetch(presignGet(destination, { ttlSeconds: 300 }));
+    expect(await get.text()).toBe(body);
+    await deleteObject(destination);
+    // A copy of nothing is an error, never a silent success.
+    await expect(copyObject(source, destination)).rejects.toThrow();
   });
 
   it("refuses an upload that sends a different content type than was signed", async () => {

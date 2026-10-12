@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  FORUM_UNREAD_CAP,
   formatUserTag,
   USER_SEARCH_PAGE_SIZE,
   type DmPrivacy,
@@ -1475,6 +1476,26 @@ export async function liftBan(
  * disagree with the badge that appeared at the time, about the same message.
  * The message is still delivered and still readable behind the client's
  * curtain — a block takes away the notification, not the content.
+ *
+ * --- forums --- (packages/shared/src/forums.ts, "UNREAD"). A forum post gets
+ * NO row here, and a forum's row is computed differently from a channel's:
+ *
+ * - `count` is the number of published posts by others created after the
+ *   viewer's cursor on the FORUM (capped at `FORUM_UNREAD_CAP`). A reply in a
+ *   post the viewer never opened does not light the forum. That is the rule
+ *   that keeps a busy forum readable, and it is also what keeps this query
+ *   cheap: counted per post, a viewer who never opened 2,000 posts would make
+ *   every server open count every message in all of them, from `-infinity`.
+ * - `mentions` is the viewer's `message_mentions` rows inside the forum's
+ *   posts, after that post's own cursor, or after the forum's when the post
+ *   was never opened. Driven by the viewer's mentions
+ *   (`idx_message_mentions_user`), not by the posts, so it costs the same at
+ *   ten posts and at ten thousand. `@everyone` inside a post is not counted
+ *   there (it is a flag on the message, not a row per member, and finding it
+ *   means scanning the posts); the post itself still lights the forum.
+ *
+ * Chat threads keep their own rows: the web client derives which threads are
+ * unread from these keys.
  */
 export async function listUnread(serverId: string, userId: string) {
   const result = await getPool().query<{
@@ -1482,7 +1503,32 @@ export async function listUnread(serverId: string, userId: string) {
     count: string;
     mentions: string;
   }>(
-    `SELECT c.id AS channel_id,
+    `-- The forum roll-up below must be driven by the viewer's mention rows
+     -- (idx_message_mentions_user), never by the posts. Written as a plain
+     -- join, the planner was free to start from this server's forums and walk
+     -- every message in every post (11k to 32k buffers at 500 posts). So the
+     -- viewer's mention ids come first, alone (keyed by user, which is the
+     -- index there is), and each one is then resolved by primary key through
+     -- a LATERAL, which leaves the planner no other order: a message, its
+     -- post, and whether that post's forum is in this server.
+     WITH my_post_mentions AS MATERIALIZED (
+       SELECT hit.forum_id, hit.post_id, hit.created_at
+         FROM message_mentions mm
+         CROSS JOIN LATERAL (
+           SELECT fp.forum_id, fp.channel_id AS post_id, m.created_at
+             FROM messages m
+             JOIN forum_posts fp ON fp.channel_id = m.channel_id
+            WHERE m.id = mm.message_id
+              AND m.author_id <> $2
+              AND fp.published_at IS NOT NULL
+              AND ${notBlockedSql("$2", "m.author_id")}
+              AND EXISTS (
+                SELECT 1 FROM channels f WHERE f.id = fp.forum_id AND f.server_id = $1
+              )
+         ) hit
+        WHERE mm.user_id = $2
+     )
+     SELECT c.id AS channel_id,
             COUNT(m.id)::text AS count,
             COUNT(DISTINCT CASE
               WHEN mm.user_id IS NOT NULL OR m.mention_everyone THEN m.id
@@ -1499,9 +1545,58 @@ export async function listUnread(serverId: string, userId: string) {
      LEFT JOIN message_mentions mm
        ON mm.message_id = m.id AND mm.user_id = $2
      WHERE c.server_id = $1
+       AND c.type <> 'forum'
+       -- Not a forum post. Written against the parent rather than as a probe
+       -- of forum_posts so it filters the channel scan itself (one hashed
+       -- list of this server's forums) before the per-row visibility check:
+       -- as an anti-join the planner ran it after, and paid channel_viewable
+       -- once per post. A post never moves between forums and a chat thread
+       -- never has a forum parent, so the two agree.
+       AND NOT (
+         c.type = 'thread'
+         AND c.parent_id IS NOT NULL
+         AND c.parent_id IN (
+           SELECT f.id FROM channels f WHERE f.server_id = $1 AND f.type = 'forum'
+         )
+       )
        AND ${channelVisibleSql("$2")}
-     GROUP BY c.id`,
-    [serverId, userId],
+     GROUP BY c.id
+
+     UNION ALL
+
+     SELECT c.id AS channel_id,
+            (SELECT COUNT(*) FROM (
+               SELECT 1
+                 FROM forum_posts fp
+                WHERE fp.forum_id = c.id
+                  AND fp.published_at IS NOT NULL
+                  AND fp.created_at > COALESCE(cr.last_read_at, TIMESTAMPTZ '-infinity')
+                  AND fp.author_id IS DISTINCT FROM $2
+                  AND ${notBlockedSql("$2", "fp.author_id")}
+                LIMIT $3
+             ) fresh)::text AS count,
+            COALESCE(fm.mentions, 0)::text AS mentions
+     FROM channels c
+     JOIN server_members sm ON sm.server_id = c.server_id AND sm.user_id = $2
+     LEFT JOIN channel_reads cr
+       ON cr.channel_id = c.id AND cr.user_id = $2
+     -- Every forum's mentions in one pass over the viewer's mention rows,
+     -- grouped by forum, rather than once per forum row.
+     LEFT JOIN (
+       SELECT mine.forum_id, COUNT(*) AS mentions
+         FROM my_post_mentions mine
+         LEFT JOIN channel_reads pr
+           ON pr.channel_id = mine.post_id AND pr.user_id = $2
+         LEFT JOIN channel_reads fr
+           ON fr.channel_id = mine.forum_id AND fr.user_id = $2
+        WHERE mine.created_at > COALESCE(
+                pr.last_read_at, fr.last_read_at, TIMESTAMPTZ '-infinity')
+        GROUP BY mine.forum_id
+     ) fm ON fm.forum_id = c.id
+     WHERE c.server_id = $1
+       AND c.type = 'forum'
+       AND ${channelVisibleSql("$2")}`,
+    [serverId, userId, FORUM_UNREAD_CAP],
   );
 
   return result.rows.map((row) => ({

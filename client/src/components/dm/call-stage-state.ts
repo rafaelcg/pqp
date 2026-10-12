@@ -97,14 +97,23 @@ export function isMusicPictureOnlyStage(input: {
  * The SHORT rule is capped so `STAGE_COLUMN_RESERVE_PX` of the window is
  * left for the header above and the composer below, because on a short
  * window that furniture cannot shrink and the message box went off the
- * bottom edge. The tall rule is deliberately NOT capped: `68svh` for a
- * camera or a share is a product rule with its own e2e assertions behind
+ * bottom edge.
+ *
+ * The TALL rule keeps `68svh` for a camera or a share on any window 720px
+ * tall or more: that is a product rule with its own e2e assertions behind
  * it (`call-split-layout.spec.ts` checks the stage is exactly 68svh of the
  * window before anybody drags the divider, and `dm-call-video-stage.spec.ts`
- * checks a 1:1 call gives the remote person at least half the viewport).
- * A 300px reserve costs 12px of that at 900px tall, which is enough to
- * break both. A picture somebody is publishing wins; an album cover does
- * not need to.
+ * checks a 1:1 call gives the remote person at least half the viewport),
+ * so it is not given the 300px reserve, which costs 12px of it at 900px.
+ * It carries a smaller one, `STAGE_TALL_RESERVE_PX`: what sits outside the
+ * stage while a picture is up (the channel header above it, the chat
+ * header and the message box below it; the call controls are on the stage
+ * itself), which is 32% of a 720px window and so never binds there. Below
+ * that, a desktop window down to the shell's 600px minimum or a laptop
+ * with a panel, the bare `68svh` put the message box off the bottom edge
+ * during a screen share ("aparece tanta informação que o resto fica
+ * cortado", a Linux desktop report, Oct 2026). Now the stage gives way and
+ * the box stays on screen.
  */
 /**
  * Written out rather than built, both of them, because Tailwind generates a
@@ -112,12 +121,20 @@ export function isMusicPictureOnlyStage(input: {
  * from a template literal produces no CSS at all and the element falls back
  * to whatever it inherits, which here would be no height rule whatsoever.
  */
-const STAGE_HEIGHT_TALL = "h-[68svh] min-h-[280px]";
+export const STAGE_HEIGHT_TALL =
+  "h-[min(68svh,calc(100svh-230px))] min-h-[280px]";
 const STAGE_HEIGHT_SHORT =
   "h-[min(38svh,calc(100svh-300px))] max-h-[420px] min-h-[220px]";
 
-/** What both rules keep clear for the header above and the composer below. */
+/** What the short rule keeps clear for the header above and the composer below. */
 export const STAGE_COLUMN_RESERVE_PX = 300;
+
+/**
+ * What the tall rule keeps clear while a picture is up. Must stay at or under
+ * 32% of 720px (230.4), so a window that tall or taller still gets a clean
+ * `68svh`; the test holds it there.
+ */
+export const STAGE_TALL_RESERVE_PX = 230;
 
 export function stageHeightClass(input: {
   anyVideo: boolean;

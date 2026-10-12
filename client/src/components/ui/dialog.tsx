@@ -160,6 +160,13 @@ interface DialogProps {
    * it for a 56px band; every other dialog leaves it alone.
    */
   headerClassName?: string;
+  /**
+   * One control in the title band, before the close button: the forum
+   * composer's Publicar on a phone, where the band is the part of a bottom
+   * sheet the keyboard never covers (the layer is sized to the visual
+   * viewport, so the band stays on screen above the keyboard).
+   */
+  headerAction?: ReactNode;
 }
 
 /**
@@ -182,6 +189,7 @@ export function Dialog({
   entrance = true,
   headerKey,
   headerClassName,
+  headerAction,
 }: DialogProps) {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -438,6 +446,11 @@ export function Dialog({
                 </p>
               )}
             </div>
+            {headerAction && (
+              <div className="ml-auto flex shrink-0 items-center self-center">
+                {headerAction}
+              </div>
+            )}
             {dismissible && (
               <button
                 type="button"

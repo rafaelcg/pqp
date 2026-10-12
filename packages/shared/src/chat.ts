@@ -21,6 +21,7 @@ import { embedSchema } from "./embeds.js";
 import { friendActivitySchema } from "./friends.js";
 import { permissionsUpdateSchema } from "./permissions.js";
 import { communityHomeUpdateSchema } from "./community-home.js";
+import { storiesUpdateFrameSchema } from "./stories.js";
 import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { serverRemovedSchema } from "./moderation.js";
@@ -38,9 +39,16 @@ import {
   threadUpdateBroadcastSchema,
 } from "./threads.js";
 import { webhookEmbedSchema } from "./webhooks.js";
+// --- forums ---
+import { forumPostRemovedSchema, forumPostUpsertSchema } from "./forums.js";
 import { chanceRequestSchema, chanceResultSchema } from "./chance.js";
 import { pollRequestSchema, pollSchema } from "./polls.js";
 import { AUTOMOD_CUSTOM_MESSAGE_MAX } from "./automod.js";
+import {
+  messageSystemKindSchema,
+  nudgeFrameSchema,
+  nudgeRefusedSchema,
+} from "./nudge.js";
 
 export const joinChannelMessageSchema = z.object({
   type: z.literal("join-channel"),
@@ -179,6 +187,10 @@ const broadcastMessageSchema = z.object({
   thread: threadSummarySchema.nullable().default(null),
   chance: chanceResultSchema.nullable().default(null),
   poll: pollSchema.nullable().default(null),
+  /** Same field as `messageSchema.systemKind`: `nudge`, or null. */
+  systemKind: messageSystemKindSchema,
+  /** See `messageSchema.storyId`: the story a reply quotes. */
+  storyId: z.string().uuid().nullable().optional(),
 });
 
 export const pollVoteMessageSchema = z.object({
@@ -254,6 +266,13 @@ export const messageRejectReasonSchema = z.enum([
    * moment the database is back.
    */
   "database-unavailable",
+  /**
+   * A reply in a forum post that staff closed (`forums.ts`). Only staff
+   * (MANAGE_MESSAGES or MANAGE_CHANNELS on the forum) still get through. Only a
+   * forum-aware client can reach a post, so an older client never sees it;
+   * Android and iOS fall back to their generic copy anyway.
+   */
+  "locked",
 ]);
 export type MessageRejectReason = z.infer<typeof messageRejectReasonSchema>;
 
@@ -368,6 +387,14 @@ export const channelActivitySchema = z.object({
    * to know who wrote it) without a second round trip.
    */
   authorId: z.string().uuid().optional(),
+  /**
+   * Set when the message behind this activity is a system message (`nudge`),
+   * so a client that is not looking at the conversation can say "Lu chamou
+   * tua atenção!" instead of showing the bare `📳` preview. Optional and
+   * caught, so a frame from an older sibling, or a kind added later, parses
+   * as an ordinary message's activity.
+   */
+  systemKind: z.enum(["nudge"]).optional().catch(undefined),
 });
 
 export const reactionBroadcastSchema = z.object({
@@ -623,6 +650,20 @@ export const watchPartyUpdateSchema = z.object({
 
 export type WatchPartyUpdateBroadcast = z.infer<typeof watchPartyUpdateSchema>;
 
+/**
+ * The 422 body of `POST /api/channels/:forumId/posts` when the opening message
+ * (or the title, under AutoMod) was refused: the house `{ error }` plus the
+ * same fields a `message-rejected` frame carries, so the forum composer reuses
+ * the chat composer's copy. `error` is `forum_post_rejected` (`FORUM_ERRORS`).
+ */
+export const forumPostRejectedBodySchema = z.object({
+  error: z.string(),
+  reason: messageRejectReasonSchema,
+  retryAfterMs: messageRejectedSchema.shape.retryAfterMs,
+  automodMessage: messageRejectedSchema.shape.automodMessage,
+});
+export type ForumPostRejectedBody = z.infer<typeof forumPostRejectedBodySchema>;
+
 export const chatServerMessageSchema = z.discriminatedUnion("type", [
   messageBroadcastSchema,
   messageUpdateBroadcastSchema,
@@ -637,6 +678,9 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   profileUpdateSchema,
   // --- threads ---
   threadUpdateBroadcastSchema,
+  // --- forums --- the forum list's live rows, fanned out to the forum.
+  forumPostUpsertSchema,
+  forumPostRemovedSchema,
   // A refusal is a chat outcome: it is sent over the chat socket, in response
   // to a chat action, and it describes what happened to a message somebody
   // tried to send. It belongs in the type the chat socket is declared to carry,
@@ -659,6 +703,9 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // channel the frame named.
   permissionsUpdateSchema,
   communityHomeUpdateSchema,
+  // Per person, never a channel fan-out: a server's members, an author's
+  // friends, or the author's own sockets. See `stories.ts`.
+  storiesUpdateFrameSchema,
   // Per socket like `permissions-update`: the members who can see the change.
   channelsUpdateSchema,
   pollUpdateBroadcastSchema,
@@ -673,6 +720,9 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // Per person too: see `voiceNoteListenedSchema`, and its absence from the
   // list below.
   voiceNoteListenedSchema,
+  // Addressed to the sender only, like `message-rejected`: a nudge that did
+  // not land, and why. See `nudge.ts`, and its absence from the list below.
+  nudgeRefusedSchema,
 ]);
 
 /**
@@ -701,6 +751,8 @@ const chatClientFrameUnion = z.discriminatedUnion("type", [
   setAttentionMessageSchema,
   pollVoteMessageSchema,
   pollCloseMessageSchema,
+  // Chamar a atenção: one tap, no body. The server writes the message.
+  nudgeFrameSchema,
 ]);
 
 export const chatClientMessageSchema = chatClientFrameUnion.superRefine(
@@ -775,6 +827,10 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  * `community-home-update` is absent for the same reason: server-scoped, no
  * channel, clients refetch Baú. It travels on `chat.community-home`.
  *
+ * `stories-update` is absent for the same reason: addressed to a server's
+ * members, an author's friends or the author alone, never to a channel. It
+ * travels on `chat.stories`.
+ *
  * `channels-update` is absent for the same reason again: server-scoped, no
  * channel, clients refetch their own channel list. It travels on
  * `chat.channels`.
@@ -783,6 +839,10 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  * lost the server, so no channel could reach them anyway. It names who was
  * kicked or banned by who receives it, and travels on `chat.membership` keyed
  * by user id.
+ *
+ * `nudge-refused` is absent for the same reason as `message-rejected`: it
+ * tells one sender their nudge did not land. A nudge that DID land is an
+ * ordinary `message-broadcast` and needs nothing here.
  *
  * `voice-note-listened` is absent for the same reason: it is addressed to the
  * listener's own sockets and, in a small conversation, the author's, and the
@@ -804,6 +864,12 @@ export const CHAT_SERVER_MESSAGE_TYPES = [
   // --- threads --- the chip refresh for parent-channel viewers; content-free,
   // so fanning it out to everyone in the parent channel is correct.
   "thread-update",
+  // --- forums --- a post's summary, or its removal, for everyone viewing the
+  // forum (and, for a removal, the post). Every forum viewer may read every
+  // summary, so the channel relay is exactly the right audience; without
+  // these two lines a post made on the sibling instance never reaches them.
+  "forum-post-upsert",
+  "forum-post-removed",
   "poll-update",
   // A voice note's transcript and playback copy. Addressed to the note's
   // channel on purpose: whoever can hear the audio may read the text. They

@@ -64,6 +64,11 @@ data class BauMedia(
     val twitchUrl: String? = null,
     /** The vertical cut of a `video`, or null. Only ever set on a video. */
     val mobile: BauMobileRendition? = null,
+    /**
+     * The cover the author chose for a `video` (a presigned image URL), or
+     * null: no cover, not a video, or an older API that never sends it.
+     */
+    val posterUrl: String? = null,
 ) {
     val isImage: Boolean get() = kind == "image"
     val isVideo: Boolean get() = kind == "video"
@@ -91,6 +96,13 @@ data class BauMedia(
         isHttp(mobile?.url) -> mobile?.url
         else -> url
     }
+
+    /**
+     * The cover to paint before play, or null to keep the plain badge. Only
+     * for a stored video and only a readable http(s) URL, so a bad value
+     * costs the cover and nothing else.
+     */
+    val coverUrl: String? get() = posterUrl.takeIf { isVideo && isHttp(it) }
 
     /** What a tap opens: the object for storage kinds, the watch page for paste URLs. */
     val openUrl: String? get() = when {

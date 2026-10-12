@@ -66,6 +66,20 @@ data class Me(
 data class MePreferences(
     /** Finished, skipped, or grandfathered. Present means "not again", on every device. */
     val onboardedAt: String? = null,
+    /**
+     * The notification levels the web's menus write. Only the per-channel map
+     * is read on Android, to dim the channels this person silenced.
+     */
+    val notifications: MeNotificationPreferences? = null,
+    /** Chamar a atenção, both ways. Absent reads as on (`nudgesAllowed`). */
+    val allowNudges: Boolean? = null,
+)
+
+/** `notificationPreferencesSchema`, the one key this client reads. */
+@Serializable
+data class MeNotificationPreferences(
+    /** Channel id to `"all" | "mentions" | "none"`. */
+    val channels: Map<String, String> = emptyMap(),
 )
 
 // --- servers and channels ---
@@ -176,6 +190,13 @@ data class Channel(
     // A watch party is a voice room with a gated stage; this app joins it as audience.
     val isVoice: Boolean get() = type == "voice" || type == "watch_party"
     val isCategory: Boolean get() = type == "category"
+
+    /**
+     * Holds posts instead of messages (`packages/shared/src/forums.ts`). Its
+     * row sits with the text channels and opens the forum screen, never a
+     * chat: a forum carries no message of its own.
+     */
+    val isForum: Boolean get() = type == "forum"
 }
 
 @Serializable
@@ -325,6 +346,18 @@ data class Message(
      */
     val blocked: Boolean = false,
     val chance: ChancePayload? = null,
+    /**
+     * `nudge` when the server wrote this message for chamar a atenção; null for
+     * an ordinary one and for any kind this build does not know, which then
+     * renders as its plaintext body. See `gg.pqp.app.nudge.Nudge`.
+     */
+    val systemKind: String? = null,
+    /**
+     * The story a DM reply quotes (`messageSchema.storyId`). The quote card
+     * reads `GET /api/stories/:id/card`, which never hands out media after the
+     * story expires.
+     */
+    val storyId: String? = null,
 )
 
 @Serializable

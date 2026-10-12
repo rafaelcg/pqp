@@ -27,6 +27,7 @@ export const FEATURE_HINT_IDS = [
   "musicField",
   "composerFormat",
   "channelPin",
+  "forum",
   "shortcuts",
   // Not in the attached queue: the notice is rendered by the composer itself,
   // at the moment somebody records (see `voice-note-transcription-notice.tsx`).
@@ -49,6 +50,7 @@ export const FEATURE_HINT_STORAGE_KEYS = {
   musicField: "pqp:feature-hint-music-field-2026-09",
   composerFormat: "pqp:feature-hint-composer-format-2026-09",
   channelPin: "pqp:feature-hint-channel-pin-2026-09",
+  forum: "pqp:feature-hint-forum-2026-10",
   shortcuts: "pqp:feature-hint-shortcuts-2026-09",
   voiceNoteTranscription: "pqp:feature-hint-voice-note-transcription-2026-10",
 } as const;
@@ -87,6 +89,10 @@ export const ATTACHED_FEATURE_HINT_ORDER = [
   "music",
   "composerFormat",
   "channelPin",
+  // Beside Novo post, the first time somebody who can post opens a forum
+  // that has posts (an empty forum's own empty state already explains).
+  // Last: a standing tip, and the forum pane is where it lives.
+  "forum",
 ] as const;
 
 export type AttachedFeatureHintId = (typeof ATTACHED_FEATURE_HINT_ORDER)[number];

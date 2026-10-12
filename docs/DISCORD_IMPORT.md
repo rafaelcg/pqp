@@ -64,13 +64,18 @@ Not in a Guild Template:
 
 Mapped away by pqp:
 
-- NSFW, slowmode, bitrate, forum tags, threads, directory channels
+- NSFW, slowmode, bitrate, threads, directory channels
+- Forum tags past the 20-tag cap, tag names past 20 characters, duplicate tag
+  names, and a custom emoji's picture (the tag keeps its name). With the
+  `forum_channels` flag off, all forum tags.
 - Roles that cannot be sanitised to pqp's `letters, numbers, underscore` names
 - Roles named `everyone`, `here`, `Owner`, `Admin`, `Manager`, or
   `Moderator` after sanitising (those names are already seeded)
 
-Announcement, forum, and media channels become text channels. Stage channels
-become voice channels.
+Announcement and media channels become text channels. Stage channels become
+voice channels. A forum becomes a forum, with its tags, while the
+`forum_channels` flag is **globally** on; otherwise it becomes a text channel
+as it always did (see "Forums" below).
 
 ## Privacy
 
@@ -171,9 +176,11 @@ Checked against Discord's Guild Template docs and
 |---|---|
 | Guild name | Server name |
 | Category / text / voice | Same types, sidebar order recomputed |
-| Announcement / forum / media | Flattened to text |
+| Announcement / media | Flattened to text |
+| Forum | Forum, with its tags, when `forum_channels` is globally on. Flattened to text otherwise. |
+| Forum `available_tags` | `forum_tags`: first 20, names cut to 20, duplicates by lower-case name dropped, unicode emoji and `moderated` kept |
 | Stage | Flattened to voice |
-| Channel name, topic | Name kept; topic cut at 200 |
+| Channel name, topic | Name kept; topic cut at 200. A forum's topic is its guidelines. |
 | `@everyone` deny VIEW | Private channel (`channel_overwrites`) |
 | Role name, colour, hoist, mentionable | Cosmetic role |
 | Role `permissions` | Named pqp flags. Never Administrator. `@everyone` also drops manage bits. |
@@ -193,7 +200,10 @@ Overview (about + Baú), but import still does not fill it.
 | `nsfw` | The instance is already 18+. No per-channel NSFW flag. | Unlikely. |
 | `rate_limit_per_user` (slowmode) | Gap #20 in [`DISCORD_GAPS.md`](./DISCORD_GAPS.md). No `slowmode_seconds` column. | When slowmode ships. |
 | `bitrate`, `user_limit`, `video_quality_mode`, `rtc_region` | No per-channel Discord-style voice caps. Discord's default is 64 kbps on every voice channel; copying it would make imported Lobbies worse than homemade ones. | Only if pqp grows its own per-channel voice knobs. |
-| Forum tags, default reaction, sort, layout, auto-archive | Flattened to text. pqp threads hang off a root message, which a template does not contain. | After a real forum type, not by inventing empty threads. |
+| Forum default reaction, sort by creation date, gallery layout, post slowmode (`default_thread_rate_limit_per_user`), require-a-tag flag, auto-archive | The forum is created with pqp's defaults. The preview lists the forum under "mapped away" (`forumSettings`). | Sort and require-tag have a home (`forum_settings`) and could be copied; the rest have none. |
+| A tag's custom emoji picture | `forum_tags.emoji` holds one unicode emoji, no custom pictures in v1. The tag keeps its name (`forumTagsTrimmed`). | With custom emoji. |
+| Forum tags past 20, names past 20 characters, duplicates | `forum_tags` caps and uniqueness. Reported as `forumTagsTrimmed`. | No. |
+| Media channels (type 16) | Still flattened to text. | Unlikely. |
 | Threads (types 10/11/12), directory (14) | Dropped. Directory is Discord hub-only. | Directory: never. Threads: not from a template. |
 | `verification_level`, `explicit_content_filter` | pqp uses an age gate, not Discord's verification ladder. | No. |
 | `default_message_notifications` | pqp notification levels are per-user prefs, not a guild default. | No. |
@@ -201,8 +211,34 @@ Overview (about + Baú), but import still does not fill it.
 | AFK channel / timeout, system channel / flags, premium progress bar | pqp has no AFK and no Discord system channel. | No. |
 | `region` | Legacy Discord voice region. Unused. | No. |
 
-Announcement, forum, media, and stage as first-class types would stop the
-flatten. That is a product type decision, not an import bug.
+Announcement, media, and stage as first-class types would stop the flatten.
+That is a product type decision, not an import bug. Forums are the one that
+stopped.
+
+### Forums
+
+`mapGuildTemplate(raw, { forumChannels })` is pure. The server passes
+`forumChannelsEnabled(null)` (`server/src/services/discord-import.ts`, in
+`fetchMappedDiscordTemplate`), so preview and apply both read the flag at the
+moment they run and agree with each other.
+
+**The flag is global only here.** An import creates a new server, so no
+per-server override can exist yet; `isEnabled` is asked without a server id and
+answers the global row, the variable, or the default. While forums are on for a
+few servers only, imports keep flattening a forum to a text channel (the
+preview says so with `flattenForum`). Off is byte for byte the old output.
+
+On, type 15 maps to `{ type: "forum" }` and `available_tags` is parsed
+leniently (`{ name, emoji_name?, emoji_id?, moderated? }`, any entry that is
+not that is skipped, never a failed template). `createServerFromImport` inserts
+`forum_tags` right after the channels, in the same transaction, one INSERT for
+every forum.
+
+Reasons the preview can show for a forum: `forumTagsTrimmed` (tags skipped,
+names cut, or a custom emoji picture lost), `forumSettings` (an option above
+that did not come along). A forum's `topic` is its guidelines and keeps the
+200 cut (`topicTruncated`). The `/vem` landing copy still says a forum becomes
+a text channel; it changes when the flag goes global.
 
 ### Not in a Guild Template
 

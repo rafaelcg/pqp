@@ -238,6 +238,13 @@ actor APIClient {
         try await send(path: path, method: "DELETE", query: [], body: nil)
     }
 
+    /// A verb with a JSON body that the helpers above do not name (PUT, or a
+    /// DELETE that carries a reason), for endpoints declared in other files.
+    @discardableResult
+    func send<T: Decodable>(path: String, method: String, body: some Encodable) async throws -> T {
+        try await send(path: path, method: method, query: [], body: try Coding.encoder.encode(body))
+    }
+
     fileprivate func send<T: Decodable>(
         path: String,
         method: String,
@@ -261,6 +268,16 @@ actor APIClient {
         }
     }
 
+    /// What a URLSession failure becomes. A cancelled request is
+    /// `CancellationError`, never `APIError.transport`: the transport case is
+    /// shown to people ("Could not connect to the server."), and URLSession's
+    /// sentence for a cancelled task is the bare word "cancelled". See
+    /// `Error.isCancellation`.
+    static func transportFailure(_ error: any Error) -> any Error {
+        if error.isCancellation { return CancellationError() }
+        return APIError.transport(error.localizedDescription)
+    }
+
     /// The transport, minus decoding.
     ///
     /// Split out so a conditional GET can see the status code: a `304` is a
@@ -275,6 +292,60 @@ actor APIClient {
         body: Data?,
         ifNoneMatch: String?,
         idempotencyKey: String? = nil
+    ) async throws -> (Data, HTTPURLResponse) {
+        let (data, http) = try await transport(
+            path: path, method: method, query: query, body: body,
+            ifNoneMatch: ifNoneMatch, idempotencyKey: idempotencyKey
+        )
+
+        if http.statusCode == 304, ifNoneMatch != nil {
+            return (data, http)
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            // Every non-2xx body is `{ "error": "..." }`; fall back to the
+            // status if we somehow got something else (e.g. hit a static host).
+            let message = (try? Coding.decoder.decode(ApiErrorBody.self, from: data))?.error
+                ?? "Request failed (\(http.statusCode))"
+            switch http.statusCode {
+            case 401: throw APIError.unauthorized
+            case 404: throw APIError.notFound(message)
+            case 429:
+                let retry = (http.value(forHTTPHeaderField: "Retry-After")).flatMap(Int.init)
+                throw APIError.rateLimited(retryAfter: retry)
+            default: throw APIError.server(status: http.statusCode, message: message)
+            }
+        }
+
+        return (data, http)
+    }
+
+    /// A request whose refusal says more than `{ error }`: the body and the
+    /// status come back as they are, for every status. Only the transport
+    /// itself throws. Used by the forum create, whose 422 carries the same
+    /// `reason` / `retryAfterMs` / `automodMessage` a `message-rejected` does,
+    /// which the mapping above would reduce to one sentence.
+    func rawRequest(
+        _ path: String,
+        method: String,
+        body: (some Encodable)? = Optional<Data>.none
+    ) async throws -> (data: Data, status: Int) {
+        let encoded = try body.map { try Coding.encoder.encode($0) }
+        let (data, http) = try await transport(
+            path: path, method: method, query: [], body: encoded,
+            ifNoneMatch: nil, idempotencyKey: nil
+        )
+        return (data, http.statusCode)
+    }
+
+    /// Builds and sends one request. No status mapping: that is the caller's.
+    private func transport(
+        path: String,
+        method: String,
+        query: [URLQueryItem],
+        body: Data?,
+        ifNoneMatch: String?,
+        idempotencyKey: String?
     ) async throws -> (Data, HTTPURLResponse) {
         guard var components = URLComponents(
             url: backend.apiBaseURL.appendingPathComponent(path),
@@ -300,36 +371,22 @@ actor APIClient {
             request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
         }
         request.httpBody = body
+        // A caller cancelled while the token was being read. Clerk answers that
+        // with no token at all, and sending the request anyway would come back
+        // 401 and read as "Your session expired" to somebody who only pulled
+        // to refresh.
+        try Task.checkCancellation()
 
         let data: Data
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw APIError.transport(error.localizedDescription)
+            throw Self.transportFailure(error)
         }
 
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")
-        }
-
-        if http.statusCode == 304, ifNoneMatch != nil {
-            return (data, http)
-        }
-
-        guard (200..<300).contains(http.statusCode) else {
-            // Every non-2xx body is `{ "error": "..." }`; fall back to the
-            // status if we somehow got something else (e.g. hit a static host).
-            let message = (try? Coding.decoder.decode(ApiErrorBody.self, from: data))?.error
-                ?? "Request failed (\(http.statusCode))"
-            switch http.statusCode {
-            case 401: throw APIError.unauthorized
-            case 404: throw APIError.notFound(message)
-            case 429:
-                let retry = (http.value(forHTTPHeaderField: "Retry-After")).flatMap(Int.init)
-                throw APIError.rateLimited(retryAfter: retry)
-            default: throw APIError.server(status: http.statusCode, message: message)
-            }
         }
 
         return (data, http)
@@ -1013,7 +1070,7 @@ extension APIClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw APIError.transport(error.localizedDescription)
+            throw Self.transportFailure(error)
         }
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")
@@ -1068,7 +1125,7 @@ extension APIClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw APIError.transport(error.localizedDescription)
+            throw Self.transportFailure(error)
         }
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")

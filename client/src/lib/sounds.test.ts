@@ -34,7 +34,93 @@ const enabled: SoundState = {
   voiceLeave: true,
   incomingCall: true,
   outgoingCall: true,
+  nudge: true,
 };
+
+/** An AudioContext that records every oscillator and filter it is asked for. */
+function stubSynthAudio() {
+  const oscillators: Array<{ type: string; frequency: Record<string, unknown> }> = [];
+  const filters: Array<{ type: string; frequency: { value: number } }> = [];
+  const param = () => ({
+    value: 0,
+    setValueAtTime: vi.fn(),
+    linearRampToValueAtTime: vi.fn(),
+    exponentialRampToValueAtTime: vi.fn(),
+  });
+  const node = () => ({
+    connect: vi.fn((next: unknown) => next),
+    disconnect: vi.fn(),
+  });
+  vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("offline"))));
+  vi.stubGlobal(
+    "AudioContext",
+    class {
+      state = "running";
+      currentTime = 0;
+      destination = {};
+      createGain() {
+        return { ...node(), gain: param() };
+      }
+      createOscillator() {
+        const osc = {
+          ...node(),
+          type: "sine",
+          frequency: param(),
+          start: vi.fn(),
+          stop: vi.fn(),
+          onended: null as (() => void) | null,
+        };
+        oscillators.push(osc);
+        return osc;
+      }
+      createBiquadFilter() {
+        const filter = { ...node(), type: "allpass", frequency: { value: 0 }, Q: { value: 0 } };
+        filters.push(filter);
+        return filter;
+      }
+      close() {
+        return Promise.resolve();
+      }
+      resume() {
+        return Promise.resolve();
+      }
+    },
+  );
+  return { oscillators, filters };
+}
+
+describe("the nudge cue", () => {
+  it("is synthesised: two triangle knocks, a square rattle through a lowpass, a 28 Hz tremolo", () => {
+    const { oscillators, filters } = stubSynthAudio();
+    playCue("nudge");
+    expect(oscillators.map((osc) => osc.type)).toEqual([
+      "triangle",
+      "triangle",
+      "square",
+      "sine",
+    ]);
+    expect(oscillators[3]!.frequency.value).toBe(28);
+    expect(filters).toHaveLength(1);
+    expect(filters[0]!.type).toBe("lowpass");
+    expect(filters[0]!.frequency.value).toBe(950);
+  });
+
+  it("stays silent when its own switch or the master switch is off", () => {
+    const { oscillators } = stubSynthAudio();
+    setSoundCueEnabled("nudge", false);
+    playCue("nudge");
+    setSoundCueEnabled("nudge", true);
+    setSoundEnabled(false);
+    playCue("nudge");
+    expect(oscillators).toHaveLength(0);
+  });
+
+  it("is on by default and adopts the account's choice", () => {
+    expect(getSoundState().nudge).toBe(true);
+    adoptSoundPreferences({ nudge: false });
+    expect(getSoundState().nudge).toBe(false);
+  });
+});
 
 afterEach(() => {
   resetSoundStateForTests();

@@ -18,6 +18,12 @@ const MAX_BATCHES_PER_SERVER = 20;
  * explicit "keep this," and retention silently taking one away would be a
  * surprise nobody asked for.
  *
+ * A forum post's opening message is exempt too: it is the question the post
+ * exists for, and sweeping it would leave a title over a list of orphaned
+ * answers. Its replies age out like any other message. The probe goes through
+ * `forum_posts`' primary key (`channel_id`), so it costs nothing on the
+ * channels that are not posts.
+ *
  * No broadcast, unlike a moderator's delete: these are, by definition,
  * messages nobody currently has open (they are older than the server's own
  * retention window), so there is nothing live to reconcile. The orphaned
@@ -44,6 +50,11 @@ export async function sweepMessageRetention(): Promise<number> {
            WHERE c.server_id = $1
              AND m.pinned_at IS NULL
              AND m.created_at < NOW() - ($2 || ' days')::interval
+             AND NOT EXISTS (
+               SELECT 1 FROM forum_posts fp
+                WHERE fp.channel_id = m.channel_id
+                  AND fp.opening_message_id = m.id
+             )
            LIMIT $3
          )`,
         [server.id, server.message_retention_days, BATCH_SIZE],

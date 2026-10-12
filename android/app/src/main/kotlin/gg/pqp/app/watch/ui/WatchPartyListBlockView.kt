@@ -1,6 +1,7 @@
 package gg.pqp.app.watch.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -60,7 +62,6 @@ fun WatchPartyListBlockView(
                 .padding(horizontal = Spacing.railInset, vertical = Spacing.xs)
                 .testTag("channels.watchParty.live"),
         ) {
-            SectionEyebrow(stringResource(R.string.watch_party_list_label))
             block.parties.forEachIndexed { index, party ->
                 if (index > 0) Spacer(Modifier.padding(top = Spacing.xs))
                 LivePartyCard(
@@ -82,82 +83,83 @@ fun WatchPartyListBlockView(
     }
 }
 
-/** The small uppercase rule above the live cards, same job as [gg.pqp.app.ui.components.SectionLabel] but inset for this block. */
-@Composable
-private fun SectionEyebrow(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs),
-    )
-}
 
 /**
- * A live party reads as an event, not a busy channel: the party's own name,
- * who is hosting, a live badge and -- when the server has already said so --
- * how many are watching. Same anatomy the web's card converged on, scaled
- * down to a phone-width rail: one line for the name, one for the rest.
+ * A live party reads as an event, not a busy channel: one red card at the top
+ * of the list with the party's name, who is streaming, how many are watching
+ * when the server has said so, and a button that says what tapping does.
  */
 @Composable
 private fun LivePartyCard(party: WatchPartyListEntry.Live, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(12.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(MaterialTheme.shapes.small)
-            .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.16f))
+            .clip(shape)
+            .background(colors.error.copy(alpha = 0.10f))
+            .border(Sizes.hairline, colors.error.copy(alpha = 0.35f), shape)
             .clickable(onClick = onClick)
-            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            .padding(Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(Sizes.iconInline), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .size(width = 64.dp, height = 44.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Brush.linearGradient(listOf(colors.error.copy(alpha = 0.55f), colors.surfaceContainerHigh))),
+            contentAlignment = Alignment.Center,
+        ) {
             Icon(
                 imageVector = PqpIcons.WatchParty,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(Sizes.iconInline),
+                tint = colors.onSurface,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).size(16.dp),
+            )
+            Text(
+                text = stringResource(R.string.watch_live),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = colors.onError,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(3.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(colors.error)
+                    .padding(horizontal = 3.dp),
             )
         }
-        Spacer(Modifier.width(Spacing.sm + 2.dp))
+        Spacer(Modifier.width(Spacing.md))
         Column(Modifier.weight(1f)) {
             Text(
                 text = party.partyName,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = colors.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = stringResource(R.string.watch_party_list_hosted_by, party.hostDisplayName),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (party.watching != null && party.watching > 0) {
-                    Text(
-                        text = "  ·  " + pluralStringResource(R.plurals.watch_audience, party.watching, party.watching),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
+            val watching = party.watching?.takeIf { it > 0 }
+            Text(
+                text = stringResource(R.string.watch_party_streaming, party.hostDisplayName) +
+                    (watching?.let { " · " + pluralStringResource(R.plurals.watch_audience, it, it) } ?: ""),
+                style = MaterialTheme.typography.labelMedium,
+                color = colors.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         Spacer(Modifier.width(Spacing.sm))
         Text(
-            text = stringResource(R.string.watch_live),
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onError,
+            text = stringResource(R.string.watch_party_watch),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.onError,
             modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .background(MaterialTheme.colorScheme.error)
-                .padding(horizontal = Spacing.xs, vertical = 1.dp),
+                .clip(RoundedCornerShape(50))
+                .background(colors.error)
+                .padding(horizontal = Spacing.md, vertical = Spacing.xs + 2.dp)
+                .testTag("channels.watchParty.watch"),
         )
     }
 }

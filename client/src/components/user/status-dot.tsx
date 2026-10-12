@@ -1,6 +1,8 @@
 import { useId } from "react";
 import type { UserStatus } from "@pqp/shared";
+import { useRetroLook } from "@/hooks/use-appearance";
 import { useTranslation } from "@/lib/i18n";
+import { retroStatusKey } from "@/lib/retro-look";
 import { cn } from "@/lib/utils";
 
 /**
@@ -55,16 +57,20 @@ export function StatusDot({
   // Masks are referenced by id from the document, so two pips on one screen must
   // not share one — the second would silently adopt the first one's shape.
   const maskId = useId();
+  // Modo 2005 says the status names of the era ("Ocupado", "Disponível").
+  const retro = useRetroLook();
   const text =
     label ??
     t(
-      status === "online"
-        ? "status.online"
-        : status === "idle"
-          ? "status.idle"
-          : status === "dnd"
-            ? "status.dnd"
-            : "status.offline",
+      retro
+        ? retroStatusKey(status)
+        : status === "online"
+          ? "status.online"
+          : status === "idle"
+            ? "status.idle"
+            : status === "dnd"
+              ? "status.dnd"
+              : "status.offline",
     );
 
   return (
@@ -72,6 +78,8 @@ export function StatusDot({
       viewBox="0 0 12 12"
       role="img"
       aria-label={text}
+      // Modo 2005 paints this as a glossy gem (`components/retro/retro.css`).
+      data-status-dot={status}
       className={cn(
         "shrink-0",
         size === "sm" ? "h-2.5 w-2.5" : "h-3 w-3",

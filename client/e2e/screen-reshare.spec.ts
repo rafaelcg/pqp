@@ -514,12 +514,12 @@ test("a voice channel's SECOND screen share renders for the other member", async
   const pair = await seedVoiceServer("reshare-vc-a", "reshare-vc-b");
   const watcher = await secondClient(
     browser,
-    `/app/servers/${pair.serverId}`,
+    `/app/server/${pair.serverId}`,
     pair.guestSuffix,
   );
 
   try {
-    await bootAs(page, `/app/servers/${pair.serverId}`, pair.hostSuffix);
+    await bootAs(page, `/app/server/${pair.serverId}`, pair.hostSuffix);
     await joinVoice(page);
     await joinVoice(watcher.page);
 

@@ -22,19 +22,43 @@ struct ChannelListView: View {
     /// Set when a Baú post link brought us here: push the Baú on top of this
     /// list, scrolled to the post it names.
     let initialBau: BauFocus?
+    /// Set when a forum link or a push for a post brought us here: push the
+    /// forum on top of this list, and the post on top of the forum.
+    let initialForum: ForumFocus?
 
     init(
         server: Server,
         initialChannel: Channel? = nil,
         opensBau: Bool = false,
-        initialBau: BauFocus? = nil
+        initialBau: BauFocus? = nil,
+        initialForum: ForumFocus? = nil
     ) {
         self.server = server
         self.initialChannel = initialChannel
         self.opensBau = opensBau
         self.initialBau = initialBau
+        self.initialForum = initialForum
         _current = State(initialValue: server)
+        _collapsed = State(initialValue: CollapsedSections().load(serverId: server.id))
+        _stories = State(initialValue: StoryStripModel(scope: .server(id: server.id, name: server.name)))
     }
+
+    /// This server's stories: the strip at the top of the list, and the
+    /// composer the menu opens. Draws nothing with the flag off.
+    @State private var stories: StoryStripModel
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Sections folded on this device: `text`, `voice` or a category id.
+    @State private var collapsed: Set<String>
+    /// The header has scrolled under the navigation bar, which now shows the
+    /// compact name and activity line.
+    @State private var headerCollapsed = false
+    /// `GET …/home/latest`. Nil until the first answer; `.unsupported` on an
+    /// API without the route, which keeps today's row and `/home/unread`.
+    @State private var bauLatest: CommunityHomeLatestAnswer?
+    @State private var composingBau = false
+    /// Bumped by every `refreshBau`; an answer for an older number is dropped.
+    @State private var bauRequest = 0
 
     @State private var channels: [Channel] = []
     @State private var unread: [String: UnreadEntry] = [:]
@@ -118,12 +142,14 @@ struct ChannelListView: View {
     @State private var threadsFor: Channel?
     @State private var current: Server
     @State private var handlerKey = UUID().uuidString
-    /// Only ever driven by a restored launch — taps push through plain
+    /// Only ever driven by a restored launch, taps push through plain
     /// `NavigationLink`s, which do not need a binding.
     @State private var openedChannel: Channel?
     @State private var hasSeededInitialChannel = false
     @State private var openedBau: BauFocus?
     @State private var hasSeededInitialBau = false
+    @State private var openedForum: ForumFocus?
+    @State private var hasSeededInitialForum = false
 
     /**
      A WATCH PARTY IS NOT A VOICE ROW, AND THIS IS WHERE THAT IS ENFORCED.
@@ -162,155 +188,306 @@ struct ChannelListView: View {
         listed.filter(\.isCategory).sorted { $0.position < $1.position }
     }
     /// Channels with no category, which the sidebar shows above the grouped
-    /// ones — matching the web client's layout.
-    private var looseText: [Channel] { listed.filter { $0.isText && $0.parentId == nil } }
+    /// ones, matching the web client's layout. A forum sits with the text
+    /// channels, as on the web.
+    private var looseText: [Channel] {
+        listed.filter { ($0.isText || $0.isForum) && $0.parentId == nil }
+    }
     private var looseVoice: [Channel] { listed.filter { $0.isVoice && $0.parentId == nil } }
 
     private func children(of category: Channel) -> [Channel] {
+        Self.children(of: category, in: listed)
+    }
+
+    /// Only types this build can open (a chat or a forum): a type it does not
+    /// know is hidden, not drawn as a row that goes nowhere.
+    static func children(of category: Channel, in listed: [Channel]) -> [Channel] {
         listed
-            .filter { $0.parentId == category.id && !$0.isCategory }
+            .filter { $0.parentId == category.id && $0.isListed }
             .sorted { $0.position < $1.position }
     }
 
     private var textChannels: [Channel] { looseText }
     private var voiceChannels: [Channel] { looseVoice }
 
-    /// Split out of `body` in three parts because the single chain was
-    /// past what the type checker would finish on CI's runners.
+    // MARK: - Live state the rows read
+
+    private func isMuted(_ channel: Channel) -> Bool {
+        ChannelMute.isMuted(channelId: channel.id, serverId: server.id, preferences: session.preferences)
+    }
+
+    private func mark(for channel: Channel) -> ChannelUnreadMark {
+        ChannelUnreadMark.resolve(unread: unread[channel.id], isMuted: isMuted(channel))
+    }
+
+    private func summary(of members: [Channel]) -> ChannelSectionSummary {
+        ChannelSectionSummary.make(channels: members, unread: unread, isMuted: isMuted)
+    }
+
+    /// The call this phone is in, when it is in this list.
+    private func isCurrentCall(_ channel: Channel) -> Bool {
+        channel.isVoice && voice.isLive && voice.channelId == channel.id
+    }
+
+    /// Who is talking in this phone's own call. Nobody else's: the roster does
+    /// not carry speaking, see `VoiceOccupancyStore`.
+    private var speakingPeerIds: Set<String> {
+        Set(voice.peers.filter(\.isSpeaking).map(\.peerId))
+    }
+
+    private var activity: ServerActivity {
+        let voiceIds = channels.filter(\.isVoice).map(\.id)
+        var live = Set(liveChannels.intersection(Set(channels.map(\.id))))
+        if case .live(let party) = watchPartyListState { live.insert(party.channelId) }
+        return ServerActivity(inCall: session.voiceOccupancy.headcount(in: voiceIds), live: live.count)
+    }
+
+    private var bauMode: BauPreviewMode {
+        BauPreviewMode.resolve(
+            answer: bauLatest,
+            legacyUnread: bauUnread,
+            canPost: CommunityHomeComposeGate.canPost(config: communityHome ?? .off, permissions: watchPartyPermissions)
+        )
+    }
+
+    private func toggleSection(_ key: String) {
+        withAnimation(.channelList(reduceMotion: reduceMotion)) {
+            collapsed = CollapsedSections().toggle(key, serverId: server.id)
+        }
+    }
+
+    /// Split out of `body` in parts because the single chain was past what
+    /// the type checker would finish on CI's runners.
     private var channelScroll: some View {
-        ZStack {
-            Palette.ink.ignoresSafeArea()
+        GeometryReader { outer in
+            ZStack {
+                Palette.ink.ignoresSafeArea()
 
-            if isLoading && channels.isEmpty {
-                ProgressView().tint(Palette.signal)
-            } else if let error {
-                EmptyState(
-                    icon: "exclamationmark.triangle",
-                    title: "Could not load channels",
-                    message: LocalizedStringKey(error),
-                    actionTitle: "Try again",
-                    action: { Task { await load() } }
-                )
-            } else {
-                ScrollView {
-                    // Full-bleed, so it sits outside the list's own gutter.
-                    // Absent — which is every server that has not uploaded one —
-                    // leaves the large navigation title doing the naming, exactly
-                    // as before.
-                    if let banner = Avatar.resolve(current.bannerUrl) {
-                        CommunityBanner(url: banner, name: current.name)
-                    }
-
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        // ABOVE EVERYTHING, which is where the web's own
-                        // `LivePartyBlock` puts it: a party is an event, and
-                        // on the one evening it matters it is the reason the
-                        // app is open. NOT a row under a heading any more
-                        // (build 21's "watch party shows as a regular voice
-                        // channel" bug, and its build-22 fix, a `ForEach`
-                        // under a static "Watch party" label whenever ANY
-                        // watch_party channel existed): a member with no
-                        // party running and no permission to start one saw
-                        // an idle row that opened onto a "Nobody is
-                        // streaming yet" card, which is neither of the two
-                        // things a party in the list is supposed to mean.
-                        // `resolveServerWatchPartyListState` decides between
-                        // a live card, this account's own pending card, a
-                        // single Create row, or nothing at all -- see that
-                        // function's doc, and `WatchPartySidebarSlot`'s.
-                        WatchPartySidebarSlot(
-                            state: watchPartyListState,
-                            watching: watchingByChannel,
-                            isCreating: creatingWatchParty,
-                            onOpen: { party in openWatchPartyCard(party) },
-                            onCreate: {
-                                watchPartyDraftName = ""
-                                showingCreateWatchParty = true
-                            }
-                        )
-                        .padding(.bottom, watchPartyListState == .none ? 0 : 4)
-
-                        // Above TEXT, where the web sidebar puts it. Not a
-                        // channel and not drawn as one: the row carries its own
-                        // hint so nobody opens it expecting to type.
-                        if showsBau, let config = communityHome {
-                            NavigationLink {
-                                CommunityHomeView(
-                                    server: current,
-                                    config: config,
-                                    chatDestination: { AnyView(chat(for: $0)) }
-                                )
-                            } label: {
-                                BauRow(unread: bauUnread)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("channels.bau")
-                            .padding(.top, 4)
-                        }
-
-                        if !textChannels.isEmpty {
-                            SectionLabel(text: String(localized: "Text"))
-                                .padding(.horizontal, 4)
-                                .padding(.top, 4)
-                            ForEach(textChannels) { channel in
-                                NavigationLink {
-                                    chat(for: channel)
-                                } label: {
-                                    ChannelRow(channel: channel, unread: unread[channel.id])
-                                }
-                                .buttonStyle(.plain)
-                                .contextMenu { channelActions(for: channel) }
-                            }
-                        }
-
-                        ForEach(categories) { category in
-                            SectionLabel(text: category.name)
-                                .padding(.horizontal, 4)
-                                .padding(.top, 12)
-                                .contextMenu { channelActions(for: category) }
-                            ForEach(children(of: category)) { channel in
-                                NavigationLink {
-                                    chat(for: channel)
-                                } label: {
-                                    ChannelRow(channel: channel, unread: unread[channel.id])
-                                }
-                                .buttonStyle(.plain)
-                                .contextMenu { channelActions(for: channel) }
-                            }
-                        }
-
-                        if !voiceChannels.isEmpty {
-                            SectionLabel(text: String(localized: "Voice"))
-                                .padding(.horizontal, 4)
-                                .padding(.top, 12)
-                            ForEach(voiceChannels) { channel in
-                                NavigationLink { chat(for: channel) } label: {
-                                    ChannelRow(channel: channel, unread: unread[channel.id])
-                                }
-                                .buttonStyle(.plain)
-                                .contextMenu { channelActions(for: channel) }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, Metrics.hPadding)
-                    .padding(.top, 8)
+                if isLoading && channels.isEmpty {
+                    ProgressView().tint(Palette.signal)
+                } else if let error {
+                    EmptyState(
+                        icon: "exclamationmark.triangle",
+                        title: "Could not load channels",
+                        message: LocalizedStringKey(error),
+                        actionTitle: "Try again",
+                        action: { Task { await load() } }
+                    )
+                } else {
+                    channelList(topInset: outer.safeAreaInsets.top)
                 }
-                .refreshable { await load() }
             }
         }
     }
 
+    private func channelList(topInset: CGFloat) -> some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                // Under the transparent navigation bar, so the back and menu
+                // buttons float on the banner. Scrolled away, the bar shows
+                // the compact copy (`headerCollapsed`).
+                ServerHeader(
+                    name: current.name,
+                    bannerURL: Avatar.resolve(current.bannerUrl),
+                    activity: activity,
+                    topInset: topInset
+                )
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    proxy.frame(in: .named(ServerHeader.coordinateSpace)).maxY
+                } action: { bottom in
+                    let tucked = bottom < topInset + 8
+                    guard tucked != headerCollapsed else { return }
+                    withAnimation(.channelList(reduceMotion: reduceMotion)) { headerCollapsed = tucked }
+                }
+
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    topCards
+                    sections
+                }
+                .padding(.horizontal, Metrics.hPadding)
+                .padding(.top, 8)
+                .padding(.bottom, 24)
+            }
+        }
+        .coordinateSpace(name: ServerHeader.coordinateSpace)
+        .ignoresSafeArea(edges: .top)
+        .pullToRefresh { await load() }
+    }
+
+    /// The live watch party, then the Baú: the two things on this list that
+    /// are not channels.
+    @ViewBuilder
+    private var topCards: some View {
+        // Above the watch party and the Baú: stories are what people are up
+        // to right now, and the strip scrolls away with the list.
+        StoryStripView(model: stories, server: current)
+            .padding(.bottom, stories.showsStrip || !stories.notices.isEmpty ? 10 : 0)
+        // ABOVE EVERYTHING, where the web's `LivePartyBlock` sits: a party is
+        // an event, and on the evening it matters it is the reason the app is
+        // open. `resolveServerWatchPartyListState` decides between a live
+        // card, this account's own pending card, or nothing here (the Create
+        // row lives at the end of the voice rooms).
+        WatchPartySidebarSlot(
+            state: watchPartyListState,
+            watching: watchingByChannel,
+            onOpen: { party in openWatchPartyCard(party) }
+        )
+        .padding(.bottom, watchPartyHasCard ? 8 : 0)
+
+        if showsBau, let config = communityHome {
+            Group {
+                if case .empty(canPost: true) = bauMode {
+                    // Its own button inside: not wrapped in the link.
+                    BauPreview(mode: bauMode, onCompose: { composingBau = true })
+                } else {
+                    NavigationLink {
+                        CommunityHomeView(
+                            server: current,
+                            config: config,
+                            chatDestination: { AnyView(chat(for: $0)) }
+                        )
+                    } label: {
+                        BauPreview(mode: bauMode)
+                    }
+                    .buttonStyle(ChannelRowButtonStyle())
+                    .accessibilityIdentifier("channels.bau")
+                }
+            }
+            .padding(.bottom, 8)
+        }
+    }
+
+    private var watchPartyHasCard: Bool {
+        switch watchPartyListState {
+        case .live, .pending: true
+        case .none, .canHost: false
+        }
+    }
+
+    private var showsCreateWatchParty: Bool { watchPartyListState == .canHost }
+
+    @ViewBuilder
+    private var sections: some View {
+        if !textChannels.isEmpty {
+            channelSection(key: CollapsedSections.textKey, title: String(localized: "Text"), members: textChannels)
+        }
+
+        ForEach(categories) { category in
+            channelSection(key: category.id, title: category.name, members: children(of: category), category: category)
+        }
+
+        if !voiceChannels.isEmpty {
+            channelSection(
+                key: CollapsedSections.voiceKey,
+                title: String(localized: "Voice"),
+                members: voiceChannels,
+                showsCreate: showsCreateWatchParty
+            )
+        } else if showsCreateWatchParty {
+            createWatchPartyRow.padding(.top, 8)
+        }
+    }
+
+    private var createWatchPartyRow: some View {
+        CreateWatchPartyRow(isCreating: creatingWatchParty) {
+            watchPartyDraftName = ""
+            showingCreateWatchParty = true
+        }
+    }
+
+    @ViewBuilder
+    private func channelSection(
+        key: String,
+        title: String,
+        members: [Channel],
+        showsCreate: Bool = false,
+        category: Channel? = nil
+    ) -> some View {
+        let isCollapsed = collapsed.contains(key)
+        let header = ChannelSectionHeader(
+            title: title,
+            isCollapsed: isCollapsed,
+            summary: summary(of: members),
+            onToggle: { toggleSection(key) }
+        )
+        .padding(.top, 10)
+
+        if let category {
+            header.contextMenu { channelActions(for: category) }
+        } else {
+            header
+        }
+
+        if !isCollapsed {
+            ForEach(members) { channel in
+                channelEntry(channel)
+            }
+            if showsCreate {
+                createWatchPartyRow
+            }
+        }
+    }
+
+    /// One channel, and for a voice room the people inside it.
+    @ViewBuilder
+    private func channelEntry(_ channel: Channel) -> some View {
+        let people = channel.isVoice ? session.voiceOccupancy.participants(in: channel.id) : []
+        let inCall = isCurrentCall(channel)
+        VStack(alignment: .leading, spacing: 0) {
+            NavigationLink {
+                destination(for: channel)
+            } label: {
+                ChannelRow(
+                    channel: channel,
+                    mark: mark(for: channel),
+                    isMuted: isMuted(channel),
+                    isLive: liveChannels.contains(channel.id),
+                    isCurrentCall: inCall,
+                    occupantCount: people.count
+                )
+            }
+            .buttonStyle(ChannelRowButtonStyle())
+            .contextMenu { channelActions(for: channel) }
+
+            if !people.isEmpty {
+                VoiceOccupantList(
+                    participants: people,
+                    selfUserId: session.currentUser?.id,
+                    speakingPeerIds: inCall ? speakingPeerIds : []
+                )
+                .transition(.opacity)
+            }
+        }
+        .animation(.channelList(reduceMotion: reduceMotion), value: people.isEmpty)
+    }
+
     private var navigatedList: some View {
         channelScroll
+        // Kept for the back button of every screen pushed from here; the bar
+        // itself draws `ServerCompactTitle` once the header has scrolled away.
         .navigationTitle(current.name)
-        // The banner already says the name, in type twice the size. Leaving the
-        // large title on would print it twice, one under the other.
-        .navigationBarTitleDisplayMode(current.bannerUrl == nil ? .large : .inline)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(headerCollapsed ? .visible : .hidden, for: .navigationBar)
+        .toolbarBackground(Palette.ink, for: .navigationBar)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                ServerCompactTitle(name: current.name, activity: activity)
+                    .opacity(headerCollapsed ? 1 : 0)
+                    .accessibilityHidden(!headerCollapsed)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showingSearch = true } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .tint(Palette.paper)
+                .accessibilityLabel(Text("Search messages"))
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button { showingSearch = true } label: {
-                        Label("Search messages", systemImage: "magnifyingglass")
+                    if stories.strip.enabled && stories.strip.canPost {
+                        Button { stories.composing = true } label: {
+                            Label("New story", systemImage: "plus.circle")
+                        }
                     }
                     Button { showingMembers = true } label: {
                         Label("Members", systemImage: "person.2")
@@ -328,7 +505,7 @@ struct ChannelListView: View {
                     }
                     Divider()
                     // Leaving is offered to everyone except the owner, who has
-                    // to transfer or delete instead — the server refuses the
+                    // to transfer or delete instead, the server refuses the
                     // last-owner case and there is no sense offering it.
                     if server.role != "owner" {
                         Button(role: .destructive) { confirmingLeave = true } label: {
@@ -336,12 +513,30 @@ struct ChannelListView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: "ellipsis")
                 }
-                .tint(Palette.signal)
+                .tint(Palette.paper)
             }
         }
-        .navigationDestination(item: $openedChannel) { channel in chat(for: channel) }
+        .sheet(isPresented: $composingBau) {
+            CommunityHomeComposeView(
+                server: current,
+                config: communityHome ?? .off,
+                api: session.api,
+                channels: channels
+            ) {
+                composingBau = false
+                Task { await refreshBau() }
+            }
+        }
+        .navigationDestination(item: $openedChannel) { channel in destination(for: channel) }
+        .navigationDestination(item: $openedForum) { focus in
+            if let forum = channels.first(where: { $0.id == focus.forumId && $0.isForum }) {
+                ForumHomeView(forum: forum, server: current, initialPostId: focus.postId)
+            }
+        }
+        // A forum link: once the list knows the forum (cached or fetched).
+        .onChange(of: channels) { _, _ in openForumIfAsked() }
         .navigationDestination(isPresented: $showingBau) {
             if let config = communityHome {
                 CommunityHomeView(server: current, config: config, chatDestination: { AnyView(chat(for: $0)) })
@@ -353,7 +548,7 @@ struct ChannelListView: View {
         // Deferred by one appearance on purpose. A `navigationDestination` can
         // only serve a push once the view carrying it is *in* the stack, and on
         // a restored launch this view is itself being pushed in the same
-        // update — set the binding any earlier and SwiftUI drops it, leaving
+        // update, set the binding any earlier and SwiftUI drops it, leaving
         // the app parked on the channel list. Guarded so swiping back from the
         // channel does not immediately push it again.
         .onAppear {
@@ -468,7 +663,7 @@ struct ChannelListView: View {
             // land in.
             session.eventHandlers[handlerKey] = { event in
                 switch event {
-                case .activity(let channelId, let serverId, let mention)
+                case .activity(let channelId, let serverId, let mention, _)
                     where serverId == server.id:
                     let existing = unread[channelId]
                     unread[channelId] = UnreadEntry(
@@ -489,7 +684,7 @@ struct ChannelListView: View {
                 // for rather than bumped: a deletion sends the same frame and
                 // would have to move it the other way.
                 case .communityHomeUpdate(let serverId) where serverId == server.id:
-                    Task { await refreshBauUnread() }
+                    Task { await refreshBau() }
                 // A broadcast started or stopped in a channel this account may
                 // see. `stream == nil` is a stop, and it has to remove the
                 // pill: a badge that survives the end of the show sends people
@@ -544,7 +739,9 @@ struct ChannelListView: View {
             }
             await load()
         }
+        .task { await stories.start(session: session) }
         .onDisappear {
+            stories.stop()
             session.eventHandlers.removeValue(forKey: handlerKey)
             availabilityRetryTask?.cancel()
             unmatchedWatchPartyReconcileTask?.cancel()
@@ -561,6 +758,29 @@ struct ChannelListView: View {
         // Coming back from a chat re-reads the counts: the chat marked itself
         // read on the server, and this is what clears its badge locally.
         .onAppear { Task { await refreshUnread() } }
+    }
+
+    /// Where a row goes: a forum's list, or a chat.
+    @ViewBuilder
+    private func destination(for channel: Channel) -> some View {
+        if channel.isForum {
+            ForumHomeView(forum: channel, server: current)
+        } else {
+            chat(for: channel)
+        }
+    }
+
+    /// The forum a link named, pushed once, without a slide (the same rule as
+    /// a restored channel). A forum this account cannot see, or one that is
+    /// gone, leaves the list where it is.
+    private func openForumIfAsked() {
+        guard let initialForum, !hasSeededInitialForum,
+              channels.contains(where: { $0.id == initialForum.forumId && $0.isForum })
+        else { return }
+        hasSeededInitialForum = true
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { openedForum = initialForum }
     }
 
     /// A channel's chat screen. Only text channels are recorded as the last
@@ -590,7 +810,7 @@ struct ChannelListView: View {
         if let entries = try? await session.api.unread(serverId: server.id) {
             unread = Dictionary(uniqueKeysWithValues: entries.map { ($0.channelId, $0) })
         }
-        await refreshBauUnread()
+        await refreshBau()
     }
 
     /// The push for a new post lands here with `opensBau`. Once, and only if
@@ -605,12 +825,35 @@ struct ChannelListView: View {
         withTransaction(transaction) { showingBau = true }
     }
 
-    /// Only asked while the row is drawn: the route 404s when the instance
-    /// flag is off, and a server that does not show a Baú has no badge to
-    /// keep. A failure leaves the last count rather than zeroing it.
-    private func refreshBauUnread() async {
+    /// Only asked while the Baú is drawn: every `/home` route 404s when the
+    /// instance flag is off. `/home/latest` answers the count too, so it
+    /// replaces `/home/unread` here; an API without it (a 404) falls back to
+    /// `/home/unread` and today's row. A failure leaves what was showing.
+    private func refreshBau() async {
         guard showsBau else { return }
-        if let count = try? await session.api.communityHomeUnread(serverId: server.id) {
+        // Load, pull-to-refresh, coming back and a `community-home-update` can
+        // all be in flight at once; only the newest request may write, or a
+        // slow older answer would put back a card the reader already saw.
+        bauRequest += 1
+        let request = bauRequest
+        do {
+            let answer = try await session.api.communityHomeLatest(
+                serverId: server.id, lang: BauShare.cardLanguage()
+            )
+            guard request == bauRequest else { return }
+            if case .ok(let latest) = answer { bauUnread = latest.unread }
+            withAnimation(.channelList(reduceMotion: reduceMotion)) { bauLatest = answer }
+            if answer == .unsupported { await refreshLegacyBauUnread() }
+        } catch {
+            guard request == bauRequest else { return }
+            if bauLatest == .unsupported { await refreshLegacyBauUnread() }
+        }
+    }
+
+    private func refreshLegacyBauUnread() async {
+        let request = bauRequest
+        if let count = try? await session.api.communityHomeUnread(serverId: server.id),
+           request == bauRequest {
             bauUnread = count
         }
     }
@@ -632,7 +875,7 @@ struct ChannelListView: View {
             )
             channels.append(channel)
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -722,7 +965,7 @@ struct ChannelListView: View {
                 landOnHostStage(channel)
             }
         } catch {
-            watchPartyCreateError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { watchPartyCreateError = shown }
             // AN UNCERTAIN OUTCOME IS NOT A REFUSAL (Farol finding). This
             // POST can commit on the server and still throw here on a lost
             // response, and the `watch-party-update` it broadcasts can itself
@@ -741,7 +984,7 @@ struct ChannelListView: View {
             try await session.api.moveChannel(id: channel.id, parentId: parentId, index: 0)
             await load()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -761,14 +1004,14 @@ struct ChannelListView: View {
             try await session.api.deleteChannel(id: channel.id)
             channels.removeAll { $0.id == channel.id }
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
     @ViewBuilder
     private func channelActions(for channel: Channel) -> some View {
-        // Threads are readable by anyone who can read the channel — their
-        // visibility IS the channel's — so this sits above the manager block.
+        // Threads are readable by anyone who can read the channel, their
+        // visibility IS the channel's, so this sits above the manager block.
         if channel.isText {
             Button { threadsFor = channel } label: {
                 Label("Threads", systemImage: "bubble.left.and.text.bubble.right")
@@ -852,11 +1095,11 @@ struct ChannelListView: View {
         do {
             channels = try await channelsTask
             // Unread is a separate call and failing it must not blank the
-            // channel list — badges are a nicety, the list is the screen.
+            // channel list, badges are a nicety, the list is the screen.
             if let entries = try? await session.api.unread(serverId: server.id) {
                 unread = Dictionary(uniqueKeysWithValues: entries.map { ($0.channelId, $0) })
             }
-            await refreshBauUnread()
+            await refreshBau()
             // KEEP THE LAST KNOWN ARRAY ON A FAILED FETCH (Farol finding).
             // This used to fall back to `[]` on any failure, which could
             // drop a live card a manager was mid-broadcast on, or silently
@@ -868,7 +1111,7 @@ struct ChannelListView: View {
                 serverWatchParties = parties
             }
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isLoading = false
 
@@ -1016,178 +1259,5 @@ struct ChannelListView: View {
         if let permissions = try? await session.api.fetchMemberPermissions(serverId: server.id) {
             watchPartyPermissions = permissions
         }
-    }
-}
-
-/// A community's banner, with its name over it.
-///
-/// THE SCRIM IS NOT DECORATION. The image is whatever the owner uploaded — a
-/// white photograph is as likely as a dark one — and white display type on an
-/// unknown picture is unreadable roughly half the time. The gradient is opaque
-/// enough at the bottom edge to carry text against anything, and clears away
-/// entirely at the top so the picture is still the thing you see.
-///
-/// 120pt: tall enough to read as a banner rather than a stripe, short enough
-/// that the first channel is still above the fold on the smallest screen this
-/// app supports.
-private struct CommunityBanner: View {
-    let url: URL
-    let name: String
-
-    var body: some View {
-        // FRAMED AND CLIPPED BEFORE THE SCRIM AND THE NAME GO ON. A
-        // `scaledToFill` image grows the stack it is in, not only itself, so a
-        // wide banner laid out as a sibling of the name would push the name
-        // far below the 120pt window and clipping would then remove it. The two
-        // things drawn on top are overlays, which measure against the strip.
-        ZStack {
-            // Under the image rather than instead of it, so a slow load shows a
-            // band of the app's own colour and not a white hole.
-            Palette.surface
-
-            AsyncImage(url: url) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                Color.clear
-            }
-        }
-        .frame(height: 120)
-        .frame(maxWidth: .infinity)
-        .clipped()
-        .overlay {
-            LinearGradient(
-                colors: [
-                    Palette.ink.opacity(0),
-                    Palette.ink.opacity(0.55),
-                    Palette.ink.opacity(0.88),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        }
-        .overlay(alignment: .bottomLeading) {
-            Text(name)
-                .font(Typography.display(24))
-                .foregroundStyle(Palette.paper)
-                .lineLimit(2)
-                .shadow(color: .black.opacity(0.45), radius: 6, y: 1)
-                .padding(.horizontal, Metrics.hPadding)
-                .padding(.bottom, 12)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(name)
-    }
-}
-
-/// The Baú's row. Same surface as a channel row, so it sits in the list, with
-/// a second line: the one thing a person needs to know before tapping is that
-/// this is not a place to type.
-struct BauRow: View {
-    /// Posts not yet seen. Never a mention (the Baú has no @), but lime all the
-    /// same: it was the quiet grey badge, and that made the feature the product
-    /// leads with the least eventful row in the list. `isMention` on the badge
-    /// is how it asks for the signal colour.
-    var unread: Int = 0
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "archivebox")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Palette.paperMuted)
-                .frame(width: 20)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Baú")
-                    .font(Typography.bodyMedium)
-                    .foregroundStyle(Palette.paper)
-                    .lineLimit(1)
-                Text("Posts that stay. Not chat.")
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.paperMuted)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            if unread > 0 {
-                UnreadBadge(count: unread, isMention: true)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
-    }
-}
-
-struct ChannelRow: View {
-    let channel: Channel
-    let unread: UnreadEntry?
-    var isDisabled: Bool = false
-    /// Something is being broadcast in this channel right now. Draws the one
-    /// badge that tells somebody scrolling a list that the show has started.
-    var isLive: Bool = false
-
-    /**
-     The glyph, and the reason a watch party gets its own.
-
-     The clapperboard is what the web sidebar draws (`ChannelIcon`), so the
-     two clients name the same thing the same way. Build 21 asked only
-     `isVoice`, which is true for a watch party, so it drew the speaker: the
-     type shipped with a player, a stream and no way to tell it apart from the
-     voice channel above it.
-     */
-    private var glyph: String {
-        if channel.isWatchParty { return "movieclapper.fill" }
-        return channel.isVoice ? "speaker.wave.2.fill" : "number"
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: glyph)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(isDisabled ? Palette.paperMuted.opacity(0.5) : Palette.paperMuted)
-                .frame(width: 20)
-
-            Text(channel.name)
-                .font(Typography.bodyMedium)
-                .foregroundStyle(isDisabled ? Palette.paperMuted : Palette.paper)
-                .lineLimit(1)
-
-            if channel.isPrivate {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Palette.paperMuted)
-            }
-
-            // Red, and not the signal colour: the signal green means "the call
-            // you are in" everywhere else in this app, and this means
-            // "something is being broadcast", which is a different sentence.
-            // No pulse. A list of rows is not the place for a moving object.
-            if isLive {
-                Text("LIVE")
-                    .font(Typography.label)
-                    .tracking(0.8)
-                    .foregroundStyle(Palette.paper)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Palette.danger, in: RoundedRectangle(cornerRadius: 4))
-                    .accessibilityIdentifier("channels.live")
-            }
-
-            Spacer()
-
-            if isDisabled {
-                Text("SOON")
-                    .font(Typography.label)
-                    .tracking(1)
-                    .foregroundStyle(Palette.paperMuted)
-            } else if let unread, unread.count > 0 {
-                UnreadBadge(count: unread.count, isMention: unread.mentions > 0)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 13)
-        .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
-        .opacity(isDisabled ? 0.65 : 1)
     }
 }

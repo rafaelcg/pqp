@@ -12,10 +12,12 @@ import {
   FolderMinus,
   FolderPlus,
   Hand,
+  Hash,
   History,
   Lock,
   LogOut,
   MessageSquareText,
+  MessagesSquare,
   Mic,
   MicOff,
   PanelLeftOpen,
@@ -69,6 +71,11 @@ import type { ChannelMusicTrack } from "@pqp/shared";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { SearchDialog } from "@/components/search/search-dialog";
+import { useConversationsHome } from "@/lib/conversations-config";
+import {
+  CommunityHomePreview,
+  type CommunityHomePreviewProps,
+} from "@/components/community-home/community-home-preview";
 import {
   ChannelIcon,
   channelIconIsPrivateLock,
@@ -91,6 +98,7 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { Menu } from "@/components/ui/menu";
+import { BetaTag } from "@/components/ui/beta-tag";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useIsTruncated } from "@/lib/use-is-truncated";
@@ -145,10 +153,24 @@ const TEXT_ZONE = "__text__";
 const VOICE_ZONE = "__voice__";
 
 /** Apple keyboards label the same chord differently, and the hint is the point. */
-const SEARCH_SHORTCUT_HINT =
-  typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent)
-    ? "⌘K"
-    : "Ctrl K";
+const IS_APPLE_KEYBOARD =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent);
+
+/**
+ * Message search's chord. Conversas (`conversations_home`) gives Ctrl/Cmd+K
+ * to the "ir pra" switcher and moves search to F; off, it is K as it was.
+ */
+function searchShortcutKey(conversationsHome: boolean): "f" | "k" {
+  return conversationsHome ? "f" : "k";
+}
+
+function searchShortcutHint(conversationsHome: boolean): string {
+  const key = searchShortcutKey(conversationsHome).toUpperCase();
+  return IS_APPLE_KEYBOARD ? `⌘${key}` : `Ctrl ${key}`;
+}
+
+/** The switcher's "Buscar nas mensagens" row asks for message search with its words. */
+export const SEARCH_MESSAGES_EVENT = "pqp:search-messages";
 
 /** Equal-width action tiles on a channel row (pin, settings). */
 const CHANNEL_ACTION_TILE =
@@ -317,10 +339,16 @@ interface ChannelListProps {
    * is true; with the flag off the sidebar has no button that sends it.
    */
   onCreateChannel: (type: ChannelType, isPrivate: boolean) => void;
+  /**
+   * The runtime flag `forum_channels` is on for this server (`useForumConfig`).
+   * Turns the Texto section's "+" into a menu offering a text channel or a
+   * Fórum. Off, the "+" is the plain one-click text channel it always was.
+   */
+  forumCreateEnabled?: boolean;
   onRenameChannel: (channel: Channel) => void;
   onOpenChannelSettings: (
     channel: Channel,
-    section: "overview" | "permissions" | "webhooks",
+    section: "overview" | "tags" | "permissions" | "webhooks",
     options?: { forceAdvanced?: boolean },
   ) => void;
   onDeleteChannel: (channelId: string) => void;
@@ -371,6 +399,12 @@ interface ChannelListProps {
   communityHomeUnreadFresh?: boolean;
   communityHomeSelected?: boolean;
   onSelectCommunityHome?: () => void;
+  /**
+   * The Baú preview (`GET …/home/latest`): a card while something is new, a
+   * slim row with the last post once seen. Null or absent (the server has the
+   * preview off, or the read has not landed) keeps the plain row.
+   */
+  communityHomePreview?: CommunityHomePreviewProps | null;
   /**
    * Current server roster, so a seated person with a claimed handle can get
    * Ver perfil / pqp.gg/@handle on right-click. Absent handle: no link.
@@ -455,6 +489,7 @@ export const ChannelList = memo(function ChannelList({
   onSetPeerVolume,
   onSetScreenVolume,
   onCreateChannel,
+  forumCreateEnabled = false,
   onRenameChannel,
   onOpenChannelSettings,
   onDeleteChannel,
@@ -473,6 +508,7 @@ export const ChannelList = memo(function ChannelList({
   communityHomeShowNew = false,
   communityHomeUnread = 0,
   communityHomeUnreadFresh = false,
+  communityHomePreview = null,
   communityHomeSelected = false,
   onSelectCommunityHome,
   members = [],
@@ -514,9 +550,12 @@ export const ChannelList = memo(function ChannelList({
     : channels;
   const visibleFavs = visibleFavoriteChannels(listed, favoriteChannelIds);
   const favoriteIdSet = new Set(visibleFavs.map((c) => c.id));
+  // A forum is listed with the text channels: it is a place to write, the
+  // server groups its positions with `text`, and a separate Fórum section
+  // would be a header over one row in nearly every server.
   const topLevelText = sortByPosition(
     listed.filter(
-      (c) => c.type === "text" && !c.parentId && !favoriteIdSet.has(c.id),
+      (c) => isTextGroupChannelType(c.type) && !c.parentId && !favoriteIdSet.has(c.id),
     ),
   );
   const topLevelVoice = sortByPosition(
@@ -558,6 +597,8 @@ export const ChannelList = memo(function ChannelList({
 
   const speaking = new Set(speakingPeerIds);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchSeed, setSearchSeed] = useState("");
+  const conversationsHome = useConversationsHome();
   const [collapsed, setCollapsed] = useState<Set<string>>(() =>
     loadCollapsedCategories(),
   );
@@ -587,15 +628,31 @@ export const ChannelList = memo(function ChannelList({
     if (!hasServer) {
       return;
     }
+    const key = searchShortcutKey(conversationsHome);
     function onKeyDown(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === key
+      ) {
         event.preventDefault();
+        setSearchSeed("");
         setSearchOpen(true);
       }
     }
+    function onSearchRequest(event: Event) {
+      const query = (event as CustomEvent<{ query?: string }>).detail?.query ?? "";
+      setSearchSeed(query);
+      setSearchOpen(true);
+    }
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [hasServer]);
+    window.addEventListener(SEARCH_MESSAGES_EVENT, onSearchRequest);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener(SEARCH_MESSAGES_EVENT, onSearchRequest);
+    };
+  }, [hasServer, conversationsHome]);
 
   // --- icons only ---------------------------------------------------------
   // Below every hook, so the strip and the column are the same component with
@@ -653,8 +710,13 @@ export const ChannelList = memo(function ChannelList({
             open={searchOpen}
             serverId={server.id}
             serverName={server.name}
-            onClose={() => setSearchOpen(false)}
+            onClose={() => {
+              setSearchOpen(false);
+              // The switcher's words were for that one search, not the next.
+              setSearchSeed("");
+            }}
             onNavigate={onMobileClose}
+            initialQuery={searchSeed}
           />
         )}
         <div className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 py-2">
@@ -1486,15 +1548,20 @@ export const ChannelList = memo(function ChannelList({
             <Search className="h-3.5 w-3.5 shrink-0" />
             <span className="truncate">{t("chrome.searchMessages")}</span>
             <kbd className="ml-auto hidden shrink-0 rounded border border-border px-1 py-px text-[10px] font-sans md:inline">
-              {SEARCH_SHORTCUT_HINT}
+              {searchShortcutHint(conversationsHome)}
             </kbd>
           </button>
           <SearchDialog
             open={searchOpen}
             serverId={server.id}
             serverName={server.name}
-            onClose={() => setSearchOpen(false)}
+            onClose={() => {
+              setSearchOpen(false);
+              // The switcher's words were for that one search, not the next.
+              setSearchSeed("");
+            }}
             onNavigate={onMobileClose}
+            initialQuery={searchSeed}
           />
         </div>
       )}
@@ -1600,17 +1667,40 @@ export const ChannelList = memo(function ChannelList({
             server &&
             onSelectCommunityHome && (
               <div className="mb-3 px-1">
-                <CommunityHomeNavButton
-                  server={server}
-                  selected={communityHomeSelected}
-                  unread={communityHomeUnread}
-                  fresh={communityHomeUnreadFresh}
-                  showNew={communityHomeShowNew}
-                  onSelect={() => {
-                    onSelectCommunityHome();
-                    onMobileClose?.();
-                  }}
-                />
+                {communityHomePreview ? (
+                  <CommunityHomePreview
+                    latest={communityHomePreview.latest}
+                    canPost={communityHomePreview.canPost}
+                    serverName={server.name}
+                    serverHueSeed={server.communitySlug ?? server.name}
+                    selected={communityHomeSelected}
+                    face={<CommunityHomeFace server={server} />}
+                    onOpen={() => {
+                      onSelectCommunityHome();
+                      onMobileClose?.();
+                    }}
+                    onOpenPost={(postId) => {
+                      communityHomePreview.onOpenPost(postId);
+                      onMobileClose?.();
+                    }}
+                    onCompose={() => {
+                      communityHomePreview.onCompose();
+                      onMobileClose?.();
+                    }}
+                  />
+                ) : (
+                  <CommunityHomeNavButton
+                    server={server}
+                    selected={communityHomeSelected}
+                    unread={communityHomeUnread}
+                    fresh={communityHomeUnreadFresh}
+                    showNew={communityHomeShowNew}
+                    onSelect={() => {
+                      onSelectCommunityHome();
+                      onMobileClose?.();
+                    }}
+                  />
+                )}
               </div>
             )}
 
@@ -1619,6 +1709,16 @@ export const ChannelList = memo(function ChannelList({
               canManage={canManage}
               onAdd={() => onCreateChannel("text", false)}
               onAddPrivate={() => onCreateChannel("text", true)}
+              addMenu={
+                forumCreateEnabled
+                  ? textSectionAddMenu({
+                      textLabel: t("chrome.createTextChannel"),
+                      forumLabel: t("chrome.createForum"),
+                      onText: () => onCreateChannel("text", false),
+                      onForum: () => onCreateChannel("forum", false),
+                    })
+                  : undefined
+              }
               isDragOver={dragOverId === TEXT_ZONE && !draggedOccupant}
               onDragOver={(event) => {
                 if (draggedOccupant) {
@@ -1955,11 +2055,49 @@ function PinnedChannelsSection({
   );
 }
 
+/**
+ * The channel types the Texto section lists. A forum is written in, not
+ * talked in, so it sits with the text channels (and the server groups its
+ * positions with `text` for the same reason).
+ */
+export function isTextGroupChannelType(type: string): boolean {
+  return type === "text" || type === "forum";
+}
+
+/**
+ * The Texto section's "+" while forums are on for this server: a text channel
+ * first (still the common case, and what the plain "+" always did), then the
+ * Fórum with its beta pill. Exported for the test.
+ */
+export function textSectionAddMenu({
+  textLabel,
+  forumLabel,
+  onText,
+  onForum,
+}: {
+  textLabel: string;
+  forumLabel: string;
+  onText: () => void;
+  onForum: () => void;
+}): ContextMenuItemDef[] {
+  return [
+    { id: "create-text", label: textLabel, icon: Hash, onSelect: onText },
+    {
+      id: "create-forum",
+      label: forumLabel,
+      icon: MessagesSquare,
+      trailing: <BetaTag />,
+      onSelect: onForum,
+    },
+  ];
+}
+
 function ChannelSection({
   label,
   canManage,
   onAdd,
   onAddPrivate,
+  addMenu,
   children,
   isDragOver = false,
   onDragOver,
@@ -1969,6 +2107,12 @@ function ChannelSection({
   canManage: boolean;
   onAdd: () => void;
   onAddPrivate: () => void;
+  /**
+   * When set, the "+" opens this menu instead of creating straight away: the
+   * section can make more than one kind of channel (Texto: a text channel or
+   * a Fórum). Absent, the "+" is one click, as it always was.
+   */
+  addMenu?: ContextMenuItemDef[];
   children: ReactNode;
   isDragOver?: boolean;
   onDragOver?: (event: DragEvent) => void;
@@ -1976,6 +2120,8 @@ function ChannelSection({
 }) {
   const { t } = useTranslation();
   const typeName = label.toLowerCase();
+  const addButtonClass =
+    "rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper data-[state=open]:bg-ink-3 data-[state=open]:text-paper";
   return (
     <div className="mb-4">
       <div
@@ -2005,15 +2151,32 @@ function ChannelSection({
         </span>
         {canManage && (
           <div className="flex gap-0.5">
-            <Tooltip label={t("chrome.newChannel", { name: typeName })}>
-              <button
-                type="button"
-                className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                onClick={onAdd}
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
-            </Tooltip>
+            {addMenu && addMenu.length > 0 ? (
+              // The tooltip wraps the menu's trigger, not the other way
+              // round: Radix's trigger is `asChild`, and a Tooltip inside it
+              // would swallow the click that opens the menu.
+              <Menu items={addMenu} align="end">
+                <button
+                  type="button"
+                  data-channel-section-add=""
+                  aria-label={t("chrome.newInSection", { name: typeName })}
+                  className={addButtonClass}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </Menu>
+            ) : (
+              <Tooltip label={t("chrome.newChannel", { name: typeName })}>
+                <button
+                  type="button"
+                  data-channel-section-add=""
+                  className={addButtonClass}
+                  onClick={onAdd}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </Tooltip>
+            )}
             <Tooltip label={t("chrome.newPrivateChannel", { name: typeName })}>
               <button
                 type="button"
@@ -2875,6 +3038,13 @@ function ChannelRow({
             />
             <span className="sr-only">{t("chrome.connected")}</span>
           </>
+        )}
+        {/* Forums are new and still per server (`forum_channels`), so the
+            row says so with the same pill the wordmark wears. It steps aside
+            on hover, where the pin and settings tiles need the room, and
+            when a mention count is there to be read instead. */}
+        {channel.type === "forum" && mentions === 0 && (
+          <BetaTag className="group-hover:hidden group-focus-within:hidden" />
         )}
         {mentions > 0 && (
           <span

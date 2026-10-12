@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   executeSlashCommand,
   filterRollPresets,
+  filterSlashCommands,
   isRollPresetMenu,
   isSlashMenuOpen,
 } from "./slash-commands.js";
+import { resetNudgeStateForTests, setNudgeEnabledForTests, setNudgeTarget } from "./nudge";
 
 function ctx(overrides: Record<string, unknown> = {}) {
   return {
@@ -193,5 +195,35 @@ describe("/clear", () => {
     );
     expect(openPurgeDialog).not.toHaveBeenCalled();
     expect(result.kind).toBe("error");
+  });
+});
+
+describe("/nudge", () => {
+  const channelId = "11111111-1111-4111-8111-111111111111";
+
+  it("is only in the menu where the header button is (flag on, a 1:1 with a friend)", () => {
+    resetNudgeStateForTests();
+    expect(filterSlashCommands("nu").map((c) => c.name)).not.toContain("nudge");
+    setNudgeTarget({ channelId, trigger: () => "sent" });
+    expect(filterSlashCommands("nu").map((c) => c.name)).not.toContain("nudge");
+    setNudgeEnabledForTests(true);
+    expect(filterSlashCommands("nu").map((c) => c.name)).toContain("nudge");
+    resetNudgeStateForTests();
+  });
+
+  it("nudges through the button's own path, and refuses anywhere else", async () => {
+    resetNudgeStateForTests();
+    const outside = await executeSlashCommand("/nudge", ctx());
+    expect(outside.kind).toBe("error");
+    const trigger = vi.fn(() => "sent" as const);
+    setNudgeEnabledForTests(true);
+    setNudgeTarget({ channelId, trigger });
+    const sendMessage = vi.fn();
+    const inside = await executeSlashCommand("/nudge", ctx({ sendMessage }));
+    expect(inside.kind).toBe("ok");
+    expect(trigger).toHaveBeenCalledTimes(1);
+    // Never a text message: the server writes the line.
+    expect(sendMessage).not.toHaveBeenCalled();
+    resetNudgeStateForTests();
   });
 });

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { clearQualityBar } from "./community-quality-seed";
 import { ensureServer, openApp, resetPreferences } from "./fixtures";
 
 /**
@@ -29,6 +30,8 @@ const DEV_TOKEN = "dev-local-token";
 const OWNER = "lang-owner";
 /** …and a third, purely to be the member that clears the directory's floor. */
 const FILLER = "lang-filler";
+/** The third person the directory's quality bar asks for. */
+const FILLER_TWO = "lang-filler-two";
 
 test.setTimeout(90_000);
 
@@ -52,7 +55,7 @@ async function ensureAccount(suffix: string): Promise<void> {
   });
 }
 
-/** A listed community with two members, in a stated language. */
+/** A listed community that clears the quality bar, in a stated language. */
 async function seedCommunity(
   name: string,
   category: string,
@@ -67,7 +70,10 @@ async function seedCommunity(
   if (!created.ok) {
     throw new Error(`could not create ${name}: ${created.status}`);
   }
-  const { server } = (await created.json()) as { server: { id: string } };
+  const { server, channels } = (await created.json()) as {
+    server: { id: string };
+    channels: { id: string; type: string }[];
+  };
 
   const invite = await fetch(`${API}/api/servers/${server.id}/invites`, {
     method: "POST",
@@ -78,6 +84,12 @@ async function seedCommunity(
   await fetch(`${API}/api/invites/${made.code}/join`, {
     method: "POST",
     headers: headers(FILLER),
+  });
+  await clearQualityBar({
+    serverId: server.id,
+    channels,
+    owner: OWNER,
+    thirdMember: FILLER_TWO,
   });
 
   const patched = await fetch(`${API}/api/servers/${server.id}/community`, {

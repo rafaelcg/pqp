@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 /// The signed-in shell.
 ///
@@ -47,23 +48,35 @@ struct HomeView: View {
         /// Set when the link was a Baú post: the channel list opens the
         /// server's Baú on top of itself, scrolled to the post.
         var bau: BauFocus? = nil
+        /// Set when the link was a forum or one of its posts: the channel
+        /// list pushes the forum, and the forum the post.
+        var forum: ForumFocus? = nil
     }
 
+    /// Conversas on a phone: which tab is up. Seeded by the landing rule once
+    /// the shell knows whether it was opened for a person.
+    @State private var tab: PhoneTab = PhoneTab.stored() ?? .servidores
+    @State private var hasPickedLandingTab = false
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
-        NavigationStack {
-            HubView(model: model, openedConversation: $openedConversation)
-                .navigationDestination(item: $restoredChannel) { restored in
-                    ChannelListView(
-                        server: restored.server,
-                        initialChannel: restored.channel,
-                        opensBau: restored.opensBau,
-                        initialBau: restored.bau
-                    )
+        Group {
+            if model.dmsConfig.phoneTabs {
+                tabs
+            } else {
+                NavigationStack {
+                    HubView(model: model, openedConversation: $openedConversation)
+                        .navigationDestination(item: $restoredChannel) { restored in
+                            channelList(restored)
+                        }
                 }
+            }
         }
         .tint(Palette.signal)
         .task {
+            pickLandingTab()
             await model.load(session: session)
+            await model.refreshDmsConfig()
             // BOTH BRANCHES ARE NEEDED, and this one is easy to leave out.
             // A pending invite is consumed inside `becomeReady`, which runs
             // *before* this view exists — so the request can already be sitting
@@ -82,6 +95,19 @@ struct HomeView: View {
                 await restoreLastVisited()
             }
         }
+        // A flag flipped while the app was in the background reaches it the
+        // next time it comes forward, with no relaunch.
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await model.refreshDmsConfig() }
+        }
+        .onChange(of: tab) { _, next in next.store() }
+        // The app icon says how many conversations are waiting (Conversas I4),
+        // the same number as the tab. Set from here, on every change the app
+        // sees; the server's push does not carry a badge yet, so a phone that
+        // stayed closed shows the count from the last time it was open.
+        .onChange(of: model.waitingConversations, initial: true) { _, _ in syncAppBadge() }
+        .onChange(of: model.dmsConfig) { _, _ in syncAppBadge() }
         // A link or a notification tap that arrives while the shell is up,
         // resolved against what the server still says exists — the same
         // validation `restoreLastVisited` does, and for the same reason: a stale
@@ -107,6 +133,67 @@ struct HomeView: View {
         }
     }
 
+    /// Conversas / Servidores / Tu. Each tab is its own stack, so switching
+    /// never loses where you were in the other two, and a call or a voice
+    /// room lives above all three (the overlays are on the app root).
+    private var tabs: some View {
+        TabView(selection: $tab) {
+            NavigationStack {
+                ConversasView(model: model, openedConversation: $openedConversation)
+            }
+            .tabItem {
+                Label("Chats", systemImage: "bubble.left.and.bubble.right.fill")
+            }
+            .badge(model.waitingConversations)
+            .tag(PhoneTab.conversas)
+
+            NavigationStack {
+                HubView(model: model, openedConversation: $openedConversation, layout: .servers)
+                    .navigationDestination(item: $restoredChannel) { restored in
+                        channelList(restored)
+                    }
+            }
+            .tabItem {
+                Label("Servers", systemImage: "square.grid.2x2.fill")
+            }
+            .tag(PhoneTab.servidores)
+
+            NavigationStack {
+                ProfileView()
+            }
+            .tabItem {
+                Label("You", systemImage: "person.crop.circle.fill")
+            }
+            .tag(PhoneTab.tu)
+        }
+    }
+
+    private func channelList(_ restored: RestoredChannel) -> some View {
+        ChannelListView(
+            server: restored.server,
+            initialChannel: restored.channel,
+            opensBau: restored.opensBau,
+            initialBau: restored.bau,
+            initialForum: restored.forum
+        )
+    }
+
+    /// Conversas off leaves the icon clean, which is what it has always been.
+    private func syncAppBadge() {
+        let count = model.dmsConfig.home && model.hasLoadedOnce ? model.waitingConversations : 0
+        UNUserNotificationCenter.current().setBadgeCount(count) { _ in }
+    }
+
+    /// The landing rule, applied once: the last tab used, Servidores when
+    /// nothing is stored, Conversas when the app was opened for a person.
+    private func pickLandingTab() {
+        guard !hasPickedLandingTab else { return }
+        hasPickedLandingTab = true
+        var forPerson = false
+        if case .conversation = session.navigationRequest { forPerson = true }
+        tab = PhoneTab.landing(stored: PhoneTab.stored(), arrivedForPerson: forPerson)
+    }
+
     /// Navigates to a link's destination.
     ///
     /// Invites never arrive here — `SessionStore.requestNavigation` redeems one
@@ -130,17 +217,47 @@ struct HomeView: View {
             guard let conversation = model.conversations
                 .first(where: { $0.channelId == channelId })
             else { return }
+            tab = .conversas
             openedConversation = conversation
 
         case .channel(let serverId, let channelId):
             guard let server = await resolveServer(serverId),
-                  let channels = try? await session.api.channels(serverId: serverId),
-                  let channel = channels.first(where: { $0.id == channelId && $0.isText })
+                  let channels = try? await session.api.channels(serverId: serverId)
             else { return }
-            restoredChannel = RestoredChannel(server: server, channel: channel)
+            tab = .servidores
+            if let channel = channels.first(where: { $0.id == channelId }) {
+                if channel.isText {
+                    restoredChannel = RestoredChannel(server: server, channel: channel)
+                } else if channel.isForum {
+                    restoredChannel = RestoredChannel(
+                        server: server, channel: nil, forum: ForumFocus(forumId: channel.id)
+                    )
+                }
+                return
+            }
+            // Not in the list: a forum post (a push for a reply in one names
+            // the post's own channel). The post knows its forum; anything
+            // else, or a post this account cannot see, lands on the server.
+            if let detail = await forumPostOnce(channelId),
+               channels.contains(where: { $0.id == detail.post.forumId && $0.isForum }) {
+                restoredChannel = RestoredChannel(
+                    server: server, channel: nil,
+                    forum: ForumFocus(forumId: detail.post.forumId, postId: channelId)
+                )
+            } else {
+                restoredChannel = RestoredChannel(server: server, channel: nil)
+            }
+
+        case .forumPost(let serverId, let forumId, let postId):
+            guard let server = await resolveServer(serverId) else { return }
+            tab = .servidores
+            restoredChannel = RestoredChannel(
+                server: server, channel: nil, forum: ForumFocus(forumId: forumId, postId: postId)
+            )
 
         case .server(let serverId):
             guard let server = await resolveServer(serverId) else { return }
+            tab = .servidores
             restoredChannel = RestoredChannel(server: server, channel: nil)
 
         case .bau(let serverId):
@@ -148,14 +265,33 @@ struct HomeView: View {
             // lands on the server and not on an empty stack. If the server's
             // Baú is off by now the list simply stays.
             guard let server = await resolveServer(serverId) else { return }
+            tab = .servidores
             restoredChannel = RestoredChannel(server: server, channel: nil, opensBau: true)
         case .bauPost(let serverId, let postId):
             // A Baú post card in chat, or a Baú post link. The Baú is a screen
             // on top of the server's channel list, so the list is the landing
             // and it pushes the Baú itself once it knows the instance flag.
             guard let server = await resolveServer(serverId) else { return }
+            tab = .servidores
             restoredChannel = RestoredChannel(server: server, channel: nil, bau: BauFocus(postId: postId))
         }
+    }
+
+    /// A post a push named, asked twice before giving up: a tap on a
+    /// notification often wakes the app with the network still waking too.
+    /// A 404 is final.
+    private func forumPostOnce(_ id: String) async -> ForumPostDetail? {
+        for delay in [0.0, 1.5] {
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            do {
+                return try await session.api.forumPost(id: id)
+            } catch APIError.notFound {
+                return nil
+            } catch {
+                continue
+            }
+        }
+        return nil
     }
 
     /// A server by id, refreshing the list once if it is not already known —
@@ -181,6 +317,16 @@ struct HomeView: View {
         hasAttemptedRestore = true
         guard let target = LastVisited.load() else { return }
 
+        // With the tabs on, a remembered place is reopened only inside the tab
+        // the app landed on: the last tab used outranks the last screen, and
+        // a conversation pushed onto a tab nobody is looking at would be a
+        // surprise waiting behind a tap.
+        if model.dmsConfig.phoneTabs {
+            switch (target.kind, tab) {
+            case (.conversation, .conversas), (.channel, .servidores): break
+            default: return
+            }
+        }
         switch target.kind {
         case .conversation:
             guard let conversation = model.conversations
@@ -268,6 +414,21 @@ final class HomeModel {
     /// fetch everything twice before the first frame.
     private(set) var hasLoadedOnce = false
 
+    /// Conversas: which layout to draw (`GET /api/dms/config`). Seeded from
+    /// the last answer on this device so a launch does not draw the hub and
+    /// then swap to tabs a second later.
+    var dmsConfig = DmsConfig.load()
+    /// Friends' presence, by user id, for the dot on a 1:1 row. Read off the
+    /// same friends fetch the badge uses.
+    var friendStatus: [String: String] = [:]
+    /// Friends, online first, for Nova conversa.
+    var friends: [Friend] = []
+    /// Who is typing where, for "digitando…" on a row. `typingRevision` is the
+    /// observable half: the struct changes without SwiftUI seeing it.
+    private(set) var typingRevision = 0
+    @ObservationIgnored private var typing = ConversationTyping()
+    @ObservationIgnored private var typingSweep: Task<Void, Never>?
+
     private var session: SessionStore?
     private let handlerKey = "home-" + UUID().uuidString
 
@@ -287,33 +448,141 @@ final class HomeModel {
                 Task { await self.refreshFriendBadge() }
                 return
             }
-            guard case .activity(let channelId, let serverId, let mention) = event,
-                  serverId == nil else { return }
-            guard let index = self.conversations.firstIndex(where: { $0.channelId == channelId })
-            else {
+            self.handleConversationEvent(event)
+        }
+        await refresh()
+    }
+
+    /// The conversation list kept honest while the user is elsewhere:
+    /// activity bumps a row (serverId is nil on a conversation's frames), a
+    /// message seen in full moves its preview, and typing lights "digitando…".
+    func handleConversationEvent(_ event: RealtimeEvent) {
+        switch event {
+        case .activity(let channelId, let serverId, let mention, let preview):
+            guard serverId == nil else { return }
+            if let author = preview?.authorId, typing.clear(channelId: channelId, userId: author) {
+                typingRevision += 1
+            }
+            guard let next = ConversationList.applyingActivity(
+                conversations, channelId: channelId, mention: mention, preview: preview
+            ) else {
                 // A conversation this list has never seen — someone opened a
                 // brand-new DM to us. Only the server knows who is in it.
                 Task { await self.refresh() }
                 return
             }
-            let old = self.conversations[index]
-            self.conversations[index] = DmSummary(
-                channelId: old.channelId,
-                kind: old.kind,
-                participants: old.participants,
-                lastMessageAt: Date(),
-                unread: DmUnread(
-                    count: old.unread.count + 1,
-                    mentions: old.unread.mentions + (mention ? 1 : 0)
-                )
-            )
-            // Freshest first, the way the server orders the list.
-            self.conversations.sort {
-                ($0.lastMessageAt ?? .distantPast) > ($1.lastMessageAt ?? .distantPast)
+            conversations = next
+        case .messageCreated(let message, _):
+            if typing.clear(channelId: message.channelId, userId: message.authorId) {
+                typingRevision += 1
             }
+            if let next = ConversationList.applyingMessage(conversations, message: message) {
+                conversations = next
+            }
+        case .typing(let channelId, let userId, let displayName):
+            // Only conversations feed the list's typing line.
+            guard conversations.contains(where: { $0.channelId == channelId }) else { return }
+            if typing.note(
+                channelId: channelId, userId: userId, name: displayName,
+                viewerId: session?.currentUser?.id
+            ) {
+                typingRevision += 1
+            }
+            scheduleTypingSweep()
+        default:
+            return
         }
-        await refresh()
     }
+
+    /// Wakes when the next typist runs out, so "digitando…" leaves on time
+    /// even when no other frame arrives to redraw the list.
+    private func scheduleTypingSweep() {
+        typingSweep?.cancel()
+        guard let soonest = typing.soonestExpiry else { return }
+        let delay = max(0.05, soonest.timeIntervalSinceNow)
+        typingSweep = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Int(delay * 1000) + 20))
+            guard !Task.isCancelled, let self else { return }
+            if self.typing.prune() { self.typingRevision += 1 }
+            self.scheduleTypingSweep()
+        }
+    }
+
+    /// Names typing in a conversation right now. Reads `typingRevision` so a
+    /// view drawing it redraws when somebody starts or stops.
+    func typingNames(in channelId: String) -> [String] {
+        _ = typingRevision
+        return typing.names(in: channelId)
+    }
+
+    // MARK: - Conversas
+
+    /// Re-reads `GET /api/dms/config`. A failed read keeps what is drawn.
+    func refreshDmsConfig() async {
+        guard let session, let next = await session.api.dmsConfig() else { return }
+        if next != dmsConfig {
+            dmsConfig = next
+        }
+        next.save()
+    }
+
+    /// Friend presence for a 1:1 row. Nil for anybody who is not a friend:
+    /// a stranger who writes to you does not get to show you whether they
+    /// are at their keyboard, and you do not learn it by being written to.
+    func presence(for conversation: DmSummary) -> String? {
+        guard conversation.kind == "dm", let other = conversation.participants.first else { return nil }
+        return friendStatus[other.id]
+    }
+
+    var pinnedConversationIds: [String] { preferences?.pinnedConversations ?? [] }
+
+    func isPinned(_ conversation: DmSummary) -> Bool {
+        pinnedConversationIds.contains(conversation.channelId)
+    }
+
+    /// Fixar / Desafixar. Optimistic, and put back on a failed write.
+    func togglePin(_ conversation: DmSummary) async {
+        guard let session else { return }
+        let previous = preferences
+        var ids = pinnedConversationIds
+        if let index = ids.firstIndex(of: conversation.channelId) {
+            ids.remove(at: index)
+        } else {
+            guard ids.count < Self.pinnedMax else {
+                error = String(localized: "You can pin up to 15 conversations. Unpin one first.")
+                return
+            }
+            ids.insert(conversation.channelId, at: 0)
+        }
+        var local = preferences ?? UserPreferences()
+        local.pinnedConversations = ids
+        preferences = local
+        do {
+            preferences = try await session.api.setPinnedConversations(ids)
+        } catch {
+            preferences = previous
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    static let pinnedMax = 15
+
+    /// Fechar conversa. Gone from the list now; a 1:1 comes back with the
+    /// next message.
+    func close(_ conversation: DmSummary) async {
+        guard let session else { return }
+        let previous = conversations
+        conversations.removeAll { $0.channelId == conversation.channelId }
+        do {
+            try await session.api.closeConversation(channelId: conversation.channelId)
+        } catch {
+            conversations = previous
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// The tab badge: conversations waiting, not messages.
+    var waitingConversations: Int { ConversationList.waitingCount(conversations) }
 
     func refresh() async {
         guard let session else { return }
@@ -349,7 +618,7 @@ final class HomeModel {
             communitiesEnabled = await session.api.communitiesEnabled()
             await refreshBauUnread()
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isLoading = false
         hasLoadedOnce = true
@@ -418,6 +687,11 @@ final class HomeModel {
         if let friends = await friendsResponse {
             pendingFriendRequests = FriendsDigest.pendingActionCount(friends)
             friendCount = friends.friends.count
+            self.friends = FriendsDigest.onlineFirst(friends.friends)
+            friendStatus = Dictionary(
+                friends.friends.map { ($0.id, $0.status) },
+                uniquingKeysWith: { first, _ in first }
+            )
         }
         if let pending = await queue {
             pendingDepoimentos = pending.count
@@ -442,7 +716,7 @@ final class HomeModel {
             )
         } catch {
             servers[index].showOnProfile = previous
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 
@@ -460,7 +734,7 @@ final class HomeModel {
             createServerAttempt.reset()
             servers.append(server)
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
     }
 }
@@ -478,10 +752,21 @@ struct HubView: View {
     /// Owned by `HomeView` so a restored DM and a freshly created one push
     /// through the same, single destination.
     @Binding var openedConversation: DmSummary?
+    /// The hub (servers and conversations on one screen, today's shell) or the
+    /// Servidores tab, where conversations have a tab of their own and "you"
+    /// is the Tu tab, so neither the conversation list nor the dock is drawn.
+    var layout: Layout = .hub
+
+    enum Layout {
+        case hub
+        case servers
+    }
 
     @State private var showingCreateServer = false
     @State private var newServerName = ""
     @State private var showingNewConversation = false
+    /// Stories from friends, at the top of the conversations: Amigos only.
+    @State private var friendStories = StoryStripModel(scope: .friends)
     /// Typing or pasting a code, for the invite that did not arrive as a
     /// tappable link — read out loud over voice chat, or copied out of a
     /// message. The empty-servers card has promised this since it shipped.
@@ -533,26 +818,47 @@ struct HubView: View {
                                 onDismiss: { Task { await model.settleFirstRun() } }
                             )
                         }
-                        serverSection
-                        conversationSection
+                        if layout == .servers {
+                            serverRows
+                        } else {
+                            serverSection
+                            conversationSection
+                        }
                     }
                     .padding(.top, 6)
                     .padding(.bottom, 24)
                 }
-                .refreshable { await model.refresh() }
+                .pullToRefresh { await model.refresh() }
                 .animation(Motion.gentle, value: FirstRun.shouldShow(firstRunInputs))
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { profileDock }
-        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if layout == .hub { profileDock }
+        }
+        .navigationTitle(layout == .servers ? String(localized: "Servers") : "")
+        .navigationBarTitleDisplayMode(layout == .servers ? .large : .inline)
         .toolbar {
-            ToolbarItem(placement: .principal) { wordmark }
+            if layout == .hub {
+                ToolbarItem(placement: .principal) { wordmark }
+            }
+            if layout == .servers, model.communitiesEnabled {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showingCommunities = true } label: {
+                        Image(systemName: "safari")
+                    }
+                    .tint(Palette.signal)
+                    .accessibilityIdentifier("servers.communities")
+                    .accessibilityLabel("Find communities")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button {
-                        showingNewConversation = true
-                    } label: {
-                        Label("New message", systemImage: "square.and.pencil")
+                    if layout == .hub {
+                        Button {
+                            showingNewConversation = true
+                        } label: {
+                            Label("New message", systemImage: "square.and.pencil")
+                        }
                     }
                     Button {
                         showingCreateServer = true
@@ -606,7 +912,7 @@ struct HubView: View {
             Text("Paste the invite you were sent, or type the code.")
         }
         .sheet(isPresented: $showingNewConversation) {
-            NewConversationView { conversation in
+            newConversationSheet { conversation in
                 // Refresh so the new thread is in the list behind the sheet,
                 // then open it — otherwise dismissing lands on a list that does
                 // not yet contain the conversation just created.
@@ -614,9 +920,13 @@ struct HubView: View {
                 openedConversation = conversation
             }
         }
-        .navigationDestination(item: $openedConversation) { conversation in
-            chat(for: conversation)
-        }
+        // Only the hub pushes conversations. On the Servidores tab they belong
+        // to the Conversas tab's stack, and registering the same binding here
+        // too would push one conversation onto two stacks.
+        .modifier(ConversationDestination(
+            enabled: layout == .hub,
+            openedConversation: $openedConversation
+        ))
         .navigationDestination(item: $addingFriend) { _ in
             FriendsView(opensAddImmediately: true)
         }
@@ -939,6 +1249,13 @@ struct HubView: View {
     @ViewBuilder
     private var conversationSection: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Friends' stories, above the conversations they lead to (with the
+            // Conversas tabs on they live at the top of that tab instead).
+            // Only with the friends flag on; the author's own bubble shows
+            // alone only for somebody with friends to post to.
+            StoryStripView(model: friendStories, showsOwnBubbleAlone: model.friendCount > 0)
+                .padding(.horizontal, Metrics.hPadding)
+                .task { await friendStories.start(session: session) }
             HStack {
                 SectionLabel(text: String(localized: "Direct messages"))
                 Spacer()
@@ -969,18 +1286,41 @@ struct HubView: View {
                 .buttonStyle(.plain)
                 .padding(.horizontal, Metrics.hPadding)
             } else {
-                LazyVStack(spacing: 10) {
-                    ForEach(model.conversations) { conversation in
-                        NavigationLink {
-                            chat(for: conversation)
-                        } label: {
-                            ConversationRow(conversation: conversation)
+                if model.dmsConfig.home {
+                    // Conversas rows on the hub too: the preview, presence and
+                    // "digitando…" do not need a tab bar to be useful.
+                    LazyVStack(spacing: 0) {
+                        ForEach(model.conversations) { conversation in
+                            NavigationLink {
+                                chat(for: conversation)
+                            } label: {
+                                ConversationRowV2(
+                                    conversation: conversation,
+                                    viewerId: session.currentUser?.id,
+                                    presence: model.presence(for: conversation),
+                                    typing: model.typingNames(in: conversation.channelId),
+                                    isPinned: model.isPinned(conversation)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("hub.conversation.\(conversation.channelId)")
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("hub.conversation.\(conversation.channelId)")
                     }
+                    .padding(.horizontal, Metrics.hPadding)
+                } else {
+                    LazyVStack(spacing: 10) {
+                        ForEach(model.conversations) { conversation in
+                            NavigationLink {
+                                chat(for: conversation)
+                            } label: {
+                                ConversationRow(conversation: conversation)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("hub.conversation.\(conversation.channelId)")
+                        }
+                    }
+                    .padding(.horizontal, Metrics.hPadding)
                 }
-                .padding(.horizontal, Metrics.hPadding)
             }
         }
     }
@@ -988,6 +1328,141 @@ struct HubView: View {
     /// One place builds a conversation's chat screen, so "opened a DM" and
     /// "remember this DM" cannot drift apart.
     private func chat(for conversation: DmSummary) -> some View {
+        ConversationChat(conversation: conversation)
+    }
+
+    /// Nova conversa with friends listed when Conversas is on; the search
+    /// sheet as it always was when it is off.
+    @ViewBuilder
+    private func newConversationSheet(onOpened: @escaping (DmSummary) -> Void) -> some View {
+        if model.dmsConfig.home {
+            NovaConversaView(friends: model.friends, onOpened: onOpened)
+        } else {
+            NewConversationView(onOpened: onOpened)
+        }
+    }
+
+    // MARK: - Servidores (the tab)
+
+    /// Servers as rows, the way the Servidores tab draws them: the mark, the
+    /// name, and the Baú's news under it. Below them, one row that creates or
+    /// joins, so an account with no servers still has a door.
+    @ViewBuilder
+    private var serverRows: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(model.servers) { server in
+                NavigationLink {
+                    ChannelListView(server: server)
+                } label: {
+                    ServerRow(
+                        server: server,
+                        bauUnread: server.communityHomeEnabled
+                            ? BauBadge.unread(for: server.id, in: model.bauUnread)
+                            : 0
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("servers.server.\(server.id)")
+            }
+
+            Menu {
+                Button {
+                    showingCreateServer = true
+                } label: {
+                    Label("New community", systemImage: "plus.square.on.square")
+                }
+                Button {
+                    showingJoinInvite = true
+                } label: {
+                    Label("Join with invite", systemImage: "envelope.open")
+                }
+                if model.communitiesEnabled {
+                    Button {
+                        showingCommunities = true
+                    } label: {
+                        Label("Find communities", systemImage: "safari")
+                    }
+                }
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Palette.paperMuted)
+                        .frame(width: 48, height: 48)
+                        .background(Circle().fill(Palette.surface))
+                        .overlay(Circle().strokeBorder(Palette.border, lineWidth: 1))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Create or join a server")
+                            .font(Typography.bodyMedium)
+                            .foregroundStyle(Palette.paper)
+                        Text("With an invite or from the communities list")
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.paperMuted)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("servers.createOrJoin")
+        }
+        .padding(.horizontal, Metrics.hPadding)
+    }
+}
+
+/// A server on the Servidores tab.
+struct ServerRow: View {
+    let server: Server
+    var bauUnread: Int = 0
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Avatar(name: server.name, seed: server.id, size: 48, url: server.iconUrl)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(server.name)
+                    .font(Typography.bodyMedium)
+                    .foregroundStyle(Palette.paper)
+                    .lineLimit(1)
+                if bauUnread > 0 {
+                    Text("New in the Baú")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.signal)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            if let label = BauBadge.label(count: bauUnread) {
+                UnreadBadge(label: label, isMention: true)
+            }
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+}
+
+/// Registers the conversation push only where conversations are pushed from.
+private struct ConversationDestination: ViewModifier {
+    let enabled: Bool
+    @Binding var openedConversation: DmSummary?
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.navigationDestination(item: $openedConversation) { conversation in
+                ConversationChat(conversation: conversation)
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// A conversation's chat screen, and "remember this DM" with it, in one
+/// place so the two cannot drift apart.
+struct ConversationChat: View {
+    let conversation: DmSummary
+
+    var body: some View {
         ChatView(
             channelId: conversation.channelId,
             title: conversation.title,

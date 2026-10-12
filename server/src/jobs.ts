@@ -31,6 +31,7 @@ import {
   sweepQuarantinedAttachments,
 } from "./services/attachments.js";
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
+import { sweepQuarantinedCommunityHomeMedia } from "./services/community-home-scan.js";
 import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
 import { sweepCommunityHomeCaptions } from "./services/community-home-captions.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
@@ -40,6 +41,7 @@ import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.j
 import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
+import { sweepForumPostShells } from "./services/forums.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import {
@@ -64,6 +66,14 @@ import { broadcastWatchParty } from "./ws/watch-party-events.js";
 import { userHasAuthenticatedSocket } from "./ws/sockets.js";
 import { hasClusterSocket } from "./ws/status.js";
 import { sweepHlsSessions } from "./voice/hls-cleanup.js";
+import { storyAudienceTargets } from "./services/stories.js";
+import {
+  STORY_SWEEP_INTERVAL_MS,
+  STORY_VIDEO_INTERVAL_MS,
+  processStoryVideos,
+  sweepStories,
+} from "./services/story-media.js";
+import { notifyStoriesUpdate, notifyStoryAudiences } from "./ws/stories.js";
 
 /**
  * Hourly, because the grace period is an hour: running more often only finds
@@ -80,6 +90,15 @@ export const CHANNEL_SESSION_REMINDER_INTERVAL_MS = 60_000;
 /** Daily is plenty for a 90-day retention window; a failure here costs
  * nothing but disk, and resolves on the next run. */
 export const DAILY_MS = 24 * 60 * 60_000;
+/**
+ * Forum post shells: a create that crashed between the post row and its
+ * opening message. Invisible to everyone (every read filters on
+ * `published_at`), so this is hygiene, but a shell holds the composer's staged
+ * files on the post, and those go back to the forum here. Ten minutes old
+ * before it is touched (`FORUM_SHELL_TTL_MS`), so a tick every five minutes
+ * removes one within fifteen.
+ */
+export const FORUM_SHELL_SWEEP_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Five minutes rather than daily, and unlike every other sweep in this file
@@ -145,6 +164,13 @@ export async function sweepAttachments(): Promise<void> {
 }
 
 async function sweepCommunityHomeMedia(): Promise<void> {
+  // Quarantine expiry first and on its own: a failure in one sweep must not
+  // starve the other. Never touches an illegal-content row at any age.
+  try {
+    await sweepQuarantinedCommunityHomeMedia();
+  } catch (error) {
+    console.error("[content-safety] Baú quarantine sweep failed:", error);
+  }
   try {
     await sweepOrphanedCommunityHomeMedia();
   } catch (error) {
@@ -179,6 +205,62 @@ async function sweepCommunityHomeVideoCaptions(): Promise<void> {
     await sweepCommunityHomeCaptions();
   } catch (error) {
     console.error("[community-home] captions sweep failed:", error);
+  }
+}
+
+/**
+ * Stories: the expiry sweep, every minute, whatever the flags say (a flag
+ * turned off must never make bytes outlive the 24 h promise).
+ */
+async function sweepStoriesJob(): Promise<void> {
+  try {
+    const result = await sweepStories();
+    if (result.mediaFailed > 0) {
+      console.warn(`[stories] ${result.mediaFailed} media delete(s) failed, retrying next tick`);
+    }
+  } catch (error) {
+    console.error("[stories] sweep failed:", error);
+  }
+}
+
+let storyVideosRunning = false;
+
+/**
+ * Stories: finish published videos (probe, poster, frames, scan). One at a
+ * time per process and never overlapping itself; a few per tick while there
+ * is a queue. Where this runs without sockets (the worker), the nudge goes
+ * out over the cluster bus.
+ */
+async function processStoryVideosJob(): Promise<void> {
+  if (storyVideosRunning) {
+    return;
+  }
+  storyVideosRunning = true;
+  try {
+    for (let i = 0; i < 3; i += 1) {
+      const tick = await processStoryVideos();
+      if (tick.outcome === "idle") {
+        break;
+      }
+      if (tick.storyId && tick.authorId) {
+        const authorId = tick.authorId;
+        if (tick.wentLive) {
+          // Best effort: the story is live either way, and a missed nudge is
+          // a strip that refreshes on the next focus.
+          await storyAudienceTargets(tick.storyId)
+            .then((targets) => notifyStoryAudiences(authorId, targets))
+            .catch((error: unknown) => {
+              console.error("[stories] live nudge failed:", error);
+            });
+        } else {
+          notifyStoriesUpdate({ scope: "own", userId: authorId });
+        }
+      }
+    }
+  } catch (error) {
+    console.error("[stories] video job failed:", error);
+  } finally {
+    storyVideosRunning = false;
   }
 }
 
@@ -238,6 +320,7 @@ export function startColdJobs(): ColdJobs {
     // inert, because enforcement compares it against the channel's current
     // interval. Rows, not disk pages, is the point.
     every(DAILY_MS, "slow-mode", sweepSlowModeClocks),
+    every(FORUM_SHELL_SWEEP_INTERVAL_MS, "forum-shells", sweepForumPostShells),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),
     // Refilled cluster rate-limit buckets carry no information. Rows, not
     // disk pages: the table is bounded by "subjects who rang somebody in the
@@ -299,6 +382,8 @@ export function startColdJobs(): ColdJobs {
       },
     ),
     every(HLS_SESSION_SWEEP_INTERVAL_MS, "hls-sessions", sweepHlsSessions),
+    every(STORY_SWEEP_INTERVAL_MS, "stories", sweepStoriesJob),
+    every(STORY_VIDEO_INTERVAL_MS, "stories-video", processStoryVideosJob),
     // Voice occupancy: the one job here that reads live state rather than
     // rows. It is here rather than next to the WS heartbeat because with
     // `VOICE_REGISTRY=postgres` the truth is in `voice_peers`, which the

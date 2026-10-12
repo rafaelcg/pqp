@@ -21,5 +21,9 @@ export default defineConfig({
     // pinned. These render through `react-dom/server`, which needs no DOM — the
     // environment stays `node` and the suite keeps costing nothing.
     include: ["src/**/*.test.{ts,tsx}"],
+    // Worker threads rather than the default child processes: the same 558
+    // files, ~18% less CPU (measured locally, 201 s -> 164 s), and CI runs
+    // this suite beside the server's on four cores, so CPU is the wall clock.
+    pool: "threads",
   },
 });

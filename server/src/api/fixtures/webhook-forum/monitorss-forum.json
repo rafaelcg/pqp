@@ -1,0 +1,31 @@
+{
+  "source": "MonitoRSS user-feeds-next, webhook to a forum: buildForumThreadBody({ isWebhook: true }) spreads the first payload and adds thread_name (forumThreadTitle, default '{{title}}', 100 max) and applied_tags (Discord forum tag snowflakes); enhancePayloadsWithWebhookDetails adds username and avatar_url; embeds carry footer.icon_url, image, thumbnail and author exactly as discord-payload-builder.ts writes them. Sent to ?wait=true.",
+  "query": { "wait": "true" },
+  "body": {
+    "content": "**Patch 1.4.2: correções de rede**\nhttps://jogo.example.com/noticias/patch-1-4-2?utm_source=rss&utm_medium=feed",
+    "embeds": [
+      {
+        "color": 5814783,
+        "title": "Patch 1.4.2: correções de rede",
+        "description": "Corrigimos a queda de conexão no matchmaking e o travamento ao abrir o inventário.",
+        "url": "https://jogo.example.com/noticias/patch-1-4-2?utm_source=rss&utm_medium=feed",
+        "footer": {
+          "text": "Jogo Example",
+          "icon_url": "https://jogo.example.com/favicon.png"
+        },
+        "image": { "url": "https://jogo.example.com/img/patch-1-4-2.jpg" },
+        "thumbnail": { "url": "https://jogo.example.com/img/logo.png" },
+        "author": {
+          "name": "Equipe Jogo",
+          "url": "https://jogo.example.com",
+          "icon_url": "https://jogo.example.com/team.png"
+        },
+        "timestamp": "2026-10-10T18:00:00.000Z"
+      }
+    ],
+    "username": "Notícias do Jogo",
+    "avatar_url": "https://jogo.example.com/rss-avatar.png",
+    "thread_name": "Patch 1.4.2: correções de rede",
+    "applied_tags": ["1092873465839202354", "1092873465839202355"]
+  }
+}

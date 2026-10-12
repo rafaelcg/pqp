@@ -28,6 +28,7 @@ import {
 } from "@/lib/api";
 import { uploadServerImage } from "@/lib/server-image-upload";
 import { useTranslation } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 
 /**
  * The two public switches, inside Server settings.
@@ -69,16 +70,28 @@ import { useTranslation } from "@/lib/i18n";
  * The address switch is disabled for them too while the room is IN the
  * directory, because turning it off there would take the listing down sideways
  * — the server refuses exactly that, and the line under the switch says so.
+ *
+ * THE DIRECTORY IS ASKED AT THE MOMENT THE ADDRESS GOES ON. An owner ticking
+ * the address on a room that had none sees the directory switch light up
+ * right under it, in a box, still unticked, with the one line that says what
+ * it means. That is the moment the question makes sense; before October 2026
+ * the switch sat greyed out below and most owners with an address never
+ * found it. Listing stays opt-in: nothing is ticked for them.
+ *
+ * `bare` drops the section's own heading and rule, for when it is a whole pane
+ * of Server settings (the Comunidade section) whose header already says it.
  */
 export function CommunitySettingsSection({
   serverId,
   canListPublicly,
   onIdentitySaved,
+  bare = false,
 }: {
   serverId: string;
   /** True only for the server's owner. */
   canListPublicly: boolean;
   onIdentitySaved?: (patch: Partial<Server>) => void;
+  bare?: boolean;
 }) {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<CommunitySettings | null>(null);
@@ -333,6 +346,12 @@ export function CommunitySettingsSection({
    * Disabled here rather than left to fail, with the reason in the line below.
    */
   const addressLocked = !canListPublicly && settings?.isListed === true;
+  /**
+   * The owner just ticked the address on a room that had none (saved state
+   * says no address yet): the directory question is asked right here.
+   */
+  const offerDirectory =
+    canListPublicly && addressed && settings?.isCommunity === false;
   const currentEmbed =
     settings?.featured && settings.featured.kind !== "image"
       ? settings.featured.url
@@ -352,13 +371,15 @@ export function CommunitySettingsSection({
 
   return (
     <section
-      className="space-y-3 border-t border-ink-4 pt-5"
+      className={cn("space-y-3", !bare && "border-t border-ink-4 pt-5")}
       data-community-settings
     >
-      <h3 className="flex items-center gap-2 font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
-        <Globe aria-hidden="true" className="h-4 w-4" />
-        {t("communities.settings.title")}
-      </h3>
+      {!bare && (
+        <h3 className="flex items-center gap-2 font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
+          <Globe aria-hidden="true" className="h-4 w-4" />
+          {t("communities.settings.title")}
+        </h3>
+      )}
 
       {/* Both paragraphs render whether or not either switch is on. Reading
           what the two mean only after you have ticked one is the wrong order. */}
@@ -424,8 +445,16 @@ export function CommunitySettingsSection({
           {/* Switch two: the directory. Disabled until the address is on, and
               saying which of the two reasons applies — an owner with no address
               yet, and an admin, are stopped by different rules and a single
-              greyed box would tell neither of them which. */}
-          <div className="space-y-1">
+              greyed box would tell neither of them which. The moment an owner
+              turns the address on, it is offered in a box (`offerDirectory`). */}
+          <div
+            className={cn(
+              "space-y-1",
+              offerDirectory &&
+                "animate-door-reveal rounded-lg border border-signal/40 bg-signal/5 p-3",
+            )}
+            data-directory-offer={offerDirectory ? "" : undefined}
+          >
             <label
               className="flex items-center gap-2 text-sm text-paper"
               htmlFor={toggleId}

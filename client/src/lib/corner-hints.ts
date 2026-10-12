@@ -18,6 +18,8 @@
  *  3. notifyOffer — a DM or mention reached a hidden tab and banners are off;
  *     a moment rather than a campaign (`lib/notifications.ts`, `NotifyOfferHint`)
  *  4. qg — the house, first-run
+ *  4b. listingNudge: once, to the owner of a room with a public address
+ *     that is not in the directory (`lib/community-listing-nudge.ts`)
  *  5. voiceClean — the one-time Voz limpa nudge, above the user bar; after
  *     the first-run cards, before the app-invite campaigns (`lib/voice-clean.ts`)
  *  6. mobileBeta — phone browsers only; the campaign for the native apps
@@ -31,6 +33,7 @@ export const CORNER_HINT_ORDER = [
   "communityHomePost",
   "notifyOffer",
   "qg",
+  "listingNudge",
   "voiceClean",
   "mobileBeta",
   "whatsNew",

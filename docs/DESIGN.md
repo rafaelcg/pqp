@@ -51,7 +51,7 @@ The role set, as defined today:
 | Borders | `border`, `border-strong` |
 | Text | `text`, `text-secondary`, `text-tertiary` |
 | Accent | `accent`, `accent-hover`, `on-accent` |
-| Status | `danger`, `warning`, `success` |
+| Status | `danger`, `warning`, `success`, and `on-danger` for a count drawn on the danger fill (an unread badge) |
 | Soft | `accent-soft`, `danger-soft`, `danger-soft-hover`, `warning-soft`, `success-soft`, and an `on-` for each fill |
 | Code | `code-bg`, `code-text` |
 | State | `focus-ring`, `ring-offset`, `selection`, `indicator` |
@@ -564,6 +564,24 @@ chrome, `hero` on a photograph, where the token colours are invisible and white
 at low alpha is the only thing that works. Its copy is not a catalogue key,
 because "beta" is the same word in both of this product's languages.
 
+### Badge
+
+`badge.tsx`. A short status word on a card or beside a name: "Novo",
+"Resolvido", "Fixado", "Fechado", "OP", the "Staff" marker on a forum tag.
+One size (18px, 10px uppercase bold, `--radius-tick`), so the same signal
+reads the same on every surface.
+
+- **Variants.** `new` (solid accent, something the viewer has not seen),
+  `accent`, `success`, `warning`, `danger` (the soft pairs) and `neutral`
+  (`surface-3` with `text-secondary`). Every variant is a pair the bench
+  already measures; there is no opacity wash.
+- **`icon`.** An optional lucide icon before the word, decorative.
+- **Use it** for a state. **Do not** use it for a count (the mention pill and
+  the unread pip are their own shapes) or for the product's own "beta"
+  (`BetaTag`).
+- **Accessibility.** The word is the meaning, so colour is never the only
+  signal; the icon is `aria-hidden`.
+
 ## Planned primitives
 
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a
@@ -577,8 +595,8 @@ variant set, and then use it everywhere.
   general.
 - **Toast.** The animations (`animate-toast-in`, `animate-toast-out`) exist in
   `index.css` and each caller draws its own container.
-- **Badge.** `BetaTag` is one badge with one word. There is no general count or
-  status badge.
+- **Count badge.** The status `Badge` exists; a general count pill does not
+  (the sidebar's mention number is drawn in place).
 
 ## Rules
 

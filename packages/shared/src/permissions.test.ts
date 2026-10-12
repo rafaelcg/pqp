@@ -31,9 +31,9 @@ const ADMIN = Permission.ADMINISTRATOR;
 
 describe("permission bitfields", () => {
   it("round-trips as a decimal string, never a JS number", () => {
-    expect(serializePermissions(PERMISSION_DEFAULT_EVERYONE)).toBe("36222657");
-    expect(parsePermissions("36222657")).toBe(PERMISSION_DEFAULT_EVERYONE);
-    expect(serializePermissions(PERMISSION_ALL)).toBe("134217727");
+    expect(serializePermissions(PERMISSION_DEFAULT_EVERYONE)).toBe("103331521");
+    expect(parsePermissions("103331521")).toBe(PERMISSION_DEFAULT_EVERYONE);
+    expect(serializePermissions(PERMISSION_ALL)).toBe("268435455");
     expect(parsePermissions(PERMISSION_ALL)).toBe(PERMISSION_ALL);
   });
 

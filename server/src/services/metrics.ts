@@ -11,6 +11,7 @@ import {
   streamAlertMetrics,
   type StreamAlertMetrics,
 } from "./stream-alerts.js";
+import { nudgeMetrics, type NudgeMetrics } from "./nudge.js";
 import {
   communityHomeTranslationMetrics,
   type CommunityHomeTranslationMetrics,
@@ -19,6 +20,7 @@ import {
   communityHomeCaptionsMetrics,
   type CommunityHomeCaptionsMetrics,
 } from "./community-home-captions.js";
+import { storiesMetrics, type StoriesMetrics } from "./story-metrics.js";
 import {
   communityColumns,
   communityTag,
@@ -124,6 +126,10 @@ import { callRatingAudioHealthCounts, callRatingSummary } from "./call-ratings.j
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
 import { voiceNoteMetrics, type VoiceNoteMetrics } from "./voice-note-metrics.js";
+import {
+  conversationMetrics,
+  type ConversationMetrics,
+} from "./conversation-metrics.js";
 import type { CallRatingSummary, VoiceRoomTransport } from "@pqp/shared";
 
 /**
@@ -338,6 +344,15 @@ export interface AdminMetrics {
    */
   communityHomeCaptions: CommunityHomeCaptionsMetrics;
   /**
+   * Stories (`services/story-metrics.ts`): this process's counters (posts,
+   * views, scans, video jobs, sweep deletes and failures) and, deployment
+   * wide and cached 30 s, the numbers the feature is judged by: posters and
+   * their concentration, viewers per story, openers, reactions, replies and
+   * whether replies got answers, repeat posters, reports, removals, holds,
+   * live bytes and the sweep lag. Live like `communityHomeCaptions`.
+   */
+  stories: StoriesMetrics;
+  /**
    * The start-of-stream notice (`services/stream-alerts.ts`), since this
    * process started: shares that armed a timer, those dropped for the flag, the
    * 20 s debounce or the cooldown, notices claimed, people told, why people
@@ -346,6 +361,14 @@ export interface AdminMetrics {
    * Live, never from the 30 s cache.
    */
   streamAlerts: StreamAlertMetrics;
+  /**
+   * Chamar a atenção (`services/nudge.ts`), since this process started:
+   * whether the `nudge` flag is on here, nudges sent, and refusals by reason
+   * (`cooldown`, `unanswered`, `busy`, `self-off`, `unavailable`). Per process
+   * like the push counters: with two instances read each. Live, never from
+   * the 30 s cache.
+   */
+  nudge: NudgeMetrics;
   /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
@@ -948,6 +971,13 @@ export interface AdminMetrics {
    * above says; the dashboard does not draw that as a result.
    */
   voiceNotes: VoiceNoteMetrics;
+  /**
+   * Conversas: who is talking to people in DMs and groups, and whether new
+   * accounts start to. Field by field in `services/conversation-metrics.ts`.
+   * Null when its read failed, which the dashboard draws as "could not ask"
+   * rather than as zero.
+   */
+  conversations: ConversationMetrics | null;
 
   // ------------------------------------------------------------ tab detail
   // Everything below backs one tab each on the operator dashboard. It is
@@ -1198,7 +1228,9 @@ type CachedMetrics = Omit<
   | "flags"
   | "communityHomeTranslation"
   | "communityHomeCaptions"
+  | "stories"
   | "streamAlerts"
+  | "nudge"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -1217,6 +1249,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     callRatings,
     connections,
     voiceNotes,
+    conversations,
   ] = await runWithConcurrencyLimit(
     [
     () => pool.query<{ total: string; last24h: string }>(
@@ -1319,6 +1352,10 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     () => callRatingSummary(7),
     () => connectionAdoption(),
     () => voiceNoteMetrics(),
+    () => conversationMetrics().catch((error: unknown) => {
+      console.error("[metrics] conversation metrics failed:", error);
+      return null;
+    }),
     ],
     METRICS_QUERY_CONCURRENCY,
   );
@@ -1383,7 +1420,10 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
          FROM (
            SELECT server_id, COUNT(*) AS n
              FROM channels
-            WHERE kind = 'server'
+            -- Sidebar channels only: a thread is a channel row too, and a
+            -- forum holds one per post, so counting them would make this
+            -- card jump the day a forum fills up.
+            WHERE kind = 'server' AND type <> 'thread'
             GROUP BY server_id
          ) t`,
     ),
@@ -1785,6 +1825,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     // dashboard to pick one: it is the users total in this same payload.
     connections: { ...connections, ofUsers: Number(users.rows[0]?.total ?? 0) },
     voiceNotes,
+    conversations,
 
     channelDetail: {
       privateText: Number(channelShape.rows[0]?.private_text ?? 0),
@@ -1975,6 +2016,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     flags,
     communityHomeTranslation,
     communityHomeCaptions,
+    stories,
   ] = await Promise.all([
     getCachedMetrics(),
     checkReady(),
@@ -1983,6 +2025,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     featureFlagMetrics(),
     communityHomeTranslationMetrics(),
     communityHomeCaptionsMetrics(),
+    storiesMetrics(),
   ]);
   const runtime = runtimeSnapshot();
   const cluster = await clusterMetrics(runtime);
@@ -1998,7 +2041,9 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     flags,
     communityHomeTranslation,
     communityHomeCaptions,
+    stories,
     streamAlerts: streamAlertMetrics(),
+    nudge: nudgeMetrics(),
   };
 }
 

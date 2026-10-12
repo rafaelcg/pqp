@@ -774,20 +774,40 @@ final class WatchPartyTests: XCTestCase {
         XCTAssertFalse(ChannelFixture.make(type: "forum").isWatchParty)
     }
 
+    /// The list keeps only the types this build can open: a chat, and since
+    /// forum PR 6 a forum (its own screen, never a dead "#" row). A type it
+    /// does not know is still hidden.
+    func testAForumChildIsShownAndAnUnknownOneIsHidden() {
+        let category = ChannelFixture.make(type: "category", id: "cat")
+        let kids = [
+            ChannelFixture.make(type: "text", id: "t", parentId: "cat"),
+            ChannelFixture.make(type: "voice", id: "v", parentId: "cat"),
+            ChannelFixture.make(type: "forum", id: "f", parentId: "cat"),
+            ChannelFixture.make(type: "something-new", id: "n", parentId: "cat"),
+        ]
+        let shown = ChannelListView.children(of: category, in: kids + [category])
+        XCTAssertEqual(Set(shown.map(\.id)), ["t", "v", "f"])
+        XCTAssertFalse(ChannelFixture.make(type: "forum").opensAsChat)
+        XCTAssertTrue(ChannelFixture.make(type: "text").opensAsChat)
+        XCTAssertTrue(ChannelFixture.make(type: "voice").opensAsChat)
+    }
+
     /**
      THE GLYPH HAS TO EXIST.
 
      `Image(systemName:)` for a symbol this OS does not have renders nothing
      and reports nothing, so a wrong name is a channel row with a hole in it
      and no failure anywhere. The web draws a clapperboard for this type and
-     `movieclapper.fill` is its SF Symbols equivalent (SF Symbols 5, iOS 17,
-     which is this app's floor).
+     `movieclapper` is its SF Symbols equivalent (SF Symbols 5, iOS 17,
+     which is this app's floor). The row draws the outline, like every other
+     glyph in the list; the live card uses the filled one.
      */
     func testTheWatchPartyGlyphResolvesOnThisOs() {
         XCTAssertNotNil(
-            UIImage(systemName: "movieclapper.fill"),
+            UIImage(systemName: "movieclapper"),
             "the channel row would draw an empty box and say nothing about it"
         )
+        XCTAssertNotNil(UIImage(systemName: "movieclapper.fill"))
     }
 
     /**
@@ -803,8 +823,12 @@ final class WatchPartyTests: XCTestCase {
         let source = try String(
             contentsOf: sources.appending(path: "Chat/ChannelListView.swift"), encoding: .utf8
         )
+        // The row itself lives in its own file since the A1 list.
+        let rows = try String(
+            contentsOf: sources.appending(path: "Chat/ChannelListRows.swift"), encoding: .utf8
+        )
         XCTAssertTrue(
-            source.contains("if channel.isWatchParty { return \"movieclapper.fill\" }"),
+            rows.contains("if channel.isWatchParty { return \"movieclapper\" }"),
             "a party drawn with the speaker glyph is a party nobody can find"
         )
         XCTAssertTrue(
@@ -815,17 +839,17 @@ final class WatchPartyTests: XCTestCase {
             source.contains("channels.filter { !$0.isWatchParty }"),
             "and filtered out of Voice, or it is listed twice"
         )
-        // The section heading itself moved out of this file and into
-        // `WatchPartySidebarSlot`, which is what `ChannelListView` now hands
-        // the live/pending/create decision to -- see
-        // `resolveServerWatchPartyListState`.
+        // The live card is the other half of telling a party apart from a
+        // voice channel: red, with the LIVE pill on its poster and a Watch
+        // button, above everything (`WatchPartySidebarSlot`).
         let slot = try String(
             contentsOf: sources.appending(path: "Voice/WatchPartySidebarSlot.swift"), encoding: .utf8
         )
         XCTAssertTrue(
-            slot.contains("String(localized: \"Watch party\")"),
-            "the live card's own heading is the other half of telling a party apart from a voice channel"
+            slot.contains(".overlay(alignment: .topLeading) { livePill.padding(4) }"),
+            "the live card has to say it is live"
         )
+        XCTAssertTrue(slot.contains("Text(\"Watch\")"), "and offer to watch it")
     }
 
     /**
@@ -1041,11 +1065,12 @@ final class WatchPartyTests: XCTestCase {
 }
 
 private enum ChannelFixture {
-    static func make(type: String) -> Channel {
+    static func make(type: String, id: String = "c1", parentId: String? = nil) -> Channel {
+        let parent = parentId.map { "\"\($0)\"" } ?? "null"
         let json = """
-        {"id":"c1","serverId":"s1","kind":"server","name":"sessao-de-sabado",
+        {"id":"\(id)","serverId":"s1","kind":"server","name":"sessao-de-sabado",
          "type":"\(type)","position":0,"isPrivate":false,"topic":null,
-         "imageUrl":null,"parentId":null}
+         "imageUrl":null,"parentId":\(parent)}
         """
         // Force-tried: a fixture that cannot decode is a broken test.
         return try! Coding.decoder.decode(Channel.self, from: Data(json.utf8))
