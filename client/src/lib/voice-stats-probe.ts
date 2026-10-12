@@ -779,6 +779,70 @@ export interface VoiceStatsConsole {
 }
 
 /**
+ * Two samples closer together than this are the same sample.
+ *
+ * WHY. Every delta in a snapshot (packets, energy, bytes) is measured from
+ * the previous sample BY ANYONE, because the mark tables are shared. Several
+ * consumers poll on their own two-second timers (the share's uplink strain,
+ * the link-quality bars) beside the shared poll the audio repair reads, and
+ * timers started in the same commit stay phase-locked for the whole call. When
+ * one of them sampled a few milliseconds before the repair's tick, the repair
+ * was handed the delta of those few milliseconds: zero packets from a peer
+ * whose voice was arriving perfectly. Chrome also serves `getStats()` from a
+ * cache for a short while, so two scans that close read identical counters.
+ * Five such ticks in a row is "their voice stopped arriving" on a mesh call,
+ * and the repair for that rebuilds the peer connection, which froze a
+ * presenter's screen share for every viewer for several seconds and took
+ * `screen-quality-received.spec.ts` down on CI about one run in twenty
+ * (2026-10-12). A caller inside this window gets the snapshot that was just
+ * taken, so no consumer can shrink another's interval to nothing.
+ */
+export const MIN_SAMPLE_GAP_MS = 1000;
+
+interface TakenSample {
+  /** When the scan started, for the gap. */
+  at: number;
+  /** Scans are numbered in the order they start; see `subscribeVoiceStats`. */
+  seq: number;
+  snapshot: VoiceStatsSnapshot;
+}
+
+let latestSample: TakenSample | null = null;
+let inFlightSample: Promise<TakenSample> | null = null;
+let nextSampleSeq = 0;
+
+function sampleCoalesced(): Promise<TakenSample> {
+  if (inFlightSample) {
+    return inFlightSample;
+  }
+  const at = Date.now();
+  if (latestSample && at - latestSample.at < MIN_SAMPLE_GAP_MS) {
+    return Promise.resolve(latestSample);
+  }
+  const seq = nextSampleSeq;
+  nextSampleSeq += 1;
+  const pending = sampleAll().then((snapshot) => {
+    const taken = { at, seq, snapshot };
+    latestSample = taken;
+    return taken;
+  });
+  inFlightSample = pending;
+  const clear = () => {
+    if (inFlightSample === pending) {
+      inFlightSample = null;
+    }
+  };
+  pending.then(clear, clear);
+  return pending;
+}
+
+/** Test seam: forget the last sample so the next call scans again. */
+export function resetVoiceStatsSamplingForTests(): void {
+  latestSample = null;
+  inFlightSample = null;
+}
+
+/**
  * One silent sample of every live connection.
  *
  * The same work `report()` does without the printing, so a UI readout and the
@@ -786,9 +850,12 @@ export interface VoiceStatsConsole {
  * byte marks, which means two consumers sampling at different intervals will
  * each see a bitrate measured from whichever sample came last. That is fine
  * for a readout and would not be for billing.
+ *
+ * Coalesced (`MIN_SAMPLE_GAP_MS`): a call made while a scan is running, or
+ * just after one finished, gets that scan rather than a new one.
  */
 export function sampleVoiceStats(): Promise<VoiceStatsSnapshot> {
-  return sampleAll();
+  return sampleCoalesced().then((taken) => taken.snapshot);
 }
 
 /** How often the shared poll below samples, matching what every consumer
@@ -798,6 +865,10 @@ const SHARED_POLL_INTERVAL_MS = 2000;
 
 type VoiceStatsListener = (snapshot: VoiceStatsSnapshot) => void;
 const sharedListeners = new Set<VoiceStatsListener>();
+/** The first scan each listener may be handed: one that started after it subscribed. */
+const firstSeqFor = new Map<VoiceStatsListener, number>();
+/** The newest scan the shared poll has delivered, so none is delivered twice. */
+let lastSharedSeq = -1;
 let sharedPollTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -832,9 +903,15 @@ let sharedPollTimer: ReturnType<typeof setInterval> | null = null;
  * before its call existed, folded into media-quality numbers for a call that
  * has barely started. Snapshotting the target set at tick start is what
  * keeps a sample scoped to the subscribers who were there to ask for it.
+ *
+ * Coalescing (`MIN_SAMPLE_GAP_MS`) means a tick can be answered by a scan
+ * somebody else started a moment earlier, possibly before this listener
+ * subscribed. So the rule is kept on the scan itself as well: a listener is
+ * only ever handed a scan that STARTED after it subscribed (`firstSeqFor`).
  */
 export function subscribeVoiceStats(listener: VoiceStatsListener): () => void {
   sharedListeners.add(listener);
+  firstSeqFor.set(listener, nextSampleSeq);
   if (!sharedPollTimer) {
     const tick = () => {
       // Who this SPECIFIC tick is for, fixed before the first `await` inside
@@ -842,14 +919,21 @@ export function subscribeVoiceStats(listener: VoiceStatsListener): () => void {
       // itself, which keeps mutating (new subscribers, unsubscribes) for as
       // long as this tick's `getStats()` calls are still out.
       const targets = new Set(sharedListeners);
-      sampleAll()
-        .then((snapshot) => {
+      sampleCoalesced()
+        .then((taken) => {
+          // Two ticks inside one gap (a throttled tab firing a late timer
+          // straight after its successor) get the same scan; it was already
+          // delivered, and a second delivery would count one reading twice.
+          if (taken.seq <= lastSharedSeq) {
+            return;
+          }
+          lastSharedSeq = taken.seq;
           for (const l of sharedListeners) {
             // Delivered only if this listener was both subscribed when the
             // sample was taken AND is still subscribed now -- the
             // intersection is what "this sample is for you" means.
-            if (targets.has(l)) {
-              l(snapshot);
+            if (targets.has(l) && taken.seq >= (firstSeqFor.get(l) ?? Infinity)) {
+              l(taken.snapshot);
             }
           }
         })
@@ -865,6 +949,7 @@ export function subscribeVoiceStats(listener: VoiceStatsListener): () => void {
   }
   return () => {
     sharedListeners.delete(listener);
+    firstSeqFor.delete(listener);
     if (sharedListeners.size === 0 && sharedPollTimer) {
       clearInterval(sharedPollTimer);
       sharedPollTimer = null;
@@ -1077,7 +1162,7 @@ function print(snapshot: VoiceStatsSnapshot): void {
 
 const api: VoiceStatsConsole = {
   async report() {
-    const snapshot = await sampleAll();
+    const { snapshot } = await sampleCoalesced();
     print(snapshot);
     return snapshot;
   },
@@ -1086,7 +1171,7 @@ const api: VoiceStatsConsole = {
       clearInterval(timer);
     }
     timer = setInterval(() => {
-      void sampleAll().then(print);
+      void sampleCoalesced().then((taken) => print(taken.snapshot));
     }, ms);
     return `pqp voice stats: sampling every ${ms}ms — pqpVoiceStats.stop() to end`;
   },
@@ -1098,7 +1183,7 @@ const api: VoiceStatsConsole = {
     return "pqp voice stats: stopped";
   },
   async dump() {
-    return JSON.stringify(await sampleAll(), null, 2);
+    return JSON.stringify((await sampleCoalesced()).snapshot, null, 2);
   },
 };
 

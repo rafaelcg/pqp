@@ -146,9 +146,21 @@ vi.mock("livekit-client", () => {
 
 const { connectLiveKit } = await import("./livekit-session");
 const { setAudioSelfHealForTests } = await import("./audio-self-heal-flag");
-const { describeLimitation, sampleVoiceStats } = await import(
-  "./voice-stats-probe"
-);
+const {
+  describeLimitation,
+  sampleVoiceStats: sampleCoalesced,
+  resetVoiceStatsSamplingForTests,
+} = await import("./voice-stats-probe");
+
+/**
+ * One scan per call. `sampleVoiceStats()` hands a caller inside
+ * `MIN_SAMPLE_GAP_MS` the scan it just took, and every call in this file
+ * stands for its own tick, so each one starts clean.
+ */
+function sampleVoiceStats() {
+  resetVoiceStatsSamplingForTests();
+  return sampleCoalesced();
+}
 
 const SESSION: VoiceSessionInfo = {
   backend: "livekit",
