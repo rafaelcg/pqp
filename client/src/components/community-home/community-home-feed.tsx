@@ -117,6 +117,13 @@ import {
   useChannelPicker,
 } from "./community-home-channel-refs";
 import { CommunityHomeComposeEmbed } from "./community-home-compose-embed";
+import {
+  coverForCreate,
+  coverForPreview,
+  coverForUpdate,
+  type CoverDraft,
+} from "@/lib/community-home/cover";
+import { ComposeCover } from "./community-home-compose-cover";
 import { ComposeMobileRendition } from "./community-home-compose-mobile";
 import { UnlockedMedia } from "./community-home-media";
 import {
@@ -198,6 +205,11 @@ type Props = {
    */
   focusPostId?: string | null;
   focusNonce?: number;
+  /**
+   * Bumped by the sidebar's "Postar no Baú" (empty Baú, staff): open the
+   * composer. Zero, the initial value, opens nothing.
+   */
+  composeNonce?: number;
 };
 
 type StaffTab = "feed" | "compose" | "drafts";
@@ -1177,6 +1189,14 @@ type ComposeState = {
   existingMobile: CommunityHomeMobileRendition | null;
   /** The author removed the cut on the post. */
   clearMobile: boolean;
+  /** The cover picked in this session (a frame or an image), not yet on a post. */
+  coverUpload: UploadedHomeMedia | null;
+  /** Local preview of `coverUpload`, an object URL. */
+  coverPreviewUrl: string | null;
+  /** The cover already on the post being edited (`media.posterUrl`). */
+  existingCover: string | null;
+  /** The author went back to the automatic cover (the first frame). */
+  clearCover: boolean;
 };
 
 /**
@@ -1189,6 +1209,18 @@ const NO_MOBILE = {
   mobilePreviewUrl: null,
   existingMobile: null,
   clearMobile: false,
+} as const;
+
+/**
+ * Same for the cover: it is a picture of one particular video (or chosen for
+ * it), so a new main file starts from the automatic cover again. The server
+ * drops it too when the main file changes.
+ */
+const NO_COVER = {
+  coverUpload: null,
+  coverPreviewUrl: null,
+  existingCover: null,
+  clearCover: false,
 } as const;
 
 const emptyCompose = (): ComposeState => ({
@@ -1205,6 +1237,7 @@ const emptyCompose = (): ComposeState => ({
   existingMedia: null,
   clearMedia: false,
   ...NO_MOBILE,
+  ...NO_COVER,
 });
 
 function composeFromPost(
@@ -1228,6 +1261,7 @@ function composeFromPost(
     existingMedia:
       post.media && !isCommunityHomeEmbedKind(post.media.kind) ? post.media : null,
     existingMobile: post.media?.mobile ?? null,
+    existingCover: post.media?.posterUrl ?? null,
   };
 }
 
@@ -1258,6 +1292,21 @@ function composeMobile(state: ComposeState): CommunityHomeMobileRendition | null
     };
   }
   return state.clearMobile ? null : state.existingMobile;
+}
+
+function composeCoverDraft(state: ComposeState): CoverDraft {
+  return {
+    mainIsVideo: composeMainIsVideo(state),
+    upload: state.coverUpload,
+    previewUrl: state.coverPreviewUrl,
+    existing: state.existingCover,
+    cleared: state.clearCover,
+  };
+}
+
+/** The cover as the composer shows it: picked now, else the one on the post. Null is the first frame. */
+function composeCover(state: ComposeState): string | null {
+  return coverForPreview(composeCoverDraft(state));
 }
 
 function composeHasFileMedia(state: ComposeState): boolean {
@@ -1301,9 +1350,14 @@ function previewPost(
       youtubeUrl: null,
       twitchUrl: null,
       mobile: composeMobile(state),
+      posterUrl: composeCover(state),
     };
   } else if (state.existingMedia && !state.clearMedia) {
-    media = { ...state.existingMedia, mobile: composeMobile(state) };
+    media = {
+      ...state.existingMedia,
+      mobile: composeMobile(state),
+      posterUrl: composeCover(state),
+    };
   }
   const now = new Date().toISOString();
   return {
@@ -1350,6 +1404,7 @@ function ComposeCard({
   mediaEnabled,
   translationEnabled,
   mobileRenditionEnabled,
+  customCoverEnabled,
   channels,
   announceChannel,
   onDone,
@@ -1366,6 +1421,8 @@ function ComposeCard({
   translationEnabled: boolean;
   /** `bau_mobile_rendition` is on here: offer a vertical cut beside a video. */
   mobileRenditionEnabled: boolean;
+  /** `bau_custom_cover` is on here: offer a cover (a frame or an image) for a video. */
+  customCoverEnabled: boolean;
   /** Channels the author can see: the `#` picker lists these. */
   channels: readonly Channel[];
   /**
@@ -1431,6 +1488,15 @@ function ComposeCard({
     };
   }, [state.mobilePreviewUrl]);
 
+  useEffect(() => {
+    const url = state.coverPreviewUrl;
+    return () => {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, [state.coverPreviewUrl]);
+
   async function pickFile(file: File | null) {
     if (!file) {
       return;
@@ -1489,6 +1555,7 @@ function ComposeCard({
         youtubeUrl: "",
         clearMedia: true,
         ...NO_MOBILE,
+        ...NO_COVER,
       }));
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -1512,6 +1579,7 @@ function ComposeCard({
       youtubeUrl: "",
       clearMedia: true,
       ...NO_MOBILE,
+      ...NO_COVER,
     }));
   }
 
@@ -1589,6 +1657,7 @@ function ComposeCard({
               : state.clearMobile
                 ? { mobileMediaUploadId: null }
                 : {}),
+            ...coverForUpdate(composeCoverDraft(state)),
           },
         );
         post = updated;
@@ -1615,6 +1684,7 @@ function ComposeCard({
           commentsEnabled: state.commentsEnabled,
           mediaUploadId: state.upload?.uploadId ?? null,
           mobileMediaUploadId: mobileUploadId,
+          ...coverForCreate(composeCoverDraft(state)),
           youtubeUrl,
           status:
             action === "publish"
@@ -1832,7 +1902,7 @@ function ComposeCard({
                   upload: youtubeUrl ? null : prev.upload,
                   uploadPreviewUrl: youtubeUrl ? null : prev.uploadPreviewUrl,
                   clearMedia: youtubeUrl ? true : prev.clearMedia,
-                  ...(youtubeUrl ? NO_MOBILE : {}),
+                  ...(youtubeUrl ? { ...NO_MOBILE, ...NO_COVER } : {}),
                 }));
               }}
               placeholder="https://youtu.be/…"
@@ -1899,6 +1969,46 @@ function ComposeCard({
                 mobileUpload: null,
                 mobilePreviewUrl: null,
                 clearMobile: true,
+              }))
+            }
+          />
+        )}
+
+        {customCoverEnabled && mediaEnabled && composeMainIsVideo(state) && (
+          <ComposeCover
+            // Keyed by the main video, like the phone cut: a new main file
+            // remounts the picker, which aborts a cover still uploading for
+            // the old one.
+            key={composeMainKey(state)}
+            serverId={serverId}
+            videoUrl={
+              state.upload ? state.uploadPreviewUrl : (state.existingMedia?.url ?? null)
+            }
+            videoIsLocal={Boolean(state.upload)}
+            current={composeCover(state)}
+            onUploaded={(uploaded, previewUrl) => {
+              // And if one lands anyway, it is checked against the main video
+              // it was picked for, not whatever is there now.
+              const pickedFor = composeMainKey(state);
+              setState((prev) => {
+                if (composeMainKey(prev) !== pickedFor || !composeMainIsVideo(prev)) {
+                  URL.revokeObjectURL(previewUrl);
+                  return prev;
+                }
+                return {
+                  ...prev,
+                  coverUpload: uploaded,
+                  coverPreviewUrl: previewUrl,
+                  clearCover: false,
+                };
+              });
+            }}
+            onRemove={() =>
+              setState((prev) => ({
+                ...prev,
+                coverUpload: null,
+                coverPreviewUrl: null,
+                clearCover: true,
               }))
             }
           />
@@ -2276,12 +2386,14 @@ export function CommunityHomeFeed({
   canSendInChannel,
   focusPostId = null,
   focusNonce = 0,
+  composeNonce = 0,
 }: Props) {
   const { t, locale } = useTranslation();
   const [posts, setPosts] = useState<CommunityHomePost[] | null>(null);
   const [drafts, setDrafts] = useState<CommunityHomePost[]>([]);
   const [translationEnabled, setTranslationEnabled] = useState(false);
   const [mobileRenditionEnabled, setMobileRenditionEnabled] = useState(false);
+  const [customCoverEnabled, setCustomCoverEnabled] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [staffTab, setStaffTab] = useState<StaffTab>("feed");
@@ -2330,6 +2442,7 @@ export function CommunityHomeFeed({
         setDrafts(staff.posts);
         setTranslationEnabled(feed.translationEnabled === true);
         setMobileRenditionEnabled(feed.mobileRenditionEnabled === true);
+        setCustomCoverEnabled(feed.customCoverEnabled === true);
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
           setPosts([]);
@@ -2776,6 +2889,12 @@ export function CommunityHomeFeed({
     setStaffTab("compose");
   }
 
+  useEffect(() => {
+    if (composeNonce > 0 && canManageServer) {
+      setStaffTab("compose");
+    }
+  }, [composeNonce, canManageServer]);
+
   function openDrafts() {
     setStaffTab("drafts");
   }
@@ -2973,6 +3092,7 @@ export function CommunityHomeFeed({
                 mediaEnabled={mediaEnabled}
                 translationEnabled={translationEnabled}
                 mobileRenditionEnabled={mobileRenditionEnabled}
+                customCoverEnabled={customCoverEnabled}
                 channels={channels}
                 announceChannel={announceChannel}
                 onDone={onComposed}

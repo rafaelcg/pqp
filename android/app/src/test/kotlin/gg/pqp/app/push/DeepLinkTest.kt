@@ -21,6 +21,19 @@ class DeepLinkTest {
     }
 
     @Test
+    fun `a forum post link carries the server, the forum and the post`() {
+        val target = DeepLinkTarget.ForumPost("srv-1", "forum-2", "post-3")
+        assertEquals(target, DeepLink.target("/app/server/srv-1/channel/forum-2/post/post-3"))
+        assertEquals(target, DeepLink.target("https://pqp.gg/app/server/srv-1/channel/forum-2/post/post-3"))
+        assertEquals("post-3", target.channelId)
+        // A dangling "/post" with no id is still the forum.
+        assertEquals(
+            DeepLinkTarget.Channel("srv-1", "forum-2"),
+            DeepLink.target("/app/server/srv-1/channel/forum-2/post"),
+        )
+    }
+
+    @Test
     fun `dm path is a conversation`() {
         assertEquals(
             DeepLinkTarget.Conversation("chan-9"),

@@ -70,6 +70,12 @@ data class VoiceState(
     /** This device is capturing and publishing its screen. */
     val sharingScreen: Boolean = false,
     /**
+     * The share carries the phone's own sound (a game, a video), mixed into
+     * the microphone. False on Android 9 and older, where the platform has no
+     * playback capture, and whenever no share is running.
+     */
+    val sharingScreenAudio: Boolean = false,
+    /**
      * Whether this device may put a screen on this room's stage.
      *
      * IT IS THE PERMISSION, NOT THE TRANSPORT. It used to be
@@ -207,6 +213,29 @@ class VoiceController(
     private val _state = MutableStateFlow(VoiceState())
     val state: StateFlow<VoiceState> = _state.asStateFlow()
 
+    /**
+     * Who is in every voice room this account can see, for the channel list.
+     * Built here because this object lives as long as the app and so is
+     * already listening when the socket's catch-up rosters arrive after `auth`.
+     */
+    val rooms: VoiceRoomsStore = VoiceRoomsStore(
+        frames = session.realtime.frames,
+        realtimeState = session.realtime.state,
+        scope = scope,
+    )
+
+    private val _speakingPeers = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * Peer ids talking right now in THIS device's call, local peer included.
+     *
+     * Only the media server reports it today (LiveKit's active speakers); a
+     * peer-to-peer call leaves it empty and draws no ring rather than a guess.
+     * Never anything about rooms this device is not in: the roster does not
+     * carry `speaking`, on purpose (see `packages/shared/src/signaling.ts`).
+     */
+    val speakingPeers: StateFlow<Set<String>> = _speakingPeers.asStateFlow()
+
     private val _remoteScreens = MutableStateFlow<Map<String, RemoteVideoFeed>>(emptyMap())
 
     /**
@@ -305,6 +334,7 @@ class VoiceController(
         // Posted rather than run inline: this arrives on the projection's own
         // callback thread, from inside the capturer we are about to dispose.
         onScreenShareEnded = { scope.launch { stopScreenShare() } },
+        onScreenAudioChanged = ::onScreenAudioChanged,
     )
 
     /**
@@ -359,6 +389,7 @@ class VoiceController(
         // "Stop sharing" chip and a refused publish both have to take the
         // roster claim down with them.
         onScreenShareEnded = { scope.launch { stopScreenShare() } },
+        onScreenAudioChanged = ::onScreenAudioChanged,
         onFailed = { failure -> onSfuFailure(failure) },
         onConnected = {
             // Only now is the call actually a call. `welcome` arrived long
@@ -376,6 +407,7 @@ class VoiceController(
         },
         onRemoteScreen = ::onRemoteScreen,
         onRemoteCamera = ::onRemoteCamera,
+        onActiveSpeakers = { speakers -> _speakingPeers.value = speakers },
         isMetered = {
             // Mobile data, or a hotspot the OS knows is metered: the SFU is
             // asked for the 360p layer of a share instead of 720p.
@@ -402,6 +434,7 @@ class VoiceController(
         if (kind == engineKind) return
         Log.i(TAG, "voice transport ${engineKind.name} -> ${kind.name}; disposing the old engine")
         runCatching { engine.dispose() }
+        _speakingPeers.value = emptySet()
         _remoteScreens.value = emptyMap()
         _remoteCameras.value = emptyMap()
         engine = when (kind) {
@@ -518,6 +551,7 @@ class VoiceController(
         // leaving, and `welcome` carries no sequence of its own: the first
         // full roster after the join is what supplies the next baseline.
         rosterTracker.forget()
+        _speakingPeers.value = emptySet()
         _state.value = VoiceState(
             channelId = channelId,
             channelName = channelName,
@@ -802,10 +836,21 @@ class VoiceController(
         val profile = screenCaptureProfileFor(width, height)
         if (!engine.startScreenShare(permission, profile)) {
             VoiceService.dropProjection(context)
+            // Said, not swallowed: the person pressed a labelled button and
+            // granted the system dialog, so silence here reads as a broken
+            // button rather than a refusal.
+            _state.value = _state.value.copy(
+                notice = context.getString(R.string.voice_screen_share_failed),
+            )
             return
         }
 
-        _state.value = _state.value.copy(sharingScreen = true)
+        // The game's sound is claimed only once its recorder is running; see
+        // [onScreenAudioChanged].
+        _state.value = _state.value.copy(
+            sharingScreen = true,
+            sharingScreenAudio = engine.isSharingScreenAudio,
+        )
         // Announced after the capture is alive, never before: a roster that
         // says somebody is presenting while nothing is on the wire puts an
         // empty tile in front of everybody else.
@@ -813,20 +858,35 @@ class VoiceController(
             buildJsonObject {
                 put("type", "set-sharing-screen")
                 put("sharing", true)
-                // This capture carries no audio. `MediaProjection` can record
-                // the device's playback from Android 10, but only from apps
-                // that allow it, and a system audio track nobody can rely on is
-                // worse than an honest silent share.
+                // No separate share-audio stream. From Android 10 the phone's
+                // playback (the game) is captured and mixed into the
+                // microphone track instead (see [GameAudioCapture]), because
+                // neither WebRTC build here can publish an app-fed second
+                // audio track. Announcing a stream id would tell receivers to
+                // look for a track that does not exist.
                 put("audioStreamId", JsonNull)
             },
         )
+    }
+
+    /**
+     * The share's game sound went live, or failed for good. Engines post this
+     * on [scope]; a stale one after the share ended is ignored.
+     */
+    private fun onScreenAudioChanged(live: Boolean) {
+        val current = _state.value
+        // A server mute lands on the roster path, a recorder starting on a
+        // posted coroutine; either way a share that has ended stays silent.
+        if (live && !current.sharingScreen) return
+        if (current.sharingScreenAudio == live) return
+        _state.value = current.copy(sharingScreenAudio = live)
     }
 
     fun stopScreenShare() {
         if (!engine.isSharingScreen && !_state.value.sharingScreen) return
         engine.stopScreenShare()
         VoiceService.dropProjection(context)
-        _state.value = _state.value.copy(sharingScreen = false)
+        _state.value = _state.value.copy(sharingScreen = false, sharingScreenAudio = false)
         session.realtime.send(
             buildJsonObject {
                 put("type", "set-sharing-screen")
@@ -945,6 +1005,7 @@ class VoiceController(
         // number would refuse every delta of the rebuilt call until a keyframe;
         // holding no number accepts the first one it is offered.
         rosterTracker.forget()
+        _speakingPeers.value = emptySet()
         _remoteScreens.value = emptyMap()
         _remoteCameras.value = emptyMap()
         // `engine.stop` released the capture, so the service must stop
@@ -958,6 +1019,7 @@ class VoiceController(
             participants = emptyList(),
             unreachablePeers = 0,
             sharingScreen = false,
+            sharingScreenAudio = false,
         )
     }
 
@@ -1321,6 +1383,9 @@ class VoiceController(
             .copy(participants = participants)
             .absorbServerMute(participants, before.localPeerId)
         _state.value = after
+        // Every roster, not only on a change: a promotion hands over a fresh
+        // engine that starts out knowing nothing.
+        engine.setSelfServerMuted(after.serverMuted)
         if (after.muted != before.muted) {
             // Forced on by a moderator. Not pushed back over the socket: the
             // server already holds us as muted, which is how we got here, and
@@ -1385,6 +1450,7 @@ class VoiceController(
         VoiceService.dropProjection(context)
         _state.value = _state.value.copy(
             sharingScreen = false,
+            sharingScreenAudio = false,
             refusal = Refusal.ScreenShareDenied,
         )
     }
@@ -1522,6 +1588,7 @@ class VoiceController(
         resumeToken = null
         peerMedia.clear()
         rosterTracker.forget()
+        _speakingPeers.value = emptySet()
         _remoteScreens.value = emptyMap()
         _remoteCameras.value = emptyMap()
         releaseAudioFocus()

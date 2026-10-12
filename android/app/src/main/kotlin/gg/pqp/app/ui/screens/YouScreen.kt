@@ -58,7 +58,13 @@ import gg.pqp.app.ui.theme.Spacing
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun YouScreen(session: SessionStore, onBack: () -> Unit) {
+fun YouScreen(
+    session: SessionStore,
+    /** Null when this is the Tu tab, which has nowhere to go back to. */
+    onBack: (() -> Unit)?,
+    /** The bar's title; the Tu tab says "Tu". */
+    title: String? = null,
+) {
     val phase by session.phase.collectAsStateWithLifecycle()
     val me = (phase as? SessionPhase.Ready)?.me
     var confirmingDelete by remember { mutableStateOf(false) }
@@ -108,14 +114,16 @@ fun YouScreen(session: SessionStore, onBack: () -> Unit) {
         topBar = {
             Column {
                 TopAppBar(
-                    title = { Text(stringResource(R.string.you_title)) },
+                    title = { Text(title ?: stringResource(R.string.you_title)) },
                     colors = pqpTopBarColors(),
                     navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                imageVector = PqpIcons.Back,
-                                contentDescription = stringResource(R.string.chat_back),
-                            )
+                        if (onBack != null) {
+                            IconButton(onClick = onBack) {
+                                Icon(
+                                    imageVector = PqpIcons.Back,
+                                    contentDescription = stringResource(R.string.chat_back),
+                                )
+                            }
                         }
                     },
                 )
@@ -160,6 +168,11 @@ fun YouScreen(session: SessionStore, onBack: () -> Unit) {
             Spacer(Modifier.height(Spacing.lg))
             PushSettingsSection(
                 Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
+            )
+            // Chamar a atenção's opt-out, only while the flag is on.
+            gg.pqp.app.nudge.ui.NudgeSettingsRow(
+                session = session,
+                modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
             )
 
             // Voice. One row for now: the check that tells "fica conectando"

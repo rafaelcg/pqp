@@ -5,6 +5,7 @@ import android.util.Log
 import gg.pqp.app.core.ApiException
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.core.runSuspendCatching
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -69,6 +70,14 @@ class SocialRepository(
     private val _loadingConversations = MutableStateFlow(false)
     val loadingConversations: StateFlow<Boolean> = _loadingConversations.asStateFlow()
 
+    /**
+     * Whether `GET /api/dms` has answered at least once this session. An
+     * empty list before that is "not loaded", not "no conversations", and a
+     * screen must not greet a failed load with the empty-inbox welcome.
+     */
+    private val _conversationsLoaded = MutableStateFlow(false)
+    val conversationsLoaded: StateFlow<Boolean> = _conversationsLoaded.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -80,6 +89,21 @@ class SocialRepository(
      */
     private val _friendNudge = MutableStateFlow<String?>(null)
     val friendNudge: StateFlow<String?> = _friendNudge.asStateFlow()
+
+    /**
+     * Conversas: channelId to the names typing there right now, for the list
+     * row's "digitando...". Fed by `typing-broadcast`, which the server sends
+     * to every participant of a conversation (S2), not only to whoever has it
+     * open. The viewer's own frames never land here.
+     */
+    private val listTyping = ListTyping()
+    private val _typing = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    val typing: StateFlow<Map<String, List<String>>> = _typing.asStateFlow()
+    private var typingSweep: Job? = null
+
+    /** The signed-in account's id: drops our own typing, prefixes "tu:". */
+    private val _selfId = MutableStateFlow<String?>(null)
+    val selfId: StateFlow<String?> = _selfId.asStateFlow()
 
     init {
         scope.launch { listen() }
@@ -120,7 +144,10 @@ class SocialRepository(
                 refreshAgain = false
                 val startedAt = SystemClock.elapsedRealtime()
                 runCatching { session.api.conversations() }
-                    .onSuccess { _conversations.value = it.map { row -> row.honouringRead(startedAt) } }
+                    .onSuccess {
+                        _conversations.value = it.map { row -> row.honouringRead(startedAt) }
+                        _conversationsLoaded.value = true
+                    }
                     .onFailure { Log.w(TAG, "conversations failed: ${it.message}") }
             } while (refreshAgain)
             _loadingConversations.value = false
@@ -207,7 +234,7 @@ class SocialRepository(
     suspend fun searchPeople(query: String): Result<List<PublicUser>> {
         val term = query.trim()
         if (term.length < USER_SEARCH_MIN_LENGTH) return Result.success(emptyList())
-        return runCatching {
+        return runSuspendCatching {
             if (looksLikeTag(term)) {
                 listOf(session.api.lookupUser(term))
             } else {
@@ -226,7 +253,7 @@ class SocialRepository(
      * navigates into it in the same breath and an empty list behind the back
      * button reads as a conversation that failed to open.
      */
-    suspend fun openConversation(userIds: List<String>): Result<DmSummary> = runCatching {
+    suspend fun openConversation(userIds: List<String>): Result<DmSummary> = runSuspendCatching {
         val conversation = session.api.openConversation(userIds)
         upsert(conversation)
         refreshConversations()
@@ -279,7 +306,41 @@ class SocialRepository(
                 "friend-activity" -> onFriendActivity(frame)
                 "channel-activity" -> onChannelActivity(frame)
                 "profile-update" -> onProfileUpdate(frame)
+                "typing-broadcast" -> onTyping(frame)
             }
+        }
+    }
+
+    /**
+     * Somebody is typing. Only conversations in the list are kept: a server
+     * channel's typing reaches this socket too while that channel is open, and
+     * it belongs to the chat screen, not to a row that does not exist.
+     */
+    private fun onTyping(frame: JsonObject) {
+        val channelId = frame.string("channelId") ?: return
+        val userId = frame.string("userId") ?: return
+        val name = frame.string("displayName") ?: return
+        if (userId == _selfId.value) return
+        if (_conversations.value.none { it.channelId == channelId }) return
+        if (listTyping.note(channelId, userId, name, SystemClock.elapsedRealtime())) {
+            publishTyping()
+        } else {
+            scheduleTypingSweep()
+        }
+    }
+
+    private fun publishTyping() {
+        _typing.value = listTyping.snapshot(SystemClock.elapsedRealtime())
+        scheduleTypingSweep()
+    }
+
+    /** One timer for the soonest expiry; it redraws, then re-arms for the next. */
+    private fun scheduleTypingSweep() {
+        typingSweep?.cancel()
+        val next = listTyping.nextExpiry() ?: return
+        typingSweep = scope.launch {
+            kotlinx.coroutines.delay((next - SystemClock.elapsedRealtime()).coerceAtLeast(50))
+            publishTyping()
         }
     }
 
@@ -310,6 +371,10 @@ class SocialRepository(
         if (kind != "dm" && kind != "group" && !serverIsNull) return
 
         val mention = frame["mention"]?.jsonPrimitive?.booleanOrNull ?: false
+        val authorId = frame.string("authorId")
+        // Whoever wrote it has stopped typing, whatever their last frame said.
+        if (authorId != null && listTyping.clear(channelId, authorId)) publishTyping()
+
         val known = _conversations.value.firstOrNull { it.channelId == channelId }
         if (known == null) {
             // The reopened-conversation case, and the one worth being careful
@@ -318,7 +383,20 @@ class SocialRepository(
             return
         }
 
+        // The preview rides the frame, patched in place so the row reads like
+        // it will after a reload, with no second read. A frame WITHOUT one
+        // (previews off, or a server that predates it) clears the line rather
+        // than keeping the old text: the old text is no longer the latest
+        // message, and keeping it would show content the reader turned off.
+        val lastMessage = livePreview(
+            preview = frame.string("preview"),
+            authorId = authorId,
+            authorName = frame.string("authorName"),
+            systemKind = frame.string("systemKind"),
+        )
+
         val bumped = known.copy(
+            lastMessage = lastMessage,
             lastMessageAt = bumpedTimestamp(
                 Instant.now(),
                 _conversations.value.mapNotNull { it.lastMessageAt }.maxOrNull(),
@@ -380,6 +458,7 @@ class SocialRepository(
         var wasReady = false
         session.phase.collect { phase ->
             val ready = phase is SessionPhase.Ready
+            _selfId.value = (phase as? SessionPhase.Ready)?.me?.id
             if (ready && !wasReady) {
                 refreshFriends()
                 refreshConversations()
@@ -387,8 +466,12 @@ class SocialRepository(
             if (!ready && wasReady) {
                 _friends.value = FriendsResponse()
                 _conversations.value = emptyList()
+                _conversationsLoaded.value = false
                 _friendNudge.value = null
                 _error.value = null
+                typingSweep?.cancel()
+                listTyping.clearAll()
+                _typing.value = emptyMap()
                 readSettledAt.clear()
                 readInFlight.clear()
             }
@@ -448,6 +531,28 @@ class SocialRepository(
          * *started after* the read settled, which is the point from which the
          * server's own cursor is guaranteed to be the one it answers from.
          */
+        /**
+         * The row's preview after a live `channel-activity` frame. No preview
+         * on the frame means no preview on the row, never the previous one.
+         */
+        internal fun livePreview(
+            preview: String?,
+            authorId: String?,
+            authorName: String?,
+            systemKind: String? = null,
+        ): LastMessagePreview? =
+            if (preview != null && authorId != null) {
+                LastMessagePreview(
+                    authorId = authorId,
+                    authorName = authorName.orEmpty(),
+                    preview = preview,
+                    isAttachment = preview.isBlank(),
+                    systemKind = systemKind?.takeIf { it == ConversationList.NUDGE_KIND },
+                )
+            } else {
+                null
+            }
+
         internal fun readHoldApplies(
             snapshotStartedAt: Long,
             settledAt: Long?,

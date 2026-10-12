@@ -286,6 +286,33 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/servers/:id/home/posts (mobileRenditionEnabled)",
   },
+  bau_custom_cover: {
+    description:
+      "Capa dos vídeos do Baú: quem posta escolhe um frame do vídeo ou sobe uma imagem (desligado: todo mundo vê o primeiro frame, as capas ficam guardadas).",
+    env: "BAU_CUSTOM_COVER",
+    parseEnv: onUnlessOff,
+    // On: it only changes the picture shown before play, and the off switch
+    // is here for a misfire seen live. Per server for the same reason as the
+    // phone cut: every reader hydrates posts of one server, and create /
+    // update are routes under `/servers/:id`.
+    codeDefault: true,
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/posts (customCoverEnabled)",
+  },
+  bau_latest_preview: {
+    description:
+      "Prévia do Baú na lista de canais: o último post com capa enquanto tem novidade, depois uma linha com miniatura (desligado: a linha de antes, só com o número).",
+    env: "BAU_LATEST_PREVIEW",
+    parseEnv: onUnlessOff,
+    // On: it reads what the feed already shows, adds no fan-out, and replaces
+    // the unread read instead of adding one. The switch is here for a misfire
+    // seen live: off, the route answers 404 and every client goes back to
+    // `…/home/unread` and the old row on its next read.
+    codeDefault: true,
+    // The one reader is a route under `/servers/:id`.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/latest",
+  },
   bau_post_push: {
     description:
       "Push de post novo no Baú (celular e navegador): quem não mutou o servidor é avisado quando um post é publicado ou o horário agendado chega.",
@@ -409,6 +436,19 @@ export const FEATURE_FLAGS = {
     // sweep in ws/voice.ts), so this is the kill switch as well.
     perServer: true,
     clientVia: "GET /api/voice/config?serverId= (audienceMode)",
+  },
+  voice_audio_self_heal: {
+    description:
+      "Call que se conserta sozinha: percebe mic que parou de mandar som e call que parou de tocar, tenta arrumar sem ninguém notar e, se não der, mostra \"Arrumar\" com um toque (desligado: nada disso roda).",
+    env: "VOICE_AUDIO_SELF_HEAL",
+    parseEnv: onUnlessOff,
+    // On: the repairs are the ones the call already does on its own (reopen
+    // the mic, replay an element, resubscribe, ICE restart), each bounded per
+    // call, and the off switch is here for a misfire seen live. Global, not
+    // per server: half of the reports are DM calls, which have no server.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/voice/config (audioSelfHeal)",
   },
   watch_now_banner: {
     description:
@@ -542,6 +582,140 @@ export const FEATURE_FLAGS = {
     // Read once per send, on the instance that took it, where the server is
     // known but a conversation has no roles: global on purpose.
     perServer: false,
+  },
+  newcomer_invite_moment: {
+    description:
+      "Chama teus amigos (só cliente): quem chegou sem convite e só está em comunidades públicas (o QG) vê uma faixa pra criar uma sala e mandar o link, e a lista de primeiros passos para de contar o QG como sala.",
+    env: "NEWCOMER_INVITE_MOMENT",
+    parseEnv: exactTrue,
+    // Off until the strip has been seen on production by a real newcomer.
+    codeDefault: false,
+    // About an account, not a server: the strip asks whether ANY of your
+    // servers is a room of your own, and the hub's checklist has no server in
+    // hand. A per-server override would never be read.
+    perServer: false,
+    clientVia: "GET /api/onboarding/config (inviteMoment)",
+  },
+  conversations_home: {
+    description:
+      "Conversas (só cliente): a porta das DMs na barra ganha nome e mostra quem te escreveu, a lista vira estilo WhatsApp (presença, prévia, digitando, fixadas, filtros), Nova conversa já lista os amigos e Ctrl/Cmd+K vira \"ir pra\".",
+    env: "CONVERSATIONS_HOME",
+    parseEnv: exactTrue,
+    // Off until QA has walked it on both themes with two accounts.
+    codeDefault: false,
+    // About a person's conversations, which belong to no server.
+    perServer: false,
+    clientVia: "GET /api/dms/config (home)",
+  },
+  conversations_home_phone_tabs: {
+    description:
+      "Conversas no celular (só cliente, precisa de Conversas ligado): no navegador do celular a barra de servidores sai e entra uma barra embaixo com Conversas, Servidores e Tu. Abre na última aba usada; quem nunca escolheu começa em Servidores.",
+    env: "CONVERSATIONS_HOME_PHONE_TABS",
+    parseEnv: exactTrue,
+    // The riskiest half (it moves the whole phone shell), so it has its own
+    // switch: desktop can go first and this can be turned off alone.
+    codeDefault: false,
+    perServer: false,
+    clientVia: "GET /api/dms/config (phoneTabs)",
+  },
+  forum_channels: {
+    description:
+      "Canais fórum: posts com título, tags e respostas, em vez de um chat corrido (desligado: ninguém cria fórum nem post novo; o que já existe continua aberto pra ler e responder).",
+    env: "FORUM_CHANNELS",
+    parseEnv: exactTrue,
+    // Off: one server first (its override), then everybody once the web and
+    // the phones handle forums. See docs/plans/FORUM_CHANNELS.md.
+    codeDefault: false,
+    // Every reader knows the server: the create-channel route starts from a
+    // server, the forum routes from a channel, and the client asks
+    // `GET /api/forum/config?serverId=`. The Discord import is the exception
+    // (a new server has no override yet) and asks without one: global only.
+    perServer: true,
+    clientVia: "GET /api/forum/config?serverId= (enabled)",
+  },
+  nudge: {
+    description:
+      "Chamar a atenção: em DM entre amigos, um toque chacoalha a janela do outro (com som) e deixa uma linha na conversa. Desligado, o servidor recusa todo pedido e os apps escondem o botão.",
+    env: "NUDGE",
+    parseEnv: exactTrue,
+    // Off until the web build that draws the line and the shake is live, and
+    // one phone build renders the pill: before that, an old client shows a
+    // bare 📳 bubble, which is readable but not the feature.
+    codeDefault: false,
+    // Conversations have no server: a per-server override would never be
+    // read. Checked on every nudge frame, so off is a real kill switch (the
+    // server refuses the frame whatever a stale client thinks).
+    perServer: false,
+    clientVia: "GET /api/fun/config (nudge)",
+  },
+  community_listing_nudge: {
+    description:
+      "Card único pro dono de comunidade com endereço público e fora do diretório: pergunta se quer aparecer no diretório. Só aparece pra sala que passa no filtro do diretório.",
+    env: "COMMUNITY_LISTING_NUDGE",
+    parseEnv: onUnlessOff,
+    // On: the card asks once and only an owner can answer it. This is the
+    // switch to stop asking, not a rollout.
+    codeDefault: true,
+    // About an owner across all their rooms: the route picks the room.
+    perServer: false,
+    clientVia: "GET /api/communities/listing-nudge (listingNudge)",
+  },
+  retro_look: {
+    description:
+      "Modo 2005 (só cliente): o visual escondido que a pessoa acha com /2005. Ligado por padrão; é o interruptor de emergência: desligado, quem estava nele volta pro visual padrão no próximo refresh da config e o atalho some.",
+    env: "RETRO_LOOK",
+    parseEnv: onUnlessOff,
+    // On: a kill switch, not a rollout. Off only if the look breaks.
+    codeDefault: true,
+    // A look belongs to a person, not a server.
+    perServer: false,
+    // Read by `client/src/lib/retro-look.ts`, only in a browser that found the
+    // look; a `false` paints the look underneath and hides tile and command.
+    clientVia: "GET /api/fun/config (retroLook)",
+  },
+  stories: {
+    description:
+      "Stories nos servidores: fotos, vídeos de até 30 s e textos que somem em 24 h, com o anel no topo da lista de canais.",
+    env: "STORIES",
+    parseEnv: exactTrue,
+    // Off: one server first (the QG, by its override), then everybody.
+    codeDefault: false,
+    // Every reader knows the server: the strip and every route under
+    // `/servers/:id`, and a story's reads work from its server audiences.
+    // Off for a server hides its strip and refuses its routes; nothing is
+    // deleted, and the expiry sweep keeps running, so bytes never outlive
+    // the 24 h promise because a flag moved.
+    perServer: true,
+    // No `(field)`: the contract test would ask for a client reader, and the
+    // clients that read it land after the server.
+    clientVia: "GET /api/stories/config + GET /api/servers/:id/stories",
+  },
+  stories_friends: {
+    description:
+      "Stories pros amigos: o mesmo story vai pra quem é teu amigo, com a faixa no topo das Conversas.",
+    env: "STORIES_FRIENDS",
+    parseEnv: exactTrue,
+    // Off until the Conversas redesign lands and the per-server test is
+    // judged: the friends audience crosses servers, so it waits.
+    codeDefault: false,
+    // About a friendship, not a server: nothing that reads it has a server.
+    perServer: false,
+    clientVia: "GET /api/stories/config + GET /api/stories/friends",
+  },
+  mixed_channel_list: {
+    description:
+      "Lista de canais só com categorias: tipos misturados em cada categoria, a ordem que o gerente escolher, e um servidor novo nasce com a categoria Canais.",
+    env: "MIXED_CHANNEL_LIST",
+    parseEnv: exactTrue,
+    // Off: the QG first (override, then the operator's migrate), a day on web
+    // and on the phones already in the stores, then a few servers, then on.
+    codeDefault: false,
+    // Every reader knows the server: the config route, the migration job (it
+    // reads the overrides to find its work) and the legacy-create rule. The
+    // global answer alone also decides how a NEW server is born.
+    perServer: true,
+    // No `(field)`: the clients that read `mixed` land after the server.
+    clientVia: "GET /api/servers/:id/channel-layout",
   },
 } as const satisfies Record<string, FlagDefinition>;
 

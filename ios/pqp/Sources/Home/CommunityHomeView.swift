@@ -63,7 +63,7 @@ struct CommunityHomeView: View {
                                 vipEnabled: config.vipEnabled,
                                 channels: channels,
                                 onOpenChannel: { channel in
-                                    if chatDestination != nil { openedChannel = channel }
+                                    if chatDestination != nil, channel.opensAsChat { openedChannel = channel }
                                 },
                                 expanded: expanded[post.id],
                                 loadingComments: loadingComments.contains(post.id),
@@ -85,7 +85,7 @@ struct CommunityHomeView: View {
                     .padding(.horizontal, Metrics.hPadding)
                     .padding(.vertical, 12)
                 }
-                .refreshable {
+                .pullToRefresh {
                     async let fresh: Void = loadChannels()
                     await load()
                     await fresh
@@ -167,7 +167,7 @@ struct CommunityHomeView: View {
             // on the way back, which is what clears the row's badge here.
             try? await session.api.markCommunityHomeRead(serverId: server.id)
         } catch {
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            if let shown = error.userFacingMessage { self.error = shown }
         }
         isLoading = false
     }
@@ -400,11 +400,11 @@ private struct LockedBox: View {
     }
 }
 
-/// One post's media. Every kind opens *out*: the image in the browser, the
-/// video and the file in Safari or a viewer, YouTube / Twitch / TikTok /
-/// Instagram in their apps. A phone has better players for all of those than
-/// a chat app does, and a card that plays sound on scroll is the thing the
-/// web's `preload="none"` exists to avoid.
+/// One post's media. An uploaded video and a YouTube link play in place, poster
+/// first (`BauInlineVideo`, `BauYoutubeVideo`), the way the web's `<video>` and
+/// iframe do. The rest opens *out*: the image in the browser, the file in
+/// Safari or a viewer, Twitch / TikTok / Instagram in their apps. Nothing plays
+/// or loads a player on scroll, which is what the web's `preload="none"` is for.
 private struct MediaView: View {
     @Environment(\.openURL) private var openURL
     let media: CommunityHomeMedia
@@ -415,7 +415,10 @@ private struct MediaView: View {
             // A stored video plays in place, like the web's `<video>`. It is
             // not wrapped in the open-out button: that button would swallow
             // the tap meant for the player's own controls.
-            BauInlineVideo(url: videoURL, name: media.name, postID: postID)
+            BauInlineVideo(url: videoURL, name: media.name, postID: postID, posterURL: media.posterURL)
+        } else if media.isYoutube, let videoId = YoutubeLinks.videoId(media.youtubeUrl) {
+            // Same reason as above: the player's own controls need the tap.
+            BauYoutubeVideo(videoId: videoId, watchURL: media.openURL, name: media.name)
         } else if let target = media.openURL {
             Button { openURL(target) } label: { preview(target) }
                 .buttonStyle(.plain)

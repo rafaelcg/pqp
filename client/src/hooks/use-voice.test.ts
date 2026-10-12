@@ -47,6 +47,31 @@ interface ManagerStub {
   offers: string[];
 }
 
+/**
+ * The shared stats poll, driven by hand: the audio self-repair rides it, and a
+ * real two-second interval shared with every other test's leftover call is
+ * not something a test can wait on.
+ */
+const statsListeners = vi.hoisted(() => new Set<(snapshot: unknown) => void>());
+vi.mock("@/lib/voice-stats-probe", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/voice-stats-probe")>();
+  return {
+    ...actual,
+    subscribeVoiceStats: (listener: (snapshot: unknown) => void) => {
+      statsListeners.add(listener);
+      return () => {
+        statsListeners.delete(listener);
+      };
+    },
+  };
+});
+
+function emitStatsTick() {
+  for (const listener of [...statsListeners]) {
+    listener({ senders: [], receivers: [], paths: [], audio: { senders: [], receivers: [] } });
+  }
+}
+
 const playCueMock = vi.hoisted(() => vi.fn());
 const whenCueSettledMock = vi.hoisted(() => vi.fn(async () => {}));
 
@@ -2504,6 +2529,71 @@ describe("lobby presence sounds", () => {
     expect(voice.getState().isMuted).toBe(true);
   });
 
+  it("audio self-repair: a listen-only call offers to fix the mic, and the tap tries the microphone again", async () => {
+    const { setAudioSelfHealForTests } = await import("@/lib/audio-self-heal-flag");
+    const missing = Object.assign(new Error("Requested device not found"), {
+      name: "NotFoundError",
+    });
+    const getUserMedia = vi.fn(async () => {
+      throw missing;
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: async () => [],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+    setAudioSelfHealForTests(true);
+    try {
+      const { transport, sent } = createTransport();
+      const voice = createVoiceController(transport);
+      await voice.join(CHANNEL);
+      voice.handleSignaling(welcome("mesh"));
+      await settle();
+      emitStatsTick();
+      await settle();
+      expect(voice.getState().audioHealthPrompt).toBe("micUnavailable");
+
+      const callsBefore = getUserMedia.mock.calls.length;
+      await voice.repairAudio();
+      // The repair is the join path's own way of adding a microphone: leave
+      // and come back, asking the browser again.
+      expect(getUserMedia.mock.calls.length).toBeGreaterThan(callsBefore);
+      expect(sent.filter((m) => m.type === "join-voice-room").length).toBe(2);
+      expect(voice.getState().audioHealthPrompt).toBeNull();
+      voice.leave();
+    } finally {
+      setAudioSelfHealForTests(false);
+    }
+  });
+
+  it("audio self-repair: with the flag off, a listen-only call shows no card", async () => {
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => {
+          throw Object.assign(new Error("Requested device not found"), { name: "NotFoundError" });
+        },
+        enumerateDevices: async () => [],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    emitStatsTick();
+    await settle();
+    expect(voice.getState().status).toBe("connected");
+    expect(voice.getState().audioHealthPrompt).toBeNull();
+    voice.leave();
+  });
+
   it("plays join when someone else enters the lobby, leave when they go", async () => {
     const { transport } = createTransport();
     const voice = createVoiceController(transport);
@@ -4561,5 +4651,171 @@ describe("audience mode", () => {
       ],
     });
     expect(voice.getState().speakLockedPeerIds).toEqual([]);
+  });
+});
+
+describe("a microphone that goes quiet on its own", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    stoppedTracks.length = 0;
+  });
+
+  /**
+   * A capture track that can end the way a real one does: by firing `ended`
+   * at its listeners, which `track.stop()` (our own teardown) never does.
+   */
+  function endableMic(label: string) {
+    const listeners = new Map<string, Set<() => void>>();
+    const track = {
+      ...fakeTrack(label),
+      readyState: "live",
+      addEventListener: (type: string, fn: () => void) => {
+        if (!listeners.has(type)) listeners.set(type, new Set());
+        listeners.get(type)!.add(fn);
+      },
+      removeEventListener: (type: string, fn: () => void) => {
+        listeners.get(type)?.delete(fn);
+      },
+      end() {
+        track.readyState = "ended";
+        for (const fn of [...(listeners.get("ended") ?? [])]) fn();
+      },
+    };
+    return track;
+  }
+
+  function micDevices() {
+    const opened: ReturnType<typeof endableMic>[] = [];
+    const getUserMedia = vi.fn(async () => {
+      const track = endableMic(`mic-${opened.length + 1}`);
+      opened.push(track);
+      return { getTracks: () => [track], getAudioTracks: () => [track] };
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+    return { getUserMedia, opened };
+  }
+
+  async function connectedMeshCall() {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh", [{ peerId: "other" }]));
+    await settle();
+    expect(voice.getState().status).toBe("connected");
+    return voice;
+  }
+
+  it("reopens the microphone when the capture ends mid-call, instead of publishing silence until a rejoin", async () => {
+    const { getUserMedia, opened } = micDevices();
+    await connectedMeshCall();
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+
+    // A Bluetooth headset sleeps, a USB headset hiccups: the browser ends the
+    // capture. The published (processed) track stays live and enabled, so
+    // nothing else in the call would ever notice.
+    opened[0]!.end();
+    await settle();
+    await settle();
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    // The dead pipeline is released, not leaked alongside the new one.
+    expect(stoppedTracks).toContain("mic-1");
+    expect(stoppedTracks).not.toContain("mic-2");
+  });
+
+  it("watches the reopened microphone too", async () => {
+    const { getUserMedia, opened } = micDevices();
+    await connectedMeshCall();
+    opened[0]!.end();
+    await settle();
+    await settle();
+    opened[1]!.end();
+    await settle();
+    await settle();
+    expect(getUserMedia).toHaveBeenCalledTimes(3);
+  });
+
+  it("gives up after a few reopens rather than looping on a device that dies every time", async () => {
+    const { getUserMedia, opened } = micDevices();
+    await connectedMeshCall();
+    for (let i = 0; i < 6; i++) {
+      opened[opened.length - 1]!.end();
+      await settle();
+      await settle();
+    }
+    // The join's own open, plus the three the budget allows.
+    expect(getUserMedia).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not reopen anything for a capture that ends after the call is left", async () => {
+    const { getUserMedia, opened } = micDevices();
+    const voice = await connectedMeshCall();
+    voice.leave();
+    await settle();
+    opened[0]!.end();
+    await settle();
+    await settle();
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes a context that was suspended under the call, and reopens only if it will not run", async () => {
+    const { getUserMedia } = micDevices();
+    const contexts: Array<{
+      state: string;
+      suspend: () => void;
+      resumeWorks: boolean;
+    }> = [];
+    const Base = (globalThis as unknown as { AudioContext: new () => object })
+      .AudioContext;
+    (globalThis as unknown as { AudioContext: unknown }).AudioContext = class extends Base {
+      state = "running";
+      resumeWorks = true;
+      private listeners = new Set<() => void>();
+      constructor() {
+        super();
+        contexts.push(this);
+      }
+      addEventListener(type: string, fn: () => void) {
+        if (type === "statechange") this.listeners.add(fn);
+      }
+      removeEventListener(type: string, fn: () => void) {
+        if (type === "statechange") this.listeners.delete(fn);
+      }
+      suspend() {
+        this.state = "suspended";
+        for (const fn of [...this.listeners]) fn();
+      }
+      resume() {
+        if (this.resumeWorks) this.state = "running";
+        return this.resumeWorks ? Promise.resolve() : Promise.reject(new Error("no"));
+      }
+    };
+
+    await connectedMeshCall();
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+
+    // A context the browser suspended and lets run again: resumed in place,
+    // no second capture.
+    contexts[0]!.suspend();
+    await settle();
+    await settle();
+    expect(contexts[0]!.state).toBe("running");
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+
+    // One that refuses to run: the published track would be silence, so the
+    // pipeline is rebuilt.
+    contexts[0]!.resumeWorks = false;
+    contexts[0]!.suspend();
+    await settle();
+    await settle();
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
   });
 });

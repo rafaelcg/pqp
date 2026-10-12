@@ -28,6 +28,7 @@ import {
   SCAN_URL_TTL_SECONDS,
   scanAllowsAttachment,
   scanImage,
+  scanReportReason,
   quarantineDays,
   type ScanResult,
 } from "./content-scan.js";
@@ -553,14 +554,7 @@ async function escalateScanResult(
     );
   }
 
-  const reason = result.labels.includes("illegal")
-    ? "illegal_content"
-    : result.labels.includes("csam_suspected") ||
-        result.labels.includes("minor_present")
-      ? "illegal_content"
-      : result.labels.includes("gore")
-        ? "violence"
-        : "other";
+  const reason = scanReportReason(result.labels);
 
   try {
     await createAutomatedReport({

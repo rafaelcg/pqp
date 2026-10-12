@@ -213,6 +213,12 @@ class WireProtocolTest {
             "voice-join-refused",
             // the Baú's one live frame
             "community-home-update",
+            // The forum list's two frames. Losing either leaves the list
+            // frozen (no new posts, no bumps) or showing a deleted post that
+            // 404s on tap; the post screen also reads both (a lock or resolve
+            // by staff, and the removed state).
+            "forum-post-upsert",
+            "forum-post-removed",
             // handshake
             "ready",
         )
@@ -746,7 +752,7 @@ class WireProtocolTest {
     @Test
     fun `the channel enums match shared`() {
         assertEquals(
-            listOf("text", "voice", "category", "watch_party"),
+            listOf("text", "voice", "category", "watch_party", "forum"),
             RepoSources.enumValues(api, "channelTypeSchema"),
         )
         assertTrue(

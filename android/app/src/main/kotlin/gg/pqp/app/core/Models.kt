@@ -66,6 +66,20 @@ data class Me(
 data class MePreferences(
     /** Finished, skipped, or grandfathered. Present means "not again", on every device. */
     val onboardedAt: String? = null,
+    /**
+     * The notification levels the web's menus write. Only the per-channel map
+     * is read on Android, to dim the channels this person silenced.
+     */
+    val notifications: MeNotificationPreferences? = null,
+    /** Chamar a atenção, both ways. Absent reads as on (`nudgesAllowed`). */
+    val allowNudges: Boolean? = null,
+)
+
+/** `notificationPreferencesSchema`, the one key this client reads. */
+@Serializable
+data class MeNotificationPreferences(
+    /** Channel id to `"all" | "mentions" | "none"`. */
+    val channels: Map<String, String> = emptyMap(),
 )
 
 // --- servers and channels ---
@@ -92,8 +106,20 @@ data class ServerSummary(
 @Serializable
 data class ServersResponse(val servers: List<ServerSummary> = emptyList())
 
+/**
+ * `locale` names the one category a new server starts with while the mixed
+ * channel list is on ("Canais", "Channels", "Canales"). An older server
+ * ignores the key.
+ */
 @Serializable
-data class CreateServerRequest(val name: String)
+data class CreateServerRequest(val name: String, val locale: String? = null)
+
+/** The app's language as the server's `locale` enum spells it: `pt-BR`, `en` or `es`. */
+fun serverLocale(language: String = java.util.Locale.getDefault().language): String = when (language.lowercase()) {
+    "pt" -> "pt-BR"
+    "es" -> "es"
+    else -> "en"
+}
 
 @Serializable
 data class CreateServerResponse(
@@ -176,6 +202,13 @@ data class Channel(
     // A watch party is a voice room with a gated stage; this app joins it as audience.
     val isVoice: Boolean get() = type == "voice" || type == "watch_party"
     val isCategory: Boolean get() = type == "category"
+
+    /**
+     * Holds posts instead of messages (`packages/shared/src/forums.ts`). Its
+     * row sits with the text channels and opens the forum screen, never a
+     * chat: a forum carries no message of its own.
+     */
+    val isForum: Boolean get() = type == "forum"
 }
 
 @Serializable
@@ -319,13 +352,54 @@ data class Message(
     val pinnedAt: String? = null,
     val isWebhook: Boolean = false,
     /**
+     * The embeds a webhook sent with the message (`messageSchema.webhookEmbeds`,
+     * Discord's shape): an RSS item's card under a feed post. Empty for
+     * everything a person writes.
+     */
+    val webhookEmbeds: List<WebhookEmbed> = emptyList(),
+    /**
      * On the wire but absent from `messageSchema` in `@pqp/shared`: the server
      * adds it in `mapMessage` so a blocked author's row still travels and
      * paging stays correct. Decoded defensively for the same reason iOS does.
      */
     val blocked: Boolean = false,
     val chance: ChancePayload? = null,
+    /**
+     * `nudge` when the server wrote this message for chamar a atenção; null for
+     * an ordinary one and for any kind this build does not know, which then
+     * renders as its plaintext body. See `gg.pqp.app.nudge.Nudge`.
+     */
+    val systemKind: String? = null,
+    /**
+     * The story a DM reply quotes (`messageSchema.storyId`). The quote card
+     * reads `GET /api/stories/:id/card`, which never hands out media after the
+     * story expires.
+     */
+    val storyId: String? = null,
 )
+
+/** `webhookEmbedSchema` in `packages/shared/src/webhooks.ts`. Every field optional, as on Discord. */
+@Serializable
+data class WebhookEmbed(
+    val title: String? = null,
+    val description: String? = null,
+    val url: String? = null,
+    /** A packed 24-bit RGB integer. */
+    val color: Int? = null,
+    val fields: List<WebhookEmbedField> = emptyList(),
+    val footer: WebhookEmbedFooter? = null,
+    val timestamp: String? = null,
+)
+
+@Serializable
+data class WebhookEmbedField(
+    val name: String = "",
+    val value: String = "",
+    val inline: Boolean = false,
+)
+
+@Serializable
+data class WebhookEmbedFooter(val text: String = "")
 
 @Serializable
 data class ChanceRollGroup(

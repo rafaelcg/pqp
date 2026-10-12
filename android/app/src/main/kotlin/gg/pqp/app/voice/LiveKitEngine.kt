@@ -6,6 +6,7 @@ import android.util.Log
 import gg.pqp.app.core.IceServer
 import gg.pqp.app.core.VoiceSessionResponse
 import io.livekit.android.AudioOptions
+import io.livekit.android.audio.AudioBufferCallback
 import io.livekit.android.ConnectOptions
 import io.livekit.android.LiveKit
 import io.livekit.android.LiveKitOverrides
@@ -28,6 +29,7 @@ import io.livekit.android.room.track.Track
 import io.livekit.android.room.track.TrackPublication
 import io.livekit.android.room.track.VideoCaptureParameter
 import io.livekit.android.room.track.VideoEncoding
+import java.nio.ByteBuffer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
@@ -36,6 +38,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import livekit.org.webrtc.PeerConnection
 import livekit.org.webrtc.RtpParameters
+import livekit.org.webrtc.ScreenCapturerAndroid
 
 /**
  * LiveKit SFU audio, for a room the server put on the `livekit` transport.
@@ -134,6 +137,14 @@ class LiveKitEngine(
      * an empty tile in front of everybody.
      */
     private val onScreenShareEnded: () -> Unit = {},
+    /** The share's game sound started going out (true) or stopped for good (false). */
+    private val onScreenAudioChanged: (Boolean) -> Unit = {},
+    /**
+     * The media server's list of who is talking, as pqp peer ids (the
+     * participant identity is the peer id; see [LiveKitPeerIndex]). Drives
+     * the speaking ring in this device's own call and nothing else.
+     */
+    private val onActiveSpeakers: (Set<String>) -> Unit = {},
 ) : VoiceTransport {
 
     /**
@@ -237,6 +248,59 @@ class LiveKitEngine(
     private var screenTrack: LocalScreencastVideoTrack? = null
 
     override val isSharingScreen: Boolean get() = screenTrack != null
+
+    /** The game's sound while a share carries it. See [GameAudioCapture]. */
+    @Volatile private var gameAudio: GameAudioCapture? = null
+
+    override val isSharingScreenAudio: Boolean
+        get() = carryingGameAudio() && gameAudio?.live == true
+
+    /** A moderator holds the microphone. Nothing goes out, game included. */
+    @Volatile private var serverMuted = false
+
+    override fun setSelfServerMuted(muted: Boolean) {
+        if (serverMuted == muted) return
+        serverMuted = muted
+        micTrack?.enabled = micTrackEnabled()
+        scope.launch { applyMuteToPublication() }
+        // The call bar's "com o som" follows the moderator too.
+        if (gameAudio != null) onScreenAudioChanged(isSharingScreenAudio)
+    }
+
+    private fun carryingGameAudio(): Boolean =
+        !serverMuted && gameAudio?.usable == true
+
+    /**
+     * The microphone's buffer hook while [gameAudio] is attached. The mic
+     * half is zeroed while the person is muted or deafened, which is how the
+     * game keeps going out when they stop talking.
+     */
+    private val gameAudioHook = object : AudioBufferCallback {
+        override fun onBuffer(
+            buffer: ByteBuffer,
+            audioFormat: Int,
+            channelCount: Int,
+            sampleRate: Int,
+            bytesRead: Int,
+            captureTimeNs: Long,
+        ): Long {
+            // Zeroed, not passed through, under a moderator's mute: the track
+            // is disabled as well, and this holds in the moment between.
+            if (serverMuted) {
+                zeroPcm(buffer, bytesRead)
+            } else {
+                gameAudio?.process(
+                    buffer,
+                    audioFormat,
+                    channelCount,
+                    sampleRate,
+                    bytesRead,
+                    micOn = !(muted || deafened) && canPublishAudio,
+                )
+            }
+            return captureTimeNs
+        }
+    }
 
     /**
      * What the SFU token granted, from `VoiceSessionResponse.stream`. A
@@ -648,10 +712,13 @@ class LiveKitEngine(
             ),
         )
         micTrack = track
+        // A share that started before SPEAK was granted already holds the
+        // game's sound; it rides this track from its first buffer.
+        if (gameAudio != null) track.setAudioBufferCallback(gameAudioHook)
         // The mic goes up already carrying whatever mute state the person had
         // before they joined. Publishing live and then muting a moment later is
         // a moment of them being heard when they asked not to be.
-        track.enabled = !(muted || deafened)
+        track.enabled = micTrackEnabled()
         room.localParticipant.publishAudioTrack(
             track,
             AudioTrackPublishOptions(
@@ -701,6 +768,12 @@ class LiveKitEngine(
                 // so this is the only way a track that appears mid-call is
                 // ever heard or seen.
                 is RoomEvent.TrackPublished -> subscribeIfWanted(event.publication)
+
+                // Who is talking. LiveKit computes it from the audio levels it
+                // already forwards, so this costs the phone nothing extra.
+                is RoomEvent.ActiveSpeakersChanged -> onActiveSpeakers(
+                    event.speakers.mapNotNull { it.identity?.value }.toSet(),
+                )
 
                 // A camera the far end muted without unpublishing. Every pqp
                 // client unpublishes instead, so this is the server-side mute
@@ -1138,7 +1211,7 @@ class LiveKitEngine(
 
     override fun setMuted(muted: Boolean) {
         this.muted = muted
-        micTrack?.enabled = !muted
+        micTrack?.enabled = micTrackEnabled()
         scope.launch { applyMuteToPublication() }
     }
 
@@ -1149,6 +1222,13 @@ class LiveKitEngine(
             // the local track is silenced so nothing is captured meanwhile.
             micTrack?.enabled = false
             return
+        }
+        // An existing track (SPEAK revoked and granted back) is re-enabled by
+        // the same rule as everywhere else: the person's own mute still
+        // holds, a share's game sound comes back.
+        micTrack?.let { track ->
+            track.enabled = micTrackEnabled()
+            scope.launch { applyMuteToPublication() }
         }
         val room = room ?: return
         if (micTrack != null || localPeerId == null) return
@@ -1172,8 +1252,19 @@ class LiveKitEngine(
         val publication = room?.localParticipant
             ?.getTrackPublication(Track.Source.MICROPHONE)
             ?: return
-        runCatching { publication.muted = muted || deafened }
+        runCatching { publication.muted = !sendingAudio() }
     }
+
+    /**
+     * Something should leave on the microphone track: the person's voice, or
+     * a share's game sound while they are muted. The mic half is zeroed in
+     * [gameAudioHook] in that second case, so the publication stays live
+     * without anyone hearing the room they muted themselves from.
+     */
+    private fun sendingAudio(): Boolean =
+        !serverMuted && (!(muted || deafened) || carryingGameAudio())
+
+    private fun micTrackEnabled(): Boolean = canPublishAudio && sendingAudio()
 
     override fun setDeafened(value: Boolean, mutedByUser: Boolean) {
         deafened = value
@@ -1183,7 +1274,7 @@ class LiveKitEngine(
         // `canPublishAudio` for the same reason as on the mesh path:
         // undeafening is the one route that enables the track without passing
         // through `setMuted`.
-        micTrack?.enabled = !(value || mutedByUser) && canPublishAudio
+        micTrack?.enabled = micTrackEnabled()
         scope.launch { applyMuteToPublication() }
     }
 
@@ -1346,6 +1437,7 @@ class LiveKitEngine(
         screenTrack = track
         return runCatching {
             track.startCapture()
+            attachGameAudio(track)
             screenJob = scope.launch {
                 val published = runCatching {
                     room.localParticipant.publishVideoTrack(
@@ -1389,8 +1481,46 @@ class LiveKitEngine(
         }
     }
 
+    /**
+     * Carry the phone's sound with the share, mixed into the microphone.
+     *
+     * The projection only exists once the capture has started. No microphone
+     * track yet (SPEAK not granted) still attaches: [publishMicrophone] hooks
+     * the callback in when the track arrives.
+     */
+    private fun attachGameAudio(track: LocalScreencastVideoTrack) {
+        if (!gameAudioSupported()) return
+        val projection = (track.capturer as? ScreenCapturerAndroid)?.mediaProjection ?: return
+        lateinit var capture: GameAudioCapture
+        capture = GameAudioCapture(projection) { live ->
+            // Off the setup or microphone thread, and only for the share
+            // that is still current.
+            scope.launch {
+                if (gameAudio !== capture) return@launch
+                micTrack?.enabled = micTrackEnabled()
+                applyMuteToPublication()
+                onScreenAudioChanged(live && carryingGameAudio())
+            }
+        }
+        gameAudio = capture
+        micTrack?.setAudioBufferCallback(gameAudioHook)
+        micTrack?.enabled = micTrackEnabled()
+        scope.launch { applyMuteToPublication() }
+    }
+
+    private fun detachGameAudio() {
+        val capture = gameAudio ?: return
+        gameAudio = null
+        runCatching { micTrack?.setAudioBufferCallback(null) }
+        capture.release()
+        micTrack?.enabled = micTrackEnabled()
+        scope.launch { applyMuteToPublication() }
+        onScreenAudioChanged(false)
+    }
+
     override fun stopScreenShare() {
         val track = screenTrack ?: return
+        detachGameAudio()
         // The generation moves FIRST. Everything in flight is stale from this
         // line on, including a publish that is about to succeed and a late
         // `onStop` from this track's own capturer.
@@ -1429,6 +1559,7 @@ class LiveKitEngine(
     }
 
     private fun releaseScreenTrack() {
+        detachGameAudio()
         screenGuard.invalidate()
         screenJob?.cancel()
         screenJob = null
@@ -1459,6 +1590,8 @@ class LiveKitEngine(
         screenJob?.cancel()
         screenJob = null
         val screen = screenTrack
+        gameAudio?.release()
+        gameAudio = null
         roomName = null
         micTrack = null
         screenTrack = null

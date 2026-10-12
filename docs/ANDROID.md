@@ -69,7 +69,14 @@ the order to cut from the bottom:
 
 1. Auth, servers, channels, text chat. **Done.**
 2. Voice with a foreground service. **Done, and audio measured on both sides.**
-3. Screen sharing via `MediaProjection`, send and receive. **Done.**
+3. Screen sharing via `MediaProjection`, send and receive, on mesh and LiveKit
+   rooms alike. **Done.** From Android 10 the share carries the phone's own
+   sound (a game, a video) through `AudioPlaybackCapture`, mixed into the
+   microphone track because neither WebRTC build can publish an app-fed second
+   audio track (`voice/GameAudioCapture.kt`, `voice/GameAudioMix.kt`). Muting
+   yourself zeroes the voice half and keeps the game going out. A game that opts
+   out of playback capture arrives silent. **The sound half is unverified on a
+   device.**
 4. Push via FCM, as the third leg of `server/src/services/push.ts`. **Client
    and server legs built. Whether a Play build receives it depends on the
    `GOOGLE_SERVICES_JSON` secret reaching the release workflow; see the push
@@ -2230,6 +2237,65 @@ both phones rather than through curl:
 path is server-side and untried from this client), attachments in a DM, and
 anything about how the list behaves at a few hundred conversations. There are
 still no instrumented tests. Blocking is wired but was not exercised end to end.
+
+### Conversas (the DM redesign, behind `GET /api/dms/config`)
+
+Two runtime flags, read on launch and on every resume (throttled to five
+minutes), with the last answer kept in SharedPreferences (`pqp.conversas`) so a
+cold start draws the right shell straight away. A 404 or both flags off is the
+home above, unchanged.
+
+- **`home`**: the Messages tab becomes the Conversas list
+  (`social/ui/ConversasScreen.kt`). Rows have presence for friends, the
+  server's preview with "tu:" or a group author's first name in front, the time
+  in lime while unread, a red count (99+, the server caps at 100), and
+  "digitando..." from `typing-broadcast` (own frames dropped, five second life,
+  cleared by that person's next `channel-activity`). Search and Tudo / Não
+  lidas / Grupos run over the list in memory. Nova conversa lists Online agora
+  and Amigos, and a name with nothing ticked opens directly. A message in a
+  server channel offers "Mandar mensagem pra {nome}", the Android door for the
+  web's member-row "Mensagem" (there is no member list here).
+- **`phoneTabs`**: the bar becomes Conversas / Servidores / Tu, Friends moves
+  to the Conversas header, and the app opens on the last tab used
+  (Servidores for somebody who never chose). Back from another tab returns to
+  that landing tab.
+
+The rules are pure and tested in `ConversasTest` (`social/ConversationList.kt`).
+
+## Stories
+
+`stories/` and `stories/ui/`, against `packages/shared/src/stories.ts`. The
+design is the stories study (strip, viewer, composer); this is what the phone
+does with it.
+
+- **Where.** A server strip below the channel list's banner (the server's
+  `stories` flag, through `GET /api/servers/:id/stories`), and a friends strip
+  above the Messages list (`stories_friends`, `GET /api/stories/friends`). Off
+  draws nothing; nothing is deleted.
+- **Live.** `StoriesStore` holds every strip on screen for the process.
+  `stories-update` is content-free: it re-reads the strip it names, drops any
+  `removedStoryIds`, and `own` bumps the viewers sheet. Expiry sends no frame;
+  a timer drops a ring when its last story runs out. Views are batched after
+  1 s on screen.
+- **Viewer.** A full-screen dialog over whatever opened it: tap to step, hold
+  to pause, swipe across for the next person (a deck: the outgoing card
+  recedes), swipe down to close. Clocks are linear (photo 5 s, text 5 s plus
+  50 ms a character, call sticker 8 s, video its own length). Replies become a
+  DM quoting the story; reactions stay on the story. The menu has mute, report
+  (`subjectType: "story"`, `minor_sexual` included), delete for the author and
+  "Tirar do {servidor}" for each server the viewer moderates.
+- **Composer.** TEXTO / CÂMERA / CALL, then "Quem vê". The system camera and the
+  photo picker, so no storage permission; the camera permission is asked for
+  first because the app declares it (Android refuses `IMAGE_CAPTURE` from an
+  app that declares CAMERA without holding it, and that crash was found in QA).
+  A photo is re-encoded (1440 px long side, EXIF gone). A video is measured,
+  not transcoded: MP4, at most 30 s and 25 MB, refused with the reason before
+  any upload.
+- **Motion.** All Compose, so it follows the animator duration scale; at zero
+  the deck transform and the drag shrink are skipped and the gestures keep
+  working.
+
+Rules are pure and tested in `StoriesTest` (`stories/StoriesRules.kt`).
 
 ## Attachments
 

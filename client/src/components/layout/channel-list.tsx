@@ -1,10 +1,12 @@
 import {
   ArrowDown,
   ArrowUp,
+  ArrowUpDown,
   Archive,
   CheckCheck,
   ChevronDown,
   ChevronRight,
+  CirclePlus,
   Copy,
   Eraser,
   ExternalLink,
@@ -12,10 +14,12 @@ import {
   FolderMinus,
   FolderPlus,
   Hand,
+  Hash,
   History,
   Lock,
   LogOut,
   MessageSquareText,
+  MessagesSquare,
   Mic,
   MicOff,
   PanelLeftOpen,
@@ -52,6 +56,13 @@ import {
 } from "react";
 import {
   FAVORITE_CHANNELS_PER_SERVER_MAX,
+  buildSidebarLayout,
+  locateInLayout,
+  moveInLayout,
+  stepInLayout,
+  type LayoutTarget,
+  type SidebarCategory,
+  type SidebarLayout,
   isVoiceRoomChannelType,
   isWatchPartyChannelType,
   liveStateFromRoster,
@@ -69,6 +80,11 @@ import type { ChannelMusicTrack } from "@pqp/shared";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { SearchDialog } from "@/components/search/search-dialog";
+import { useConversationsHome } from "@/lib/conversations-config";
+import {
+  CommunityHomePreview,
+  type CommunityHomePreviewProps,
+} from "@/components/community-home/community-home-preview";
 import {
   ChannelIcon,
   channelIconIsPrivateLock,
@@ -90,6 +106,7 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { Menu } from "@/components/ui/menu";
+import { BetaTag } from "@/components/ui/beta-tag";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useIsTruncated } from "@/lib/use-is-truncated";
@@ -128,6 +145,17 @@ import { heroHue, heroTintStyle, initialsFor } from "@/lib/hero-tint";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { isWatchPartyChannelsEnabled } from "@/lib/watch-party-channels";
+import {
+  CreateCategoryRow,
+  DragStatus,
+  DropLine,
+  EmptyCategoryDrop,
+  MixedCategoryHeader,
+  PinDropBar,
+  OrganizeChannels,
+  stepAvailability,
+  type DropEdge,
+} from "@/components/layout/channel-list-mixed";
 
 const EMPTY_THREAD_IDS: ReadonlySet<string> = new Set();
 
@@ -138,16 +166,63 @@ export interface UnreadState {
 
 const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
 
+/** Where a drag in the mixed list would land, as the pointer says now. */
+type MixedDrop =
+  | { kind: "row"; id: string; edge: DropEdge }
+  | { kind: "into"; categoryId: string }
+  | { kind: "category"; id: string; edge: DropEdge }
+  /** The top edge of a header: the end of the group above it (loose, for the first). */
+  | { kind: "beforeCategory"; categoryId: string }
+  | { kind: "afterLastCategory" };
+
+/** The top this much of a category header means "above this category". */
+const HEADER_BEFORE_FRACTION = 0.3;
+
+/** A folded category held under the pointer this long opens. */
+const FOLDED_CATEGORY_OPEN_MS = 600;
+
+/** What a reorder came back as (`App.handleApplyLayout`). */
+export type ApplyLayoutResult = "ok" | "stale" | "failed";
+
+function layoutKey(layout: SidebarLayout): string {
+  return JSON.stringify([
+    layout.loose.map((channel) => channel.id),
+    layout.categories.map((entry) => [
+      entry.category.id,
+      entry.children.map((channel) => channel.id),
+    ]),
+  ]);
+}
+
+function edgeOf(event: DragEvent, host: Element): DropEdge {
+  const rect = host.getBoundingClientRect();
+  return event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+}
+
 /** Drop-target ids that are not channels: the Pinados / TEXT / VOICE headers. */
 const PINNED_ZONE = "__pinned__";
 const TEXT_ZONE = "__text__";
 const VOICE_ZONE = "__voice__";
 
 /** Apple keyboards label the same chord differently, and the hint is the point. */
-const SEARCH_SHORTCUT_HINT =
-  typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent)
-    ? "⌘K"
-    : "Ctrl K";
+const IS_APPLE_KEYBOARD =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent);
+
+/**
+ * Message search's chord. Conversas (`conversations_home`) gives Ctrl/Cmd+K
+ * to the "ir pra" switcher and moves search to F; off, it is K as it was.
+ */
+function searchShortcutKey(conversationsHome: boolean): "f" | "k" {
+  return conversationsHome ? "f" : "k";
+}
+
+function searchShortcutHint(conversationsHome: boolean): string {
+  const key = searchShortcutKey(conversationsHome).toUpperCase();
+  return IS_APPLE_KEYBOARD ? `⌘${key}` : `Ctrl ${key}`;
+}
+
+/** The switcher's "Buscar nas mensagens" row asks for message search with its words. */
+export const SEARCH_MESSAGES_EVENT = "pqp:search-messages";
 
 /** Equal-width action tiles on a channel row (pin, settings). */
 const CHANNEL_ACTION_TILE =
@@ -296,11 +371,40 @@ interface ChannelListProps {
    * `watch_party` is only ever asked for while `isWatchPartyChannelsEnabled()`
    * is true; with the flag off the sidebar has no button that sends it.
    */
-  onCreateChannel: (type: ChannelType, isPrivate: boolean) => void;
+  onCreateChannel: (
+    type: ChannelType,
+    isPrivate: boolean,
+    /** The category to create it in (the mixed list's per-category "+"). */
+    parentId?: string | null,
+  ) => void;
+  /**
+   * Draw the mixed list: categories are the only headers and every type
+   * mixes in one order (`mixed_channel_list` on for the server and its data
+   * migrated, `GET /api/servers/:id/channel-layout`). Null or absent draws the
+   * old TEXTO / VOZ / CATEGORIAS list, untouched. `version` is what a reorder
+   * is sent against; null while it has not been read yet, which holds every
+   * reorder back.
+   */
+  mixedLayout?: { version: number | null } | null;
+  /**
+   * Commit a reorder of the mixed list (one full-order PUT). Applied
+   * optimistically by the caller, which reverts on a failure and adopts the
+   * server's list on a stale one.
+   */
+  onApplyLayout?: (
+    layout: SidebarLayout<Channel>,
+    baseVersion: number,
+  ) => Promise<ApplyLayoutResult>;
+  /**
+   * The runtime flag `forum_channels` is on for this server (`useForumConfig`).
+   * Turns the Texto section's "+" into a menu offering a text channel or a
+   * Fórum. Off, the "+" is the plain one-click text channel it always was.
+   */
+  forumCreateEnabled?: boolean;
   onRenameChannel: (channel: Channel) => void;
   onOpenChannelSettings: (
     channel: Channel,
-    section: "overview" | "permissions" | "webhooks",
+    section: "overview" | "tags" | "permissions" | "webhooks",
     options?: { forceAdvanced?: boolean },
   ) => void;
   onDeleteChannel: (channelId: string) => void;
@@ -314,6 +418,8 @@ interface ChannelListProps {
     channelId: string,
     parentId: string | null,
     index: number,
+    /** A drop on this row: the server takes its slot exactly. */
+    targetId?: string,
   ) => void;
   /**
    * This person's pinned channel ids for the open server, in display order.
@@ -351,6 +457,20 @@ interface ChannelListProps {
   communityHomeUnreadFresh?: boolean;
   communityHomeSelected?: boolean;
   onSelectCommunityHome?: () => void;
+  /**
+   * The Baú preview (`GET …/home/latest`): a card while something is new, a
+   * slim row with the last post once seen. Null or absent (the server has the
+   * preview off, or the read has not landed) keeps the plain row.
+   */
+  communityHomePreview?: CommunityHomePreviewProps | null;
+  /**
+   * The stories strip (`components/stories/story-strip.tsx`), drawn at the
+   * top of the list, above Baú. It draws nothing unless the server has
+   * stories on and something is live. Never in the icons-only rail.
+   */
+  storiesSlot?: ReactNode;
+  /** "Postar story" in the server menu, for someone who may post here. */
+  onPostStory?: () => void;
   /**
    * Current server roster, so a seated person with a claimed handle can get
    * Ver perfil / pqp.gg/@handle on right-click. Absent handle: no link.
@@ -434,11 +554,14 @@ export const ChannelList = memo(function ChannelList({
   onSetPeerVolume,
   onSetScreenVolume,
   onCreateChannel,
+  forumCreateEnabled = false,
   onRenameChannel,
   onOpenChannelSettings,
   onDeleteChannel,
   onPurgeChannel,
   onMoveChannel,
+  mixedLayout = null,
+  onApplyLayout,
   favoriteChannelIds = [],
   onFavoriteChannelIdsChange,
   onInvite,
@@ -452,8 +575,11 @@ export const ChannelList = memo(function ChannelList({
   communityHomeShowNew = false,
   communityHomeUnread = 0,
   communityHomeUnreadFresh = false,
+  communityHomePreview = null,
   communityHomeSelected = false,
   onSelectCommunityHome,
+  storiesSlot = null,
+  onPostStory,
   members = [],
   iconsOnly = false,
   onExpand,
@@ -493,9 +619,12 @@ export const ChannelList = memo(function ChannelList({
     : channels;
   const visibleFavs = visibleFavoriteChannels(listed, favoriteChannelIds);
   const favoriteIdSet = new Set(visibleFavs.map((c) => c.id));
+  // A forum is listed with the text channels: it is a place to write, the
+  // server groups its positions with `text`, and a separate Fórum section
+  // would be a header over one row in nearly every server.
   const topLevelText = sortByPosition(
     listed.filter(
-      (c) => c.type === "text" && !c.parentId && !favoriteIdSet.has(c.id),
+      (c) => isTextGroupChannelType(c.type) && !c.parentId && !favoriteIdSet.has(c.id),
     ),
   );
   const topLevelVoice = sortByPosition(
@@ -535,8 +664,22 @@ export const ChannelList = memo(function ChannelList({
     );
   }
 
+  // What the mixed list draws and every reorder is computed on: what this
+  // person sees in its place (pins live in Pinados, a watch party room is the
+  // block at the top). A channel left out of the write keeps its place on
+  // the server, so the view is the whole truth the write needs.
+  const viewLayout = buildSidebarLayout(
+    listed.filter((c) => !favoriteIdSet.has(c.id)),
+    { mixed: true },
+  );
+  // One pass for every row's Mover para cima / para baixo, not a candidate
+  // layout per row per render.
+  const viewSteps = stepAvailability(viewLayout);
+
   const speaking = new Set(speakingPeerIds);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchSeed, setSearchSeed] = useState("");
+  const conversationsHome = useConversationsHome();
   const [collapsed, setCollapsed] = useState<Set<string>>(() =>
     loadCollapsedCategories(),
   );
@@ -545,6 +688,48 @@ export const ChannelList = memo(function ChannelList({
   const [draggedOccupant, setDraggedOccupant] =
     useState<VoiceOccupantDrag | null>(null);
   const [dropHint, setDropHint] = useState<string | null>(null);
+  // --- the mixed list ---
+  const mixed = mixedLayout != null;
+  const [mixedDrop, setMixedDropState] = useState<MixedDrop | null>(null);
+  const mixedDropRef = useRef<MixedDrop | null>(null);
+  /** The row picked up, drawn as a dashed gap (set a tick after dragstart). */
+  const [liftedId, setLiftedId] = useState<string | null>(null);
+  const liftRef = useRef<string | null>(null);
+  const [organizing, setOrganizing] = useState<{
+    layout: SidebarLayout<Channel>;
+    baseVersion: number;
+  } | null>(null);
+  const [organizeBusy, setOrganizeBusy] = useState(false);
+  const [statusLine, setStatusLine] = useState<string | null>(null);
+  const statusTimerRef = useRef<number | null>(null);
+  const focusAfterRef = useRef<string | null>(null);
+  const openTimerRef = useRef<{ id: string; timer: number } | null>(null);
+  useEffect(() => {
+    const id = focusAfterRef.current;
+    if (!id) {
+      return;
+    }
+    focusAfterRef.current = null;
+    // After the menu that asked for the move has closed and handed focus
+    // back: the moved row keeps it, wherever it went.
+    window.setTimeout(() => {
+      const target = document.querySelector<HTMLElement>(
+        `[data-channel-id="${id}"] button, [data-category-id="${id}"] button`,
+      );
+      target?.focus();
+    }, 0);
+  }, [channels]);
+  useEffect(
+    () => () => {
+      if (statusTimerRef.current !== null) {
+        window.clearTimeout(statusTimerRef.current);
+      }
+      if (openTimerRef.current) {
+        window.clearTimeout(openTimerRef.current.timer);
+      }
+    },
+    [],
+  );
   const openProfile = useProfilePopover();
   const memberById = useMemo(() => {
     const map = new Map<string, ServerMember>();
@@ -563,15 +748,31 @@ export const ChannelList = memo(function ChannelList({
     if (!hasServer) {
       return;
     }
+    const key = searchShortcutKey(conversationsHome);
     function onKeyDown(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === key
+      ) {
         event.preventDefault();
+        setSearchSeed("");
         setSearchOpen(true);
       }
     }
+    function onSearchRequest(event: Event) {
+      const query = (event as CustomEvent<{ query?: string }>).detail?.query ?? "";
+      setSearchSeed(query);
+      setSearchOpen(true);
+    }
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [hasServer]);
+    window.addEventListener(SEARCH_MESSAGES_EVENT, onSearchRequest);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener(SEARCH_MESSAGES_EVENT, onSearchRequest);
+    };
+  }, [hasServer, conversationsHome]);
 
   // --- icons only ---------------------------------------------------------
   // Below every hook, so the strip and the column are the same component with
@@ -582,13 +783,23 @@ export const ChannelList = memo(function ChannelList({
   // is already fully hidden, so collapsing it saves nothing and costs the
   // names. `App.tsx` will not ask for it there either; this is the belt.
   if (iconsOnly && !mobileOpen && onExpand) {
-    const railGroups = channelRailGroups({
-      favorites: visibleFavs,
-      text: topLevelText,
-      voice: topLevelVoice,
-      categories,
-      childrenByCategory,
-    });
+    const railGroups = mixed
+      ? channelRailGroups({
+          favorites: visibleFavs,
+          text: viewLayout.loose,
+          voice: [],
+          categories: viewLayout.categories.map((entry) => entry.category),
+          childrenByCategory: new Map(
+            viewLayout.categories.map((entry) => [entry.category.id, entry.children]),
+          ),
+        })
+      : channelRailGroups({
+          favorites: visibleFavs,
+          text: topLevelText,
+          voice: topLevelVoice,
+          categories,
+          childrenByCategory,
+        });
 
     return (
       <aside
@@ -629,8 +840,13 @@ export const ChannelList = memo(function ChannelList({
             open={searchOpen}
             serverId={server.id}
             serverName={server.name}
-            onClose={() => setSearchOpen(false)}
+            onClose={() => {
+              setSearchOpen(false);
+              // The switcher's words were for that one search, not the next.
+              setSearchSeed("");
+            }}
             onNavigate={onMobileClose}
+            initialQuery={searchSeed}
           />
         )}
         <div className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 py-2">
@@ -694,6 +910,240 @@ export const ChannelList = memo(function ChannelList({
     setDraggedId(null);
     setDragOverId(null);
     setDraggedOccupant(null);
+    setMixedDrop(null);
+    liftRef.current = null;
+    setLiftedId(null);
+    cancelFoldedOpen();
+  }
+
+  // --- mixed list: drag, drop, keyboard, organize -------------------------
+
+  function setMixedDrop(next: MixedDrop | null) {
+    // Mirrored in a ref: a drop in the same frame as the last dragover reads
+    // the target the pointer is on, not the one the last render saw.
+    mixedDropRef.current = next;
+    setMixedDropState((current) =>
+      JSON.stringify(current) === JSON.stringify(next) ? current : next,
+    );
+  }
+
+  function cancelFoldedOpen() {
+    if (openTimerRef.current) {
+      window.clearTimeout(openTimerRef.current.timer);
+      openTimerRef.current = null;
+    }
+  }
+
+  /** Hovering a folded category while dragging opens it after a beat. */
+  function scheduleFoldedOpen(categoryId: string) {
+    if (openTimerRef.current?.id === categoryId) {
+      return;
+    }
+    cancelFoldedOpen();
+    const timer = window.setTimeout(() => {
+      openTimerRef.current = null;
+      if (loadCollapsedCategories().has(categoryId)) {
+        setCollapsed(toggleCollapsedCategory(categoryId));
+      }
+    }, FOLDED_CATEGORY_OPEN_MS);
+    openTimerRef.current = { id: categoryId, timer };
+  }
+
+  function showStatus(text: string) {
+    setStatusLine(text);
+    if (statusTimerRef.current !== null) {
+      window.clearTimeout(statusTimerRef.current);
+    }
+    statusTimerRef.current = window.setTimeout(() => {
+      statusTimerRef.current = null;
+      setStatusLine(null);
+    }, 4000);
+  }
+
+  function describeMove(layout: SidebarLayout<Channel>, id: string): string | null {
+    const place = locateInLayout(layout, id);
+    const row = channels.find((c) => c.id === id);
+    if (!place || !row) {
+      return null;
+    }
+    const n = place.index + 1;
+    if (place.isCategory) {
+      return t("chrome.movedCategory", { category: row.name, n, total: place.total });
+    }
+    if (place.parentId === null) {
+      return t("chrome.movedToLoose", { channel: row.name, n, total: place.total });
+    }
+    const category = layout.categories.find((entry) => entry.category.id === place.parentId);
+    return t("chrome.movedTo", {
+      channel: row.name,
+      category: category?.category.name ?? "",
+      n,
+      total: place.total,
+    });
+  }
+
+  async function commitLayout(
+    next: SidebarLayout<Channel>,
+    movedId: string | null,
+    baseVersion: number | null = mixedLayout?.version ?? null,
+  ): Promise<ApplyLayoutResult> {
+    if (!onApplyLayout || baseVersion === null) {
+      showStatus(t("chrome.reorderFailed"));
+      return "failed";
+    }
+    if (movedId) {
+      focusAfterRef.current = movedId;
+    }
+    const result = await onApplyLayout(next, baseVersion);
+    if (result === "ok") {
+      const said = movedId ? describeMove(next, movedId) : null;
+      if (said) {
+        showStatus(said);
+      }
+    } else {
+      showStatus(t(result === "stale" ? "chrome.reorderStale" : "chrome.reorderFailed"));
+    }
+    return result;
+  }
+
+  function applyMove(id: string, target: LayoutTarget) {
+    const next = moveInLayout(viewLayout, id, target);
+    if (!next || layoutKey(next) === layoutKey(viewLayout)) {
+      return;
+    }
+    void commitLayout(next, id);
+  }
+
+  function stepMove(id: string, direction: -1 | 1) {
+    const stepped = stepInLayout(viewLayout, id, direction);
+    if (stepped) {
+      void commitLayout(stepped.layout, id);
+    }
+  }
+
+  /** The slot a drop on a row (above or below its middle) lands in. */
+  function rowDropTarget(draggedRowId: string, rowId: string, edge: DropEdge): LayoutTarget | null {
+    const at = locateInLayout(viewLayout, rowId);
+    if (!at) {
+      return null;
+    }
+    let index = at.index + (edge === "after" ? 1 : 0);
+    const from = locateInLayout(viewLayout, draggedRowId);
+    // The index is read with the dragged row already taken out.
+    if (from && from.isCategory === at.isCategory && from.parentId === at.parentId && from.index < index) {
+      index -= 1;
+    }
+    return { parentId: at.isCategory ? null : at.parentId, index };
+  }
+
+  function finishMixedDrop() {
+    const dragged = draggedChannel();
+    const drop = mixedDropRef.current;
+    clearDrag();
+    if (!dragged || !drop || !canManage || favoriteIdSet.has(dragged.id)) {
+      return;
+    }
+    const end = Number.MAX_SAFE_INTEGER;
+    const isCategory = dragged.type === "category";
+    switch (drop.kind) {
+      case "row": {
+        const target = isCategory ? null : rowDropTarget(dragged.id, drop.id, drop.edge);
+        if (target) {
+          applyMove(dragged.id, target);
+        }
+        return;
+      }
+      case "into":
+        if (!isCategory) {
+          applyMove(dragged.id, { parentId: drop.categoryId, index: end });
+        }
+        return;
+      case "beforeCategory": {
+        if (isCategory) {
+          return;
+        }
+        const at = viewLayout.categories.findIndex(
+          (entry) => entry.category.id === drop.categoryId,
+        );
+        const above = at > 0 ? viewLayout.categories[at - 1]!.category.id : null;
+        applyMove(dragged.id, { parentId: above, index: end });
+        return;
+      }
+      case "category": {
+        const target = isCategory ? rowDropTarget(dragged.id, drop.id, drop.edge) : null;
+        if (target) {
+          applyMove(dragged.id, target);
+        }
+        return;
+      }
+      case "afterLastCategory":
+        if (isCategory) {
+          applyMove(dragged.id, { parentId: null, index: end });
+        }
+        return;
+    }
+  }
+
+  /** A dragged channel a manager may place (not a pin, not a category, not a person). */
+  function draggingPlaceableChannel(): Channel | null {
+    if (!mixed || !canManage || draggedOccupant || !draggedId) {
+      return null;
+    }
+    const dragged = draggedChannel();
+    if (!dragged || dragged.type === "category" || favoriteIdSet.has(dragged.id)) {
+      return null;
+    }
+    return dragged;
+  }
+
+  /** Nothing pinned yet and a channel in the air: offer the bar to pin it. */
+  function pinBarOpen(): boolean {
+    if (!draggedId || draggedOccupant || visibleFavs.length > 0 || !onFavoriteChannelIdsChange) {
+      return false;
+    }
+    const dragged = draggedChannel();
+    return Boolean(dragged && dragged.type !== "category");
+  }
+
+  function draggingCategory(): Channel | null {
+    if (!mixed || !canManage || draggedOccupant || !draggedId) {
+      return null;
+    }
+    const dragged = draggedChannel();
+    return dragged?.type === "category" ? dragged : null;
+  }
+
+  function startOrganizing() {
+    if (mixedLayout?.version == null) {
+      showStatus(t("chrome.reorderFailed"));
+      return;
+    }
+    setOrganizing({ layout: viewLayout, baseVersion: mixedLayout.version });
+  }
+
+  async function finishOrganizing() {
+    if (!organizing) {
+      return;
+    }
+    if (layoutKey(organizing.layout) === layoutKey(viewLayout)) {
+      setOrganizing(null);
+      return;
+    }
+    setOrganizeBusy(true);
+    let result: ApplyLayoutResult = "failed";
+    try {
+      result = await commitLayout(organizing.layout, null, organizing.baseVersion);
+    } catch {
+      showStatus(t("chrome.reorderFailed"));
+    } finally {
+      setOrganizeBusy(false);
+      // A stale list was swapped for the fresh one: start over from it
+      // rather than keep arranging something that no longer exists.
+      setOrganizing(null);
+    }
+    if (result === "ok") {
+      showStatus(t("chrome.organizeSaved"));
+    }
   }
 
   function showDropHint(reason: Parameters<typeof dropReasonMessageKey>[0]) {
@@ -758,6 +1208,27 @@ export const ChannelList = memo(function ChannelList({
     }
     if (draggedId) {
       event.preventDefault();
+      const placeable = draggingPlaceableChannel();
+      if (placeable && !favoriteIdSet.has(channel.id)) {
+        // Above or below the middle of the row (its occupants and threads
+        // count as the row): a line says where it lands.
+        if (placeable.id === channel.id) {
+          setMixedDrop(null);
+        } else {
+          const host =
+            (event.currentTarget as HTMLElement).closest("[data-channel-id]") ??
+            (event.currentTarget as HTMLElement);
+          setMixedDrop({ kind: "row", id: channel.id, edge: edgeOf(event, host) });
+        }
+        setDragOverId(null);
+        return;
+      }
+      if (draggingCategory()) {
+        // A category only lands between categories.
+        event.dataTransfer.dropEffect = "none";
+        setMixedDrop(null);
+        return;
+      }
       setDragOverId(channel.id);
     }
   }
@@ -1027,13 +1498,39 @@ export const ChannelList = memo(function ChannelList({
       clearDrag();
       return;
     }
+    if (mixed) {
+      finishMixedDrop();
+      return;
+    }
     clearDrag();
     if (target.type === "category" && dragged.type !== "category") {
       const kids = childrenByCategory.get(target.id) ?? [];
       onMoveChannel(dragged.id, target.id, kids.length);
       return;
     }
-    onMoveChannel(dragged.id, target.parentId, target.position);
+    onMoveChannel(dragged.id, target.parentId, legacyDropIndex(target), target.id);
+  }
+
+  /**
+   * The index `PATCH /move` reads for a drop on a row. Inside a category it
+   * is the row's position. In the loose area the server keeps one sequence
+   * for every type now and reads the index per type (its legacy-move rule),
+   * so this is the row's slot among the loose channels of its own type group,
+   * which is what `position` used to be when each type was numbered apart.
+   */
+  function legacyDropIndex(target: Channel): number {
+    if (target.parentId) {
+      return target.position;
+    }
+    const sameGroup = (type: string) =>
+      isTextGroupChannelType(target.type)
+        ? isTextGroupChannelType(type as Channel["type"])
+        : type === target.type;
+    const group = sortByPosition(
+      channels.filter((c) => !c.parentId && c.type !== "category" && sameGroup(c.type)),
+    );
+    const index = group.findIndex((c) => c.id === target.id);
+    return index === -1 ? target.position : index;
   }
 
   /** "Move up"/"Move down" swap a channel with its immediate neighbour within
@@ -1061,15 +1558,34 @@ export const ChannelList = memo(function ChannelList({
       : [];
     const isFavorite = inFavorites || favoriteIdSet.has(channel.id);
     const occupantDropOk = occupantDropAllowed(channel);
+    const mixedRow = mixed && !inFavorites;
+    const rowDrop =
+      mixedRow && mixedDrop?.kind === "row" && mixedDrop.id === channel.id
+        ? mixedDrop.edge
+        : null;
+    // The dragged row's slot stays as a dashed gap, so nothing jumps.
+    const isOrigin =
+      mixedRow && liftedId === channel.id && draggedId === channel.id && Boolean(draggingPlaceableChannel());
+    const canStepUp = mixedRow && canManage && (viewSteps.get(channel.id)?.up ?? false);
+    const canStepDown = mixedRow && canManage && (viewSteps.get(channel.id)?.down ?? false);
     return (
       <div
         key={channel.id}
-        className="mb-0.5 min-w-0"
+        className={cn(
+          "relative mb-0.5 min-w-0",
+          isOrigin &&
+            "rounded-[var(--radius-control)] outline-dashed outline-1 outline-border [&>*]:invisible",
+        )}
         data-channel-id={channel.id}
+        data-drop={rowDrop ?? undefined}
         data-channel-type={channel.type}
         onDragOver={(event) => handleRowDragOver(event, channel)}
         onDrop={(event) => {
-          if (!draggedOccupant) {
+          // A channel let go over this room's occupants or threads: they
+          // count as the row (the line said so), so the drop is the row's.
+          const channelOnRow =
+            mixedRow && mixedDropRef.current?.kind === "row" && mixedDropRef.current.id === channel.id;
+          if (!draggedOccupant && !channelOnRow) {
             return;
           }
           event.preventDefault();
@@ -1077,6 +1593,7 @@ export const ChannelList = memo(function ChannelList({
           handleRowDrop(channel);
         }}
       >
+        {rowDrop && <DropLine edge={rowDrop} />}
         <ChannelRow
           channel={channel}
           selected={selectedChannelId === channel.id}
@@ -1135,18 +1652,27 @@ export const ChannelList = memo(function ChannelList({
           }
           categories={categoryOptions}
           onMoveToCategory={(categoryId) =>
-            onMoveChannel(
-              channel.id,
-              categoryId,
-              categoryId
-                ? (childrenByCategory.get(categoryId)?.length ?? 0)
-                : isVoiceRoomChannelType(channel.type)
-                  ? topLevelVoice.length
-                  : topLevelText.length,
-            )
+            mixedRow
+              ? applyMove(channel.id, {
+                  parentId: categoryId,
+                  index: Number.MAX_SAFE_INTEGER,
+                })
+              : onMoveChannel(
+                  channel.id,
+                  categoryId,
+                  categoryId
+                    ? (childrenByCategory.get(categoryId)?.length ?? 0)
+                    : isVoiceRoomChannelType(channel.type)
+                      ? topLevelVoice.length
+                      : topLevelText.length,
+                )
           }
           onMoveUp={
-            inFavorites
+            mixedRow
+              ? canStepUp
+                ? () => stepMove(channel.id, -1)
+                : undefined
+              : inFavorites
               ? index > 0
                 ? () =>
                     commitFavorites(
@@ -1163,7 +1689,11 @@ export const ChannelList = memo(function ChannelList({
                 : undefined
           }
           onMoveDown={
-            inFavorites
+            mixedRow
+              ? canStepDown
+                ? () => stepMove(channel.id, 1)
+                : undefined
+              : inFavorites
               ? index < group.length - 1
                 ? () =>
                     commitFavorites(
@@ -1183,11 +1713,29 @@ export const ChannelList = memo(function ChannelList({
             if (draggedOccupant) {
               return;
             }
-            setDraggedId(channel.id);
+            // A tick later, never inside dragstart: the drag zones that open
+            // (Pinados, the loose drop) move rows, and the origin turns into
+            // a gap, and Chromium cancels a drag whose source moves or hides
+            // before it has taken the image. Guarded, because a cancelled
+            // drag can end before the tick.
+            liftRef.current = channel.id;
+            window.setTimeout(() => {
+              if (liftRef.current === channel.id) {
+                setDraggedId(channel.id);
+                if (mixedRow) {
+                  setLiftedId(channel.id);
+                }
+              }
+            }, 0);
           }}
           onDragEnd={() => {
+            // Esc, or a drop outside any target: nothing moves.
             setDraggedId(null);
             setDragOverId(null);
+            setMixedDrop(null);
+            liftRef.current = null;
+            setLiftedId(null);
+            cancelFoldedOpen();
           }}
           onDragOverRow={(event) => handleRowDragOver(event, channel)}
           onDrop={() => handleRowDrop(channel)}
@@ -1267,6 +1815,255 @@ export const ChannelList = memo(function ChannelList({
     );
   }
 
+  function categoryAddItems(categoryId: string): ContextMenuItemDef[] {
+    if (!canManage) {
+      return [];
+    }
+    return [
+      {
+        id: "create-text",
+        label: t("chrome.addTextChannel"),
+        icon: Hash,
+        onSelect: () => onCreateChannel("text", false, categoryId),
+      },
+      {
+        id: "create-voice",
+        label: t("chrome.addVoiceChannel"),
+        icon: Volume2,
+        onSelect: () => onCreateChannel("voice", false, categoryId),
+      },
+      ...(forumCreateEnabled
+        ? [
+            {
+              id: "create-forum",
+              label: t("chrome.addForum"),
+              icon: MessagesSquare,
+              trailing: <BetaTag />,
+              onSelect: () => onCreateChannel("forum", false, categoryId),
+            },
+          ]
+        : []),
+      { id: "sep-private", label: "", separator: true },
+      {
+        id: "create-private",
+        label: t("chrome.privateChannel"),
+        icon: Lock,
+        onSelect: () => onCreateChannel("text", true, categoryId),
+      },
+    ];
+  }
+
+  function renderMixedCategory(entry: SidebarCategory<Channel>) {
+    const category = entry.category;
+    const kids = entry.children;
+    const isCollapsed = collapsed.has(category.id);
+    // Folding never hides where you are: the open channel and the call you
+    // are in stay under a folded header.
+    const shown = isCollapsed
+      ? kids.filter((c) => c.id === selectedChannelId || c.id === activeVoiceChannelId)
+      : kids;
+    const hasUnread = kids.some(
+      (c) => c.id !== selectedChannelId && (unread[c.id]?.count ?? 0) > 0,
+    );
+    const up = canManage && (viewSteps.get(category.id)?.up ?? false);
+    const down = canManage && (viewSteps.get(category.id)?.down ?? false);
+    const menuItems: ContextMenuItemDef[] = canManage
+      ? [
+          ...(up
+            ? [{ id: "move-up", label: t("chrome.moveUp"), icon: ArrowUp, onSelect: () => stepMove(category.id, -1) }]
+            : []),
+          ...(down
+            ? [{ id: "move-down", label: t("chrome.moveDown"), icon: ArrowDown, onSelect: () => stepMove(category.id, 1) }]
+            : []),
+          ...(up || down ? [{ id: "sep-move", label: "", separator: true }] : []),
+          {
+            id: "rename",
+            label: t("chrome.renameCategory"),
+            icon: Pencil,
+            onSelect: () => onRenameChannel(category),
+          },
+          { id: "sep", label: "", separator: true },
+          {
+            id: "delete",
+            label: t("chrome.deleteCategory"),
+            icon: Trash2,
+            danger: true,
+            onSelect: () => onDeleteChannel(category.id),
+          },
+        ]
+      : [];
+    const headerDrop =
+      mixedDrop?.kind === "into" && mixedDrop.categoryId === category.id
+        ? ("into" as const)
+        : mixedDrop?.kind === "category" && mixedDrop.id === category.id
+          ? mixedDrop.edge
+          : mixedDrop?.kind === "beforeCategory" && mixedDrop.categoryId === category.id
+            ? ("before" as const)
+            : null;
+    return (
+      <div key={category.id} data-category-group={category.id}>
+        <MixedCategoryHeader
+          category={category}
+          collapsed={isCollapsed}
+          onToggle={() => toggleCollapsed(category.id)}
+          childCount={kids.length}
+          hasUnread={hasUnread}
+          addItems={categoryAddItems(category.id)}
+          menuItems={menuItems}
+          drag={{
+            draggable: canManage,
+            dragging: draggedId === category.id,
+            drop: headerDrop,
+            onDragStart: (event) => {
+              if (!canManage || draggedOccupant) {
+                event.preventDefault();
+                return;
+              }
+              event.dataTransfer.setData("application/x-pqp-channel", category.id);
+              event.dataTransfer.effectAllowed = "move";
+              // A tick later, like a row (see there).
+              liftRef.current = category.id;
+              window.setTimeout(() => {
+                if (liftRef.current === category.id) {
+                  setDraggedId(category.id);
+                }
+              }, 0);
+            },
+            onDragEnd: () => {
+              liftRef.current = null;
+              setDraggedId(null);
+              setDragOverId(null);
+              setMixedDrop(null);
+              cancelFoldedOpen();
+            },
+            onDragOver: (event) => {
+              if (draggedOccupant) {
+                event.dataTransfer.dropEffect = "none";
+                return;
+              }
+              const dragged = draggedChannel();
+              if (!dragged) {
+                return;
+              }
+              event.preventDefault();
+              if (favoriteIdSet.has(dragged.id)) {
+                // A pin dropped on a header goes back where it lives.
+                setDragOverId(category.id);
+                return;
+              }
+              if (draggingCategory()) {
+                setMixedDrop(
+                  dragged.id === category.id
+                    ? null
+                    : { kind: "category", id: category.id, edge: edgeOf(event, event.currentTarget) },
+                );
+                return;
+              }
+              if (draggingPlaceableChannel()) {
+                const rect = event.currentTarget.getBoundingClientRect();
+                if (event.clientY < rect.top + rect.height * HEADER_BEFORE_FRACTION) {
+                  setMixedDrop({ kind: "beforeCategory", categoryId: category.id });
+                  return;
+                }
+                setMixedDrop({ kind: "into", categoryId: category.id });
+                if (isCollapsed) {
+                  scheduleFoldedOpen(category.id);
+                }
+              }
+            },
+            onDragLeave: (event) => {
+              const next = event.relatedTarget as Node | null;
+              if (!next || !event.currentTarget.contains(next)) {
+                if (openTimerRef.current?.id === category.id) {
+                  cancelFoldedOpen();
+                }
+              }
+            },
+            onDrop: (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (draggedOccupant) {
+                showDropHint("category");
+                clearDrag();
+                return;
+              }
+              handleDrop(category);
+            },
+          }}
+        />
+        {!isCollapsed && kids.length === 0 ? (
+          canManage ? (
+            <EmptyCategoryDrop
+              active={mixedDrop?.kind === "into" && mixedDrop.categoryId === category.id}
+              onDragOver={(event) => {
+                if (!draggingPlaceableChannel()) {
+                  return;
+                }
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setMixedDrop({ kind: "into", categoryId: category.id });
+              }}
+              onDragLeave={() => undefined}
+              onDrop={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (draggedOccupant) {
+                  showDropHint("category");
+                  clearDrag();
+                  return;
+                }
+                handleDrop(category);
+              }}
+            />
+          ) : null
+        ) : (
+          shown.map((channel) => renderRow(channel, kids))
+        )}
+      </div>
+    );
+  }
+
+  /**
+   * THE MIXED LIST: channels in no category on top with no header, then every
+   * category (an empty one only for managers, who can fill it), then
+   * "Criar categoria". Pinados, the watch party block and Baú stay above it,
+   * drawn by the caller exactly as before.
+   */
+  function renderMixedList() {
+    const lastCategoryId = viewLayout.categories.at(-1)?.category.id ?? null;
+    return (
+      <div data-channel-list-mixed="">
+        {viewLayout.loose.length > 0 && (
+          <div data-loose-channels="" className="mb-1">
+            {viewLayout.loose.map((channel) => renderRow(channel, viewLayout.loose))}
+          </div>
+        )}
+        {viewLayout.categories
+          .filter((entry) => canManage || entry.children.length > 0)
+          .map((entry) => renderMixedCategory(entry))}
+        {canManage && (
+          <CreateCategoryRow
+            onCreate={() => onCreateChannel("category", false)}
+            dropAfterLast={mixedDrop?.kind === "afterLastCategory"}
+            onDragOver={(event) => {
+              if (!draggingCategory() || !lastCategoryId) {
+                return;
+              }
+              event.preventDefault();
+              setMixedDrop({ kind: "afterLastCategory" });
+            }}
+            onDragLeave={() => undefined}
+            onDrop={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              finishMixedDrop();
+            }}
+          />
+        )}
+      </div>
+    );
+  }
+
   const headerItems: ContextMenuItemDef[] = server
     ? [
         {
@@ -1281,6 +2078,26 @@ export const ChannelList = memo(function ChannelList({
           icon: Users,
           onSelect: onOpenMembers,
         },
+        ...(onPostStory
+          ? [
+              {
+                id: "post-story",
+                label: t("stories.strip.post"),
+                icon: CirclePlus,
+                onSelect: onPostStory,
+              },
+            ]
+          : []),
+        ...(mixed && canManage && onApplyLayout
+          ? [
+              {
+                id: "organize-channels",
+                label: t("chrome.organizeChannels"),
+                icon: ArrowUpDown,
+                onSelect: startOrganizing,
+              },
+            ]
+          : []),
         ...(canManage || canManageMessages
           ? [
               { id: "sep", label: "", separator: true },
@@ -1457,15 +2274,20 @@ export const ChannelList = memo(function ChannelList({
             <Search className="h-3.5 w-3.5 shrink-0" />
             <span className="truncate">{t("chrome.searchMessages")}</span>
             <kbd className="ml-auto hidden shrink-0 rounded border border-border px-1 py-px text-[10px] font-sans md:inline">
-              {SEARCH_SHORTCUT_HINT}
+              {searchShortcutHint(conversationsHome)}
             </kbd>
           </button>
           <SearchDialog
             open={searchOpen}
             serverId={server.id}
             serverName={server.name}
-            onClose={() => setSearchOpen(false)}
+            onClose={() => {
+              setSearchOpen(false);
+              // The switcher's words were for that one search, not the next.
+              setSearchSeed("");
+            }}
             onNavigate={onMobileClose}
+            initialQuery={searchSeed}
           />
         </div>
       )}
@@ -1473,15 +2295,28 @@ export const ChannelList = memo(function ChannelList({
       <div className="flex-1 overflow-y-auto px-3 pb-3 pt-2">
         {isLoading ? (
           <ChannelListSkeleton />
+        ) : mixed && organizing ? (
+          <OrganizeChannels
+            layout={organizing.layout}
+            onChange={(next) =>
+              setOrganizing((current) => (current ? { ...current, layout: next } : current))
+            }
+            onCancel={() => setOrganizing(null)}
+            onDone={() => void finishOrganizing()}
+            busy={organizeBusy}
+            iconFor={(channel) => <ChannelIcon channel={channel} />}
+          />
         ) : (
           <>
+            {server && storiesSlot}
             {server &&
               (visibleFavs.length > 0 ||
-                Boolean(
-                  draggedId &&
-                    !draggedOccupant &&
-                    draggedChannel()?.type !== "category",
-                )) && (
+                (!mixed &&
+                  Boolean(
+                    draggedId &&
+                      !draggedOccupant &&
+                      draggedChannel()?.type !== "category",
+                  ))) && (
               <PinnedChannelsSection
                 collapsed={collapsed.has(favoritesCollapseKey(server.id))}
                 onToggle={() =>
@@ -1571,25 +2406,62 @@ export const ChannelList = memo(function ChannelList({
             server &&
             onSelectCommunityHome && (
               <div className="mb-3 px-1">
-                <CommunityHomeNavButton
-                  server={server}
-                  selected={communityHomeSelected}
-                  unread={communityHomeUnread}
-                  fresh={communityHomeUnreadFresh}
-                  showNew={communityHomeShowNew}
-                  onSelect={() => {
-                    onSelectCommunityHome();
-                    onMobileClose?.();
-                  }}
-                />
+                {communityHomePreview ? (
+                  <CommunityHomePreview
+                    latest={communityHomePreview.latest}
+                    canPost={communityHomePreview.canPost}
+                    serverName={server.name}
+                    serverHueSeed={server.communitySlug ?? server.name}
+                    selected={communityHomeSelected}
+                    face={<CommunityHomeFace server={server} />}
+                    onOpen={() => {
+                      onSelectCommunityHome();
+                      onMobileClose?.();
+                    }}
+                    onOpenPost={(postId) => {
+                      communityHomePreview.onOpenPost(postId);
+                      onMobileClose?.();
+                    }}
+                    onCompose={() => {
+                      communityHomePreview.onCompose();
+                      onMobileClose?.();
+                    }}
+                  />
+                ) : (
+                  <CommunityHomeNavButton
+                    server={server}
+                    selected={communityHomeSelected}
+                    unread={communityHomeUnread}
+                    fresh={communityHomeUnreadFresh}
+                    showNew={communityHomeShowNew}
+                    onSelect={() => {
+                      onSelectCommunityHome();
+                      onMobileClose?.();
+                    }}
+                  />
+                )}
               </div>
             )}
 
+            {mixed ? (
+              renderMixedList()
+            ) : (
+            <>
             <ChannelSection
               label={t("chrome.text")}
               canManage={canManage}
               onAdd={() => onCreateChannel("text", false)}
               onAddPrivate={() => onCreateChannel("text", true)}
+              addMenu={
+                forumCreateEnabled
+                  ? textSectionAddMenu({
+                      textLabel: t("chrome.createTextChannel"),
+                      forumLabel: t("chrome.createForum"),
+                      onText: () => onCreateChannel("text", false),
+                      onForum: () => onCreateChannel("forum", false),
+                    })
+                  : undefined
+              }
               isDragOver={dragOverId === TEXT_ZONE && !draggedOccupant}
               onDragOver={(event) => {
                 if (draggedOccupant) {
@@ -1753,6 +2625,8 @@ export const ChannelList = memo(function ChannelList({
                 })}
               </div>
             )}
+            </>
+            )}
             {/* UNDER THE LAST CHANNEL, AND OUT OF THE FLOW.
                 At the top of the list it pushed every channel down, which
                 is what a coachmark must never do, and it covered the
@@ -1776,13 +2650,45 @@ export const ChannelList = memo(function ChannelList({
         )}
       </div>
 
-      {dropHint && (
+      {mixed && pinBarOpen() && (
+        <PinDropBar
+          active={dragOverId === PINNED_ZONE}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setMixedDrop(null);
+            setDragOverId(PINNED_ZONE);
+          }}
+          onDragLeave={() => {
+            if (dragOverId === PINNED_ZONE) {
+              setDragOverId(null);
+            }
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            handleDropOnFavorites();
+          }}
+        />
+      )}
+      {mixed && (draggingPlaceableChannel() || draggingCategory()) ? (
+        <DragStatus />
+      ) : statusLine && !dropHint ? (
         <p
           role="status"
-          className="border-t border-ink-4/60 px-3 py-2 text-xs text-paper"
+          data-channel-list-status=""
+          className="border-t border-border px-3 py-2 text-xs text-text-secondary"
         >
-          {dropHint}
+          {statusLine}
         </p>
+      ) : (
+        dropHint && (
+          <p
+            role="status"
+            className="border-t border-ink-4/60 px-3 py-2 text-xs text-paper"
+          >
+            {dropHint}
+          </p>
+        )
       )}
 
       {footer}
@@ -1926,11 +2832,49 @@ function PinnedChannelsSection({
   );
 }
 
+/**
+ * The channel types the Texto section lists. A forum is written in, not
+ * talked in, so it sits with the text channels (and the server groups its
+ * positions with `text` for the same reason).
+ */
+export function isTextGroupChannelType(type: string): boolean {
+  return type === "text" || type === "forum";
+}
+
+/**
+ * The Texto section's "+" while forums are on for this server: a text channel
+ * first (still the common case, and what the plain "+" always did), then the
+ * Fórum with its beta pill. Exported for the test.
+ */
+export function textSectionAddMenu({
+  textLabel,
+  forumLabel,
+  onText,
+  onForum,
+}: {
+  textLabel: string;
+  forumLabel: string;
+  onText: () => void;
+  onForum: () => void;
+}): ContextMenuItemDef[] {
+  return [
+    { id: "create-text", label: textLabel, icon: Hash, onSelect: onText },
+    {
+      id: "create-forum",
+      label: forumLabel,
+      icon: MessagesSquare,
+      trailing: <BetaTag />,
+      onSelect: onForum,
+    },
+  ];
+}
+
 function ChannelSection({
   label,
   canManage,
   onAdd,
   onAddPrivate,
+  addMenu,
   children,
   isDragOver = false,
   onDragOver,
@@ -1940,6 +2884,12 @@ function ChannelSection({
   canManage: boolean;
   onAdd: () => void;
   onAddPrivate: () => void;
+  /**
+   * When set, the "+" opens this menu instead of creating straight away: the
+   * section can make more than one kind of channel (Texto: a text channel or
+   * a Fórum). Absent, the "+" is one click, as it always was.
+   */
+  addMenu?: ContextMenuItemDef[];
   children: ReactNode;
   isDragOver?: boolean;
   onDragOver?: (event: DragEvent) => void;
@@ -1947,6 +2897,8 @@ function ChannelSection({
 }) {
   const { t } = useTranslation();
   const typeName = label.toLowerCase();
+  const addButtonClass =
+    "rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper data-[state=open]:bg-ink-3 data-[state=open]:text-paper";
   return (
     <div className="mb-4">
       <div
@@ -1976,15 +2928,32 @@ function ChannelSection({
         </span>
         {canManage && (
           <div className="flex gap-0.5">
-            <Tooltip label={t("chrome.newChannel", { name: typeName })}>
-              <button
-                type="button"
-                className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                onClick={onAdd}
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
-            </Tooltip>
+            {addMenu && addMenu.length > 0 ? (
+              // The tooltip wraps the menu's trigger, not the other way
+              // round: Radix's trigger is `asChild`, and a Tooltip inside it
+              // would swallow the click that opens the menu.
+              <Menu items={addMenu} align="end">
+                <button
+                  type="button"
+                  data-channel-section-add=""
+                  aria-label={t("chrome.newInSection", { name: typeName })}
+                  className={addButtonClass}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </Menu>
+            ) : (
+              <Tooltip label={t("chrome.newChannel", { name: typeName })}>
+                <button
+                  type="button"
+                  data-channel-section-add=""
+                  className={addButtonClass}
+                  onClick={onAdd}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </Tooltip>
+            )}
             <Tooltip label={t("chrome.newPrivateChannel", { name: typeName })}>
               <button
                 type="button"
@@ -2847,6 +3816,13 @@ function ChannelRow({
             <span className="sr-only">{t("chrome.connected")}</span>
           </>
         )}
+        {/* Forums are new and still per server (`forum_channels`), so the
+            row says so with the same pill the wordmark wears. It steps aside
+            on hover, where the pin and settings tiles need the room, and
+            when a mention count is there to be read instead. */}
+        {channel.type === "forum" && mentions === 0 && (
+          <BetaTag className="group-hover:hidden group-focus-within:hidden" />
+        )}
         {mentions > 0 && (
           <span
             className="min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
@@ -2871,6 +3847,13 @@ function ChannelRow({
           ) {
             event.preventDefault();
             return;
+          }
+          // Something on the drag, or Firefox (and an automated Chromium)
+          // ends it before it begins. A private type, so dropping a row on
+          // the composer does not type its name.
+          event.dataTransfer?.setData("application/x-pqp-channel", channel.id);
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = "move";
           }
           onDragStart();
         }}

@@ -562,6 +562,15 @@ CREATE INDEX IF NOT EXISTS idx_messages_reply_to
 -- than a JSON blob: votes need a real unique constraint per option and user.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS chance JSONB;
 
+-- ------------------------------------------------------------------ system messages
+-- A message the server wrote for a product action rather than somebody typing
+-- it. Today only 'nudge' (chamar a atenção, packages/shared/src/nudge.ts),
+-- stored with the plaintext body every older client renders. Nullable, no
+-- index, no backfill: an ordinary message is NULL. The unanswered-nudge check
+-- reads the newest rows of one conversation through the existing
+-- (channel_id, created_at) index, so it needs nothing of its own.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS system_kind TEXT;
+
 -- Idempotent sends. A client that queued a message offline may deliver the
 -- same frame twice (a reconnect flush and a reload both replay it), so the
 -- nonce it already put on the wire is stored and made unique per author and
@@ -1168,15 +1177,15 @@ CREATE INDEX IF NOT EXISTS idx_channels_server
 -- ON DELETE SET NULL, not CASCADE: deleting a category must not delete every
 -- channel that was ever inside it, only uncategorize them.
 --
--- `position` is scoped by (parent_id, type) at the top level rather than by
--- parent_id alone: the sidebar renders top-level text, top-level voice and
--- categories as three separate lists, not one interleaved one, so `type` has
--- to be part of a top-level sibling group or reordering one list would
--- silently perturb the position numbers of a completely different one. Inside
--- a real category the group is not type-scoped — text and voice channels mix
--- together there, matching how the sidebar nests them under one heading. See
--- the comment on `moveChannel` in services/servers.ts for where this is
--- actually enforced.
+-- `position` is a contiguous 0..n-1 per sibling group, and there are exactly
+-- two kinds of group: the categories of a server (one sequence), and the
+-- channels of one parent, where the parent is a category or nothing at all
+-- ("loose", above the first category). Types mix inside every channel group.
+-- Until 2026-10 the loose group was split by type (text, voice, watch party
+-- each numbered apart); `channel_top_level_unify_2026_10` below renumbered it
+-- into one sequence in the old visual order, so a client that still filters
+-- by type and sorts by position reads the same order it always did. See
+-- `positionGroupTypes` in services/servers.ts and services/channel-layout.ts.
 ALTER TABLE channels ADD COLUMN IF NOT EXISTS parent_id UUID
   REFERENCES channels(id) ON DELETE SET NULL;
 
@@ -2463,14 +2472,25 @@ CREATE INDEX IF NOT EXISTS idx_servers_community_directory
 -- stated purpose — which is the one thing a message report cannot reach: the
 -- communities that got Orkut's operators criminally charged were rooms whose
 -- names were the offence, and most of them never hosted a conversation at all.
+--
+-- `story` joined the list with stories (see the stories block at the end of
+-- this file). Rewritten only when the constraint does not already allow it, so
+-- a boot that changes nothing here does not drop and re-validate it, and
+-- without the old catch-all handler: a failure here must stop the boot rather
+-- than leave the table with no subject CHECK at all.
 DO $$
 BEGIN
-  ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_subject_type_check;
-  ALTER TABLE reports
-    ADD CONSTRAINT reports_subject_type_check
-    CHECK (subject_type IN ('message', 'user', 'server'));
-EXCEPTION
-  WHEN others THEN NULL;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'reports'::regclass
+       AND conname = 'reports_subject_type_check'
+       AND pg_get_constraintdef(oid) LIKE '%story%'
+  ) THEN
+    ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_subject_type_check;
+    ALTER TABLE reports
+      ADD CONSTRAINT reports_subject_type_check
+      CHECK (subject_type IN ('message', 'user', 'server', 'story'));
+  END IF;
 END $$;
 
 -- The reported community. A SEPARATE COLUMN FROM `server_id`, and the separation
@@ -4078,6 +4098,44 @@ CREATE INDEX IF NOT EXISTS idx_community_home_media_unclaimed
   ON community_home_media_uploads (created_at)
   WHERE claimed_post_id IS NULL AND verified_at IS NULL;
 
+-- Image scanning for Baú media, the same verdict columns and the same meaning
+-- as on `message_attachments` (see the long comment there and
+-- docs/CONTENT_SAFETY.md). The scan runs on `POST .../home/media/claim`, before
+-- `verified_at` is set, and nothing can put an unverified upload on a post, so
+-- a refused image never reaches a feed.
+--
+-- `quarantined_at` is the same evidence hold: a rejected upload stays unclaimed
+-- and unverified, which is exactly what the orphan sweep deletes within the
+-- hour, so the sweep skips it and `sweepQuarantinedCommunityHomeMedia` expires
+-- it after CONTENT_SCAN_QUARANTINE_DAYS instead (never, for an illegal label).
+ALTER TABLE community_home_media_uploads
+  ADD COLUMN IF NOT EXISTS scan_status TEXT NOT NULL DEFAULT 'unscanned';
+ALTER TABLE community_home_media_uploads ADD COLUMN IF NOT EXISTS scan_provider TEXT;
+ALTER TABLE community_home_media_uploads ADD COLUMN IF NOT EXISTS scan_score REAL;
+ALTER TABLE community_home_media_uploads ADD COLUMN IF NOT EXISTS scan_labels JSONB;
+ALTER TABLE community_home_media_uploads ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMPTZ;
+ALTER TABLE community_home_media_uploads ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAMPTZ;
+
+-- Added once, never dropped and re-added (a re-add re-validates every row under
+-- a strong lock on each schema run).
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'community_home_media_uploads_scan_status_check'
+       AND conrelid = 'community_home_media_uploads'::regclass
+  ) THEN
+    ALTER TABLE community_home_media_uploads
+      ADD CONSTRAINT community_home_media_uploads_scan_status_check
+      CHECK (scan_status IN ('unscanned', 'skipped', 'pass', 'flagged', 'rejected', 'error'));
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_community_home_media_quarantined
+  ON community_home_media_uploads (quarantined_at) WHERE quarantined_at IS NOT NULL;
+
 -- The phone cut of a post's uploaded video: the vertical (9:16) edit a phone
 -- plays instead of the landscape one. A second stored object on the same row,
 -- through the same mint / PUT / claim and the same size, type and HEAD checks
@@ -4103,6 +4161,34 @@ BEGIN
     ALTER TABLE community_home_posts
       ADD CONSTRAINT community_home_posts_mobile_media_check
       CHECK (mobile_media_storage_key IS NULL OR media_kind = 'video');
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+-- The cover of a post's uploaded video: the picture the player shows before
+-- play, chosen by the author (a frame of the video they picked in the
+-- composer, or an image they uploaded). Without one the player paints the
+-- video's first frame, which is what every video had before. Same mint / PUT /
+-- claim as any Baú image (type allowlist, byte sniff, HEAD), so its upload row
+-- is an ordinary one and the orphan sweep and the delete path treat it the
+-- same way. Only ever set when media_kind = 'video' (the service enforces it;
+-- the CHECK is the backstop). Served only while the runtime flag
+-- `bau_custom_cover` is on for the server.
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS poster_storage_key TEXT;
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS poster_content_type TEXT;
+
+-- Added once, never dropped and re-added (same reasoning as the phone cut's).
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'community_home_posts_poster_check'
+       AND conrelid = 'community_home_posts'::regclass
+  ) THEN
+    ALTER TABLE community_home_posts
+      ADD CONSTRAINT community_home_posts_poster_check
+      CHECK (poster_storage_key IS NULL OR media_kind = 'video');
   END IF;
 EXCEPTION
   WHEN duplicate_object THEN NULL;
@@ -5285,4 +5371,638 @@ CREATE TABLE IF NOT EXISTS stream_alert_channels (
   -- repeats while a party stays live can never claim a second time after the
   -- cooldown has passed. NULL for a plain share, where the cooldown is the rule.
   start_key        TEXT
+);
+
+-- forum channels
+--
+-- A FORUM IS A CHANNEL THAT HOLDS POSTS, AND A POST IS A THREAD. The forum row
+-- is `type = 'forum'` and never carries a message. Each post is a `channels`
+-- row with `type = 'thread'`, `parent_id` = the forum, and
+-- `thread_root_message_id` NULL (it grew out of no message; the CHECK
+-- `channels_thread_root_check` already allows that). Visibility, overwrites,
+-- slow mode, read cursors, mentions, search, retention and reports therefore
+-- cover posts by construction. The side tables below carry only what a chat
+-- thread does not need. The wire contract and every rule these tables serve
+-- are in packages/shared/src/forums.ts; the plan is docs/plans/FORUM_CHANNELS.md.
+--
+-- Pitfall 22: nothing here adds a column to an existing table. The only
+-- statement that touches one is the type CHECK below, and every table is new,
+-- so CREATE TABLE takes its FK locks on the first run only. Every forum table
+-- is here, including the ones only later work reads (follows, settings,
+-- webhook settings), so the feature costs exactly one hash-changing deploy.
+
+-- The type CHECK, for the fourth time in this file, and the first time it is
+-- written so it cannot be silently skipped.
+--
+-- The three older blocks above end in `EXCEPTION WHEN others THEN NULL`. That
+-- is how they survive rows of a type they predate (their ADD fails and rolls
+-- back, the newer constraint stays), but it also swallows a `lock_timeout`
+-- (55P03) or a deadlock (40P01): the boot run under `initDb`'s 2 s lock bound
+-- would then record the hash with a constraint that still lacks the newest
+-- type, and no retry would ever come, because nothing failed. For 'forum'
+-- that is "every forum create is a CHECK violation until the next schema
+-- change". So this block:
+--
+--  - does nothing (and takes no lock) when the constraint already allows
+--    'forum';
+--  - otherwise DROPs and ADDs, and lets every error out, so a lock timeout or
+--    a deadlock fails the whole run, `initDb` rolls back and retries;
+--  - catches exactly one error, `check_violation`: rows of a type this list
+--    does not know, which only happens when a NEWER schema added one and this
+--    image is a rollback. The newer constraint stays, as before;
+--  - skips the validation scan (`NOT VALID`) when it can prove the scan would
+--    find nothing: the constraint it replaces was VALIDATED and allows no
+--    type outside this list, so every row already passes this one. That is
+--    the normal case (the watch party block above has just validated a
+--    subset), and it keeps a full pass over `channels` out of the ACCESS
+--    EXCLUSIVE window. New rows and updates are checked either way. Any
+--    other starting point (no constraint, an unvalidated one, one with a
+--    type this list lacks) validates, which is what makes a rollback image
+--    keep a newer constraint instead of replacing it.
+--
+-- `db-boot-schema.test.ts` runs this block under a held lock and asserts the
+-- 55P03 reaches the caller, that a contended boot ends with 'forum' in the
+-- constraint, and which of the two ADDs each starting point takes.
+DO $$
+DECLARE
+  covered BOOLEAN;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_constraint
+     WHERE conrelid = 'channels'::regclass
+       AND conname = 'channels_type_check'
+       AND pg_get_constraintdef(oid) LIKE '%''forum''%'
+  ) THEN
+    -- Proof needs the canonical shape every block in this file writes
+    -- (`type IN ('a', 'b')`, printed as `type = ANY (ARRAY['a'::text, ...])`)
+    -- with nothing but plain literals in the array. A differently written
+    -- constraint (`type <> 'x'`, an OR) or a NULL element (a CHECK that
+    -- evaluates to NULL passes) could be valid and still let other types in,
+    -- so either one validates instead.
+    SELECT c.convalidated
+           AND pg_get_constraintdef(c.oid)
+               ~ '^CHECK \(\(type = ANY \(ARRAY\[''[a-z_]+''::text(, ''[a-z_]+''::text)*\]\)\)\)$'
+           AND NOT EXISTS (
+             SELECT 1
+               FROM regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g') AS m(v)
+              WHERE m.v[1] NOT IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum')
+           )
+      INTO covered
+      FROM pg_constraint c
+     WHERE c.conrelid = 'channels'::regclass
+       AND c.conname = 'channels_type_check';
+    BEGIN
+      ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+      IF covered THEN
+        ALTER TABLE channels
+          ADD CONSTRAINT channels_type_check
+          CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum'))
+          NOT VALID;
+      ELSE
+        ALTER TABLE channels
+          ADD CONSTRAINT channels_type_check
+          CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum'));
+      END IF;
+    EXCEPTION WHEN check_violation THEN
+      RAISE WARNING 'channels_type_check left as it was: a row has a channel type this schema does not know (a rollback?)';
+    END;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS forum_posts (
+  -- The post's own thread channel. Deleting the channel deletes the post.
+  channel_id UUID PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+  -- Denormalised copy of channels.parent_id, so the list indexes live here.
+  -- Posts never move between forums in v1, so the two cannot disagree.
+  forum_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  -- SET NULL: the post and its answers outlive the account ("Conta excluída").
+  author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  -- NO FOREIGN KEY, on purpose. A FK into `messages` would add a lookup on
+  -- this table to every message delete in the product. A deleted opening
+  -- message reads as NULL through the LEFT JOIN in the list query, the same
+  -- answer SET NULL would give.
+  opening_message_id UUID,
+  -- The accepted answer ("Marcar como solução"): a reply in this post. NO
+  -- FOREIGN KEY either, for the reason above and one more: a deleted answer
+  -- must keep its id, so the post can say "A resposta marcada foi apagada"
+  -- instead of silently forgetting it ever had one. SET NULL would erase
+  -- exactly that fact.
+  resolved_message_id UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- NULL while the post is a shell waiting for its opening message. Every
+  -- read path filters on it; a shell is never listed, and a sweep deletes
+  -- shells older than 10 minutes.
+  published_at TIMESTAMPTZ,
+  -- BUMP semantics, written by the send path with GREATEST (order-free).
+  -- Deleting a reply does not un-bump.
+  last_activity_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  pinned_at TIMESTAMPTZ,
+  locked_at TIMESTAMPTZ,
+  resolved_at TIMESTAMPTZ,
+  -- Idempotent create: a retried POST with the same nonce returns the post.
+  client_nonce TEXT,
+  -- Webhook dedupe: the caller's Idempotency-Key, or a hash of the
+  -- normalised title and first link. NULL for posts made by people.
+  dedupe_key TEXT
+);
+
+-- Created order, and the one index that LEADS with forum_id with no
+-- predicate, which is what the ON DELETE CASCADE from a deleted channel uses
+-- (every channel delete in the product probes `forum_id = $1`; a partial
+-- index cannot answer that). Keyset on (sort key, channel_id) so two posts in
+-- the same millisecond page stably.
+CREATE INDEX IF NOT EXISTS idx_forum_posts_created
+  ON forum_posts (forum_id, created_at DESC, channel_id DESC);
+-- Activity order. Partial: shells are never listed.
+CREATE INDEX IF NOT EXISTS idx_forum_posts_activity
+  ON forum_posts (forum_id, last_activity_at DESC, channel_id DESC)
+  WHERE published_at IS NOT NULL;
+-- Pinned posts are a handful per forum; read apart from the page.
+CREATE INDEX IF NOT EXISTS idx_forum_posts_pinned
+  ON forum_posts (forum_id) WHERE pinned_at IS NOT NULL;
+-- "Meus posts", and the SET NULL when an account is deleted.
+CREATE INDEX IF NOT EXISTS idx_forum_posts_author
+  ON forum_posts (author_id, forum_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_forum_posts_nonce
+  ON forum_posts (forum_id, author_id, client_nonce)
+  WHERE client_nonce IS NOT NULL;
+-- The shell sweep.
+CREATE INDEX IF NOT EXISTS idx_forum_posts_shells
+  ON forum_posts (created_at) WHERE published_at IS NULL;
+-- Webhook dedupe lookup inside the window. Not UNIQUE: the rule is "no
+-- repeat within N hours", and a unique index would make it "never".
+CREATE INDEX IF NOT EXISTS idx_forum_posts_dedupe
+  ON forum_posts (forum_id, dedupe_key, created_at DESC)
+  WHERE dedupe_key IS NOT NULL;
+-- Who marked the accepted answer: "Solução · marcada por {name}". Written
+-- with resolved_message_id, cleared with it. NULL on answers marked before
+-- this column existed, and the card then names nobody. No foreign key, the
+-- same choice as resolved_message_id: a FK into users would put a probe of
+-- this table on every account deletion, and a deleted marker simply stops
+-- matching the join and reads as nobody.
+ALTER TABLE forum_posts ADD COLUMN IF NOT EXISTS resolved_by UUID;
+
+CREATE TABLE IF NOT EXISTS forum_tags (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  forum_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 20),
+  -- One unicode emoji or NULL. No custom emoji in v1.
+  emoji TEXT CHECK (emoji IS NULL OR char_length(emoji) <= 16),
+  -- "Só staff": only MANAGE_MESSAGES puts it on or takes it off a post.
+  moderated BOOLEAN NOT NULL DEFAULT FALSE,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- Leads with forum_id, so it also serves the cascade from channels.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_forum_tags_name
+  ON forum_tags (forum_id, lower(name));
+
+CREATE TABLE IF NOT EXISTS forum_post_tags (
+  post_id UUID NOT NULL REFERENCES forum_posts(channel_id) ON DELETE CASCADE,
+  tag_id UUID NOT NULL REFERENCES forum_tags(id) ON DELETE CASCADE,
+  PRIMARY KEY (post_id, tag_id)
+);
+-- Tag filters (AND: one probe per selected tag), the tag's post count, and
+-- the cascade when a tag is deleted.
+CREATE INDEX IF NOT EXISTS idx_forum_post_tags_tag
+  ON forum_post_tags (tag_id, post_id);
+
+-- Who follows a post. Unused until the P2 reply push; created now so the
+-- feature costs one schema deploy. `muted = TRUE` is an explicit "stop
+-- following", kept so an automatic follow (the author's) never re-adds it.
+CREATE TABLE IF NOT EXISTS forum_post_follows (
+  post_id UUID NOT NULL REFERENCES forum_posts(channel_id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  muted BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (post_id, user_id)
+);
+-- The account-delete cascade, and "what do I follow".
+CREATE INDEX IF NOT EXISTS idx_forum_post_follows_user
+  ON forum_post_follows (user_id, post_id);
+
+-- Per-forum settings. A side table, not columns on `channels` (pitfall 22).
+-- No row means the defaults below, which are `FORUM_SETTINGS_DEFAULTS` in
+-- forums.ts. The guidelines are NOT here: they are the channel's topic.
+CREATE TABLE IF NOT EXISTS forum_settings (
+  forum_id UUID PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+  -- A post needs at least one tag.
+  require_tag BOOLEAN NOT NULL DEFAULT FALSE,
+  -- The list's order when the request names none.
+  default_sort TEXT NOT NULL DEFAULT 'activity'
+    CHECK (default_sort IN ('activity', 'created')),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- A webhook that targets a forum (P1b). A side table, not columns on
+-- `webhooks`, for the same pitfall 22 reason. No row means the defaults:
+-- every non-moderated tag allowed, no default tags, a 72 h dedupe window.
+CREATE TABLE IF NOT EXISTS webhook_forum_settings (
+  webhook_id UUID PRIMARY KEY REFERENCES webhooks(id) ON DELETE CASCADE,
+  -- The tags this feed may apply. NULL = every non-moderated tag of the
+  -- forum; a moderated tag is applied only when it is listed here.
+  allowed_tag_ids UUID[],
+  -- Applied when the payload names no tag that resolves ("Notícias").
+  default_tag_ids UUID[] NOT NULL DEFAULT '{}',
+  dedupe_window_hours INTEGER NOT NULL DEFAULT 72
+    CHECK (dedupe_window_hours BETWEEN 0 AND 720)
+);
+
+-- A webhook post a moderator deleted, remembered by its dedupe key so the feed
+-- re-sending the same item inside the window does not bring it back. Without
+-- this, deleting a feed post was undone by the feed's next poll: the dedupe
+-- lookup reads `forum_posts`, and the delete had just removed the only row
+-- that named the key. The window counts from the deleted post's creation,
+-- exactly as it does for a live post; the forum shell sweep drops rows past
+-- the longest window (720 h). Written only by the post DELETE route, in the
+-- delete's own transaction, never by a shell discard (a failed create must
+-- stay retryable).
+CREATE TABLE IF NOT EXISTS forum_dedupe_tombstones (
+  forum_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  dedupe_key TEXT NOT NULL,
+  -- The deleted post's id, answered as `channel_id` to a repeat. No FK: the
+  -- post is gone by definition.
+  post_id UUID NOT NULL,
+  post_created_at TIMESTAMPTZ NOT NULL,
+  deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (forum_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_forum_dedupe_tombstones_age
+  ON forum_dedupe_tombstones (post_created_at);
+
+-- ============================================================ stories
+--
+-- A photo, a short video or a text card that lives for 24 hours, posted to
+-- one or more servers the author is in and/or to their friends
+-- (`packages/shared/src/stories.ts` is the wire contract). Behind the runtime
+-- flags `stories` (per server) and `stories_friends` (global), both off.
+--
+-- The promise this schema keeps is that the bytes go away: `expires_at` is
+-- read by every query (a late sweep never shows an expired story), the media
+-- is deleted by the sweep a minute after expiry, and the row a week after
+-- that. The exceptions are deliberate and are the only way a story outlives
+-- its day: an open report, a report resolved in the last 30 days, a flagged
+-- or refused scan (`hold_until`), and an illegal-content match
+-- (`hold_forever`, never deleted by anything automatic; see
+-- docs/CONTENT_SAFETY.md before touching one).
+CREATE TABLE IF NOT EXISTS stories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- SET NULL, not CASCADE: account deletion removes the author's stories and
+  -- their bytes itself (services/account.ts), and a story something HOLDS (a
+  -- report, a scan flag, an illegal-content match) must outlive the account
+  -- as evidence. A NULL author is never served: every read joins `users`.
+  author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('image', 'video', 'text')),
+  -- pending: minted, waiting for its bytes. processing: a video whose frames
+  -- are being checked. live: visible until expires_at. expired: past it.
+  -- deleted: by its author, by an operator, or refused by the scanner.
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'processing', 'live', 'expired', 'deleted')),
+  caption TEXT CHECK (char_length(caption) <= 200),
+  text_body TEXT CHECK (char_length(text_body) <= 280),
+  -- A palette key (`STORY_BACKGROUNDS`), text kind only. No CHECK so a new
+  -- colour is a client change, not a constraint swap.
+  background TEXT,
+  -- `{ "type": "call", "serverId", "channelId" }`; phase 2 adds types.
+  sticker JSONB,
+  replies_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  -- stories/<authorId>/<storyId>/<uuid>.<jpg|webp|png|mp4>, never client chosen.
+  media_storage_key TEXT UNIQUE,
+  media_content_type TEXT,
+  media_byte_size INTEGER,
+  media_width INTEGER,
+  media_height INTEGER,
+  media_duration_ms INTEGER,
+  -- Video only: stories/<authorId>/<storyId>/poster.jpg, a frame at 0.5 s.
+  poster_storage_key TEXT UNIQUE,
+  scan_status TEXT NOT NULL DEFAULT 'unscanned'
+    CHECK (scan_status IN ('unscanned', 'pass', 'flagged', 'rejected', 'error', 'skipped')),
+  scan_provider TEXT,
+  scan_score REAL,
+  scan_labels JSONB,
+  scanned_at TIMESTAMPTZ,
+  -- The video job's lease: a row claimed longer ago than the lease is taken
+  -- again, so a worker that died mid-job does not strand the story.
+  processing_claimed_at TIMESTAMPTZ,
+  processing_attempts INTEGER NOT NULL DEFAULT 0,
+  processing_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ,
+  -- published_at + 24 hours.
+  expires_at TIMESTAMPTZ,
+  deleted_at TIMESTAMPTZ,
+  -- A flagged or refused scan holds the bytes until this time. NULL = none.
+  hold_until TIMESTAMPTZ,
+  -- An illegal-content match. Never auto-deleted at any age.
+  hold_forever BOOLEAN NOT NULL DEFAULT FALSE,
+  media_deleted_at TIMESTAMPTZ,
+  CHECK ((kind = 'text') = (media_storage_key IS NULL)),
+  CHECK (kind <> 'text' OR (text_body IS NOT NULL AND background IS NOT NULL)),
+  CHECK (status <> 'live' OR (published_at IS NOT NULL AND expires_at IS NOT NULL))
+);
+
+-- An author's live stories, for the strip's own ring and the viewer.
+CREATE INDEX IF NOT EXISTS idx_stories_author_live
+  ON stories (author_id, expires_at DESC) WHERE status = 'live';
+-- The expiry sweep's first step.
+CREATE INDEX IF NOT EXISTS idx_stories_expiry
+  ON stories (expires_at) WHERE status = 'live';
+-- Orphans (never published) and the video job's claim.
+CREATE INDEX IF NOT EXISTS idx_stories_pending
+  ON stories (created_at) WHERE status IN ('pending', 'processing');
+-- The media sweep: bytes not yet deleted.
+CREATE INDEX IF NOT EXISTS idx_stories_media_sweep
+  ON stories (expires_at)
+  WHERE media_deleted_at IS NULL AND media_storage_key IS NOT NULL;
+-- A create's idempotency key (`createStorySchema.requestId`): a retried
+-- create answers the story it already made instead of posting another.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS request_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_stories_author_request
+  ON stories (author_id, request_id) WHERE request_id IS NOT NULL;
+
+-- The media sweep's lease: a delete claimed and not finished (a process
+-- that died mid-delete) is taken again after it lapses. `media_deleted_at` is
+-- written only once every object is gone.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS media_delete_claimed_at TIMESTAMPTZ;
+
+-- The posting budget (`STORY_POSTS_PER_DAY`), counted per author.
+CREATE INDEX IF NOT EXISTS idx_stories_author_created
+  ON stories (author_id, created_at DESC);
+
+-- Where a story is visible. server_id NULL = the author's friends, evaluated
+-- at read time (unfriending removes access at once, nothing to undo).
+-- `expires_at` is copied from the story when it goes live, so the strip reads
+-- one index; NULL until then, which keeps a pending story out of every strip.
+-- `removed_*` is a moderator taking it out of THIS server only.
+CREATE TABLE IF NOT EXISTS story_audiences (
+  story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ,
+  removed_at TIMESTAMPTZ,
+  removed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  removed_reason TEXT CHECK (char_length(removed_reason) <= 200)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_story_audience_server
+  ON story_audiences (story_id, server_id) WHERE server_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_story_audience_friends
+  ON story_audiences (story_id) WHERE server_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_story_audience_strip
+  ON story_audiences (server_id, expires_at DESC) WHERE removed_at IS NULL;
+-- Every story's own audiences (reads, and the cascade when a story row goes).
+-- The two unique indexes above are partial, so neither serves `story_id = $1`.
+CREATE INDEX IF NOT EXISTS idx_story_audience_story ON story_audiences (story_id);
+
+-- One row per viewer per story. The author's own views are never written.
+-- One reaction per viewer, changeable; a reaction never creates a message.
+CREATE TABLE IF NOT EXISTS story_views (
+  story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  viewer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  viewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  reaction TEXT CHECK (reaction IN ('gg', 'fire', 'joy', 'wow', 'skull', 'clap')),
+  reacted_at TIMESTAMPTZ,
+  replied_at TIMESTAMPTZ,
+  PRIMARY KEY (story_id, viewer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_story_views_viewer
+  ON story_views (viewer_id, viewed_at DESC);
+-- The author's viewers sheet, newest first, keyset on (viewed_at, viewer_id).
+CREATE INDEX IF NOT EXISTS idx_story_views_recent
+  ON story_views (story_id, viewed_at DESC, viewer_id DESC);
+
+-- The author's own counts, kept by a trigger so a read never recounts a
+-- story's whole audience. A view row also leaves when its VIEWER's account is
+-- deleted (`viewer_id` cascades), so a delete counts down too; when the story
+-- itself is being deleted the UPDATE finds no row, which is fine.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS view_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS reaction_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS reply_count INTEGER NOT NULL DEFAULT 0;
+
+CREATE OR REPLACE FUNCTION pqp_sync_story_view_counts() RETURNS TRIGGER AS $$
+BEGIN
+  IF (TG_OP = 'INSERT') THEN
+    UPDATE stories
+       SET view_count = view_count + 1,
+           reaction_count = reaction_count + (NEW.reaction IS NOT NULL)::int,
+           reply_count = reply_count + (NEW.replied_at IS NOT NULL)::int
+     WHERE id = NEW.story_id;
+  ELSIF (TG_OP = 'DELETE') THEN
+    UPDATE stories
+       SET view_count = GREATEST(view_count - 1, 0),
+           reaction_count = GREATEST(reaction_count - (OLD.reaction IS NOT NULL)::int, 0),
+           reply_count = GREATEST(reply_count - (OLD.replied_at IS NOT NULL)::int, 0)
+     WHERE id = OLD.story_id;
+  ELSIF (TG_OP = 'UPDATE') THEN
+    IF (OLD.reaction IS NULL) <> (NEW.reaction IS NULL)
+       OR (OLD.replied_at IS NULL) <> (NEW.replied_at IS NULL) THEN
+      UPDATE stories
+         SET reaction_count = GREATEST(reaction_count
+               + (NEW.reaction IS NOT NULL)::int - (OLD.reaction IS NOT NULL)::int, 0),
+             reply_count = GREATEST(reply_count
+               + (NEW.replied_at IS NOT NULL)::int - (OLD.replied_at IS NOT NULL)::int, 0)
+       WHERE id = NEW.story_id;
+    END IF;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_story_view_counts ON story_views;
+CREATE TRIGGER trg_story_view_counts
+  AFTER INSERT OR UPDATE OR DELETE ON story_views
+  FOR EACH ROW EXECUTE FUNCTION pqp_sync_story_view_counts();
+
+-- Seed the counters for any views written before the trigger existed. Once.
+-- No live write can interleave: this file runs as one transaction, and the
+-- `ALTER TABLE stories` above holds ACCESS EXCLUSIVE on `stories` (which every
+-- view write's trigger updates) until it commits. The rows are few: stories
+-- are deleted a week after expiry, so `story_views` holds about eight days.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'story_view_counts_backfill_2026_10'
+  ) THEN
+    RETURN;
+  END IF;
+
+  UPDATE stories s
+     SET view_count = c.views, reaction_count = c.reactions, reply_count = c.replies
+    FROM (
+      SELECT story_id, COUNT(*)::int AS views, COUNT(reaction)::int AS reactions,
+             COUNT(replied_at)::int AS replies
+        FROM story_views GROUP BY story_id
+    ) c
+   WHERE c.story_id = s.id;
+
+  INSERT INTO data_migrations (name) VALUES ('story_view_counts_backfill_2026_10');
+END $$;
+
+-- "Silenciar stories do Caio": hides an author from the muter's strips. The
+-- author is never told, and their view list is unaffected.
+CREATE TABLE IF NOT EXISTS story_mutes (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  muted_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, muted_user_id),
+  CHECK (user_id <> muted_user_id)
+);
+
+-- The one-time in-app card an author gets when staff remove their story from
+-- a server ("A staff tirou teu story do X", with the reason). No push. The
+-- server's name is a snapshot so the card still reads after a rename.
+CREATE TABLE IF NOT EXISTS story_notices (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'removed' CHECK (kind IN ('removed')),
+  story_id UUID REFERENCES stories(id) ON DELETE SET NULL,
+  server_id UUID REFERENCES servers(id) ON DELETE SET NULL,
+  server_name TEXT,
+  reason TEXT CHECK (char_length(reason) <= 200),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  acked_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_story_notices_open
+  ON story_notices (user_id, created_at DESC) WHERE acked_at IS NULL;
+-- `story_id ... ON DELETE SET NULL` looks notices up by story.
+CREATE INDEX IF NOT EXISTS idx_story_notices_story
+  ON story_notices (story_id) WHERE story_id IS NOT NULL;
+
+-- Which processes can check a video's frames (ffmpeg present), refreshed by
+-- each one's stories job. `GET /api/stories/config` reads it so that, with a
+-- scanner configured, video is offered only while something can scan it,
+-- rather than posted unscanned or left waiting forever.
+CREATE TABLE IF NOT EXISTS story_media_processors (
+  instance_id TEXT PRIMARY KEY,
+  seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- A DM reply quotes the story it answers. SET NULL when the story row is
+-- finally deleted; the quote reads "Story expirou" long before that. Added
+-- without the constraint first, then the constraint NOT VALID: every existing
+-- row is NULL, and validating would scan all of `messages` under lock for
+-- nothing. The index is built CONCURRENTLY at boot (`CONCURRENT_INDEXES` in
+-- db.ts), because without it every story row deletion scans `messages`.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS story_id UUID;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'messages'::regclass
+       AND conname = 'messages_story_id_fkey'
+  ) THEN
+    ALTER TABLE messages
+      ADD CONSTRAINT messages_story_id_fkey
+      FOREIGN KEY (story_id) REFERENCES stories(id) ON DELETE SET NULL
+      NOT VALID;
+  END IF;
+END $$;
+
+-- Story reports (`subject_type = 'story'`, allowed by
+-- `reports_subject_type_check` above). The subject is the story; the caption
+-- or text is copied into `story_snapshot` (never `content_snapshot`, which the
+-- table's first CHECK reserves for message reports). A story with an open
+-- report, or one resolved in the last 30 days, is held by the sweep.
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS reported_story_id UUID
+  REFERENCES stories(id) ON DELETE SET NULL;
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS story_snapshot TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'reports'::regclass
+       AND conname = 'reports_story_subject_check'
+  ) THEN
+    ALTER TABLE reports
+      ADD CONSTRAINT reports_story_subject_check
+      -- One-directional, like `reports_server_subject_check`: the story row
+      -- is deleted long before the report, and the report must survive it.
+      CHECK (subject_type = 'story' OR reported_story_id IS NULL);
+  END IF;
+END $$;
+
+-- The story-report indexes (dedupe and the sweep's hold check) are built
+-- CONCURRENTLY at boot (`CONCURRENT_INDEXES` in db.ts), so adding them never
+-- blocks writes to `reports` while the existing rows are scanned.
+
+-- POST_STORIES (bit 25 = 33554432): post a story to the server. On for
+-- @everyone by default, like SEND_MESSAGES, so staff can take it away per
+-- role; listed communities too (they add a 72 h account age rule in code).
+-- Also ORed onto the seeded Manager and Admin cargos, whose stored masks mean
+-- "everything", so they keep meaning it. One-shot via data_migrations: an
+-- owner who later turns the bit off must never see it come back.
+DO $$
+DECLARE
+  post_stories CONSTANT BIGINT := 33554432;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'post_stories_bit_2026_10'
+  ) THEN
+    RETURN;
+  END IF;
+
+  WITH changed AS (
+    UPDATE roles
+       SET permissions = permissions | post_stories
+     WHERE (permissions & post_stories) = 0
+       AND (is_everyone OR system_key IN ('manager', 'admin'))
+    RETURNING server_id
+  )
+  UPDATE servers
+     SET permissions_version = permissions_version + 1
+   WHERE id IN (SELECT DISTINCT server_id FROM changed);
+
+  INSERT INTO data_migrations (name) VALUES ('post_stories_bit_2026_10');
+END $$;
+
+-- THE CHANNEL LIST, ONE ORDER PER PARENT (services/channel-layout.ts).
+--
+-- Step 0, once per database: the loose channels of every server (no category,
+-- not a category, not a thread) were numbered per type. Renumber them into one
+-- sequence in the order the web drew them: text and forums, then voice, then
+-- watch party, each by its old position. A client that filters by type and
+-- sorts by position reads exactly what it read before; every later write
+-- (create, move, delete, the full-order PUT) keeps the one sequence.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'channel_top_level_unify_2026_10'
+  ) THEN
+    WITH ranked AS (
+      SELECT id,
+             ROW_NUMBER() OVER (
+               PARTITION BY server_id
+               ORDER BY CASE WHEN type IN ('text', 'forum') THEN 0
+                             WHEN type = 'voice' THEN 1 ELSE 2 END,
+                        position, created_at, id
+             ) - 1 AS pos
+        FROM channels
+       WHERE kind = 'server' AND server_id IS NOT NULL AND parent_id IS NULL
+         AND type NOT IN ('category', 'thread')
+    )
+    UPDATE channels c SET position = r.pos
+      FROM ranked r
+     WHERE c.id = r.id AND c.position IS DISTINCT FROM r.pos;
+    INSERT INTO data_migrations (name) VALUES ('channel_top_level_unify_2026_10');
+  END IF;
+END $$;
+
+-- Bumped by every write that changes the shape of a server's channel list
+-- (create, delete, move, a category rename, the full-order PUT, a migration),
+-- so a drag made against an old list is refused with 409 instead of undoing
+-- somebody else's change.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS channel_layout_version INTEGER NOT NULL DEFAULT 0;
+
+-- One row per server whose channel list moved to the mixed layout (or was
+-- found already in it: `category_id` NULL is a recorded no-op). The row is
+-- what makes the migration idempotent, and `snapshot` ([{id, parent_id,
+-- position}] of every sidebar row before the move) is what the operator's
+-- revert restores. A reverted row stays, with `reverted_at`, so the job never
+-- migrates that server again on its own.
+CREATE TABLE IF NOT EXISTS channel_layout_migrations (
+  server_id   UUID PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  category_id UUID REFERENCES channels(id) ON DELETE SET NULL,
+  snapshot    JSONB NOT NULL DEFAULT '[]'::jsonb,
+  migrated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  reverted_at TIMESTAMPTZ
 );

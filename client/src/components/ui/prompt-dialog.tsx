@@ -1,4 +1,5 @@
 import { useEffect, useId, useState, type FormEvent } from "react";
+import { CATEGORY_NAME_MAX_LENGTH } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -18,6 +19,13 @@ interface PromptDialogProps {
   initialValue?: string;
   checkboxLabel?: string;
   checkboxDefault?: boolean;
+  /**
+   * `slug` (the default) is a channel name: lower case, hyphens, the rule the
+   * server keeps for channels. `label` is a category name: what was typed,
+   * spaces and accents included ("Salas de voz"), up to
+   * `CATEGORY_NAME_MAX_LENGTH`.
+   */
+  nameMode?: "slug" | "label";
   /**
    * An optional second, free-text field under the name (a watch party's
    * short description). Rendered only when a placeholder is given; its
@@ -50,6 +58,7 @@ export function PromptDialog({
   initialValue = "",
   checkboxLabel,
   checkboxDefault = false,
+  nameMode = "slug",
   secondaryLabel,
   secondaryPlaceholder,
   secondaryMaxLength = 200,
@@ -128,11 +137,15 @@ export function PromptDialog({
           <Input
             value={value}
             onChange={(e) => {
-              setValue(sanitizeChannelName(e.target.value));
+              setValue(
+                nameMode === "label"
+                  ? e.target.value.replace(/[\r\n\t]+/g, " ").slice(0, CATEGORY_NAME_MAX_LENGTH)
+                  : sanitizeChannelName(e.target.value),
+              );
               setError(null);
             }}
             placeholder={placeholder}
-            maxLength={CHANNEL_NAME_MAX_LENGTH}
+            maxLength={nameMode === "label" ? CATEGORY_NAME_MAX_LENGTH : CHANNEL_NAME_MAX_LENGTH}
             aria-invalid={error ? true : undefined}
             disabled={busy}
             autoFocus

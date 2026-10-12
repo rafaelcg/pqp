@@ -24,8 +24,15 @@ const PLAYABLE = new Set(["video", "youtube", "twitch", "tiktok", "instagram"]);
 
 /** Pure: does this card have something to put in the poster slot. */
 export function posterKind(
-  card: Pick<CommunityHomePostCard, "mediaKind" | "mediaUrl">,
+  card: Pick<CommunityHomePostCard, "mediaKind" | "mediaUrl"> & {
+    posterUrl?: string | null;
+  },
 ): "image" | "video" | "frame" | null {
+  // A video with the cover its author chose: the cover is the picture, and
+  // the play badge still says it plays.
+  if (card.mediaKind === "video" && card.posterUrl) {
+    return "image";
+  }
   if (card.mediaKind === "video" && card.mediaUrl) {
     return "video";
   }
@@ -71,6 +78,18 @@ function useNearViewport<T extends Element>() {
   return [ref, near] as const;
 }
 
+/** Pure: the picture behind an "image" poster (a video's cover, else the media itself). */
+export function posterImageUrl(
+  card: Pick<CommunityHomePostCard, "mediaKind" | "mediaUrl"> & {
+    posterUrl?: string | null;
+  },
+): string | null {
+  if (card.mediaKind === "video") {
+    return card.posterUrl ?? null;
+  }
+  return card.mediaUrl;
+}
+
 export function BauPostCardView({
   card,
   href,
@@ -82,6 +101,7 @@ export function BauPostCardView({
 }) {
   const { t } = useTranslation();
   const poster = posterKind(card);
+  const posterImage = poster === "image" ? posterImageUrl(card) : null;
   const [posterRef, near] = useNearViewport<HTMLDivElement>();
   const playable = card.mediaKind !== null && PLAYABLE.has(card.mediaKind);
   const title = card.title?.trim() || t("bauCard.untitled");
@@ -103,9 +123,9 @@ export function BauPostCardView({
           poster ? "aspect-video" : "h-16",
         )}
       >
-        {poster === "image" && card.mediaUrl && near && (
+        {poster === "image" && posterImage && near && (
           <img
-            src={card.mediaUrl}
+            src={posterImage}
             alt=""
             loading="lazy"
             decoding="async"

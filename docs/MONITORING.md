@@ -1073,6 +1073,20 @@ Faro's Loki bytes (about 0.8 GB a day quiet, 3 to 6 GB on party days) and nothin
 reads them. Faro is a separate Grafana product from the
 Prometheus/Loki stack here and has its own UI; there is nothing to import.
 
+**Faro is session-sampled, because the free plan stops it dead.** The stack's
+Frontend Observability allowance is 50,000 sessions a month, and past it the
+collector answers **402 to every request** until the month turns over: no errors,
+no Web Vitals, nothing, and nothing in the page says so except a console line.
+October 2026 hit the cap on the 9th (about 6,300 sessions a day; the always-open
+desktop windows roll over to a new session after 15 idle minutes), and Faro was
+blind from then on. Since then only a share of sessions report
+(`DEFAULT_SESSION_SAMPLE_RATE` in `client/src/lib/faro.ts`, 0.2, about 38,000 a
+month), overridable with the repository variable `VITE_FARO_SESSION_SAMPLE_RATE`
+at build time. Sampling is per session: a session sends everything or nothing.
+To check the budget, `grafanacloud_org_fe_o11y_billable_sessions` against
+`grafanacloud_org_fe_o11y_included_sessions` on the `grafanacloud-usage`
+Prometheus data source. Counts read off Faro are a sample: multiply by five.
+
 ## The activation funnel
 
 The growth counters above say how much is happening. The **activation funnel**

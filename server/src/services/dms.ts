@@ -380,6 +380,13 @@ export async function hideConversation(
   return (result.rowCount ?? 0) > 0;
 }
 
+/**
+ * Where a conversation's unread count stops. One past what the badge prints
+ * (`99+`), so "more than 99" is still a fact the client can draw. Exported for
+ * the test that pins it.
+ */
+export const UNREAD_COUNT_CAP = 100;
+
 interface DmRow {
   channel_id: string;
   kind: ConversationKind;
@@ -393,6 +400,7 @@ interface DmRow {
   last_message_has_attachments: boolean | null;
   last_message_first_attachment_type: string | null;
   last_message_voice_duration_ms: number | null;
+  last_message_system_kind: string | null;
 }
 
 /**
@@ -416,37 +424,52 @@ export async function listConversations(
 ): Promise<DmSummary[]> {
   const [rows, preferences] = await Promise.all([
     getPool().query<DmRow>(
-      // `counts` is grouped down to one row per channel BEFORE the lateral
-      // join runs, on purpose: `lastmsg` is a LATERAL, and joining it against
-      // the raw `messages`/`message_mentions` join (which fans out to one row
-      // per unread message) would let the planner re-evaluate the per-channel
+      // `counts` is one row per channel (its unread count is a LATERAL
+      // aggregate) BEFORE the `lastmsg` lateral join runs, on purpose: joining
+      // `lastmsg` against a raw `messages`/`message_mentions` join (which fans
+      // out to one row per unread message) would let the planner re-evaluate the per-channel
       // "newest message" lookup once per unread row instead of once per
       // conversation — a heavy unread count in one DM should not cost more
       // lateral work than a light one. `LEFT(lm.body, 2000)` is a defensive
       // bound: the 140-char cap is enforced on the redacted *output*, not on
       // what gets fetched and run through the markdown strip, so this keeps a
       // pathological input from costing more than a page of text regardless.
+      // The unread count stops at UNREAD_COUNT_CAP: the badge prints "99+"
+      // past 99, so a conversation somebody left unread for a month must not
+      // make every list read walk all of it. The newest unread rows are the
+      // ones counted (the index `messages (channel_id, created_at DESC)` hands
+      // them over in that order), so the mentions among them are the recent
+      // ones, which is what a badge is for.
       `WITH counts AS (
          SELECT c.id AS channel_id,
                 c.kind,
                 (SELECT MAX(created_at) FROM messages any_m
                   WHERE any_m.channel_id = c.id) AS last_message_at,
-                COUNT(m.id)::text AS count,
-                COUNT(mm.user_id)::text AS mentions
+                unread.count,
+                unread.mentions
          FROM channel_members me
          JOIN channels c ON c.id = me.channel_id AND c.kind <> 'server'
          LEFT JOIN channel_reads cr
            ON cr.channel_id = c.id AND cr.user_id = $1
-         LEFT JOIN messages m
-           ON m.channel_id = c.id
-          AND m.author_id <> $1
-          AND m.created_at > COALESCE(cr.last_read_at, TIMESTAMPTZ '-infinity')
-          AND ${notBlockedSql("$1", "m.author_id")}
-         LEFT JOIN message_mentions mm
-           ON mm.message_id = m.id AND mm.user_id = $1
+         CROSS JOIN LATERAL (
+           SELECT COUNT(*)::text AS count,
+                  COUNT(*) FILTER (WHERE newest.mentioned)::text AS mentions
+           FROM (
+             SELECT EXISTS (
+                      SELECT 1 FROM message_mentions mm
+                      WHERE mm.message_id = m.id AND mm.user_id = $1
+                    ) AS mentioned
+             FROM messages m
+             WHERE m.channel_id = c.id
+               AND m.author_id <> $1
+               AND m.created_at > COALESCE(cr.last_read_at, TIMESTAMPTZ '-infinity')
+               AND ${notBlockedSql("$1", "m.author_id")}
+             ORDER BY m.created_at DESC
+             LIMIT ${UNREAD_COUNT_CAP}
+           ) newest
+         ) unread
          WHERE me.user_id = $1
            AND ($2::uuid IS NULL OR c.id = $2)
-         GROUP BY c.id, c.kind
        )
        SELECT counts.channel_id,
               counts.kind,
@@ -459,10 +482,11 @@ export async function listConversations(
               lastmsg.author_name AS last_message_author_name,
               lastmsg.has_attachments AS last_message_has_attachments,
               lastmsg.first_attachment_type AS last_message_first_attachment_type,
-              lastmsg.voice_duration_ms AS last_message_voice_duration_ms
+              lastmsg.voice_duration_ms AS last_message_voice_duration_ms,
+              lastmsg.system_kind AS last_message_system_kind
        FROM counts
        LEFT JOIN LATERAL (
-         SELECT lm.id, LEFT(lm.body, 2000) AS body, lm.author_id,
+         SELECT lm.id, LEFT(lm.body, 2000) AS body, lm.author_id, lm.system_kind,
                 u2.display_name AS author_name,
                 EXISTS (
                   SELECT 1 FROM message_attachments ma
@@ -523,6 +547,7 @@ export async function listConversations(
               isGifAttachment: row.last_message_first_attachment_type === "image/gif",
               voiceDurationMs: row.last_message_voice_duration_ms,
             }),
+            systemKind: row.last_message_system_kind === "nudge" ? "nudge" : null,
           }
         : null,
   }));

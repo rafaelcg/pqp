@@ -1,6 +1,13 @@
 import type {
+  ForumPostDetailResponse,
+  ForumSettings,
+  ForumTag,
+  PutForumTagsRequest,
+  UpdateForumSettingsRequest,
   VoiceAudienceResponse,
   ChannelType,
+  ChannelLayoutConfig,
+  ChannelLayoutInput,
   StreamAlertSetting,
   MusicResolved,
   AcquisitionInput,
@@ -21,6 +28,7 @@ import type {
   CommunityHomeCommentsResponse,
   CommunityHomeConfig,
   CommunityHomeUnreadAllResponse,
+  CommunityHomeLatestResponse,
   CommunityHomeUnreadResponse,
   PinCommunityHomePostRequest,
   ServerCommunityHomeConfig,
@@ -41,6 +49,7 @@ import type {
   CommunityConfig,
   CommunityJoinVia,
   CommunityPage,
+  CommunityListingNudge,
   CommunitySettings,
   CommunitySummary,
   ConnectionConfig,
@@ -765,10 +774,75 @@ export interface VoiceConfig {
    * state and its off switch whatever this says.
    */
   audienceMode?: boolean;
+  /**
+   * `voice_audio_self_heal`: watch this call's audio and repair it
+   * (`lib/audio-health.ts`). Global, so it is read without a server.
+   */
+  audioSelfHeal?: boolean;
 }
 
 export const fetchVoiceConfig = (serverId: string) =>
   apiFetch<VoiceConfig>(`/api/voice/config?serverId=${encodeURIComponent(serverId)}`);
+
+/** The global answer, for the switches that are not per server. */
+export const fetchGlobalVoiceConfig = () => apiFetch<VoiceConfig>("/api/voice/config");
+
+/**
+ * `GET /api/forum/config?serverId=`: the runtime flag `forum_channels` for
+ * this server (`forumConfigForServer` on the server, `ForumConfig` in
+ * `@pqp/shared`). Optional like every config field: an older API answers 404
+ * or omits it, and absent is off. Off only stops CREATING forums and posts;
+ * the ones that exist stay readable.
+ */
+export interface ForumConfig {
+  enabled?: boolean;
+}
+
+export const fetchForumConfig = (serverId: string) =>
+  apiFetch<ForumConfig>(`/api/forum/config?serverId=${encodeURIComponent(serverId)}`);
+
+// ------------------------------------------------------------------ forums
+//
+// The routes the shell needs (deep links and the forum's settings) from the
+// REST surface frozen in `packages/shared/src/forums.ts`. The pane's own
+// routes (list, create, edit) live beside it. Every route below 404s on an
+// API that predates forum PR 1; the callers read that as "nothing here yet".
+
+/**
+ * One post by its own id: the deep link, a search hit, a push. 404 when the
+ * id is not a post (a chat thread, a plain channel) or this viewer cannot see
+ * its forum, which the route fallback reads as "try the next kind of thing".
+ */
+export const fetchForumPost = (postId: string) =>
+  apiFetch<ForumPostDetailResponse>(
+    `/api/forum-posts/${encodeURIComponent(postId)}`,
+  );
+
+export const fetchForumTags = (forumId: string) =>
+  apiFetch<{ tags: ForumTag[] }>(
+    `/api/channels/${encodeURIComponent(forumId)}/forum-tags`,
+  );
+
+/** Replaces the whole list: see `putForumTagsSchema`. */
+export const putForumTags = (forumId: string, body: PutForumTagsRequest) =>
+  put<{ tags: ForumTag[] }>(
+    `/api/channels/${encodeURIComponent(forumId)}/forum-tags`,
+    body,
+  );
+
+export const fetchForumSettings = (forumId: string) =>
+  apiFetch<{ settings: ForumSettings }>(
+    `/api/channels/${encodeURIComponent(forumId)}/forum-settings`,
+  );
+
+export const updateForumSettings = (
+  forumId: string,
+  body: UpdateForumSettingsRequest,
+) =>
+  patch<{ settings: ForumSettings }>(
+    `/api/channels/${encodeURIComponent(forumId)}/forum-settings`,
+    body,
+  );
 
 /** Turn audience mode on or off in the call running in this voice channel. */
 export const setVoiceAudienceMode = (channelId: string, enabled: boolean) =>
@@ -1075,10 +1149,18 @@ export const fetchAttachmentUrl = (attachmentId: string) =>
 export const fetchServers = () =>
   apiFetch<{ servers: Server[] }>("/api/servers");
 
-export const createServer = (name: string, idempotencyKey?: string) =>
+export const createServer = (
+  name: string,
+  idempotencyKey?: string,
+  /** Names the first category ("Canais", "Channels", "Canales") when the server makes one. */
+  locale?: string,
+) =>
   post<{ server: Server; channels: Channel[] }>(
     "/api/servers",
-    { name },
+    {
+      name,
+      ...(locale === "pt-BR" || locale === "en" || locale === "es" ? { locale } : {}),
+    },
     idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
   );
 
@@ -1258,6 +1340,16 @@ export const updateCommunitySettings = (
     body,
   );
 
+/**
+ * The owner's one-time "Aparecer no diretório" card: the room to ask about,
+ * or `null` (nothing to ask, already asked, or the runtime flag
+ * `community_listing_nudge` is off). 404 with communities off.
+ */
+export const fetchListingNudge = () =>
+  apiFetch<{ listingNudge: CommunityListingNudge }>(
+    "/api/communities/listing-nudge",
+  );
+
 /** Servers a verified email domain lets this user join without an invite. */
 export const fetchSsoAvailableServers = () =>
   apiFetch<{ servers: Server[] }>("/api/servers/sso-available");
@@ -1330,13 +1422,43 @@ export const createChannel = (
   isPrivate = false,
   /** Optional short description; the watch party dialog asks for one. */
   topic?: string,
+  /**
+   * The category to create it in, or null for no category. Always sent: a
+   * request WITHOUT the key is how the server recognises an older client
+   * and files its channel into the first category (the legacy-create rule).
+   * A category is never given one.
+   */
+  parentId: string | null = null,
 ) =>
   post<{ channel: Channel }>(`/api/servers/${serverId}/channels`, {
     name,
     type,
     isPrivate,
     ...(topic ? { topic } : {}),
+    ...(type === "category" ? {} : { parentId }),
   });
+
+/**
+ * Which channel list to draw for a server: the mixed one (categories are the
+ * only headers) only when `mixed`, which the server says once the
+ * `mixed_channel_list` flag is on for it AND its data has moved. `version`
+ * goes back as `baseVersion` on the full-order PUT. An older API answers
+ * 404, which reads as the old list.
+ */
+export const fetchChannelLayoutConfig = (serverId: string) =>
+  apiFetch<ChannelLayoutConfig>(`/api/servers/${serverId}/channel-layout`);
+
+/**
+ * The whole sidebar order in one write. 409 `channel_layout_stale` carries
+ * the fresh `channels` and `version` in `ApiError.details`; adopt them.
+ * `channels` is null when the order committed but the list could not be read
+ * back: keep the order drawn.
+ */
+export const putChannelLayout = (serverId: string, body: ChannelLayoutInput) =>
+  apiFetch<{ channels: Channel[] | null; version: number }>(
+    `/api/servers/${serverId}/channel-layout`,
+    { method: "PUT", body: JSON.stringify(body) },
+  );
 
 export const updateChannel = (
   channelId: string,
@@ -1386,10 +1508,13 @@ export const moveChannel = (
   channelId: string,
   parentId: string | null,
   index: number,
+  /** A drop on this row: the server takes its slot (it sees private siblings). */
+  targetId?: string,
 ) =>
   patch<{ channels: Channel[] }>(`/api/channels/${channelId}/move`, {
     parentId,
     index,
+    ...(targetId ? { targetId } : {}),
   });
 
 /**
@@ -1836,8 +1961,26 @@ export const deleteChannelOverwrite = (
     `/api/channels/${channelId}/overwrites/${targetType}/${targetId}`,
   );
 
+/**
+ * A channel's webhooks. On a forum each one carries `forumSettings` and the
+ * answer brings the forum's tags as `forumTags` (forum PR 4); anything else,
+ * or an older API, answers `forumTags` null or absent.
+ */
 export const fetchWebhooks = (channelId: string) =>
-  apiFetch<{ webhooks: Webhook[] }>(`/api/channels/${channelId}/webhooks`);
+  apiFetch<{
+    webhooks: Webhook[];
+    forumTags?: import("@pqp/shared").ForumTag[] | null;
+  }>(`/api/channels/${channelId}/webhooks`);
+
+/** Replaces a forum webhook's tag allowlist, default tags and dedupe window. */
+export const putWebhookForumSettings = (
+  webhookId: string,
+  body: import("@pqp/shared").WebhookForumSettings,
+) =>
+  put<{ settings: import("@pqp/shared").WebhookForumSettings }>(
+    `/api/webhooks/${encodeURIComponent(webhookId)}/forum-settings`,
+    body,
+  );
 
 export const createWebhook = (
   channelId: string,
@@ -2101,6 +2244,16 @@ export const deleteCommunityHomePost = (serverId: string, postId: string) =>
 /** The sidebar badge: posts this person has not seen. Cheap, no posts. */
 export const fetchCommunityHomeUnread = (serverId: string) =>
   apiFetch<CommunityHomeUnreadResponse>(`/api/servers/${serverId}/home/unread`);
+
+/**
+ * The sidebar preview: the newest posts as cards with `isNew`, plus the same
+ * unread count. 404 while the server has `bau_latest_preview` off; callers go
+ * through `readBauRow` (`lib/community-home/latest.ts`), which falls back.
+ */
+export const fetchCommunityHomeLatest = (serverId: string, lang?: string) =>
+  apiFetch<CommunityHomeLatestResponse>(
+    `/api/servers/${serverId}/home/latest${lang ? `?lang=${encodeURIComponent(lang)}` : ""}`,
+  );
 
 /**
  * Unread Baú posts for every server this account is in, in one read: what the

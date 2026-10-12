@@ -106,7 +106,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "1d565989",
+      sourceRev: "16406152",
       heading: "Armazenamento local",
       body: (
         <>
@@ -168,6 +168,10 @@ export const cookiesPtBr: LegalDocument = {
             <li>
               <code>pqp:receive-quality</code>: a qualidade de vídeo que você
               pediu para receber.
+            </li>
+            <li>
+              <code>pqp:share-priority</code>: se a sua tela compartilhada
+              segura os fps ou a resolução quando a conexão aperta.
             </li>
             <li>
               <code>pqp:video-fit</code>: se o vídeo de câmera, tela e watch

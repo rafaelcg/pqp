@@ -264,6 +264,43 @@ class YoutubeLinksTest {
     }
 
     @Test
+    fun `the video cover decodes from the feed, and an older payload without it still does`() {
+        val withCover = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"video","name":"a.mp4","url":"https://s.example/a.mp4",
+               "posterUrl":"https://s.example/cover.jpg?sig=1"}""",
+        )
+        assertEquals("https://s.example/cover.jpg?sig=1", withCover.coverUrl)
+        // The cover is only a picture to show first: the file still plays.
+        assertEquals("https://s.example/a.mp4", withCover.videoUrl)
+        assertTrue(withCover.canPlayInApp)
+
+        val without = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"video","name":"a.mp4","url":"https://s.example/a.mp4"}""",
+        )
+        assertNull(without.coverUrl)
+
+        val explicitNull = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"video","name":"a.mp4","url":"https://s.example/a.mp4","posterUrl":null}""",
+        )
+        assertNull(explicitNull.coverUrl)
+    }
+
+    @Test
+    fun `a cover is only used when readable and only on a video`() {
+        val video = "https://s.example/a.mp4"
+        assertEquals(
+            "https://s.example/c.jpg",
+            BauMedia(kind = "video", url = video, posterUrl = "https://s.example/c.jpg").coverUrl,
+        )
+        assertNull(BauMedia(kind = "video", url = video, posterUrl = "/relative.jpg").coverUrl)
+        assertNull(BauMedia(kind = "video", url = video, posterUrl = "file:///etc/hosts").coverUrl)
+        assertNull(BauMedia(kind = "image", url = "https://s.example/a.png", posterUrl = "https://s.example/c.jpg").coverUrl)
+    }
+
+    @Test
     fun `a comment that is only a klipy url is a gif`() {
         val url = "https://static.klipy.com/ii/abc123/D4WkSi1Q.gif"
         assertEquals(url, comment(url).gifUrl)

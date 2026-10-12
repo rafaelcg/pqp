@@ -10,6 +10,7 @@
 import {
   appearanceForcesDark,
   getAppearance,
+  isRetroLookOn,
   setAppearancePreference,
   type AppearancePreference,
 } from "@/lib/appearance";
@@ -50,7 +51,16 @@ export function takeModeBeforeNight(): ThemePreference | null {
 
 export function chooseLook(next: AppearancePreference): void {
   const current = getAppearance();
+  if (next === "retro") {
+    // Modo 2005 paints over the look underneath, which keeps its mode.
+    setAppearancePreference(next);
+    return;
+  }
   if (next === current) {
+    if (isRetroLookOn()) {
+      // Leaving Modo 2005 for the look that was under it: nothing else moves.
+      setAppearancePreference(next);
+    }
     return;
   }
   const wasDarkOnly = appearanceForcesDark(current);

@@ -1,0 +1,9 @@
+{
+  "source": "n8n HTTP Request node to a Discord forum webhook, written by hand from Discord's execute-webhook docs: thread_name from the item title, applied_tags typed as tag NAMES (what a person types when they do not know tag ids), in mixed case and without or with different accents.",
+  "headers": { "Idempotency-Key": "https://blog.example.com/?p=4412" },
+  "body": {
+    "content": "Saiu o trailer da expansão.\nhttps://blog.example.com/trailer-expansao",
+    "thread_name": "Trailer da expansão",
+    "applied_tags": ["noticias", "LANÇAMENTO"]
+  }
+}

@@ -177,6 +177,10 @@ private object Lucide {
         "m9 12 2 2 4-4",
     )
 
+    val zap by lucide(
+        "M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z",
+    )
+
     val archive by lucide(
         "M3 3h18a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z",
         "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8",
@@ -197,6 +201,12 @@ private object Lucide {
     val bell by lucide(
         "M10.268 21a2 2 0 0 0 3.464 0",
         "M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326",
+    )
+    val bellOff by lucide(
+        "M10.268 21a2 2 0 0 0 3.464 0",
+        "M17 17H4a1 1 0 0 1-.74-1.673C4.59 13.956 6 12.499 6 8a6 6 0 0 1 .258-1.742",
+        "m2 2 20 20",
+        "M8.668 3.01A6 6 0 0 1 18 8c0 2.687.77 4.653 1.707 6.05",
     )
     val check by lucide(
         "M20 6 9 17l-5-5",
@@ -416,6 +426,68 @@ private object Lucide {
         "m6 6 12 12",
     )
 
+    // Forums, as the web client draws them (lucide 0.469).
+    val messagesSquare by lucide(
+        "M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z",
+        "M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1",
+    )
+    val messageSquare by lucide(
+        "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+    )
+    val bookOpen by lucide(
+        "M12 7v14",
+        "M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z",
+    )
+    val arrowUpDown by lucide(
+        "m21 16-4 4-4-4",
+        "M17 20V4",
+        "m3 8 4-4 4 4",
+        "M7 4v16",
+    )
+    val arrowDown by lucide(
+        "M12 5v14",
+        "m19 12-7 7-7-7",
+    )
+    val lightbulb by lucide(
+        "M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5",
+        "M9 18h6",
+        "M10 22h4",
+    )
+    val circleDot by lucide(
+        "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0",
+        "M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
+    )
+    val ellipsis by lucide(
+        "M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
+        "M18 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
+        "M4 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
+    )
+    val shield by lucide(
+        "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+    )
+    val bellRing by lucide(
+        "M10.268 21a2 2 0 0 0 3.464 0",
+        "M22 8c0-2.3-.8-4.3-2-6",
+        "M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326",
+        "M4 2C2.8 3.7 2 5.7 2 8",
+    )
+    val lockOpen by lucide(
+        "M5 11H19A2 2 0 0 1 21 13V20A2 2 0 0 1 19 22H5A2 2 0 0 1 3 20V13A2 2 0 0 1 5 11Z",
+        "M7 11V7a5 5 0 0 1 9.9-1",
+    )
+    val rotateCcw by lucide(
+        "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
+        "M3 3v5h5",
+    )
+    val tag by lucide(
+        "M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z",
+        "M7 7.5a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0",
+    )
+    val image by lucide(
+        "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
+        "M7 9a2 2 0 1 0 4 0a2 2 0 1 0 -4 0",
+        "m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21",
+    )
 }
 
 /**
@@ -466,6 +538,9 @@ object PqpIcons {
     val Settings get() = Lucide.settings
     val SignOut get() = Lucide.logOut
     val Notifications get() = Lucide.bell
+
+    /** A channel this person silenced. */
+    val ChannelMuted get() = Lucide.bellOff
     val Warning get() = Lucide.circleAlert
     val Attach get() = Lucide.paperclip
 
@@ -525,8 +600,31 @@ object PqpIcons {
 
     /** Place or answer a conversation call. */
     val Call get() = Lucide.phone
+
+    /** Chamar a atenção: the bolt, the same glyph as the web header button. */
+    val Nudge get() = Lucide.zap
     val ShareScreen get() = Lucide.screenShare
     val StopSharing get() = Lucide.screenShareOff
     val EnterFullscreen get() = Lucide.maximize
     val ExitFullscreen get() = Lucide.minimize
+
+    // Forums. `MessagesSquare` is the web's forum glyph (`channel-icon.tsx`),
+    // so a forum reads the same in both sidebars.
+    val ForumChannel get() = Lucide.messagesSquare
+    val Replies get() = Lucide.messageSquare
+    val Guidelines get() = Lucide.bookOpen
+    val Sort get() = Lucide.arrowUpDown
+    val JumpDown get() = Lucide.arrowDown
+    val Similar get() = Lucide.lightbulb
+    val Resolved get() = Lucide.circleCheck
+    val OpenStatus get() = Lucide.circleDot
+    val Menu get() = Lucide.ellipsis
+    val StaffOnly get() = Lucide.shield
+    val Follow get() = Lucide.bell
+    val Following get() = Lucide.bellRing
+    val Lock get() = Lucide.lock
+    val Unlock get() = Lucide.lockOpen
+    val Reopen get() = Lucide.rotateCcw
+    val Tag get() = Lucide.tag
+    val Image get() = Lucide.image
 }

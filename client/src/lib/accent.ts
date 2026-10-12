@@ -19,6 +19,9 @@ export const APPEARANCE_ACCENT_HUE: Record<AppearancePreference, number> = {
   harmony: 255,
   hearth: 200,
   night: 125,
+  // Modo 2005. Accepted by the API before this client can pick it; its own
+  // tokens arrive with the look itself.
+  retro: 255,
   halloween: 55,
   christmas: 90,
 };

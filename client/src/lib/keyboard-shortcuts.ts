@@ -11,6 +11,7 @@
  * action in this table.
  */
 
+import { buildSidebarLayout, navigableIds } from "@pqp/shared";
 import {
   isTextEntryTarget,
   matchesBinding,
@@ -244,13 +245,33 @@ function sortByPosition<T extends { position: number }>(list: T[]): T[] {
  * top-level voice, then each category's children.
  *
  * The list the API already filtered is the list the user can see.
+ *
+ * With the mixed list (`mixed`), the order is the shared layout's: loose
+ * channels in their one order, then each category's children, types mixed,
+ * exactly as `ChannelList` draws them.
  */
 export function navigableChannelIds(
   channels: readonly NavigableChannel[],
+  options: { mixed?: boolean } = {},
 ): string[] {
+  if (options.mixed) {
+    return navigableIds(
+      buildSidebarLayout(
+        channels.map((channel) => ({ ...channel, parentId: channel.parentId ?? null })),
+        // Watch party rooms stay out, as they always have here.
+        { mixed: true, hideWatchParty: true },
+      ),
+    );
+  }
   const ids: string[] = [];
+  // A forum sits in the Texto group with the text channels, as the sidebar
+  // draws it, so Alt+arrow walks the list in the order the eye reads it.
   const topLevelText = sortByPosition(
-    channels.filter((channel) => channel.type === "text" && !channel.parentId),
+    channels.filter(
+      (channel) =>
+        (channel.type === "text" || channel.type === "forum") &&
+        !channel.parentId,
+    ),
   );
   const topLevelVoice = sortByPosition(
     channels.filter((channel) => channel.type === "voice" && !channel.parentId),
@@ -321,3 +342,126 @@ export function channelIsUnread(
   const counts = unread[channelId];
   return Boolean(counts && (counts.count > 0 || counts.mentions > 0));
 }
+
+// ------------------------------------------------------------------ forum
+
+/**
+ * The forum's single keys (the forum UX study, section 3.1). Context keys,
+ * not bindings: they mean something only while a forum list or a post is on
+ * screen, so they are not rebindable and are not in `SHORTCUT_ACTIONS`. The
+ * overlay lists them as their own group (`FORUM_KEY_ROWS`).
+ *
+ *   list   J / ↓ next, K / ↑ previous, Home / End, Enter / O open,
+ *          C new post, / search
+ *   post   Esc / U back to the list, R reply
+ */
+export type ForumKeyAction =
+  | "next"
+  | "previous"
+  | "first"
+  | "last"
+  | "open"
+  | "newPost"
+  | "search"
+  | "back"
+  | "reply";
+
+/** A key event as far as the forum keys need it. */
+export interface ForumKeyEventLike {
+  key: string;
+  ctrlKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+  isComposing?: boolean;
+  target?: unknown;
+}
+
+/**
+ * Inside a dialog, a menu or a listbox the arrows and letters belong to that
+ * surface: the composer's tag chips, the sort menu, the similar-posts list.
+ * `data-forum-keys-off` lets any other surface opt out the same way.
+ */
+const OWN_KEYBOARD_SURFACES =
+  '[role="dialog"], [role="menu"], [role="listbox"], [role="radiogroup"], [data-forum-keys-off]';
+
+function insideOwnKeyboardSurface(target: unknown): boolean {
+  const element = target as { closest?: (selector: string) => unknown } | null;
+  if (!element || typeof element.closest !== "function") {
+    return false;
+  }
+  return Boolean(element.closest(OWN_KEYBOARD_SURFACES));
+}
+
+/**
+ * Which forum action this keydown asks for, or null. Never fires while typing
+ * (a `j` in the search box is a letter), with Ctrl, Cmd or Alt held (those are
+ * the app's own chords, and Alt+arrow is channel navigation), during IME
+ * composition, or inside a dialog or a menu. Shift is allowed, so `/` on a
+ * layout that needs Shift for it still focuses search.
+ */
+export function forumKeyAction(
+  event: ForumKeyEventLike,
+  where: "list" | "post",
+): ForumKeyAction | null {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) {
+    return null;
+  }
+  if (isTextEntryTarget(event.target) || insideOwnKeyboardSurface(event.target)) {
+    return null;
+  }
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  if (where === "post") {
+    if (key === "Escape" || key === "u") {
+      return "back";
+    }
+    if (key === "r") {
+      return "reply";
+    }
+    return null;
+  }
+  switch (key) {
+    case "j":
+    case "ArrowDown":
+      return "next";
+    case "k":
+    case "ArrowUp":
+      return "previous";
+    case "Home":
+      return "first";
+    case "End":
+      return "last";
+    case "Enter":
+    case "o":
+      return "open";
+    case "c":
+      return "newPost";
+    case "/":
+      return "search";
+    default:
+      return null;
+  }
+}
+
+export type ForumKeyRowId =
+  | "forumMove"
+  | "forumOpen"
+  | "forumNew"
+  | "forumSearch"
+  | "forumBack"
+  | "forumReply";
+
+/**
+ * The overlay's "Fórum" group: what each key does, with the caps to draw.
+ * Read by `shortcut-overlay.tsx`; the labels are catalogue keys there.
+ */
+export const FORUM_KEY_ROWS: ReadonlyArray<{
+  id: ForumKeyRowId;
+  keys: readonly string[];
+}> = [
+  { id: "forumMove", keys: ["J", "K"] },
+  { id: "forumOpen", keys: ["Enter"] },
+  { id: "forumNew", keys: ["C"] },
+  { id: "forumSearch", keys: ["/"] },
+  { id: "forumBack", keys: ["Esc"] },
+  { id: "forumReply", keys: ["R"] },
+];

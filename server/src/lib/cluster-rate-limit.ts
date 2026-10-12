@@ -158,6 +158,52 @@ export async function sharedRateLimit(
 }
 
 /**
+ * How long until `subject` has a whole token again, in milliseconds, read
+ * with the same refill arithmetic `sharedRateLimit` spends with. For the
+ * "try again in N s" a refusal carries, so it is a read and never spends:
+ * 0 when there is no row (nothing spent, or swept) or the bucket already
+ * refilled. Throws on a database error; the caller picks its own fallback.
+ */
+export async function sharedRateLimitRetryAfterMs(
+  options: SharedBucketOptions,
+  subject: string,
+): Promise<number> {
+  const { bucket, capacity, refillPerSecond } = options;
+  const result = await getPool().query<{ tokens: number }>(
+    `SELECT LEAST(
+              $3::float8,
+              tokens + EXTRACT(EPOCH FROM (NOW() - updated_at)) * $4::float8
+            )::float8 AS tokens
+       FROM rate_limit_buckets
+      WHERE bucket = $1 AND subject = $2`,
+    [bucket, subject, capacity, refillPerSecond],
+  );
+  const tokens = result.rows[0]?.tokens;
+  if (tokens === undefined || tokens >= 1) {
+    return 0;
+  }
+  return Math.ceil(((1 - tokens) / refillPerSecond) * 1000);
+}
+
+/**
+ * Give one token back to `subject`, never past `capacity`. For a spend that
+ * turned out not to buy anything (the action failed after the budget was
+ * taken). No row means nothing was spent here: nothing to do. Throws on a
+ * database error; the caller decides whether that matters.
+ */
+export async function refundSharedRateLimit(
+  options: SharedBucketOptions,
+  subject: string,
+): Promise<void> {
+  await getPool().query(
+    `UPDATE rate_limit_buckets
+        SET tokens = LEAST($3::float8, tokens + 1)
+      WHERE bucket = $1 AND subject = $2`,
+    [options.bucket, subject, options.capacity],
+  );
+}
+
+/**
  * Rows whose bucket has refilled carry no information; drop them so the table
  * is bounded by "subjects active in the last few minutes" rather than by
  * "subjects ever". Runs with the other cold jobs.

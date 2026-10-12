@@ -4,6 +4,9 @@ import {
   channelIsUnread,
   defaultShortcutBindings,
   findBindingConflict,
+  FORUM_KEY_ROWS,
+  forumKeyAction,
+  type ForumKeyEventLike,
   matchShortcut,
   navigableChannelIds,
   parseShortcutOverrides,
@@ -454,6 +457,23 @@ describe("channel list motion", () => {
     ]);
   });
 
+  it("walks the mixed list in its one order: loose by position, then each category", () => {
+    const mixed = [
+      { id: "cat", type: "category", parentId: null, position: 0 },
+      { id: "voice-loose", type: "voice", parentId: null, position: 0 },
+      { id: "text-loose", type: "text", parentId: null, position: 1 },
+      { id: "party", type: "watch_party", parentId: null, position: 2 },
+      { id: "v-in-cat", type: "voice", parentId: "cat", position: 0 },
+      { id: "t-in-cat", type: "text", parentId: "cat", position: 1 },
+    ];
+    expect(navigableChannelIds(mixed, { mixed: true })).toEqual([
+      "voice-loose",
+      "text-loose",
+      "v-in-cat",
+      "t-in-cat",
+    ]);
+  });
+
   it("steps to the next and previous channel, wrapping", () => {
     const ids = navigableChannelIds(channels);
     expect(stepChannelId(ids, "t-first", 1)).toBe("t-late");
@@ -475,5 +495,85 @@ describe("channel list motion", () => {
     expect(stepUnreadChannelId(ids, "d", isUnread, 1)).toBe("b");
     expect(stepUnreadChannelId(ids, "c", isUnread, -1)).toBe("b");
     expect(stepUnreadChannelId(ids, "a", () => false, 1)).toBeNull();
+  });
+});
+
+describe("forums in channel navigation", () => {
+  it("walks a top-level forum in the Texto group, where the sidebar draws it", () => {
+    expect(
+      navigableChannelIds([
+        { id: "voice", type: "voice", parentId: null, position: 0 },
+        { id: "forum", type: "forum", parentId: null, position: 1 },
+        { id: "geral", type: "text", parentId: null, position: 0 },
+      ]),
+    ).toEqual(["geral", "forum", "voice"]);
+  });
+});
+
+describe("forumKeyAction", () => {
+  const card = { tagName: "ARTICLE", closest: () => null };
+  const press = (key: string, extra: Partial<ForumKeyEventLike> = {}) =>
+    ({
+      key,
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      target: card,
+      ...extra,
+    }) as ForumKeyEventLike;
+
+  it("maps the list keys, either case and arrows included", () => {
+    expect(forumKeyAction(press("j"), "list")).toBe("next");
+    expect(forumKeyAction(press("J"), "list")).toBe("next");
+    expect(forumKeyAction(press("ArrowDown"), "list")).toBe("next");
+    expect(forumKeyAction(press("k"), "list")).toBe("previous");
+    expect(forumKeyAction(press("ArrowUp"), "list")).toBe("previous");
+    expect(forumKeyAction(press("Home"), "list")).toBe("first");
+    expect(forumKeyAction(press("End"), "list")).toBe("last");
+    expect(forumKeyAction(press("Enter"), "list")).toBe("open");
+    expect(forumKeyAction(press("o"), "list")).toBe("open");
+    expect(forumKeyAction(press("c"), "list")).toBe("newPost");
+    expect(forumKeyAction(press("/"), "list")).toBe("search");
+    expect(forumKeyAction(press("x"), "list")).toBeNull();
+  });
+
+  it("maps the post keys and nothing else there", () => {
+    expect(forumKeyAction(press("Escape"), "post")).toBe("back");
+    expect(forumKeyAction(press("u"), "post")).toBe("back");
+    expect(forumKeyAction(press("r"), "post")).toBe("reply");
+    expect(forumKeyAction(press("c"), "post")).toBeNull();
+  });
+
+  it("is a letter while typing, never an action", () => {
+    expect(forumKeyAction(press("j", { target: composer }), "list")).toBeNull();
+    expect(
+      forumKeyAction(press("c", { target: { tagName: "INPUT", type: "text" } }), "list"),
+    ).toBeNull();
+  });
+
+  it("leaves the app's chords and IME composition alone", () => {
+    expect(forumKeyAction(press("ArrowDown", { altKey: true }), "list")).toBeNull();
+    expect(forumKeyAction(press("k", { metaKey: true }), "list")).toBeNull();
+    expect(forumKeyAction(press("c", { ctrlKey: true }), "list")).toBeNull();
+    expect(forumKeyAction(press("j", { isComposing: true }), "list")).toBeNull();
+  });
+
+  it("gives the keys to a dialog, a menu or a listbox under focus", () => {
+    const inDialog = { tagName: "BUTTON", closest: () => ({}) };
+    expect(forumKeyAction(press("j", { target: inDialog }), "list")).toBeNull();
+    expect(forumKeyAction(press("Escape", { target: inDialog }), "post")).toBeNull();
+    // A plain element outside any of them still gets the action.
+    expect(forumKeyAction(press("j", { target: plainDiv }), "list")).toBe("next");
+  });
+
+  it("lists every forum key for the overlay", () => {
+    expect(FORUM_KEY_ROWS.map((row) => row.id)).toEqual([
+      "forumMove",
+      "forumOpen",
+      "forumNew",
+      "forumSearch",
+      "forumBack",
+      "forumReply",
+    ]);
   });
 });

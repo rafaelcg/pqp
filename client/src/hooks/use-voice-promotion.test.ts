@@ -1,5 +1,6 @@
 import type { VoiceSignalingMessage } from "@pqp/shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RemotePeer } from "@/lib/peer-connection-manager";
 import type { RealtimeTransport } from "@/lib/realtime";
 
 /**
@@ -19,13 +20,21 @@ import type { RealtimeTransport } from "@/lib/realtime";
  * - the person is told, in their language, that the call became a large room,
  * - a transport this build does not know is ignored and we stay put, because
  *   guessing is what produced the split-brain in the first place,
- * - a second copy of the frame does not tear a live session down.
+ * - a second copy of the frame does not tear a live session down,
+ * - and none of it is heard: the mesh keeps playing until the SFU carries each
+ *   peer, nobody is played twice, no mesh signaling leaves after the switch,
+ *   and a failure that can be retried is retried instead of hanging up.
  */
 
 interface ManagerStub {
   peerIds: string[];
   localCameraStreams: (MediaStream | null)[];
   disposed: boolean;
+  removed: string[];
+  /** The relay the hook handed the manager: what the mesh would signal with. */
+  send: (message: Record<string, unknown>) => void;
+  /** Report a peer list, as a real manager does on every state change. */
+  report: (peers: RemotePeer[]) => void;
 }
 
 const managers: ManagerStub[] = [];
@@ -42,11 +51,20 @@ vi.mock("@/lib/voice-leave-beacon", () => ({
 
 vi.mock("@/lib/peer-connection-manager", () => ({
   getDefaultIceServers: () => [],
-  createPeerConnectionManager: vi.fn(() => {
+  createPeerConnectionManager: vi.fn(
+    (_localPeerId: string, send: (message: Record<string, unknown>) => void) => {
+    let handler: ((peers: RemotePeer[]) => void) | null = null;
+    let current: RemotePeer[] = [];
     const stub: ManagerStub = {
       peerIds: [],
       localCameraStreams: [],
       disposed: false,
+      removed: [],
+      send,
+      report: (peers) => {
+        current = peers;
+        handler?.(peers);
+      },
     };
     managers.push(stub);
     return {
@@ -63,10 +81,17 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       setPeerCameraStreamId: () => {},
       setPeerScreenAudioStreamId: () => {},
       setPeerSharingScreen: () => {},
-      onPeerStateChange: () => {},
+      onPeerStateChange: (next: (peers: RemotePeer[]) => void) => {
+        handler = next;
+      },
       connectToPeer: (peerId: string) => stub.peerIds.push(peerId),
       setPeerIdentity: () => {},
-      removePeer: () => {},
+      removePeer: (peerId: string) => {
+        stub.removed.push(peerId);
+        if (current.some((peer) => peer.peerId === peerId)) {
+          stub.report(current.filter((peer) => peer.peerId !== peerId));
+        }
+      },
       handleOffer: async () => {},
       handleAnswer: async () => {},
       handleIceCandidate: async () => {},
@@ -85,6 +110,14 @@ const sfuCameraPublishes: MediaStream[] = [];
 const sfuMicPublishes: MediaStream[] = [];
 const sfuMuteCalls: boolean[] = [];
 let sfuFails = false;
+/** Fail this many connects, then succeed: a transient failure. */
+let sfuFailuresLeft = 0;
+let cameraPublishFails = false;
+/** While true, `publishCamera` parks until the test rejects it. */
+let holdCameraPublish = false;
+let rejectCameraPublish: ((error: Error) => void) | null = null;
+/** The SFU session's peer callback, so a test can say who it carries. */
+let sfuPeersChanged: ((peers: RemotePeer[]) => void) | null = null;
 /**
  * While true, `connectLiveKit` parks until `releaseSfuConnect` is called.
  * A promotion is not instant, and the interesting duplicate is the one that
@@ -94,10 +127,16 @@ let holdSfuConnect = false;
 let releaseSfuConnect: (() => void) | null = null;
 
 vi.mock("@/lib/livekit-session", () => ({
-  connectLiveKit: vi.fn(async () => {
+  connectLiveKit: vi.fn(
+    async (options: { onPeersChanged: (peers: RemotePeer[]) => void }) => {
     if (sfuFails) {
       throw new Error("SFU unreachable");
     }
+    if (sfuFailuresLeft > 0) {
+      sfuFailuresLeft -= 1;
+      throw new Error("SFU blip");
+    }
+    sfuPeersChanged = options.onPeersChanged;
     if (holdSfuConnect) {
       await new Promise<void>((resolve) => {
         releaseSfuConnect = resolve;
@@ -115,6 +154,14 @@ vi.mock("@/lib/livekit-session", () => ({
       unpublishScreen: async () => {},
       unpublishScreenAudio: async () => {},
       publishCamera: async (stream: MediaStream) => {
+        if (cameraPublishFails) {
+          throw new Error("camera refused");
+        }
+        if (holdCameraPublish) {
+          await new Promise<void>((_resolve, reject) => {
+            rejectCameraPublish = reject;
+          });
+        }
         sfuCameraPublishes.push(stream);
       },
       setCameraMaxBitrate: async () => {},
@@ -130,7 +177,8 @@ vi.mock("@/lib/livekit-session", () => ({
   }),
 }));
 
-const { createVoiceController } = await import("./use-voice");
+const { createVoiceController, MESH_HANDOFF_GRACE_MS, PROMOTION_RETRY_DELAYS_MS } =
+  await import("./use-voice");
 const { connectLiveKit } = await import("@/lib/livekit-session");
 const { isCameraAtCap, isScreenShareAtCap } = await import(
   "@/lib/screen-share-roster"
@@ -287,10 +335,19 @@ beforeEach(() => {
   sfuMicPublishes.length = 0;
   sfuMuteCalls.length = 0;
   sfuFails = false;
+  sfuFailuresLeft = 0;
+  cameraPublishFails = false;
+  holdCameraPublish = false;
+  rejectCameraPublish = null;
+  sfuPeersChanged = null;
   holdSfuConnect = false;
   releaseSfuConnect = null;
   vi.mocked(connectLiveKit).mockClear();
   vi.spyOn(console, "warn").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("following a room onto the voice server", () => {
@@ -432,15 +489,26 @@ describe("following a room onto the voice server", () => {
     expect(sfuMicPublishes).toHaveLength(1);
   });
 
-  it("leaves and says so when the promoted room cannot be reached", async () => {
+  it("leaves and says so only after every attempt to reach the room failed", async () => {
     const { voice, sent } = await connectedMesh();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     sfuFails = true;
 
     voice.handleSignaling(promoted());
-    await settle();
-    await settle();
+    await vi.advanceTimersByTimeAsync(0);
+    // A failed attempt is not a hangup: the mesh is still how the call sounds.
+    expect(voice.getState().status).toBe("connected");
+    expect(sent.map((m) => m.type)).not.toContain("leave-voice-room");
+    expect(managers[0]!.disposed).toBe(false);
+
+    for (const delay of PROMOTION_RETRY_DELAYS_MS) {
+      await vi.advanceTimersByTimeAsync(delay);
+    }
 
     const state = voice.getState();
+    expect(connectLiveKit).toHaveBeenCalledTimes(
+      PROMOTION_RETRY_DELAYS_MS.length + 1,
+    );
     // Never a mesh rebuilt behind the room's back: everyone else has moved.
     expect(state.status).toBe("idle");
     expect(state.transportFailure).toEqual({
@@ -448,6 +516,191 @@ describe("following a room onto the voice server", () => {
       reason: "unreachable",
     });
     expect(sent.map((m) => m.type)).toContain("leave-voice-room");
+    expect(managers[0]!.disposed).toBe(true);
+  });
+});
+
+describe("a promotion nobody hears", () => {
+  const MESH_STREAM = fakeStream("mesh-other") as unknown as MediaStream;
+  const SFU_STREAM = fakeStream("sfu-other") as unknown as MediaStream;
+
+  function remote(stream: MediaStream | null): RemotePeer {
+    return {
+      peerId: OTHER,
+      connectionState: "connected",
+      stream,
+      screenStream: null,
+      cameraStream: null,
+      screenAudioStream: null,
+    };
+  }
+
+  async function talkingOnMesh() {
+    const ctx = await connectedMesh();
+    managers[0]!.report([remote(MESH_STREAM)]);
+    expect(ctx.voice.getState().remotePeers[0]!.stream).toBe(MESH_STREAM);
+    return ctx;
+  }
+
+  it("keeps playing the mesh until the SFU carries the peer, then retires that connection", async () => {
+    const { voice } = await talkingOnMesh();
+    holdSfuConnect = true;
+
+    voice.handleSignaling(promoted());
+    await settle();
+    // Connecting: the other person is still heard, over the mesh.
+    expect(managers[0]!.disposed).toBe(false);
+    expect(voice.getState().remotePeers.map((p) => p.stream)).toEqual([
+      MESH_STREAM,
+    ]);
+
+    releaseSfuConnect?.();
+    await settle();
+    await settle();
+    expect(voice.getState().usingSfu).toBe(true);
+    // Up, but the SFU does not carry them yet: still the mesh.
+    sfuPeersChanged?.([remote(null)]);
+    expect(voice.getState().remotePeers.map((p) => p.stream)).toEqual([
+      MESH_STREAM,
+    ]);
+    expect(managers[0]!.removed).toEqual([]);
+
+    // Their voice arrives over the SFU: played from there, and only there,
+    // and the mesh connection that carried it closes.
+    sfuPeersChanged?.([remote(SFU_STREAM)]);
+    expect(voice.getState().remotePeers.map((p) => p.stream)).toEqual([
+      SFU_STREAM,
+    ]);
+    expect(managers[0]!.removed).toEqual([OTHER]);
+    expect(managers[0]!.disposed).toBe(true);
+    expect(voice.getState().status).toBe("connected");
+  });
+
+  it("closes what is left of the mesh after the grace period", async () => {
+    const { voice } = await talkingOnMesh();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    voice.handleSignaling(promoted());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(voice.getState().usingSfu).toBe(true);
+    // A peer that never shows up on the SFU (a phone that could not follow).
+    expect(managers[0]!.disposed).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(MESH_HANDOFF_GRACE_MS);
+
+    expect(managers[0]!.disposed).toBe(true);
+    expect(voice.getState().remotePeers).toEqual([]);
+    expect(voice.getState().status).toBe("connected");
+  });
+
+  it("sends no mesh signaling once the room has moved", async () => {
+    const { voice, sent } = await talkingOnMesh();
+    holdSfuConnect = true;
+
+    voice.handleSignaling(promoted());
+    await settle();
+    // The retiring mesh tries an ICE restart, or trickles a late candidate.
+    managers[0]!.send({ type: "ice-candidate", to: OTHER, candidate: null });
+    managers[0]!.send({ type: "offer", to: OTHER, sdp: "v=0" });
+
+    const relayed = sent.filter((m) =>
+      ["offer", "answer", "ice-candidate"].includes(m.type),
+    );
+    expect(relayed).toEqual([]);
+  });
+
+  it("still relays mesh signaling in a mesh room", async () => {
+    // The gate is the room's transport, not a switch that stays thrown.
+    const { sent } = await connectedMesh();
+    managers[0]!.send({ type: "ice-candidate", to: OTHER, candidate: null });
+    expect(sent.map((m) => m.type)).toContain("ice-candidate");
+  });
+
+  it("retries a failed SFU session and keeps the seat", async () => {
+    const { voice, sent } = await talkingOnMesh();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    sfuFailuresLeft = 1;
+
+    voice.handleSignaling(promoted());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(voice.getState().usingSfu).toBe(false);
+    expect(voice.getState().remotePeers.map((p) => p.stream)).toEqual([
+      MESH_STREAM,
+    ]);
+
+    await vi.advanceTimersByTimeAsync(PROMOTION_RETRY_DELAYS_MS[0]);
+
+    const state = voice.getState();
+    expect(connectLiveKit).toHaveBeenCalledTimes(2);
+    expect(state.usingSfu).toBe(true);
+    expect(state.status).toBe("connected");
+    expect(state.peerId).toBe(PEER);
+    expect(state.transportFailure).toBeNull();
+    expect(sent.map((m) => m.type)).not.toContain("leave-voice-room");
+    expect(sent.filter((m) => m.type === "join-voice-room")).toHaveLength(1);
+  });
+
+  it("a camera that cannot be republished turns off; the call stays", async () => {
+    const { voice, sent } = await connectedMesh();
+    await voice.toggleCamera();
+    cameraPublishFails = true;
+
+    voice.handleSignaling(promoted());
+    await settle();
+    await settle();
+
+    const state = voice.getState();
+    expect(state.status).toBe("connected");
+    expect(state.usingSfu).toBe(true);
+    expect(state.isCameraOn).toBe(false);
+    expect(sent.map((m) => m.type)).not.toContain("leave-voice-room");
+    expect(sent.filter((m) => m.type === "set-camera").at(-1)?.streamId).toBe(
+      null,
+    );
+  });
+
+  it("a publish that fails because the person left commits nothing", async () => {
+    // Leaving tears the session down under a camera republish still in
+    // flight, which then rejects. That rejection is the session going away,
+    // not an optional step failing: no camera frame, no `usingSfu`, no error.
+    const { voice, sent } = await connectedMesh();
+    await voice.toggleCamera();
+    holdCameraPublish = true;
+
+    voice.handleSignaling(promoted());
+    await settle();
+    await settle();
+    expect(rejectCameraPublish).not.toBeNull();
+    voice.leave();
+    const sentAtLeave = sent.length;
+
+    rejectCameraPublish?.(new Error("session closed"));
+    await settle();
+    await settle();
+
+    const state = voice.getState();
+    expect(state.status).toBe("idle");
+    expect(state.usingSfu).toBe(false);
+    expect(state.error).toBeNull();
+    expect(sent.slice(sentAtLeave).map((m) => m.type)).not.toContain(
+      "set-camera",
+    );
+  });
+
+  it("leaving mid-promotion stops the attempt and closes the retiring mesh", async () => {
+    const { voice } = await talkingOnMesh();
+    holdSfuConnect = true;
+
+    voice.handleSignaling(promoted());
+    await settle();
+    voice.leave();
+    expect(managers[0]!.disposed).toBe(true);
+
+    releaseSfuConnect?.();
+    await settle();
+    await settle();
+    expect(voice.getState().status).toBe("idle");
+    expect(voice.getState().usingSfu).toBe(false);
   });
 });
 

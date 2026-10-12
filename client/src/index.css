@@ -46,6 +46,9 @@
   --color-on-accent: oklch(0.16 0.012 250);
 
   --color-danger: oklch(0.65 0.2 25);
+  /* A count ON the danger fill (an unread badge): white in every theme,
+     because the red is mid-luminance in both. Measured by the bench. */
+  --color-on-danger: oklch(0.99 0 0);
   --color-warning: oklch(0.8 0.14 85);
   --color-success: oklch(0.72 0.14 150);
 
@@ -462,6 +465,12 @@
   --swatch-christmas-list: oklch(0.18 0.03 165);
   --swatch-christmas-surface: oklch(0.22 0.035 165);
   --swatch-christmas-accent: oklch(0.85 0.14 90);
+  /* Modo 2005's tile is drawn, not swatched: a title bar and three gems. */
+  --swatch-retro-bar: oklch(0.75 0.09 250);
+  --swatch-retro-body: oklch(0.96 0.02 245);
+  --swatch-retro-on: oklch(0.66 0.19 140);
+  --swatch-retro-away: oklch(0.74 0.16 70);
+  --swatch-retro-busy: oklch(0.57 0.19 30);
 
   /* Both stops at hue 0 + `longer hue` = the full wheel, left to right.
      Without the direction, `linear-gradient` defaults to `to bottom` and the
@@ -509,6 +518,7 @@
   --color-on-accent: oklch(0.99 0 0);
 
   --color-danger: oklch(0.52 0.2 25);
+  --color-on-danger: oklch(0.99 0 0);
   --color-warning: oklch(0.52 0.13 75);
   --color-success: oklch(0.48 0.13 150);
 
@@ -837,6 +847,197 @@
 }
 
 /*
+ * MODO 2005, the hidden look (`lib/appearance.ts`, `Look`). Dark is
+ * Madrugada, the navy of a 2 a.m. chat; light is the sky-blue glossy
+ * chat window of the mid-2000s. Our own palette, not a colour-picked copy of
+ * any product. The `--retro-*` names are for this look's own chrome (title
+ * bars, glossy status gems, picture frames): `components/retro/retro.css`
+ * draws with them and is only loaded while the look is on. Every value here
+ * is a plain OKLCH colour so the bench can read it.
+ */
+:root[data-appearance="retro"] {
+  --font-sans: Tahoma, "Segoe UI", Verdana, "DejaVu Sans", sans-serif;
+
+  --color-surface-0: oklch(0.21 0.05 255);
+  --color-surface-1: oklch(0.18 0.04 255);
+  --color-surface-2: oklch(0.25 0.05 255);
+  --color-surface-3: oklch(0.31 0.06 255);
+  --color-rail: oklch(0.3 0.07 255);
+
+  --color-border: oklch(0.36 0.06 255);
+  --color-border-strong: oklch(0.46 0.07 255);
+
+  --color-text: oklch(0.93 0.03 250);
+  --color-text-secondary: oklch(0.8 0.04 250);
+  --color-text-tertiary: oklch(0.74 0.05 250);
+
+  --color-accent: oklch(0.78 0.1 245);
+  --color-accent-hover: oklch(0.7 0.11 245);
+  --color-on-accent: oklch(0.18 0.04 255);
+  --color-accent-soft: oklch(0.33 0.07 250);
+  --color-on-accent-soft: oklch(0.88 0.07 245);
+
+  --color-danger: oklch(0.68 0.17 30);
+  --color-warning: oklch(0.8 0.14 75);
+  --color-success: oklch(0.74 0.17 140);
+
+  --color-code-bg: oklch(0.15 0.04 255);
+  --color-code-text: oklch(0.82 0.09 245);
+
+  --color-focus-ring: oklch(0.78 0.1 245 / 0.6);
+  --color-selection: oklch(0.78 0.1 245 / 0.35);
+  --color-indicator: oklch(0.93 0.03 250);
+
+  --shadow-speaking: 0 0 10px oklch(0.78 0.1 245 / 0.45);
+  --glow-accent: oklch(0.45 0.1 250 / 0.28);
+  --glow-accent-soft: oklch(0.78 0.1 245 / 0.08);
+
+  --gradient-app-1: oklch(0.3 0.07 250 / 0.35);
+  --gradient-app-2: oklch(0.22 0.05 255 / 0.4);
+
+  --rgb-picker-background: 24, 43, 77;
+  --rgb-picker-input: 15, 26, 46;
+  --rgb-picker-color: 219, 232, 251;
+  --rgb-picker-accent: 140, 196, 255;
+  --picker-border: oklch(0.36 0.06 255);
+
+  --retro-titlebar: linear-gradient(
+    180deg,
+    oklch(0.44 0.11 255) 0%,
+    oklch(0.36 0.1 257) 49%,
+    oklch(0.32 0.09 257) 51%,
+    oklch(0.38 0.09 256) 100%
+  );
+  --retro-titlebar-ink: oklch(0.98 0.01 250);
+  --retro-toolbar: linear-gradient(180deg, oklch(0.27 0.06 255), oklch(0.23 0.055 256));
+  --retro-strip: oklch(0.23 0.055 256);
+  --retro-pane: linear-gradient(180deg, oklch(0.25 0.06 255), oklch(0.18 0.04 255) 140px);
+  --retro-rail: linear-gradient(180deg, oklch(0.35 0.08 255), oklch(0.24 0.06 258));
+  --retro-tile: linear-gradient(180deg, oklch(0.98 0.005 250), oklch(0.9 0.04 245));
+  --retro-tile-ink: oklch(0.42 0.12 255);
+  --retro-tile-home: linear-gradient(180deg, oklch(0.97 0.05 135), oklch(0.85 0.13 135));
+  --retro-tile-home-ink: oklch(0.42 0.12 140);
+  --retro-tile-edge: oklch(0.3 0.08 255);
+  --retro-frame: linear-gradient(180deg, oklch(0.36 0.07 255), oklch(0.25 0.05 255));
+  --retro-edge: oklch(0.46 0.07 255);
+  --retro-edge-soft: oklch(0.33 0.06 255);
+  --retro-hover: oklch(0.28 0.06 255);
+  --retro-select: oklch(0.34 0.08 255);
+  --retro-field: oklch(0.16 0.035 255);
+  --retro-button: linear-gradient(180deg, oklch(0.43 0.09 255), oklch(0.33 0.08 255));
+  --retro-button-ink: oklch(0.98 0.01 250);
+  --retro-peer-ink: oklch(0.8 0.13 305);
+  --retro-self-ink: oklch(0.85 0.12 150);
+  --retro-sys-ink: oklch(0.74 0.05 250);
+  --retro-nudge-ink: oklch(0.7 0.17 30);
+  --retro-gloss: oklch(1 0 0 / 0.85);
+  --retro-gem-edge: oklch(0 0 0 / 0.3);
+  --retro-gem-on-hi: oklch(0.89 0.15 135);
+  --retro-gem-on: oklch(0.66 0.19 140);
+  --retro-gem-on-lo: oklch(0.52 0.16 140);
+  --retro-gem-busy-hi: oklch(0.8 0.12 28);
+  --retro-gem-busy: oklch(0.57 0.19 30);
+  --retro-gem-busy-lo: oklch(0.42 0.15 30);
+  --retro-gem-away-hi: oklch(0.92 0.12 95);
+  --retro-gem-away: oklch(0.74 0.16 70);
+  --retro-gem-away-lo: oklch(0.57 0.13 65);
+  --retro-gem-off-hi: oklch(0.93 0.01 250);
+  --retro-gem-off: oklch(0.72 0.02 250);
+  --retro-gem-off-lo: oklch(0.55 0.02 250);
+  --retro-picture: linear-gradient(135deg, oklch(0.76 0.12 235), oklch(0.5 0.17 262));
+  --retro-picture-ink: oklch(0.99 0 0);
+  --retro-ring: oklch(0.74 0.16 70 / 0.9);
+  --retro-ring-clear: oklch(0.74 0.16 70 / 0);
+  --retro-shadow: 0 8px 24px oklch(0 0 0 / 0.45);
+  --retro-frame-shadow: 0 1px 2px oklch(0.2 0.05 255 / 0.4);
+}
+
+:root[data-appearance="retro"][data-theme="light"] {
+  --color-surface-0: oklch(0.97 0.02 245);
+  --color-surface-1: oklch(1 0 0);
+  --color-surface-2: oklch(0.95 0.025 245);
+  --color-surface-3: oklch(0.88 0.03 245);
+  --color-rail: oklch(0.58 0.11 250);
+
+  --color-border: oklch(0.85 0.04 248);
+  --color-border-strong: oklch(0.7 0.06 250);
+
+  --color-text: oklch(0.31 0.06 255);
+  --color-text-secondary: oklch(0.45 0.05 250);
+  --color-text-tertiary: oklch(0.5 0.05 250);
+
+  --color-accent: oklch(0.5 0.15 255);
+  --color-accent-hover: oklch(0.44 0.15 255);
+  --color-on-accent: oklch(0.99 0 0);
+  --color-accent-soft: oklch(0.93 0.04 245);
+  --color-on-accent-soft: oklch(0.4 0.14 255);
+
+  --color-danger: oklch(0.54 0.19 30);
+  --color-warning: oklch(0.58 0.14 65);
+  --color-success: oklch(0.55 0.16 140);
+
+  --color-danger-soft: oklch(0.94 0.04 30);
+  --color-on-danger-soft: oklch(0.45 0.17 30);
+  --color-danger-soft-hover: oklch(0.9 0.06 30);
+  --color-warning-soft: oklch(0.95 0.05 85);
+  --color-on-warning-soft: oklch(0.43 0.11 65);
+  --color-success-soft: oklch(0.94 0.05 140);
+  --color-on-success-soft: oklch(0.4 0.12 140);
+
+  --color-code-bg: oklch(0.95 0.02 245);
+  --color-code-text: oklch(0.42 0.14 255);
+
+  --color-focus-ring: oklch(0.5 0.15 255 / 0.6);
+  --color-selection: oklch(0.5 0.15 255 / 0.25);
+  --color-indicator: oklch(0.31 0.06 255);
+
+  --shadow-speaking: 0 0 0 3px oklch(0.5 0.15 255 / 0.4);
+  --glow-accent: oklch(0.7 0.1 250 / 0.18);
+  --glow-accent-soft: oklch(0.5 0.15 255 / 0.06);
+
+  --gradient-app-1: oklch(0.9 0.05 245 / 0.3);
+  --gradient-app-2: oklch(0.94 0.03 245 / 0.3);
+
+  --rgb-picker-background: 247, 251, 255;
+  --rgb-picker-input: 233, 243, 253;
+  --rgb-picker-color: 29, 51, 80;
+  --rgb-picker-accent: 27, 93, 179;
+  --picker-border: oklch(0.85 0.04 248);
+
+  --retro-titlebar: linear-gradient(
+    180deg,
+    oklch(0.75 0.09 250) 0%,
+    oklch(0.62 0.12 252) 49%,
+    oklch(0.57 0.13 254) 51%,
+    oklch(0.66 0.11 252) 100%
+  );
+  --retro-toolbar: linear-gradient(180deg, oklch(0.995 0.003 250), oklch(0.95 0.025 245));
+  --retro-strip: oklch(0.98 0.01 245);
+  --retro-pane: linear-gradient(
+    180deg,
+    oklch(0.99 0.008 245 / 0.55),
+    oklch(1 0 0 / 0.9) 140px,
+    oklch(1 0 0)
+  );
+  --retro-rail: linear-gradient(180deg, oklch(0.64 0.1 250), oklch(0.53 0.11 252));
+  --retro-tile-edge: oklch(0.46 0.1 252);
+  --retro-frame: linear-gradient(180deg, oklch(1 0 0), oklch(0.92 0.03 245));
+  --retro-edge: oklch(0.7 0.06 250);
+  --retro-edge-soft: oklch(0.85 0.04 248);
+  --retro-hover: oklch(0.94 0.035 245);
+  --retro-select: oklch(0.87 0.06 245);
+  --retro-field: oklch(1 0 0);
+  --retro-button: linear-gradient(180deg, oklch(1 0 0), oklch(0.89 0.05 245));
+  --retro-button-ink: oklch(0.31 0.06 255);
+  --retro-peer-ink: oklch(0.5 0.22 300);
+  --retro-self-ink: oklch(0.42 0.12 150);
+  --retro-sys-ink: oklch(0.5 0.05 250);
+  --retro-nudge-ink: oklch(0.52 0.19 30);
+  --retro-shadow: 0 8px 24px oklch(0.3 0.06 255 / 0.3);
+  --retro-frame-shadow: 0 1px 2px oklch(0.31 0.06 255 / 0.25);
+}
+
+/*
  * High contrast is an accessibility override, not a fourth skin. It only
  * pushes text, muted text, borders and the indicator so they stay readable
  * on whatever appearance is already active. Keep unlayered. Two-attribute
@@ -1034,6 +1235,27 @@
   background-color: var(--elevation-3-surface);
   border: 1px solid var(--elevation-3-border);
   box-shadow: var(--elevation-3-shadow);
+}
+
+/*
+ * A control drawn smaller than a finger still takes a 44px tap: an invisible
+ * box centred on it, at least 44 by 44, catches the touch. Used as
+ * `max-sm:hit-44` where a 44px drawing would crowd a row (a filter chip, the
+ * live pill), the same "28px drawn, 44px to a finger" the dialog's X uses.
+ * Not for controls packed edge to edge: the boxes would overlap and the later
+ * one would win the shared strip.
+ */
+@utility hit-44 {
+  position: relative;
+  &::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
 }
 
 /*
@@ -1252,6 +1474,63 @@
   width: 1.1rem;
   border-radius: var(--radius-pill);
   background: var(--preview-accent);
+}
+
+/* Modo 2005's tile in Aparência: a glossy title bar over a pale window with
+   three status gems. In the main sheet because the tile shows before the
+   look (and its lazy stylesheet) is on. */
+.appearance-preview-retro {
+  position: relative;
+  display: block;
+  height: 5rem;
+  overflow: hidden;
+  border-radius: 0.45rem;
+  background:
+    linear-gradient(
+      var(--swatch-retro-bar) 0 1rem,
+      var(--swatch-retro-body) 1rem
+    );
+}
+
+.appearance-preview-retro::after {
+  content: "";
+  position: absolute;
+  left: 0.6rem;
+  top: 1.7rem;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: var(--radius-pill);
+  background: var(--swatch-retro-on);
+  box-shadow:
+    1rem 0 0 0 var(--swatch-retro-away),
+    2rem 0 0 0 var(--swatch-retro-busy);
+}
+
+/*
+ * Turning Modo 2005 on or off is one moment, not a flicker: `lib/retro-look.ts`
+ * runs the switch inside a view transition and sets `data-look-transition` for
+ * its length. The old skin fades out while the new one rises in. Opacity and
+ * transform only; reduced motion never starts the transition at all.
+ */
+@keyframes look-transition-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes look-transition-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.98);
+  }
+}
+
+:root[data-look-transition]::view-transition-old(root) {
+  animation: look-transition-out 280ms var(--ease-standard) both;
+}
+
+:root[data-look-transition]::view-transition-new(root) {
+  animation: look-transition-in 560ms var(--ease-emphasized) both;
 }
 
 * {
@@ -1822,6 +2101,140 @@ html[data-pre] #main > section:first-of-type .animate-rise {
   animation: badge-pop 0.32s var(--ease-emphasized) both;
 }
 
+/*
+ * CHAMAR A ATENÇÃO (the nudge). Transform and opacity only, so none of it
+ * relayouts the chat it sits on.
+ *
+ * `nudge-shake` is the receiving pane's one shake: 0.4 s, 4 px, a decaying
+ * side to side on the curve a struck object settles with (fast out, long
+ * tail). Polite on purpose in the default look; Modo 2005 gets its own,
+ * bigger one. Under reduced motion it is not shortened but replaced:
+ * `nudge-pulse` draws a warning-coloured border on the pane and fades it in
+ * twice, opacity only, no movement anywhere.
+ */
+@keyframes nudge-shake {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  14% {
+    transform: translate3d(-4px, 0, 0);
+  }
+  30% {
+    transform: translate3d(4px, 0, 0);
+  }
+  46% {
+    transform: translate3d(-3px, 0, 0);
+  }
+  62% {
+    transform: translate3d(2px, 0, 0);
+  }
+  78% {
+    transform: translate3d(-1px, 0, 0);
+  }
+}
+
+@keyframes nudge-pulse {
+  0%,
+  45%,
+  100% {
+    opacity: 0;
+  }
+  20%,
+  70% {
+    opacity: 1;
+  }
+}
+
+/* The line in the log arriving, and the little phone on it (and on the
+   header button when my nudge lands) rattling once. */
+@keyframes nudge-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes nudge-wiggle {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  15% {
+    transform: rotate(-16deg);
+  }
+  35% {
+    transform: rotate(13deg);
+  }
+  55% {
+    transform: rotate(-9deg);
+  }
+  75% {
+    transform: rotate(5deg);
+  }
+}
+
+@keyframes nudge-pending {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* The cooldown bar under the header button empties over the wait the server
+   announced; its duration is set inline from `retryAfterMs`. */
+@keyframes nudge-cooldown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.nudge-shake {
+  animation: nudge-shake 0.4s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+.nudge-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  border: 2px solid var(--color-warning);
+  border-radius: inherit;
+  opacity: 0;
+  animation: nudge-pulse 0.8s var(--ease-standard) both;
+}
+
+.nudge-line-in {
+  animation: nudge-line-in 0.32s var(--ease-emphasized) both;
+}
+
+.nudge-wiggle {
+  transform-origin: 50% 60%;
+  animation: nudge-wiggle 0.45s var(--ease-standard) both;
+}
+
+.nudge-pending {
+  animation: nudge-pending 0.9s var(--ease-standard) infinite;
+}
+
+.nudge-cooldown-bar {
+  transform-origin: left center;
+  animation-name: nudge-cooldown;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
 /* Corner cards and steps inside a dialog: one entrance, one exit. */
 @keyframes pop-in {
   from {
@@ -2349,8 +2762,19 @@ html[data-pre] #main > section:first-of-type .animate-rise {
   .vem-swap-out,
   .vem-swap-in,
   .vem-cursor,
-  .vem-ring {
+  .vem-ring,
+  .nudge-shake,
+  .nudge-line-in,
+  .nudge-wiggle,
+  .nudge-pending,
+  .nudge-cooldown-bar {
     animation: none;
+  }
+
+  /* Never reached from the app, which picks `nudge-pulse` instead under this
+     query; stated anyway so a stray class can never move the pane. */
+  .nudge-shake {
+    transform: none;
   }
 
   .vem-cta-arrow svg {
@@ -2366,6 +2790,29 @@ html[data-pre] #main > section:first-of-type .animate-rise {
   .cta-lift:active {
     transition: none;
     transform: none;
+  }
+}
+
+/*
+ * CONVERSAS ON A PHONE (`conversations_home_phone_tabs`, `data-phone-tabs` on
+ * the app shell). The rail is gone, so the two list drawers (conversations and
+ * channels) open full width from the left edge instead of beside a 72px rail,
+ * and stop above the bottom bar while it is up. The member list is not a
+ * drawer of this kind and keeps its own placement. Corner cards (onboarding,
+ * campaigns) rise above the bar so neither covers the other.
+ */
+@media (max-width: 47.999rem) {
+  [data-phone-tabs] aside[data-immersive-hide]:not([data-member-sidebar]):not([data-channel-rail]) {
+    left: 0;
+    width: 100%;
+  }
+
+  [data-phone-tabs][data-phone-bar] aside[data-immersive-hide]:not([data-member-sidebar]):not([data-channel-rail]) {
+    bottom: calc(4rem + env(safe-area-inset-bottom));
+  }
+
+  [data-phone-tabs][data-phone-bar] [data-corner-card].fixed {
+    bottom: calc(4.75rem + env(safe-area-inset-bottom));
   }
 }
 
@@ -2712,4 +3159,318 @@ html[data-immersive-stage] [data-immersive-hide] {
 }
 :root[data-theme="light"] [data-stream-name] {
   --stream-name: oklch(0.52 0.16 var(--stream-name-hue, 200));
+}
+
+/*
+ * STORIES. Rings, the viewer and the composer preview (components/stories/).
+ *
+ * Story content is a photograph's world, not the app's: a text card, the
+ * viewer's chrome and the scrims over a picture look the same in light and
+ * dark, the way a photo does. So these are their own tokens, white on the
+ * dark card surfaces, and only the ring follows the theme (it sits on the
+ * sidebar). Every text background is chosen for at least 4.5:1 with white.
+ *
+ * The ring is accent into warning, never solid accent: solid lime already
+ * means "speaking" and "in a call".
+ */
+:root {
+  --story-ring: conic-gradient(
+    from 210deg,
+    var(--color-accent),
+    var(--color-warning),
+    var(--color-accent)
+  );
+  --story-ring-seen: var(--color-border-strong);
+  --story-on-media: oklch(1 0 0);
+  --story-on-media-2: oklch(1 0 0 / 0.74);
+  --story-track: oklch(1 0 0 / 0.3);
+  --story-hairline: oklch(1 0 0 / 0.16);
+  --story-field-edge: oklch(1 0 0 / 0.36);
+  --story-field-fill: oklch(1 0 0 / 0.08);
+  --story-card: oklch(0.13 0.01 250);
+  --story-backdrop: oklch(0.1 0.012 250 / 0.94);
+  --story-scrim: linear-gradient(
+    180deg,
+    oklch(0 0 0 / 0.55) 0%,
+    oklch(0 0 0 / 0) 22%,
+    oklch(0 0 0 / 0) 68%,
+    oklch(0 0 0 / 0.6) 100%
+  );
+  --story-dim: oklch(0 0 0 / 0.4);
+  --story-tray: oklch(0.19 0.014 250 / 0.985);
+  --story-sticker: oklch(0.17 0.03 132 / 0.95);
+  --story-sticker-edge: oklch(0.88 0.19 125 / 0.34);
+  /* The accent as it reads on the story's own dark surface, in both themes:
+     the light theme's accent is a dark green made for paper, and on this
+     surface it all but disappears. */
+  --story-accent: oklch(0.88 0.19 125);
+  --story-accent-soft: oklch(0.9 0.16 125);
+  --story-on-accent: oklch(0.16 0.012 250);
+  --story-shadow: 0 18px 40px oklch(0 0 0 / 0.55);
+  --story-hatch: repeating-linear-gradient(
+    135deg,
+    var(--color-surface-2) 0 6px,
+    var(--color-surface-1) 6px 12px
+  );
+  /* The close curve: accelerating, the opposite of emphasized. */
+  --story-ease-exit: cubic-bezier(0.3, 0, 1, 1);
+
+  --story-bg-lime: radial-gradient(80% 50% at 20% 0%, oklch(0.55 0.14 128 / 0.75) 0%, oklch(0.55 0.14 128 / 0) 70%),
+    linear-gradient(170deg, oklch(0.36 0.09 130) 0%, oklch(0.2 0.04 135) 100%);
+  --story-bg-night: radial-gradient(60% 40% at 80% 10%, oklch(0.6 0.16 265 / 0.45) 0%, oklch(0.6 0.16 265 / 0) 70%),
+    linear-gradient(180deg, oklch(0.27 0.09 265) 0%, oklch(0.16 0.04 265) 100%);
+  --story-bg-ember: radial-gradient(70% 45% at 50% 30%, oklch(0.58 0.2 25 / 0.6) 0%, oklch(0.58 0.2 25 / 0) 70%),
+    linear-gradient(170deg, oklch(0.36 0.12 28) 0%, oklch(0.18 0.05 20) 100%);
+  --story-bg-grape: radial-gradient(60% 50% at 70% 20%, oklch(0.62 0.17 300 / 0.6) 0%, oklch(0.62 0.17 300 / 0) 70%),
+    linear-gradient(160deg, oklch(0.42 0.18 295) 0%, oklch(0.2 0.08 295) 100%);
+  --story-bg-sand: radial-gradient(60% 45% at 30% 20%, oklch(0.7 0.12 75 / 0.45) 0%, oklch(0.7 0.12 75 / 0) 70%),
+    linear-gradient(170deg, oklch(0.42 0.08 65) 0%, oklch(0.22 0.04 55) 100%);
+  --story-bg-ink: radial-gradient(70% 50% at 50% 0%, oklch(0.4 0.02 250 / 0.5) 0%, oklch(0.4 0.02 250 / 0) 70%),
+    linear-gradient(180deg, oklch(0.2 0.012 250) 0%, oklch(0.11 0.01 250) 100%);
+}
+
+/* A ring: a gradient layer and a seen layer, crossfaded (never animate the
+   conic gradient itself), a gap circle that scales to set the ring's width,
+   and the face. `--story-gap-unseen` / `--story-gap-seen` are scales set by
+   the component from the ring's size, so the width change is a transform. */
+.story-ring {
+  position: relative;
+  display: block;
+  flex: none;
+  border-radius: 999px;
+}
+.story-ring > [data-ring-layer] {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+}
+.story-ring > [data-ring-layer="grad"] {
+  background: var(--story-ring);
+  transition: opacity var(--duration-slow) var(--ease-standard);
+}
+.story-ring > [data-ring-layer="seen"] {
+  background: var(--story-ring-seen);
+  opacity: 0;
+  transition: opacity var(--duration-slow) var(--ease-standard);
+}
+.story-ring > [data-ring-layer="gap"] {
+  background: var(--story-ring-bg, var(--color-surface-1));
+  transform: scale(var(--story-gap-unseen, 0.9));
+  transition: transform var(--duration-slow) var(--ease-standard);
+}
+.story-ring[data-ring="seen"] > [data-ring-layer="grad"] {
+  opacity: 0;
+}
+.story-ring[data-ring="seen"] > [data-ring-layer="seen"] {
+  opacity: 1;
+}
+.story-ring[data-ring="seen"] > [data-ring-layer="gap"] {
+  transform: scale(var(--story-gap-seen, 0.94));
+}
+.story-ring[data-ring="none"] > [data-ring-layer] {
+  opacity: 0;
+}
+.story-ring[data-ring="none"] > [data-ring-layer="gap"] {
+  transform: none;
+}
+.story-ring-label {
+  transition: color var(--duration-slow) var(--ease-standard);
+}
+
+@keyframes story-ring-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes story-ring-sweep {
+  from {
+    transform: rotate(-200deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+.story-ring-in {
+  animation: story-ring-in var(--duration-slow) var(--ease-emphasized) both;
+}
+.story-ring-in > [data-ring-layer="grad"] {
+  animation: story-ring-sweep 900ms var(--ease-emphasized) both;
+}
+@keyframes story-upload-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.story-upload-processing {
+  animation: story-upload-spin 1.4s linear infinite;
+  transform-origin: center;
+}
+
+/* The viewer. */
+.story-text-card[data-bg="lime"] {
+  background: var(--story-bg-lime);
+}
+.story-text-card[data-bg="night"] {
+  background: var(--story-bg-night);
+}
+.story-text-card[data-bg="ember"] {
+  background: var(--story-bg-ember);
+}
+.story-text-card[data-bg="grape"] {
+  background: var(--story-bg-grape);
+}
+.story-text-card[data-bg="sand"] {
+  background: var(--story-bg-sand);
+}
+.story-text-card[data-bg="ink"] {
+  background: var(--story-bg-ink);
+}
+
+/* Hold to pause: the chrome leaves after 250 ms in 200 ms, returns in 150. */
+.story-chrome {
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+[data-story-held="true"] .story-chrome {
+  opacity: 0;
+  transition: opacity var(--duration-base) var(--ease-standard) 250ms;
+}
+
+@keyframes story-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes story-tray-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes story-react-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes story-react-fly {
+  0% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-150px) scale(1.8);
+  }
+}
+@keyframes story-pill {
+  0% {
+    opacity: 0;
+  }
+  12%,
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.story-media-in {
+  animation: story-fade-in 100ms linear both;
+}
+.story-tray-up {
+  animation: story-tray-up var(--duration-base) var(--ease-emphasized) both;
+}
+.story-react-pop {
+  animation: story-react-pop var(--duration-base) var(--ease-emphasized) both;
+  animation-delay: calc(var(--i, 0) * 30ms);
+}
+.story-react-fly {
+  animation: story-react-fly 600ms var(--ease-emphasized) forwards;
+  pointer-events: none;
+}
+.story-pill {
+  animation: story-pill 1.2s var(--ease-standard) both;
+}
+.story-dim {
+  background: var(--story-dim);
+  animation: story-fade-in var(--duration-base) var(--ease-standard) both;
+}
+.story-backdrop-in {
+  animation: story-fade-in var(--duration-base) var(--ease-standard) both;
+}
+
+/* Own story: the viewers sheet rises inside the card and the story shrinks
+   above it. Transform and opacity only. */
+.story-stage {
+  transform-origin: 50% 0%;
+  transition: transform var(--duration-slow) var(--ease-emphasized);
+}
+[data-story-sheet="open"] .story-stage {
+  transform: translateY(4%) scale(0.62);
+}
+.story-sheet {
+  transform: translateY(100%);
+  transition: transform var(--duration-slow) var(--ease-emphasized);
+}
+[data-story-sheet="open"] .story-sheet {
+  transform: none;
+}
+
+/*
+ * Reduced motion: no zoom, no deck, no flying emoji, no sweep, no shrinking
+ * story. Fades stay (opacity is not motion), and so do the progress bars,
+ * which are information, not decoration.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .story-ring-in {
+    animation: story-fade-in var(--duration-fast) linear both;
+  }
+  .story-ring-in > [data-ring-layer="grad"],
+  .story-upload-processing,
+  .story-react-fly {
+    animation: none;
+  }
+  .story-ring > [data-ring-layer="gap"] {
+    transition: none;
+  }
+  .story-tray-up,
+  .story-react-pop {
+    animation: story-fade-in var(--duration-base) linear both;
+    animation-delay: 0ms;
+  }
+  [data-story-held="true"] .story-chrome {
+    opacity: 1;
+  }
+  .story-stage,
+  [data-story-sheet="open"] .story-stage {
+    transform: none;
+    transition: none;
+  }
+  .story-sheet,
+  [data-story-sheet="open"] .story-sheet {
+    transform: none;
+  }
+  .story-sheet {
+    opacity: 0;
+    transition: opacity var(--duration-fast) linear;
+  }
+  [data-story-sheet="open"] .story-sheet {
+    opacity: 1;
+  }
 }

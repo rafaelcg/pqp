@@ -222,6 +222,9 @@ struct CommunityHomePostCard: Decodable, Sendable, Equatable {
     enum Poster: Equatable, Sendable {
         /// A picture to fetch (an image, or a YouTube poster).
         case image(URL)
+        /// A stored video with an author-chosen cover: that picture, with the
+        /// play badge, instead of a frame pulled out of the file.
+        case coverImage(URL)
         /// A stored video: its first frame, never autoplayed.
         case videoFrame(URL)
         /// Twitch, TikTok, Instagram: nothing we may fetch, but the lime plate
@@ -240,6 +243,8 @@ struct CommunityHomePostCard: Decodable, Sendable, Equatable {
     let author: Author?
     let mediaKindRaw: String?
     let mediaUrl: String?
+    /// The author's cover for a `video`, or nil. `mediaUrl` stays the file.
+    let posterUrl: String?
     let visibility: String
     let locked: Bool
     let pinned: Bool
@@ -273,6 +278,12 @@ struct CommunityHomePostCard: Decodable, Sendable, Equatable {
         let url = mediaUrl.flatMap { URL(string: $0) }.flatMap { Self.isLoadable($0) ? $0 : nil }
         switch mediaKind {
         case .video:
+            // The author's cover wins over the first frame, and a cover with
+            // no playable file still reads as a video, so it is not gated on
+            // `url`. An unreadable cover falls through to the frame.
+            if let cover = posterUrl.flatMap({ URL(string: $0) }).flatMap({ Self.isLoadable($0) ? $0 : nil }) {
+                return .coverImage(cover)
+            }
             if let url { return .videoFrame(url) }
             return .plate
         case .image, .youtube:
@@ -288,7 +299,7 @@ struct CommunityHomePostCard: Decodable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey {
         case postId, serverId, serverName, title, teaser, author
         case mediaKindRaw = "mediaKind"
-        case mediaUrl, visibility, locked, pinned, likeCount, commentCount, publishedAt
+        case mediaUrl, posterUrl, visibility, locked, pinned, likeCount, commentCount, publishedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -301,6 +312,8 @@ struct CommunityHomePostCard: Decodable, Sendable, Equatable {
         author = try c.decodeIfPresent(Author.self, forKey: .author)
         mediaKindRaw = try c.decodeIfPresent(String.self, forKey: .mediaKindRaw)
         mediaUrl = try c.decodeIfPresent(String.self, forKey: .mediaUrl)
+        // Absent on an older API; a wrong-typed value costs the cover only.
+        posterUrl = (try? c.decodeIfPresent(String.self, forKey: .posterUrl)) ?? nil
         visibility = try c.decodeIfPresent(String.self, forKey: .visibility) ?? "free"
         locked = try c.decodeIfPresent(Bool.self, forKey: .locked) ?? false
         pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
@@ -312,7 +325,7 @@ struct CommunityHomePostCard: Decodable, Sendable, Equatable {
     init(
         postId: String, serverId: String, serverName: String = "", title: String? = nil,
         teaser: String? = nil, author: Author? = nil, mediaKind: String? = nil, mediaUrl: String? = nil,
-        visibility: String = "free", locked: Bool = false, pinned: Bool = false,
+        posterUrl: String? = nil, visibility: String = "free", locked: Bool = false, pinned: Bool = false,
         likeCount: Int = 0, commentCount: Int = 0, publishedAt: String? = nil
     ) {
         self.postId = postId
@@ -323,6 +336,7 @@ struct CommunityHomePostCard: Decodable, Sendable, Equatable {
         self.author = author
         self.mediaKindRaw = mediaKind
         self.mediaUrl = mediaUrl
+        self.posterUrl = posterUrl
         self.visibility = visibility
         self.locked = locked
         self.pinned = pinned

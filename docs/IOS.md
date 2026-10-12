@@ -220,7 +220,7 @@ The SDK's own broadcast path (`LKSampleHandler`, `BroadcastScreenCapturer`)
 is deliberately not used: it JPEG-encodes every frame in the extension and
 decodes it in the app, inside a process iOS kills at about 50 MB, and it
 would link LiveKit's WebRTC build into that process. Our bridge already
-scales to 1280 on the long side, clocks to 30 fps and allocates nothing per
+scales to 720 on the short side, clocks to 30 fps and allocates nothing per
 frame. The SDK still *thinks* an extension is configured, because the bundle
 ids match its convention, but nothing calls `setScreenShare(enabled:)`, so
 `BroadcastManager` is never reached.
@@ -235,6 +235,25 @@ Pinned by `ScreenSharePlanTests`.
 
 Not yet on LiveKit: the receive-side video quality ladder. Receiving shares,
 with their audio, works.
+
+**A share carries its sound on LiveKit, and only there.** The extension now
+forwards ReplayKit's `.audioApp` buffers over the same socket (a second frame
+kind, `"PQPA"`, wire version 2), converted to Int16 little-endian, at most two
+channels, at the source rate, by `ScreenShareAudioConverter`, which reads the
+buffer's own `AudioStreamBasicDescription` (big-endian, float and planar
+included). In a LiveKit room the app hands them to
+`AudioManager.shared.mixer.capture(appAudio:)`, which mixes them into the
+microphone track (`ScreenShareAppAudio`); the gate is opened by
+`LiveKitVoiceClient.startScreenShare` and shut on stop and disconnect. So the
+far end hears the game as part of the presenter's voice, not as a separate
+share track: no separate share volume, no "stop watching" for the sound.
+While that sound is live, a self-mute keeps the track on and zeroes the
+microphone in the mixer instead (`SfuMicrophoneRouting`), so muting to cough
+does not take the game away from the room; a moderator's mute is never worked
+around. The Android app does the same, through its audio device's buffer
+callback. A mesh room stays picture only: Google's WebRTC build has no capture
+hook short of replacing the whole audio device, and the presenter banner says
+"Apresentando só a imagem, sem o som". **Unverified on hardware.**
 
 **The share control follows SPEAK.** `welcome.self.canSpeak` (and the same
 field on every roster entry) is the channel's SPEAK permission, which is the
@@ -371,10 +390,11 @@ link that cannot do 720p30, picking 480p buys a crisp 480p30.
 the quality scaler off, but it also puts VP8 into `ScreenshareLayers`, whose base
 temporal layer targets about 5 fps. See the comment in `startScreenShare`.
 
-**The size ceiling is unchanged and is the real limit on the top rung.** The
-broadcast extension still packs at `ScreenShareWire.maxLongSide` (1280), for the
-memory reasons in that file's header, so 1080p and 720p send the same picture
-with a different allowance behind it. Settings says so out loud. Raising it means
+**The size ceiling is the real limit on the top rung.** The broadcast
+extension packs at `ScreenShareWire.maxShortSide` (720 on the short side, the
+Android rule; it was 1280 on the long side, which is 590x1280 on a modern
+iPhone), for the memory reasons in that file's header, so 1080p and 720p send
+the same picture with a different allowance behind it. Settings says so out loud. Raising it means
 letting the extension read the choice out of the App Group, in a ~50 MB process,
 on a path nobody has yet run on a phone.
 
@@ -1003,7 +1023,7 @@ Still only on web, as of 2026-08-25:
 |---|---|
 | **Roles and permissions** (PR #75) | 20 permission bits, role management, per-channel overwrites. iOS knows only the legacy `owner`/`admin`/`member` rank (`Moderation.swift`). **Not a leak:** `listChannels` resolves VIEW_CHANNEL in Postgres and the server evicts sockets, so a permission-blind client is never shown content it should not have. What iOS now also does is act on `permissions-update` and re-read the list, so a channel you have lost no longer sits in the sidebar until relaunch. |
 | ~~Camera in a channel call~~ | **Done.** See **Cameras** above. |
-| ~~Screen-share quality selector~~ | **Done**, with one platform difference: the screen is still *captured* at 1280 on the long side, so the top two rungs send the same picture. See **Quality** above. |
+| ~~Screen-share quality selector~~ | **Done**, with one platform difference: the screen is still *captured* at 720 on the short side, so the top two rungs send the same picture. See **Quality** above. |
 | **In-app sounds** (PR #62) | No cue playback of any kind on iOS. Haptics only. |
 | **Game connections** (PR #58) | Steam / Battle.net / Twitch are absent entirely. |
 | **Public profile viewer** | The handle can be claimed and shared from Settings, but `UserProfileSheet` shows the `name#1234` tag and never a `pqp.gg/@handle`, and there is no deep link for one. |

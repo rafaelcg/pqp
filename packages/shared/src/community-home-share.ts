@@ -111,6 +111,13 @@ export const communityHomePostCardSchema = z.object({
    * embed with no poster.
    */
   mediaUrl: z.string().nullable(),
+  /**
+   * The cover the author chose for a video (`media.posterUrl`), a signed GET of
+   * an image. Null for anything else, for a video on its automatic cover and
+   * for a locked card. Defaulted, so a card from an older API still parses; a
+   * client that ignores it paints the video's first frame from `mediaUrl`.
+   */
+  posterUrl: z.string().nullable().optional().transform((value) => value ?? null),
   visibility: communityHomeVisibilitySchema,
   locked: z.boolean(),
   pinned: z.boolean(),
@@ -120,6 +127,53 @@ export const communityHomePostCardSchema = z.object({
 });
 
 export type CommunityHomePostCard = z.infer<typeof communityHomePostCardSchema>;
+
+/** How many posts `GET …/home/latest` returns when `?limit=` is absent. */
+export const COMMUNITY_HOME_LATEST_DEFAULT = 3;
+/** The most `?limit=` may ask for. A preview, not a second feed. */
+export const COMMUNITY_HOME_LATEST_MAX = 10;
+
+/**
+ * `?limit=` of `GET …/home/latest`, clamped: absent or not a number is the
+ * default, anything else is pulled into 1..max. Never a 400, because the
+ * caller is a sidebar that should draw something rather than nothing.
+ */
+export function parseCommunityHomeLatestLimit(raw: string | null | undefined): number {
+  const n = raw == null ? Number.NaN : Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) {
+    return COMMUNITY_HOME_LATEST_DEFAULT;
+  }
+  return Math.min(COMMUNITY_HOME_LATEST_MAX, Math.max(1, n));
+}
+
+/**
+ * One post of `GET …/home/latest`: the chat card, plus whether it counts
+ * toward `unread`. `isNew` is the unread rule itself (published after the
+ * viewer last opened the Baú, and not their own post), computed in the same
+ * statement as the count, so the preview and the badge never disagree.
+ */
+export const communityHomeLatestCardSchema = communityHomePostCardSchema.extend({
+  isNew: z.boolean(),
+});
+
+export type CommunityHomeLatestCard = z.infer<typeof communityHomeLatestCardSchema>;
+
+/**
+ * `GET /api/servers/:serverId/home/latest?limit=3&lang=`: the sidebar preview.
+ * The newest published posts (newest first, the pinned post NOT moved to the
+ * front), the unread count the badge shows, and when the viewer last opened
+ * the Baú (null: never). 404 while the runtime flag `bau_latest_preview` is
+ * off for the server; the client then falls back to `…/home/unread`.
+ */
+export const communityHomeLatestResponseSchema = z.object({
+  unread: z.number().int().nonnegative(),
+  lastSeenAt: z.string().nullable(),
+  posts: z.array(communityHomeLatestCardSchema),
+});
+
+export type CommunityHomeLatestResponse = z.infer<
+  typeof communityHomeLatestResponseSchema
+>;
 
 /** `POST /api/servers/:id/home/posts/:postId/share` */
 export const shareCommunityHomePostSchema = z.object({

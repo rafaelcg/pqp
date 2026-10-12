@@ -1,3 +1,4 @@
+import { StoryQuoteCard } from "@/components/stories/story-quote-card";
 import type {
   Embed,
   MessageReaction,
@@ -7,6 +8,7 @@ import type {
 import { MESSAGE_BULK_DELETE_MAX } from "@pqp/shared";
 import {
   AlertCircle,
+  CircleCheck,
   WifiOff,
   ArrowDown,
   Check,
@@ -38,6 +40,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -53,6 +56,7 @@ import {
 import { createPortal } from "react-dom";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useChatDisplay } from "@/hooks/use-chat-display";
+import { useRetroLook } from "@/hooks/use-appearance";
 import { RankMarks } from "@/components/user/rank-marks";
 import { StatusDot } from "@/components/user/status-dot";
 import { AttachmentGrid } from "@/components/chat/attachment-grid";
@@ -108,6 +112,7 @@ import { translateMessage, useTranslation } from "@/lib/i18n";
 import { toggleMessageSelection } from "@/lib/message-selection";
 import { splitArrivals } from "@/lib/message-arrivals";
 import { scrollWithin } from "@/lib/scroll-within";
+import { shouldOpenUp } from "@/lib/menu-flip";
 import {
   cn,
   formatDayLabel,
@@ -117,11 +122,14 @@ import {
   isSameDay,
 } from "@/lib/utils";
 import { MessageListSkeleton } from "@/components/ui/skeleton";
+import { NudgeLine, NudgeNotice } from "@/components/chat/nudge-line";
 
 /** Consecutive messages from one author within this window render as one block. */
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
 /** How close to the bottom still counts as "following the conversation". */
 const STICKY_THRESHOLD_PX = 120;
+/** Closer to the end than this, there is nothing below to jump to. */
+const SCROLL_END_SLACK_PX = 4;
 /** Distance from the top that triggers loading older history. */
 const LOAD_MORE_THRESHOLD_PX = 240;
 /** How long a jumped-to message stays lit. */
@@ -353,6 +361,37 @@ interface MessageListProps {
   variant?: "default" | "stream";
   /** Who is running the party, for the badges before their names. */
   streamBadges?: { hostUserId: string; cohostIds: ReadonlySet<string> } | null;
+  /** A forum post's transcript. See `ForumPostDecor`. */
+  forumPost?: ForumPostDecor | null;
+}
+
+/**
+ * What a forum post adds to its transcript (`ThreadPanel variant="forum-post"`):
+ * the OP badge on the author's name wherever they speak, the accepted
+ * answer's green edge, "Marcar como solução" on replies for whoever may pick
+ * one, and the Solução card right under the opening message.
+ */
+export interface ForumPostDecor {
+  /** The post's author: an OP badge on every one of their rows. */
+  authorId: string | null;
+  /** The reply marked as the answer. */
+  acceptedAnswerId: string | null;
+  /** Drawn under the opening message, once it is loaded. */
+  afterOpening?: ReactNode;
+  /** Present when this reader may pick the answer (the author, or staff). */
+  onToggleAnswer?: (messageId: string) => void;
+  /**
+   * A first visit lands at the top of the loaded window, on the question,
+   * not on the newest reply. The post view pages history back to the opening
+   * message before it hands the window over (`lib/forum-landing.ts`).
+   */
+  landAtTop?: boolean;
+  /**
+   * Drawn at the very top of the scrolling transcript, above the first
+   * message: on a phone the post's title and status scroll with it, and the
+   * header takes the title over once this has scrolled off.
+   */
+  listHeader?: ReactNode;
 }
 
 interface Row {
@@ -550,12 +589,20 @@ export const MessageList = memo(function MessageList({
   onEditMessageHandled,
   variant = "default",
   streamBadges = null,
+  forumPost = null,
 }: MessageListProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isPinned, setIsPinned] = useState(true);
+  /**
+   * Whether anything is below the fold. A transcript that fits on screen
+   * can be unpinned (landing on "Novas" unpins), and "Ir ao presente" over
+   * replies that are all already visible offered a jump to nowhere (forum QA
+   * P8). Read from the geometry on every scroll and every resize.
+   */
+  const [canScrollDown, setCanScrollDown] = useState(false);
   const [missedCount, setMissedCount] = useState(0);
   const [flashId, setFlashId] = useState<string | null>(null);
   const [jumpNotice, setJumpNotice] = useState(false);
@@ -652,6 +699,15 @@ export const MessageList = memo(function MessageList({
   const highlightRef = useRef<string | null>(highlightMessageId);
   highlightRef.current = highlightMessageId;
   const lastCountRef = useRef(messages.length);
+  /**
+   * A forum post's first visit landed on the question and the reader has not
+   * moved yet: content that sizes late (an image, an embed) must not pull the
+   * view to the bottom, and a reply arriving is counted, not followed. Ends
+   * at the reader's first wheel, touch or key in the transcript.
+   */
+  const forumHoldTopRef = useRef(false);
+  /** The newest row last time: unchanged means only history above moved. */
+  const lastTailIdRef = useRef<string | null>(messages[messages.length - 1]?.id ?? null);
   /** Scroll height captured before prepending history, to keep the view still. */
   const restoreRef = useRef<{ height: number; top: number } | null>(null);
   /**
@@ -803,6 +859,11 @@ export const MessageList = memo(function MessageList({
     () => findFirstUnreadMessageId(messages, unreadSince, currentUserId),
     [messages, unreadSince, currentUserId],
   );
+  // A forum post's opening message is its first: known only once nothing
+  // older is left to page in.
+  const forumOpeningId =
+    forumPost && !hasMore && messages.length > 0 ? messages[0].id : null;
+  const forumLandAtTop = forumPost?.landAtTop === true;
   /**
    * The ids a selection may contain, in the order they are on screen.
    *
@@ -1150,6 +1211,8 @@ export const MessageList = memo(function MessageList({
    */
   const jumpToMessage = useCallback(
     (messageId: string) => {
+      // A jump is the reader moving: a forum post's first-visit hold ends.
+      forumHoldTopRef.current = false;
       // Every jump supersedes the one before it, a loaded one included: a page
       // still being fetched for an earlier target must not land afterwards
       // and take the reader back there.
@@ -1247,6 +1310,16 @@ export const MessageList = memo(function MessageList({
     prependedRef.current = 0;
     const appended = appendedRef.current;
     appendedRef.current = 0;
+    const current = messagesRef.current;
+    const tailId = current[current.length - 1]?.id ?? null;
+    const tailUnchanged = tailId !== null && tailId === lastTailIdRef.current;
+    lastTailIdRef.current = tailId;
+    // Older pages read by the owner of the controller rather than by this
+    // list's own "load older" (the forum post paging back to its question)
+    // leave the newest row where it was: nothing arrived.
+    if (tailUnchanged) {
+      return;
+    }
     // The first page of a visit is not an "arrival". The landing effect below
     // puts the viewport on the NEW rule (or the tail), or the permalink jump
     // puts it on its message, without treating the whole history as missed
@@ -1267,6 +1340,7 @@ export const MessageList = memo(function MessageList({
     // puts you on your own message every time. Scrolled up, the send used to
     // sit below the fold and the pill counted it as somebody else's news.
     if (sentHere) {
+      forumHoldTopRef.current = false;
       followOwnSendRef.current();
       return;
     }
@@ -1276,7 +1350,7 @@ export const MessageList = memo(function MessageList({
     if (hasNewerRef.current) {
       return;
     }
-    if (isPinnedRef.current) {
+    if (isPinnedRef.current && !forumHoldTopRef.current) {
       scrollToBottom(messages.length > 60 ? "auto" : "smooth");
     } else if (fromOthers.length > 0) {
       // The reader's own rows are never "new": one from their other device
@@ -1315,6 +1389,11 @@ export const MessageList = memo(function MessageList({
       return;
     }
     const observer = new ResizeObserver(() => {
+      setCanScrollDown(distanceFromBottom(container) > SCROLL_END_SLACK_PX);
+      if (forumHoldTopRef.current) {
+        container.scrollTop = 0;
+        return;
+      }
       if (isPinnedRef.current && !hasNewerRef.current) {
         // "auto": the growth already happened, so animating to it reads as a
         // second, unexplained scroll.
@@ -1456,12 +1535,36 @@ export const MessageList = memo(function MessageList({
       return;
     }
     unreadLandedRef.current = key;
+    // Only when the post is taller than the pane: a short one shows its
+    // question at the top anyway, and unpinning it would offer "Ir ao
+    // presente" over a transcript that has nowhere to go.
+    const overflows =
+      scrollRef.current.scrollHeight > scrollRef.current.clientHeight + 4;
+    if (forumLandAtTop) {
+      // Held at the question until the reader moves, whether or not the post
+      // overflows yet: it can start short and grow as its images load.
+      forumHoldTopRef.current = true;
+    }
+    if (forumLandAtTop && overflows) {
+      // Unpinned NOW, through the ref too: the follow-the-tail effects read
+      // the ref in this same commit, and a late image would pull the reader
+      // to the bottom past the question they came to read.
+      isPinnedRef.current = false;
+      setIsPinned(false);
+      scrollRef.current.scrollTop = 0;
+      const frame = requestAnimationFrame(() => {
+        if (scrollRef.current && !isPinnedRef.current) {
+          scrollRef.current.scrollTop = 0;
+        }
+      });
+      return () => cancelAnimationFrame(frame);
+    }
     setIsPinned(true);
     scrollToBottom("auto");
     // One more frame: the first layout can still be short if the composer or
     // a cached image settles after this commit.
     const frame = requestAnimationFrame(() => {
-      if (isPinnedRef.current && !hasNewerRef.current) {
+      if (isPinnedRef.current && !hasNewerRef.current && !forumHoldTopRef.current) {
         scrollToBottom("auto");
       }
     });
@@ -1473,6 +1576,8 @@ export const MessageList = memo(function MessageList({
     messages.length,
     scrollToBottom,
     isLoading,
+    forumLandAtTop,
+    hasMore,
   ]);
 
   useEffect(() => {
@@ -1540,6 +1645,7 @@ export const MessageList = memo(function MessageList({
 
   /** The button under the reader: back to the live end of the channel. */
   const jumpToPresent = useCallback(() => {
+    forumHoldTopRef.current = false;
     if (!hasNewer || !onJumpToPresent) {
       scrollToBottom();
       return;
@@ -1641,11 +1747,21 @@ export const MessageList = memo(function MessageList({
    */
   const jumpToPresentFromPill = followOwnSend;
 
+  const releaseForumHold = useCallback(() => {
+    forumHoldTopRef.current = false;
+  }, []);
+  // A hold belongs to the post it landed on, never to the next conversation.
+  useEffect(() => {
+    forumHoldTopRef.current = false;
+  }, [channelId]);
+
   const handleScroll = useCallback(() => {
     const container = scrollRef.current;
     if (!container) {
       return;
     }
+    // Plain geometry, true mid-jump as much as any other time.
+    setCanScrollDown(distanceFromBottom(container) > SCROLL_END_SLACK_PX);
     // A jump's own animation: `settleJump` reads the geometry when it lands.
     // Its first frames are still near the bottom and would re-pin the list.
     if (jumpingRef.current) {
@@ -1715,6 +1831,11 @@ export const MessageList = memo(function MessageList({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
+        // The reader moving is what ends a forum first visit's hold.
+        onWheel={releaseForumHold}
+        onTouchStart={releaseForumHold}
+        onKeyDown={releaseForumHold}
+        onPointerDown={releaseForumHold}
         role="log"
         aria-label={t("chat.messagesAria")}
         // The container itself never auto-announces: a busy channel mutates
@@ -1725,6 +1846,7 @@ export const MessageList = memo(function MessageList({
         aria-live="off"
         className="flex-1 overflow-y-auto [overflow-anchor:none] py-4"
       >
+        {forumPost?.listHeader}
         {hasMore && (
           <div className="flex justify-center pb-3">
             {isLoadingOlder ? (
@@ -1779,10 +1901,68 @@ export const MessageList = memo(function MessageList({
             // forward), so this only changes identity for the message you
             // just sent, in the seconds after you sent it.
             const elementKey = row.message.nonce ?? rowId;
+            const isOpening = forumOpeningId !== null && rowId === forumOpeningId;
+            if (row.message.systemKind === "nudge") {
+              const mine = row.message.authorId === currentUserId;
+              const name = mine
+                ? (participants?.find((one) => one.id !== currentUserId)?.displayName ??
+                  row.message.authorName)
+                : row.message.authorName;
+              return (
+                <Fragment key={elementKey}>
+                  {row.dayLabel ? <DaySeparator label={row.dayLabel} /> : null}
+                  <NudgeLine
+                    messageId={rowId}
+                    createdAt={row.message.createdAt}
+                    mine={mine}
+                    name={name}
+                    registerRow={registerRow}
+                    onDelete={
+                      onDeleteMessage
+                        ? stableRowCallback(
+                            rowId,
+                            "delete",
+                            [onDeleteMessage],
+                            () => () => void onDeleteMessage(rowId),
+                          )
+                        : undefined
+                    }
+                    onReport={
+                      onReportMessage
+                        ? stableRowCallback(
+                            rowId,
+                            "report",
+                            [onReportMessage, row.message],
+                            () => () => onReportMessage(row.message),
+                          )
+                        : undefined
+                    }
+                  />
+                </Fragment>
+              );
+            }
             return (
+            <Fragment key={elementKey}>
             <MessageRow
-              key={elementKey}
               row={row}
+              forumOp={
+                forumPost !== null &&
+                forumPost.authorId !== null &&
+                row.message.authorId === forumPost.authorId
+              }
+              forumAnswer={
+                forumPost !== null && forumPost.acceptedAnswerId === rowId
+              }
+              onToggleAnswer={
+                forumPost?.onToggleAnswer && !isOpening && !row.message.pending
+                  ? stableRowCallback(
+                      rowId,
+                      "toggleAnswer",
+                      [forumPost.onToggleAnswer],
+                      () => () => forumPost.onToggleAnswer?.(rowId),
+                    )
+                  : undefined
+              }
               mentionJoinTop={joinTop}
               mentionJoinBottom={joinBottom}
               stream={variant === "stream"}
@@ -2024,13 +2204,28 @@ export const MessageList = memo(function MessageList({
               }
               onMarkRead={onMarkRead}
               showUnreadDivider={rowId === firstUnreadId}
+              afterForumOpening={
+                forumOpeningId !== null &&
+                index > 0 &&
+                rows[index - 1]?.message.id === forumOpeningId &&
+                forumPost?.afterOpening != null
+              }
               unreadDividerRef={
                 rowId === firstUnreadId ? unreadDividerRef : undefined
               }
             />
+            {isOpening && forumPost?.afterOpening}
+            </Fragment>
             );
           })
         )}
+
+        {channelId ? (
+          <NudgeNotice
+            channelId={channelId}
+            name={participants?.find((one) => one.id !== currentUserId)?.displayName ?? ""}
+          />
+        ) : null}
 
         {hasNewer && (
           <div className="flex justify-center pt-3">
@@ -2115,7 +2310,7 @@ export const MessageList = memo(function MessageList({
         </p>
       )}
 
-      {(!isPinned || hasNewer) && (
+      {((!isPinned && canScrollDown) || hasNewer) && (
         <button
           type="button"
           onClick={jumpToPresentFromPill}
@@ -2398,6 +2593,20 @@ function EmptyState({
 
 function TypingIndicator({ users }: { users: TypingUser[] }) {
   const { t } = useTranslation();
+  const retro = useRetroLook();
+  if (retro) {
+    // Modo 2005: a status strip under the log that is always there, so the
+    // log does not jump when somebody starts typing.
+    return (
+      <p className="retro-typing" aria-live="polite" data-retro-typing="">
+        {users.length === 0
+          ? null
+          : users.length === 1
+            ? t("retro.typing_one", { name: users[0]!.displayName })
+            : t("retro.typing_other", { count: users.length })}
+      </p>
+    );
+  }
   if (users.length === 0) {
     return null;
   }
@@ -2602,6 +2811,12 @@ interface MessageRowProps {
   onMarkRead?: () => void;
   showUnreadDivider?: boolean;
   unreadDividerRef?: Ref<HTMLDivElement>;
+  /**
+   * The first reply under a forum post's opening message: something is drawn
+   * between them (the Solução card, "N RESPOSTAS"), so this row opens its own
+   * block even when the author wrote the opening message too.
+   */
+  afterForumOpening?: boolean;
   /** This ping sits against the previous row's wash. */
   mentionJoinTop?: boolean;
   /** This ping sits against the next row's wash. */
@@ -2611,6 +2826,12 @@ interface MessageRowProps {
   /** Every other stream row gets a faint wash, Twitch's alternating background. */
   zebra?: boolean;
   streamBadges?: { hostUserId: string; cohostIds: ReadonlySet<string> } | null;
+  /** A forum post: this row's author opened it. */
+  forumOp?: boolean;
+  /** A forum post: this row is the accepted answer. */
+  forumAnswer?: boolean;
+  /** A forum post: mark (or unmark) this reply as the answer. */
+  onToggleAnswer?: () => void;
 }
 
 const MessageRow = memo(function MessageRow({
@@ -2664,16 +2885,24 @@ const MessageRow = memo(function MessageRow({
   onMarkRead,
   showUnreadDivider = false,
   unreadDividerRef,
+  afterForumOpening = false,
   mentionJoinTop = false,
   mentionJoinBottom = false,
   stream = false,
   streamBadges = null,
   zebra = false,
+  forumOp = false,
+  forumAnswer = false,
+  onToggleAnswer,
 }: MessageRowProps) {
   const { t, locale } = useTranslation();
   const openProfile = useProfilePopover();
   const compact = useChatDisplay().display.density === "compact";
-  const { message, startsGroup, dayLabel } = row;
+  const { message, dayLabel } = row;
+  // The first unread message opens a block even when the same person also
+  // wrote the message above the "Novas" line: the divider is where the reader
+  // starts, and a headerless row right under it reads as nobody's.
+  const startsGroup = row.startsGroup || showUnreadDivider || afterForumOpening;
   // A Baú post pasted here is drawn as a card. The server decides whether this
   // reader may see it; until it answers (and if it refuses) the link stays.
   const bauSelection = useMemo(
@@ -2702,7 +2931,21 @@ const MessageRow = memo(function MessageRow({
     currentUserId,
   );
   const moreRef = useRef<HTMLDivElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
   const [moreOpen, setMoreOpen] = useState(false);
+  // Above the button when the transcript would clip it below (the last
+  // reply, right over the composer). Measured before paint, so it never
+  // flashes in the wrong place.
+  const [moreUp, setMoreUp] = useState(false);
+  useLayoutEffect(() => {
+    const anchor = moreRef.current;
+    const menu = moreMenuRef.current;
+    if (!moreOpen || !anchor || !menu) {
+      setMoreUp(false);
+      return;
+    }
+    setMoreUp(shouldOpenUp(anchor, menu.offsetHeight));
+  }, [moreOpen]);
   useEffect(() => {
     if (!moreOpen) {
       return;
@@ -2930,7 +3173,19 @@ const MessageRow = memo(function MessageRow({
           },
         ]
       : []),
-    ...(canReply || threadAction
+    ...(onToggleAnswer && isReal
+      ? [
+          {
+            id: "forum-answer",
+            label: forumAnswer
+              ? t("forum.solution.unmark")
+              : t("forum.solution.mark"),
+            icon: CircleCheck,
+            onSelect: selectAndClose(onToggleAnswer, true),
+          },
+        ]
+      : []),
+    ...(canReply || threadAction || (onToggleAnswer && isReal)
       ? [{ id: "sep-reply", label: "", separator: true }]
       : []),
     {
@@ -3121,6 +3376,9 @@ const MessageRow = memo(function MessageRow({
           // gets from the keyboard Menu key / Shift+F10.
           onContextMenu={onMenuOpenRow}
           data-message-stream={stream ? "" : undefined}
+          // Hooks for Modo 2005's "Fulano diz:" rows (`components/retro/retro.css`).
+          data-own={isMine ? "" : undefined}
+          data-group-start={startsGroup ? "" : undefined}
           className={cn(
             "group relative flex items-start gap-0 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
             stream ? "px-3" : "px-5",
@@ -3138,7 +3396,9 @@ const MessageRow = memo(function MessageRow({
             selecting && "rounded-md",
             selecting && !selected && "hover:bg-ink-3/40",
             selected && "bg-danger/15 ring-1 ring-danger/50",
+            forumAnswer && "shadow-[inset_3px_0_0_var(--color-success)]",
           )}
+          data-forum-answer={forumAnswer ? "" : undefined}
         >
           {selecting && onToggleSelect && isReal && (
             /* One overlay rather than a checkbox column: the row layout stays
@@ -3176,7 +3436,10 @@ const MessageRow = memo(function MessageRow({
             style={ROW_CONTENT_VISIBILITY}
           >
             {stream ? null : startsGroup && !compact ? (
-              <div className="flex w-14 shrink-0 items-start justify-end pr-2">
+              <div
+                className="flex w-14 shrink-0 items-start justify-end pr-2"
+                data-row-gutter=""
+              >
                 <div className="relative h-9 w-9 shrink-0">
                   <AuthorButton
                     message={message}
@@ -3219,6 +3482,7 @@ const MessageRow = memo(function MessageRow({
                 )}
                 dateTime={message.createdAt}
                 title={formatFullTimestamp(message.createdAt)}
+                data-row-gutter=""
               >
                 {formatTime(message.createdAt)}
               </time>
@@ -3238,8 +3502,14 @@ const MessageRow = memo(function MessageRow({
                 />
               )}
               {startsGroup && !stream && (
-                <div className="flex flex-wrap items-baseline gap-x-2">
-                  <span className="inline-flex items-baseline gap-1">
+                <div
+                  className="flex flex-wrap items-baseline gap-x-2"
+                  data-row-header=""
+                >
+                  <span
+                    className="inline-flex items-baseline gap-1"
+                    data-row-author=""
+                  >
                     <AuthorButton
                       message={message}
                       author={authorInfo}
@@ -3265,6 +3535,14 @@ const MessageRow = memo(function MessageRow({
                       })}
                     />
                   </span>
+                  {forumOp && (
+                    <span
+                      className="self-center rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-bold uppercase tracking-wide text-text-secondary"
+                      title={t("forum.badge.opHint")}
+                    >
+                      {t("forum.badge.op")}
+                    </span>
+                  )}
                   {message.isAutomod ? (
                     <span
                       className="rounded bg-accent-soft px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-on-accent-soft"
@@ -3325,6 +3603,12 @@ const MessageRow = memo(function MessageRow({
                 <>
                   {/* A message carrying attachments is allowed to say nothing, so
                       an empty body renders as nothing rather than an empty line. */}
+                  {message.storyId ? (
+                    <StoryQuoteCard
+                      storyId={message.storyId}
+                      currentUserId={currentUserId}
+                    />
+                  ) : null}
                   {message.chance ? (
                     <ChanceCard result={message.chance} />
                   ) : message.poll ? (
@@ -3575,10 +3859,28 @@ const MessageRow = memo(function MessageRow({
                 </Tooltip>
                 {moreOpen && (
                   <div
+                    ref={moreMenuRef}
                     role="menu"
                     aria-label={t("chat.more")}
-                    className="absolute right-0 top-full z-20 mt-0.5 max-h-[18rem] w-48 overflow-y-auto rounded-md border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
+                    data-opens={moreUp ? "up" : "down"}
+                    className={cn(
+                      "absolute right-0 z-20 max-h-[18rem] w-48 overflow-y-auto rounded-md border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]",
+                      moreUp ? "bottom-full mb-0.5" : "top-full mt-0.5",
+                    )}
                   >
+                    {onToggleAnswer && isReal && (
+                      <MoreMenuItem
+                        icon={CircleCheck}
+                        onSelect={() => {
+                          onToggleAnswer();
+                          setMoreOpen(false);
+                        }}
+                      >
+                        {forumAnswer
+                          ? t("forum.solution.unmark")
+                          : t("forum.solution.mark")}
+                      </MoreMenuItem>
+                    )}
                     {canPin && (
                       <MoreMenuItem
                         icon={isMessagePinned ? PinOff : Pin}

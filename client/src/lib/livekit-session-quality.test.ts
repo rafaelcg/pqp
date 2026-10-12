@@ -1844,7 +1844,8 @@ describe("share_high_motion_guard on the SFU", () => {
     const last = senderWrites.at(-1)!;
     expect(last.source).toBe(Track.Source.ScreenShare);
     expect(last.encodings.every((e) => e.maxFramerate === 30)).toBe(true);
-    expect(last.encodings[last.encodings.length - 1]?.maxBitrate).toBe(2_000_000);
+    // The plan's ceiling for a 60 fps capture (4 Mbps x 1.5), halved.
+    expect(last.encodings[last.encodings.length - 1]?.maxBitrate).toBe(3_000_000);
     // No republish and no new sid: the viewers never see a blink.
     expect(published).toHaveLength(publishesBefore);
     expect(unpublished).toHaveLength(0);
@@ -1879,7 +1880,8 @@ describe("share_high_motion_guard on the SFU", () => {
 
     const last = senderWrites.at(-1)!;
     expect(last.encodings.every((e) => e.maxFramerate === 60)).toBe(true);
-    expect(last.encodings[last.encodings.length - 1]?.maxBitrate).toBe(4_000_000);
+    // 4 Mbps at 30 fps is 6 Mbps for a 60 fps capture.
+    expect(last.encodings[last.encodings.length - 1]?.maxBitrate).toBe(6_000_000);
   });
 
   it("keeps the guard's frame rate and height when the room's plan changes the capture", async () => {
@@ -1936,5 +1938,87 @@ describe("share_high_motion_guard on the SFU", () => {
     (publication.track.sender as { getStats?: () => Promise<unknown> }).getStats =
       async () => report;
     expect(await sfu.getScreenSenderReports?.()).toEqual([report]);
+  });
+});
+
+describe("a 60 fps share and the presenter's priority", () => {
+  it("gives a 60 fps share half again the ceiling of a 30 fps one", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen30", 1080, 30));
+    expect(
+      encodingFor(Track.Source.ScreenShare)?.screenShareEncoding?.maxBitrate,
+    ).toBe(3_000_000);
+    await sfu.unpublishScreen();
+    await sfu.publishScreen(fakeStream("video", "screen60", 1080, 60));
+    expect(
+      lastPublish(Track.Source.ScreenShare)?.screenShareEncoding?.maxBitrate,
+    ).toBe(4_500_000);
+  });
+
+  it("does not scale the large-room cap, which is about the SFU's bill", async () => {
+    const sfu = await session();
+    fillRoom(30);
+    await sfu.publishScreen(fakeStream("video", "screen60", 1080, 60));
+    expect(
+      encodingFor(Track.Source.ScreenShare)?.screenShareEncoding?.maxBitrate,
+    ).toBe(1_500_000);
+  });
+
+  it("moves a share from 30 to 60 in place, frame rate and ceiling both", async () => {
+    const sfu = await session();
+    const stream = fakeStream("video", "screen", 1080, 30);
+    await sfu.publishScreen(stream);
+    const publishesBefore = published.length;
+    senderWrites.length = 0;
+    // What `applyConstraints({ frameRate: 60 })` does to a real capture.
+    (
+      stream.getVideoTracks()[0] as unknown as { __settings: { frameRate: number } }
+    ).__settings.frameRate = 60;
+
+    await sfu.refreshScreenFrameRate?.();
+
+    const last = senderWrites.at(-1)!;
+    expect(last.encodings.at(-1)?.maxFramerate).toBe(60);
+    expect(last.encodings.at(-1)?.maxBitrate).toBe(4_500_000);
+    expect(published).toHaveLength(publishesBefore);
+  });
+
+  it("publishes an ordinary share holding resolution when sharpness was chosen", async () => {
+    const sfu = await session();
+    await sfu.setScreenPriority?.("detail");
+    await sfu.publishScreen(fakeStream("video", "screen", 1080, 60));
+    expect(encodingFor(Track.Source.ScreenShare)?.degradationPreference).toBe(
+      "maintain-resolution",
+    );
+  });
+
+  it("switches a live share's priority in place, both ways", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080, 60));
+    const publishesBefore = published.length;
+    senderWrites.length = 0;
+
+    await sfu.setScreenPriority?.("detail");
+    expect(senderWrites.at(-1)?.degradationPreference).toBe("maintain-resolution");
+
+    await sfu.setScreenPriority?.("motion");
+    expect(senderWrites.at(-1)?.degradationPreference).toBe("maintain-framerate");
+    expect(published).toHaveLength(publishesBefore);
+  });
+
+  it("keeps a watch party's ingest on motion whatever was chosen", async () => {
+    const sfu = await session();
+    await sfu.setScreenPriority?.("detail");
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    await sfu.publishScreen(fakeStream("video", "screen", 1080, 60));
+    expect(lastPublish(Track.Source.ScreenShare)?.degradationPreference).toBe(
+      "maintain-framerate",
+    );
+    senderWrites.length = 0;
+    await sfu.setScreenPriority?.("motion");
+    await sfu.setScreenPriority?.("detail");
+    for (const write of senderWrites) {
+      expect(write.degradationPreference).toBe("maintain-framerate");
+    }
   });
 });

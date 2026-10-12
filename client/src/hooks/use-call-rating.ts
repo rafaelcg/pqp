@@ -17,6 +17,9 @@ import {
   type ReconnectTracker,
 } from "@/lib/call-quality-summary";
 import { subscribeVoiceStats } from "@/lib/voice-stats-probe";
+import { currentAudioHealthSummary } from "@/lib/audio-health-monitor";
+import { hasAudioHealth } from "@/lib/audio-health";
+import { audioSelfHealEnabled } from "@/lib/audio-self-heal-flag";
 
 /**
  * The React shell around `lib/call-rating.ts`: watch a call, ask once when it
@@ -128,11 +131,16 @@ export function useCallRating(voice: VoiceShape): {
       return;
     }
     writeLastAsked(now);
+    // What the audio self-repair saw, only when the API has said it runs it:
+    // that answer is also the only proof this API accepts the field, and the
+    // rating schema is strict (see `lib/audio-self-heal-flag.ts`).
+    const audioHealth = audioSelfHealEnabled() ? currentAudioHealthSummary() : {};
     setPending({
       ...ratable,
       mediaQuality: {
         ...finishQuality(quality.current),
         reconnectCount: reconnects.current.reconnectCount,
+        ...(hasAudioHealth(audioHealth) ? { audioHealth } : {}),
       },
     });
     // `snapshot` is rebuilt every render, so the individual fields are the deps

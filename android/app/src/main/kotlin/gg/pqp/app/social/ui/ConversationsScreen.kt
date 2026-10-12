@@ -80,6 +80,12 @@ fun ConversationsScreen(
     social: SocialRepository,
     onOpen: (DmSummary) -> Unit,
     onNewConversation: () -> Unit,
+    /**
+     * Stories: the friends strip at the top of the list, while the global
+     * `stories` flag is on. Null draws no strip (tests, previews).
+     */
+    session: gg.pqp.app.core.SessionStore? = null,
+    onJoinStoryCall: (serverId: String, channelId: String, channelName: String) -> Unit = { _, _, _ -> },
 ) {
     val conversations by social.conversations.collectAsStateWithLifecycle()
     val loading by social.loadingConversations.collectAsStateWithLifecycle()
@@ -153,12 +159,21 @@ fun ConversationsScreen(
                 .padding(padding),
         ) {
             if (conversations.isEmpty()) {
-                EmptyState(stringResource(R.string.dms_empty), icon = PqpIcons.Messages)
-            } else {
+                Column(Modifier.fillMaxSize()) {
+                    FriendsStories(session, onJoinStoryCall)
+                    EmptyState(stringResource(R.string.dms_empty), icon = PqpIcons.Messages)
+                }
+            } else Column(Modifier.fillMaxSize()) {
+                // Above the list, not its first item: a lazy list keeps its
+                // place by the first visible key, so a strip that arrives a
+                // beat after the rows would be inserted above the viewport and
+                // never seen.
+                FriendsStories(session, onJoinStoryCall)
                 LazyColumn(
                     contentPadding = PaddingValues(bottom = 96.dp),
                     modifier = Modifier
-                        .fillMaxSize()
+                        .weight(1f)
+                        .fillMaxWidth()
                         .testTag("dms.list"),
                 ) {
                     items(conversations, key = { it.channelId }) { conversation ->
@@ -305,4 +320,19 @@ private fun ConversationRow(
             UnreadBadge(unread, conversation.unread.mentions)
         }
     }
+}
+
+/** The friends story strip, when there is a session to read it with. */
+@Composable
+private fun FriendsStories(
+    session: gg.pqp.app.core.SessionStore?,
+    onJoinStoryCall: (String, String, String) -> Unit,
+) {
+    if (session == null) return
+    gg.pqp.app.stories.ui.StoriesSection(
+        session = session,
+        serverId = null,
+        contextLabel = stringResource(R.string.stories_viewer_friends),
+        onJoinCall = onJoinStoryCall,
+    )
 }

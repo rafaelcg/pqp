@@ -55,6 +55,15 @@ describe("ChannelIcon", () => {
     expect(html).not.toContain("lucide-mic");
   });
 
+  it("gives a forum its own glyph, not the hash", () => {
+    const html = renderToStaticMarkup(
+      <ChannelIcon channel={{ ...BASE, type: "forum" }} />,
+    );
+    // lucide renames icons across majors; the class carries the current name.
+    expect(html).toMatch(/lucide-(messages-square|message-squares)/);
+    expect(html).not.toContain("lucide-hash");
+  });
+
   it("falls back to the lock glyph for a private channel with no image", () => {
     const html = renderToStaticMarkup(
       <ChannelIcon channel={{ ...BASE, isPrivate: true }} />,

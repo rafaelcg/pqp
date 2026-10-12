@@ -145,7 +145,7 @@ struct ThreadListView: View {
                         .padding(.horizontal, Metrics.hPadding)
                         .padding(.top, 8)
                     }
-                    .refreshable { await load() }
+                    .pullToRefresh { await load() }
                 }
             }
             .navigationTitle("Threads in #\(channel.name)")

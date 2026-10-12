@@ -1,5 +1,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  STORY_IDS_MAX,
+  STORY_POSTS_PER_MINUTE,
+  createStorySchema,
+  storyModRemoveSchema,
+  storyReactionSchema,
+  storyReplySchema,
+  storySaveToBauSchema,
+  storyViewsBatchSchema,
+  type CommunityHomeContentType,
   AUTOMOD_MENTION_LIMIT_DEFAULT,
   createAutomodRuleSchema,
   updateAutomodRuleSchema,
@@ -33,6 +42,10 @@ import {
   createChannelMessageSchema,
   createChannelSchema,
   moveChannelSchema,
+  channelLayoutSchema,
+  channelNameIssue,
+  CHANNEL_LAYOUT_OFF,
+  CHANNEL_LAYOUT_STALE,
   createDmSchema,
   createGifAttachmentSchema,
   createInviteSchema,
@@ -136,12 +149,18 @@ import {
   shareCommunityHomePostSchema,
   communityHomeCommentBodySchema,
   parseCommunityHomeBody,
+  parseCommunityHomeLatestLimit,
   parseCommunityHomeTeaser,
   parseCommunityHomeTitle,
   scheduleCommunityHomePostSchema,
   updateCommunityHomePostSchema,
   updateServerCommunityHomeConfigSchema,
   isVoiceRoomChannelType,
+  WEBHOOK_DEDUPLICATED_HEADER,
+  WEBHOOK_FORUM_SETTINGS_DEFAULTS,
+  type WebhookForumSettings,
+  WEBHOOK_THREAD_ID_PARAM,
+  webhookForumSettingsSchema,
   liveHlsTelemetryBatchSchema,
   liveHlsPresenceSchema,
   streamQualityTelemetryBatchSchema,
@@ -149,6 +168,19 @@ import {
   setVoiceAudienceSpeakerSchema,
 } from "@pqp/shared";
 import { z } from "zod";
+import {
+  ChannelLayoutError,
+  ChannelLayoutServerMissing,
+  applyChannelLayout,
+  getChannelLayoutConfig,
+  legacyCreateParent,
+  listSidebarChannelIds,
+  migrateChannelLayout,
+  revertChannelLayout,
+} from "../services/channel-layout.js";
+
+/** Operator: migrate or revert one server's channel list (see `operatorChannelLayout`). */
+const ADMIN_CHANNEL_LAYOUT_PATH = "/api/admin/channel-layout";
 import {
   createLiveKitSession,
   getServerVoiceBackend,
@@ -252,6 +284,22 @@ import {
 } from "../ws/voice.js";
 import { audienceModeEnabledFor } from "../voice/audience.js";
 import { voiceConfigForServer } from "../lib/voice-config.js";
+import {
+  FORUM_CHANNELS_OFF,
+  forumChannelsEnabled,
+  forumConfigForServer,
+} from "../lib/forum-config.js";
+import {
+  FORUM_POST_USE_POST_ROUTES,
+  isForumPost,
+} from "../services/forum-guards.js";
+import {
+  executeForumWebhook,
+  ForumWebhookRefusal,
+  putWebhookForumSettings,
+  readWebhookForumSettings,
+  webhookRateLimitedBody,
+} from "../services/forum-webhooks.js";
 import { verifyVoiceResumeToken } from "../ws/voice-resume-token.js";
 // --- voice moderation ---
 import { evictSfuUser, setSfuUserCanPublish, setSfuUserMuted } from "../voice/admin.js";
@@ -355,7 +403,9 @@ import {
 import {
   addCommunityHomeComment,
   claimCommunityHomeMediaUpload,
+  communityHomeObjectKey,
   CommunityHomeError,
+  registerCopiedCommunityHomeMedia,
   countUnreadCommunityHomePosts,
   countUnreadCommunityHomePostsAllServers,
   markCommunityHomeRead,
@@ -364,6 +414,7 @@ import {
   deleteCommunityHomeComment,
   deleteCommunityHomePost,
   getCommunityHomePost,
+  isBauCustomCoverOn,
   isBauMobileRenditionOn,
   getCommunityHomePostCaptions,
   isCommunityHomeEnabled,
@@ -381,7 +432,35 @@ import {
 } from "../services/community-home.js";
 import { pushPendingCommunityHomePosts } from "../services/community-home-push.js";
 import {
+  ackStoryNotice,
+  createStory,
+  deleteStoryEverywhere,
+  getStoriesForViewer,
+  getStoryCard,
+  listFriendsStrip,
+  listServerStrip,
+  listStoryAudienceOptions,
+  listStoryNotices,
+  listViewers,
+  markReplied,
+  muteAuthor,
+  prepareStoryReply,
+  publishStory,
+  recordViews,
+  removeStoryFromServer,
+  setReaction,
+  storiesConfig,
+  storiesOnForServer,
+  storyAudienceTargets,
+  storyForBau,
+  StoryError,
+  unmuteAuthor,
+} from "../services/stories.js";
+import { notifyStoriesUpdate, notifyStoryAudiences } from "../ws/stories.js";
+import { copyObject, deleteObject, StorageError } from "../lib/s3.js";
+import {
   getCommunityHomePostCard,
+  listLatestCommunityHomeCards,
   safeShareOrigin,
   shareCommunityHomePost,
   type ShareFailure,
@@ -444,6 +523,7 @@ import {
   CommunityListingNeedsAddressError,
   CommunitySlugError,
   findCommunityIdBySlug,
+  findListingNudge,
   getCommunity,
   getCommunitySettings,
   getPublicCommunity,
@@ -1183,6 +1263,9 @@ export function resetApiRateLimits(): void {
   // drain across them.
   operatorLimiter.reset();
   musicResolveLimiter.reset();
+  // Declared in the stories section below; same temporal dead zone note as
+  // `depoimentoLimiter` above.
+  resetStoryRateLimits();
 }
 
 class Forbidden extends HttpError {
@@ -1369,6 +1452,20 @@ async function requireServerChannel(channelId: string) {
     throw new NotFound("Channel not found");
   }
   return { ...channel, server_id: channel.server_id };
+}
+
+/**
+ * --- forums --- The generic channel routes rename and delete chat threads,
+ * and must not do either to a forum post: the post routes
+ * (`/api/forum-posts/:postId`) run AutoMod on a new title, write the forum
+ * audit rows and send `forum-post-removed`, and these would skip all three.
+ * Asked after the permission check, so a caller without MANAGE_CHANNELS
+ * learns nothing about what the id is. A chat thread passes (one PK probe).
+ */
+async function refuseForumPost(channel: { id: string; type: string }) {
+  if (channel.type === "thread" && (await isForumPost(channel.id))) {
+    throw new HttpError(400, FORUM_POST_USE_POST_ROUTES);
+  }
 }
 
 const router = createRouter();
@@ -2245,6 +2342,13 @@ router.get(OPERATOR_CHANNELS_PATH, async ({ url, user }) => {
   return operatorChannels(url.searchParams.get("serverId"));
 });
 
+router.post(ADMIN_CHANNEL_LAYOUT_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return operatorChannelLayout(req);
+});
+
 router.put(OPERATOR_SERVER_LIVE_HLS_PATH, async ({ req, user }) => {
   if (!isInstanceModerator(user)) {
     throw new NotFound("Not found");
@@ -2396,6 +2500,13 @@ const ADMIN_MACHINE_ROUTES: {
       return operatorSetServerLiveHls(body.serverId, body, null);
     },
   },
+  // The mixed channel list's data: "do the QG now" (dry run first) and undo.
+  // Both are reversible and both keep a snapshot.
+  {
+    method: "POST",
+    path: ADMIN_CHANNEL_LAYOUT_PATH,
+    run: async (req) => operatorChannelLayout(req),
+  },
   // The waitlist: one read, and the one write that is not already the
   // availability flip above ("Ativar" IS that flip, with low latency beside
   // it, and approves the server's rows as a side effect of turning it on).
@@ -2492,6 +2603,43 @@ async function operatorChannels(serverId: string | null) {
     throw new NotFound("Server not found");
   }
   return list;
+}
+
+const adminChannelLayoutSchema = z.object({
+  serverId: z.string().uuid(),
+  action: z.enum(["migrate", "revert"]),
+  dryRun: z.boolean().optional(),
+});
+
+/**
+ * Migrate one server's channel list now (the job would within a minute once
+ * the flag is on, but the QG goes by hand, dry run first), or revert it to the
+ * snapshot. A migrate after a revert is allowed here and only here, and it
+ * takes a NEW snapshot: a revert after that restores the list as it was at
+ * the second migrate, not the original one.
+ */
+async function operatorChannelLayout(req: IncomingMessage) {
+  const body = adminChannelLayoutSchema.parse(await readJsonBody(req));
+  try {
+    const result =
+      body.action === "migrate"
+        ? await migrateChannelLayout(body.serverId, {
+            dryRun: body.dryRun,
+            allowReverted: true,
+          })
+        : await revertChannelLayout(body.serverId);
+    // Every outcome but a dry run nudges, `already` included: a retry of a
+    // migrate whose first nudge was lost is how the operator sends it again.
+    if (result.status !== "dry-run" && result.status !== "not-migrated") {
+      nudgeWholeList(body.serverId);
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof ChannelLayoutServerMissing) {
+      throw new NotFound(error.message);
+    }
+    throw error;
+  }
 }
 
 async function operatorSetServerLiveHls(
@@ -2674,6 +2822,28 @@ router.get("/api/dms", async ({ user }) =>
 );
 
 /**
+ * Conversas: which presentation of conversations the clients draw. Two
+ * runtime flags (global, off by default, docs/FEATURE_FLAGS.md), read per
+ * request so a flip reaches open tabs on their next config refresh:
+ *
+ * - `home` (`conversations_home`): the labelled rail door, WhatsApp-style
+ *   rows, Nova conversa with friends listed, Ctrl/Cmd+K "ir pra".
+ * - `phoneTabs` (`conversations_home_phone_tabs`): on a phone, the bottom bar
+ *   Conversas / Servidores / Tu. Only meaningful with `home` on, and the
+ *   answer says so rather than leaving every client to remember it.
+ *
+ * Web, iOS and Android read this same route. Anything but an explicit `true`
+ * is off, so a client talking to an older API (404) keeps today's layout.
+ */
+router.get("/api/dms/config", async () => {
+  const home = isEnabled("conversations_home");
+  return {
+    home,
+    phoneTabs: home && isEnabled("conversations_home_phone_tabs"),
+  };
+});
+
+/**
  * Open a conversation. 201 when one was created, 200 when an existing 1:1 was
  * handed back — the idempotency `dm_pairs` exists to provide.
  *
@@ -2734,6 +2904,12 @@ router.get("/api/share/config", async ({ url }) =>
 // whether a host in this server is offered audience mode.
 router.get("/api/voice/config", async ({ url }) =>
   voiceConfigForServer(url.searchParams.get("serverId")),
+);
+
+// Forum channels (`forum_channels`, per server, default off). Asked with the
+// server the client is in; see lib/forum-config.ts. Read per request.
+router.get("/api/forum/config", async ({ url }) =>
+  forumConfigForServer(url.searchParams.get("serverId")),
 );
 
 // Whether the operator has forced every stale client to update
@@ -3253,6 +3429,26 @@ router.post("/api/voice/token", async ({ req, user }) => {
     } else {
       transport = (await readVoiceRoomTransport(body.voiceChannelId)) ?? transport;
     }
+  } else if (
+    transport !== "livekit" &&
+    isVoiceRegistryEnabled() &&
+    isRoomPinnedLocally(body.voiceChannelId)
+  ) {
+    // A PROMOTION THIS REPLICA HAS NOT HEARD YET. A mid-call promotion
+    // (`promoteRoomPastMeshCap` in ws/voice.ts) rewrites the room row first
+    // and tells the cluster second, over the bus. The seats on the replica
+    // that decided it are told at once and ask for a token at once, and HTTP
+    // is balanced per request, so the ask can land here, on a replica that
+    // holds seats in the room and still has `mesh` in its own map because
+    // the bus frame is a few milliseconds behind. Answering 409 there hung
+    // up a person whose call had just been moved for them. The row is the
+    // authority the promotion wrote, so a local `mesh` is checked against it
+    // before refusing. Only on this refusal path: a room that is really mesh
+    // pays one indexed read to be refused, everyone else pays nothing.
+    const stored = await readVoiceRoomTransport(body.voiceChannelId);
+    if (stored === "livekit") {
+      transport = stored;
+    }
   }
   if (transport !== "livekit") {
     throw new HttpError(409, "This room runs peer-to-peer");
@@ -3736,6 +3932,7 @@ router.post("/api/servers", async ({ req, user }) => {
     body.name,
     user.id,
     idempotencyKey,
+    { locale: body.locale },
   );
   const payload = {
     server: { ...mapServer(server), role: "owner" as const },
@@ -4430,6 +4627,7 @@ router.get(
         posts,
         translationEnabled: translationActiveFor(serverId!),
         mobileRenditionEnabled: isBauMobileRenditionOn(serverId!),
+        customCoverEnabled: isBauCustomCoverOn(serverId!),
       };
     } catch (error) {
       mapCommunityHomeError(error);
@@ -4448,6 +4646,7 @@ router.get(
         posts,
         translationEnabled: translationActiveFor(serverId!),
         mobileRenditionEnabled: isBauMobileRenditionOn(serverId!),
+        customCoverEnabled: isBauCustomCoverOn(serverId!),
       };
     } catch (error) {
       mapCommunityHomeError(error);
@@ -4599,6 +4798,7 @@ router.post(
         commentsEnabled: raw.commentsEnabled !== false,
         mediaUploadId: raw.mediaUploadId ?? null,
         mobileMediaUploadId: raw.mobileMediaUploadId ?? null,
+        posterUploadId: raw.posterUploadId ?? null,
         youtubeUrl: raw.youtubeUrl ?? null,
         status: raw.status,
         scheduledAt: raw.scheduledAt ?? null,
@@ -4652,6 +4852,7 @@ router.patch(
         youtubeUrl: raw.youtubeUrl,
         clearMedia: raw.clearMedia,
         mobileMediaUploadId: raw.mobileMediaUploadId,
+        posterUploadId: raw.posterUploadId,
       });
       await notifyHome(serverId!);
       return { post };
@@ -4708,6 +4909,35 @@ router.get(
     await requireServerMember(serverId!, user.id);
     try {
       return await countUnreadCommunityHomePosts(serverId!, user.id);
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+/**
+ * The sidebar preview: the newest published posts as cards (each with
+ * `isNew`), the unread count and the read stamp, in one read. It replaces
+ * `…/home/unread` for a client that knows it, so the channel list makes one
+ * request, not two. Behind the per-server runtime flag `bau_latest_preview`:
+ * off, 404, and the client falls back to `…/home/unread` and the plain row.
+ * Membership, the server's own Baú switch and the VIP lock are the feed's.
+ */
+router.get(
+  "/api/servers/:serverId/home/latest",
+  async ({ url, user }, { serverId }) => {
+    requireCommunityHome();
+    if (!isEnabled("bau_latest_preview", { serverId: serverId! })) {
+      throw new NotFound("Not found");
+    }
+    await requireServerMember(serverId!, user.id);
+    try {
+      return await listLatestCommunityHomeCards(
+        serverId!,
+        user.id,
+        parseCommunityHomeLatestLimit(url.searchParams.get("limit")),
+        url.searchParams.get("lang"),
+      );
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -4966,6 +5196,376 @@ router.post(
   },
 );
 
+// ----------------------------------------------------------------- stories
+
+/**
+ * STORIES (`packages/shared/src/stories.ts` is the contract, the rules are in
+ * `services/stories.ts`). Behind `stories` (per server) and `stories_friends`
+ * (global): with a flag off, a route of that audience answers 404, except the
+ * strips, which answer `{ enabled: false }` so clients hide without a 404
+ * storm. Every per-story route goes through the one visibility gate in the
+ * service, so a story id is never a probe: not visible and not there are the
+ * same 404.
+ */
+
+/**
+ * Posting: `STORY_POSTS_PER_MINUTE` a minute per process here, and the exact
+ * `STORY_POSTS_PER_DAY` in the database. Views are batched by the client and
+ * cheap; a burst covers catching up on a full strip.
+ */
+const storyPostLimiter = createRateLimiter({
+  capacity: STORY_POSTS_PER_MINUTE,
+  refillPerSecond: STORY_POSTS_PER_MINUTE / 60,
+});
+const storyViewLimiter = createRateLimiter({ capacity: 60, refillPerSecond: 2 });
+const storyReactionLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
+
+export function resetStoryRateLimits(): void {
+  storyPostLimiter.reset();
+  storyViewLimiter.reset();
+  storyReactionLimiter.reset();
+}
+
+function takeStoryBudget(
+  limiter: { take: (key: string) => boolean; retryAfter: (key: string) => number },
+  res: ServerResponse,
+  userId: string,
+): void {
+  const key = `story:${userId}`;
+  if (!limiter.take(key)) {
+    res.setHeader("Retry-After", String(limiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+}
+
+function mapStoryError(error: unknown): never {
+  if (error instanceof StoryError) {
+    switch (error.code) {
+      case "not_found":
+        throw new NotFound(error.message);
+      case "forbidden":
+      case "video_off":
+      case "dm_closed":
+      case "replies_off":
+        throw new Forbidden(error.message);
+      case "storage_off":
+        throw new HttpError(503, error.message);
+      case "over_limit":
+        throw new HttpError(413, error.message);
+      case "budget":
+        throw new HttpError(429, error.message);
+      case "automod":
+      case "refused":
+        throw new HttpError(422, error.message);
+      case "not_verified":
+        throw new HttpError(409, error.message);
+      default:
+        throw new HttpError(400, error.message);
+    }
+  }
+  if (error instanceof DmRefusedError) {
+    // Same wording whatever the reason: a refusal must not say whether it was
+    // a block or a privacy setting (see services/dms.ts).
+    throw new Forbidden("Cannot send to this person");
+  }
+  throw error;
+}
+
+/** Ids from `?ids=a,b,c`, uuids only, at most `STORY_IDS_MAX`. */
+function storyIdsParam(url: URL): string[] {
+  const raw = url.searchParams.get("ids") ?? "";
+  const ids = raw
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  if (ids.length === 0 || ids.length > STORY_IDS_MAX || ids.some((id) => !isUuid(id))) {
+    throw new HttpError(400, `Pass 1 to ${STORY_IDS_MAX} story ids`);
+  }
+  return ids;
+}
+
+router.get("/api/stories/config", async ({ url }) => {
+  const serverId = url.searchParams.get("serverId");
+  return storiesConfig(serverId && isUuid(serverId) ? serverId : null);
+});
+
+router.get("/api/stories/audiences", async ({ user }) =>
+  listStoryAudienceOptions(user.id),
+);
+
+router.get("/api/servers/:serverId/stories", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId!, user.id);
+  return listServerStrip(user, serverId!);
+});
+
+router.get("/api/stories/friends", async ({ user }) => listFriendsStrip(user));
+
+router.get("/api/stories", async ({ url, user }) => ({
+  stories: await getStoriesForViewer(user.id, storyIdsParam(url)),
+}));
+
+router.post("/api/stories", async ({ req, res, user }) => {
+  takeStoryBudget(storyPostLimiter, res, user.id);
+  const body = createStorySchema.parse(await readJsonBody(req));
+  try {
+    const result = await createStory(user, body);
+    if (result.liveServerIds.length > 0 || result.liveFriends) {
+      notifyStoryAudiences(user.id, {
+        serverIds: result.liveServerIds,
+        friends: result.liveFriends,
+      });
+    }
+    return created({ story: result.story, upload: result.upload });
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+router.post("/api/stories/:storyId/publish", async ({ user }, { storyId }) => {
+  try {
+    const published = await publishStory(user, storyId!);
+    if (published.wentLive) {
+      // Best effort after the publish committed: a failed lookup costs a live
+      // nudge (clients refetch on focus), never the answer.
+      await storyAudienceTargets(storyId!)
+        .then((targets) => notifyStoryAudiences(user.id, targets))
+        .catch((error: unknown) => {
+          console.error("[stories] publish nudge failed:", error);
+        });
+    }
+    return { story: published.story };
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+router.delete("/api/stories/:storyId", async ({ user }, { storyId }) => {
+  const removed = await deleteStoryEverywhere(storyId!, user.id);
+  if (!removed) {
+    throw new NotFound("Story not found");
+  }
+  // The bytes go on the next sweep tick (a minute at most) unless a report or
+  // a flag holds them; the story is gone from every read right now.
+  notifyStoryAudiences(removed.authorId, removed.targets, [storyId!]);
+  return noContent();
+});
+
+router.post("/api/stories/views", async ({ req, res, user }) => {
+  takeStoryBudget(storyViewLimiter, res, user.id);
+  const body = storyViewsBatchSchema.parse(await readJsonBody(req));
+  const { recorded, authorIds } = await recordViews(user.id, body.storyIds);
+  for (const authorId of authorIds) {
+    notifyStoriesUpdate({ scope: "own", userId: authorId });
+  }
+  return { recorded };
+});
+
+router.put("/api/stories/:storyId/reaction", async ({ req, res, user }, { storyId }) => {
+  takeStoryBudget(storyReactionLimiter, res, user.id);
+  const body = storyReactionSchema.parse(await readJsonBody(req));
+  try {
+    const authorId = await setReaction(user.id, storyId!, body.reaction);
+    notifyStoriesUpdate({ scope: "own", userId: authorId });
+    return { reaction: body.reaction };
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+/**
+ * A text reply becomes a message in the 1:1 conversation with the author,
+ * quoting the story. Everything a DM is subject to applies, because it IS a
+ * DM: privacy and blocks (`openConversation`), the send budget, the block
+ * guard and the push (`postChannelMessage`).
+ */
+router.post("/api/stories/:storyId/reply", async ({ req, res, user }, { storyId }) => {
+  const body = storyReplySchema.parse(await readJsonBody(req));
+  const budget = takeMessageBudget(user.id);
+  if (!budget.ok) {
+    res.setHeader("Retry-After", String(Math.max(1, Math.ceil(budget.retryAfterMs / 1000))));
+    throw new HttpError(429, "Slow down");
+  }
+  try {
+    const { authorId } = await prepareStoryReply(user.id, storyId!);
+    const opened = await openConversation(user.id, [authorId]);
+    const posted = await postChannelMessage({
+      author: user,
+      channelId: opened.channelId,
+      body: body.text,
+      storyId: storyId!,
+      // A retry with the same nonce answers the reply that already landed.
+      ...(body.nonce ? { nonce: body.nonce } : {}),
+    });
+    if (!posted.ok) {
+      switch (posted.reason) {
+        case "rate-limited":
+        case "slow-mode":
+          throw new HttpError(429, "Slow down");
+        case "database-unavailable":
+          throw new DatabaseUnavailableError();
+        default:
+          throw new Forbidden("Cannot send to this person");
+      }
+    }
+    // The DM is sent and committed: bookkeeping after it must not turn that
+    // into an error, or a retry would send it twice.
+    await markReplied(user.id, storyId!).catch((error: unknown) => {
+      console.error("[stories] reply bookkeeping failed:", error);
+    });
+    notifyStoriesUpdate({ scope: "own", userId: authorId });
+    return created({ conversationId: opened.channelId, messageId: posted.message.id });
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+router.get("/api/stories/:storyId/viewers", async ({ url, user }, { storyId }) => {
+  try {
+    return await listViewers(user.id, storyId!, url.searchParams.get("cursor"));
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+router.get("/api/stories/:storyId/card", async ({ user }, { storyId }) => {
+  try {
+    return await getStoryCard(user.id, storyId!);
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+/**
+ * "Tirar do servidor": MANAGE_MESSAGES in this server takes the story out of
+ * THIS server only. Audited, and the author is told once, in-app, with the
+ * reason. It may still be up for their friends or in another server.
+ */
+router.delete(
+  "/api/servers/:serverId/stories/:storyId",
+  async ({ req, user }, { serverId, storyId }) => {
+    if (!storiesOnForServer(serverId!)) {
+      throw new NotFound("Not found");
+    }
+    await requirePermission(serverId!, user.id, Permission.MANAGE_MESSAGES);
+    const body = storyModRemoveSchema.parse(await readJsonBody(req));
+    const removed = await removeStoryFromServer({
+      serverId: serverId!,
+      storyId: storyId!,
+      moderatorId: user.id,
+      reason: body.reason || null,
+    });
+    if (!removed) {
+      throw new NotFound("Story not found");
+    }
+    // Best effort, after the removal committed: an audit hiccup must not make
+    // a done removal answer as failed (same shape as remove-message).
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "story.remove",
+      targetType: "user",
+      targetId: removed.authorId,
+      reason: body.reason || null,
+      changes: [{ key: "story", old: storyId!, new: null }],
+    }).catch((error: unknown) => {
+      console.error(`[moderation] audit write failed after removing story ${storyId}:`, error);
+    });
+    notifyStoriesUpdate({ scope: "server", serverId: serverId! }, [storyId!]);
+    notifyStoriesUpdate({ scope: "own", userId: removed.authorId });
+    return noContent();
+  },
+);
+
+router.put("/api/stories/mutes/:userId", async ({ user }, { userId }) => {
+  try {
+    await muteAuthor(user.id, userId!);
+    return noContent();
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+router.delete("/api/stories/mutes/:userId", async ({ user }, { userId }) => {
+  await unmuteAuthor(user.id, userId!);
+  return noContent();
+});
+
+router.get("/api/stories/notices", async ({ user }) => ({
+  notices: await listStoryNotices(user.id),
+}));
+
+router.post("/api/stories/notices/:noticeId/ack", async ({ user }, { noticeId }) => {
+  if (!(await ackStoryNotice(user.id, noticeId!))) {
+    throw new NotFound("Notice not found");
+  }
+  return noContent();
+});
+
+/**
+ * "Salvar no Baú": the author, holding MANAGE_SERVER there, turns their own
+ * story into a Baú DRAFT. The media is copied inside the bucket (no bytes pass
+ * here), so the story's own object is still deleted on schedule and the copy
+ * stays with the draft. Nobody else may make a story permanent.
+ */
+router.post("/api/stories/:storyId/save-to-bau", async ({ req, user }, { storyId }) => {
+  const body = storySaveToBauSchema.parse(await readJsonBody(req));
+  if (!isCommunityHomeEnabled() || !storiesOnForServer(body.serverId)) {
+    throw new NotFound("Not found");
+  }
+  await requirePermission(body.serverId, user.id, Permission.MANAGE_SERVER);
+  let copiedKey: string | null = null;
+  try {
+    const source = await storyForBau(user.id, storyId!, body.serverId);
+    let mediaUploadId: string | null = null;
+    if (source.key && source.contentType && source.byteSize) {
+      if (!isCommunityHomeMediaConfigured()) {
+        throw new HttpError(503, "Media uploads are not configured on this server");
+      }
+      const contentType = source.contentType as CommunityHomeContentType;
+      const key = communityHomeObjectKey(body.serverId, contentType);
+      await copyObject(source.key, key);
+      copiedKey = key;
+      mediaUploadId = await registerCopiedCommunityHomeMedia({
+        serverId: body.serverId,
+        uploaderId: user.id,
+        key,
+        filename: `story${key.slice(key.lastIndexOf("."))}`,
+        contentType,
+        byteSize: source.byteSize,
+        scan: source.scan,
+      });
+    }
+    const post = await createCommunityHomePost(body.serverId, user.id, {
+      title: null,
+      body: source.caption ?? source.text ?? "",
+      teaser: null,
+      visibility: "free",
+      commentsEnabled: true,
+      mediaUploadId,
+      mobileMediaUploadId: null,
+      youtubeUrl: null,
+      status: "draft",
+      scheduledAt: null,
+      scheduleTimezone: null,
+    });
+    return created({ postId: post.id });
+  } catch (error) {
+    // The copy has no row to be swept from if the draft never happened.
+    if (copiedKey) {
+      await deleteObject(copiedKey).catch((cleanup: unknown) => {
+        console.error(`[stories] leaked a Baú copy ${copiedKey}:`, cleanup);
+      });
+    }
+    if (error instanceof CommunityHomeError) {
+      mapCommunityHomeError(error);
+    }
+    if (error instanceof StorageError) {
+      throw new HttpError(503, "Could not copy the media, try again");
+    }
+    mapStoryError(error);
+  }
+});
+
 // ------------------------------------------------------------- communities
 
 /**
@@ -4986,6 +5586,35 @@ router.post(
  */
 router.get("/api/communities/config", async () => ({
   enabled: isCommunitiesEnabled(),
+}));
+
+/**
+ * First-run switches the client reads once per page and again on every config
+ * refresh (`client/src/lib/newcomer-invite.ts`). One field today:
+ * `inviteMoment`, the runtime flag `newcomer_invite_moment` (global, off by
+ * default; docs/FEATURE_FLAGS.md). Client presentation only, read per request,
+ * so a flip reaches open tabs on their next refresh. Not behind
+ * `COMMUNITIES_ENABLED`: an instance with no communities still has newcomers,
+ * and answering `false` there is the same as the flag being off.
+ */
+router.get("/api/onboarding/config", async () => ({
+  inviteMoment: isEnabled("newcomer_invite_moment"),
+}));
+
+/**
+ * The small, playful switches a client reads with its other configs
+ * (`client/src/lib/config-refresh.ts` asks again on focus and every 10 min).
+ * `nudge`, the runtime flag of the same name (global, off by default;
+ * docs/FEATURE_FLAGS.md), shows or hides chamar a atenção; the server refuses
+ * the `nudge` frame while it is off regardless of what a stale client
+ * believes, so this only decides whether the button is drawn. `retroLook` is
+ * Modo 2005's kill switch (`retro_look`, on by default).
+ */
+router.get("/api/fun/config", async () => ({
+  nudge: isEnabled("nudge"),
+  // Modo 2005's kill switch (`retro_look`, default on). A client reads
+  // anything but `false` as on.
+  retroLook: isEnabled("retro_look"),
 }));
 
 /**
@@ -5070,6 +5699,24 @@ router.get("/api/communities", async ({ url, user }) => {
       : 0;
 
   return listCommunities(user.id, { category, language, search, limit, offset });
+});
+
+/**
+ * The owner's one-time "Aparecer no diretório" card
+ * (`client/src/components/communities/listing-nudge-hint.tsx`).
+ *
+ * Registered above `/api/communities/:serverId`, which would otherwise read
+ * `listing-nudge` as an id. Behind `COMMUNITIES_ENABLED` like every route
+ * here, and behind the runtime flag `community_listing_nudge` (default on),
+ * which answers `null` rather than 404 so turning it off live is invisible to
+ * an open tab. Eligibility is `findListingNudge`.
+ */
+router.get("/api/communities/listing-nudge", async ({ user }) => {
+  requireCommunities();
+  if (!isEnabled("community_listing_nudge")) {
+    return { listingNudge: null };
+  }
+  return { listingNudge: await findListingNudge(user.id) };
 });
 
 /** One listing, for a deep link into the directory. */
@@ -5560,18 +6207,122 @@ router.get(
   },
 );
 
+/**
+ * Which channel list to draw. `mixed` is the `mixed_channel_list` flag for
+ * this server AND a finished migration, so a client never draws a half state;
+ * `version` goes back as the PUT's `baseVersion`. Clients ask on server open
+ * and after each `channels-update`. A 404 (an older API) means the old list.
+ */
+router.get(
+  "/api/servers/:serverId/channel-layout",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    return getChannelLayoutConfig(serverId!);
+  },
+);
+
+/**
+ * The whole sidebar order in one atomic write (the drag on the web, Organizar
+ * canais on the phones). 409 `channel_layout_stale` with the caller's fresh
+ * list when the list moved since `baseVersion`; 409 `channel_layout_off` when
+ * the server is not in the mixed layout. Channels the caller cannot see keep
+ * their place. Same permission as `PATCH /move`: MANAGE_CHANNELS server-wide.
+ */
+router.put(
+  "/api/servers/:serverId/channel-layout",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_CHANNELS);
+    const body = channelLayoutSchema.parse(await readJsonBody(req));
+    const config = await getChannelLayoutConfig(serverId!);
+    if (!config.mixed) {
+      throw new HttpErrorWithDetail(409, CHANNEL_LAYOUT_OFF, {
+        version: config.version,
+      });
+    }
+    let result: Awaited<ReturnType<typeof applyChannelLayout>>;
+    try {
+      result = await applyChannelLayout(serverId!, user.id, body, {
+        // Inside the transaction: the audit row lands with the order or not
+        // at all, and nothing after COMMIT can make a saved order look failed.
+        beforeCommit: (client, moved) =>
+          logAudit(
+            {
+              serverId: serverId!,
+              actorId: user.id,
+              action: "channel.reorder",
+              targetType: "server",
+              targetId: serverId!,
+              changes: [{ key: "moved", old: null, new: moved }],
+            },
+            client,
+          ),
+      });
+    } catch (error) {
+      if (error instanceof ChannelLayoutError) {
+        throw new HttpError(400, error.message);
+      }
+      throw error;
+    }
+    if (result.status === "stale") {
+      throw new HttpErrorWithDetail(409, CHANNEL_LAYOUT_STALE, {
+        channels: (await listChannels(serverId!, user.id)).map(mapChannel),
+        version: result.version,
+      });
+    }
+    if (result.moved > 0) {
+      // Every sidebar row is named (a server may have no category at all),
+      // so each member who can see any of it refetches, and nobody else
+      // hears. Fire and forget: the order is committed whatever this does.
+      nudgeWholeList(serverId!);
+    }
+    // Committed. A list that cannot be read back now is `null`, and the
+    // client keeps the order it drew; the nudge above refreshes it.
+    let channels: ReturnType<typeof mapChannel>[] | null = null;
+    try {
+      channels = (await listChannels(serverId!, user.id)).map(mapChannel);
+    } catch (error) {
+      console.error("[api] channel-layout read-back failed:", error);
+    }
+    return { channels, version: result.version };
+  },
+);
+
 router.post(
   "/api/servers/:serverId/channels",
   async ({ req, user }, { serverId }) => {
     await requirePermission(serverId!, user.id, Permission.MANAGE_CHANNELS);
     const body = createChannelSchema.parse(await readJsonBody(req));
-    const channel = await createChannel(
-      serverId!,
-      body.name,
-      body.type,
-      body.isPrivate ?? false,
-      body.topic ?? null,
-    );
+    // The enum accepts `forum` so the contract is one shape everywhere; this
+    // is what keeps it inert until the runtime flag is on for this server.
+    if (body.type === "forum" && !forumChannelsEnabled(serverId!)) {
+      throw new Forbidden(FORUM_CHANNELS_OFF);
+    }
+    // ABSENT `parentId` is an older client (the legacy-create rule): on a
+    // server in the mixed layout its channel goes to the end of the first
+    // category, where that client draws it. `null` is a current client
+    // asking for no category, and is honoured.
+    const parentId =
+      body.parentId !== undefined
+        ? body.parentId
+        : body.type === "category"
+          ? null
+          : await legacyCreateParent(serverId!);
+    let channel: Awaited<ReturnType<typeof createChannel>>;
+    try {
+      channel = await createChannel(
+        serverId!,
+        body.name,
+        body.type,
+        body.isPrivate ?? false,
+        body.topic ?? null,
+        parentId,
+      );
+    } catch (error) {
+      if (error instanceof InvalidChannelMoveError) {
+        throw new HttpError(400, error.message);
+      }
+      throw error;
+    }
     if (channel.is_private) {
       await addChannelMember(channel.id, user.id);
     }
@@ -5621,7 +6372,19 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
     user.id,
     Permission.MANAGE_CHANNELS,
   );
+  await refuseForumPost(channel);
   const body = updateChannelSchema.parse(await readJsonBody(req));
+  // The schema takes any name up to 100; the rule is per type. A category is
+  // a label ("Salas de voz"), a channel is still a slug.
+  if (body.name !== undefined) {
+    if (channel.type === "category") {
+      body.name = body.name.trim();
+    }
+    const issue = channelNameIssue(channel.type, body.name);
+    if (issue) {
+      throw new HttpError(400, issue);
+    }
+  }
   const privacyChanged =
     body.isPrivate !== undefined && body.isPrivate !== channel.is_private;
   // A privacy flip changes who can see the channel, so the people who are
@@ -5716,6 +6479,7 @@ router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
     user.id,
     Permission.MANAGE_CHANNELS,
   );
+  await refuseForumPost(channel);
   // Read before the delete: afterwards there is no row to ask who could see
   // it. A failure here fails the request with nothing deleted, so no nudge
   // is owed.
@@ -5757,7 +6521,13 @@ router.patch(
     const body = moveChannelSchema.parse(await readJsonBody(req));
 
     try {
-      await moveChannel(channel.server_id, channelId!, body.parentId, body.index);
+      await moveChannel(
+        channel.server_id,
+        channelId!,
+        body.parentId,
+        body.index,
+        body.targetId,
+      );
     } catch (error) {
       if (error instanceof InvalidChannelMoveError) {
         throw new HttpError(400, error.message);
@@ -7336,8 +8106,12 @@ async function tryHlsReplayCapabilityDoor(
 }
 
 // -------------------------------------------------------------- webhooks
+//
+// Every check below names the webhook's CHANNEL, so a cargo given
+// MANAGE_CHANNELS on one channel manages that channel's webhooks and nothing
+// else (a channel overwrite), the same rule the channel's own settings follow.
 
-function mapWebhook(w: DbWebhook) {
+function mapWebhook(w: DbWebhook, forumSettings?: WebhookForumSettings) {
   return {
     id: w.id,
     channelId: w.channel_id,
@@ -7345,6 +8119,7 @@ function mapWebhook(w: DbWebhook) {
     avatarUrl: w.avatar_url,
     url: `/api/webhooks/${w.id}/${w.token}`,
     createdAt: w.created_at.toISOString(),
+    ...(forumSettings ? { forumSettings } : {}),
   };
 }
 
@@ -7352,9 +8127,25 @@ router.get(
   "/api/channels/:channelId/webhooks",
   async ({ user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
-    await requirePermission(channel.server_id, user.id, Permission.MANAGE_CHANNELS);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+      channel.id,
+    );
+    const webhooks = await listWebhooksForChannel(channelId!);
+    if (channel.type !== "forum") {
+      return { webhooks: webhooks.map((webhook) => mapWebhook(webhook)), forumTags: null };
+    }
+    // A forum's webhooks carry their tag settings, and the forum's tags come
+    // along, so the settings section draws from this one answer.
+    const [settings, forumTags] = await Promise.all([
+      readWebhookForumSettings(webhooks.map((webhook) => webhook.id)),
+      listForumTags(channel.id),
+    ]);
     return {
-      webhooks: (await listWebhooksForChannel(channelId!)).map(mapWebhook),
+      webhooks: webhooks.map((webhook) => mapWebhook(webhook, settings.get(webhook.id))),
+      forumTags,
     };
   },
 );
@@ -7363,7 +8154,22 @@ router.post(
   "/api/channels/:channelId/webhooks",
   async ({ req, user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
-    await requirePermission(channel.server_id, user.id, Permission.MANAGE_CHANNELS);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+      channel.id,
+    );
+    // A webhook writes messages, so it needs a channel that shows them as a
+    // feed: a text channel, or a forum (where each execute becomes a post,
+    // `services/forum-webhooks.ts`). Not a category (never holds a message),
+    // not a voice room (its chat is the conversation beside a call), and not
+    // a thread: a webhook on a forum post would write past the post's lock,
+    // which is the send path's rule. Discord's way to reply into a post is
+    // `?thread_id=` on the forum's webhook.
+    if (channel.type !== "text" && channel.type !== "forum") {
+      throw new HttpError(400, "Webhooks can only post to a text channel or a forum");
+    }
     const body = createWebhookSchema.parse(await readJsonBody(req));
     const webhook = await createWebhook(
       channelId!,
@@ -7380,7 +8186,64 @@ router.post(
       targetId: webhook.id,
       changes: [{ key: "name", old: null, new: webhook.name }],
     });
-    return created({ webhook: mapWebhook(webhook) });
+    return created({
+      webhook: mapWebhook(
+        webhook,
+        channel.type === "forum" ? { ...WEBHOOK_FORUM_SETTINGS_DEFAULTS } : undefined,
+      ),
+    });
+  },
+);
+
+/**
+ * A forum webhook's tag allowlist, default tags and dedupe window (plan
+ * §7.3 and §7.4). Replaces all three. 400 on a webhook that is not on a
+ * forum, and on a tag id that is not one of the forum's tags.
+ */
+router.put(
+  "/api/webhooks/:webhookId/forum-settings",
+  async ({ req, user }, { webhookId }) => {
+    const webhook = await getWebhook(webhookId!);
+    if (!webhook) {
+      throw new NotFound("Webhook not found");
+    }
+    await requirePermission(
+      webhook.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+      webhook.channel_id,
+    );
+    const channel = await getChannel(webhook.channel_id);
+    if (channel?.type !== "forum") {
+      throw new HttpError(400, "This webhook does not post to a forum");
+    }
+    const body = webhookForumSettingsSchema.parse(await readJsonBody(req));
+    const { before, after } = await putWebhookForumSettings(webhook.id, channel.id, body);
+    const changes: { key: string; old: unknown; new: unknown }[] = [];
+    if (JSON.stringify(before.allowedTagIds) !== JSON.stringify(after.allowedTagIds)) {
+      changes.push({ key: "allowed_tags", old: before.allowedTagIds, new: after.allowedTagIds });
+    }
+    if (JSON.stringify(before.defaultTagIds) !== JSON.stringify(after.defaultTagIds)) {
+      changes.push({ key: "default_tags", old: before.defaultTagIds, new: after.defaultTagIds });
+    }
+    if (before.dedupeWindowHours !== after.dedupeWindowHours) {
+      changes.push({
+        key: "dedupe_window_hours",
+        old: before.dedupeWindowHours,
+        new: after.dedupeWindowHours,
+      });
+    }
+    if (changes.length > 0) {
+      await logAudit({
+        serverId: webhook.server_id,
+        actorId: user.id,
+        action: "webhook.forum_settings",
+        targetType: "webhook",
+        targetId: webhook.id,
+        changes,
+      });
+    }
+    return { settings: after };
   },
 );
 
@@ -7389,7 +8252,13 @@ router.delete("/api/webhooks/:webhookId", async ({ user }, { webhookId }) => {
   if (!webhook) {
     throw new NotFound("Webhook not found");
   }
-  await requirePermission(webhook.server_id, user.id, Permission.MANAGE_CHANNELS);
+  await requirePermission(
+    webhook.server_id,
+    user.id,
+    Permission.MANAGE_CHANNELS,
+    webhook.channel_id,
+  );
+  // `webhook_forum_settings` goes with the row (ON DELETE CASCADE).
   await deleteWebhook(webhookId!);
   await logAudit({
     serverId: webhook.server_id,
@@ -7575,6 +8444,10 @@ router.post(
           );
         case "database-unavailable":
           throw new DatabaseUnavailableError();
+        case "locked":
+          // A forum post staff closed to replies (forums.ts). Sent from the
+          // forum send-path guard; a character is not staff by default.
+          throw new Forbidden("This post is closed to replies");
         case "bad-reply":
           throw new HttpError(400, "Reply is not in this channel");
         case "empty":
@@ -7655,9 +8528,15 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
   if (!existing) {
     throw new NotFound("Message not found");
   }
-  await requireChannelAccess(existing.channel_id, user.id);
+  const editedChannel = await requireChannelAccess(existing.channel_id, user.id);
   if (existing.author_id !== user.id) {
     throw new Forbidden("You can only edit your own messages");
+  }
+  // A nudge is the server's sentence, not the sender's: editing it into text
+  // would turn a "chamou tua atenção" line into an arbitrary message that
+  // still carries the kind. It can be deleted like any message.
+  if (existing.system_kind) {
+    throw new HttpError(400, "This message cannot be edited");
   }
 
   // Editing is a send. The WebSocket paths all consult this guard, but an edit
@@ -7694,6 +8573,10 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
     const automodInput = {
       serverId: existing.server_id,
       channelId: existing.channel_id,
+      // Known from the access check, so AutoMod never has to look it up: the
+      // parent of a thread or a forum post, null for any other channel.
+      parentChannelId:
+        editedChannel.type === "thread" ? (editedChannel.parent_id ?? null) : null,
       authorId: user.id,
       memberPerms: await computeMemberPermissions(
         existing.server_id,
@@ -7752,6 +8635,11 @@ router.delete("/api/messages/:messageId", async ({ user }, { messageId }) => {
   // server and therefore no moderators, so `server_id` being null is not a
   // missing lookup — it is the answer, and the check must stop there rather
   // than fall through to one.
+  //
+  // Resolved for the message's channel, not server-wide: a per-channel deny
+  // refuses the delete, and a cargo given MANAGE_MESSAGES only on one channel
+  // (or one forum, whose posts resolve to it) can moderate there. The same
+  // scope the socket delete and the bulk purge already use.
   if (
     existing.author_id !== user.id &&
     !(
@@ -7760,6 +8648,7 @@ router.delete("/api/messages/:messageId", async ({ user }, { messageId }) => {
         existing.server_id,
         user.id,
         Permission.MANAGE_MESSAGES,
+        existing.channel_id,
       ))
     )
   ) {
@@ -8079,6 +8968,494 @@ router.delete(
   },
 );
 
+// ----------------------------------------------------------------- forums
+//
+// Forum channels (packages/shared/src/forums.ts has the contract and the REST
+// table; services/forums.ts the queries; services/forum-posts.ts the create).
+// A post is a thread channel under the forum, so its messages, reads,
+// reactions, pins, attachments and reports all go through the channel routes
+// above, gated by `canAccessChannel`, which answers for a post with the
+// forum's answer. These routes are what a post has that a chat thread does
+// not: a title, tags, pinned / locked / resolved, and the list.
+//
+// Every permission check names the FORUM, so a cargo given MANAGE_MESSAGES on
+// one forum moderates that forum and nothing else (a channel overwrite), and
+// "staff" below is MANAGE_MESSAGES or MANAGE_CHANNELS there: the pair that
+// already walks through slow mode.
+import {
+  createForumPostSchema,
+  FORUM_ERRORS,
+  hasPermission,
+  listForumPostsQuerySchema,
+  putForumTagsSchema,
+  setForumPostFollowSchema,
+  similarForumPostsQuerySchema,
+  updateForumPostSchema,
+  updateForumSettingsSchema,
+} from "@pqp/shared";
+import {
+  applyForumPostPatch,
+  checkTagChange,
+  ForumError,
+  getForumPostDetail,
+  getForumPostRow,
+  getForumPostSummary,
+  getForumPostTagIds,
+  getForumSettings,
+  invalidateForumList,
+  isReplyInPost,
+  listForumPosts,
+  listForumTagRefs,
+  listForumTags,
+  readForumPostViewers,
+  replaceForumTags,
+  setForumPostFollow,
+  similarForumPosts,
+  updateForumSettings,
+  writeDedupeTombstone,
+  type ForumPostPatch,
+  type ForumPostRow,
+} from "../services/forums.js";
+import { createForumPost } from "../services/forum-posts.js";
+import { findTimeoutForChannel } from "../services/sanctions.js";
+import {
+  announceForumConfig,
+  announceForumPostRemoved,
+  announceForumPostUpdate,
+} from "../ws/chat.js";
+
+/** A forum the caller can see. 404 for anything else, like any channel miss. */
+async function requireForum(forumId: string, userId: string) {
+  const channel = await requireChannelAccess(forumId, userId);
+  if (channel.type !== "forum" || !channel.server_id) {
+    throw new NotFound("Forum not found");
+  }
+  return { ...channel, server_id: channel.server_id };
+}
+
+/**
+ * A published post the caller can see. Access is the post channel's, which
+ * `canAccessChannel` resolves through the forum, so a private forum's posts
+ * fail closed here with no forum-specific code.
+ */
+async function requireForumPost(postId: string, userId: string): Promise<ForumPostRow> {
+  await requireChannelAccess(postId, userId);
+  const post = await getForumPostRow(postId);
+  if (!post) {
+    throw new NotFound("Post not found");
+  }
+  return post;
+}
+
+async function forumPerms(serverId: string, userId: string, forumId: string) {
+  await requireServerMember(serverId, userId);
+  const perms = await computeMemberPermissions(serverId, userId, forumId);
+  return {
+    perms,
+    isStaff:
+      hasPermission(perms, Permission.MANAGE_MESSAGES) ||
+      hasPermission(perms, Permission.MANAGE_CHANNELS),
+  };
+}
+
+/** `?tag=a&tag=b` is a list; the schema takes it as one. */
+function forumListQuery(url: URL): Record<string, unknown> {
+  const params = url.searchParams;
+  const tags = params.getAll("tag");
+  const optional = (key: string) => params.get(key) ?? undefined;
+  return {
+    sort: optional("sort"),
+    tag: tags.length > 0 ? tags : undefined,
+    status: optional("status"),
+    mine: optional("mine"),
+    q: optional("q"),
+    cursor: optional("cursor"),
+    limit: optional("limit"),
+  };
+}
+
+router.get("/api/channels/:forumId/posts", async ({ url, user }, { forumId }) => {
+  await requireForum(forumId!, user.id);
+  const query = listForumPostsQuerySchema.parse(forumListQuery(url));
+  return listForumPosts({ forumId: forumId!, viewerId: user.id, query });
+});
+
+router.get(
+  "/api/channels/:forumId/posts/similar",
+  async ({ url, user }, { forumId }) => {
+    await requireForum(forumId!, user.id);
+    const { title } = similarForumPostsQuerySchema.parse({
+      title: url.searchParams.get("title") ?? "",
+    });
+    return { posts: await similarForumPosts(forumId!, title) };
+  },
+);
+
+/**
+ * Create a post (plan §1.5). Off for this server: 403 `forum_channels_off`,
+ * and nothing is written; existing posts stay readable and repliable. The
+ * timeout gate in `handleApi` already covers this path by its
+ * `/api/channels/:id` shape. A refusal from the message path is 422 with the
+ * `message-rejected` fields, and a wait also travels as `Retry-After`.
+ */
+router.post("/api/channels/:forumId/posts", async ({ req, user }, { forumId }) => {
+  const forum = await requireForum(forumId!, user.id);
+  if (!forumChannelsEnabled(forum.server_id)) {
+    throw new Forbidden(FORUM_CHANNELS_OFF);
+  }
+  const request = createForumPostSchema.parse(await readJsonBody(req));
+  const result = await createForumPost({ author: user, forum, request });
+  const body = { post: result.post, viewer: result.viewer };
+  return result.created ? created(body) : body;
+});
+
+router.get("/api/forum-posts/:postId", async ({ user }, { postId }) => {
+  await requireForumPost(postId!, user.id);
+  const detail = await getForumPostDetail(postId!, user.id);
+  if (!detail) {
+    throw new NotFound("Post not found");
+  }
+  return detail;
+});
+
+type ForumAuditAction = "forum.post_pin" | "forum.post_lock" | "forum.post_edit";
+
+/**
+ * Edit a post, field by field (forums.ts header): title, tags, resolved and
+ * the accepted answer are the author's or staff's; pin and lock are staff
+ * only; a staff-only tag is added or removed by staff only. Pin, lock and a
+ * staff edit of somebody else's post leave an audit row.
+ */
+router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
+  const post = await requireForumPost(postId!, user.id);
+  const body = updateForumPostSchema.parse(await readJsonBody(req));
+  const { perms, isStaff } = await forumPerms(post.server_id, user.id, post.forum_id);
+  const isAuthor = post.author_id !== null && post.author_id === user.id;
+
+  // `/api/forum-posts/...` names no server, so the timeout gate in
+  // `handleApi` cannot see it; editing a post is participation.
+  const timeout = await findTimeoutForChannel(user.id, post.forum_id);
+  if (timeout) {
+    throw new Forbidden(timeoutMessage(timeout));
+  }
+
+  const authorFields =
+    body.title !== undefined ||
+    body.tagIds !== undefined ||
+    body.resolved !== undefined ||
+    body.acceptedAnswerId !== undefined;
+  if (authorFields && !isAuthor && !isStaff) {
+    throw new Forbidden("You cannot edit this post");
+  }
+  if ((body.pinned !== undefined || body.locked !== undefined) && !isStaff) {
+    throw new Forbidden("You do not have permission to do that");
+  }
+  if (body.resolved === false && body.acceptedAnswerId) {
+    throw new HttpError(400, "A post with an answer is resolved");
+  }
+
+  const patch: ForumPostPatch = {};
+  const changes: Array<{ key: string; old: unknown; new: unknown }> = [];
+
+  if (body.title !== undefined && body.title !== post.title) {
+    // A rename goes through AutoMod like the title on create (staff walk
+    // through, as everywhere).
+    const automodInput = {
+      serverId: post.server_id,
+      channelId: post.forum_id,
+      // The title is checked on the forum itself, which has no parent.
+      parentChannelId: null,
+      authorId: user.id,
+      memberPerms: perms,
+      body: body.title,
+    };
+    const verdict = await checkAutomod(automodInput);
+    if (verdict) {
+      void recordAutomodHit(automodInput, verdict)
+        .then(applyAutomodEffects)
+        .catch((error: unknown) => {
+          console.error("[automod] forum title hit effects failed:", error);
+        });
+      throw new ForumError(422, FORUM_ERRORS.postRejected, {
+        reason: "automod",
+        ...(verdict.customMessage ? { automodMessage: verdict.customMessage } : {}),
+        field: "title",
+      });
+    }
+    patch.title = body.title;
+    changes.push({ key: "title", old: post.title, new: body.title });
+  }
+
+  if (body.tagIds !== undefined) {
+    const [forumTags, previous, settings] = await Promise.all([
+      listForumTagRefs(post.forum_id),
+      getForumPostTagIds(post.channel_id),
+      getForumSettings(post.forum_id),
+    ]);
+    checkTagChange(forumTags, body.tagIds, previous, isStaff);
+    if (settings.requireTag && body.tagIds.length === 0) {
+      throw new ForumError(422, FORUM_ERRORS.tagRequired);
+    }
+    const sameSet =
+      previous.length === body.tagIds.length &&
+      body.tagIds.every((id) => previous.includes(id));
+    if (!sameSet) {
+      patch.tagIds = body.tagIds;
+      changes.push({ key: "tagIds", old: previous, new: body.tagIds });
+    }
+  }
+
+  if (body.acceptedAnswerId) {
+    if (!(await isReplyInPost(post, body.acceptedAnswerId))) {
+      throw new ForumError(400, FORUM_ERRORS.answerInvalid);
+    }
+    if (body.acceptedAnswerId !== post.resolved_message_id) {
+      patch.acceptedAnswerId = body.acceptedAnswerId;
+      patch.answerMarkedBy = user.id;
+      changes.push({
+        key: "acceptedAnswerId",
+        old: post.resolved_message_id,
+        new: body.acceptedAnswerId,
+      });
+    }
+    // Marking an answer resolves the post.
+    if (post.resolved_at === null) {
+      patch.resolvedAt = "now";
+      changes.push({ key: "resolved", old: false, new: true });
+    }
+  } else if (body.acceptedAnswerId === null && post.resolved_message_id !== null) {
+    // Unmarking the answer leaves the resolved state as it is.
+    patch.acceptedAnswerId = null;
+    changes.push({ key: "acceptedAnswerId", old: post.resolved_message_id, new: null });
+  }
+
+  if (body.resolved === true && post.resolved_at === null && !patch.resolvedAt) {
+    patch.resolvedAt = "now";
+    changes.push({ key: "resolved", old: false, new: true });
+  } else if (body.resolved === false) {
+    // Reopening clears the answer too.
+    if (post.resolved_at !== null) {
+      patch.resolvedAt = null;
+      changes.push({ key: "resolved", old: true, new: false });
+    }
+    // `acceptedAnswerId: null` in the same request already recorded this.
+    if (post.resolved_message_id !== null && patch.acceptedAnswerId === undefined) {
+      patch.acceptedAnswerId = null;
+      changes.push({
+        key: "acceptedAnswerId",
+        old: post.resolved_message_id,
+        new: null,
+      });
+    }
+  }
+
+  const pinChange =
+    body.pinned !== undefined && body.pinned !== (post.pinned_at !== null);
+  const lockChange =
+    body.locked !== undefined && body.locked !== (post.locked_at !== null);
+  if (pinChange) {
+    patch.pinned = body.pinned;
+  }
+  if (lockChange) {
+    patch.locked = body.locked;
+  }
+
+  // The audit rows are written INSIDE the patch's transaction: they land with
+  // the change or not at all. Written after COMMIT, a failure there was lost
+  // for good, because the retry finds nothing left to change.
+  const audits: Array<{
+    action: ForumAuditAction;
+    changes: Array<{ key: string; old: unknown; new: unknown }>;
+  }> = [];
+  if (pinChange) {
+    audits.push({
+      action: "forum.post_pin",
+      changes: [
+        { key: "pinned", old: !body.pinned, new: body.pinned },
+        { key: "title", old: post.title, new: post.title },
+      ],
+    });
+  }
+  if (lockChange) {
+    audits.push({
+      action: "forum.post_lock",
+      changes: [
+        { key: "locked", old: !body.locked, new: body.locked },
+        { key: "title", old: post.title, new: post.title },
+      ],
+    });
+  }
+  // An author editing their own post is not a moderator action.
+  if (changes.length > 0 && !isAuthor) {
+    audits.push({ action: "forum.post_edit", changes });
+  }
+
+  if (Object.keys(patch).length > 0) {
+    await applyForumPostPatch(post, patch, async (client) => {
+      for (const entry of audits) {
+        await logAudit(
+          {
+            serverId: post.server_id,
+            actorId: user.id,
+            action: entry.action,
+            targetType: "channel",
+            targetId: post.channel_id,
+            changes: entry.changes,
+          },
+          client,
+        );
+      }
+    });
+  }
+
+  // A failed read here is safe to answer as a failure: the retry changes
+  // nothing and writes no second audit row. The live row is sent even when
+  // this request changed nothing, so that same retry repairs a frame the
+  // first attempt never sent; it is best effort (logged), never the answer.
+  const updated = await getForumPostSummary(post.channel_id);
+  if (!updated) {
+    throw new NotFound("Post not found");
+  }
+  forumBestEffort("upsert", () => announceForumPostUpdate(updated));
+  return { post: updated };
+});
+
+/**
+ * A fan-out after a committed forum write: logged, never the request's
+ * answer. The change and its audit row are already durable, the live frame is
+ * a convenience every list repairs on its next read.
+ */
+function forumBestEffort(label: string, run: () => void): void {
+  try {
+    run();
+  } catch (error) {
+    console.error(`[forums] ${label} broadcast failed:`, error);
+  }
+}
+
+/**
+ * Delete a whole post: staff only. The author removes their opening message
+ * the ordinary way and the answers other people wrote stay (open question 2).
+ * The frame goes out before the eviction, so an open panel hears why it is
+ * closing.
+ */
+router.delete("/api/forum-posts/:postId", async ({ user }, { postId }) => {
+  const post = await requireForumPost(postId!, user.id);
+  const { isStaff } = await forumPerms(post.server_id, user.id, post.forum_id);
+  if (!isStaff) {
+    throw new Forbidden("You do not have permission to do that");
+  }
+  // The audit row and, for a feed post, the dedupe tombstone commit with the
+  // delete: after COMMIT the post is gone, a retry answers 404, and neither
+  // could be written any more.
+  await deleteChannel(post.channel_id, {
+    beforeCommit: async (client) => {
+      await writeDedupeTombstone(client, post);
+      await logAudit(
+        {
+          serverId: post.server_id,
+          actorId: user.id,
+          action: "forum.post_delete",
+          targetType: "channel",
+          targetId: post.channel_id,
+          changes: [{ key: "title", old: post.title, new: null }],
+        },
+        client,
+      );
+    },
+  });
+  invalidateForumList(post.forum_id);
+  forumBestEffort("removed", () => {
+    announceForumPostRemoved(post.forum_id, post.channel_id);
+    evictChannelViewers(post.channel_id);
+  });
+  return noContent();
+});
+
+/** Follow or stop following a post (stored now, acted on by the P2 push). */
+router.put("/api/forum-posts/:postId/follow", async ({ req, user }, { postId }) => {
+  const post = await requireForumPost(postId!, user.id);
+  const body = setForumPostFollowSchema.parse(await readJsonBody(req));
+  await setForumPostFollow(post.channel_id, user.id, body.following);
+  const [viewer] = await readForumPostViewers([post.channel_id], user.id);
+  return { viewer };
+});
+
+router.get("/api/channels/:forumId/forum-tags", async ({ user }, { forumId }) => {
+  await requireForum(forumId!, user.id);
+  return { tags: await listForumTags(forumId!) };
+});
+
+router.put("/api/channels/:forumId/forum-tags", async ({ req, user }, { forumId }) => {
+  const forum = await requireForum(forumId!, user.id);
+  await requirePermission(forum.server_id, user.id, Permission.MANAGE_CHANNELS, forum.id);
+  const body = putForumTagsSchema.parse(await readJsonBody(req));
+  const { after } = await replaceForumTags(forum.id, body, (client, before, next) =>
+    logAudit(
+      {
+        serverId: forum.server_id,
+        actorId: user.id,
+        action: "forum.tags_update",
+        targetType: "channel",
+        targetId: forum.id,
+        changes: [
+          {
+            key: "tags",
+            old: before.map((tag) => tag.name).join(", "),
+            new: next.map((tag) => tag.name).join(", "),
+          },
+        ],
+      },
+      client,
+    ),
+  );
+  forumBestEffort("config", () => announceForumConfig(forum.id, { tags: after }));
+  return { tags: after };
+});
+
+router.get("/api/channels/:forumId/forum-settings", async ({ user }, { forumId }) => {
+  await requireForum(forumId!, user.id);
+  return { settings: await getForumSettings(forumId!) };
+});
+
+router.patch(
+  "/api/channels/:forumId/forum-settings",
+  async ({ req, user }, { forumId }) => {
+    const forum = await requireForum(forumId!, user.id);
+    await requirePermission(
+      forum.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+      forum.id,
+    );
+    const body = updateForumSettingsSchema.parse(await readJsonBody(req));
+    const { after } = await updateForumSettings(forum.id, body, async (client, before, next) => {
+      const changes: Array<{ key: string; old: unknown; new: unknown }> = [];
+      if (before.requireTag !== next.requireTag) {
+        changes.push({ key: "requireTag", old: before.requireTag, new: next.requireTag });
+      }
+      if (before.defaultSort !== next.defaultSort) {
+        changes.push({ key: "defaultSort", old: before.defaultSort, new: next.defaultSort });
+      }
+      if (changes.length > 0) {
+        await logAudit(
+          {
+            serverId: forum.server_id,
+            actorId: user.id,
+            action: "forum.settings_update",
+            targetType: "channel",
+            targetId: forum.id,
+            changes,
+          },
+          client,
+        );
+      }
+    });
+    forumBestEffort("config", () => announceForumConfig(forum.id, { settings: after }));
+    return { settings: after };
+  },
+);
+
 // ----------------------------------------------------------------- search
 
 router.get("/api/servers/:serverId/search", async (ctx, { serverId }) => {
@@ -8380,6 +9757,19 @@ async function evictViewersOutsideAudience(channelId: string): Promise<void> {
   for (const threadId of await listThreadChannelIds(channelId)) {
     evictChannelViewers(threadId, { exceptUserIds: allowed });
   }
+}
+
+/**
+ * `channels-update` for a server's whole sidebar, after a write that may have
+ * moved any of it (a reorder, a migration, a revert). Fire and forget, and
+ * never throws: the write already committed.
+ */
+function nudgeWholeList(serverId: string): void {
+  void listSidebarChannelIds(serverId)
+    .then((channelIds) => pingChannels(serverId, { channelIds, carriesChildren: true }))
+    .catch((error) => {
+      console.error("[api] channel list nudge failed:", error);
+    });
 }
 
 function pingPermissions(serverId: string): void {
@@ -9518,7 +10908,18 @@ router.post("/api/reports", async ({ req, res, user }) => {
               reason: body.reason,
               details: body.details,
             }
-          : {
+          : body.subjectType === "story"
+            ? {
+                // Visibility (flags included) is checked against the
+                // audience named, in services/stories.ts.
+                subjectType: "story",
+                reporterId: user.id,
+                storyId: body.storyId,
+                serverId: body.serverId ?? null,
+                reason: body.reason,
+                details: body.details,
+              }
+            : {
               subjectType: "user",
               reporterId: user.id,
               userId: body.userId,
@@ -9878,6 +11279,105 @@ router.post(
       }
     }
 
+    return { ok: true };
+  },
+);
+
+/**
+ * Take a reported story down. The button beside `remove-message`, with the
+ * same authorization (a manager of the report's server, or an instance
+ * moderator), and one difference that matters: an instance moderator removes
+ * it EVERYWHERE (every server it went to and the friends audience), while a
+ * server's manager removes it from THEIR server only, exactly like "Tirar do
+ * servidor". Either way its bytes stay held while the report is open and for
+ * 30 days after it is resolved, as evidence.
+ */
+router.post(
+  "/api/reports/:report/remove-story",
+  async ({ user }, { report }) => {
+    const reportId = reportIdParam(report);
+    const scope = await getReportScope(reportId);
+    if (!scope) {
+      throw new NotFound("Report not found");
+    }
+    if (scope.serverId) {
+      if (!isInstanceModerator(user)) {
+        await requireAnyPermission(scope.serverId, user.id, [
+          Permission.KICK_MEMBERS,
+          Permission.BAN_MEMBERS,
+          Permission.MODERATE_MEMBERS,
+        ]);
+      }
+    } else if (!isInstanceModerator(user)) {
+      throw new NotFound("Report not found");
+    }
+    const full = await getReport(reportId);
+    if (!full || full.subjectType !== "story" || !full.storyId) {
+      throw new HttpError(400, "This report has no story left to remove");
+    }
+    if (scope.serverId && !isInstanceModerator(user)) {
+      // A server's own staff own their server's slice and nothing else: the
+      // same story may be up for the author's friends or in other servers.
+      const slice = await removeStoryFromServer({
+        serverId: scope.serverId,
+        storyId: full.storyId,
+        moderatorId: user.id,
+        reason: null,
+      });
+      if (!slice) {
+        throw new HttpError(400, "The reported story is already gone");
+      }
+      await logAudit({
+        serverId: scope.serverId,
+        actorId: user.id,
+        action: "story.remove",
+        targetType: "user",
+        targetId: slice.authorId,
+        reason: null,
+        changes: [
+          { key: "story", old: full.storyId, new: null },
+          { key: "report", old: null, new: reportId },
+        ],
+      }).catch((error: unknown) => {
+        console.error(
+          `[moderation] audit write failed after removing story ${full.storyId}:`,
+          error,
+        );
+      });
+      notifyStoriesUpdate({ scope: "server", serverId: scope.serverId }, [full.storyId]);
+      notifyStoriesUpdate({ scope: "own", userId: slice.authorId });
+      return { ok: true };
+    }
+    const removed = await deleteStoryEverywhere(full.storyId, null);
+    if (!removed) {
+      throw new HttpError(400, "The reported story is already gone");
+    }
+    console.log(
+      `[moderation] operator removed story: report ${reportId}, ` +
+        `story ${full.storyId}, moderator ${user.id}`,
+    );
+    notifyStoryAudiences(removed.authorId, removed.targets, [full.storyId]);
+    await Promise.all(
+      removed.targets.serverIds.map((serverId) =>
+        logAudit({
+          serverId,
+          actorId: user.id,
+          action: "story.remove",
+          targetType: "user",
+          targetId: removed.authorId,
+          reason: null,
+          changes: [
+            { key: "story", old: full.storyId, new: null },
+            { key: "report", old: null, new: reportId },
+          ],
+        }).catch((error: unknown) => {
+          console.error(
+            `[moderation] audit write failed after removing story ${full.storyId}:`,
+            error,
+          );
+        }),
+      ),
+    );
     return { ok: true };
   },
 );
@@ -10949,7 +12449,7 @@ const WEBHOOK_EXECUTE_PATH =
  * Slow mode does not reach here, on purpose. This path has its own INSERT and
  * never goes through `postChannelMessage`, and that is the right shape: a
  * webhook is a pipe, not a resident. Its URL was configured once by somebody
- * who held MANAGE_WEBHOOKS on the channel, what comes out of it is a build
+ * who held MANAGE_CHANNELS on the channel, what comes out of it is a build
  * result or an alert that is useless late, and there is no person on the other
  * end to show a countdown to. A flood from one is a webhook to revoke rather
  * than a member to slow down. `webhookExecuteLimiter` above is its budget. A
@@ -10964,11 +12464,11 @@ async function handleWebhookExecute(
   token: string,
 ): Promise<void> {
   if (!webhookExecuteLimiter.take(`webhook:${webhookId}`)) {
-    res.setHeader(
-      "Retry-After",
-      String(webhookExecuteLimiter.retryAfter(`webhook:${webhookId}`)),
-    );
-    sendError(res, 429, "Too many requests", req);
+    const retryAfter = webhookExecuteLimiter.retryAfter(`webhook:${webhookId}`);
+    res.setHeader("Retry-After", String(retryAfter));
+    // Discord's body beside our `error`: RSS tools built for Discord read
+    // `retry_after` (seconds) to back off.
+    sendJson(res, 429, webhookRateLimitedBody(retryAfter), req);
     return;
   }
 
@@ -10983,6 +12483,60 @@ async function handleWebhookExecute(
     body = executeWebhookSchema.parse(await readJsonBody(req));
   } catch {
     sendError(res, 400, "Invalid webhook payload", req);
+    return;
+  }
+
+  // --- forums --- A forum never holds a message of its own. An execute on a
+  // forum's webhook makes a post (or, with `?thread_id=`, a reply in one):
+  // `services/forum-webhooks.ts`. A webhook that sits on a forum POST (one
+  // made before the create route refused threads) is refused: it would write
+  // past the post's lock, and `?thread_id=` on the forum's webhook is how a
+  // reply is made.
+  // The channel's type comes with the webhook lookup, so a text channel's
+  // delivery pays no extra round trip here.
+  if (webhook.channel_type === "thread" && (await isForumPost(webhook.channel_id))) {
+    sendError(res, 400, "Webhooks cannot post into a forum post directly", req);
+    return;
+  }
+  if (webhook.channel_type === "forum") {
+    const query = new URL(req.url ?? "/", "http://localhost").searchParams;
+    const idempotencyKey = req.headers["idempotency-key"];
+    try {
+      const result = await executeForumWebhook({
+        webhook,
+        forum: { id: webhook.channel_id, server_id: webhook.server_id },
+        body,
+        threadId: query.get(WEBHOOK_THREAD_ID_PARAM),
+        idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : null,
+      });
+      if (result.deduplicated) {
+        res.setHeader(WEBHOOK_DEDUPLICATED_HEADER, "1");
+      }
+      sendJson(
+        res,
+        200,
+        {
+          // Discord's `id` / `channel_id`, where a Discord tool reads them
+          // (`webhookForumExecuteExtrasSchema`): a post answers its own id,
+          // so a follow-up to `?thread_id=<id>` lands in it.
+          id: result.reply && result.message ? result.message.id : result.postId,
+          channel_id: result.postId,
+          message: result.message,
+          ...(result.post ? { post: result.post } : {}),
+          ...(result.ignoredTags.length > 0 ? { ignored_tags: result.ignoredTags } : {}),
+        },
+        req,
+      );
+    } catch (error) {
+      if (error instanceof ForumWebhookRefusal) {
+        if (error.retryAfterSeconds) {
+          res.setHeader("Retry-After", String(error.retryAfterSeconds));
+        }
+        sendJson(res, error.status, error.body, req);
+        return;
+      }
+      throw error;
+    }
     return;
   }
 
@@ -11426,6 +12980,19 @@ export async function handleApi(
     // Checked before the plain `HttpError` branch it extends, or the extra
     // fields would be silently dropped by the more general match.
     if (error instanceof HttpErrorWithDetail) {
+      sendJson(res, error.status, { error: error.message, ...error.detail }, req);
+      return;
+    }
+    // --- forums --- a refusal with its `message-rejected` fields beside
+    // `error`, and a wait as `Retry-After` too.
+    if (error instanceof ForumError) {
+      const retryAfterMs = error.detail.retryAfterMs;
+      if (typeof retryAfterMs === "number" && retryAfterMs > 0) {
+        res.setHeader(
+          "Retry-After",
+          String(Math.max(1, Math.ceil(retryAfterMs / 1000))),
+        );
+      }
       sendJson(res, error.status, { error: error.message, ...error.detail }, req);
       return;
     }

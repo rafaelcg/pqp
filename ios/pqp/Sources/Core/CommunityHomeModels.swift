@@ -80,6 +80,10 @@ struct CommunityHomeMedia: Codable, Sendable, Hashable {
     let twitchUrl: String?
     /// The vertical cut of a `video`, or nil. Only ever set on a video.
     let mobile: CommunityHomeMobileRendition?
+    /// The cover the author chose for a `video`, a presigned image URL, or
+    /// nil (no cover, a post that is not a video, or an older API that does
+    /// not send the field).
+    let posterUrl: String?
 
     var isImage: Bool { kind == "image" }
     var isVideo: Bool { kind == "video" }
@@ -102,6 +106,14 @@ struct CommunityHomeMedia: Codable, Sendable, Hashable {
         return Self.httpURL(mobile?.url) ?? Self.httpURL(url)
     }
 
+    /// The cover to paint before play, or nil to fall back to the video's own
+    /// first frame. Only ever for a stored video, and only a readable http(s)
+    /// URL: a cover that cannot be fetched must never hide the frame.
+    var posterURL: URL? {
+        guard isVideo else { return nil }
+        return Self.httpURL(posterUrl)
+    }
+
     /// What a tap opens: the object for storage kinds, the watch page for paste URLs.
     var openURL: URL? {
         if isYoutube || isTiktok || isInstagram { return URL(string: youtubeUrl ?? "") }
@@ -118,7 +130,7 @@ struct CommunityHomeMedia: Codable, Sendable, Hashable {
 
     init(kind: String, name: String = "", contentType: String? = nil, byteSize: Int? = nil,
          url: String? = nil, youtubeUrl: String? = nil, twitchUrl: String? = nil,
-         mobile: CommunityHomeMobileRendition? = nil) {
+         mobile: CommunityHomeMobileRendition? = nil, posterUrl: String? = nil) {
         self.kind = kind
         self.name = name
         self.contentType = contentType
@@ -127,6 +139,7 @@ struct CommunityHomeMedia: Codable, Sendable, Hashable {
         self.youtubeUrl = youtubeUrl
         self.twitchUrl = twitchUrl
         self.mobile = mobile
+        self.posterUrl = posterUrl
     }
 
     init(from decoder: Decoder) throws {
@@ -140,6 +153,8 @@ struct CommunityHomeMedia: Codable, Sendable, Hashable {
         twitchUrl = try c.decodeIfPresent(String.self, forKey: .twitchUrl)
         // A malformed cut costs the cut, never the card.
         mobile = try? c.decodeIfPresent(CommunityHomeMobileRendition.self, forKey: .mobile)
+        // Same rule for the cover: a wrong-typed value costs the cover only.
+        posterUrl = (try? c.decodeIfPresent(String.self, forKey: .posterUrl)) ?? nil
     }
 }
 
@@ -227,8 +242,8 @@ struct CommunityHomeUnreadAllResponse: Codable, Sendable { let servers: [String:
 ///
 /// `videoId` is a port of `parseYoutubeVideoId` in shared: watch, youtu.be,
 /// shorts, embed and live, eleven characters of id, anything else nil. The
-/// thumbnail is the public one every video has; there is no API key involved
-/// and no embed on the phone, a tap opens the watch page.
+/// thumbnail is the public one every video has; there is no API key involved.
+/// The card shows it until a tap builds the player (`BauYoutubeVideo`).
 enum YoutubeLinks {
     static func videoId(_ raw: String?) -> String? {
         guard let raw else { return nil }

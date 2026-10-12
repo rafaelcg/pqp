@@ -34,6 +34,7 @@ const FULL_BLEED: Record<string, string> = {
   "layout/server-settings-dialog.tsx": "section rail sits against the panel edge",
   "layout/channel-settings-dialog.tsx": "section rail sits against the panel edge",
   "search/search-dialog.tsx": "draws its own header and result chrome",
+  "conversations/quick-switcher.tsx": "a command palette: field, results and key hints edge to edge",
   "onboarding/onboarding-flow.tsx": "each step pads itself as it slides in",
 };
 

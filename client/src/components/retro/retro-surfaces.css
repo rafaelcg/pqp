@@ -1,0 +1,551 @@
+/*
+ * MODO 2005: the surfaces it redraws. The contact list, the conversation
+ * window (title bar, toolbar, "Para:" strip, framed pictures, "Fulano diz:"
+ * rows, the typing strip) and the corner cards. Same chunk and same rule as
+ * `retro.css`: no colour here, only role and `--retro-*` tokens from
+ * `index.css`.
+ */
+
+/* ------------------------------------------------------------ shared chrome */
+
+.retro-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 1.875rem;
+  flex-shrink: 0;
+  padding: 0 0.625rem;
+  background: var(--retro-titlebar);
+  color: var(--retro-titlebar-ink);
+  font-weight: 700;
+  font-size: 0.8125rem;
+  text-shadow: 0 1px 0 var(--retro-gem-edge);
+}
+
+.retro-titlebar-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Decorative window buttons. Plain shapes, aria-hidden, they do nothing. */
+.retro-winbuttons {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.retro-winbutton {
+  position: relative;
+  width: 1.25rem;
+  height: 1.125rem;
+  border-radius: 0.1875rem;
+  border: 1px solid var(--retro-titlebar-ink);
+  opacity: 0.75;
+}
+
+.retro-winbutton::after {
+  content: "";
+  position: absolute;
+  left: 0.3rem;
+  right: 0.3rem;
+  bottom: 0.25rem;
+  height: 0.125rem;
+  background: var(--retro-titlebar-ink);
+}
+
+.retro-winbutton[data-kind="max"]::after {
+  top: 0.25rem;
+  height: auto;
+  background: none;
+  border: 1px solid var(--retro-titlebar-ink);
+  border-top-width: 2px;
+}
+
+.retro-winbutton[data-kind="close"]::after {
+  left: 50%;
+  right: auto;
+  top: 0.2rem;
+  bottom: 0.2rem;
+  width: 0.125rem;
+  height: auto;
+  transform: rotate(45deg);
+  box-shadow: none;
+}
+
+.retro-winbutton[data-kind="close"]::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0.2rem;
+  bottom: 0.2rem;
+  width: 0.125rem;
+  background: var(--retro-titlebar-ink);
+  transform: rotate(-45deg);
+}
+
+.retro-frame {
+  flex: none;
+  border-radius: 0.5625rem;
+  padding: 0.1875rem;
+  background: var(--retro-frame);
+  border: 1px solid var(--retro-edge);
+  box-shadow: var(--retro-frame-shadow);
+}
+
+.retro-frame[data-status="online"] {
+  box-shadow:
+    0 0 0 2px color-mix(in oklch, var(--retro-gem-on) 40%, transparent),
+    var(--retro-frame-shadow);
+}
+
+.retro-frame[data-status="dnd"] {
+  box-shadow:
+    0 0 0 2px color-mix(in oklch, var(--retro-gem-busy) 40%, transparent),
+    var(--retro-frame-shadow);
+}
+
+.retro-frame[data-status="idle"] {
+  box-shadow:
+    0 0 0 2px color-mix(in oklch, var(--retro-gem-away) 45%, transparent),
+    var(--retro-frame-shadow);
+}
+
+/* A picture nobody uploaded: a glossy square with the initial. */
+.retro-avatar-fallback {
+  background: var(--retro-picture);
+  color: var(--retro-picture-ink);
+  font-weight: 700;
+  text-shadow: 0 1px 1px var(--retro-gem-edge);
+}
+
+/* The contact list's gems are a touch bigger, as they were. */
+[data-retro-contacts] svg[data-status-dot] {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+/* ------------------------------------------------------------ contacts */
+
+.retro-contacts-body {
+  background: var(--retro-pane);
+}
+
+.retro-me {
+  display: flex;
+  gap: 0.625rem;
+  padding: 0.75rem 0.75rem 0.625rem;
+  border-bottom: 1px solid var(--retro-edge-soft);
+}
+
+.retro-recado {
+  margin-top: 0.3125rem;
+  border: 1px solid var(--retro-edge-soft);
+  border-radius: 0.1875rem;
+  padding: 0.1875rem 0.375rem;
+  background: var(--retro-field);
+  color: var(--color-text-secondary);
+  font-style: italic;
+  font-size: 0.75rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.retro-search {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0.5rem 0.625rem;
+  border: 1px solid var(--retro-edge-soft);
+  border-radius: 0.1875rem;
+  padding: 0 0.375rem;
+  background: var(--retro-field);
+}
+
+.retro-search input {
+  min-width: 0;
+  flex: 1;
+  height: 1.75rem;
+  background: transparent;
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  outline: none;
+}
+
+.retro-search input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.retro-group {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.625rem 0.125rem;
+  font-weight: 700;
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  text-align: left;
+}
+
+.retro-twisty {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--color-text-secondary);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.retro-group[aria-expanded="false"] .retro-twisty {
+  transform: rotate(-90deg);
+}
+
+.retro-contact {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 0.4375rem;
+  padding: 0.1875rem 0.625rem 0.1875rem 1.25rem;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  text-align: left;
+}
+
+.retro-contact:hover {
+  background: var(--retro-hover);
+}
+
+.retro-contact[aria-current="page"] {
+  background: var(--retro-select);
+}
+
+.retro-contact[data-offline] .retro-contact-name {
+  color: var(--color-text-tertiary);
+}
+
+.retro-contact-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 70%;
+}
+
+.retro-contact-recado {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-style: italic;
+  color: var(--color-text-secondary);
+}
+
+.retro-unread {
+  margin-left: auto;
+  flex: none;
+  min-width: 1.125rem;
+  border-radius: var(--radius-pill);
+  padding: 0 0.3125rem;
+  background: var(--color-danger);
+  color: var(--color-on-accent);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.125rem;
+}
+
+/* ------------------------------------------------------------ the window */
+
+.retro-tools {
+  display: flex;
+  gap: 0.125rem;
+  padding: 0.25rem 0.375rem;
+  border-bottom: 1px solid var(--retro-edge-soft);
+  background: var(--retro-toolbar);
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+
+.retro-tool {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Never squeezed: on a phone the toolbar scrolls sideways instead, or the
+     pt-BR labels ("Chamar a atenção") ran into each other at 390 px. */
+  flex-shrink: 0;
+  gap: 0.125rem;
+  min-width: 3.625rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+  color: var(--color-text);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.retro-tool:hover,
+.retro-tool:focus-visible {
+  border-color: var(--retro-edge-soft);
+  background: var(--retro-hover);
+  outline: none;
+}
+
+.retro-tool-icon {
+  font-size: 1.125rem;
+  line-height: 1;
+}
+
+.retro-to {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.375rem;
+  flex-shrink: 0;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--retro-edge-soft);
+  background: var(--retro-strip);
+  font-size: 0.75rem;
+  color: var(--color-text);
+}
+
+.retro-to-label,
+.retro-to-status {
+  color: var(--color-text-secondary);
+}
+
+.retro-to-recado {
+  color: var(--color-text-secondary);
+  font-style: italic;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.retro-to-recado[data-music] {
+  color: var(--color-accent);
+}
+
+.retro-log-frame {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.retro-pictures {
+  display: none;
+  width: 8rem;
+  flex: none;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.625rem 0;
+  border-left: 1px solid var(--retro-edge-soft);
+  background: var(--retro-toolbar);
+}
+
+@media (min-width: 900px) {
+  .retro-pictures {
+    display: flex;
+  }
+}
+
+/* "Fulano diz:" rows, only inside a conversation window. Server channels
+   keep their own row shape, in the look's colours. */
+[data-retro-window] article[data-group-start] {
+  margin-top: 0.625rem;
+}
+
+[data-retro-window] article:not([data-message-stream]) {
+  padding-left: 1rem;
+}
+
+[data-retro-window] [data-row-gutter] {
+  display: none;
+}
+
+[data-retro-window] [data-row-header] {
+  font-size: 0.75rem;
+}
+
+[data-retro-window] [data-row-header] time {
+  display: none;
+}
+
+[data-retro-window] [data-row-author] button {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+}
+
+[data-retro-window] [data-row-author]::after {
+  content: var(--retro-says, "");
+  color: var(--color-text-secondary);
+}
+
+[data-retro-window] .markdown-body {
+  padding-left: 0.875rem;
+  color: var(--retro-peer-ink);
+}
+
+[data-retro-window] article[data-own] .markdown-body {
+  color: var(--retro-self-ink);
+}
+
+.retro-typing {
+  flex-shrink: 0;
+  min-height: 1.5rem;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--color-text-secondary);
+}
+
+.retro-typing:not(:empty)::before {
+  content: "✏️ ";
+  font-style: normal;
+}
+
+/* Outside a window the strip only shows while somebody types. */
+.retro-typing:empty {
+  display: none;
+}
+
+[data-retro-window] .retro-typing {
+  display: block;
+  border-top: 1px solid var(--retro-edge-soft);
+  background: var(--retro-strip);
+}
+
+/* ------------------------------------------------------------ DM cards */
+
+/* The DM cards move to the bottom right, framed, under a little title bar,
+   stacked above this look's own corner cards. */
+@media (min-width: 640px) {
+  [data-appearance="retro"] [data-dm-toasts] {
+    top: auto;
+    bottom: calc(
+      6.5rem + var(--retro-corner-offset, 0px) + var(--retro-stack-h, 0px)
+    );
+    flex-direction: column-reverse;
+  }
+}
+
+[data-appearance="retro"] [data-dm-toasts] > * {
+  position: relative;
+  padding-top: 1.875rem;
+  border: 1px solid var(--retro-edge);
+  border-radius: 0.4375rem;
+  background: var(--retro-toolbar);
+  box-shadow: var(--retro-shadow);
+}
+
+[data-appearance="retro"] [data-dm-toasts] > *::before {
+  content: "pqp";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1.25rem;
+  padding: 0 0.375rem;
+  border-radius: 0.4375rem 0.4375rem 0 0;
+  background: var(--retro-titlebar);
+  color: var(--retro-titlebar-ink);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+}
+
+/* ------------------------------------------------------------ motion */
+
+/*
+ * Small and quick, transform and opacity only: the window's chrome settles in
+ * when a conversation opens, the pictures pop into their frames, rows ease in
+ * as a group opens, the toolbar buttons press.
+ */
+@keyframes retro-chrome-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes retro-frame-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+
+@keyframes retro-row-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+}
+
+[data-retro-chrome] {
+  animation: retro-chrome-in 260ms var(--ease-emphasized) both;
+}
+
+.retro-pictures .retro-frame {
+  animation: retro-frame-in 360ms var(--ease-emphasized) both;
+}
+
+.retro-pictures .retro-frame + .retro-frame {
+  animation-delay: 80ms;
+}
+
+.retro-contact {
+  animation: retro-row-in 200ms var(--ease-emphasized) both;
+}
+
+.retro-tool {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.retro-tool:active {
+  transform: translateY(1px) scale(0.97);
+}
+
+.retro-tool-icon {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.retro-tool:hover .retro-tool-icon {
+  transform: translateY(-1px) scale(1.08);
+}
+
+/* The composer sits in the window's bottom strip. */
+[data-retro-window] > form {
+  border-top: 1px solid var(--retro-edge-soft);
+  background: var(--retro-toolbar);
+}
+
+/* No room for decoration on a phone. */
+@media (max-width: 639px) {
+  .retro-winbuttons {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-retro-chrome],
+  .retro-pictures .retro-frame,
+  .retro-contact {
+    animation: none;
+  }
+
+  .retro-tool,
+  .retro-tool-icon,
+  .retro-twisty {
+    transition: none;
+  }
+
+  .retro-tool:active,
+  .retro-tool:hover .retro-tool-icon {
+    transform: none;
+  }
+}
