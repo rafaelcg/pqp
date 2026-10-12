@@ -176,17 +176,37 @@ function coloCache(): Cache | null {
   return (globalThis as { caches?: { default?: Cache } }).caches?.default ?? null;
 }
 
-/** The API's answer, stored in the colo cache. Null when it did not answer. Never rejects. */
+/**
+ * The API's answer, stored in the colo cache. Null when it did not answer.
+ * Never rejects, and settles within `API_TIMEOUT_MS`, edge-config read included.
+ */
 async function fetchCommunities(context: PagesContext): Promise<boolean | null> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(null);
+    }, API_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([askCommunities(context, controller.signal), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function askCommunities(
+  context: PagesContext,
+  signal: AbortSignal,
+): Promise<boolean | null> {
   try {
     const apiOrigin = await resolveApiOrigin(context);
     if (!apiOrigin) {
       return null;
     }
     const response = await fetch(`${apiOrigin}/api/public/communities/config`, {
-      signal: controller.signal,
+      signal,
       headers: { accept: "application/json" },
     });
     if (!response.ok) {
@@ -204,8 +224,6 @@ async function fetchCommunities(context: PagesContext): Promise<boolean | null> 
     return enabled;
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
