@@ -26,7 +26,7 @@ describe("screenAnswer: the answers it must let through", () => {
   // A screen that rejects correct answers is a bot that says "não sei" to
   // everything, which is a different failure and just as useless.
   const good = [
-    "tem sim: Configurações, Voz e vídeo, Vídeo que você envia. Vai de 360p a 1080p, a 30 ou 60 fps.",
+    "tem sim: Configurações, Voz e vídeo, Qualidade do vídeo enviado. Vai de 360p a 1080p, a 30 ou 60 fps.",
     "quanto menos gente assistindo, mais nítida a imagem fica. o envio divide uns 5 Mbps entre os espectadores.",
     "o app de Android tá na Google Play, em pqp.gg/android.",
     "o som só vai junto no chrome, compartilhando uma guia, com a caixinha de áudio da guia marcada.",

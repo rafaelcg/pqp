@@ -947,7 +947,7 @@ async function main() {
           : /android|celular/i.test(question)
             ? "o app de android tá na google play, em pqp.gg/android. dá pra assistir e compartilhar a tela. o som do celular junto deve funcionar no android 10 ou mais novo, mas ainda não foi confirmado num aparelho. câmera ainda não. no iphone tem o beta em pqp.gg/beta."
             : /tela|qualidade|resolu|som|[áa]udio|voz|desktop|c[óo]digo|aberto/i.test(question)
-              ? "tem ajuste, sim: Configurações, Voz e vídeo, Vídeo que você envia, de 360p a 1080p. é um teto: se a conexão não aguenta, a imagem diminui pra não travar."
+              ? "tem ajuste, sim: Configurações, Voz e vídeo, Qualidade do vídeo enviado, de 360p a 1080p. é um teto: se a conexão não aguenta, a imagem diminui pra não travar."
               : "NAO_SEI",
   };
   /**

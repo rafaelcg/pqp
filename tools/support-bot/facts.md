@@ -35,10 +35,12 @@ possível deste sistema.
 - Comunidade pública e servidor com 10 membros ou mais usam o servidor de mídia
   (LiveKit) desde o começo. Aí cada pessoa manda o áudio uma vez só e o servidor
   repassa pra todo mundo. Não é ligação direta.
-- Uma ligação direta passa pro servidor de mídia no meio da call quando chega a
-  4 pessoas, ou quando alguém liga mais câmera ou tela do que a ligação direta
-  aguenta, se o servidor de mídia tiver espaço. Ninguém precisa sair e entrar
-  de novo.
+- Numa call de servidor, a ligação direta passa pro servidor de mídia no meio
+  da call quando chega a 4 pessoas, ou quando alguém liga mais câmera ou tela
+  do que a ligação direta aguenta, se o servidor de mídia tiver espaço. Ninguém
+  precisa sair e entrar de novo.
+- Chamada na DM, inclusive em grupo, fica sempre na ligação direta. Ela nunca
+  passa pro servidor de mídia.
 - O servidor de mídia principal fica em São Paulo. Também tem servidores em
   Miami e em Londres: a sala vai pro servidor perto de onde está a maior parte
   do pessoal daquele servidor. Watch party fica sempre em São Paulo.
@@ -47,9 +49,9 @@ possível deste sistema.
 
 - A tela é capturada em até 1080p.
 - Tem ajuste de qualidade, sim. Essa é a pergunta mais comum. Fica em
-  Configurações, Voz e vídeo, "Vídeo que você envia": Automático, 1080p, 720p,
-  480p ou 360p. Vale pra câmera e pra tela. Durante a call, o mesmo ajuste
-  aparece no menu de qualidade do vídeo, na barra da call.
+  Configurações, Voz e vídeo, "Qualidade do vídeo enviado (câmera e tela)":
+  Automático, 1080p, 720p, 480p ou 360p. Vale pra câmera e pra tela. Durante a
+  call, o mesmo ajuste aparece no menu "Vídeo que você envia", na barra da call.
 - A qualidade escolhida é um teto, não uma garantia. Se a conexão de quem
   compartilha não aguenta, a imagem diminui pra não travar.
 - Quadros por segundo da tela: Automático (60 quando a conexão aguenta, senão
@@ -70,9 +72,10 @@ possível deste sistema.
   no menu da call. Com dados móveis começa em 360p pra poupar a franquia. Numa
   ligação direta quem escolhe é só quem envia.
 - Mais de uma pessoa pode transmitir ao mesmo tempo. Numa ligação direta cabem
-  até 4 telas, menos se a conexão for fraca. Quando enche, a call passa pro
-  servidor de mídia, que não tem um número fixo de telas. Se mesmo assim não
-  couber, quem tenta recebe o recado de que a call chegou no máximo de telas.
+  até 4 telas, menos se a conexão for fraca. Numa call de servidor, quando
+  enche, a call passa pro servidor de mídia, que não tem um número fixo de
+  telas. Na chamada da DM isso não acontece. Se não couber, quem tenta recebe o
+  recado de que a call chegou no máximo de telas.
 - Serviço com DRM, tipo Netflix, sai preto. Isso é o navegador protegendo o
   conteúdo, não é bug do pqp.
 
@@ -86,8 +89,8 @@ possível deste sistema.
   porque a call iria junto. Nesse caso, usa o app.
 - No app, compartilhar uma **janela** manda só o som daquele programa.
   Compartilhar a **tela inteira** manda tudo que está tocando, menos a call.
-- Se o app não consegue capturar o som naquele Windows, a caixinha de som não
-  aparece e a tela vai sem som.
+- No Windows 10, se o app não consegue capturar o som naquele computador, a
+  caixinha de som não aparece e a tela vai sem som.
 - Compartilhar a tela inteira ou uma janela no macOS sai mudo (exceto guia
   no Chrome).
 - Safari e Firefox saem mudos sempre.
@@ -199,7 +202,7 @@ mesmo deploy. Localmente, `--facts <caminho>` lê outro arquivo sem build.
 | Fato | Fonte |
 |---|---|
 | captura em até 1080p, 30 ou 60 fps | `screenCaptureOptions`, `client/src/lib/screen-capture-audio.ts`; `SCREEN_FRAME_RATES`, `client/src/lib/hls-capture-rate.ts`; `settings.voice.screenFrameRate*` em `client/src/locales/pt-BR/translation.json` |
-| Automático / 1080p / 720p / 480p / 360p, câmera e tela | `VIDEO_QUALITIES` e `screenBitrateFor`, `client/src/lib/video-quality.ts`; `settings.voice.videoQuality*` e `settings.voice.videoQualityRow`; o menu da call é `client/src/components/voice/video-quality-menu.tsx` |
+| Automático / 1080p / 720p / 480p / 360p, câmera e tela | `VIDEO_QUALITIES` e `screenBitrateFor`, `client/src/lib/video-quality.ts`; `settings.voice.videoQuality*` e `settings.voice.videoQualityRow` (o nome da linha em Configurações); o menu da call é `client/src/components/voice/video-quality-menu.tsx`, botão `call.quality.open` |
 | fluidez / nitidez | `DEFAULT_SHARE_PRIORITY`, `client/src/lib/share-priority.ts`; `call.quality.send.priority*` |
 | 5 Mbps que se ajusta | `DEFAULT_SCREEN_UPLOAD_BUDGET_BPS`, `client/src/lib/screen-upload-budget.ts` |
 | 720p acima de 20 pessoas | `LARGE_ROOM_PARTICIPANTS`, `packages/shared/src/voice-backend.ts`; `call.quality.send.largeRoomCap` |
@@ -207,6 +210,7 @@ mesmo deploy. Localmente, `--facts <caminho>` lê outro arquivo sem build.
 | até 4 telas numa ligação direta, sem número fixo no servidor de mídia | `SCREEN_SHARE_LIMIT`, `MESH_VIDEO_HARD_LIMIT` e `meshVideoLimit`, `packages/shared/src/voice-backend.ts`; `voice.error.shareLimit` |
 | direta vs servidor de mídia, 10 membros, comunidade | `resolveVoiceTransport` e `LARGE_SERVER_MEMBER_THRESHOLD`, `server/src/voice/transport-policy.ts` |
 | passa pro servidor de mídia com 4 pessoas | `MESH_ROOM_PROMOTION_SIZE`, `packages/shared/src/voice-backend.ts`; `promotionRoomSize`, `server/src/voice/promotion.ts` |
+| chamada na DM nunca passa pro servidor de mídia | `resolveVoiceTransport` devolve `dm` para toda conversa; `canPromoteTransport = channel.kind === "server"` e a recusa `conversation` em `promoteRoomPastMeshCap`, `server/src/ws/voice.ts` |
 | São Paulo, Miami, Londres | `livekitRegions` em `https://api.pqp.gg/ready` e `voice-mia` / `voice-lhr` em `https://api.pqp.gg/status.json`; `docs/plans/SFU_REGIONS.md`; watch party em casa: `server/src/voice/regions.ts` |
 | dois irmãos, independente | `https://pqp.gg/contact` |
 | desktop se atualiza sozinho | `electron/lib/updater.js` (em todo release desde 0.1.0) |
