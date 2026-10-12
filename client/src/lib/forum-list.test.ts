@@ -55,6 +55,7 @@ function post(n: number, over: Partial<ForumPostSummary> = {}): ForumPostSummary
     thumbnailAttachmentId: null,
     thumbnailWidth: null,
     thumbnailHeight: null,
+    thumbnailVideoUrl: null,
     tagIds: [],
     ...over,
   };

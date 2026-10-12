@@ -1,9 +1,10 @@
-import type { ForumPostSummary, ForumTag } from "@pqp/shared";
+import { FORUM_PREVIEW_MAX, type ForumPostSummary, type ForumTag } from "@pqp/shared";
 import {
   CheckCircle2,
   Lock,
   MessageSquare,
   Pin,
+  Play,
   Rss,
   ShieldCheck,
 } from "lucide-react";
@@ -49,6 +50,12 @@ export interface ForumPostCardProps {
   leaving?: boolean;
   tabIndex: 0 | -1;
   onOpen: (postId: string) => void;
+  /**
+   * Double click: the post takes the whole content area for this visit,
+   * without changing the remembered split/maximized choice. A single click
+   * keeps opening it beside the list.
+   */
+  onOpenFull?: (postId: string) => void;
   onFocus: (postId: string) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLAnchorElement>, postId: string) => void;
   registerLink?: (postId: string, node: HTMLAnchorElement | null) => void;
@@ -114,10 +121,21 @@ export function forumPreviewText(t: Translator["t"], post: ForumPostSummary): st
     return t("thread.originDeleted");
   }
   if (post.preview && post.preview.trim()) {
-    return post.preview;
+    // The server cuts the opening message at FORUM_PREVIEW_MAX characters;
+    // a cut that lands inside the second line must still read as "more".
+    return Array.from(post.preview).length >= FORUM_PREVIEW_MAX
+      ? `${post.preview.trimEnd()}…`
+      : post.preview;
   }
   if (post.openingKind === "voice") {
     return t("forum.preview.voice");
+  }
+  // One picture or one clip says what it is; several files say how many.
+  if (post.attachmentCount === 1 && post.thumbnailUrl) {
+    return t("forum.preview.image");
+  }
+  if (post.attachmentCount === 1 && post.thumbnailVideoUrl) {
+    return t("forum.preview.video");
   }
   if (post.attachmentCount > 0) {
     return t("forum.preview.files", { count: post.attachmentCount });
@@ -146,7 +164,8 @@ function Thumbnail({
   className: string;
 }) {
   const [failed, setFailed] = useState(false);
-  if (!post.thumbnailUrl || failed) {
+  const videoUrl = post.thumbnailUrl ? null : (post.thumbnailVideoUrl ?? null);
+  if ((!post.thumbnailUrl && !videoUrl) || failed) {
     return null;
   }
   return (
@@ -156,15 +175,41 @@ function Thumbnail({
         className,
       )}
     >
-      <img
-        src={post.thumbnailUrl}
-        alt=""
-        loading="lazy"
-        decoding="async"
-        draggable={false}
-        onError={() => setFailed(true)}
-        className="h-full w-full object-cover"
-      />
+      {post.thumbnailUrl ? (
+        <img
+          src={post.thumbnailUrl}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onError={() => setFailed(true)}
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <>
+          {/* The first frame is the poster: `#t` asks for it, `metadata`
+              keeps the fetch to the header and that frame. */}
+          <video
+            src={`${videoUrl}#t=0.1`}
+            preload="metadata"
+            muted
+            playsInline
+            disablePictureInPicture
+            tabIndex={-1}
+            aria-hidden
+            onError={() => setFailed(true)}
+            className="pointer-events-none h-full w-full object-cover"
+          />
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 grid place-items-center"
+          >
+            <span className="grid h-6 w-6 place-items-center rounded-full bg-black/55 text-white">
+              <Play className="h-3 w-3 translate-x-px fill-current" />
+            </span>
+          </span>
+        </>
+      )}
       {/* The hairline sits ON the image, so a dark screenshot does not melt
           into the card behind it. */}
       <span
@@ -188,6 +233,7 @@ export const ForumPostCard = memo(function ForumPostCard({
   leaving = false,
   tabIndex,
   onOpen,
+  onOpenFull,
   onFocus,
   onKeyDown,
   registerLink,
@@ -333,28 +379,42 @@ export const ForumPostCard = memo(function ForumPostCard({
             aria-label={srName}
             aria-current={open ? "true" : undefined}
             onClick={handleClick}
+            onDoubleClick={(event) => {
+              if (onOpenFull) {
+                event.preventDefault();
+                onOpenFull(post.id);
+              }
+            }}
             onFocus={() => onFocus(post.id)}
             onKeyDown={(event) => onKeyDown?.(event, post.id)}
             className={cn(
               "min-w-0 truncate rounded-[var(--radius-control)] outline-none after:absolute after:inset-0 after:rounded-[var(--radius-card)] after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-focus-ring",
               narrow && !compact
                 ? cn(
-                    "basis-full whitespace-normal leading-5 line-clamp-2",
-                    pinnedRow ? "text-sm" : "text-[15px]",
+                    "basis-full whitespace-normal leading-snug line-clamp-2",
+                    pinnedRow ? "text-sm" : "text-base",
                   )
                 : compact || pinnedRow
-                  ? "text-sm"
-                  : "text-[15px]",
+                  ? "text-[15px] leading-5"
+                  : "text-base leading-6",
+              // The title is the line people scan: heavier than everything
+              // else on the card read or not, and unread heavier still.
               isUnread
-                ? "font-[650] text-text"
-                : "font-medium text-text-secondary",
+                ? "font-bold text-text"
+                : "font-semibold text-text-secondary",
             )}
           >
             {post.title}
           </a>
         </div>
-        {!compact && !pinnedRow && preview && (
-          <p className="mt-0.5 line-clamp-1 text-[13px] text-text-tertiary max-sm:line-clamp-2">
+        {!pinnedRow && preview && (
+          <p
+            className={cn(
+              "text-[13px] leading-[18px] text-text-tertiary",
+              // Two lines on a full card, one beside an open post.
+              compact ? "mt-0.5 line-clamp-1" : "mt-1 line-clamp-2",
+            )}
+          >
             {post.authorIsWebhook && (
               <UserAvatar
                 name={author}
@@ -365,7 +425,7 @@ export const ForumPostCard = memo(function ForumPostCard({
               />
             )}
             <span className="font-semibold text-text-secondary">{author}:</span>{" "}
-            {preview}
+            <span className={cn(post.openingDeleted && "italic")}>{preview}</span>
           </p>
         )}
         <div

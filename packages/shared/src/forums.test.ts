@@ -59,6 +59,7 @@ const SUMMARY: ForumPostSummary = {
   thumbnailAttachmentId: null,
   thumbnailWidth: null,
   thumbnailHeight: null,
+  thumbnailVideoUrl: null,
   tagIds: [TAG_A],
 };
 

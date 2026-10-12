@@ -396,6 +396,14 @@ export const forumPostSummarySchema = z.object({
   thumbnailAttachmentId: uuid.nullable(),
   thumbnailWidth: z.number().int().positive().nullable(),
   thumbnailHeight: z.number().int().positive().nullable(),
+  /**
+   * The opening message's first video, signed, when it has no image: the web
+   * card draws the video's first frame as the thumbnail (UX #18, "a video
+   * shows its poster"). Additive and separate from `thumbnailUrl` on purpose:
+   * a client that draws `thumbnailUrl` with an image view must never be
+   * handed a video. Absent from an older API, hence the default.
+   */
+  thumbnailVideoUrl: z.string().nullable().default(null),
   /** In the forum's tag order. */
   tagIds: z.array(uuid),
 });
