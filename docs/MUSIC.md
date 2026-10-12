@@ -283,8 +283,8 @@ while a track is on.
 
 The queue is Fila, `music-fila.tsx`, a chat-width sheet that grows up from
 that bar (`max-height` so the field stays typeable). Members stay in the
-right rail. The header is `Fila · N`, then +, Ver no palco, and X: no
-overflow, because the bar under it is still the player. The sheet is
+right rail. The header is `Fila · N`, then shuffle and X: no overflow
+and no Ver no palco, because the bar under it is still the player. The sheet is
 search, the queue, and Tocadas: no second now-playing card and no
 second seek. Search is behind +, or the empty state. Queue rows
 drag-reorder; hover and right-click share play-next, remove, and open
@@ -315,8 +315,9 @@ A pasted link still goes through `GET /api/music/resolve`. Typed text goes
 through `GET /api/music/search` and the person picks a row.
 
 "Ver no palco" moves that same embed onto the call stage as a 16:9 tile.
-The iframe never remounts, so the sound does not stop. Closing the tile is
-the only way off. The tile keeps fullscreen. Placement is remembered per
+It is a toggle on the bar, left of the queue button; the drawer away from
+the call keeps it in its header. The iframe never remounts, so the sound
+does not stop. The same toggle, or the tile's X, takes it off. The tile keeps fullscreen. Placement is remembered per
 browser in `client/src/lib/music-prefs.ts`.
 
 Ducking is personal. `music-duck.ts` ramps the embed from full volume to

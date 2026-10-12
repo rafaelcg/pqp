@@ -14,7 +14,7 @@ import {
   setMusicSession,
   stopMusic,
 } from "@/lib/music-store";
-import { resetMusicPrefsForTests } from "@/lib/music-prefs";
+import { resetMusicPrefsForTests, setMusicPlacement } from "@/lib/music-prefs";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { resetChannelMusicCardRightsForTests } from "@/components/voice/channel-music-card-rights";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
@@ -1059,6 +1059,26 @@ describe("the composer bar's up-next line", () => {
     expect(html).not.toContain("data-music-next");
   });
 
+  it("puts the stage toggle on the bar, beside the queue", () => {
+    resetMusicPrefsForTests();
+    const off = bar({ queue: [] });
+    expect(off).toMatch(
+      new RegExp(
+        `data-music-stage-watch=""[^>]*aria-pressed="false"[^>]*aria-label="${translateMessage("music.stage.watch")}"`,
+      ),
+    );
+    expect(off.indexOf("data-music-stage-watch")).toBeLessThan(
+      off.indexOf("data-music-queue-toggle"),
+    );
+    setMusicPlacement("stage");
+    expect(bar({ queue: [] })).toMatch(
+      new RegExp(
+        `data-music-stage-watch=""[^>]*aria-pressed="true"[^>]*aria-label="${translateMessage("music.stage.hide")}"`,
+      ),
+    );
+    resetMusicPrefsForTests();
+  });
+
   it("drops the count when there is nothing queued", () => {
     const html = bar({ queue: [] });
     expect(html).toContain("data-music-queue-toggle");
@@ -1497,7 +1517,8 @@ describe("MusicFila", () => {
     expect(html).not.toContain("w-60");
     expect(html).toContain("data-music-fila-close");
     expect(html).not.toContain("data-music-overflow");
-    expect(html).toContain("data-music-stage-watch");
+    // The bar under the sheet carries the stage toggle.
+    expect(html).not.toContain("data-music-stage-watch");
     expect(html).not.toContain("data-music-fila-play");
     expect(html).not.toContain("h-12 w-12");
     expect(html).not.toContain("data-music-vote-skip");
@@ -1517,6 +1538,7 @@ describe("MusicFila", () => {
     expect(html).toContain("data-music-fila=\"drawer\"");
     expect(html).toContain("data-music-overflow");
     expect(html).toContain("data-music-fila-play");
+    expect(html).toContain("data-music-stage-watch");
     expect(html).toContain("h-12 w-12");
     expect(html).toContain("data-slider=\"scrub\"");
     expect(html).not.toContain("data-indeterminate");
@@ -1557,7 +1579,6 @@ describe("MusicFila", () => {
     );
     expect(html).not.toContain("data-music-vote-skip");
     expect(html).not.toContain("data-music-overflow");
-    expect(html).toContain("data-music-stage-watch");
     expect(html).not.toContain("data-music-fila-play");
   });
 
