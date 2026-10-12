@@ -950,8 +950,15 @@ private suspend fun navigateToPush(
         is DeepLinkTarget.ForumPost -> {
             val name = serverName(target.serverId)
             nav.navigate(ChannelsRoute(target.serverId, name))
-            val forum = runCatching { session.api.channels(target.serverId) }.getOrNull()
-                ?.firstOrNull { it.id == target.forumId }
+            // Only the names and the guidelines come from this; a failure
+            // still opens the post. A cancellation is not a failure.
+            val forum = try {
+                session.api.channels(target.serverId)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }?.firstOrNull { it.id == target.forumId }
             nav.navigate(ForumRoute(target.serverId, target.forumId, forum?.name.orEmpty(), name, forum?.topic))
             nav.navigate(ForumPostRoute(target.serverId, target.forumId, target.postId, forum?.name.orEmpty()))
         }

@@ -213,6 +213,19 @@ class ForumViewModelTest {
     }
 
     @Test
+    fun `a frame that lands while page 1 is out survives the page's answer`() = runTest {
+        val gate = kotlinx.coroutines.CompletableDeferred<ForumPostListResponse>()
+        val fake = FakeBackend()
+        val backend = object : ForumBackend by fake {
+            override suspend fun page(forumId: String, query: ForumQuery) = gate.await()
+        }
+        val vm = ForumViewModel(backend, "s", "f", searchDebounceMs = 0)
+        fake.frames.emit(upsertFrame(post("c", 3)))
+        gate.complete(page(post("b", 2), post("a", 1)))
+        assertEquals(listOf("c", "b", "a"), vm.state.value.list.posts.map { it.id })
+    }
+
+    @Test
     fun `a failed page 1 says so, and a retry recovers`() = runTest {
         val backend = object : ForumBackend by FakeBackend() {
             var fail = true

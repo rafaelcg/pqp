@@ -137,6 +137,10 @@ class ForumViewModel(
     /** The forum's cursor has been moved for this visit (once, after page 1). */
     private var markedRead = false
 
+    /** A page 1 is out; frames wait in [held] so its answer cannot erase them. */
+    private var pageReading = false
+    private val held = mutableListOf<ForumFrame>()
+
     /**
      * The cursor this VISIT replaced, from its first page. Every later page 1
      * (a filter, a reconnect, coming back from a post) is read after this
@@ -213,6 +217,7 @@ class ForumViewModel(
             moreError = false,
             loadingMore = false,
         )
+        pageReading = true
         pageJob = viewModelScope.launch {
             val page = try {
                 backend.page(forumId, query())
@@ -222,13 +227,17 @@ class ForumViewModel(
                 null
             }
             if (ticket != generation) return@launch
+            pageReading = false
             if (page == null) {
                 _state.value = _state.value.copy(loading = false, loadError = _state.value.isEmpty)
+                replayHeld()
                 return@launch
             }
             val first = !markedRead
             if (first) visitPreviousReadAt = page.forumPreviousReadAt
             _state.value = _state.value.copy(list = forVisit(ForumList.fromPage(page)), loading = false, loadError = false)
+            // Frames that landed while the page was out may be newer than it.
+            replayHeld()
             if (first) {
                 // After the first page, never before: its `forumPreviousReadAt`
                 // is the cursor this visit replaces, which is what "Novo" means.
@@ -367,9 +376,23 @@ class ForumViewModel(
         }
     }
 
+    private fun replayHeld() {
+        val frames = held.toList()
+        held.clear()
+        frames.forEach(::apply)
+    }
+
     internal fun onFrame(frame: ForumFrame) {
         if (frame.forumId != forumId) return
         if (frame is ForumFrame.Upsert && frame.post.forumId != forumId) return
+        if (pageReading) {
+            held += frame
+            return
+        }
+        apply(frame)
+    }
+
+    private fun apply(frame: ForumFrame) {
         val list = _state.value.list
         _state.value = _state.value.copy(
             list = when (frame) {

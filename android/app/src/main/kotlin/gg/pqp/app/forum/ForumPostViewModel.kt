@@ -107,7 +107,8 @@ class ForumPostViewModel(
             return@coroutineScope
         }
         _state.value = _state.value.copy(
-            post = loaded.post,
+            // A frame that landed while the detail was out is newer than it.
+            post = _state.value.post ?: loaded.post,
             viewer = loaded.viewer,
             acceptedAnswer = loaded.acceptedAnswer,
             participantCount = loaded.participantCount,
@@ -228,7 +229,13 @@ class ForumPostViewModel(
         viewModelScope.launch {
             runCatching { request() }
                 .onSuccess { updated ->
-                    _state.value = _state.value.copy(post = updated)
+                    if (_state.value.post == drawn) {
+                        _state.value = _state.value.copy(post = updated)
+                    } else {
+                        // A newer action or frame was drawn while this one
+                        // was out; its answer may be older than that.
+                        refreshDetail()
+                    }
                     after(updated)
                 }
                 .onFailure { failure ->

@@ -316,21 +316,28 @@ class ForumComposerViewModel(
         val localId = UUID.randomUUID().toString()
         _state.value = current.copy(attachmentRefusal = null)
         viewModelScope.launch {
-            // Read a couple at a time: each read holds the whole file.
+            // Two files in hand at a time, read through upload: the bytes are
+            // only let go once the PUT is done with them.
+            reads.withPermit { ingest(reader, uri, localId, current.maxAttachmentBytes) }
+        }
+    }
+
+    private suspend fun ingest(reader: AttachmentFiles, uri: String, localId: String, maxBytes: Long) {
+        run {
             val local = try {
-                reads.withPermit { reader.read(uri, current.maxAttachmentBytes) }
+                reader.read(uri, maxBytes)
             } finally {
                 reserved -= 1
             }
             if (local == null) {
                 _state.value = _state.value.copy(attachmentRefusal = AttachmentRefusal.Unreadable)
-                return@launch
+                return
             }
             val size = local.bytes.size.toLong()
             refuseAttachment(local.contentType, size, _state.value.maxAttachmentBytes, _state.value.attachments.size)
                 ?.let { refusal ->
                     _state.value = _state.value.copy(attachmentRefusal = refusal)
-                    return@launch
+                    return
                 }
             val contentType = local.contentType!!
             _state.value = _state.value.copy(
