@@ -15,7 +15,7 @@
  */
 
 /** Older pages read at most before landing. A page is 50 messages. */
-export const FORUM_LANDING_MAX_PAGES = 20;
+export const FORUM_LANDING_MAX_PAGES = 8;
 
 export interface LandingHistory {
   /** Older messages exist above the loaded window. */

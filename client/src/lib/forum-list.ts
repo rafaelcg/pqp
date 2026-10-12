@@ -57,6 +57,20 @@ export interface ForumListState {
    * `flushQueued` when the pill is pressed or the reader returns to the top.
    */
   queued: ForumPostSummary[];
+  /**
+   * Every post this list has seen, drawn or not (a new post that fails the
+   * filters is seen and never drawn), with whether it was open. It is what
+   * makes the header's totals count a post exactly once, move "abertos" when
+   * one is resolved or reopened, and drop it when it is deleted, whichever
+   * list it is in. Copied only when a post is first seen or changes state.
+   */
+  known: ReadonlyMap<string, boolean>;
+  /**
+   * The newest post by creation (time, then id: the server's keyset order)
+   * among the ones seen. An unseen post newer than this is a new post; an
+   * unseen older one is an old post this list had not reached.
+   */
+  newest: { createdAt: string; id: string } | null;
 }
 
 export function emptyForumList(): ForumListState {
@@ -68,7 +82,47 @@ export function emptyForumList(): ForumListState {
     counts: null,
     forumPreviousReadAt: null,
     queued: [],
+    known: new Map(),
+    newest: null,
   };
+}
+
+/** Creation order, newest first: time, then id (the server's tie-breaker). */
+function createdAfter(
+  post: { createdAt: string; id: string },
+  than: { createdAt: string; id: string } | null,
+): boolean {
+  if (than === null) {
+    return true;
+  }
+  if (post.createdAt !== than.createdAt) {
+    return post.createdAt > than.createdAt;
+  }
+  return post.id > than.id;
+}
+
+function newestOf(
+  posts: readonly ForumPostSummary[],
+  start: ForumListState["newest"] = null,
+): ForumListState["newest"] {
+  let newest = start;
+  for (const post of posts) {
+    if (createdAfter(post, newest)) {
+      newest = { createdAt: post.createdAt, id: post.id };
+    }
+  }
+  return newest;
+}
+
+function withKnown(
+  known: ReadonlyMap<string, boolean>,
+  posts: readonly ForumPostSummary[],
+): ReadonlyMap<string, boolean> {
+  const next = new Map(known);
+  for (const post of posts) {
+    next.set(post.id, post.resolvedAt === null);
+  }
+  return next;
 }
 
 function viewerMap(
@@ -85,14 +139,17 @@ function viewerMap(
 /** Page 1: replaces everything, the queue included (it is now on screen). */
 export function forumListFromPage(page: ForumPostListResponse): ForumListState {
   const pinnedIds = new Set(page.pinned.map((post) => post.id));
+  const posts = page.posts.filter((post) => !pinnedIds.has(post.id));
   return {
     pinned: page.pinned,
-    posts: page.posts.filter((post) => !pinnedIds.has(post.id)),
+    posts,
     viewer: viewerMap(page.viewer),
     nextCursor: page.nextCursor,
     counts: page.counts,
     forumPreviousReadAt: page.forumPreviousReadAt,
     queued: [],
+    known: withKnown(new Map(), [...page.pinned, ...posts]),
+    newest: newestOf([...page.pinned, ...posts]),
   };
 }
 
@@ -115,6 +172,8 @@ export function appendForumPage(
     posts: [...state.posts, ...fresh],
     viewer: viewerMap(page.viewer, state.viewer),
     nextCursor: page.nextCursor,
+    known: fresh.length > 0 ? withKnown(state.known, fresh) : state.known,
+    newest: newestOf(fresh, state.newest),
   };
 }
 
@@ -266,9 +325,15 @@ function nextViewer(
   };
 }
 
+/**
+ * The header's totals after one frame, from what this list knew about the
+ * post (`known`) rather than from where it happens to be drawn: a post is
+ * counted once when it first arrives as new, and "abertos" moves only when a
+ * post it knew changes between open and resolved.
+ */
 function adjustCounts(
   counts: ForumListState["counts"],
-  previous: ForumPostSummary | undefined,
+  knownOpen: boolean | undefined,
   post: ForumPostSummary,
   isNew: boolean,
 ): ForumListState["counts"] {
@@ -276,19 +341,14 @@ function adjustCounts(
     return counts;
   }
   let { posts, open } = counts;
+  const isOpen = post.resolvedAt === null;
   if (isNew) {
     posts += 1;
-    if (post.resolvedAt === null) {
+    if (isOpen) {
       open += 1;
     }
-  } else if (previous) {
-    const wasOpen = previous.resolvedAt === null;
-    const isOpen = post.resolvedAt === null;
-    if (wasOpen && !isOpen) {
-      open = Math.max(0, open - 1);
-    } else if (!wasOpen && isOpen) {
-      open += 1;
-    }
+  } else if (knownOpen !== undefined && knownOpen !== isOpen) {
+    open = isOpen ? open + 1 : Math.max(0, open - 1);
   }
   return { posts, open };
 }
@@ -313,16 +373,21 @@ export function applyForumUpsert(
     viewer && viewer !== state.viewer[post.id]
       ? { ...state.viewer, [post.id]: viewer }
       : state.viewer;
-  // A post the list never held, with no replies and newer than anything it
-  // did hold, is a new post; anything else unknown is an old post bumped or
-  // edited beyond the loaded pages.
-  const newestCreated = [...state.pinned, ...state.posts].reduce(
-    (max, one) => (one.createdAt > max ? one.createdAt : max),
-    "",
-  );
-  const brandNew =
-    !previous && post.replyCount === 0 && post.createdAt > newestCreated;
-  const counts = adjustCounts(state.counts, previous, post, brandNew);
+  // A post never seen, newer by creation than every post seen, is a new
+  // post (whether or not it already has a reply when its first frame lands);
+  // an unseen older one is an old post bumped or edited beyond the pages.
+  const knownOpen = state.known.get(post.id);
+  const isOpen = post.resolvedAt === null;
+  const brandNew = knownOpen === undefined && createdAfter(post, state.newest);
+  const counts = adjustCounts(state.counts, knownOpen, post, brandNew);
+  const known =
+    knownOpen === isOpen ? state.known : new Map(state.known).set(post.id, isOpen);
+  const newest = brandNew ? { createdAt: post.createdAt, id: post.id } : state.newest;
+  // A queued snapshot is always the latest: an edit after a held bump must
+  // not be undone by the pill applying the older copy.
+  const queuedFresh = state.queued.some((one) => one.id === post.id)
+    ? replaceIn(state.queued, post)
+    : state.queued;
 
   // ---------------------------------------------------------------- pinned
   // Pins sit above every filter and only vanish under a search.
@@ -338,6 +403,8 @@ export function applyForumUpsert(
       queued: withoutId(state.queued, post.id),
       viewer: viewerNext,
       counts,
+      known,
+      newest,
     };
   }
   const base: ForumListState = {
@@ -345,6 +412,9 @@ export function applyForumUpsert(
     pinned: wasPinned ? withoutId(state.pinned, post.id) : state.pinned,
     viewer: viewerNext,
     counts,
+    known,
+    newest,
+    queued: queuedFresh,
   };
 
   const index = base.posts.findIndex((one) => one.id === post.id);
@@ -382,11 +452,9 @@ export function applyForumUpsert(
   if (!passes) {
     return { ...base, queued: withoutId(base.queued, post.id) };
   }
-  if (filters.sort === "created" && !brandNew) {
-    // A reply cannot move a post under "Mais novos", and an old post the
-    // pages did not reach yet arrives with them.
-    return base;
-  }
+  // By its place in the order on screen: a new post lands on top, an old one
+  // the pages had not reached is left for them (insertSorted answers null),
+  // and one that now passes the filters (retagged, reopened) takes its slot.
   const placed = insertSorted(
     base.posts,
     post,
@@ -408,27 +476,23 @@ export function applyForumRemoved(
   state: ForumListState,
   postId: string,
 ): ForumListState {
-  // A post still waiting behind the pill counts too: it is in the header's
-  // totals (counted when it was queued) and in the pill, and both drop now.
-  const previous =
-    state.pinned.find((one) => one.id === postId) ??
-    state.posts.find((one) => one.id === postId) ??
-    state.queued.find((one) => one.id === postId);
-  if (!previous) {
+  // Whatever list it is in, the queue behind the pill included, or none
+  // (a new post the filters hide): the totals drop once for a post they
+  // counted, and the pill drops with the queue.
+  const knownOpen = state.known.get(postId);
+  if (knownOpen === undefined) {
     return state;
   }
-  const counts =
-    previous && state.counts
-      ? {
-          posts: Math.max(0, state.counts.posts - 1),
-          open:
-            previous.resolvedAt === null
-              ? Math.max(0, state.counts.open - 1)
-              : state.counts.open,
-        }
-      : state.counts;
+  const counts = state.counts
+    ? {
+        posts: Math.max(0, state.counts.posts - 1),
+        open: knownOpen ? Math.max(0, state.counts.open - 1) : state.counts.open,
+      }
+    : state.counts;
   const viewer = { ...state.viewer };
   delete viewer[postId];
+  const known = new Map(state.known);
+  known.delete(postId);
   return {
     ...state,
     pinned: withoutId(state.pinned, postId),
@@ -436,6 +500,7 @@ export function applyForumRemoved(
     queued: withoutId(state.queued, postId),
     viewer,
     counts,
+    known,
   };
 }
 
@@ -444,34 +509,40 @@ export function flushForumQueue(
   state: ForumListState,
   ctx: Omit<ForumUpsertContext, "hold">,
 ): ForumListState {
-  // Queued posts were counted when they were queued; applying them is not a
-  // second arrival.
-  let next: ForumListState = { ...state, queued: [], counts: null };
-  for (const post of state.queued) {
-    const onScreen = next.posts.some((one) => one.id === post.id);
-    if (onScreen && ctx.filters.sort === "activity") {
-      // Its words were already updated in place when it was queued, so an
-      // upsert would see no bump; the move is what was held back.
-      const rest = withoutId(next.posts, post.id);
-      next = {
-        ...next,
-        posts: passesForumFilters(post, ctx.filters, ctx.viewerId)
-          ? (insertSorted(rest, post, "activity", true) ?? rest)
-          : rest,
-      };
+  // One pass, not one upsert per queued post: the queued posts (counted and
+  // viewer-updated when they were queued) are taken out of the list, sorted
+  // among themselves, and merged back into the sorted remainder. A card that
+  // left the filters while held stayed put, updated; letting go is when it
+  // leaves.
+  const compare = compareForSort(ctx.filters.sort);
+  const queuedIds = new Set(state.queued.map((post) => post.id));
+  const rest = state.posts.filter(
+    (post) =>
+      !queuedIds.has(post.id) && passesForumFilters(post, ctx.filters, ctx.viewerId),
+  );
+  const incoming = state.queued
+    .filter((post) => passesForumFilters(post, ctx.filters, ctx.viewerId))
+    .sort(compare);
+  const complete = state.nextCursor === null;
+  const last = rest[rest.length - 1];
+  const merged: ForumPostSummary[] = [];
+  let r = 0;
+  for (const post of incoming) {
+    while (r < rest.length && compare(rest[r], post) < 0) {
+      merged.push(rest[r]);
+      r += 1;
+    }
+    // Past the loaded pages with more to page in: the next page brings it.
+    if (r === rest.length && !complete && last && compare(post, last) > 0) {
       continue;
     }
-    next = applyForumUpsert(next, post, { ...ctx, hold: false });
+    merged.push(post);
   }
-  // A card that left the filter while held stayed put, updated; letting go
-  // is when it leaves.
-  return {
-    ...next,
-    counts: state.counts,
-    posts: next.posts.filter((one) =>
-      passesForumFilters(one, ctx.filters, ctx.viewerId),
-    ),
-  };
+  while (r < rest.length) {
+    merged.push(rest[r]);
+    r += 1;
+  }
+  return { ...state, queued: [], posts: merged };
 }
 
 /** Mark one post read locally (the reader opened it). */
@@ -555,8 +626,43 @@ export function forumUnreadState(
 export function refreshForumFirstPage(
   state: ForumListState,
   page: ForumPostListResponse,
+  options: { hold?: boolean } = {},
 ): ForumListState {
   const fresh = forumListFromPage(page);
+  const known = withKnown(state.known, [...page.pinned, ...page.posts]);
+  const newest = newestOf([...page.pinned, ...page.posts], state.newest);
+  if (options.hold) {
+    // The reader is busy: nothing moves. Cards on screen take the fresh
+    // words in place, and posts page 1 shows that the reader does not have
+    // yet wait behind the pill like any arrival.
+    const freshById = new Map(
+      [...fresh.pinned, ...fresh.posts].map((post) => [post.id, post]),
+    );
+    const onScreen = new Set([
+      ...state.pinned.map((post) => post.id),
+      ...state.posts.map((post) => post.id),
+    ]);
+    const patch = (list: ForumPostSummary[]) =>
+      list.map((post) => freshById.get(post.id) ?? post);
+    const pinnedIds = new Set(fresh.pinned.map((post) => post.id));
+    const arrivals = fresh.posts.filter((post) => !onScreen.has(post.id));
+    const queued = [
+      ...patch(state.queued).filter(
+        (post) => !arrivals.some((one) => one.id === post.id),
+      ),
+      ...arrivals,
+    ];
+    return {
+      ...state,
+      pinned: fresh.pinned,
+      posts: patch(state.posts).filter((post) => !pinnedIds.has(post.id)),
+      viewer: { ...state.viewer, ...fresh.viewer },
+      counts: fresh.counts ?? state.counts,
+      queued,
+      known,
+      newest,
+    };
+  }
   const shown = new Set([
     ...fresh.pinned.map((post) => post.id),
     ...fresh.posts.map((post) => post.id),
@@ -569,5 +675,7 @@ export function refreshForumFirstPage(
     nextCursor: keepsTail ? state.nextCursor : fresh.nextCursor,
     viewer: { ...state.viewer, ...fresh.viewer },
     queued: state.queued.filter((post) => !shown.has(post.id)),
+    known,
+    newest,
   };
 }

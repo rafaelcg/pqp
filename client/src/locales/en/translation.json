@@ -3024,8 +3024,6 @@
   "chat.reject.automod": "AutoMod blocked this message.",
   "chat.reject.databaseUnavailable": "Service is temporarily unavailable. Try again in a moment.",
   "chat.reject.locked": "This post is closed. Only staff can reply here.",
-  "forum.placeholder.title": "Forum on its way",
-  "forum.placeholder.body": "This channel is a forum. Its list of posts doesn't open here yet, but it's coming soon.",
   "channel.type.forum": "Forum",
   "channel.type.forum.description": "Titled, tagged posts that are easy to find later.",
   "forum.create.guidelinesPlaceholder": "Forum guidelines (optional)",

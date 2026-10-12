@@ -169,7 +169,9 @@ export function ThreadPanel({
     attachmentsEnabled,
     channelType: "text",
     streamChat: false,
-    canSend,
+    // A closed post shows no composer to a member, so nothing can take the
+    // file: the zone refuses it rather than staging an upload into nowhere.
+    canSend: canSend && !(forum?.locked && !forum.canReplyLocked),
   });
   const drop = useFileDropZone({
     mode: dropVerdict.mode,

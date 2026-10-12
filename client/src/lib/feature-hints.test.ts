@@ -61,6 +61,9 @@ describe("winningFeatureHint", () => {
       winningFeatureHint({ composerFormat: true, channelPin: true }),
     ).toBe("composerFormat");
     expect(winningFeatureHint({ channelPin: true })).toBe("channelPin");
+    // The forum's tip waits behind every other attached tip.
+    expect(winningFeatureHint({ channelPin: true, forum: true })).toBe("channelPin");
+    expect(winningFeatureHint({ forum: true })).toBe("forum");
     expect(
       winningFeatureHint({ watchParty: true, bringFriends: true }),
     ).toBe("watchParty");
