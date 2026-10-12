@@ -34,11 +34,13 @@ import {
 } from "./appearance";
 
 describe("isAppearance", () => {
-  it("accepts the four skins the stylesheet defines", () => {
+  it("accepts the skins the stylesheet defines", () => {
     expect(isAppearance("signal")).toBe(true);
     expect(isAppearance("harmony")).toBe(true);
     expect(isAppearance("hearth")).toBe(true);
     expect(isAppearance("night")).toBe(true);
+    expect(isAppearance("halloween")).toBe(true);
+    expect(isAppearance("christmas")).toBe(true);
   });
 
   it("rejects a brand name and anything else", () => {
@@ -49,8 +51,10 @@ describe("isAppearance", () => {
     expect(isAppearance(null)).toBe(false);
   });
 
-  it("pins Night to dark and leaves the other looks free", () => {
+  it("pins Night and the seasonal looks to dark and leaves the others free", () => {
     expect(appearanceForcesDark("night")).toBe(true);
+    expect(appearanceForcesDark("halloween")).toBe(true);
+    expect(appearanceForcesDark("christmas")).toBe(true);
     expect(appearanceForcesDark("signal")).toBe(false);
     expect(appearanceForcesDark("harmony")).toBe(false);
     expect(appearanceForcesDark("hearth")).toBe(false);

@@ -129,6 +129,10 @@ import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
+import {
+  SeasonalLookHint,
+  seasonalLookToOffer,
+} from "@/components/layout/seasonal-look-hint";
 import { NotifyOfferHint } from "@/components/layout/notify-offer-hint";
 import { BringFriendsServerProvider } from "@/components/layout/bring-friends-hint";
 import { FeatureHintProvider } from "@/components/layout/feature-hint";
@@ -642,7 +646,8 @@ import { useAttentionReport } from "@/hooks/use-attention";
 import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptAccentHuePreference } from "@/lib/accent";
-import { adoptAppearancePreference, getAppearance } from "@/lib/appearance";
+import { getAppearance } from "@/lib/appearance";
+import { adoptLook } from "@/lib/choose-look";
 import { useRetroLook } from "@/hooks/use-appearance";
 import { useKonamiRetro } from "@/hooks/use-konami-retro";
 import { adoptRetroFound, startRetroLookFlag } from "@/lib/retro-look";
@@ -1647,6 +1652,10 @@ function MainAppContent({
   const [wantsCargosHint, setWantsCargosHint] = useState(
     () => !isAutomatedBrowser() && !isCargosHintSeen(),
   );
+  // The seasonal look invite (Halloween, Christmas): which look it is for, or
+  // null out of season, once seen this season, or once dismissed this load.
+  const [seasonalLookOffer, setSeasonalLookOffer] = useState(seasonalLookToOffer);
+  const dismissSeasonalLook = useCallback(() => setSeasonalLookOffer(null), []);
   // The one-time "Ativar notificações" card. Like the cargos card it decides
   // for itself whether it was seen, and the queue has to know too: a card that
   // wants the corner and never draws would hold every tip behind it.
@@ -4773,7 +4782,7 @@ function MainAppContent({
         bindPreferenceSyncAccount(me.id);
         // Always called: with no stored look it still hands a Modo 2005
         // found before the look synced up to the account (`appearance.ts`).
-        adoptAppearancePreference(me.preferences?.appearance, readGeneration);
+        adoptLook(me.preferences?.appearance, readGeneration);
         adoptRetroFound(me.preferences?.easterEggs?.retro, readGeneration);
         const nextTheme = themeToAdopt(
           me.preferences?.theme,
@@ -10584,6 +10593,8 @@ function MainAppContent({
       campaignsYield,
     }),
     voiceClean: wantsVoiceCleanHint,
+    seasonalLook:
+      seasonalLookOffer !== null && qgHintReady && !campaignsYield,
     mobileBeta: wantsMobileBeta && !campaignsYield,
     whatsNew: wantsWhatsNew && !campaignsYield,
     cargos:
@@ -13778,6 +13789,11 @@ function MainAppContent({
       <NotifyOfferHint
         enabled={effectiveCornerHint === "notifyOffer"}
         onDismiss={() => setWantsNotifyOfferCard(false)}
+      />
+      <SeasonalLookHint
+        look={seasonalLookOffer}
+        enabled={effectiveCornerHint === "seasonalLook"}
+        onDismiss={dismissSeasonalLook}
       />
       <CargosHint
         enabled={effectiveCornerHint === "cargos"}

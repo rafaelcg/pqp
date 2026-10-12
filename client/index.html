@@ -93,11 +93,18 @@
             ? "harmony"
             : storedAppearance === "harmony" ||
                 storedAppearance === "hearth" ||
-                storedAppearance === "night"
+                storedAppearance === "night" ||
+                storedAppearance === "halloween" ||
+                storedAppearance === "christmas"
               ? storedAppearance
               : "signal";
         document.documentElement.dataset.appearance = appearance;
-        if (appearance === "night") {
+        // Dark-only looks: keep in lockstep with `appearanceForcesDark`.
+        if (
+          appearance === "night" ||
+          appearance === "halloween" ||
+          appearance === "christmas"
+        ) {
           document.documentElement.dataset.theme = "dark";
         }
         // Modo 2005 paints over the look above (which it keeps, to go back
