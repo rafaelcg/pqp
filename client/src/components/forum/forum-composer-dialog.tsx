@@ -258,6 +258,19 @@ export function ForumComposerDialog({
     clearBodyOnClose.current = false;
     clearDraft(forumId);
   }, [open, forumId]);
+  // The other way out: the dialog itself unmounts (the pane goes away) before
+  // `open` turns false. React tears a deleted tree down parent first, so this
+  // cleanup runs BEFORE the composer's last write; the clear is queued behind
+  // it. With the dialog gone nothing can race it any more.
+  useEffect(
+    () => () => {
+      if (clearBodyOnClose.current) {
+        clearBodyOnClose.current = false;
+        window.setTimeout(() => clearDraft(forumId), 0);
+      }
+    },
+    [forumId],
+  );
 
   // --------------------------------------------------------- similar posts
   const [similar, setSimilar] = useState<ForumPostSummary[]>([]);

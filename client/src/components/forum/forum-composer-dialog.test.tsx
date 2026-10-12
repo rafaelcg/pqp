@@ -75,8 +75,21 @@ afterEach(() => {
 });
 
 /** The pane's shape: it owns `open`, and closes later than the publish resolves. */
-function Harness({ closeDelayMs, discardOnly }: { closeDelayMs: number; discardOnly?: boolean }) {
+function Harness({
+  closeDelayMs,
+  discardOnly,
+  unmount,
+}: {
+  closeDelayMs: number;
+  discardOnly?: boolean;
+  /** The pane goes away instead of closing the dialog. */
+  unmount?: boolean;
+}) {
   const [open, setOpen] = useState(true);
+  const [mounted, setMounted] = useState(true);
+  if (!mounted) {
+    return null;
+  }
   return (
     <TooltipProvider>
       <ForumComposerDialog
@@ -96,7 +109,7 @@ function Harness({ closeDelayMs, discardOnly }: { closeDelayMs: number; discardO
           }
         }}
         onPublished={() => {
-          window.setTimeout(() => setOpen(false), closeDelayMs);
+          window.setTimeout(() => (unmount ? setMounted(false) : setOpen(false)), closeDelayMs);
         }}
         onOpenPost={() => {}}
       />
@@ -104,12 +117,14 @@ function Harness({ closeDelayMs, discardOnly }: { closeDelayMs: number; discardO
   );
 }
 
-async function mount(closeDelayMs: number, discardOnly = false) {
+async function mount(closeDelayMs: number, discardOnly = false, unmount = false) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
   await act(async () => {
-    root!.render(<Harness closeDelayMs={closeDelayMs} discardOnly={discardOnly} />);
+    root!.render(
+      <Harness closeDelayMs={closeDelayMs} discardOnly={discardOnly} unmount={unmount} />,
+    );
   });
 }
 
@@ -148,6 +163,19 @@ describe("forum composer body draft", () => {
     expect(document.querySelector("textarea")?.value).toBe(
       "Do nada o microfone para de mandar áudio.",
     );
+    await act(async () => setTitle("Microfone some"));
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[data-publish-placement="footer"]')!.click(),
+    );
+    await settle(120);
+
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(readDraft(FORUM_ID)).toBe("");
+  });
+
+  it("clears the body too when the dialog unmounts instead of closing", async () => {
+    writeDraft(FORUM_ID, "Corpo publicado e depois a tela trocou.");
+    await mount(40, false, true);
     await act(async () => setTitle("Microfone some"));
     await act(async () =>
       document.querySelector<HTMLButtonElement>('[data-publish-placement="footer"]')!.click(),
