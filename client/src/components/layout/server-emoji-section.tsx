@@ -68,7 +68,7 @@ interface Draft {
 }
 
 /**
- * Settings → Emoji. Manage Server only; the dialog decides whether to show it.
+ * Settings → Emoji. Manage Emoji only; the dialog decides whether to show it.
  *
  * Pick a file (or drop one), see it at the size it will be, confirm the name,
  * add. Every write lands immediately, like the server icon: there is no Save.
