@@ -482,6 +482,21 @@ final class WireDecodingTests: XCTestCase {
         XCTAssertNil(version)
     }
 
+    /// `channels-update` is what makes an open channel list re-read itself and
+    /// which list to draw. As `.other` (what it was before the mixed list), a
+    /// reorder somebody else made, or the mixed list switching on, never
+    /// reached an open list.
+    func testChannelsUpdateDecodes() async throws {
+        let json = """
+        {"type":"channels-update","serverId":"33333333-3333-3333-3333-333333333333"}
+        """
+        let event = await firstEvent(from: json)
+        guard case .channelsUpdate(let serverId) = event else {
+            return XCTFail("Expected channelsUpdate, got \(String(describing: event))")
+        }
+        XCTAssertEqual(serverId, "33333333-3333-3333-3333-333333333333")
+    }
+
     /// `/api/me` decides the age-gate route; absent must read as "predates the
     /// gate", never as pending.
     func testCurrentUserAgeGateDecoding() throws {

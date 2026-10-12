@@ -41,7 +41,7 @@ const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
 const { openConversation } = await import("../services/dms.js");
 const { acceptFriendRequest, sendFriendRequest } = await import("../services/friends.js");
-const { createMessage } = await import("../services/messages.js");
+const { createMessage, updateMessageBody } = await import("../services/messages.js");
 const { resetFeatureFlagsForTests, setGlobalFlag, startFeatureFlags } = await import(
   "../lib/flags.js"
 );
@@ -136,6 +136,14 @@ describeDb("chamar a atenção over HTTP", () => {
       [nudge!.id],
     );
     expect(row.rows[0]).toEqual({ body: "📳", system_kind: "nudge" });
+
+    // The service refuses on its own, not only behind the route's check.
+    expect(await updateMessageBody(nudge!.id, "virei texto")).toBeNull();
+    const afterService = await getPool().query<{ body: string; edited_at: Date | null }>(
+      `SELECT body, edited_at FROM messages WHERE id = $1`,
+      [nudge!.id],
+    );
+    expect(afterService.rows[0]).toEqual({ body: "📳", edited_at: null });
 
     // An ordinary message still edits.
     expect((await call("PATCH", `/api/messages/${plain!.id}`, { body: "oi!" })).status).toBe(200);

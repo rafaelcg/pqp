@@ -153,6 +153,10 @@ final class SessionStore {
     /// screens are alive.
     var eventHandlers: [String: @MainActor (RealtimeEvent) -> Void] = [:]
 
+    /// Bumped when a reply to a story went out, so the hub re-reads its
+    /// conversations: the DM it opened is not announced to the one who sent it.
+    var storyReplyRevision = 0
+
     /// Whether the intro has ever been completed on this device.
     ///
     /// Separate from "is there a session". A restorable session does not mean

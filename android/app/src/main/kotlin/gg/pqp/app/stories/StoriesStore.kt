@@ -55,6 +55,7 @@ class StoriesStore(
     private val _notice = MutableStateFlow<StoryNotice?>(null)
     val notice: StateFlow<StoryNotice?> = _notice.asStateFlow()
     private var noticesAsked = false
+    private var noticesAskedAt = 0L
 
     private val seenLocally = mutableSetOf<String>()
     private val views = ViewBatcher()
@@ -98,6 +99,7 @@ class StoriesStore(
 
     private suspend fun askNotices() {
         noticesAsked = true
+        noticesAskedAt = System.currentTimeMillis()
         runCatching { session.api.storyNotices() }
             .onSuccess { _notice.value = it.firstOrNull() }
     }
@@ -218,6 +220,11 @@ class StoriesStore(
             "own" -> {
                 _ownVersion.value += 1
                 raw.keys.toList().forEach(::refresh)
+                // A staff removal reaches the author on this frame, and the
+                // notice is only fetched once per session otherwise.
+                if (_notice.value == null && StoriesRules.noticeAskDue(noticesAskedAt, System.currentTimeMillis())) {
+                    scope.launch { askNotices() }
+                }
             }
         }
     }
@@ -230,6 +237,7 @@ class StoriesStore(
                 views.clear()
                 viewFailures = 0
                 noticesAsked = false
+                noticesAskedAt = 0L
                 _notice.value = null
                 _removed.value = emptySet()
                 _strips.value = emptyMap()

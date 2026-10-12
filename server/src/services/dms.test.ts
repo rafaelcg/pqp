@@ -412,6 +412,28 @@ describeDb("conversations", () => {
     });
   });
 
+  it("says when the last message is a nudge, so the row can read as one", async () => {
+    const { channelId } = await openConversation(alice.id, [bob.id]);
+    await say(channelId, bob.id, "oi");
+    let [summary] = await listConversations(alice.id);
+    expect(summary?.lastMessage?.systemKind).toBeNull();
+
+    // Stored the way the nudge handler stores it: a `📳` body plus the kind.
+    await say(channelId, bob.id, "📳");
+    await getPool().query(
+      `UPDATE messages SET system_kind = 'nudge'
+        WHERE id = (SELECT id FROM messages WHERE channel_id = $1
+                     ORDER BY created_at DESC LIMIT 1)`,
+      [channelId],
+    );
+    [summary] = await listConversations(alice.id);
+    expect(summary?.lastMessage).toMatchObject({
+      authorId: bob.id,
+      preview: "📳",
+      systemKind: "nudge",
+    });
+  });
+
   it("never previews a message from someone the viewer blocked", async () => {
     const { channelId } = await openConversation(alice.id, [bob.id]);
     await say(channelId, bob.id, "oi");

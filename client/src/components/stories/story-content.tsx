@@ -262,8 +262,11 @@ function CallSticker({
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
     >
-      <p className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.08em] text-on-accent-soft">
-        <Headphones className="h-3.5 w-3.5 text-accent" aria-hidden />
+      <p
+        className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.08em]"
+        style={{ color: "var(--story-accent-soft)" }}
+      >
+        <Headphones className="h-3.5 w-3.5" style={{ color: "var(--story-accent)" }} aria-hidden />
         {state === "ended"
           ? t("stories.call.ended")
           : state === "full"
@@ -277,7 +280,7 @@ function CallSticker({
         {call?.channelName ?? preview?.channelName}
       </p>
       {state !== "ended" && list && (
-        <div className="mt-2 flex items-center gap-2 text-[13px] text-text-secondary">
+        <div className="mt-2 flex items-center gap-2 text-[13px]" style={{ color: "var(--story-on-media-2)" }}>
           {people.length > 0 && (
             <span className="flex">
               {people.slice(0, 3).map((person, index) => (
@@ -310,7 +313,8 @@ function CallSticker({
           type="button"
           data-story-join=""
           onClick={() => onJoin(call)}
-          className="mt-3 flex h-10 w-full items-center justify-center gap-1.5 rounded-full bg-accent text-sm font-bold text-on-accent transition-transform hover:bg-accent-hover active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          className="mt-3 flex h-10 w-full items-center justify-center gap-1.5 rounded-full text-sm font-bold transition-[transform,filter] hover:brightness-105 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          style={{ background: "var(--story-accent)", color: "var(--story-on-accent)" }}
         >
           <Headphones className="h-4 w-4" aria-hidden />
           {t("stories.call.join")}
@@ -319,7 +323,8 @@ function CallSticker({
       {!call && preview && (
         <span
           aria-hidden
-          className="mt-3 flex h-10 w-full items-center justify-center gap-1.5 rounded-full bg-accent text-sm font-bold text-on-accent"
+          className="mt-3 flex h-10 w-full items-center justify-center gap-1.5 rounded-full text-sm font-bold"
+          style={{ background: "var(--story-accent)", color: "var(--story-on-accent)" }}
         >
           <Headphones className="h-4 w-4" />
           {t("stories.call.join")}

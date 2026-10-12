@@ -153,6 +153,18 @@ struct ForumTagRow: View {
 
 // MARK: - Card
 
+extension VerticalAlignment {
+    /// The top of a card's title, at its capitals: what the thumbnail lines
+    /// up with, so a badge row above the title does not push the two out of
+    /// step, and the picture does not sit above the letters by the line's
+    /// own leading.
+    private enum ForumCardTitle: AlignmentID {
+        static func defaultValue(in context: ViewDimensions) -> CGFloat { context[.top] }
+    }
+
+    static let forumCardTitle = VerticalAlignment(ForumCardTitle.self)
+}
+
 struct ForumPostCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -186,6 +198,10 @@ struct ForumPostCard: View {
 
     private var previewText: String { Self.previewText(for: post) }
 
+    /// The title's capital height (16 pt), so the thumbnail meets the top of
+    /// the letters rather than the top of the line box above them.
+    private static let titleCapHeight = UIFont.systemFont(ofSize: 16, weight: .semibold).capHeight
+
     /// The second line when the opening message has no words of its own.
     static func previewText(for post: ForumPostSummary) -> String {
         if post.openingDeleted { return String(localized: "The original message was deleted") }
@@ -208,12 +224,18 @@ struct ForumPostCard: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
+        // One text column on one leading edge: badges, title, "author: start
+        // of the question", then tags and numbers. The thumbnail hangs off the
+        // title's capitals, not off the badges above it, and on the common
+        // card (one line of title, one of preview, no tags) its bottom lands
+        // on the numbers' baseline.
+        HStack(alignment: .forumCardTitle, spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
                 if !badges.isEmpty {
                     HStack(spacing: 4) {
                         ForEach(badges, id: \.self) { ForumBadge(kind: $0) }
                     }
+                    .padding(.bottom, 6)
                 }
                 Text(verbatim: post.title)
                     .font(.system(size: 16, weight: isUnread ? .bold : .semibold))
@@ -221,16 +243,21 @@ struct ForumPostCard: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+                    .alignmentGuide(.forumCardTitle) { $0[.firstTextBaseline] - Self.titleCapHeight }
 
                 preview
+                    .padding(.top, 4)
                 meta
+                    .padding(.top, 8)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if let url = Avatar.resolve(post.thumbnailUrl) {
-                ForumThumbnail(url: url)
+                ForumThumbnail(url: url, size: ForumThumbnail.cardSize)
+                    .alignmentGuide(.forumCardTitle) { $0[.top] }
             } else if let video = Avatar.resolve(post.thumbnailVideoUrl) {
-                ForumThumbnail(url: video, isVideo: true)
+                ForumThumbnail(url: video, size: ForumThumbnail.cardSize, isVideo: true)
+                    .alignmentGuide(.forumCardTitle) { $0[.top] }
             }
         }
         .padding(.horizontal, 14)
@@ -276,11 +303,17 @@ struct ForumPostCard: View {
         }
     }
 
+    /// Tags on the left and the numbers on the right, the web card's row.
+    /// With no tags there is nothing to push against, so the numbers start
+    /// on the text's leading edge instead of floating at the far end of an
+    /// empty row.
     private var meta: some View {
         HStack(spacing: 8) {
-            ForumTagRow(tags: tags)
-            Spacer(minLength: 4)
-            HStack(spacing: 8) {
+            if !tags.isEmpty {
+                ForumTagRow(tags: tags)
+                Spacer(minLength: 4)
+            }
+            HStack(spacing: 6) {
                 if let top = post.topReaction {
                     HStack(spacing: 2) {
                         Text(verbatim: top.emoji).font(.system(size: 11))
@@ -301,6 +334,9 @@ struct ForumPostCard: View {
                         .fontWeight(.bold)
                         .foregroundStyle(Palette.signal)
                 }
+                // Read left to right now, so the time needs a break from the
+                // count before it ("Sem respostas · agora").
+                Text(verbatim: "·").accessibilityHidden(true)
                 Text(verbatim: ForumTime.short(post.lastActivityAt))
             }
             .font(.system(size: 12, weight: .medium).monospacedDigit())
@@ -332,6 +368,12 @@ struct ForumPostCard: View {
 /// dark screenshot does not melt into the card. A video post (`isVideo`) draws
 /// the clip's first frame instead, under a small play badge, like the web card.
 struct ForumThumbnail: View {
+    /// On a card: from the title's capitals (16 pt) through one line of
+    /// preview (14 pt, 4 above) to the numbers' baseline (12 pt, 8 above),
+    /// measured on the simulator at 3x. Change the card's type or spacing and
+    /// this moves too.
+    static let cardSize: CGFloat = 56
+
     let url: URL
     var size: CGFloat = 56
     var isVideo = false

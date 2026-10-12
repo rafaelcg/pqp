@@ -69,6 +69,14 @@ object StoriesRules {
         items = strip.items.filterNot { isExpired(it.expiresAt, nowMs) },
     )
 
+    /**
+     * Whether a `stories-update` for my own stories may ask for notices again.
+     * Views and reactions send the same frame, so the ask is spaced out.
+     */
+    fun noticeAskDue(lastAskMs: Long, nowMs: Long): Boolean = nowMs - lastAskMs >= NOTICE_REASK_MS
+
+    const val NOTICE_REASK_MS = 10_000L
+
     /** When the next ring on this strip runs out, so one timer can redraw it then. */
     fun nextExpiry(strip: StoryStrip, nowMs: Long): Long? =
         (listOfNotNull(strip.own) + strip.items)

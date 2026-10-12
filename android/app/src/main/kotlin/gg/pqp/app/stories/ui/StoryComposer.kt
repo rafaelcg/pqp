@@ -67,6 +67,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -539,6 +544,7 @@ private fun CardEditor(text: String, onText: (String) -> Unit, background: Strin
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
     // The card's own face, so what is typed looks like what will be posted.
     val family = MaterialTheme.typography.headlineLarge.fontFamily
+    val hint = stringResource(R.string.stories_compose_text_hint)
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
@@ -576,6 +582,7 @@ private fun CardEditor(text: String, onText: (String) -> Unit, background: Strin
             modifier = Modifier
                 .fillMaxWidth()
                 .focusRequester(focus)
+                .semantics { contentDescription = hint }
                 .testTag("stories.composer.text"),
         )
     }
@@ -589,9 +596,15 @@ private fun BackgroundSwatches(selected: String, onPick: (String) -> Unit) {
             .fillMaxWidth()
             .padding(vertical = Spacing.sm),
     ) {
-        StoriesRules.BACKGROUNDS.forEach { key ->
+        StoriesRules.BACKGROUNDS.forEachIndexed { position, key ->
+            val label = stringResource(R.string.stories_compose_background, position + 1)
             Box(
                 Modifier
+                    .semantics {
+                        role = Role.RadioButton
+                        this.selected = key == selected
+                        contentDescription = label
+                    }
                     .size(32.dp)
                     .clip(CircleShape)
                     .background(backgroundBrush(key))

@@ -71,6 +71,33 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("the switch's view transition", () => {
+  it("finishes without a frame: rendering is suppressed while the update runs", async () => {
+    apiFetch.mockResolvedValue({ retroLook: true });
+    // What a real browser does inside the update callback: no frames at all
+    // until the callback settles. A switch that waits for one never ends
+    // (Chrome aborts it after four seconds of a frozen page).
+    const requestAnimationFrame = vi.fn();
+    const startViewTransition = vi.fn((update: () => Promise<void> | void) => {
+      const done = Promise.resolve(update());
+      return { finished: done, updateCallbackDone: done };
+    });
+    vi.stubGlobal("requestAnimationFrame", requestAnimationFrame);
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
+    vi.stubGlobal("document", { startViewTransition, documentElement: { dataset: {} } });
+
+    const settled = await Promise.race([
+      toggleRetroLook(),
+      new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 1000)),
+    ]);
+
+    expect(settled).toBe("found");
+    expect(startViewTransition).toHaveBeenCalledTimes(1);
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+    expect(getLook()).toBe("retro");
+  });
+});
+
 describe("discovery", () => {
   it("is hidden from the slash menu until found", async () => {
     expect(listSlashCommands().map((c) => c.name)).not.toContain("2005");

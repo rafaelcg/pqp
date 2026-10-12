@@ -157,6 +157,8 @@ export interface ConversationMessage {
   body: string;
   createdAt: string;
   attachments: readonly { contentType: string; voice?: { durationMs: number } }[];
+  /** A nudge reads as what happened, not as its stored `📳` body. */
+  systemKind?: "nudge" | null;
 }
 
 /**
@@ -176,6 +178,7 @@ export function previewFromMessage(
       isGifAttachment: message.attachments[0]?.contentType === "image/gif",
       voiceDurationMs: message.attachments[0]?.voice?.durationMs ?? null,
     }),
+    systemKind: message.systemKind ?? null,
   };
 }
 
@@ -293,6 +296,8 @@ export function formatMessagePreview(
     /** Optional: rows from a server that predates voice notes omit both. */
     isVoice?: boolean;
     voiceDurationMs?: number | null;
+    /** Optional: rows from a server that predates nudges omit it. */
+    systemKind?: "nudge" | null;
   },
   options: {
     viewerId: string | null;
@@ -300,6 +305,13 @@ export function formatMessagePreview(
     isGroup: boolean;
   },
 ): string {
+  // Chamar a atenção: the row says what happened. Its stored body is a bare
+  // `📳`, which is there for clients that predate nudges, not for this list.
+  if (message.systemKind === "nudge") {
+    return message.authorId === options.viewerId
+      ? translateMessage("nudge.previewSent")
+      : translateMessage("nudge.notifyBody");
+  }
   const body =
     message.isAttachment && message.isVoice && typeof message.voiceDurationMs === "number"
       ? translateMessage("dm.preview.voice", {

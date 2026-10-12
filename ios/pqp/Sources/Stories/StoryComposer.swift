@@ -408,6 +408,24 @@ struct StoryCallChoice: Identifiable, Hashable, Sendable {
     var id: String { channelId }
 }
 
+/// Which room "Chama pra call" starts on, and whether the sticker will be open
+/// once posted. The server keeps a call sticker live only while its AUTHOR is
+/// in the room, so a sticker for a room the author is not in is posted already
+/// closed ("A call acabou") for everyone. Pure so it is tested, not eyeballed.
+enum StoryCallRoom {
+    static func authorIn(_ channelId: String, userId: String?, occupants: (String) -> [VoiceParticipant]) -> Bool {
+        guard let userId else { return false }
+        return occupants(channelId).contains { $0.userId == userId }
+    }
+
+    /// The room the author is in, if any; otherwise nothing is picked for them.
+    static func defaultChoice(
+        _ rooms: [StoryCallChoice], userId: String?, occupants: (String) -> [VoiceParticipant]
+    ) -> StoryCallChoice? {
+        rooms.first { authorIn($0.channelId, userId: userId, occupants: occupants) }
+    }
+}
+
 /// A movie handed over by the photo picker, copied somewhere this app owns.
 struct StoryMovieFile: Transferable {
     let url: URL
@@ -571,6 +589,16 @@ struct StoryCallPicker: View {
                     .font(Typography.caption)
                     .foregroundStyle(.white.opacity(0.75))
             }
+            if let selection, !StoryCallRoom.authorIn(
+                selection.channelId, userId: session.currentUser?.id,
+                occupants: { session.voiceOccupancy.participants(in: $0) }
+            ) {
+                Text(verbatim: String(localized: "You're not in \(selection.channelName). The card only lets people in while you're in the call."))
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("composer.call.notInRoom")
+            }
             ScrollView {
                 VStack(spacing: 6) {
                     ForEach(rooms) { room in
@@ -625,6 +653,14 @@ struct StoryCallPicker: View {
         rooms = found.sorted {
             session.voiceOccupancy.participants(in: $0.channelId).count
                 > session.voiceOccupancy.participants(in: $1.channelId).count
+        }
+        // Start on the room this account is in: that is the only sticker that
+        // is open once posted.
+        if selection == nil {
+            selection = StoryCallRoom.defaultChoice(
+                rooms, userId: session.currentUser?.id,
+                occupants: { session.voiceOccupancy.participants(in: $0) }
+            )
         }
     }
 }

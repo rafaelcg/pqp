@@ -165,11 +165,13 @@ struct Channel: Codable, Identifiable, Hashable, Sendable {
     let kind: String
     let name: String
     let type: String
-    let position: Int
+    /// `var` with `parentId`: the channel list rewrites both locally when a
+    /// saved order comes back without a read-back (`ChannelLayoutRules.apply`).
+    var position: Int
     let isPrivate: Bool
     let topic: String?
     let imageUrl: String?
-    let parentId: String?
+    var parentId: String?
     /// Seconds a member must wait between sends; 0 is off. Decoded by hand
     /// because a synthesized `Codable` has no defaults: a key the server omits
     /// (an API that predates slow mode, or a cached list written by a build

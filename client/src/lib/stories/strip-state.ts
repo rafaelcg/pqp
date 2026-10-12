@@ -85,11 +85,19 @@ export type StripView =
  *   first-run row does not apply (or was dismissed).
  * - `first-run`: the one-off dashed row, only while the server says so, only
  *   for someone who may post, and only until it is dismissed.
- * - `strip`: at least one ring, the viewer's own or somebody else's.
+ * - `strip`: at least one ring, the viewer's own or somebody else's. With
+ *   `ownSlot`, the "Teu story" bubble alone is a ring too: the Conversas
+ *   strip of somebody with friends (design §3.4), where no first-run row
+ *   ever comes and the bubble is the way in to posting for Amigos.
  */
 export function stripView(
   strip: StoryStrip,
-  options: { now: number; seenIds: ReadonlySet<string>; firstRunDismissed: boolean },
+  options: {
+    now: number;
+    seenIds: ReadonlySet<string>;
+    firstRunDismissed: boolean;
+    ownSlot?: boolean;
+  },
 ): StripView {
   if (!strip.enabled) {
     return { kind: "hidden" };
@@ -101,6 +109,9 @@ export function stripView(
   }
   if (strip.firstRunHint && strip.canPost && !options.firstRunDismissed) {
     return { kind: "first-run" };
+  }
+  if (options.ownSlot && strip.canPost) {
+    return { kind: "strip", own: null, items: [] };
   }
   return { kind: "hidden" };
 }

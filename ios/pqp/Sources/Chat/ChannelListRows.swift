@@ -363,3 +363,29 @@ struct CreateWatchPartyRow: View {
         .accessibilityIdentifier("channels.watchPartyCreate")
     }
 }
+
+// MARK: - Create category
+
+/// The last row of the mixed list, for whoever may manage channels. It
+/// replaces the old CATEGORIAS header, which read as an empty category.
+struct CreateCategoryRow: View {
+    let onCreate: () -> Void
+
+    var body: some View {
+        Button(action: onCreate) {
+            HStack(spacing: 10) {
+                Image(systemName: "plus")
+                    .font(.system(size: 15, weight: .medium))
+                    .frame(width: 22, height: 22)
+                Text("Create category")
+                    .font(.system(size: 16))
+                Spacer(minLength: 8)
+            }
+            .foregroundStyle(Palette.paperMuted)
+            .padding(.horizontal, 10)
+            .frame(height: 40)
+        }
+        .buttonStyle(ChannelRowButtonStyle())
+        .accessibilityIdentifier("channels.createCategory")
+    }
+}

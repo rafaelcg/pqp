@@ -385,7 +385,7 @@ struct StoryNoticeCard: View {
                 .font(Typography.bodyMedium)
                 .foregroundStyle(Palette.paper)
             if let reason = notice.reason, !reason.isEmpty {
-                Text("Reason: \(reason). It stays up for your Friends until it expires.")
+                Text("Reason: \(reason). If you posted it somewhere else too, it stays there until it expires.")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.paperMuted)
             }
