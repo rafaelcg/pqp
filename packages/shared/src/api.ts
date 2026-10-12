@@ -78,7 +78,9 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
  * Named token skins, independent of light/dark/system. `signal` is the
  * default pqp look. `harmony` and `hearth` take the mood of other chat apps
  * without using those apps' names or brand colours. `night` is a near-black
- * skin for dark, not a clone of another product's AMOLED theme.
+ * skin for dark, not a clone of another product's AMOLED theme. `ocean`,
+ * `catppuccin`, `rosepine`, `dracula`, `everforest` and `solarized` are the
+ * deliberate exception: credited ports of MIT palettes (see DECISIONS.md).
  *
  * `guild` and `accord` were earlier ids for harmony. Accept them on read so
  * a stored pick does not silently fall back to signal.
@@ -86,7 +88,18 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
 export const appearancePreferenceSchema = z.preprocess(
   (value) =>
     value === "guild" || value === "accord" ? "harmony" : value,
-  z.enum(["signal", "harmony", "hearth", "night"]),
+  z.enum([
+    "signal",
+    "harmony",
+    "hearth",
+    "night",
+    "ocean",
+    "catppuccin",
+    "rosepine",
+    "dracula",
+    "everforest",
+    "solarized",
+  ]),
 );
 export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;
 

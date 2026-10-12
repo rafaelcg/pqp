@@ -93,12 +93,16 @@ export function AppearanceSection({
 function ThemeGroup() {
   const { t } = useTranslation();
   return (
-    <SettingsGroup title={t("settings.appearance.group.theme.title")}>
-      <BrightnessRow />
-      <LookRow />
-      <AccentRow />
-      <ContrastRow />
-    </SettingsGroup>
+    <>
+      <SettingsGroup title={t("settings.appearance.group.theme.title")}>
+        <BrightnessRow />
+        <ContrastRow />
+      </SettingsGroup>
+      <SettingsGroup title={t("settings.appearance.group.colors.title")}>
+        <LookRow />
+        <AccentRow />
+      </SettingsGroup>
+    </>
   );
 }
 
@@ -307,11 +311,13 @@ function LockableSegmented<T extends string>({
   );
 }
 
-const LOOK_OPTIONS: {
+type LookOption = {
   value: AppearancePreference;
   label: MessageKey;
   badge?: MessageKey;
-}[] = [
+};
+
+const PQP_LOOKS: LookOption[] = [
   {
     value: "signal",
     label: "settings.appearance.preset.signal",
@@ -324,6 +330,16 @@ const LOOK_OPTIONS: {
     label: "settings.appearance.preset.night",
     badge: "settings.appearance.preset.nightOnly",
   },
+];
+
+/** Ported open-source palettes, credited in `index.css` and DECISIONS.md. */
+const COMMUNITY_LOOKS: LookOption[] = [
+  { value: "ocean", label: "settings.appearance.preset.ocean" },
+  { value: "catppuccin", label: "settings.appearance.preset.catppuccin" },
+  { value: "rosepine", label: "settings.appearance.preset.rosepine" },
+  { value: "dracula", label: "settings.appearance.preset.dracula" },
+  { value: "everforest", label: "settings.appearance.preset.everforest" },
+  { value: "solarized", label: "settings.appearance.preset.solarized" },
 ];
 
 function LookRow() {
@@ -356,6 +372,35 @@ function LookRow() {
     }
   }
 
+  // Two radiogroups on one value: arrows stay inside a set, Tab moves to the
+  // other, and the unpicked set still has a tab stop on its first card.
+  const grid = (caption: string, hint: string | null, looks: LookOption[]) => (
+    <div>
+      <div className="mb-2 flex flex-wrap items-baseline gap-x-2">
+        <span className="text-xs font-medium text-text-secondary">{caption}</span>
+        {hint ? <span className="text-xs text-text-tertiary">{hint}</span> : null}
+      </div>
+      <SettingsChoiceGrid
+        label={`${t("settings.appearance.preset")}: ${caption}`}
+        value={appearance}
+        onValueChange={choose}
+        columns={4}
+        options={looks.map((option) => ({
+          value: option.value,
+          label: t(option.label),
+          badge: option.badge ? t(option.badge) : undefined,
+          preview: (
+            <LookMiniature
+              look={option.value}
+              mode={mode}
+              customAccent={customAccent}
+            />
+          ),
+        }))}
+      />
+    </div>
+  );
+
   return (
     <SettingsRow
       id="look"
@@ -363,24 +408,14 @@ function LookRow() {
       description={t("settings.appearance.presetHint")}
       stacked
       control={
-        <SettingsChoiceGrid
-          label={t("settings.appearance.preset")}
-          value={appearance}
-          onValueChange={choose}
-          columns={4}
-          options={LOOK_OPTIONS.map((option) => ({
-            value: option.value,
-            label: t(option.label),
-            badge: option.badge ? t(option.badge) : undefined,
-            preview: (
-              <LookMiniature
-                look={option.value}
-                mode={mode}
-                customAccent={customAccent}
-              />
-            ),
-          }))}
-        />
+        <div className="space-y-5 pt-1">
+          {grid(t("settings.appearance.preset.group.pqp"), null, PQP_LOOKS)}
+          {grid(
+            t("settings.appearance.preset.group.community"),
+            t("settings.appearance.preset.group.communityHint"),
+            COMMUNITY_LOOKS,
+          )}
+        </div>
       }
     />
   );

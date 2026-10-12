@@ -396,7 +396,17 @@ const lightBlock = readTokens(css, /:root\[data-theme="light"\][^{]*\{([\s\S]*?)
 if (Object.keys(lightBlock).length > 0) {
   themes.light = { ...themes.dark, ...lightBlock };
 }
-for (const appearance of ["harmony", "hearth", "night"]) {
+for (const appearance of [
+  "harmony",
+  "hearth",
+  "night",
+  "ocean",
+  "catppuccin",
+  "rosepine",
+  "dracula",
+  "everforest",
+  "solarized",
+]) {
   const darkSkin = readTokens(
     css,
     new RegExp(

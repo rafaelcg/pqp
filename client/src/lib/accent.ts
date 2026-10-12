@@ -19,6 +19,12 @@ export const APPEARANCE_ACCENT_HUE: Record<AppearancePreference, number> = {
   harmony: 255,
   hearth: 200,
   night: 125,
+  ocean: 242,
+  catppuccin: 305,
+  rosepine: 21,
+  dracula: 302,
+  everforest: 126,
+  solarized: 245,
 };
 
 export const ACCENT_SWATCHES = [15, 80, 125, 180, 210, 255, 300, 340] as const;

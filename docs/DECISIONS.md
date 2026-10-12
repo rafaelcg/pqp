@@ -121,7 +121,9 @@ review-gated. A Connect button that 503s forever is worse than not offering it.
 ## Appearances: second axis, named presets (2026-08-25)
 
 User-facing looks are named token skins (`signal`, `harmony`, `hearth`,
-`night`), not a second brightness value and not a layout clone.
+`night`, plus the ported `ocean`, `catppuccin`, `rosepine`, `dracula`,
+`everforest`, `solarized`), not a second brightness value and not a layout
+clone.
 
 **Why a second axis.** `data-theme` already means resolved brightness
 (`light` | `dark`). Stuffing skins into it would break System, the marketing
@@ -135,6 +137,34 @@ using that app's name. Acordo was rejected: in Portuguese it also reads as
 "I wake up". Hearth is the warm workspace look. Night / Noite is the
 near-black skin. Not Onyx: that name belongs to another product. Night is
 dark-only. Light Night is a contradiction, so the look pins brightness to dark.
+
+**Ported palettes are credited copies (2026-10-11).** Six looks reuse a
+published palette under its own name:
+
+| Look | Source (all MIT) |
+|---|---|
+| Ocean | T3 Code's Ocean theme (pingdotgg/t3code) |
+| Catppuccin | Mocha and Latte (catppuccin/palette) |
+| Rosé Pine | main and Dawn (rose-pine/palette) |
+| Dracula | Dracula and Alucard (dracula/dracula-theme) |
+| Everforest | dark and light, medium (sainnhe/everforest) |
+| Solarized | dark and light (altercation/solarized) |
+
+The licence was checked on each repository before the port, and none of the
+READMEs restricts the name. The brand-colour rule exists so pqp does not pass
+as another chat app. None of these is a chat app. Each block in `index.css`
+names its source. Do not nudge the values to hide where they came from.
+
+Each look has light and dark variants and follows brightness like Harmony.
+Roles a palette does not name (a rail below the page, soft status fills,
+accent hover) are mixed from its own colours. Where a published colour fails
+the contrast bench, only its lightness moves, and the block says which tokens
+moved. Solarized and the light variants move the most.
+
+The picker shows two sets of cards, four per row. pqp's own looks come
+first. The ported palettes follow under "Community palettes". A new
+ported palette joins the second set. Mode and contrast sit in the Theme
+group. Look and accent sit in a separate Colors group.
 
 **Why not a two-tone Hearth sidebar.** Channel-list text uses `--color-text`,
 which the message pane also uses. Painting the channel column a saturated wine

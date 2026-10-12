@@ -15,7 +15,18 @@ export type { AppearancePreference };
 export const APPEARANCE_STORAGE_KEY = "pqp-appearance";
 export const DEFAULT_APPEARANCE: AppearancePreference = "signal";
 
-export const APPEARANCES = ["signal", "harmony", "hearth", "night"] as const;
+export const APPEARANCES = [
+  "signal",
+  "harmony",
+  "hearth",
+  "night",
+  "ocean",
+  "catppuccin",
+  "rosepine",
+  "dracula",
+  "everforest",
+  "solarized",
+] as const satisfies readonly AppearancePreference[];
 
 export function appearanceForcesDark(
   appearance: AppearancePreference,
@@ -24,12 +35,7 @@ export function appearanceForcesDark(
 }
 
 export function isAppearance(value: string | null): value is AppearancePreference {
-  return (
-    value === "signal" ||
-    value === "harmony" ||
-    value === "hearth" ||
-    value === "night"
-  );
+  return (APPEARANCES as readonly string[]).includes(value ?? "");
 }
 
 /** `guild` and `accord` were earlier ids for harmony. The boot script in

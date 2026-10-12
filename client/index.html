@@ -91,9 +91,17 @@
         const appearance =
           storedAppearance === "guild" || storedAppearance === "accord"
             ? "harmony"
-            : storedAppearance === "harmony" ||
-                storedAppearance === "hearth" ||
-                storedAppearance === "night"
+            : [
+                  "harmony",
+                  "hearth",
+                  "night",
+                  "ocean",
+                  "catppuccin",
+                  "rosepine",
+                  "dracula",
+                  "everforest",
+                  "solarized",
+                ].includes(storedAppearance)
               ? storedAppearance
               : "signal";
         document.documentElement.dataset.appearance = appearance;
