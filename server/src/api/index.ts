@@ -2613,7 +2613,9 @@ const adminChannelLayoutSchema = z.object({
 /**
  * Migrate one server's channel list now (the job would within a minute once
  * the flag is on, but the QG goes by hand, dry run first), or revert it to the
- * snapshot. A migrate after a revert is allowed here and only here.
+ * snapshot. A migrate after a revert is allowed here and only here, and it
+ * takes a NEW snapshot: a revert after that restores the list as it was at
+ * the second migrate, not the original one.
  */
 async function operatorChannelLayout(req: IncomingMessage) {
   const body = adminChannelLayoutSchema.parse(await readJsonBody(req));

@@ -638,7 +638,13 @@ export async function runChannelLayoutMigrations(
       if (error instanceof ChannelLayoutServerMissing) {
         continue;
       }
-      throw error;
+      // One server that cannot migrate must not wedge the batch: it sorts
+      // first by id on every tick, and nothing behind it would ever move.
+      countChannelLayout("jobFailures");
+      console.error(
+        `[channel-layout] migration failed for server ${serverId}:`,
+        error instanceof Error ? error.message : error,
+      );
     }
   }
   return changed;

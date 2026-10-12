@@ -754,6 +754,34 @@ describeDb("mixed channel list", () => {
       expect(channelLayoutMetrics().staleRejected).toBe(1);
     });
 
+    it("a PUT racing a move and a delete never deadlocks: each commits or is a clean 409", async () => {
+      const { serverId, test, duvidas } = await migrated();
+      let applied = 0;
+      for (let round = 0; round < 6; round += 1) {
+        const extra = await createIn(owner, serverId, `x${round}`, "text", { parentId: null });
+        // Built after the create, so the PUT is current and really writes:
+        // it holds the server row and goes for the channel rows while the
+        // move and the delete go for the same rows.
+        const body = await payloadAfter(manager, serverId, (layout) =>
+          moveInLayout(layout, duvidas.id, { parentId: null, index: round % 2 }),
+        );
+        const [written, move, removed] = await Promise.all([
+          put(manager, serverId, body),
+          call(owner, "PATCH", `/api/channels/${test.id}/move`, {
+            parentId: null,
+            index: round % 3,
+          }),
+          call(owner, "DELETE", `/api/channels/${extra.id}`),
+        ]);
+        expect([200, 409]).toContain(written.status);
+        expect(move.status).toBe(200);
+        expect(removed.status).toBe(200);
+        applied += written.status === 200 ? 1 : 0;
+      }
+      // Not only clean refusals: some rounds really raced and committed.
+      expect(applied).toBeGreaterThan(0);
+    });
+
     it("bumps the version on create, delete, move and a category rename", async () => {
       const { serverId, jogos, test } = await migrated();
       let version = (await configOf(owner, serverId)).version;

@@ -582,6 +582,11 @@ export async function moveChannel(
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    // The server row FIRST, before any channel row: every writer of the list
+    // (create, move, delete, the full-order PUT, a migration) takes the locks
+    // in that order, or a PUT holding the server row and a move holding a
+    // channel row wait on each other until Postgres aborts one (40P01).
+    await bumpChannelLayoutVersion(client, serverId);
 
     const target = await client.query<{ type: string; parent_id: string | null }>(
       `SELECT type, parent_id FROM channels WHERE id = $1 AND server_id = $2 FOR UPDATE`,
@@ -625,7 +630,6 @@ export async function moveChannel(
     }
 
     const oldParentId = row.parent_id;
-    await bumpChannelLayoutVersion(client, serverId);
 
     // The destination group, in order, with the moved channel spliced in —
     // every existing member of this group already has parent_id = parentId,
@@ -804,6 +808,18 @@ export async function deleteChannel(
   let keys: string[] = [];
   try {
     await client.query("BEGIN");
+    // The server row before the channel row, the order every writer of the
+    // list takes them in (see `moveChannel`). A sidebar row going away
+    // reshapes the list; a thread (a forum post) does not, and must neither
+    // lock the server nor turn a manager's drag into a 409.
+    const owner = await client.query<{ server_id: string | null; type: string }>(
+      `SELECT server_id, type FROM channels WHERE id = $1`,
+      [channelId],
+    );
+    const ownerServerId = owner.rows[0]?.server_id ?? null;
+    if (ownerServerId && owner.rows[0]?.type !== "thread") {
+      await bumpChannelLayoutVersion(client, ownerServerId);
+    }
     await client.query(`SELECT 1 FROM channels WHERE id = $1 FOR UPDATE`, [
       channelId,
     ]);
@@ -836,16 +852,11 @@ export async function deleteChannel(
     // Read the children (and the server they belong to) before the delete —
     // parent_id is still set, and a plain channel has none, so this is a
     // no-op read for the common case.
-    const before = await client.query<{ server_id: string | null; type: string }>(
-      `SELECT server_id, type FROM channels WHERE id = $1`,
+    const before = await client.query<{ server_id: string | null }>(
+      `SELECT server_id FROM channels WHERE id = $1`,
       [channelId],
     );
     const serverId = before.rows[0]?.server_id ?? null;
-    // A sidebar row going away reshapes the list; a thread (a forum post)
-    // does not, and must not turn a manager's drag into a 409.
-    if (serverId && before.rows[0]?.type !== "thread") {
-      await bumpChannelLayoutVersion(client, serverId);
-    }
     const orphaned = serverId
       ? await client.query<{ id: string; type: string }>(
           `SELECT id, type FROM channels WHERE parent_id = $1 ORDER BY position ASC`,
