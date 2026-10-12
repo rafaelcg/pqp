@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
-import type { Channel, VoiceRoomTransport } from "@pqp/shared";
+import type { Channel, ForumSort, VoiceRoomTransport } from "@pqp/shared";
 import {
   isVoiceRoomChannelType,
   SLOWMODE_SECONDS_PRESETS,
 } from "@pqp/shared";
 import { Input } from "@/components/ui/input";
+import { RadioGroup } from "@/components/ui/radio-group";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import {
   CHANNEL_NAME_MAX_LENGTH,
@@ -127,6 +128,8 @@ export interface ChannelOverviewDraft {
   imageUrl: string;
   slowmodeSeconds: number;
   voiceRoomSize: VoiceRoomSizeOption;
+  /** A forum only: the list's order when the reader has not picked one. */
+  defaultSort: ForumSort;
 }
 
 export function ChannelOverviewSection({
@@ -135,6 +138,7 @@ export function ChannelOverviewSection({
   onDraftChange,
   iconOpen,
   onIconOpenChange,
+  forumSettingsReady = false,
   showPrivateBridge,
   showRecipeBridge,
   isPrivate,
@@ -148,6 +152,8 @@ export function ChannelOverviewSection({
   onDraftChange: (next: ChannelOverviewDraft) => void;
   iconOpen: boolean;
   onIconOpenChange: (open: boolean) => void;
+  /** A forum's `forum_settings` have loaded, so its default sort can change. */
+  forumSettingsReady?: boolean;
   showPrivateBridge: boolean;
   showRecipeBridge: boolean;
   isPrivate: boolean;
@@ -163,9 +169,14 @@ export function ChannelOverviewSection({
   // voice room with a screen on it, and the server has always enforced the
   // wait there -- it just had no control, so the one channel type built for
   // an audience of hundreds was the one you could not slow down.
+  //
+  // A forum has one too, and there it is the wait between one new post and
+  // the next by the same person (`Intervalo entre posts`), which is the
+  // flood a forum gets.
+  const isForum = channel.type === "forum";
   const showSlowMode =
     channel.kind === "server" &&
-    (channel.type === "text" || isVoiceRoomChannelType(channel.type));
+    (channel.type === "text" || isForum || isVoiceRoomChannelType(channel.type));
   const showVoice = showsVoiceRoomSize(channel);
   // Read-only, one call when the sheet opens, never polled. It is decoration
   // under the size control: if it fails, or has not landed yet, the block is
@@ -303,32 +314,77 @@ export function ChannelOverviewSection({
         )}
       </SettingsGroup>
 
+      {/* A forum's topic is its guidelines: the "Regras do fórum" banner at
+          the top of the list. Same column, same 200 characters, its own
+          words, because "Tópico" on a forum reads like a post's subject. */}
       <SettingsGroup
-        title={t("channelMeta.topic")}
-        hint={t("channelMeta.topicHint")}
+        title={isForum ? t("forum.settings.guidelines") : t("channelMeta.topic")}
+        hint={
+          isForum ? t("forum.settings.guidelines.hint") : t("channelMeta.topicHint")
+        }
       >
-        <Input
-          value={draft.topic}
-          onChange={(event) =>
-            onDraftChange({ ...draft, topic: event.target.value })
-          }
-          placeholder={t("channelMeta.topicPlaceholder")}
-          maxLength={200}
-          className={fieldClass}
-        />
+        <div className="relative">
+          <Input
+            value={draft.topic}
+            onChange={(event) =>
+              onDraftChange({ ...draft, topic: event.target.value })
+            }
+            placeholder={
+              isForum
+                ? t("forum.settings.guidelines.placeholder")
+                : t("channelMeta.topicPlaceholder")
+            }
+            aria-label={
+              isForum ? t("forum.settings.guidelines") : t("channelMeta.topic")
+            }
+            maxLength={200}
+            className={cn(fieldClass, isForum && "pr-16")}
+          />
+          {isForum && (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] tabular-nums text-text-tertiary"
+            >
+              {draft.topic.length}/200
+            </span>
+          )}
+        </div>
       </SettingsGroup>
+
+      {isForum && (
+        <SettingsGroup
+          title={t("forum.settings.defaultSort")}
+          hint={t("forum.settings.defaultSort.hint")}
+        >
+          <RadioGroup<ForumSort>
+            label={t("forum.settings.defaultSort")}
+            value={draft.defaultSort}
+            disabled={!forumSettingsReady}
+            onValueChange={(defaultSort) => onDraftChange({ ...draft, defaultSort })}
+            options={[
+              { value: "activity", label: t("forum.sort.activity") },
+              { value: "created", label: t("forum.sort.created") },
+            ]}
+          />
+        </SettingsGroup>
+      )}
 
       {showSlowMode && (
         <SettingsGroup
-          title={t("channelMeta.slowMode")}
+          title={isForum ? t("forum.settings.slowMode") : t("channelMeta.slowMode")}
           hint={
-            isVoiceRoomChannelType(channel.type)
-              ? t("channelMeta.slowMode.hintVoice")
-              : t("channelMeta.slowMode.hint")
+            isForum
+              ? t("forum.settings.slowMode.hint")
+              : isVoiceRoomChannelType(channel.type)
+                ? t("channelMeta.slowMode.hintVoice")
+                : t("channelMeta.slowMode.hint")
           }
         >
           <select
             value={String(draft.slowmodeSeconds)}
+            aria-label={
+              isForum ? t("forum.settings.slowMode") : t("channelMeta.slowMode")
+            }
             className={cn(
               "w-full border px-3 text-paper outline-none focus-visible:ring-2",
               fieldClass,

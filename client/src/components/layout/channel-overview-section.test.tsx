@@ -43,6 +43,7 @@ function draftOf(one: Channel): ChannelOverviewDraft {
     imageUrl: "",
     slowmodeSeconds: one.slowmodeSeconds ?? 0,
     voiceRoomSize: "auto",
+    defaultSort: "activity",
   };
 }
 

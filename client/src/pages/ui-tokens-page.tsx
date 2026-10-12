@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { Check as CheckIcon } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { CheckRow } from "@/components/ui/check-row";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -468,6 +470,14 @@ function ControlSheet() {
 }
 
 const BUTTON_VARIANTS = ["default", "secondary", "ghost", "danger"] as const;
+const BADGE_VARIANTS: BadgeVariant[] = [
+  "new",
+  "accent",
+  "success",
+  "warning",
+  "danger",
+  "neutral",
+];
 const BUTTON_SIZES = ["default", "sm", "icon"] as const;
 
 function PrimitiveSheet() {
@@ -569,6 +579,25 @@ function PrimitiveSheet() {
         <Tooltip label={t("qaUi.tooltip.railLabel")} tone="rail" side="right">
           <Button variant="secondary">{t("qaUi.tooltip.railTrigger")}</Button>
         </Tooltip>
+      </div>
+
+      <div>
+        <p
+          className="mb-2 text-text-tertiary"
+          style={{ fontSize: "var(--type-label-size)" }}
+        >
+          Badge
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          {BADGE_VARIANTS.map((variant) => (
+            <Badge key={variant} variant={variant}>
+              {variant}
+            </Badge>
+          ))}
+          <Badge variant="success" icon={CheckIcon}>
+            success + icon
+          </Badge>
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">

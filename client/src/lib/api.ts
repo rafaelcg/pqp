@@ -1,4 +1,9 @@
 import type {
+  ForumPostDetailResponse,
+  ForumSettings,
+  ForumTag,
+  PutForumTagsRequest,
+  UpdateForumSettingsRequest,
   VoiceAudienceResponse,
   ChannelType,
   StreamAlertSetting,
@@ -791,6 +796,49 @@ export interface ForumConfig {
 
 export const fetchForumConfig = (serverId: string) =>
   apiFetch<ForumConfig>(`/api/forum/config?serverId=${encodeURIComponent(serverId)}`);
+
+// ------------------------------------------------------------------ forums
+//
+// The routes the shell needs (deep links and the forum's settings) from the
+// REST surface frozen in `packages/shared/src/forums.ts`. The pane's own
+// routes (list, create, edit) live beside it. Every route below 404s on an
+// API that predates forum PR 1; the callers read that as "nothing here yet".
+
+/**
+ * One post by its own id: the deep link, a search hit, a push. 404 when the
+ * id is not a post (a chat thread, a plain channel) or this viewer cannot see
+ * its forum, which the route fallback reads as "try the next kind of thing".
+ */
+export const fetchForumPost = (postId: string) =>
+  apiFetch<ForumPostDetailResponse>(
+    `/api/forum-posts/${encodeURIComponent(postId)}`,
+  );
+
+export const fetchForumTags = (forumId: string) =>
+  apiFetch<{ tags: ForumTag[] }>(
+    `/api/channels/${encodeURIComponent(forumId)}/forum-tags`,
+  );
+
+/** Replaces the whole list: see `putForumTagsSchema`. */
+export const putForumTags = (forumId: string, body: PutForumTagsRequest) =>
+  put<{ tags: ForumTag[] }>(
+    `/api/channels/${encodeURIComponent(forumId)}/forum-tags`,
+    body,
+  );
+
+export const fetchForumSettings = (forumId: string) =>
+  apiFetch<{ settings: ForumSettings }>(
+    `/api/channels/${encodeURIComponent(forumId)}/forum-settings`,
+  );
+
+export const updateForumSettings = (
+  forumId: string,
+  body: UpdateForumSettingsRequest,
+) =>
+  patch<{ settings: ForumSettings }>(
+    `/api/channels/${encodeURIComponent(forumId)}/forum-settings`,
+    body,
+  );
 
 /** Turn audience mode on or off in the call running in this voice channel. */
 export const setVoiceAudienceMode = (channelId: string, enabled: boolean) =>

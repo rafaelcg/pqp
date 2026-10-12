@@ -12,10 +12,12 @@ import {
   FolderMinus,
   FolderPlus,
   Hand,
+  Hash,
   History,
   Lock,
   LogOut,
   MessageSquareText,
+  MessagesSquare,
   Mic,
   MicOff,
   PanelLeftOpen,
@@ -91,6 +93,7 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { Menu } from "@/components/ui/menu";
+import { BetaTag } from "@/components/ui/beta-tag";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useIsTruncated } from "@/lib/use-is-truncated";
@@ -312,10 +315,16 @@ interface ChannelListProps {
    * is true; with the flag off the sidebar has no button that sends it.
    */
   onCreateChannel: (type: ChannelType, isPrivate: boolean) => void;
+  /**
+   * The runtime flag `forum_channels` is on for this server (`useForumConfig`).
+   * Turns the Texto section's "+" into a menu offering a text channel or a
+   * Fórum. Off, the "+" is the plain one-click text channel it always was.
+   */
+  forumCreateEnabled?: boolean;
   onRenameChannel: (channel: Channel) => void;
   onOpenChannelSettings: (
     channel: Channel,
-    section: "overview" | "permissions" | "webhooks",
+    section: "overview" | "tags" | "permissions" | "webhooks",
     options?: { forceAdvanced?: boolean },
   ) => void;
   onDeleteChannel: (channelId: string) => void;
@@ -449,6 +458,7 @@ export const ChannelList = memo(function ChannelList({
   onSetPeerVolume,
   onSetScreenVolume,
   onCreateChannel,
+  forumCreateEnabled = false,
   onRenameChannel,
   onOpenChannelSettings,
   onDeleteChannel,
@@ -508,9 +518,12 @@ export const ChannelList = memo(function ChannelList({
     : channels;
   const visibleFavs = visibleFavoriteChannels(listed, favoriteChannelIds);
   const favoriteIdSet = new Set(visibleFavs.map((c) => c.id));
+  // A forum is listed with the text channels: it is a place to write, the
+  // server groups its positions with `text`, and a separate Fórum section
+  // would be a header over one row in nearly every server.
   const topLevelText = sortByPosition(
     listed.filter(
-      (c) => c.type === "text" && !c.parentId && !favoriteIdSet.has(c.id),
+      (c) => isTextGroupChannelType(c.type) && !c.parentId && !favoriteIdSet.has(c.id),
     ),
   );
   const topLevelVoice = sortByPosition(
@@ -1633,6 +1646,16 @@ export const ChannelList = memo(function ChannelList({
               canManage={canManage}
               onAdd={() => onCreateChannel("text", false)}
               onAddPrivate={() => onCreateChannel("text", true)}
+              addMenu={
+                forumCreateEnabled
+                  ? textSectionAddMenu({
+                      textLabel: t("chrome.createTextChannel"),
+                      forumLabel: t("chrome.createForum"),
+                      onText: () => onCreateChannel("text", false),
+                      onForum: () => onCreateChannel("forum", false),
+                    })
+                  : undefined
+              }
               isDragOver={dragOverId === TEXT_ZONE && !draggedOccupant}
               onDragOver={(event) => {
                 if (draggedOccupant) {
@@ -1969,11 +1992,49 @@ function PinnedChannelsSection({
   );
 }
 
+/**
+ * The channel types the Texto section lists. A forum is written in, not
+ * talked in, so it sits with the text channels (and the server groups its
+ * positions with `text` for the same reason).
+ */
+export function isTextGroupChannelType(type: string): boolean {
+  return type === "text" || type === "forum";
+}
+
+/**
+ * The Texto section's "+" while forums are on for this server: a text channel
+ * first (still the common case, and what the plain "+" always did), then the
+ * Fórum with its beta pill. Exported for the test.
+ */
+export function textSectionAddMenu({
+  textLabel,
+  forumLabel,
+  onText,
+  onForum,
+}: {
+  textLabel: string;
+  forumLabel: string;
+  onText: () => void;
+  onForum: () => void;
+}): ContextMenuItemDef[] {
+  return [
+    { id: "create-text", label: textLabel, icon: Hash, onSelect: onText },
+    {
+      id: "create-forum",
+      label: forumLabel,
+      icon: MessagesSquare,
+      trailing: <BetaTag />,
+      onSelect: onForum,
+    },
+  ];
+}
+
 function ChannelSection({
   label,
   canManage,
   onAdd,
   onAddPrivate,
+  addMenu,
   children,
   isDragOver = false,
   onDragOver,
@@ -1983,6 +2044,12 @@ function ChannelSection({
   canManage: boolean;
   onAdd: () => void;
   onAddPrivate: () => void;
+  /**
+   * When set, the "+" opens this menu instead of creating straight away: the
+   * section can make more than one kind of channel (Texto: a text channel or
+   * a Fórum). Absent, the "+" is one click, as it always was.
+   */
+  addMenu?: ContextMenuItemDef[];
   children: ReactNode;
   isDragOver?: boolean;
   onDragOver?: (event: DragEvent) => void;
@@ -1990,6 +2057,8 @@ function ChannelSection({
 }) {
   const { t } = useTranslation();
   const typeName = label.toLowerCase();
+  const addButtonClass =
+    "rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper data-[state=open]:bg-ink-3 data-[state=open]:text-paper";
   return (
     <div className="mb-4">
       <div
@@ -2019,15 +2088,32 @@ function ChannelSection({
         </span>
         {canManage && (
           <div className="flex gap-0.5">
-            <Tooltip label={t("chrome.newChannel", { name: typeName })}>
-              <button
-                type="button"
-                className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                onClick={onAdd}
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
-            </Tooltip>
+            {addMenu && addMenu.length > 0 ? (
+              // The tooltip wraps the menu's trigger, not the other way
+              // round: Radix's trigger is `asChild`, and a Tooltip inside it
+              // would swallow the click that opens the menu.
+              <Menu items={addMenu} align="end">
+                <button
+                  type="button"
+                  data-channel-section-add=""
+                  aria-label={t("chrome.newInSection", { name: typeName })}
+                  className={addButtonClass}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </Menu>
+            ) : (
+              <Tooltip label={t("chrome.newChannel", { name: typeName })}>
+                <button
+                  type="button"
+                  data-channel-section-add=""
+                  className={addButtonClass}
+                  onClick={onAdd}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </Tooltip>
+            )}
             <Tooltip label={t("chrome.newPrivateChannel", { name: typeName })}>
               <button
                 type="button"
@@ -2889,6 +2975,13 @@ function ChannelRow({
             />
             <span className="sr-only">{t("chrome.connected")}</span>
           </>
+        )}
+        {/* Forums are new and still per server (`forum_channels`), so the
+            row says so with the same pill the wordmark wears. It steps aside
+            on hover, where the pin and settings tiles need the room, and
+            when a mention count is there to be read instead. */}
+        {channel.type === "forum" && mentions === 0 && (
+          <BetaTag className="group-hover:hidden group-focus-within:hidden" />
         )}
         {mentions > 0 && (
           <span
