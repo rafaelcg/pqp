@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,11 +31,12 @@ test("the desktop shell lets a MediaStream video enter picture-in-picture", asyn
   });
   await new Promise((res) => server.listen(0, "127.0.0.1", res));
   const url = `http://127.0.0.1:${server.address().port}/app`;
-  const app = await electron.launch({
-    args: [root],
-    env: { ...process.env, PQP_APP_URL: url, NODE_ENV: "test" },
-  });
+  let app;
   try {
+    app = await electron.launch({
+      args: [root],
+      env: { ...process.env, PQP_APP_URL: url, NODE_ENV: "test" },
+    });
     const win = await app.firstWindow();
     await win.waitForLoadState("domcontentloaded");
     await expect
@@ -51,7 +52,7 @@ test("the desktop shell lets a MediaStream video enter picture-in-picture", asyn
     await win.waitForTimeout(4000);
     if (process.env.PIP_SCREENSHOT) {
       // A picture of the OS window for a PR, which the page cannot take itself.
-      execSync(`scrot -o ${process.env.PIP_SCREENSHOT}`);
+      execFileSync("scrot", ["-o", process.env.PIP_SCREENSHOT]);
     }
     const state = await win.evaluate(() => {
       const v = document.pictureInPictureElement;
@@ -59,7 +60,10 @@ test("the desktop shell lets a MediaStream video enter picture-in-picture", asyn
     });
     expect(state?.paused).toBe(false);
   } finally {
-    await app.close();
-    server.close();
+    try {
+      await app?.close();
+    } finally {
+      server.close();
+    }
   }
 });
