@@ -86,6 +86,14 @@ final class BauYoutubeUITests: XCTestCase {
         snap(app, "bau-youtube-playing")
         XCTAssertEqual(app.state, .runningForeground, "The tap did not leave the app")
         XCTAssertFalse(app.descendants(matching: .any)["bau.media.youtube.failed"].exists, "The player did not refuse")
+
+        // Leaving the Baú lets the player go; coming back shows the poster.
+        app.buttons["BackButton"].firstMatch.tap()
+        XCTAssertTrue(bau.waitForExistence(timeout: 10), "Back on the channel list")
+        XCTAssertFalse(app.webViews.firstMatch.exists, "The web view went with the card")
+        bau.tap()
+        XCTAssertTrue(app.buttons["YouTube"].firstMatch.waitForExistence(timeout: 15), "The card is its poster again")
+        XCTAssertFalse(app.webViews.firstMatch.exists, "Nothing from YouTube until the next tap")
     }
 
     private func snap(_ app: XCUIApplication, _ name: String) {

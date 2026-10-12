@@ -31,8 +31,9 @@ import WebKit
  the floor at a time, so this player starting pauses an uploaded one and the
  other way round (`BauPlayback.claimEmbed`); the audio session follows
  `BauPlaybackPolicy.audioPlan`, which leaves a live call's session exactly as
- it is; and scrolling away pauses it, since an embed has no Picture in
- Picture for the card to hand it to. Full screen is the player's own button,
+ it is; and scrolling away stops it and lets the web view go (the card is
+ its poster again), since an embed has no Picture in Picture for the card to
+ hand it to. Full screen is the player's own button,
  and it unlocks landscape through `WatchOrientation` while it is up.
 
  The VIP lock is upstream: a locked post carries no media at all, so this
@@ -161,6 +162,9 @@ final class BauYoutubeSession: NSObject {
     @ObservationIgnored private(set) var webView: WKWebView?
     @ObservationIgnored private var fullscreenObservation: NSKeyValueObservation?
     @ObservationIgnored private var orientationOwner: UUID?
+    @ObservationIgnored private var pauseWhenFullScreenEnds = false
+    /// Another video displaced this one and its pause is on the way.
+    @ObservationIgnored private var yielding = false
 
     init(videoId: String) {
         self.videoId = videoId
@@ -201,24 +205,61 @@ final class BauYoutubeSession: NSObject {
     }
 
     /// Pause, and give up the floor. Kept for full screen: the card leaving
-    /// the feed under a full-screen player is not the person leaving it.
+    /// the feed under a full-screen player is not the person leaving it, so
+    /// the pause waits until the full screen ends.
     func pause() {
-        guard !isFullScreen else { return }
+        guard !isFullScreen else {
+            pauseWhenFullScreenEnds = true
+            return
+        }
+        forcePause()
+    }
+
+    /// Another video took the floor: pause whatever is showing.
+    private func forcePause() {
         webView?.evaluateJavaScript("bauPause()", completionHandler: nil)
         webView?.pauseAllMediaPlayback(completionHandler: nil)
         BauPlayback.shared.releaseEmbed(id)
+    }
+
+    /// The card is back on screen: a pause it asked for on the way out no
+    /// longer applies.
+    func cardDidAppear() { pauseWhenFullScreenEnds = false }
+
+    /// Stop and let go of the web view and its page, so a feed scrolled past
+    /// several played videos does not keep a WebKit view for each.
+    func tearDown() {
+        forcePause()
+        fullscreenObservation = nil
+        if let webView {
+            webView.stopLoading()
+            webView.configuration.userContentController
+                .removeScriptMessageHandler(forName: BauYoutubeEmbed.messageHandler)
+            webView.navigationDelegate = nil
+            webView.uiDelegate = nil
+        }
+        webView = nil
     }
 
     fileprivate func receive(_ body: Any) {
         guard let event = BauYoutubeEmbed.event(from: body) else { return }
         switch event {
         case .playing:
+            // A "playing" still in flight from before another video displaced
+            // this one must not take the floor back: pause again, and accept
+            // a claim only after the player has said it stopped.
+            guard !yielding else {
+                forcePause()
+                return
+            }
             BauPlayback.shared.claimEmbed(id, callActive: callActive) { [weak self] in
-                self?.pause()
+                self?.yielding = true
+                self?.forcePause()
             }
         case .buffering:
             break
         case .stopped:
+            yielding = false
             BauPlayback.shared.releaseEmbed(id)
         case .failed:
             BauPlayback.shared.releaseEmbed(id)
@@ -233,14 +274,20 @@ final class BauYoutubeSession: NSObject {
             let owner = UUID()
             orientationOwner = owner
             WatchOrientation.enterBauVideo(owner)
-        } else if let owner = orientationOwner {
-            orientationOwner = nil
-            WatchOrientation.leaveBauVideo(owner)
+        } else {
+            if let owner = orientationOwner {
+                orientationOwner = nil
+                WatchOrientation.leaveBauVideo(owner)
+            }
+            if pauseWhenFullScreenEnds {
+                pauseWhenFullScreenEnds = false
+                forcePause()
+            }
         }
     }
 }
 
-extension BauYoutubeSession: @preconcurrency WKNavigationDelegate, @preconcurrency WKUIDelegate {
+extension BauYoutubeSession: WKNavigationDelegate, WKUIDelegate {
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
@@ -345,7 +392,19 @@ struct BauYoutubeVideo: View {
             }
         }
         .onChange(of: callActive, initial: true) { _, now in session?.callActive = now }
-        .onDisappear { session?.pause() }
+        .onAppear { session?.cardDidAppear() }
+        .onDisappear {
+            // Scrolled away: the card goes back to its poster and the web view
+            // is let go. Under a full screen it is kept, and paused when the
+            // full screen ends.
+            guard let session else { return }
+            if session.isFullScreen {
+                session.pause()
+            } else {
+                session.tearDown()
+                self.session = nil
+            }
+        }
     }
 
     private var poster: some View {
