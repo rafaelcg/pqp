@@ -30,7 +30,11 @@ import {
   publishForumPost,
 } from "./forums.js";
 import { getHydratedMessage, mapMessage } from "./messages.js";
-import { executeWebhook, type DbWebhook } from "./webhooks.js";
+import {
+  executeWebhook,
+  executeWebhookIntoOpenPost,
+  type DbWebhook,
+} from "./webhooks.js";
 
 /**
  * Webhooks into a forum (plan §7, forum PR 4): one execution, one post.
@@ -345,6 +349,7 @@ async function duplicateAnswer(postId: string): Promise<ForumWebhookResult | nul
       }
       return {
         message: message ? mapMessage(message) : null,
+        postId,
         post,
         ignoredTags: [],
         deduplicated: true,
@@ -462,7 +467,14 @@ const POST_BUCKET_RETRY_SECONDS = Math.ceil(FORUM_WEBHOOK_POST_REFILL_MS / 1000)
 export interface ForumWebhookResult {
   /** The opening message, or the reply. Null only for a repeat whose opening was deleted. */
   message: ReturnType<typeof mapMessage> | null;
-  post: ForumPostSummary;
+  /** The post written to (or answered from the dedupe window). */
+  postId: string;
+  /**
+   * Its row. Null when reading it back failed after the write landed: the
+   * write stands and the execute still answers 200, because a tool that sees
+   * an error re-sends, and a re-sent reply would be a second reply.
+   */
+  post: ForumPostSummary | null;
   /** `applied_tags` entries that did not become a tag. */
   ignoredTags: string[];
   /** Answered from the dedupe window: nothing was written. */
@@ -510,30 +522,43 @@ async function replyInPost(
       code: 10003,
     });
   }
+  const locked = new ForumWebhookRefusal(403, {
+    error: "This post is locked",
+    message: "This post is locked",
+    reason: "locked",
+  });
   if (post.locked_at !== null) {
-    throw new ForumWebhookRefusal(403, {
-      error: "This post is locked",
-      message: "This post is locked",
-      reason: "locked",
-    });
+    throw locked;
   }
-  const message = await executeWebhook(input.webhook, input.body, post.channel_id);
+  // The lock is checked again inside the INSERT itself, so a moderator who
+  // locks the post after the read above still wins.
+  const message = await executeWebhookIntoOpenPost(input.webhook, input.body, post.channel_id);
+  if (!message) {
+    throw locked;
+  }
   const mapped = mapMessage(message);
   broadcastToChannel(post.channel_id, { type: "message-broadcast", message: mapped });
   // The bump the send path makes for a person's reply: the post moves up and
-  // every forum viewer gets the fresh row.
-  await bumpForumPostActivity(post.channel_id, message.created_at);
-  const summary = await getForumPostSummary(post.channel_id);
-  if (!summary) {
-    // Deleted between the write and the read: the reply went with it.
-    throw new ForumWebhookRefusal(404, {
-      error: "Unknown Channel",
-      message: "Unknown Channel",
-      code: 10003,
-    });
+  // every forum viewer gets the fresh row. Bookkeeping after the write: a
+  // failure here is logged, never answered as a failed execute.
+  let summary: ForumPostSummary | null = null;
+  try {
+    await bumpForumPostActivity(post.channel_id, message.created_at);
+    summary = await getForumPostSummary(post.channel_id);
+    if (summary) {
+      announceForumPostUpdate(summary);
+    }
+  } catch (error) {
+    console.error("[forums] webhook reply bump failed:", error);
   }
-  announceForumPostUpdate(summary);
-  return { message: mapped, post: summary, ignoredTags: [], deduplicated: false, reply: true };
+  return {
+    message: mapped,
+    postId: post.channel_id,
+    post: summary,
+    ignoredTags: [],
+    deduplicated: false,
+    reply: true,
+  };
 }
 
 async function createPostFromWebhook(
@@ -619,22 +644,21 @@ async function createPostFromWebhook(
     throw error;
   }
 
-  const post = await getForumPostSummary(postId);
-  if (!post) {
-    // Published a moment ago and gone already: a moderator deleted it.
-    throw new ForumWebhookRefusal(404, {
-      error: "Unknown Channel",
-      message: "Unknown Channel",
-      code: 10003,
-    });
-  }
-  // The post exists from here on: a failed fan-out is logged, never answered
-  // as a failed execute (the tool would re-send, and dedupe would answer it).
-  await announceForumPost(post, webhook.pseudo_user_id).catch((error: unknown) => {
+  // The post exists from here on: a failed read or fan-out is logged, never
+  // answered as a failed execute (the tool would re-send it, and with dedupe
+  // off that is a second post).
+  let post: ForumPostSummary | null = null;
+  try {
+    post = await getForumPostSummary(postId);
+    if (post) {
+      await announceForumPost(post, webhook.pseudo_user_id);
+    }
+  } catch (error) {
     console.error("[forums] webhook announce failed:", error);
-  });
+  }
   return {
     message: mapMessage(message),
+    postId,
     post,
     ignoredTags: ignored,
     deduplicated: false,

@@ -142,6 +142,26 @@ describe("WebhookForumSettingsPanel", () => {
     expect(scope.textContent).toContain("nope");
   });
 
+  it("an older edit failing never rolls back a newer one", async () => {
+    let failFirst!: (error: Error) => void;
+    putMock
+      .mockImplementationOnce(
+        () => new Promise((_, reject) => {
+          failFirst = reject;
+        }),
+      )
+      .mockResolvedValueOnce({});
+    const scope = render();
+    act(() => radio(scope, "24 h").click());
+    act(() => radio(scope, "7 days").click());
+    await act(async () => failFirst(new Error("nope")));
+    await flush();
+    await flush();
+    // The newest edit is still on screen, and it is what went out last.
+    expect(radio(scope, "7 days").getAttribute("aria-checked")).toBe("true");
+    expect(putMock).toHaveBeenLastCalledWith("w1", { ...DEFAULTS, dedupeWindowHours: 168 });
+  });
+
   it("a window set elsewhere stays visible as its own option", () => {
     const scope = render({ ...DEFAULTS, dedupeWindowHours: 48 });
     expect(radio(scope, "48 h").getAttribute("aria-checked")).toBe("true");

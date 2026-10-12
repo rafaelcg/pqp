@@ -65,6 +65,7 @@ const { resetFeatureFlagsForTests, setServerFlagOverride, startFeatureFlags } =
 const { assignRole, createRole, upsertChannelOverwrite } = await import(
   "../services/roles.js"
 );
+const { executeWebhookIntoOpenPost, getWebhook } = await import("../services/webhooks.js");
 
 type Actor = { id: string; clerk_id: string };
 
@@ -407,6 +408,21 @@ describeDb("webhooks into a forum", () => {
     const refused = await execute(webhook.url, reply, { query: { thread_id: postId } });
     expect(refused.status).toBe(403);
     expect(refused.body.reason).toBe("locked");
+    expect(await messageCount(postId)).toBe(2);
+  });
+
+  it("the reply INSERT itself refuses a locked post, whatever the route read before it", async () => {
+    const webhook = await makeWebhook();
+    const postId = (await execute(webhook.url, fixture("monitorss-forum"))).body.id!;
+    const row = await getWebhook(webhook.id);
+    // Locked AFTER any read a route could have made: only the statement's own
+    // check stands between the reply and the lock.
+    await getPool().query(`UPDATE forum_posts SET locked_at = NOW() WHERE channel_id = $1`, [postId]);
+    expect(await executeWebhookIntoOpenPost(row!, { content: "atrasado" }, postId)).toBeNull();
+    expect(await messageCount(postId)).toBe(1);
+
+    await getPool().query(`UPDATE forum_posts SET locked_at = NULL WHERE channel_id = $1`, [postId]);
+    expect(await executeWebhookIntoOpenPost(row!, { content: "agora sim" }, postId)).not.toBeNull();
     expect(await messageCount(postId)).toBe(2);
   });
 

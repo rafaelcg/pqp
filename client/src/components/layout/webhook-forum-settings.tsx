@@ -4,7 +4,7 @@ import {
   type WebhookForumSettings,
 } from "@pqp/shared";
 import { ChevronDown } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { SettingsInlineStatus } from "@/components/settings/kit/inline-status";
 import { useInlineSave } from "@/components/settings/kit/use-inline-save";
 import { CheckRow } from "@/components/ui/check-row";
@@ -43,15 +43,25 @@ export function WebhookForumSettingsPanel({
   const [settings, setSettings] = useState<WebhookForumSettings>(initial);
   const { state, run } = useInlineSave();
 
+  // What the server last confirmed, and which edit is the newest. Writes go
+  // out one at a time and an overtaken one is skipped (`useInlineSave`), and
+  // each sends the whole object, so the newest edit is what the server ends
+  // up with. Only a failure of that newest edit rolls the ticks back, and
+  // back to the server's state, never to a snapshot an older edit took.
+  const confirmed = useRef<WebhookForumSettings>(initial);
+  const newest = useRef(0);
+
   function save(next: WebhookForumSettings) {
-    const previous = settings;
+    const edit = ++newest.current;
     setSettings(next);
     void run(async () => {
       try {
         await putWebhookForumSettings(webhookId, next);
+        confirmed.current = next;
       } catch (error) {
-        // Back to what the server still holds, so the ticks never lie.
-        setSettings(previous);
+        if (edit === newest.current) {
+          setSettings(confirmed.current);
+        }
         throw error;
       }
     }, t("webhooks.forum.saveFailed"));

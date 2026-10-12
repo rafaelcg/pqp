@@ -100,9 +100,9 @@ const tabNames = () =>
   [...document.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent?.trim());
 
 describe("ChannelSettingsDialog on a forum", () => {
-  it("puts Tags between the overview and permissions, and offers no webhooks until forum webhooks exist", async () => {
+  it("puts Tags between the overview and permissions, and offers webhooks (each delivery is a post)", async () => {
     await mount(forum);
-    expect(tabNames()).toEqual(["Overview", "Tags", "Permissions"]);
+    expect(tabNames()).toEqual(["Overview", "Tags", "Permissions", "Webhooks"]);
   });
 
   it("has no Tags section for a text channel, which still keeps its webhooks", async () => {

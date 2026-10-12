@@ -11719,18 +11719,19 @@ async function handleWebhookExecute(
   // made before the create route refused threads) is refused: it would write
   // past the post's lock, and `?thread_id=` on the forum's webhook is how a
   // reply is made.
-  const target = await getChannel(webhook.channel_id);
-  if (target?.type === "thread" && (await isForumPost(target.id))) {
+  // The channel's type comes with the webhook lookup, so a text channel's
+  // delivery pays no extra round trip here.
+  if (webhook.channel_type === "thread" && (await isForumPost(webhook.channel_id))) {
     sendError(res, 400, "Webhooks cannot post into a forum post directly", req);
     return;
   }
-  if (target?.type === "forum") {
+  if (webhook.channel_type === "forum") {
     const query = new URL(req.url ?? "/", "http://localhost").searchParams;
     const idempotencyKey = req.headers["idempotency-key"];
     try {
       const result = await executeForumWebhook({
         webhook,
-        forum: target,
+        forum: { id: webhook.channel_id, server_id: webhook.server_id },
         body,
         threadId: query.get(WEBHOOK_THREAD_ID_PARAM),
         idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : null,
@@ -11745,10 +11746,10 @@ async function handleWebhookExecute(
           // Discord's `id` / `channel_id`, where a Discord tool reads them
           // (`webhookForumExecuteExtrasSchema`): a post answers its own id,
           // so a follow-up to `?thread_id=<id>` lands in it.
-          id: result.reply && result.message ? result.message.id : result.post.id,
-          channel_id: result.post.id,
+          id: result.reply && result.message ? result.message.id : result.postId,
+          channel_id: result.postId,
           message: result.message,
-          post: result.post,
+          ...(result.post ? { post: result.post } : {}),
           ...(result.ignoredTags.length > 0 ? { ignored_tags: result.ignoredTags } : {}),
         },
         req,
