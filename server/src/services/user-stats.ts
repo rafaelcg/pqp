@@ -248,10 +248,15 @@ export function createUserStatsRecorder(
   /** Noted and not yet stored, keyed `day|userId`. */
   let pendingMusic = new Map<string, { userId: string; day: string; count: number }>();
   let flushing: Promise<number> | null = null;
-  /** `userId|trackId` already counted, with when, oldest first, bounded. */
-  let creditedTracks = new Map<string, number>();
-  /** Credits whose count is still buffered, so a dropped flush can undo them. */
-  let unflushedCredits: string[] = [];
+  /**
+   * `userId|trackId` already counted, oldest first, bounded. `seq` numbers
+   * the credits in order, so "never sent to the database" is `seq >
+   * attemptedSeq`.
+   */
+  let creditedTracks = new Map<string, { at: number; seq: number }>();
+  let creditSeq = 0;
+  /** The newest credit a flush has tried to store (it may or may not have landed). */
+  let attemptedSeq = 0;
   /** Sample writes that failed, oldest first, retried before the next tick. */
   let failedSamples: { at: Date; seats: LiveSeat[] }[] = [];
   let lastBlindWarningAt = 0;
@@ -440,8 +445,8 @@ export function createUserStatsRecorder(
     // row to a winner holding the track, or a client re-sending a track
     // after the room dropped it. One add is one track.
     const at = now();
-    for (const [key, creditedAt] of creditedTracks) {
-      if (at - creditedAt <= CREDITED_TRACK_WINDOW_MS) {
+    for (const [key, credit] of creditedTracks) {
+      if (at - credit.at <= CREDITED_TRACK_WINDOW_MS) {
         break;
       }
       creditedTracks.delete(key);
@@ -459,11 +464,8 @@ export function createUserStatsRecorder(
       return;
     }
     for (const key of fresh) {
-      creditedTracks.set(key, at);
-      unflushedCredits.push(key);
-      if (unflushedCredits.length > MAX_CREDITED_TRACKS) {
-        unflushedCredits.shift();
-      }
+      creditSeq += 1;
+      creditedTracks.set(key, { at, seq: creditSeq });
       if (creditedTracks.size > MAX_CREDITED_TRACKS) {
         const oldest = creditedTracks.keys().next().value;
         if (oldest !== undefined) {
@@ -490,17 +492,20 @@ export function createUserStatsRecorder(
     const batch = pendingMusic;
     pendingMusic = new Map();
     const entries = [...batch.values()];
-    const batchCredits = unflushedCredits;
-    unflushedCredits = [];
     if (!enabled()) {
       // Off stops every write, including tracks noted before the flip.
       m.musicDropped += entries.reduce((sum, e) => sum + e.count, 0);
-      // The counts are gone, so the tracks must be reportable again.
-      for (const key of batchCredits) {
-        creditedTracks.delete(key);
+      // Counts no flush ever sent are gone, so their tracks must be
+      // reportable again. A count that went through an earlier flush may have
+      // landed, so its credit stays.
+      for (const [key, credit] of creditedTracks) {
+        if (credit.seq > attemptedSeq) {
+          creditedTracks.delete(key);
+        }
       }
       return 0;
     }
+    attemptedSeq = creditSeq;
     try {
       const result = await pool().query(
         `INSERT INTO user_daily_stats (user_id, day, music_queued)
@@ -520,9 +525,6 @@ export function createUserStatsRecorder(
       return result.rowCount ?? 0;
     } catch (error) {
       m.musicFlushFailures += 1;
-      unflushedCredits = [...batchCredits, ...unflushedCredits].slice(
-        -MAX_CREDITED_TRACKS,
-      );
       // Put back what did not land, merged with anything noted meanwhile.
       for (const entry of entries) {
         const key = `${entry.day}|${entry.userId}`;
@@ -609,7 +611,8 @@ export function createUserStatsRecorder(
       pendingMusic = new Map();
       flushing = null;
       creditedTracks = new Map();
-      unflushedCredits = [];
+      creditSeq = 0;
+      attemptedSeq = 0;
       failedSamples = [];
       lastBlindWarningAt = 0;
       m = emptyMetrics();

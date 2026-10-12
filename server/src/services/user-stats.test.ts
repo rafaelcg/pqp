@@ -359,6 +359,41 @@ describeDb("user stats", () => {
     expect(await stats()).toEqual({ [ana]: { voice: 0, share: 0, music: 1 } });
   });
 
+  it("keeps the credit of a track whose flush failed when the flag then goes off", async () => {
+    const ana = await person("ana");
+    let on = true;
+    let fail = true;
+    const r = createUserStatsRecorder({
+      enabled: () => on,
+      now: () => Date.parse("2026-10-10T12:00:00Z"),
+      pool: () =>
+        ({
+          query: async (text: string, values?: unknown[]) => {
+            if (fail) {
+              throw new Error("connection reset");
+            }
+            return getPool().query(text, values);
+          },
+        }) as unknown as ReturnType<typeof getPool>,
+    });
+    // t1 goes through a flush that fails (the insert may have committed).
+    r.noteTracksQueued(ana, ["t1"]);
+    await r.flushMusic();
+    expect(r.metrics().musicFlushFailures).toBe(1);
+    // t2 is noted after it and never sent anywhere.
+    r.noteTracksQueued(ana, ["t2"]);
+    on = false;
+    expect(await r.flushMusic()).toBe(0);
+    expect(r.metrics().musicDropped).toBe(2);
+    on = true;
+    fail = false;
+    // t1 stays counted, so a re-report does not count it twice. t2 counts.
+    r.noteTracksQueued(ana, ["t1", "t2"]);
+    expect(r.metrics().musicNoted).toBe(3);
+    await r.flushMusic();
+    expect(await stats()).toEqual({ [ana]: { voice: 0, share: 0, music: 1 } });
+  });
+
   it("counts one add once, however many writes report it", async () => {
     const ana = await person("ana");
     const r = createUserStatsRecorder({
