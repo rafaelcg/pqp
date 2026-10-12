@@ -38,6 +38,9 @@ vi.mock("./services/slow-mode.js", () => ({
 vi.mock("./services/forums.js", () => ({
   sweepForumPostShells: vi.fn(async () => 0),
 }));
+vi.mock("./services/soundboard.js", () => ({
+  sweepSoundboardUploads: vi.fn(async () => undefined),
+}));
 vi.mock("./services/connections.js", () => ({
   sweepExpiredConnectionStates: vi.fn(async () => 0),
 }));
@@ -112,6 +115,7 @@ import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.j
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { sweepForumPostShells } from "./services/forums.js";
+import { sweepSoundboardUploads } from "./services/soundboard.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
 import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
 import { startSpeechJobPoller } from "./services/speech-worker.js";
@@ -202,11 +206,12 @@ describe("cold jobs", () => {
     // job poller (its own test above: adaptive, not a fixed cadence); 21 with
     // the Baú video subtitles sweep (a minute, asserted below); 22 with the
     // forum shell sweep (five minutes, asserted below); 24 with the stories
-    // sweep (a minute) and the stories video job (5 s), both asserted below.
+    // sweep (a minute) and the stories video job (5 s), both asserted below;
+    // 25 with the soundboard upload sweep (a minute, asserted below).
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(24);
+    expect(jobs.count).toBe(25);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -233,6 +238,8 @@ describe("cold jobs", () => {
     expect(sweepStories).toHaveBeenCalledTimes(4);
     // The stories video job: every 5 s, idle here, so once per tick.
     expect(processStoryVideos).toHaveBeenCalledTimes(48);
+    // The soundboard upload sweep: a minute, so four, and none at boot.
+    expect(sweepSoundboardUploads).toHaveBeenCalledTimes(4);
 
     await vi.advanceTimersByTimeAsync(PENDING_DELETION_SWEEP_INTERVAL_MS);
     expect(sweepPendingAccountDeletions).toHaveBeenCalledTimes(1);

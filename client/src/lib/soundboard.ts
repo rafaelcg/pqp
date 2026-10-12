@@ -57,13 +57,18 @@ export interface SoundboardMark {
 const marks = new Map<string, SoundboardMark>();
 const activeUntilById = new Map<string, number>();
 const listeners = new Set<() => void>();
-let sender: ((soundId: string) => void) | null = null;
+let sender: ((soundId: string) => boolean) | null = null;
 let catalogServerId: string | null = null;
 const catalogTokens = new Map<string, number>();
 
-/** The voice socket registers this while a call is up. */
+/**
+ * The voice socket registers this while a call is up. It answers whether the
+ * frame actually went out: a seat that is locked, or no longer in a room,
+ * sends nothing, and that click must not spend the budget or wait for an
+ * echo that will never come.
+ */
 export function registerSoundboardSender(
-  next: (soundId: string) => void,
+  next: (soundId: string) => boolean,
 ): () => void {
   sender = next;
   return () => {
@@ -125,6 +130,10 @@ const SEND_REFILL_MS = SOUNDBOARD_PLAY_REFILL_MS;
 let sendTokens = SEND_BURST;
 let sendRefilledAt = 0;
 
+function refundSendToken(): void {
+  sendTokens = Math.min(SEND_BURST, sendTokens + 1);
+}
+
 function takeSendToken(now: number): boolean {
   const earned = Math.floor((now - sendRefilledAt) / SEND_REFILL_MS);
   if (earned > 0) {
@@ -180,7 +189,11 @@ export function requestSoundboardPlay(soundId: string): void {
     flagRefused("refused");
     return;
   }
-  sender(soundId);
+  if (!sender(soundId)) {
+    // Nothing went out: give the token back and expect no echo.
+    refundSendToken();
+    return;
+  }
   const token = ++pendingSeq;
   const list = pendingById.get(soundId) ?? [];
   list.push({ token, sentAt: now });
@@ -466,14 +479,17 @@ export function setSoundboardCatalogServer(serverId: string | null): void {
   }
 }
 
+/**
+ * A list the caller already fetched (the settings page). Supersedes any
+ * prefetch still in flight, and feeds the panel, the marks and the floats,
+ * with no second request.
+ */
 export function noteSoundboardCatalog(
   serverId: string,
-  sounds: readonly SoundboardSound[],
+  page: { sounds: readonly SoundboardSound[]; maxSounds: number; slotsUsed?: number },
 ): void {
   catalogTokens.set(serverId, (catalogTokens.get(serverId) ?? 0) + 1);
-  rememberCustom(serverId, sounds);
-  // Marks and floats read the names from here.
-  notify();
+  rememberCatalog(serverId, page);
 }
 
 function clipIdentity(url: string): string {
@@ -583,6 +599,11 @@ export async function prefetchSoundboard(serverId: string): Promise<void> {
   } catch {
     // The board still plays the built-in pack.
   }
+  await warmSoundboardBuiltins();
+}
+
+/** Fetch and decode the six built-ins once. Custom clips load on first play. */
+export async function warmSoundboardBuiltins(): Promise<void> {
   await Promise.all(
     SOUNDBOARD_BUILTINS.map((sound) =>
       warm(`/sounds/soundboard/${sound.file}`, sound.id),
@@ -745,6 +766,8 @@ function stopSources(match?: (userId: string | null) => boolean): void {
 export function stopSoundboardClips(): void {
   // The overlap count is per room, and leaving one ends its clips here.
   ownPlayEnds = [];
+  // Clicks from the room we left will never be echoed; say nothing about them.
+  pendingById.clear();
   stopSources();
 }
 

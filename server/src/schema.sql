@@ -5359,7 +5359,8 @@ CREATE TABLE IF NOT EXISTS hls_session_presence (
 );
 
 -- Soundboard clips for a server. Play clicks are not rows: a play is a
--- socket frame. 24 is the hard cap, enforced again in the claim transaction.
+-- socket frame. SOUNDBOARD_MAX_SOUNDS (6) is the hard cap, enforced again in
+-- the claim transaction.
 CREATE TABLE IF NOT EXISTS soundboard_sounds (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   server_id    UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,

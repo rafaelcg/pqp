@@ -172,6 +172,7 @@ import {
   useUpdateWaiting,
 } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
+import { setSoundboardCatalogServer } from "@/lib/soundboard";
 import { isNotifyOfferSeen } from "@/lib/notify-offer-hint";
 import { startNotifyDefaultsConfig } from "@/lib/notify-defaults-config";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
@@ -2914,6 +2915,19 @@ function MainAppContent({
   const watchPartyHistoryChannels = watchPartyHistoryChannelsRef.current;
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
+  // The soundboard's catalog follows the call, not the panel: custom clips
+  // other people play must keep sounding while this person reads a text
+  // channel and the call stage (with the panel) is not mounted. The ref is
+  // set before the join resolves; a DM call has no library.
+  const soundboardSeatChannelId = voiceState.voiceChannelId ?? null;
+  useEffect(() => {
+    const dm =
+      soundboardSeatChannelId !== null &&
+      conversations.some((one) => one.channelId === soundboardSeatChannelId);
+    setSoundboardCatalogServer(
+      soundboardSeatChannelId && !dm ? voiceServerIdRef.current : null,
+    );
+  }, [soundboardSeatChannelId, conversations]);
   // Windows desktop share sound: look up the call's per-server flag (and the
   // shell's self-test, when the flag is on) as soon as they are in the call,
   // so "share screen" never waits on the API. The ref is set before the join

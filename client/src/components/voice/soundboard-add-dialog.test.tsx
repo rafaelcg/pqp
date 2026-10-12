@@ -26,7 +26,6 @@ const stopped = vi.fn();
 vi.mock("@/lib/sounds", () => ({
   sharedAudioContext: () => null,
   decodeAudioBuffer: () => new Promise((resolve) => decodes.push(resolve)),
-  playAudioBuffer: () => undefined,
   unlockSounds: () => undefined,
 }));
 

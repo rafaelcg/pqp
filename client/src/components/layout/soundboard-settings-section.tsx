@@ -18,7 +18,7 @@ import {
   noteSoundboardCatalog,
   previewSoundboardClip,
   stopSoundboardPreview,
-  prefetchSoundboard,
+  warmSoundboardBuiltins,
 } from "@/lib/soundboard";
 import { soundboardErrorKey, soundboardNameErrorKey } from "@/lib/soundboard-upload";
 import { SoundboardAddDialog } from "@/components/voice/soundboard-add-dialog";
@@ -68,18 +68,17 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
         if (seq !== reloadSeq.current) {
           return;
         }
-        noteSoundboardCatalog(serverId, page.sounds);
+        noteSoundboardCatalog(serverId, page);
         setSounds(page.sounds);
         setMaxSounds(page.maxSounds);
         setSlotsUsed(page.slotsUsed ?? null);
         setError(null);
-        // Warming the clips is keyed by clip, so only a changed set needs it;
-        // the poll while uploads are in flight would otherwise fetch the whole
-        // list a second time on every tick.
+        // The list above is the catalog already; only the built-ins need
+        // warming, once.
         const ids = page.sounds.map((entry) => entry.id).join(",");
         if (ids !== prefetchedIds.current) {
           prefetchedIds.current = ids;
-          void prefetchSoundboard(serverId);
+          void warmSoundboardBuiltins();
         }
       })
       .catch(() => setError(t("soundboard.settings.loadFailed")));
@@ -192,7 +191,7 @@ export function SoundboardSettingsSection({ serverId }: { serverId: string }) {
             </p>
           )}
         </div>
-        {/* aria-disabled, not disabled: after the 24th upload the dialog hands
+        {/* aria-disabled, not disabled: after the last upload the cap allows, the dialog hands
             focus back here, and a disabled button cannot take it. */}
         <Button
           ref={addRef}

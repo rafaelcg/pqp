@@ -205,9 +205,11 @@ export function SoundboardControl({
   const hintRef = useRef<HTMLDivElement>(null);
   const [hintPlacement, setHintPlacement] = useState<CSSProperties | null>(null);
 
+  // The call owns the catalog server (App sets it while a call is up). The
+  // panel only confirms it, and never clears it on unmount: the stage
+  // unmounts whenever the person opens a text channel mid-call.
   useEffect(() => {
     setSoundboardCatalogServer(serverId);
-    return () => setSoundboardCatalogServer(null);
   }, [serverId]);
 
   useEffect(() => {

@@ -195,15 +195,27 @@ const FORGET_TOPIC = "soundboard.forget";
  * a deleted or edited clip is not admitted for up to a TTL by the sibling
  * that cached it.
  */
-function forgetPlayable(soundId: string): void {
+/**
+ * Bumped by every forget. A lookup that started before a forget must not
+ * cache what it read: its SELECT may have seen the row a delete or an edit
+ * just replaced, and caching it would admit a deleted clip for a TTL.
+ */
+let playableGeneration = 0;
+
+function dropPlayable(soundId: string): void {
+  playableGeneration += 1;
   playableCache.delete(soundId);
+}
+
+function forgetPlayable(soundId: string): void {
+  dropPlayable(soundId);
   publishToCluster(FORGET_TOPIC, { soundId });
 }
 
 subscribeToCluster(FORGET_TOPIC, (data) => {
   const soundId = (data as { soundId?: unknown } | null)?.soundId;
   if (typeof soundId === "string") {
-    playableCache.delete(soundId);
+    dropPlayable(soundId);
   }
 });
 
@@ -233,6 +245,7 @@ export async function resolvePlayableSound(
   ) {
     return cached.sound;
   }
+  const generation = playableGeneration;
   const result = await getPool().query<SoundRow>(
     `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
             duration_ms, volume
@@ -251,7 +264,9 @@ export async function resolvePlayableSound(
     durationMs: row.duration_ms,
     volume: Number(row.volume),
   };
-  rememberPlayable(serverId, sound);
+  if (generation === playableGeneration) {
+    rememberPlayable(serverId, sound);
+  }
   return sound;
 }
 

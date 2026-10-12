@@ -215,7 +215,7 @@ describe("how long a play is marked", () => {
     });
     const lib = await load();
     lib.setSoundboardCatalogServer("srv");
-    lib.noteSoundboardCatalog("srv", [custom("Sino", 5200)]);
+    lib.noteSoundboardCatalog("srv", { sounds: [custom("Sino", 5200)], maxSounds: 6 });
     const probe = await markLasts(lib, CUSTOM);
     expect(await probe.visibleAt(5000)).toBe(true);
     expect(await probe.visibleAt(400)).toBe(false);
@@ -226,7 +226,7 @@ describe("how long a play is marked", () => {
     vi.useFakeTimers();
     const lib = await load();
     lib.setSoundboardCatalogServer("srv");
-    lib.noteSoundboardCatalog("srv", [custom("Pip", 200)]);
+    lib.noteSoundboardCatalog("srv", { sounds: [custom("Pip", 200)], maxSounds: 6 });
     api.fetchSoundboard.mockResolvedValue({ sounds: [custom("Pip", 200)], maxSounds: 24 });
     const probe = await markLasts(lib, CUSTOM);
     expect(await probe.visibleAt(1000)).toBe(true);
@@ -239,7 +239,7 @@ describe("a custom clip renamed since the call began", () => {
   it("is pulled again in the background when somebody plays it", async () => {
     const lib = await load();
     lib.setSoundboardCatalogServer("srv");
-    lib.noteSoundboardCatalog("srv", [custom("Old name")]);
+    lib.noteSoundboardCatalog("srv", { sounds: [custom("Old name")], maxSounds: 6 });
     expect(lib.soundboardCustomName(CUSTOM)).toBe("Old name");
     api.fetchSoundboard.mockResolvedValue({
       sounds: [custom("New name")],

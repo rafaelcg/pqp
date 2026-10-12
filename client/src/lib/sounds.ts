@@ -1050,32 +1050,6 @@ export function sharedAudioContext(): AudioContext | null {
   return ensureContext();
 }
 
-/**
- * Play a decoded clip on the same context as the cues, so the chosen
- * output device applies. The gain is this clip's own, not the cue volume:
- * a soundboard slider must not turn message sounds down with it.
- */
-export function playAudioBuffer(
-  buffer: AudioBuffer,
-  gain: number,
-): AudioBufferSourceNode | null {
-  const ctx = ensureContext();
-  if (!ctx) {
-    return null;
-  }
-  if (ctx.state === "suspended") {
-    void ctx.resume().catch(() => {});
-  }
-  const source = ctx.createBufferSource();
-  source.buffer = buffer;
-  const node = ctx.createGain();
-  node.gain.value = Math.min(1, Math.max(0, gain));
-  source.connect(node);
-  node.connect(ctx.destination);
-  source.start();
-  return source;
-}
-
 /** Decode into the shared context. Null when this browser cannot. */
 export async function decodeAudioBuffer(
   bytes: ArrayBuffer,

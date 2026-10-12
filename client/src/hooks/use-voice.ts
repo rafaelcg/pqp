@@ -3445,13 +3445,14 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.isDeafened ||
         state.self?.serverMuted === true
       ) {
-        return;
+        return false;
       }
       transport.sendVoice({
         type: "soundboard-play",
         channelId: state.voiceChannelId,
         soundId,
       });
+      return true;
     });
   }
 

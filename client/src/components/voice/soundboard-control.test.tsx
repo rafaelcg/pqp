@@ -152,6 +152,7 @@ beforeEach(() => {
   resetSoundboardPendingForTests();
   unregister = registerSoundboardSender((soundId) => {
     sent.push(soundId);
+    return true;
   });
 });
 
@@ -1093,5 +1094,58 @@ describe("the lock note and the notice on a narrow screen", () => {
     const notice = panel()!.querySelector<HTMLElement>("[data-soundboard-notice]")!;
     expect(notice.className).toContain("min-h-5");
     expect(notice.querySelector(".truncate")).toBeNull();
+  });
+});
+
+describe("a click the seat never sent", () => {
+  it("spends no budget and waits for no echo", async () => {
+    unregister?.();
+    let open = false;
+    unregister = registerSoundboardSender((soundId) => {
+      if (!open) {
+        return false;
+      }
+      sent.push(soundId);
+      return true;
+    });
+    mount();
+    await act(async () => {
+      trigger().click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    for (let i = 0; i < 10; i += 1) {
+      act(() => tiles()[0]!.click());
+    }
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_100);
+    });
+    expect(panel()!.querySelector("[role='status']")!.textContent).toBe("");
+    // The budget is untouched: the seat can send a full burst once it may.
+    open = true;
+    for (let i = 0; i < SOUNDBOARD_PLAY_BURST; i += 1) {
+      act(() => tiles()[i % 3]!.click());
+    }
+    expect(sent).toHaveLength(SOUNDBOARD_PLAY_BURST);
+  });
+});
+
+describe("the call keeps its catalog when the panel unmounts", () => {
+  it("still knows a custom clip after the stage goes away for a while", async () => {
+    const { soundboardCustomName } = await import("@/lib/soundboard");
+    const id = "44444444-4444-4444-8444-444444444444";
+    board.sounds = [customSound(id, "Corneta")];
+    mount();
+    await act(async () => {
+      trigger().click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(soundboardCustomName(id)).toBe("Corneta");
+    // The person opens a text channel: the stage, and the panel, unmount.
+    act(() => root?.unmount());
+    root = null;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(soundboardCustomName(id)).toBe("Corneta");
   });
 });

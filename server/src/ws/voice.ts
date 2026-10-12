@@ -9396,18 +9396,19 @@ export async function handleVoiceMessage(
       return;
     }
     const peer = peers.get(existingPeerId);
-    if (
-      !peer ||
-      !soundboardPlayAllowed({
-        enabled: isEnabled("soundboard", { serverId: peer.soundboardServerId }),
-        deafened: peer.deafened,
-        canUseSoundboard: peer.canUseSoundboard,
-        canSpeak: peer.canSpeak,
-        serverMuted: isVoiceUserServerMuted(peer.voiceChannelId, peer.userId),
-        channelMatches: peer.voiceChannelId === payload.channelId,
-      }) ||
-      !peer.soundboardServerId
-    ) {
+    // One gate, asked twice: now, and again after the lookup below awaited.
+    // DMs have no library, so a null `soundboardServerId` never passes.
+    const allowed = (seat: VoicePeer): boolean =>
+      seat.soundboardServerId !== null &&
+      soundboardPlayAllowed({
+        enabled: isEnabled("soundboard", { serverId: seat.soundboardServerId }),
+        deafened: seat.deafened,
+        canUseSoundboard: seat.canUseSoundboard,
+        canSpeak: seat.canSpeak,
+        serverMuted: isVoiceUserServerMuted(seat.voiceChannelId, seat.userId),
+        channelMatches: seat.voiceChannelId === payload.channelId,
+      });
+    if (!peer || !allowed(peer) || !peer.soundboardServerId) {
       return;
     }
     if (soundboardRoomFull(peer.voiceChannelId, Date.now(), peer.userId)) {
@@ -9424,17 +9425,7 @@ export async function handleVoiceMessage(
     // the peer as it is now: still seated in this room, still allowed, not
     // moderator-muted.
     const current = peers.get(existingPeerId);
-    if (
-      current !== peer ||
-      !soundboardPlayAllowed({
-        enabled: isEnabled("soundboard", { serverId: peer.soundboardServerId }),
-        deafened: peer.deafened,
-        canUseSoundboard: peer.canUseSoundboard,
-        canSpeak: peer.canSpeak,
-        serverMuted: isVoiceUserServerMuted(peer.voiceChannelId, peer.userId),
-        channelMatches: peer.voiceChannelId === payload.channelId,
-      })
-    ) {
+    if (current !== peer || !allowed(peer)) {
       return;
     }
     if (

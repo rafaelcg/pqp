@@ -48,7 +48,7 @@ vi.mock("@/lib/api", async (importOriginal) => ({
 
 vi.mock("@/lib/soundboard", () => ({
   noteSoundboardCatalog: () => undefined,
-  prefetchSoundboard: async () => undefined,
+  warmSoundboardBuiltins: async () => undefined,
   previewSoundboardClip: () => undefined,
   stopSoundboardPreview: () => undefined,
 }));
