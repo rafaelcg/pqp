@@ -64,6 +64,11 @@ struct ChatView: View {
     /// A server voice channel's transcript. The link is intentionally here,
     /// rather than on the list row, so opening messages never joins media.
     var voiceChannel: Channel? = nil
+    /// Set when this transcript is a forum post: the title and status above
+    /// the question, the accepted answer under it, the closed bar, and a
+    /// landing on the question or the first unread reply instead of the tail.
+    /// A post is a thread channel, so everything else is this same screen.
+    var forumPost: ForumPostModel? = nil
 
     @State private var model = ChatModel()
     /// The voice-note microphone. Per screen: a recording belongs to the
@@ -107,6 +112,22 @@ struct ChatView: View {
     /// server, the same snapshot `ChannelListView` reads. See
     /// `canHostWatchParty`.
     @State private var watchPartyPermissions: PermissionsSnapshot?
+
+    // Forum post state; inert when `forumPost` is nil.
+    /// Where the post opened, once its history reached the landing point.
+    @State private var forumLanding: ForumLanding.Target?
+    /// The reply the "Novas" divider sits above, fixed for the visit.
+    @State private var forumDividerId: String?
+    @State private var forumUnreadCount = 0
+    @State private var forumDividerOnScreen = false
+    /// The reader reached the end after the divider: the pill has done its job.
+    @State private var forumPassedDivider = false
+    /// The big title is on screen, so the bar says the forum, not the title.
+    @State private var forumHeaderOnScreen = true
+    @State private var editingForumTags = false
+    @State private var editingForumTitle = false
+    @State private var forumTitleDraft = ""
+    @State private var confirmingForumDelete = false
 
     /**
      `START_WATCH_PARTY` for this room, WITH `voiceChannel.id` as the channel
@@ -196,30 +217,39 @@ struct ChatView: View {
                 attachmentStrip
                 slowModeRow
                 voiceNoteNotices
-                Composer(
-                    text: $model.draft,
-                    isSending: model.isSending,
-                    isHeld: model.isHeldBySlowMode,
-                    canAttach: model.attachmentsEnabled,
-                    hasAttachments: !model.pendingAttachments.isEmpty,
-                    isExpressing: showingExpression,
-                    onSend: { Task { await model.send() } },
-                    onType: { model.noteTyping() },
-                    onAttach: { showingPicker = true },
-                    onExpress: {
-                        // The keyboard goes first: the panel takes its place, so
-                        // the two never fight over the bottom of the screen.
-                        composerFocused = false
-                        withAnimation(Motion.standard) { showingExpression.toggle() }
-                    },
-                    // Off when the deployment, the server or this conversation
-                    // has voice notes off, or while a message is being edited
-                    // (an edit cannot become a voice note).
-                    recorder: model.voiceNotesEnabled && model.editing == nil ? recorder : nil,
-                    callIsLive: call.phase.isLive,
-                    seatedInVoiceRoom: voice.holdsSeat
-                )
-                .focused($composerFocused)
+                if let forumPost, !forumPost.canReply {
+                    ForumLockedBar()
+                        .transition(.opacity)
+                } else {
+                    if forumPost?.isLocked == true {
+                        ForumLockedStaffNote()
+                    }
+                    Composer(
+                        text: $model.draft,
+                        isSending: model.isSending,
+                        isHeld: model.isHeldBySlowMode,
+                        canAttach: model.attachmentsEnabled,
+                        hasAttachments: !model.pendingAttachments.isEmpty,
+                        isExpressing: showingExpression,
+                        onSend: { Task { await model.send() } },
+                        onType: { model.noteTyping() },
+                        onAttach: { showingPicker = true },
+                        onExpress: {
+                            // The keyboard goes first: the panel takes its place, so
+                            // the two never fight over the bottom of the screen.
+                            composerFocused = false
+                            withAnimation(Motion.standard) { showingExpression.toggle() }
+                        },
+                        // Off when the deployment, the server or this conversation
+                        // has voice notes off, or while a message is being edited
+                        // (an edit cannot become a voice note).
+                        recorder: model.voiceNotesEnabled && model.editing == nil ? recorder : nil,
+                        callIsLive: call.phase.isLive,
+                        seatedInVoiceRoom: voice.holdsSeat,
+                        placeholder: forumPost == nil ? "Message" : "Reply to the post"
+                    )
+                    .focused($composerFocused)
+                }
 
                 if showingExpression {
                     ExpressionPanel(
@@ -249,11 +279,29 @@ struct ChatView: View {
                 messageActions(for: target)
                     .zIndex(10)
             }
+
+            if forumPost?.isRemoved == true {
+                ForumRemovedState { dismiss() }
+                    .transition(.opacity)
+                    .zIndex(20)
+            }
         }
         // The theater is a cinema, not a channel: the centred title has
         // nothing to say over a full screen of film, so it is blanked
         // rather than merely uncoloured underneath it.
         .navigationTitle(watchTheater ? "" : title)
+        .modifier(ForumPostChrome(
+            model: forumPost,
+            headerOnScreen: forumHeaderOnScreen,
+            replyCount: forumPost?.post?.replyCount ?? 0,
+            onShowPins: { showingPins = true },
+            onEditTags: { editingForumTags = true },
+            onEditTitle: {
+                forumTitleDraft = forumPost?.post?.title ?? ""
+                editingForumTitle = true
+            },
+            onDelete: { confirmingForumDelete = true }
+        ))
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(watchHero ? .hidden : .automatic, for: .navigationBar)
         // The system chevron would float over the film, exempt from the
@@ -321,11 +369,15 @@ struct ChatView: View {
             // picture never asked for, and this is the same channel's
             // portrait toolbar, one turn of the phone away, so pinning
             // stays reachable there.
+            // A forum post keeps its pins in the post menu instead, beside
+            // the follow bell (`ForumPostChrome`).
             if !watchTheater {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showingPins = true } label: { Image(systemName: "pin") }
-                        .tint(Palette.signal)
-                        .accessibilityLabel("Pinned messages")
+                if forumPost == nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { showingPins = true } label: { Image(systemName: "pin") }
+                            .tint(Palette.signal)
+                            .accessibilityLabel("Pinned messages")
+                    }
                 }
             }
         }
@@ -444,8 +496,64 @@ struct ChatView: View {
                 session: session,
                 slowmodeSeconds: slowmodeSeconds,
                 bypassesSlowMode: isManager,
-                serverId: server?.id ?? flagsServerId
+                serverId: server?.id ?? flagsServerId,
+                joinsAsThread: forumPost != nil
             )
+            if let forumPost {
+                let target = await forumPost.land(chat: model)
+                let cursor = forumPost.previousReadAt
+                let viewerId = session.currentUser?.id
+                if case .firstUnread(let id) = target {
+                    forumDividerId = id
+                } else if case .top = target, cursor != nil {
+                    // The question itself is unread: the divider sits on it.
+                    forumDividerId = model.messages.first?.id
+                }
+                forumUnreadCount = ForumLanding.unreadCount(
+                    in: model.messages, previousReadAt: cursor, viewerId: viewerId
+                )
+                forumLanding = target
+            }
+        }
+        // An edit the server refused, said where every other refusal is.
+        .onChange(of: forumPost?.notice) { _, notice in
+            guard let notice else { return }
+            withAnimation(Motion.standard) { model.error = notice }
+            forumPost?.notice = nil
+        }
+        .sheet(isPresented: $editingForumTags) {
+            if let forumPost, let post = forumPost.post {
+                ForumEditTagsSheet(
+                    tags: forumPost.isStaff ? forumPost.tags : forumPost.tags.filter {
+                        !$0.moderated || post.tagIds.contains($0.id)
+                    },
+                    locked: forumPost.isStaff ? [] : Set(forumPost.tags.filter(\.moderated).map(\.id)),
+                    selected: post.tagIds
+                ) { ids in
+                    Task { await forumPost.retag(ids) }
+                }
+            }
+        }
+        .alert("Edit title", isPresented: $editingForumTitle) {
+            TextField("Title", text: $forumTitleDraft)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                let title = forumTitleDraft
+                Task { await forumPost?.retitle(title) }
+            }
+        }
+        .confirmationDialog(
+            "Delete this post?",
+            isPresented: $confirmingForumDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete post", role: .destructive) {
+                Task {
+                    if await forumPost?.delete() == true { dismiss() }
+                }
+            }
+        } message: {
+            Text(ForumCopy.deleteBody(replies: forumPost?.post?.replyCount ?? 0))
         }
         // After `open`, which resets the model — seeding before it would be
         // overwritten by the load it is racing.
@@ -522,6 +630,20 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
+                    if let forumPost {
+                        ForumPostHeader(model: forumPost)
+                            .id(ForumScrollAnchor.header)
+                            .onAppear { forumHeaderOnScreen = true }
+                            .onDisappear { forumHeaderOnScreen = false }
+                        // The question is above the loaded window (a long post
+                        // opened at its first unread): the answer still sits
+                        // right under the title rather than nowhere.
+                        if model.hasMore, let answer = forumPost.acceptedAnswer {
+                            ForumSolutionCard(answer: answer) {
+                                jumpToForumAnswer(proxy)
+                            }
+                        }
+                    }
                     if model.hasMore {
                         Button("Load earlier messages") {
                             Task { await model.loadEarlier() }
@@ -538,6 +660,12 @@ struct ChatView: View {
                         // loaded message always opens one: the day has to be
                         // named somewhere above the first thing said in it,
                         // and the row moves up when older history arrives.
+                        if message.id == forumDividerId {
+                            ForumUnreadDivider()
+                                .id(ForumScrollAnchor.divider)
+                                .onAppear { forumDividerOnScreen = true }
+                                .onDisappear { forumDividerOnScreen = false }
+                        }
                         if model.startsDay(at: index) {
                             DaySeparator(date: message.createdAt)
                         }
@@ -547,13 +675,26 @@ struct ChatView: View {
                             // a block, the way the web client groups them — a
                             // repeated avatar every line eats a phone screen.
                             // A day boundary always breaks the block.
-                            isGrouped: model.isGrouped(at: index) && !model.startsDay(at: index),
+                            isGrouped: model.isGrouped(at: index) && !model.startsDay(at: index)
+                                && !forumBreaksGroup(at: index, message: message),
                             onToggleReaction: { emoji in
                                 Task { await model.toggleReaction(emoji, on: message) }
                             },
                             onOpenThread: { openedThread = $0 },
-                            onOpenProfile: { profileSubject = $0 }
+                            onOpenProfile: { profileSubject = $0 },
+                            isOriginalPoster: forumPost?.post.map { $0.authorId == message.authorId } ?? false
                         )
+                        .overlay(alignment: .leading) {
+                            if let answerId = forumPost?.post?.acceptedAnswerId, answerId == message.id {
+                                // The chosen reply, marked in the stream too.
+                                Capsule()
+                                    .fill(Palette.success)
+                                    .frame(width: 3)
+                                    .padding(.vertical, 2)
+                                    .offset(x: -9)
+                                    .accessibilityLabel(Text("Solution"))
+                            }
+                        }
                         .id(message.id)
                         // A gesture rather than `.contextMenu`, because the
                         // quick-reaction row's layout is the whole point and a
@@ -575,9 +716,21 @@ struct ChatView: View {
                                     withAnimation(Motion.standard) { actionTarget = message }
                                 }
                         )
+
+                        // Under the question: the answer, then the count that
+                        // starts the conversation. Only when the question is
+                        // really the first loaded message.
+                        if let forumPost, index == 0, !model.hasMore {
+                            if let answer = forumPost.acceptedAnswer {
+                                ForumSolutionCard(answer: answer) {
+                                    jumpToForumAnswer(proxy)
+                                }
+                            }
+                            ForumRepliesLabel(count: forumPost.post?.replyCount ?? max(0, model.messages.count - 1))
+                        }
                     }
 
-                    if model.messages.isEmpty && !model.isLoading {
+                    if model.messages.isEmpty && !model.isLoading && forumPost == nil {
                         EmptyState(
                             icon: "text.bubble",
                             title: "Start the thread",
@@ -602,7 +755,10 @@ struct ChatView: View {
                     // draws nothing.
                     Color.clear
                         .frame(height: 1)
-                        .onAppear { model.isNearBottom = true }
+                        .onAppear {
+                            model.isNearBottom = true
+                            if forumLanding != nil { forumPassedDivider = true }
+                        }
                         .onDisappear { model.isNearBottom = false }
                 }
                 .padding(.horizontal, Metrics.hPadding)
@@ -610,6 +766,8 @@ struct ChatView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: model.messages.count) {
+                // A post lands where `ForumLanding` says, not on the tail.
+                if forumPost != nil && forumLanding == nil { return }
                 guard let last = model.messages.last else { return }
                 // Only follow the tail. Scrolling someone back to the bottom
                 // while they are reading history is the classic chat-app sin.
@@ -618,6 +776,69 @@ struct ChatView: View {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
+            }
+            .onChange(of: forumLanding) { _, target in
+                guard let target else { return }
+                // Where the app opens is not a navigation the reader made, so
+                // it is not animated.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    switch target {
+                    case .top:
+                        proxy.scrollTo(ForumScrollAnchor.header, anchor: .top)
+                    case .firstUnread:
+                        proxy.scrollTo(ForumScrollAnchor.divider, anchor: .top)
+                    case .bottom:
+                        if let last = model.messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if showsForumJumpPill {
+                    ForumJumpPill(count: forumUnreadCount) {
+                        withAnimation(Motion.standard) {
+                            proxy.scrollTo(ForumScrollAnchor.divider, anchor: .top)
+                        }
+                    }
+                    .padding(.bottom, 12)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+                }
+            }
+            .animation(Motion.standard, value: showsForumJumpPill)
+        }
+    }
+
+    /// "↓ N novas": there are unread replies and their divider is off screen,
+    /// and the reader has not yet scrolled through to the end.
+    private var showsForumJumpPill: Bool {
+        forumPost != nil && forumLanding != nil && forumDividerId != nil
+            && forumUnreadCount > 0 && !forumDividerOnScreen && !forumPassedDivider
+            && forumDividerId != model.messages.first?.id
+    }
+
+    /// The question and its answer are one block; the conversation starts
+    /// after the count, and a new block starts at the "Novas" divider.
+    private func forumBreaksGroup(at index: Int, message: Message) -> Bool {
+        guard forumPost != nil else { return false }
+        if message.id == forumDividerId { return true }
+        return index == 1 && !model.hasMore
+    }
+
+    private func jumpToForumAnswer(_ proxy: ScrollViewProxy) {
+        guard let id = forumPost?.post?.acceptedAnswerId else { return }
+        if model.messages.contains(where: { $0.id == id }) {
+            withAnimation(Motion.standard) { proxy.scrollTo(id, anchor: .center) }
+        } else {
+            // Older than the loaded window: read back until it is there.
+            Task {
+                var pages = 0
+                while model.hasMore, pages < ForumLanding.maxPages,
+                      !model.messages.contains(where: { $0.id == id }) {
+                    await model.loadEarlier()
+                    pages += 1
+                }
+                withAnimation(Motion.standard) { proxy.scrollTo(id, anchor: .center) }
             }
         }
     }
@@ -665,8 +886,28 @@ struct ChatView: View {
                 composerFocused = true
             },
             onDelete: { Task { await model.delete(message) } },
-            onDismiss: { withAnimation(Motion.standard) { actionTarget = nil } }
+            onDismiss: { withAnimation(Motion.standard) { actionTarget = nil } },
+            solution: forumSolutionAction(for: message),
+            onToggleSolution: {
+                guard let forumPost else { return }
+                Haptics.selection()
+                Task {
+                    if forumPost.post?.acceptedAnswerId == message.id {
+                        await forumPost.clearAnswer()
+                    } else {
+                        await forumPost.markAnswer(message)
+                    }
+                }
+            }
         )
+    }
+
+    /// The author and staff mark a reply as the answer. Never the question
+    /// itself, and never a row the server has not confirmed yet.
+    private func forumSolutionAction(for message: Message) -> ForumSolutionAction? {
+        guard let forumPost, forumPost.canEdit, !message.isPending else { return nil }
+        if !model.hasMore, message.id == model.messages.first?.id { return nil }
+        return forumPost.post?.acceptedAnswerId == message.id ? .unmark : .mark
     }
 
     @ViewBuilder
@@ -875,6 +1116,8 @@ struct Composer: View {
     /// `VoiceRecordGate`).
     var callIsLive = false
     var seatedInVoiceRoom = false
+    /// What the empty field says. A forum post asks for a reply to the post.
+    var placeholder: LocalizedStringKey = "Message"
 
     private var canSend: Bool {
         // A photo with no caption is a valid message, so attachments alone
@@ -922,7 +1165,7 @@ struct Composer: View {
                     .accessibilityLabel("Add photo")
                 }
 
-                TextField("Message", text: $text, axis: .vertical)
+                TextField(placeholder, text: $text, axis: .vertical)
                     // Stable identifiers: a SwiftUI TextField's accessibility
                     // label is its placeholder, which vanishes once the field
                     // has text — so a UI test that queries by "Message" stops
@@ -1023,6 +1266,9 @@ struct MessageRow: View {
     /// was to already know their full `name#1234` and type it into a different
     /// screen.
     var onOpenProfile: (ProfileSubject) -> Void = { _ in }
+    /// In a forum post, the person who asked: an "OP" beside their name
+    /// wherever they appear in it.
+    var isOriginalPoster = false
 
     /// A webhook has no account behind it, so there is nobody to open.
     private var isPerson: Bool { !message.isWebhook }
@@ -1081,6 +1327,16 @@ struct MessageRow: View {
                         .buttonStyle(.plain)
                         .disabled(!isPerson)
                         .accessibilityIdentifier("message.author")
+                        if isOriginalPoster && !message.isWebhook {
+                            Text("OP")
+                                .font(.system(size: 9, weight: .bold))
+                                .tracking(0.6)
+                                .foregroundStyle(Palette.signal)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1.5)
+                                .background(Capsule().fill(Palette.signal.opacity(0.16)))
+                                .accessibilityLabel(Text("Original poster"))
+                        }
                         if message.isWebhook {
                             Text("WEBHOOK")
                                 .font(.system(size: 9, weight: .bold))

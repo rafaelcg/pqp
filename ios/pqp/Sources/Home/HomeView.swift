@@ -47,6 +47,9 @@ struct HomeView: View {
         /// Set when the link was a Baú post: the channel list opens the
         /// server's Baú on top of itself, scrolled to the post.
         var bau: BauFocus? = nil
+        /// Set when the link was a forum or one of its posts: the channel
+        /// list pushes the forum, and the forum the post.
+        var forum: ForumFocus? = nil
     }
 
     var body: some View {
@@ -57,7 +60,8 @@ struct HomeView: View {
                         server: restored.server,
                         initialChannel: restored.channel,
                         opensBau: restored.opensBau,
-                        initialBau: restored.bau
+                        initialBau: restored.bau,
+                        initialForum: restored.forum
                     )
                 }
         }
@@ -134,10 +138,36 @@ struct HomeView: View {
 
         case .channel(let serverId, let channelId):
             guard let server = await resolveServer(serverId),
-                  let channels = try? await session.api.channels(serverId: serverId),
-                  let channel = channels.first(where: { $0.id == channelId && $0.isText })
+                  let channels = try? await session.api.channels(serverId: serverId)
             else { return }
-            restoredChannel = RestoredChannel(server: server, channel: channel)
+            if let channel = channels.first(where: { $0.id == channelId }) {
+                if channel.isText {
+                    restoredChannel = RestoredChannel(server: server, channel: channel)
+                } else if channel.isForum {
+                    restoredChannel = RestoredChannel(
+                        server: server, channel: nil, forum: ForumFocus(forumId: channel.id)
+                    )
+                }
+                return
+            }
+            // Not in the list: a forum post (a push for a reply in one names
+            // the post's own channel). The post knows its forum; anything
+            // else, or a post this account cannot see, lands on the server.
+            if let detail = await forumPostOnce(channelId),
+               channels.contains(where: { $0.id == detail.post.forumId && $0.isForum }) {
+                restoredChannel = RestoredChannel(
+                    server: server, channel: nil,
+                    forum: ForumFocus(forumId: detail.post.forumId, postId: channelId)
+                )
+            } else {
+                restoredChannel = RestoredChannel(server: server, channel: nil)
+            }
+
+        case .forumPost(let serverId, let forumId, let postId):
+            guard let server = await resolveServer(serverId) else { return }
+            restoredChannel = RestoredChannel(
+                server: server, channel: nil, forum: ForumFocus(forumId: forumId, postId: postId)
+            )
 
         case .server(let serverId):
             guard let server = await resolveServer(serverId) else { return }
@@ -156,6 +186,23 @@ struct HomeView: View {
             guard let server = await resolveServer(serverId) else { return }
             restoredChannel = RestoredChannel(server: server, channel: nil, bau: BauFocus(postId: postId))
         }
+    }
+
+    /// A post a push named, asked twice before giving up: a tap on a
+    /// notification often wakes the app with the network still waking too.
+    /// A 404 is final.
+    private func forumPostOnce(_ id: String) async -> ForumPostDetail? {
+        for delay in [0.0, 1.5] {
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            do {
+                return try await session.api.forumPost(id: id)
+            } catch APIError.notFound {
+                return nil
+            } catch {
+                continue
+            }
+        }
+        return nil
     }
 
     /// A server by id, refreshing the list once if it is not already known —

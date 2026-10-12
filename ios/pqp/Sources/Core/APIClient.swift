@@ -286,6 +286,60 @@ actor APIClient {
         ifNoneMatch: String?,
         idempotencyKey: String? = nil
     ) async throws -> (Data, HTTPURLResponse) {
+        let (data, http) = try await transport(
+            path: path, method: method, query: query, body: body,
+            ifNoneMatch: ifNoneMatch, idempotencyKey: idempotencyKey
+        )
+
+        if http.statusCode == 304, ifNoneMatch != nil {
+            return (data, http)
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            // Every non-2xx body is `{ "error": "..." }`; fall back to the
+            // status if we somehow got something else (e.g. hit a static host).
+            let message = (try? Coding.decoder.decode(ApiErrorBody.self, from: data))?.error
+                ?? "Request failed (\(http.statusCode))"
+            switch http.statusCode {
+            case 401: throw APIError.unauthorized
+            case 404: throw APIError.notFound(message)
+            case 429:
+                let retry = (http.value(forHTTPHeaderField: "Retry-After")).flatMap(Int.init)
+                throw APIError.rateLimited(retryAfter: retry)
+            default: throw APIError.server(status: http.statusCode, message: message)
+            }
+        }
+
+        return (data, http)
+    }
+
+    /// A request whose refusal says more than `{ error }`: the body and the
+    /// status come back as they are, for every status. Only the transport
+    /// itself throws. Used by the forum create, whose 422 carries the same
+    /// `reason` / `retryAfterMs` / `automodMessage` a `message-rejected` does,
+    /// which the mapping above would reduce to one sentence.
+    func rawRequest(
+        _ path: String,
+        method: String,
+        body: (some Encodable)? = Optional<Data>.none
+    ) async throws -> (data: Data, status: Int) {
+        let encoded = try body.map { try Coding.encoder.encode($0) }
+        let (data, http) = try await transport(
+            path: path, method: method, query: [], body: encoded,
+            ifNoneMatch: nil, idempotencyKey: nil
+        )
+        return (data, http.statusCode)
+    }
+
+    /// Builds and sends one request. No status mapping: that is the caller's.
+    private func transport(
+        path: String,
+        method: String,
+        query: [URLQueryItem],
+        body: Data?,
+        ifNoneMatch: String?,
+        idempotencyKey: String?
+    ) async throws -> (Data, HTTPURLResponse) {
         guard var components = URLComponents(
             url: backend.apiBaseURL.appendingPathComponent(path),
             resolvingAgainstBaseURL: false
@@ -326,25 +380,6 @@ actor APIClient {
 
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")
-        }
-
-        if http.statusCode == 304, ifNoneMatch != nil {
-            return (data, http)
-        }
-
-        guard (200..<300).contains(http.statusCode) else {
-            // Every non-2xx body is `{ "error": "..." }`; fall back to the
-            // status if we somehow got something else (e.g. hit a static host).
-            let message = (try? Coding.decoder.decode(ApiErrorBody.self, from: data))?.error
-                ?? "Request failed (\(http.statusCode))"
-            switch http.statusCode {
-            case 401: throw APIError.unauthorized
-            case 404: throw APIError.notFound(message)
-            case 429:
-                let retry = (http.value(forHTTPHeaderField: "Retry-After")).flatMap(Int.init)
-                throw APIError.rateLimited(retryAfter: retry)
-            default: throw APIError.server(status: http.statusCode, message: message)
-            }
         }
 
         return (data, http)

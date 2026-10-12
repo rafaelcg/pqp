@@ -76,6 +76,8 @@ final class ChatModel {
 
     private var session: SessionStore?
     private var channelId: String?
+    /// Opened in the thread slot (a forum post); `close` gives it back.
+    private var joinedAsThread = false
     private var handlerKey = UUID().uuidString
     private var lastTypingSentAt: Date?
     private var typingSweeper: Task<Void, Never>?
@@ -128,10 +130,12 @@ final class ChatModel {
         session: SessionStore,
         slowmodeSeconds: Int = 0,
         bypassesSlowMode: Bool = false,
-        serverId: String? = nil
+        serverId: String? = nil,
+        joinsAsThread: Bool = false
     ) async {
         self.session = session
         self.channelId = channelId
+        self.joinedAsThread = joinsAsThread
         self.slowmodeSeconds = slowmodeSeconds
         self.bypassesSlowMode = bypassesSlowMode
         // "This conversation is on screen", for the one consumer that needs it:
@@ -156,7 +160,12 @@ final class ChatModel {
         isLoading = messages.isEmpty
         startTypingSweeper()
 
-        async let joined: Void = session.realtime.join(channelId: channelId)
+        // A forum post takes the connection's THREAD slot, so the forum it
+        // belongs to keeps the primary one and its list stays live behind it
+        // (see `ForumHomeModel`). Everything else is the primary slot.
+        async let joined: Void = joinsAsThread
+            ? session.realtime.joinThread(channelId: channelId)
+            : session.realtime.join(channelId: channelId)
         // Attachments are off entirely unless the deployment configured
         // storage, so the button is hidden rather than failing on tap.
         async let attachments = (try? await session.api.attachmentConfig())?.enabled ?? false
@@ -236,6 +245,10 @@ final class ChatModel {
         session?.eventHandlers.removeValue(forKey: handlerKey)
         if let channelId {
             session?.channelWentAway(channelId)
+        }
+        if joinedAsThread, let realtime = session?.realtime, let channelId {
+            joinedAsThread = false
+            Task { await realtime.leaveThread(channelId: channelId) }
         }
         typingSweeper?.cancel()
         typingSweeper = nil
@@ -533,6 +546,8 @@ final class ChatModel {
         case "slow-mode": String(localized: "Slow mode is on.")
         case "automod": String(localized: "AutoMod blocked this message.")
         case "database-unavailable": String(localized: "Service is temporarily unavailable. Try again in a moment.")
+        // A forum post staff closed to replies.
+        case "locked": String(localized: "This post is closed. Only staff can reply.")
         default: String(localized: "This message wasn't sent.")
         }
     }
@@ -849,7 +864,10 @@ final class ChatModel {
              .voiceOffer, .voiceAnswer, .voiceCandidate,
              // Ringing is `CallModel`'s, and deliberately not this model's: a
              // call outlives the thread it was placed from.
-             .callIncoming, .callRingCancelled, .callDeclined:
+             .callIncoming, .callRingCancelled, .callDeclined,
+             // A forum's list frames are the forum screen's. An open post
+             // reads its own state from them in `ForumPostModel`.
+             .forumPostUpsert, .forumPostRemoved:
             break
         }
     }

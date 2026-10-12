@@ -198,6 +198,14 @@ enum RealtimeEvent: Sendable {
     case callRingCancelled(conversationId: String, reason: String)
     /// Somebody we were waiting for said no; the call itself continues.
     case callDeclined(conversationId: String, userId: String)
+
+    /// A forum post appeared or changed: published, bumped by a reply,
+    /// retitled, retagged, pinned, closed, resolved. Sent to whoever joined
+    /// the FORUM (`join-channel` on the forum id); see `ForumList.upsert`.
+    case forumPostUpsert(forumId: String, post: ForumPostSummary)
+    /// A forum post was deleted. Sent to the forum's viewers and to the
+    /// post's own, so an open post can say so.
+    case forumPostRemoved(forumId: String, postId: String)
     case other
 }
 
@@ -681,6 +689,15 @@ actor RealtimeClient {
         await send(raw: ["type": "thread-leave"])
     }
 
+    /// Leaves the thread slot only if it still holds `channelId`. Closing one
+    /// forum post and opening the next races: the old screen's leave can land
+    /// after the new screen's join, and the frame names no channel, so
+    /// without this it would empty the slot the new post just took.
+    func leaveThread(channelId: String) async {
+        guard joinedThreadChannelId == channelId else { return }
+        await leaveThread()
+    }
+
     /// Returns the nonce so the caller can match the echo back to its optimistic
     /// row. There is no ack frame: the echo on `message-broadcast` is what
     /// confirms a send, and `message-rejected` (same nonce) is what refuses
@@ -1042,6 +1059,20 @@ actor RealtimeClient {
      which is the whole reason `LiveStreamFrame` and this type exist rather
      than one more key added to `Envelope`.
      */
+    /// `forum-post-upsert`: `{forumId, post}`. Its own type because `post` is
+    /// a key no other frame uses, and a summary this build cannot read must
+    /// drop the frame rather than the socket.
+    private struct ForumPostUpsertFrame: Decodable {
+        let forumId: String
+        let post: ForumPostSummary
+    }
+
+    /// `forum-post-removed`: `{forumId, postId}`.
+    private struct ForumPostRemovedFrame: Decodable {
+        let forumId: String
+        let postId: String
+    }
+
     private struct WatchPartyUpdateFrame: Decodable {
         let channelId: String
         let party: WatchPartyPayload?
@@ -1351,6 +1382,14 @@ actor RealtimeClient {
             guard let frame = try? Coding.decoder.decode(WatchPartyUpdateFrame.self, from: data)
             else { return }
             event = .watchPartyUpdate(channelId: frame.channelId, party: frame.party)
+        case "forum-post-upsert":
+            guard let frame = try? Coding.decoder.decode(ForumPostUpsertFrame.self, from: data)
+            else { return }
+            event = .forumPostUpsert(forumId: frame.forumId, post: frame.post)
+        case "forum-post-removed":
+            guard let frame = try? Coding.decoder.decode(ForumPostRemovedFrame.self, from: data)
+            else { return }
+            event = .forumPostRemoved(forumId: frame.forumId, postId: frame.postId)
         case "offer":
             guard let from = envelope.from, let sdp = envelope.sdp else { return }
             event = .voiceOffer(from: from, sdp: sdp)
