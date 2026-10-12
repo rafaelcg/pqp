@@ -417,8 +417,8 @@ export async function decideReply(message, runtime) {
  *
  * There is no fallback sentence anywhere below, and that is the single most
  * important line in this function. `fallbackAnswer` exists because somebody who
- * typed `@manual_bot` is owed an answer, and "essa eu não sei responder,
- * @rafa consegue te dizer" is one. Nobody typed anything here. A bot that walks
+ * typed `@manual_bot` is owed an answer, and "essa eu não sei responder. já
+ * chamei a equipe (@rafa)" is one. Nobody typed anything here. A bot that walks
  * into a quiet channel to announce that it cannot help has added a message and
  * no information, which is precisely the noise this feature is one bad decision
  * away from becoming. It also means no escalation ping: the questions that

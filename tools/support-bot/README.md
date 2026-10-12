@@ -167,7 +167,7 @@ Outside the pnpm workspace, like `tools/ambient` and for the same reason.
 
 ```bash
 cd tools/support-bot
-npm test          # 258 tests, no network, no key, no database
+npm test          # 260 tests, no network, no key, no database
                   # CI runs the same glob (`.github/workflows/ci.yml`)
 ```
 
@@ -351,7 +351,7 @@ and the number of model calls this path can ever cost.
 
 ### Silence, not "não sei"
 
-`fallbackAnswer` ("essa eu não sei responder, `@rafa` consegue te dizer") is
+`fallbackAnswer` ("essa eu não sei responder. já chamei a equipe (`@rafa`), é só esperar um pouco.") is
 **never** used here, and there is **no escalation ping**. That sentence is owed
 to somebody who typed the bot's name; a bot walking into a quiet channel to
 announce it cannot help has added a message and no information. The questions

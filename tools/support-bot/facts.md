@@ -157,7 +157,7 @@ pareça verdade, mesmo que a pergunta empurre pra lá.
 
 ## não sei
 
-Sobre estes assuntos, a resposta é sempre que não sabe e que o Rafael responde.
+Sobre estes assuntos, a resposta é sempre que não sabe e que a equipe responde.
 Eles estão aqui de propósito: são coisas onde existe informação parcial e
 conflitante, e um chute soaria confiante e estaria errado.
 

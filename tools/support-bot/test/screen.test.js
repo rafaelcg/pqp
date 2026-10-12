@@ -36,7 +36,7 @@ describe("screenAnswer: the answers it must let through", () => {
     "não, as mensagens não são criptografadas de ponta a ponta. o pqp está em beta.",
     "sou um bot, sim.",
     "numa sala grande a tela sai em 720p, a menos que quem apresenta escolha 1080p.",
-    "essa eu não sei responder. @rafa consegue te dizer.",
+    "essa eu não sei responder. já chamei a equipe (@rafa), é só esperar um pouco.",
   ];
   for (const body of good) {
     test(`passes: ${body.slice(0, 48)}`, () => {
