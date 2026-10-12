@@ -115,6 +115,42 @@ final class ForumTests: XCTestCase {
         XCTAssertThrowsError(try Coding.decoder.decode(ForumPostSummary.self, from: Data(missingTitle.utf8)))
     }
 
+    /// UX #18: a video post carries its signed clip in `thumbnailVideoUrl`
+    /// (the picture field stays an image). An older API omits it.
+    func testTheSummaryDecodesTheVideoThumbnail() throws {
+        let json = """
+        {"id":"\(them)","forumId":"\(forumId)","title":"clip","createdAt":"2026-10-11T23:19:06.610Z",
+         "openingKind":"attachment","attachmentCount":1,"thumbnailUrl":null,
+         "thumbnailVideoUrl":"https://x/clip.mp4?sig=1","tagIds":[]}
+        """
+        let post = try Coding.decoder.decode(ForumPostSummary.self, from: Data(json.utf8))
+        XCTAssertEqual(post.thumbnailVideoUrl, "https://x/clip.mp4?sig=1")
+        XCTAssertNil(post.thumbnailUrl)
+
+        let older = #"{"id":"x","forumId":"y","title":"t","createdAt":"2026-10-11T23:19:06.610Z"}"#
+        XCTAssertNil(try Coding.decoder.decode(ForumPostSummary.self, from: Data(older.utf8)).thumbnailVideoUrl)
+
+        let explicitNull = #"{"id":"x","forumId":"y","title":"t","createdAt":"2026-10-11T23:19:06.610Z","thumbnailVideoUrl":null}"#
+        XCTAssertNil(try Coding.decoder.decode(ForumPostSummary.self, from: Data(explicitNull.utf8)).thumbnailVideoUrl)
+    }
+
+    /// One picture or one clip says what it is; several say how many.
+    func testThePreviewNamesASinglePictureOrClip() {
+        func summary(count: Int, image: String? = nil, video: String? = nil, words: String? = nil) -> ForumPostSummary {
+            ForumPostSummary(
+                id: "p", forumId: forumId, title: "t", createdAt: at(0),
+                preview: words, openingKind: "attachment", attachmentCount: count,
+                thumbnailUrl: image, thumbnailVideoUrl: video
+            )
+        }
+        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1, image: "https://x/a.png")), "📷 Image")
+        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1, video: "https://x/a.mp4")), "🎬 Video")
+        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 3, video: "https://x/a.mp4")), "3 attachments")
+        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1)), "1 attachment")
+        // Words always win over the file label.
+        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1, video: "https://x/a.mp4", words: "olha")), "olha")
+    }
+
     func testTheListAndTheDetailDecode() throws {
         let list = """
         {"pinned":[],"posts":[{"id":"p1","forumId":"f","title":"t","createdAt":"2026-10-11T23:19:06.610Z"}],

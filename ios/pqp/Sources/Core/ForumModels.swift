@@ -126,6 +126,11 @@ struct ForumPostSummary: Codable, Identifiable, Hashable, Sendable {
     let thumbnailAttachmentId: String?
     let thumbnailWidth: Int?
     let thumbnailHeight: Int?
+    /// The opening message's first video, signed, when it has no picture. The
+    /// card draws its first frame (like the web card); it is a separate field
+    /// from `thumbnailUrl` so an image view is never handed a video. Nil from
+    /// an older API.
+    let thumbnailVideoUrl: String?
     /// In the forum's tag order.
     var tagIds: [String]
 
@@ -158,6 +163,7 @@ struct ForumPostSummary: Codable, Identifiable, Hashable, Sendable {
         thumbnailAttachmentId: String? = nil,
         thumbnailWidth: Int? = nil,
         thumbnailHeight: Int? = nil,
+        thumbnailVideoUrl: String? = nil,
         tagIds: [String] = []
     ) {
         self.id = id
@@ -184,6 +190,7 @@ struct ForumPostSummary: Codable, Identifiable, Hashable, Sendable {
         self.thumbnailAttachmentId = thumbnailAttachmentId
         self.thumbnailWidth = thumbnailWidth
         self.thumbnailHeight = thumbnailHeight
+        self.thumbnailVideoUrl = thumbnailVideoUrl
         self.tagIds = tagIds
     }
 
@@ -214,6 +221,7 @@ struct ForumPostSummary: Codable, Identifiable, Hashable, Sendable {
         thumbnailAttachmentId = try c.decodeIfPresent(String.self, forKey: .thumbnailAttachmentId)
         thumbnailWidth = try c.decodeIfPresent(Int.self, forKey: .thumbnailWidth)
         thumbnailHeight = try c.decodeIfPresent(Int.self, forKey: .thumbnailHeight)
+        thumbnailVideoUrl = try c.decodeIfPresent(String.self, forKey: .thumbnailVideoUrl)
         tagIds = (try? c.decodeIfPresent([String].self, forKey: .tagIds)) ?? []
     }
 
@@ -222,7 +230,7 @@ struct ForumPostSummary: Codable, Identifiable, Hashable, Sendable {
         case createdAt, lastActivityAt, pinnedAt, lockedAt, resolvedAt, acceptedAnswerId
         case preview, openingDeleted, openingKind, attachmentCount, replyCount
         case reactionCount, topReaction, thumbnailUrl, thumbnailAttachmentId
-        case thumbnailWidth, thumbnailHeight, tagIds
+        case thumbnailWidth, thumbnailHeight, thumbnailVideoUrl, tagIds
     }
 }
 

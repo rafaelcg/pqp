@@ -37,6 +37,11 @@ import {
   isVoiceRoomChannelType,
   SIDEBAR_THREADS_PER_CHANNEL,
   withProfileUpdate,
+  applyLayoutToChannels,
+  layoutToPayload,
+  CHANNEL_LAYOUT_OFF,
+  CHANNEL_LAYOUT_STALE,
+  type SidebarLayout,
   type VoiceAudienceEnforcement,
   type WatchParty,
   type WatchPartyOptions,
@@ -338,6 +343,7 @@ import {
 import { createVoiceController } from "@/hooks/use-voice";
 import {
   ApiError,
+  putChannelLayout,
   createConversation,
   blockUser,
   bulkDeleteMessages,
@@ -621,6 +627,8 @@ import {
 } from "@/lib/sounds";
 import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
 import { useStableCallback } from "@/hooks/use-stable-callback";
+import { useChannelLayoutConfig } from "@/hooks/use-channel-layout-config";
+import type { ApplyLayoutResult } from "@/components/layout/channel-list";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { mergeMemberStatuses } from "@/lib/member-roster";
 import {
@@ -1312,6 +1320,8 @@ interface ChannelPromptState {
   type?: ChannelType;
   isPrivate?: boolean;
   channel?: Channel;
+  /** Create inside this category (the mixed list's per-category "+"). */
+  parentId?: string | null;
 }
 
 export interface UnreadState {
@@ -2630,6 +2640,15 @@ function MainAppContent({
   serversRef.current = servers;
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
+  /**
+   * The mixed channel list (`mixed_channel_list`): whether this server draws
+   * it, and the version a reorder is sent against. Re-read whenever the list
+   * changes, since every change to the list moves the version.
+   */
+  const { layout: channelLayout, adopt: adoptChannelLayout } =
+    useChannelLayoutConfig(selectedServerId, channels, {
+      onDrift: (serverId) => refreshChannelListRef.current?.(serverId),
+    });
 
   /**
    * Servers whose Baú switch may have moved while this app was not listening:
@@ -3154,8 +3173,12 @@ function MainAppContent({
     (userId: string, volume: number) => voice.setScreenVolume(userId, volume),
   );
   const stableOnCreateChannel = useStableCallback(
-    (type: ChannelType, isPrivate: boolean) =>
-      setChannelPrompt({ mode: "create", type, isPrivate }),
+    (type: ChannelType, isPrivate: boolean, parentId?: string | null) =>
+      setChannelPrompt({ mode: "create", type, isPrivate, parentId: parentId ?? null }),
+  );
+  const stableOnApplyLayout = useStableCallback(
+    (layout: SidebarLayout<Channel>, baseVersion: number) =>
+      handleApplyLayout(layout, baseVersion),
   );
   const stableOnRenameChannel = useStableCallback((channel: Channel) =>
     setChannelPrompt({ mode: "rename", channel }),
@@ -6113,7 +6136,7 @@ function MainAppContent({
               : 1;
           const inServer = selection.kind === "server";
           const ids = inServer
-            ? navigableChannelIds(channels)
+            ? navigableChannelIds(channels, { mixed: channelLayout.mixed })
             : conversations.map((conversation) => conversation.channelId);
           const next =
             action === "previousUnreadChannel" || action === "nextUnreadChannel"
@@ -6137,6 +6160,7 @@ function MainAppContent({
     },
     [
       channels,
+      channelLayout.mixed,
       conversations,
       selectChannel,
       selectConversation,
@@ -6336,6 +6360,7 @@ function MainAppContent({
         channelPrompt.type,
         isPrivate ?? channelPrompt.isPrivate ?? false,
         topic || undefined,
+        channelPrompt.parentId ?? null,
       ).catch((error: unknown) => {
         // The operator turned forums off for this server between the menu
         // drawing "Fórum" and the click: say that, not the raw token.
@@ -6475,6 +6500,83 @@ function MainAppContent({
    * the kind of drift the delete-category fix above just caught. The server
    * already did the work; trust its answer.
    */
+  /**
+   * A reorder of the mixed list: drawn at once, then one full-order PUT. A
+   * stale list (somebody else moved something first) adopts the server's
+   * fresh list and version; any other failure puts the list back as it was.
+   * The caller says which, in its own status line.
+   */
+  async function handleApplyLayout(
+    layout: SidebarLayout<Channel>,
+    baseVersion: number,
+  ): Promise<ApplyLayoutResult> {
+    const serverId = selectedServerId;
+    if (!serverId) {
+      return "failed";
+    }
+    // A ticket like every other write of the list: a refetch that starts
+    // after this (somebody else's change, nudged in) is newer, and this
+    // response must not land on top of it. A list older than its version is
+    // the one shape that would let the next drag overwrite that change.
+    const ticket = channelListTickets.take();
+    const current = () =>
+      channelListTickets.isLatest(ticket) && selectedServerIdRef.current === serverId;
+    setChannels(applyLayoutToChannels(channels, layout));
+    try {
+      const result = await putChannelLayout(
+        serverId,
+        layoutToPayload(layout, baseVersion),
+      );
+      if (current()) {
+        channelListTickets.wrote(ticket);
+        // `null`: committed, but the server could not read the list back.
+        // The order drawn is the order saved; the nudge brings the rest.
+        if (result.channels) {
+          setChannels(channelListTickets.withCreated(serverId, result.channels, ticket));
+        }
+        adoptChannelLayout(serverId, { version: result.version });
+      }
+      return "ok";
+    } catch (error) {
+      const details = (error instanceof ApiError ? error.details : null) as {
+        channels?: Channel[];
+        version?: number;
+      } | null;
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        error.message === CHANNEL_LAYOUT_STALE &&
+        details?.channels &&
+        typeof details.version === "number"
+      ) {
+        if (current()) {
+          channelListTickets.wrote(ticket);
+          setChannels(channelListTickets.withCreated(serverId, details.channels, ticket));
+          adoptChannelLayout(serverId, { version: details.version });
+        }
+        return "stale";
+      }
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        error.message === CHANNEL_LAYOUT_OFF &&
+        typeof details?.version === "number"
+      ) {
+        // The operator turned it off (or reverted) under us: the old list.
+        adoptChannelLayout(serverId, { version: details.version, mixed: false });
+      }
+      // Never a restore of the list from before the drag: by now it may be
+      // older than what the server holds. Read it again, ticketed, but only
+      // while this write is still the newest: a later write or refetch in
+      // flight brings the truth itself, and a read started now could land
+      // before that write commits.
+      if (current()) {
+        refreshChannelList(serverId);
+      }
+      return "failed";
+    }
+  }
+
   async function handleMoveChannel(
     channelId: string,
     parentId: string | null,
@@ -12508,6 +12610,10 @@ function MainAppContent({
           onDeleteChannel={stableOnDeleteChannel}
           onPurgeChannel={stableOnPurgeChannel}
           onMoveChannel={stableOnMoveChannel}
+          mixedLayout={
+            channelLayout.mixed ? { version: channelLayout.version } : null
+          }
+          onApplyLayout={stableOnApplyLayout}
           favoriteChannelIds={favoriteChannelIds}
           onFavoriteChannelIdsChange={stableOnFavoriteChannelIdsChange}
           onInvite={stableOnInvite}
@@ -13508,7 +13614,20 @@ function MainAppContent({
             ? t("channel.type.forum.description")
             : undefined
         }
-        placeholder={t("chrome.channelNamePlaceholder")}
+        nameMode={
+          (channelPrompt?.mode === "rename"
+            ? channelPrompt.channel?.type
+            : channelPrompt?.type) === "category"
+            ? "label"
+            : "slug"
+        }
+        placeholder={
+          (channelPrompt?.mode === "rename"
+            ? channelPrompt.channel?.type
+            : channelPrompt?.type) === "category"
+            ? t("chrome.categoryNamePlaceholder")
+            : t("chrome.channelNamePlaceholder")
+        }
         secondaryPlaceholder={
           channelPrompt?.mode === "create" &&
           channelPrompt.type === "watch_party"
