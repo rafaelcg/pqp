@@ -686,6 +686,13 @@ export const MessageList = memo(function MessageList({
   const highlightRef = useRef<string | null>(highlightMessageId);
   highlightRef.current = highlightMessageId;
   const lastCountRef = useRef(messages.length);
+  /**
+   * A forum post's first visit landed on the question and the reader has not
+   * moved yet: content that sizes late (an image, an embed) must not pull the
+   * view to the bottom, and a reply arriving is counted, not followed. Ends
+   * at the reader's first wheel, touch or key in the transcript.
+   */
+  const forumHoldTopRef = useRef(false);
   /** The newest row last time: unchanged means only history above moved. */
   const lastTailIdRef = useRef<string | null>(messages[messages.length - 1]?.id ?? null);
   /** Scroll height captured before prepending history, to keep the view still. */
@@ -1191,6 +1198,8 @@ export const MessageList = memo(function MessageList({
    */
   const jumpToMessage = useCallback(
     (messageId: string) => {
+      // A jump is the reader moving: a forum post's first-visit hold ends.
+      forumHoldTopRef.current = false;
       // Every jump supersedes the one before it, a loaded one included: a page
       // still being fetched for an earlier target must not land afterwards
       // and take the reader back there.
@@ -1318,6 +1327,7 @@ export const MessageList = memo(function MessageList({
     // puts you on your own message every time. Scrolled up, the send used to
     // sit below the fold and the pill counted it as somebody else's news.
     if (sentHere) {
+      forumHoldTopRef.current = false;
       followOwnSendRef.current();
       return;
     }
@@ -1327,7 +1337,7 @@ export const MessageList = memo(function MessageList({
     if (hasNewerRef.current) {
       return;
     }
-    if (isPinnedRef.current) {
+    if (isPinnedRef.current && !forumHoldTopRef.current) {
       scrollToBottom(messages.length > 60 ? "auto" : "smooth");
     } else if (fromOthers.length > 0) {
       // The reader's own rows are never "new": one from their other device
@@ -1366,6 +1376,10 @@ export const MessageList = memo(function MessageList({
       return;
     }
     const observer = new ResizeObserver(() => {
+      if (forumHoldTopRef.current) {
+        container.scrollTop = 0;
+        return;
+      }
       if (isPinnedRef.current && !hasNewerRef.current) {
         // "auto": the growth already happened, so animating to it reads as a
         // second, unexplained scroll.
@@ -1512,6 +1526,11 @@ export const MessageList = memo(function MessageList({
     // presente" over a transcript that has nowhere to go.
     const overflows =
       scrollRef.current.scrollHeight > scrollRef.current.clientHeight + 4;
+    if (forumLandAtTop) {
+      // Held at the question until the reader moves, whether or not the post
+      // overflows yet: it can start short and grow as its images load.
+      forumHoldTopRef.current = true;
+    }
     if (forumLandAtTop && overflows) {
       // Unpinned NOW, through the ref too: the follow-the-tail effects read
       // the ref in this same commit, and a late image would pull the reader
@@ -1531,7 +1550,7 @@ export const MessageList = memo(function MessageList({
     // One more frame: the first layout can still be short if the composer or
     // a cached image settles after this commit.
     const frame = requestAnimationFrame(() => {
-      if (isPinnedRef.current && !hasNewerRef.current) {
+      if (isPinnedRef.current && !hasNewerRef.current && !forumHoldTopRef.current) {
         scrollToBottom("auto");
       }
     });
@@ -1612,6 +1631,7 @@ export const MessageList = memo(function MessageList({
 
   /** The button under the reader: back to the live end of the channel. */
   const jumpToPresent = useCallback(() => {
+    forumHoldTopRef.current = false;
     if (!hasNewer || !onJumpToPresent) {
       scrollToBottom();
       return;
@@ -1713,6 +1733,10 @@ export const MessageList = memo(function MessageList({
    */
   const jumpToPresentFromPill = followOwnSend;
 
+  const releaseForumHold = useCallback(() => {
+    forumHoldTopRef.current = false;
+  }, []);
+
   const handleScroll = useCallback(() => {
     const container = scrollRef.current;
     if (!container) {
@@ -1787,6 +1811,11 @@ export const MessageList = memo(function MessageList({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
+        // The reader moving is what ends a forum first visit's hold.
+        onWheel={releaseForumHold}
+        onTouchStart={releaseForumHold}
+        onKeyDown={releaseForumHold}
+        onPointerDown={releaseForumHold}
         role="log"
         aria-label={t("chat.messagesAria")}
         // The container itself never auto-announces: a busy channel mutates

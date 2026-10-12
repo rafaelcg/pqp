@@ -391,3 +391,92 @@ describe("markForumPostRead", () => {
     expect(forumUnreadState(state.posts[0], read.viewer[id(30)], ME, null).kind).toBe("read");
   });
 });
+
+describe("each post counts once, wherever it is drawn", () => {
+  const base = forumListFromPage(page([post(3), post(2), post(1)]));
+
+  it("a new post whose first frame already has a reply is still new, under created sort too", () => {
+    const next = applyForumUpsert(base, post(40, { replyCount: 1, lastActivityAt: at(41) }), {
+      filters: created,
+      viewerId: ME,
+      hold: false,
+    });
+    expect(order(next)[0]).toBe("Post 40");
+    expect(next.counts).toEqual({ posts: 4, open: 4 });
+  });
+
+  it("a post created in the same instant as the newest is ordered by id, not dropped", () => {
+    const twin = { ...post(3), id: "00000000-0000-4000-8000-0000000000ff", title: "Twin" };
+    const next = applyForumUpsert(base, twin, { filters: created, viewerId: ME, hold: false });
+    expect(order(next)[0]).toBe("Twin");
+    expect(next.counts).toEqual({ posts: 4, open: 4 });
+  });
+
+  it("a new post the filters hide is counted once, however many frames it gets, and dropped once", () => {
+    const filters: ForumFilters = { ...activity, tagIds: [TAG_BUG] };
+    let next = applyForumUpsert(base, post(40), { filters, viewerId: ME, hold: false });
+    next = applyForumUpsert(next, post(40, { title: "edited" }), { filters, viewerId: ME, hold: false });
+    next = applyForumUpsert(next, post(40, { replyCount: 2, lastActivityAt: at(45) }), {
+      filters,
+      viewerId: ME,
+      hold: false,
+    });
+    expect(next.posts.some((one) => one.id === id(40))).toBe(false);
+    expect(next.counts).toEqual({ posts: 4, open: 4 });
+    expect(applyForumRemoved(next, id(40)).counts).toEqual({ posts: 3, open: 3 });
+  });
+
+  it("resolving and reopening a post moves abertos, drawn or not", () => {
+    const filters: ForumFilters = { ...activity, status: "open" };
+    const resolved = applyForumUpsert(base, post(2, { resolvedAt: at(9) }), {
+      filters,
+      viewerId: ME,
+      hold: false,
+    });
+    expect(resolved.counts).toEqual({ posts: 3, open: 2 });
+    const reopened = applyForumUpsert(resolved, post(2), { filters, viewerId: ME, hold: false });
+    expect(reopened.counts).toEqual({ posts: 3, open: 3 });
+  });
+});
+
+describe("the queue behind the pill", () => {
+  const base = forumListFromPage(page([post(3), post(2), post(1)]));
+
+  it("an edit after a held bump is what the pill applies, not the older copy", () => {
+    const bumped = applyForumUpsert(base, post(1, { lastActivityAt: at(30), replyCount: 1 }), {
+      filters: activity,
+      viewerId: ME,
+      hold: true,
+    });
+    const edited = applyForumUpsert(
+      bumped,
+      post(1, { lastActivityAt: at(30), replyCount: 1, title: "Renamed" }),
+      { filters: activity, viewerId: ME, hold: true },
+    );
+    const flushed = flushForumQueue(edited, { filters: activity, viewerId: ME });
+    expect(order(flushed)).toEqual(["Renamed", "Post 3", "Post 2"]);
+  });
+
+  it("several queued moves and arrivals land in order in one pass", () => {
+    const ctx = { filters: activity, viewerId: ME, hold: true };
+    let next = applyForumUpsert(base, post(40), ctx);
+    next = applyForumUpsert(next, post(1, { lastActivityAt: at(50), replyCount: 1 }), ctx);
+    next = applyForumUpsert(next, post(41), ctx);
+    expect(next.queued).toHaveLength(3);
+    const flushed = flushForumQueue(next, { filters: activity, viewerId: ME });
+    expect(order(flushed)).toEqual(["Post 1", "Post 41", "Post 40", "Post 3", "Post 2"]);
+    expect(flushed.queued).toEqual([]);
+    expect(flushed.counts).toEqual({ posts: 5, open: 5 });
+  });
+
+  it("a reconnect while the reader is busy moves nothing and queues what is new", () => {
+    const held = applyForumUpsert(base, post(40), { filters: activity, viewerId: ME, hold: true });
+    const refreshed = refreshForumFirstPage(
+      held,
+      page([post(41), post(40), post(3, { title: "Post 3 (fresh)" }), post(2)]),
+      { hold: true },
+    );
+    expect(order(refreshed)).toEqual(["Post 3 (fresh)", "Post 2", "Post 1"]);
+    expect(refreshed.queued.map((one) => one.title).sort()).toEqual(["Post 40", "Post 41"]);
+  });
+});
