@@ -221,8 +221,13 @@ class ForumViewModelTest {
         }
         val vm = ForumViewModel(backend, "s", "f", searchDebounceMs = 0)
         fake.frames.emit(upsertFrame(post("c", 3)))
+        // Many frames for one post coalesce, and a removal is never lost to them.
+        repeat(150) { fake.frames.emit(upsertFrame(post("a", 1, replies = it))) }
+        fake.frames.emit(removedFrame("b"))
+        fake.frames.emit(upsertFrame(post("b", 2, replies = 9)))
         gate.complete(page(post("b", 2), post("a", 1)))
-        assertEquals(listOf("c", "b", "a"), vm.state.value.list.posts.map { it.id })
+        assertEquals(listOf("a", "c"), vm.state.value.list.posts.map { it.id })
+        assertEquals(149, vm.state.value.list.posts.first { it.id == "a" }.replyCount)
     }
 
     @Test

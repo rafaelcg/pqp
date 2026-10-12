@@ -139,7 +139,7 @@ class ForumViewModel(
 
     /** A page 1 is out; frames wait in [held] so its answer cannot erase them. */
     private var pageReading = false
-    private val held = mutableListOf<ForumFrame>()
+    private val held = LinkedHashMap<String, ForumFrame>()
 
     /**
      * The cursor this VISIT replaced, from its first page. Every later page 1
@@ -377,20 +377,28 @@ class ForumViewModel(
     }
 
     private fun replayHeld() {
-        val frames = held.toList()
+        val frames = held.values.toList()
         held.clear()
         frames.forEach(::apply)
+    }
+
+    private fun ForumFrame.postId(): String = when (this) {
+        is ForumFrame.Upsert -> post.id
+        is ForumFrame.Removed -> postId
     }
 
     internal fun onFrame(frame: ForumFrame) {
         if (frame.forumId != forumId) return
         if (frame is ForumFrame.Upsert && frame.post.forumId != forumId) return
         if (pageReading) {
-            // Bounded: a page stuck on a bad network must not hold a busy
-            // forum's every frame. Past the cap the oldest go; the reader
-            // still gets them with the next page 1 (return, reconnect, pill).
-            if (held.size >= HELD_MAX) held.removeAt(0)
-            held += frame
+            // One entry per post, the latest state (a removal is final and
+            // never replaced by an older upsert). Bounded by the posts the
+            // forum has rather than by its traffic, and nothing is dropped.
+            val id = frame.postId()
+            if (held[id] !is ForumFrame.Removed) {
+                held.remove(id)
+                held[id] = frame
+            }
             return
         }
         apply(frame)
@@ -442,9 +450,6 @@ class ForumViewModel(
     }
 
     companion object {
-        /** Frames held while a page 1 is out, at most. */
-        private const val HELD_MAX = 100
-
         fun factory(
             session: SessionStore,
             prefs: ForumPrefs,
