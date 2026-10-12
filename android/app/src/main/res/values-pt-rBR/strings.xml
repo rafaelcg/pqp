@@ -1015,6 +1015,7 @@
     <string name="stories_sticker_call">Chama pra call</string>
     <string name="stories_call_picker_body">Quem tocar entra direto. O card mostra quem tá lá dentro na hora.</string>
     <string name="stories_call_picker_none">Nenhuma sala de voz nos servidores marcados.</string>
+    <string name="stories_call_not_in_room">Tu não tá no %1$s. O card só deixa entrar enquanto tu tá na call.</string>
     <string name="stories_call_picker_empty">vazia</string>
     <string name="stories_call_default_text">bora pra call?</string>
     <string name="stories_audience_title">Quem vê</string>

@@ -1022,6 +1022,7 @@
     <string name="stories_sticker_call">Call people in</string>
     <string name="stories_call_picker_body">Whoever taps joins right away. The card shows who\'s in there live.</string>
     <string name="stories_call_picker_none">No voice rooms in the servers you picked.</string>
+    <string name="stories_call_not_in_room">You\'re not in %1$s. The card only lets people in while you\'re in the call.</string>
     <string name="stories_call_picker_empty">empty</string>
     <string name="stories_call_default_text">who\'s up for a call?</string>
     <string name="stories_audience_title">Who sees it</string>
