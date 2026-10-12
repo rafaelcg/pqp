@@ -189,6 +189,20 @@ does anything in a desktop build whose preload publishes
 stream on that machine; see `electron/lib/win-share-audio.js`. With the flag off
 the client never asks the shell anything.
 
+`NUDGE` (`nudge`, default off, global), born as a flag: chamar a atenção, a
+one-tap shake between two friends in a 1:1 conversation, stored as a message with
+`system_kind = 'nudge'` and body `📳` (`packages/shared/src/nudge.ts`). Off, the
+server refuses every `nudge` frame as `unavailable` whatever a stale client
+thinks; served to clients as `nudge` on `GET /api/fun/config`. Counted under
+`nudge` on `GET /api/admin/metrics` (sent, refused by reason). Turn it on only
+after the web build that draws the line and the shake is live; until a phone
+build renders it, phones show a bare `📳` bubble.
+
+`RETRO_LOOK` (`retro_look`, default **on**, global), born as a flag: the kill
+switch for Modo 2005, the hidden look found with `/2005`. Served as `retroLook`
+on `GET /api/fun/config`; a client reads anything but `false` as on. Off, the
+look falls back to the default on the next config refresh.
+
 `CLIENT_FORCE_UPDATE` (`client_force_update`, default off, global), born as a flag:
 every web or desktop client that is not on the latest build puts up the blocking
 "atualização necessária" screen, served by `GET /api/client-update/config`

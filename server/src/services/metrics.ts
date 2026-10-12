@@ -11,6 +11,7 @@ import {
   streamAlertMetrics,
   type StreamAlertMetrics,
 } from "./stream-alerts.js";
+import { nudgeMetrics, type NudgeMetrics } from "./nudge.js";
 import {
   communityHomeTranslationMetrics,
   type CommunityHomeTranslationMetrics,
@@ -350,6 +351,14 @@ export interface AdminMetrics {
    * Live, never from the 30 s cache.
    */
   streamAlerts: StreamAlertMetrics;
+  /**
+   * Chamar a atenção (`services/nudge.ts`), since this process started:
+   * whether the `nudge` flag is on here, nudges sent, and refusals by reason
+   * (`cooldown`, `unanswered`, `busy`, `self-off`, `unavailable`). Per process
+   * like the push counters: with two instances read each. Live, never from
+   * the 30 s cache.
+   */
+  nudge: NudgeMetrics;
   /**
    * Per-component latency over the last 24 hours, bucketed, plus each
    * component's own p50 and p95.
@@ -1210,6 +1219,7 @@ type CachedMetrics = Omit<
   | "communityHomeTranslation"
   | "communityHomeCaptions"
   | "streamAlerts"
+  | "nudge"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -2019,6 +2029,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     communityHomeTranslation,
     communityHomeCaptions,
     streamAlerts: streamAlertMetrics(),
+    nudge: nudgeMetrics(),
   };
 }
 

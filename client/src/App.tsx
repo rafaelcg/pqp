@@ -5448,6 +5448,13 @@ function MainAppContent({
             return;
           }
 
+          // Chamar a atenção's refusal, sent only to a socket that sent a
+          // `nudge` frame. This build sends none, so nothing can be refused;
+          // kept out of the voice controller, which it is not for.
+          if (message.type === "nudge-refused") {
+            return;
+          }
+
           // --- voice state ---
           // Record each room's transport as rosters pass through (the frame
           // still falls through to the controller). Powers the members

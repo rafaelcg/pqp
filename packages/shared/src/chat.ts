@@ -43,6 +43,11 @@ import { forumPostRemovedSchema, forumPostUpsertSchema } from "./forums.js";
 import { chanceRequestSchema, chanceResultSchema } from "./chance.js";
 import { pollRequestSchema, pollSchema } from "./polls.js";
 import { AUTOMOD_CUSTOM_MESSAGE_MAX } from "./automod.js";
+import {
+  messageSystemKindSchema,
+  nudgeFrameSchema,
+  nudgeRefusedSchema,
+} from "./nudge.js";
 
 export const joinChannelMessageSchema = z.object({
   type: z.literal("join-channel"),
@@ -181,6 +186,8 @@ const broadcastMessageSchema = z.object({
   thread: threadSummarySchema.nullable().default(null),
   chance: chanceResultSchema.nullable().default(null),
   poll: pollSchema.nullable().default(null),
+  /** Same field as `messageSchema.systemKind`: `nudge`, or null. */
+  systemKind: messageSystemKindSchema,
 });
 
 export const pollVoteMessageSchema = z.object({
@@ -377,6 +384,14 @@ export const channelActivitySchema = z.object({
    * to know who wrote it) without a second round trip.
    */
   authorId: z.string().uuid().optional(),
+  /**
+   * Set when the message behind this activity is a system message (`nudge`),
+   * so a client that is not looking at the conversation can say "Lu chamou
+   * tua atenção!" instead of showing the bare `📳` preview. Optional and
+   * caught, so a frame from an older sibling, or a kind added later, parses
+   * as an ordinary message's activity.
+   */
+  systemKind: z.enum(["nudge"]).optional().catch(undefined),
 });
 
 export const reactionBroadcastSchema = z.object({
@@ -699,6 +714,9 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // Per person too: see `voiceNoteListenedSchema`, and its absence from the
   // list below.
   voiceNoteListenedSchema,
+  // Addressed to the sender only, like `message-rejected`: a nudge that did
+  // not land, and why. See `nudge.ts`, and its absence from the list below.
+  nudgeRefusedSchema,
 ]);
 
 /**
@@ -727,6 +745,8 @@ const chatClientFrameUnion = z.discriminatedUnion("type", [
   setAttentionMessageSchema,
   pollVoteMessageSchema,
   pollCloseMessageSchema,
+  // Chamar a atenção: one tap, no body. The server writes the message.
+  nudgeFrameSchema,
 ]);
 
 export const chatClientMessageSchema = chatClientFrameUnion.superRefine(
@@ -809,6 +829,10 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  * lost the server, so no channel could reach them anyway. It names who was
  * kicked or banned by who receives it, and travels on `chat.membership` keyed
  * by user id.
+ *
+ * `nudge-refused` is absent for the same reason as `message-rejected`: it
+ * tells one sender their nudge did not land. A nudge that DID land is an
+ * ordinary `message-broadcast` and needs nothing here.
  *
  * `voice-note-listened` is absent for the same reason: it is addressed to the
  * listener's own sockets and, in a small conversation, the author's, and the

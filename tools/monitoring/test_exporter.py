@@ -990,6 +990,28 @@ def _voice_notes(refusals: dict | None = None, **health_overrides) -> dict:
     }
 
 
+class NudgeTests(unittest.TestCase):
+    def test_render(self):
+        body = exporter.render(_base_payload(nudge={
+            "enabled": True,
+            "sent": 4,
+            "refused": {"cooldown": 2, "unanswered": 1, "busy": 0, "self-off": 0, "unavailable": 3},
+        }))
+        self.assertIn("pqp_api_nudge_enabled 1", body)
+        self.assertIn("pqp_api_nudge_sent_total 4", body)
+        self.assertIn('pqp_api_nudge_refused_total{reason="cooldown"} 2', body)
+        self.assertIn('pqp_api_nudge_refused_total{reason="self-off"} 0', body)
+
+    def test_absent_block_renders_nothing(self):
+        self.assertNotIn("pqp_api_nudge", exporter.render(_base_payload()))
+
+    def test_counters_sum_across_replicas(self):
+        a = _base_payload(nudge={"enabled": True, "sent": 4, "refused": {"cooldown": 2}})
+        b = _base_payload(nudge={"enabled": True, "sent": 1, "refused": {"cooldown": 5}})
+        merged = exporter.merge_admin_metrics([a, b])
+        self.assertEqual(merged["nudge"], {"enabled": True, "sent": 5, "refused": {"cooldown": 7}})
+
+
 class RenderVoiceNotesTests(unittest.TestCase):
     def test_usage_series(self):
         body = exporter.render(_base_payload(voiceNotes=_voice_notes()))

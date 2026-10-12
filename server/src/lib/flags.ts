@@ -619,6 +619,34 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/forum/config?serverId= (enabled)",
   },
+  nudge: {
+    description:
+      "Chamar a atenção: em DM entre amigos, um toque chacoalha a janela do outro (com som) e deixa uma linha na conversa. Desligado, o servidor recusa todo pedido e os apps escondem o botão.",
+    env: "NUDGE",
+    parseEnv: exactTrue,
+    // Off until the web build that draws the line and the shake is live, and
+    // one phone build renders the pill: before that, an old client shows a
+    // bare 📳 bubble, which is readable but not the feature.
+    codeDefault: false,
+    // Conversations have no server: a per-server override would never be
+    // read. Checked on every nudge frame, so off is a real kill switch (the
+    // server refuses the frame whatever a stale client thinks).
+    perServer: false,
+    clientVia: "GET /api/fun/config (nudge)",
+  },
+  retro_look: {
+    description:
+      "Modo 2005 (só cliente): o visual escondido que a pessoa acha com /2005. Ligado por padrão; é o interruptor de emergência: desligado, quem estava nele volta pro visual padrão no próximo refresh da config e o atalho some.",
+    env: "RETRO_LOOK",
+    parseEnv: onUnlessOff,
+    // On: a kill switch, not a rollout. Off only if the look breaks.
+    codeDefault: true,
+    // A look belongs to a person, not a server.
+    perServer: false,
+    // Served as `retroLook` on `GET /api/fun/config`. No `clientVia` until the
+    // client that reads it (the Modo 2005 PR) lands: the contract test fails
+    // a field no client source names.
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

@@ -48,6 +48,12 @@ export interface ConversationPushCopyInput {
    * the push never waits on one.
    */
   voiceDurationMs?: number | null;
+  /**
+   * Set when the message is a system message. `nudge` (chamar a atenção) has
+   * its own sentence: the stored body is a bare 📳, and "te mandou uma
+   * mensagem" would undersell a poke that exists to be noticed.
+   */
+  systemKind?: "nudge" | null;
 }
 
 /**
@@ -60,6 +66,20 @@ export function buildConversationPushCopy(
   input: ConversationPushCopyInput,
 ): PushCopy {
   const { locale, channelKind, dmDetails, mentionOrReply } = input;
+
+  // A nudge only happens in a 1:1, but the copy does not depend on that. With
+  // `dmDetails` off the sender stays unnamed, same as every other DM push.
+  if (input.systemKind === "nudge") {
+    if (!dmDetails) {
+      return locale === "pt-BR"
+        ? { title: "pqp", body: "Alguém chamou tua atenção! 📳" }
+        : { title: "pqp", body: "Someone sent you a nudge! 📳" };
+    }
+    const nudger = input.authorName ?? AUTHOR_FALLBACK[locale];
+    return locale === "pt-BR"
+      ? { title: nudger, body: "chamou tua atenção! 📳" }
+      : { title: nudger, body: "sent you a nudge! 📳" };
+  }
 
   if (!dmDetails) {
     if (channelKind === "group") {

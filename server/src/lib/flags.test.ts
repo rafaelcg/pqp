@@ -118,6 +118,10 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   conversations_home_phone_tabs: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   forum_channels: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  nudge: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  retro_look: offWords,
 };
 
 const SAMPLES = [

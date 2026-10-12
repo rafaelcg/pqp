@@ -813,6 +813,8 @@ export interface PushPayloadInput {
   locale: PushLocale;
   /** A conversation voice note's length; conversation copy only. */
   voiceDurationMs?: number | null;
+  /** A system message (`nudge`); conversation copy only. */
+  systemKind?: "nudge" | null;
 }
 
 export interface PushPayload {
@@ -867,6 +869,7 @@ export function buildPushPayload(input: PushPayloadInput): PushPayload {
     mentionOrReply: input.mention || input.reply,
     authorName: input.authorName ? truncateLabel(input.authorName) : null,
     voiceDurationMs: input.voiceDurationMs ?? null,
+    systemKind: input.systemKind ?? null,
   });
   return { title: copy.title, body: copy.body, path, tag };
 }
@@ -908,6 +911,12 @@ export interface ChannelPushEvent {
    * audio or a transcript.
    */
   voiceDurationMs?: number | null;
+  /**
+   * Set when the message is a system message: a nudge says "chamou tua
+   * atenção! 📳" instead of the plain copy. It is a plain message for every
+   * other rule here: a muted conversation, DND and the level still refuse it.
+   */
+  systemKind?: "nudge" | null;
 }
 
 /**
@@ -1134,6 +1143,7 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
         authorName: names.author_name,
         locale: resolvePushLocale((settings as { locale?: unknown } | null)?.locale),
         voiceDurationMs: event.voiceDurationMs ?? null,
+        systemKind: event.systemKind ?? null,
       }),
     );
   }
