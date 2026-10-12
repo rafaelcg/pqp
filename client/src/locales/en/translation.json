@@ -472,7 +472,7 @@
   "tela.faq.mobile.q": "Does it work on a phone?",
   "tela.faq.mobile.a": "The Android app is live on Google Play, at pqp.gg/android. On iPhone, TestFlight at pqp.gg/beta. The browser still works on both.",
   "tela.faq.data.q": "What do you keep about me?",
-  "tela.faq.data.a": "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami and Cloudflare Web Analytics), error reports (Grafana Faro), and the Google Ads tag, which counts sign-ups and reports page views to Google, which can use them for remarketing.",
+  "tela.faq.data.a": "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami), error reports (Grafana Faro), and the Google Ads tag, which counts sign-ups and reports page views to Google, which can use them for remarketing.",
   "tela.faq.data.link": "Read the privacy policy",
   "tela.cta.title": "Want to try it now?",
   "tela.cta.body": "A room takes a minute to make and the link is all your friends need.",

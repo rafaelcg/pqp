@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "8 de outubro de 2026",
+  updated: "12 de outubro de 2026",
   sections: [
     {
       id: "intro",
@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "2635023a",
+      sourceRev: "54687635",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -372,46 +372,31 @@ export const privacyPtBr: LegalDocument = {
 
           <h3>Analytics do site</h3>
           <p>
-            As páginas institucionais e o app usam o{" "}
-            <strong>Cloudflare Web Analytics</strong> para a gente saber se
-            alguém está chegando e se o site está rápido o suficiente para usar.
-            Ele é sem cookie: não guarda nada no seu dispositivo e não usa
-            identificador persistente, então não consegue reconhecer você em uma
-            visita futura nem seguir você para outro site.
+            As páginas institucionais e o app carregam o <strong>Umami</strong>,
+            rodado pelos criadores dele como Umami Cloud, para a gente saber se
+            alguém está chegando e em quais páginas as pessoas chegam. Ele é sem
+            cookie: não guarda nada no seu dispositivo e não usa identificador
+            persistente, então não consegue reconhecer você em uma visita futura
+            nem seguir você para outro site.
           </p>
           <p>
-            O que ele registra é o endereço da página, a página que trouxe você,
-            o seu país, o seu navegador e tipo de dispositivo, e a velocidade de
-            carregamento das páginas. Isso é medição agregada de tráfego, não
-            perfil — não tem como a gente procurar uma pessoa específica ali, e
-            isso nunca é cruzado com a sua conta.
+            Ele registra o endereço da página, a página que trouxe você, e o seu
+            país, navegador e tipo de dispositivo. Isso é medição agregada de
+            tráfego, não perfil: não tem como a gente procurar uma pessoa
+            específica ali, e isso nunca é cruzado com a sua conta.
           </p>
           <p>
-            O script é injetado pela Cloudflare na borda, e não empacotado
-            dentro do app, então você não vai encontrar ele no nosso
-            código-fonte. Bloquear com uma extensão de navegador não quebra
-            nada.
+            Ele também conta alguns passos nomeados, como tocar num botão de
+            cadastro de uma página de divulgação ou, dentro do app, passar pela
+            verificação de idade ou criar um servidor, como um nome e alguns
+            rótulos (como quanto tempo um passo levou), nunca um id. Bloquear
+            ele com uma extensão de navegador não quebra nada. Em qual região o
+            Umami Cloud guarda os dados depende de como a conta dele está
+            configurada, e esta política não promete nenhuma.
           </p>
           <p>
-            As mesmas páginas também carregam o <strong>Umami</strong>,
-            rodado pelos criadores dele como Umami Cloud, com a mesma
-            finalidade: contar visitas e ver em quais páginas as pessoas chegam.
-            Ele também é sem cookie, não guarda nada no seu dispositivo e não
-            usa identificador persistente. Registra o endereço da página, a
-            página que trouxe você, e o seu país, navegador e tipo de
-            dispositivo, tudo de forma agregada. Ele também conta
-            alguns passos nomeados, como tocar num botão de cadastro de uma
-            página de divulgação ou, dentro do app, passar pela verificação de
-            idade ou criar um servidor, como um nome e alguns
-            rótulos (como quanto tempo um passo levou), nunca um id. Ele nunca
-            vê a sua conta, e bloquear ele também não quebra nada. Em qual
-            região o Umami Cloud guarda os dados depende de como a conta dele
-            está configurada, e esta política não promete nenhuma.
-          </p>
-          <p>
-            São dois porque respondem perguntas um pouco diferentes, e nenhum
-            dos dois te custa nada por medir. Se isso mudar, este parágrafo muda
-            junto.
+            Se a gente passar a usar outra ferramenta de analytics, esta seção
+            muda junto.
           </p>
 
           <h3>Relatório de erros</h3>
@@ -508,7 +493,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-dont-do",
-      sourceRev: "12e5ef01",
+      sourceRev: "cb202edd",
       heading: "O que a gente não faz",
       body: (
         <ul>
@@ -521,9 +506,9 @@ export const privacyPtBr: LegalDocument = {
             levam um id de sessão aleatório, e o nosso código nunca liga a sua
             conta a eles. Um endereço de requisição dentro de um relatório
             ainda pode ter o id da sua conta, como está descrito ali, e o
-            feedback que você manda leva o id de sessão. As duas
-            ferramentas de analytics descritas ali contam visitas e não
-            conseguem identificar visitantes. A exceção é a tag do Google Ads,
+            feedback que você manda leva o id de sessão. A ferramenta de
+            analytics descrita ali conta visitas e não consegue identificar
+            visitantes. A exceção é a tag do Google Ads,
             descrita no mesmo lugar: ela dá um identificador a todo visitante e
             informa as visualizações de página ao Google, que pode usar isso
             para públicos de publicidade.
@@ -538,8 +523,8 @@ export const privacyPtBr: LegalDocument = {
             <strong>Sem fingerprinting de dispositivo, e a gente nunca pede a sua localização.</strong>{" "}
             O nosso código não sonda o seu dispositivo atrás de uma impressão
             digital, e nunca pede a sua localização ao navegador ou ao celular.
-            As ferramentas de analytics descritas em &quot;O que a gente
-            coleta&quot; deduzem o seu país pelo endereço IP, para contagens
+            A ferramenta de analytics descrita em &quot;O que a gente
+            coleta&quot; deduz o seu país pelo endereço IP, para contagens
             agregadas. O nosso servidor também guarda na sua conta o país da sua
             conexão, em duas letras, para escolher onde rodam as chamadas de
             voz. A sua conta não guarda nada mais preciso que um país. Fora dos
@@ -849,7 +834,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "who-sees",
-      sourceRev: "b82394b4",
+      sourceRev: "6ee1039d",
       heading: "Quem mais vê os seus dados",
       body: (
         <>
@@ -881,8 +866,7 @@ export const privacyPtBr: LegalDocument = {
             </li>
             <li>
               <strong>Cloudflare</strong> — serve o app web e o site
-              institucional. O Cloudflare Web Analytics é colocado em cada
-              página no edge deles em vez de ir no nosso código. As requisições
+              institucional. As requisições
               do app ao nosso servidor, e a conexão em tempo real dele,
               mensagens incluídas, também passam pela rede da Cloudflare no
               caminho até o nosso servidor.

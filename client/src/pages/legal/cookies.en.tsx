@@ -11,7 +11,7 @@ export const cookiesEn: LegalDocument = {
   description:
     "Exactly which cookies, local storage keys and caches pqp.gg puts on your device, and which third parties your browser contacts.",
   heading: "Cookie notice",
-  updated: "29 September 2026",
+  updated: "12 October 2026",
   sections: [
     {
       id: "intro",
@@ -483,12 +483,6 @@ export const cookiesEn: LegalDocument = {
               <code>doubleclick.net</code> and <code>google.com</code>.
             </li>
             <li>
-              <strong>Cloudflare Web Analytics</strong>: Cloudflare adds its
-              script, from <code>static.cloudflareinsights.com</code>, to every
-              page as it leaves their network. It counts visits and measures
-              page speed. The privacy notice describes what it records.
-            </li>
-            <li>
               <strong>Umami</strong>: its script loads from{" "}
               <code>cloud.umami.is</code> and sends visit counts to{" "}
               <code>gateway.umami.is</code>. The privacy notice describes what
@@ -574,11 +568,10 @@ export const cookiesEn: LegalDocument = {
             machinery here.
           </p>
           <p>
-            <strong>Cloudflare Web Analytics</strong>, <strong>Umami</strong>{" "}
-            and <strong>Grafana Faro</strong> set no cookie. Cloudflare Web
-            Analytics and Umami also store nothing on your device and use no
-            persistent identifier, so they cannot recognise you across visits
-            or across sites. Grafana Faro keeps only the random session id in
+            <strong>Umami</strong> and <strong>Grafana Faro</strong> set no
+            cookie. Umami also stores nothing on your device and uses no
+            persistent identifier, so it cannot recognise you across visits or
+            across sites. Grafana Faro keeps only the random session id in
             session storage listed above, which is gone when you close the tab.
             That is why the statement under &quot;Cookies&quot;, that our
             analytics and error reporting set no cookies, is true.

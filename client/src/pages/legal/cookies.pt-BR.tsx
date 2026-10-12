@@ -17,7 +17,7 @@ export const cookiesPtBr: LegalDocument = {
   description:
     "Exatamente quais cookies, chaves de armazenamento local e caches o pqp.gg coloca no seu dispositivo, e quais terceiros o seu navegador contata.",
   heading: "Aviso de cookies",
-  updated: "29 de setembro de 2026",
+  updated: "12 de outubro de 2026",
   sections: [
     {
       id: "intro",
@@ -465,7 +465,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "third-parties",
-      sourceRev: "1dae8f42",
+      sourceRev: "880ef7fe",
       heading: "Terceiros que o seu navegador contata",
       body: (
         <>
@@ -511,13 +511,6 @@ export const cookiesPtBr: LegalDocument = {
               carrega de <code>www.googletagmanager.com</code> em toda página do
               pqp.gg, e envia as visualizações de página para servidores do
               Google em <code>doubleclick.net</code> e <code>google.com</code>.
-            </li>
-            <li>
-              <strong>Cloudflare Web Analytics</strong>: a Cloudflare coloca o
-              script dela, de <code>static.cloudflareinsights.com</code>, em
-              toda página quando ela sai da rede deles. Ele conta visitas e mede
-              a velocidade das páginas. O aviso de privacidade descreve o que
-              ele registra.
             </li>
             <li>
               <strong>Umami</strong>: o script carrega de{" "}
@@ -589,7 +582,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "not-used",
-      sourceRev: "d9ac32c2",
+      sourceRev: "ef8b69c7",
       heading: "O que a gente não usa",
       body: (
         <>
@@ -608,11 +601,10 @@ export const cookiesPtBr: LegalDocument = {
             publicidade aqui.
           </p>
           <p>
-            O <strong>Cloudflare Web Analytics</strong>, o{" "}
-            <strong>Umami</strong> e o <strong>Grafana Faro</strong> não definem
-            cookie. O Cloudflare Web Analytics e o Umami também não guardam nada
-            no seu dispositivo e não usam identificador persistente, então não
-            conseguem reconhecer você entre visitas nem entre sites. O Grafana
+            O <strong>Umami</strong> e o <strong>Grafana Faro</strong> não
+            definem cookie. O Umami também não guarda nada no seu dispositivo e
+            não usa identificador persistente, então não consegue reconhecer
+            você entre visitas nem entre sites. O Grafana
             Faro guarda só o id de sessão aleatório no armazenamento de sessão
             listado acima, que some quando você fecha a aba. Por isso a frase em
             &quot;Cookies&quot;, de que o nosso analytics e o nosso relatório de

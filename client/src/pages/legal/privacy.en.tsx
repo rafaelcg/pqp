@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "8 October 2026",
+  updated: "12 October 2026",
   sections: [
     {
       id: "intro",
@@ -335,43 +335,30 @@ export const privacyEn: LegalDocument = {
 
           <h3>Site analytics</h3>
           <p>
-            The marketing pages and the app use{" "}
-            <strong>Cloudflare Web Analytics</strong> so we can tell whether
-            anyone is arriving and whether the site is fast enough to use. It is
-            cookieless: it stores nothing on your device and uses no persistent
-            identifier, so it cannot recognise you on a later visit or follow
-            you to another site.
+            The marketing pages and the app load <strong>Umami</strong>, run
+            by its makers as Umami Cloud, so we can tell whether anyone is
+            arriving and which pages people arrive on. It is cookieless: it
+            stores nothing on your device and uses no persistent identifier, so
+            it cannot recognise you on a later visit or follow you to another
+            site.
           </p>
           <p>
-            What it records is the page address, the page that referred you,
-            your country, your browser and device type, and how quickly pages
-            loaded. That is aggregate traffic measurement, not a profile — there
-            is no way for us to look up an individual person in it, and it is
-            never joined to your account.
+            It records the page address, the page that referred you, and your
+            country, browser and device type. That is aggregate traffic
+            measurement, not a profile: there is no way for us to look up an
+            individual person in it, and it is never joined to your account.
           </p>
           <p>
-            The script is injected by Cloudflare at the edge rather than bundled
-            into the app, so you will not find it in our source code. Blocking
-            it with a browser extension breaks nothing.
+            It also counts a few named steps, such as tapping a sign-up button
+            on a marketing page or, inside the app, passing the age check or
+            creating a server, as a name and a few labels (such as how long a
+            step took), never an id. Blocking it with a browser extension
+            breaks nothing. Which region Umami Cloud stores the data in depends
+            on how its account is set up, and this policy does not promise one.
           </p>
           <p>
-            The same pages also load <strong>Umami</strong>, run by its makers
-            as Umami Cloud, for the same purpose: counting visits and seeing
-            which pages people arrive on. It is cookieless too, stores nothing
-            on your device, and uses no persistent identifier. It records the
-            page address, the referring page, and your country, browser and
-            device type, all of it aggregate. It also counts a few named steps, such as tapping a sign-up
-            button on a marketing page or, inside the app, passing the age
-            check or creating a server, as a name and a few labels (such as how long a
-            step took), never an id. It never
-            sees your account, and blocking it also breaks nothing. Which
-            region Umami Cloud stores the data in depends on how its account is
-            set up, and this policy does not promise one.
-          </p>
-          <p>
-            Two of them, because they answer slightly different questions and
-            neither costs you anything to be measured by. If that changes, this
-            paragraph changes with it.
+            If we start using another analytics tool, this section changes with
+            it.
           </p>
 
           <h3>Error reporting</h3>
@@ -476,9 +463,8 @@ export const privacyEn: LegalDocument = {
             session id, and our code never attaches your account to them. A
             request address inside a report can still hold your account id, as
             described there, and feedback you send carries the session id. The
-            two analytics tools
-            described
-            there count visits and cannot identify visitors. The exception is
+            analytics tool described there counts visits and cannot identify
+            visitors. The exception is
             the Google Ads tag, described in the same place: it gives every
             visitor an identifier and reports page views to Google, and Google
             can use them for advertising audiences.
@@ -492,8 +478,8 @@ export const privacyEn: LegalDocument = {
           <li>
             <strong>No device fingerprinting, and we never ask for your location.</strong>{" "}
             Our code does not probe your device for a fingerprint, and never
-            asks your browser or phone for your location. The analytics tools
-            described under &quot;What we collect&quot; work out your country
+            asks your browser or phone for your location. The analytics tool
+            described under &quot;What we collect&quot; works out your country
             from your IP address, for aggregate counts. Our server also stores
             the two-letter country of your connection on your account, to
             choose where voice calls run. Your account holds nothing more
@@ -828,8 +814,7 @@ export const privacyEn: LegalDocument = {
             </li>
             <li>
               <strong>Cloudflare</strong> — serves the web app and the marketing
-              site. Cloudflare Web Analytics is added to each page at their edge
-              rather than bundled in our source. The app&apos;s requests to our
+              site. The app&apos;s requests to our
               server, and its real-time connection, messages included, also
               pass through Cloudflare&apos;s network on the way to our server.
             </li>
