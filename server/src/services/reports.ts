@@ -11,6 +11,7 @@ import {
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { getPool } from "../db.js";
+import { resolveStoryForReport } from "./stories.js";
 import { canAccessChannel } from "./users.js";
 
 /**
@@ -85,10 +86,22 @@ export interface CreateServerReportInput extends CreateReportInput {
   serverId: string;
 }
 
+/**
+ * One story, from the viewer, with the audience it was seen through: a server
+ * (its queue) or null for the friends audience (the instance queue, since no
+ * server owns it).
+ */
+export interface CreateStoryReportInput extends CreateReportInput {
+  subjectType: "story";
+  storyId: string;
+  serverId?: string | null;
+}
+
 export type CreateReportInputs =
   | CreateMessageReportInput
   | CreateUserReportInput
-  | CreateServerReportInput;
+  | CreateServerReportInput
+  | CreateStoryReportInput;
 
 /**
  * The reporter cannot see the thing they are reporting, or there is nothing
@@ -234,6 +247,10 @@ interface ResolvedSubject {
    * queue precisely so its own owner cannot read or close it.
    */
   reportedServerId?: string | null;
+  /** The reported story, for a `story` subject only. */
+  reportedStoryId?: string | null;
+  /** Its caption or text as reported. Never `contentSnapshot` (see schema.sql). */
+  storySnapshot?: string | null;
 }
 
 /**
@@ -470,6 +487,49 @@ function routeByReason(
   return { ...subject, contextKind: "none", serverId: null };
 }
 
+/**
+ * A story, reported from the viewer.
+ *
+ * VISIBLE THROUGH THE AUDIENCE NAMED, or it is the same 404 every other
+ * unreachable subject gets: a story id must not be a probe for which stories
+ * exist. A server's story goes to that server's queue; a friends story to the
+ * instance queue. `minor_sexual` then moves either to the instance queue
+ * (`routeByReason`). The caption or text is copied into `story_snapshot`; the
+ * picture is not copied anywhere, because it is HELD instead (the sweep will
+ * not delete a story with an open report, or one resolved in the last 30 days).
+ */
+async function resolveStorySubject(input: CreateStoryReportInput): Promise<ResolvedSubject> {
+  const story = await resolveStoryForReport(
+    input.reporterId,
+    input.storyId,
+    input.serverId ?? null,
+  );
+  if (!story) {
+    throw new ReportTargetNotVisibleError();
+  }
+  const author = await getPool().query<{
+    display_name: string;
+    username: string | null;
+    discriminator: string | null;
+  }>(`SELECT display_name, username, discriminator FROM users WHERE id = $1`, [story.authorId]);
+  const row = author.rows[0];
+  if (!row) {
+    throw new ReportTargetNotVisibleError();
+  }
+  return {
+    contextKind: story.serverId ? "server" : "none",
+    serverId: story.serverId,
+    channelId: null,
+    channelLabel: null,
+    messageId: null,
+    contentSnapshot: null,
+    reportedUserId: story.authorId,
+    subjectLabel: labelFor(row),
+    reportedStoryId: input.storyId,
+    storySnapshot: story.snapshot,
+  };
+}
+
 export interface CreateReportResult {
   report: Report;
   /**
@@ -499,7 +559,9 @@ export async function createReport(
       ? await resolveMessageSubject(input.messageId, input.reporterId)
       : input.subjectType === "server"
         ? await resolveServerSubject(input)
-        : await resolveUserSubject(input),
+        : input.subjectType === "story"
+          ? await resolveStorySubject(input)
+          : await resolveUserSubject(input),
   );
 
   const params = [
@@ -516,24 +578,51 @@ export async function createReport(
     input.reason,
     input.details?.trim() || null,
     subject.reportedServerId ?? null,
+    subject.reportedStoryId ?? null,
+    subject.storySnapshot ?? null,
   ];
 
+  // A story report must HOLD the story's bytes, or it is accepted as though it
+  // did while the sweep deletes them. Lock the row the sweep's claim locks
+  // (it skips locked rows), refuse a story whose bytes are already being
+  // deleted, and commit the report with the lock still held: once it lands,
+  // the open report is what the sweep's hold rule sees.
+  const storyLock = subject.reportedStoryId ? await getPool().connect() : null;
   try {
-    const inserted = await getPool().query<{ id: string }>(
+    if (storyLock) {
+      await storyLock.query("BEGIN");
+      const holdable = await storyLock.query(
+        `SELECT 1 FROM stories
+          WHERE id = $1 AND media_delete_claimed_at IS NULL AND media_deleted_at IS NULL
+          FOR UPDATE`,
+        [subject.reportedStoryId],
+      );
+      if ((holdable.rowCount ?? 0) === 0) {
+        throw new ReportTargetNotVisibleError();
+      }
+    }
+    const inserted = await (storyLock ?? getPool()).query<{ id: string }>(
       `INSERT INTO reports (
          reporter_id, subject_type, context_kind, reported_message_id,
          reported_user_id, server_id, channel_id, content_snapshot,
-         subject_label, channel_label, reason, details, reported_server_id
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         subject_label, channel_label, reason, details, reported_server_id,
+         reported_story_id, story_snapshot
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        RETURNING id::text AS id`,
       params,
     );
+    if (storyLock) {
+      await storyLock.query("COMMIT");
+    }
     const report = await getReport(inserted.rows[0]!.id);
     if (!report) {
       throw new Error("Report vanished after being filed");
     }
     return { report, duplicate: false };
   } catch (error) {
+    if (storyLock) {
+      await storyLock.query("ROLLBACK").catch(() => undefined);
+    }
     if (
       error &&
       typeof error === "object" &&
@@ -546,6 +635,8 @@ export async function createReport(
       }
     }
     throw error;
+  } finally {
+    storyLock?.release();
   }
 }
 
@@ -575,6 +666,14 @@ async function findOpenDuplicate(
                AND r.reporter_id = $1 AND r.reported_server_id = $2`,
             [input.reporterId, subject.reportedServerId],
           ]
+        : input.subjectType === "story"
+          ? [
+              // Mirrors `idx_reports_open_story_dedupe`.
+              `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS}
+               WHERE r.status = 'open' AND r.subject_type = 'story'
+                 AND r.reporter_id = $1 AND r.reported_story_id = $2`,
+              [input.reporterId, subject.reportedStoryId],
+            ]
         : [
             `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS}
              WHERE r.status = 'open' AND r.subject_type = 'user'
@@ -745,6 +844,73 @@ export async function createAutomatedInstanceReport(input: {
   return (inserted.rowCount ?? 0) > 0;
 }
 
+/**
+ * A story report nobody filed: the scanner flagged or refused a story's image
+ * or one of its video frames. The same four differences from `createReport`
+ * as `createAutomatedReport` (no reporter, no flood cap, deduplicated per
+ * uploader per place in SQL), with the story as the subject so the sweep
+ * holds its bytes while the report is open. Deduplicated PER STORY rather
+ * than per uploader: the open report is what holds a story's bytes, so a
+ * second flagged story must get its own (the per-uploader flood is bounded
+ * by the 20 stories a day an author can post). `minor_sexual` goes to the
+ * instance queue, as it does for a person's report.
+ */
+export async function createAutomatedStoryReport(input: {
+  storyId: string;
+  reportedUserId: string;
+  serverId: string | null;
+  reason: ReportReason;
+  details: string;
+}): Promise<boolean> {
+  const user = await getPool().query<{
+    display_name: string;
+    username: string | null;
+    discriminator: string | null;
+  }>(`SELECT display_name, username, discriminator FROM users WHERE id = $1`, [
+    input.reportedUserId,
+  ]);
+  const row = user.rows[0];
+  if (!row) {
+    return false;
+  }
+  const serverId = input.reason === "minor_sexual" ? null : input.serverId;
+  // Two processes judging the same story at once (a retried publish, two
+  // video workers) can both pass the NOT EXISTS; the unique
+  // `idx_reports_open_story_automated` keeps it to one, and the loser is a
+  // duplicate, not an error.
+  const inserted = await getPool()
+    .query(
+      `INSERT INTO reports (
+         reporter_id, subject_type, context_kind, reported_user_id, server_id,
+         subject_label, reason, details, reported_story_id
+       )
+       SELECT NULL, 'story', $1, $2, $3, $4, $5, $6, $7
+       WHERE NOT EXISTS (
+         SELECT 1 FROM reports
+         WHERE status = 'open'
+           AND reporter_id IS NULL
+           AND subject_type = 'story'
+           AND reported_story_id = $7
+       )`,
+      [
+        serverId ? "server" : "none",
+        input.reportedUserId,
+        serverId,
+        labelFor(row),
+        input.reason,
+        input.details,
+        input.storyId,
+      ],
+    )
+    .catch((error: unknown) => {
+      if ((error as { code?: string } | null)?.code === "23505") {
+        return { rowCount: 0 };
+      }
+      throw error;
+    });
+  return (inserted.rowCount ?? 0) > 0;
+}
+
 export async function getReport(id: string): Promise<Report | null> {
   const result = await getPool().query<ReportRow>(
     `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS} WHERE r.id = $1::bigint`,
@@ -895,9 +1061,14 @@ export async function listAllReports(
   const result = await getPool().query<AllReportRow>(
     `SELECT ${REPORT_COLUMNS}, r.server_id::text AS all_server_id,
             srv.name AS server_name,
-            ma.scan_status, ma.scan_score, ma.scan_labels,
-            ma.scan_provider, ma.content_type AS scan_content_type,
-            ma.attached AS scan_still_attached
+            COALESCE(ma.scan_status, st.scan_status) AS scan_status,
+            COALESCE(ma.scan_score, st.scan_score) AS scan_score,
+            COALESCE(ma.scan_labels, st.scan_labels) AS scan_labels,
+            COALESCE(ma.scan_provider, st.scan_provider) AS scan_provider,
+            COALESCE(ma.content_type, st.media_content_type) AS scan_content_type,
+            CASE WHEN st.id IS NOT NULL
+                 THEN st.status = 'live' AND st.expires_at > now()
+                 ELSE ma.attached END AS scan_still_attached
      FROM reports r
      ${REPORT_JOINS}
      LEFT JOIN servers srv ON srv.id = r.server_id
@@ -921,6 +1092,9 @@ export async function listAllReports(
              )::uuid
        LIMIT 1
      ) ma ON TRUE
+     LEFT JOIN stories st
+       ON r.reporter_id IS NULL AND r.subject_type = 'story'
+      AND st.id = r.reported_story_id AND st.scan_status <> 'unscanned'
      ${tail}`,
     params,
   );

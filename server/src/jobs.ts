@@ -66,6 +66,14 @@ import { broadcastWatchParty } from "./ws/watch-party-events.js";
 import { userHasAuthenticatedSocket } from "./ws/sockets.js";
 import { hasClusterSocket } from "./ws/status.js";
 import { sweepHlsSessions } from "./voice/hls-cleanup.js";
+import { storyAudienceTargets } from "./services/stories.js";
+import {
+  STORY_SWEEP_INTERVAL_MS,
+  STORY_VIDEO_INTERVAL_MS,
+  processStoryVideos,
+  sweepStories,
+} from "./services/story-media.js";
+import { notifyStoriesUpdate, notifyStoryAudiences } from "./ws/stories.js";
 
 /**
  * Hourly, because the grace period is an hour: running more often only finds
@@ -200,6 +208,62 @@ async function sweepCommunityHomeVideoCaptions(): Promise<void> {
   }
 }
 
+/**
+ * Stories: the expiry sweep, every minute, whatever the flags say (a flag
+ * turned off must never make bytes outlive the 24 h promise).
+ */
+async function sweepStoriesJob(): Promise<void> {
+  try {
+    const result = await sweepStories();
+    if (result.mediaFailed > 0) {
+      console.warn(`[stories] ${result.mediaFailed} media delete(s) failed, retrying next tick`);
+    }
+  } catch (error) {
+    console.error("[stories] sweep failed:", error);
+  }
+}
+
+let storyVideosRunning = false;
+
+/**
+ * Stories: finish published videos (probe, poster, frames, scan). One at a
+ * time per process and never overlapping itself; a few per tick while there
+ * is a queue. Where this runs without sockets (the worker), the nudge goes
+ * out over the cluster bus.
+ */
+async function processStoryVideosJob(): Promise<void> {
+  if (storyVideosRunning) {
+    return;
+  }
+  storyVideosRunning = true;
+  try {
+    for (let i = 0; i < 3; i += 1) {
+      const tick = await processStoryVideos();
+      if (tick.outcome === "idle") {
+        break;
+      }
+      if (tick.storyId && tick.authorId) {
+        const authorId = tick.authorId;
+        if (tick.wentLive) {
+          // Best effort: the story is live either way, and a missed nudge is
+          // a strip that refreshes on the next focus.
+          await storyAudienceTargets(tick.storyId)
+            .then((targets) => notifyStoryAudiences(authorId, targets))
+            .catch((error: unknown) => {
+              console.error("[stories] live nudge failed:", error);
+            });
+        } else {
+          notifyStoriesUpdate({ scope: "own", userId: authorId });
+        }
+      }
+    }
+  } catch (error) {
+    console.error("[stories] video job failed:", error);
+  } finally {
+    storyVideosRunning = false;
+  }
+}
+
 /** A registered job's own cleanup. Most are `clearInterval` on a plain
  *  timer; the outgoing webhook poller's is its own `stop()` (see below) —
  *  same list, same accounting, one shape. */
@@ -318,6 +382,8 @@ export function startColdJobs(): ColdJobs {
       },
     ),
     every(HLS_SESSION_SWEEP_INTERVAL_MS, "hls-sessions", sweepHlsSessions),
+    every(STORY_SWEEP_INTERVAL_MS, "stories", sweepStoriesJob),
+    every(STORY_VIDEO_INTERVAL_MS, "stories-video", processStoryVideosJob),
     // Voice occupancy: the one job here that reads live state rather than
     // rows. It is here rather than next to the WS heartbeat because with
     // `VOICE_REGISTRY=postgres` the truth is in `voice_peers`, which the

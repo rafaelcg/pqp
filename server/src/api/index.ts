@@ -1,5 +1,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  STORY_IDS_MAX,
+  STORY_POSTS_PER_MINUTE,
+  createStorySchema,
+  storyModRemoveSchema,
+  storyReactionSchema,
+  storyReplySchema,
+  storySaveToBauSchema,
+  storyViewsBatchSchema,
+  type CommunityHomeContentType,
   AUTOMOD_MENTION_LIMIT_DEFAULT,
   createAutomodRuleSchema,
   updateAutomodRuleSchema,
@@ -377,7 +386,9 @@ import {
 import {
   addCommunityHomeComment,
   claimCommunityHomeMediaUpload,
+  communityHomeObjectKey,
   CommunityHomeError,
+  registerCopiedCommunityHomeMedia,
   countUnreadCommunityHomePosts,
   countUnreadCommunityHomePostsAllServers,
   markCommunityHomeRead,
@@ -403,6 +414,33 @@ import {
   updateCommunityHomePost,
 } from "../services/community-home.js";
 import { pushPendingCommunityHomePosts } from "../services/community-home-push.js";
+import {
+  ackStoryNotice,
+  createStory,
+  deleteStoryEverywhere,
+  getStoriesForViewer,
+  getStoryCard,
+  listFriendsStrip,
+  listServerStrip,
+  listStoryAudienceOptions,
+  listStoryNotices,
+  listViewers,
+  markReplied,
+  muteAuthor,
+  prepareStoryReply,
+  publishStory,
+  recordViews,
+  removeStoryFromServer,
+  setReaction,
+  storiesConfig,
+  storiesOnForServer,
+  storyAudienceTargets,
+  storyForBau,
+  StoryError,
+  unmuteAuthor,
+} from "../services/stories.js";
+import { notifyStoriesUpdate, notifyStoryAudiences } from "../ws/stories.js";
+import { copyObject, deleteObject, StorageError } from "../lib/s3.js";
 import {
   getCommunityHomePostCard,
   listLatestCommunityHomeCards,
@@ -1207,6 +1245,9 @@ export function resetApiRateLimits(): void {
   // drain across them.
   operatorLimiter.reset();
   musicResolveLimiter.reset();
+  // Declared in the stories section below; same temporal dead zone note as
+  // `depoimentoLimiter` above.
+  resetStoryRateLimits();
 }
 
 class Forbidden extends HttpError {
@@ -5084,6 +5125,376 @@ router.post(
     }
   },
 );
+
+// ----------------------------------------------------------------- stories
+
+/**
+ * STORIES (`packages/shared/src/stories.ts` is the contract, the rules are in
+ * `services/stories.ts`). Behind `stories` (per server) and `stories_friends`
+ * (global): with a flag off, a route of that audience answers 404, except the
+ * strips, which answer `{ enabled: false }` so clients hide without a 404
+ * storm. Every per-story route goes through the one visibility gate in the
+ * service, so a story id is never a probe: not visible and not there are the
+ * same 404.
+ */
+
+/**
+ * Posting: `STORY_POSTS_PER_MINUTE` a minute per process here, and the exact
+ * `STORY_POSTS_PER_DAY` in the database. Views are batched by the client and
+ * cheap; a burst covers catching up on a full strip.
+ */
+const storyPostLimiter = createRateLimiter({
+  capacity: STORY_POSTS_PER_MINUTE,
+  refillPerSecond: STORY_POSTS_PER_MINUTE / 60,
+});
+const storyViewLimiter = createRateLimiter({ capacity: 60, refillPerSecond: 2 });
+const storyReactionLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
+
+export function resetStoryRateLimits(): void {
+  storyPostLimiter.reset();
+  storyViewLimiter.reset();
+  storyReactionLimiter.reset();
+}
+
+function takeStoryBudget(
+  limiter: { take: (key: string) => boolean; retryAfter: (key: string) => number },
+  res: ServerResponse,
+  userId: string,
+): void {
+  const key = `story:${userId}`;
+  if (!limiter.take(key)) {
+    res.setHeader("Retry-After", String(limiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+}
+
+function mapStoryError(error: unknown): never {
+  if (error instanceof StoryError) {
+    switch (error.code) {
+      case "not_found":
+        throw new NotFound(error.message);
+      case "forbidden":
+      case "video_off":
+      case "dm_closed":
+      case "replies_off":
+        throw new Forbidden(error.message);
+      case "storage_off":
+        throw new HttpError(503, error.message);
+      case "over_limit":
+        throw new HttpError(413, error.message);
+      case "budget":
+        throw new HttpError(429, error.message);
+      case "automod":
+      case "refused":
+        throw new HttpError(422, error.message);
+      case "not_verified":
+        throw new HttpError(409, error.message);
+      default:
+        throw new HttpError(400, error.message);
+    }
+  }
+  if (error instanceof DmRefusedError) {
+    // Same wording whatever the reason: a refusal must not say whether it was
+    // a block or a privacy setting (see services/dms.ts).
+    throw new Forbidden("Cannot send to this person");
+  }
+  throw error;
+}
+
+/** Ids from `?ids=a,b,c`, uuids only, at most `STORY_IDS_MAX`. */
+function storyIdsParam(url: URL): string[] {
+  const raw = url.searchParams.get("ids") ?? "";
+  const ids = raw
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  if (ids.length === 0 || ids.length > STORY_IDS_MAX || ids.some((id) => !isUuid(id))) {
+    throw new HttpError(400, `Pass 1 to ${STORY_IDS_MAX} story ids`);
+  }
+  return ids;
+}
+
+router.get("/api/stories/config", async ({ url }) => {
+  const serverId = url.searchParams.get("serverId");
+  return storiesConfig(serverId && isUuid(serverId) ? serverId : null);
+});
+
+router.get("/api/stories/audiences", async ({ user }) =>
+  listStoryAudienceOptions(user.id),
+);
+
+router.get("/api/servers/:serverId/stories", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId!, user.id);
+  return listServerStrip(user, serverId!);
+});
+
+router.get("/api/stories/friends", async ({ user }) => listFriendsStrip(user));
+
+router.get("/api/stories", async ({ url, user }) => ({
+  stories: await getStoriesForViewer(user.id, storyIdsParam(url)),
+}));
+
+router.post("/api/stories", async ({ req, res, user }) => {
+  takeStoryBudget(storyPostLimiter, res, user.id);
+  const body = createStorySchema.parse(await readJsonBody(req));
+  try {
+    const result = await createStory(user, body);
+    if (result.liveServerIds.length > 0 || result.liveFriends) {
+      notifyStoryAudiences(user.id, {
+        serverIds: result.liveServerIds,
+        friends: result.liveFriends,
+      });
+    }
+    return created({ story: result.story, upload: result.upload });
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+router.post("/api/stories/:storyId/publish", async ({ user }, { storyId }) => {
+  try {
+    const published = await publishStory(user, storyId!);
+    if (published.wentLive) {
+      // Best effort after the publish committed: a failed lookup costs a live
+      // nudge (clients refetch on focus), never the answer.
+      await storyAudienceTargets(storyId!)
+        .then((targets) => notifyStoryAudiences(user.id, targets))
+        .catch((error: unknown) => {
+          console.error("[stories] publish nudge failed:", error);
+        });
+    }
+    return { story: published.story };
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+router.delete("/api/stories/:storyId", async ({ user }, { storyId }) => {
+  const removed = await deleteStoryEverywhere(storyId!, user.id);
+  if (!removed) {
+    throw new NotFound("Story not found");
+  }
+  // The bytes go on the next sweep tick (a minute at most) unless a report or
+  // a flag holds them; the story is gone from every read right now.
+  notifyStoryAudiences(removed.authorId, removed.targets, [storyId!]);
+  return noContent();
+});
+
+router.post("/api/stories/views", async ({ req, res, user }) => {
+  takeStoryBudget(storyViewLimiter, res, user.id);
+  const body = storyViewsBatchSchema.parse(await readJsonBody(req));
+  const { recorded, authorIds } = await recordViews(user.id, body.storyIds);
+  for (const authorId of authorIds) {
+    notifyStoriesUpdate({ scope: "own", userId: authorId });
+  }
+  return { recorded };
+});
+
+router.put("/api/stories/:storyId/reaction", async ({ req, res, user }, { storyId }) => {
+  takeStoryBudget(storyReactionLimiter, res, user.id);
+  const body = storyReactionSchema.parse(await readJsonBody(req));
+  try {
+    const authorId = await setReaction(user.id, storyId!, body.reaction);
+    notifyStoriesUpdate({ scope: "own", userId: authorId });
+    return { reaction: body.reaction };
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+/**
+ * A text reply becomes a message in the 1:1 conversation with the author,
+ * quoting the story. Everything a DM is subject to applies, because it IS a
+ * DM: privacy and blocks (`openConversation`), the send budget, the block
+ * guard and the push (`postChannelMessage`).
+ */
+router.post("/api/stories/:storyId/reply", async ({ req, res, user }, { storyId }) => {
+  const body = storyReplySchema.parse(await readJsonBody(req));
+  const budget = takeMessageBudget(user.id);
+  if (!budget.ok) {
+    res.setHeader("Retry-After", String(Math.max(1, Math.ceil(budget.retryAfterMs / 1000))));
+    throw new HttpError(429, "Slow down");
+  }
+  try {
+    const { authorId } = await prepareStoryReply(user.id, storyId!);
+    const opened = await openConversation(user.id, [authorId]);
+    const posted = await postChannelMessage({
+      author: user,
+      channelId: opened.channelId,
+      body: body.text,
+      storyId: storyId!,
+      // A retry with the same nonce answers the reply that already landed.
+      ...(body.nonce ? { nonce: body.nonce } : {}),
+    });
+    if (!posted.ok) {
+      switch (posted.reason) {
+        case "rate-limited":
+        case "slow-mode":
+          throw new HttpError(429, "Slow down");
+        case "database-unavailable":
+          throw new DatabaseUnavailableError();
+        default:
+          throw new Forbidden("Cannot send to this person");
+      }
+    }
+    // The DM is sent and committed: bookkeeping after it must not turn that
+    // into an error, or a retry would send it twice.
+    await markReplied(user.id, storyId!).catch((error: unknown) => {
+      console.error("[stories] reply bookkeeping failed:", error);
+    });
+    notifyStoriesUpdate({ scope: "own", userId: authorId });
+    return created({ conversationId: opened.channelId, messageId: posted.message.id });
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+router.get("/api/stories/:storyId/viewers", async ({ url, user }, { storyId }) => {
+  try {
+    return await listViewers(user.id, storyId!, url.searchParams.get("cursor"));
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+router.get("/api/stories/:storyId/card", async ({ user }, { storyId }) => {
+  try {
+    return await getStoryCard(user.id, storyId!);
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+/**
+ * "Tirar do servidor": MANAGE_MESSAGES in this server takes the story out of
+ * THIS server only. Audited, and the author is told once, in-app, with the
+ * reason. It may still be up for their friends or in another server.
+ */
+router.delete(
+  "/api/servers/:serverId/stories/:storyId",
+  async ({ req, user }, { serverId, storyId }) => {
+    if (!storiesOnForServer(serverId!)) {
+      throw new NotFound("Not found");
+    }
+    await requirePermission(serverId!, user.id, Permission.MANAGE_MESSAGES);
+    const body = storyModRemoveSchema.parse(await readJsonBody(req));
+    const removed = await removeStoryFromServer({
+      serverId: serverId!,
+      storyId: storyId!,
+      moderatorId: user.id,
+      reason: body.reason || null,
+    });
+    if (!removed) {
+      throw new NotFound("Story not found");
+    }
+    // Best effort, after the removal committed: an audit hiccup must not make
+    // a done removal answer as failed (same shape as remove-message).
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "story.remove",
+      targetType: "user",
+      targetId: removed.authorId,
+      reason: body.reason || null,
+      changes: [{ key: "story", old: storyId!, new: null }],
+    }).catch((error: unknown) => {
+      console.error(`[moderation] audit write failed after removing story ${storyId}:`, error);
+    });
+    notifyStoriesUpdate({ scope: "server", serverId: serverId! }, [storyId!]);
+    notifyStoriesUpdate({ scope: "own", userId: removed.authorId });
+    return noContent();
+  },
+);
+
+router.put("/api/stories/mutes/:userId", async ({ user }, { userId }) => {
+  try {
+    await muteAuthor(user.id, userId!);
+    return noContent();
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+router.delete("/api/stories/mutes/:userId", async ({ user }, { userId }) => {
+  await unmuteAuthor(user.id, userId!);
+  return noContent();
+});
+
+router.get("/api/stories/notices", async ({ user }) => ({
+  notices: await listStoryNotices(user.id),
+}));
+
+router.post("/api/stories/notices/:noticeId/ack", async ({ user }, { noticeId }) => {
+  if (!(await ackStoryNotice(user.id, noticeId!))) {
+    throw new NotFound("Notice not found");
+  }
+  return noContent();
+});
+
+/**
+ * "Salvar no Baú": the author, holding MANAGE_SERVER there, turns their own
+ * story into a Baú DRAFT. The media is copied inside the bucket (no bytes pass
+ * here), so the story's own object is still deleted on schedule and the copy
+ * stays with the draft. Nobody else may make a story permanent.
+ */
+router.post("/api/stories/:storyId/save-to-bau", async ({ req, user }, { storyId }) => {
+  const body = storySaveToBauSchema.parse(await readJsonBody(req));
+  if (!isCommunityHomeEnabled() || !storiesOnForServer(body.serverId)) {
+    throw new NotFound("Not found");
+  }
+  await requirePermission(body.serverId, user.id, Permission.MANAGE_SERVER);
+  let copiedKey: string | null = null;
+  try {
+    const source = await storyForBau(user.id, storyId!, body.serverId);
+    let mediaUploadId: string | null = null;
+    if (source.key && source.contentType && source.byteSize) {
+      if (!isCommunityHomeMediaConfigured()) {
+        throw new HttpError(503, "Media uploads are not configured on this server");
+      }
+      const contentType = source.contentType as CommunityHomeContentType;
+      const key = communityHomeObjectKey(body.serverId, contentType);
+      await copyObject(source.key, key);
+      copiedKey = key;
+      mediaUploadId = await registerCopiedCommunityHomeMedia({
+        serverId: body.serverId,
+        uploaderId: user.id,
+        key,
+        filename: `story${key.slice(key.lastIndexOf("."))}`,
+        contentType,
+        byteSize: source.byteSize,
+        scan: source.scan,
+      });
+    }
+    const post = await createCommunityHomePost(body.serverId, user.id, {
+      title: null,
+      body: source.caption ?? source.text ?? "",
+      teaser: null,
+      visibility: "free",
+      commentsEnabled: true,
+      mediaUploadId,
+      mobileMediaUploadId: null,
+      youtubeUrl: null,
+      status: "draft",
+      scheduledAt: null,
+      scheduleTimezone: null,
+    });
+    return created({ postId: post.id });
+  } catch (error) {
+    // The copy has no row to be swept from if the draft never happened.
+    if (copiedKey) {
+      await deleteObject(copiedKey).catch((cleanup: unknown) => {
+        console.error(`[stories] leaked a Baú copy ${copiedKey}:`, cleanup);
+      });
+    }
+    if (error instanceof CommunityHomeError) {
+      mapCommunityHomeError(error);
+    }
+    if (error instanceof StorageError) {
+      throw new HttpError(503, "Could not copy the media, try again");
+    }
+    mapStoryError(error);
+  }
+});
 
 // ------------------------------------------------------------- communities
 
@@ -10257,11 +10668,6 @@ router.post("/api/reports", async ({ req, res, user }) => {
   if (body.subjectType === "server" && !isCommunitiesEnabled()) {
     throw new NotFound("Not found");
   }
-  // Story reports arrive with the stories server work; until then there is no
-  // story anybody could have seen.
-  if (body.subjectType === "story") {
-    throw new NotFound("Not found");
-  }
   try {
     const result = await createReport(
       body.subjectType === "message"
@@ -10280,7 +10686,18 @@ router.post("/api/reports", async ({ req, res, user }) => {
               reason: body.reason,
               details: body.details,
             }
-          : {
+          : body.subjectType === "story"
+            ? {
+                // Visibility (flags included) is checked against the
+                // audience named, in services/stories.ts.
+                subjectType: "story",
+                reporterId: user.id,
+                storyId: body.storyId,
+                serverId: body.serverId ?? null,
+                reason: body.reason,
+                details: body.details,
+              }
+            : {
               subjectType: "user",
               reporterId: user.id,
               userId: body.userId,
@@ -10640,6 +11057,105 @@ router.post(
       }
     }
 
+    return { ok: true };
+  },
+);
+
+/**
+ * Take a reported story down. The button beside `remove-message`, with the
+ * same authorization (a manager of the report's server, or an instance
+ * moderator), and one difference that matters: an instance moderator removes
+ * it EVERYWHERE (every server it went to and the friends audience), while a
+ * server's manager removes it from THEIR server only, exactly like "Tirar do
+ * servidor". Either way its bytes stay held while the report is open and for
+ * 30 days after it is resolved, as evidence.
+ */
+router.post(
+  "/api/reports/:report/remove-story",
+  async ({ user }, { report }) => {
+    const reportId = reportIdParam(report);
+    const scope = await getReportScope(reportId);
+    if (!scope) {
+      throw new NotFound("Report not found");
+    }
+    if (scope.serverId) {
+      if (!isInstanceModerator(user)) {
+        await requireAnyPermission(scope.serverId, user.id, [
+          Permission.KICK_MEMBERS,
+          Permission.BAN_MEMBERS,
+          Permission.MODERATE_MEMBERS,
+        ]);
+      }
+    } else if (!isInstanceModerator(user)) {
+      throw new NotFound("Report not found");
+    }
+    const full = await getReport(reportId);
+    if (!full || full.subjectType !== "story" || !full.storyId) {
+      throw new HttpError(400, "This report has no story left to remove");
+    }
+    if (scope.serverId && !isInstanceModerator(user)) {
+      // A server's own staff own their server's slice and nothing else: the
+      // same story may be up for the author's friends or in other servers.
+      const slice = await removeStoryFromServer({
+        serverId: scope.serverId,
+        storyId: full.storyId,
+        moderatorId: user.id,
+        reason: null,
+      });
+      if (!slice) {
+        throw new HttpError(400, "The reported story is already gone");
+      }
+      await logAudit({
+        serverId: scope.serverId,
+        actorId: user.id,
+        action: "story.remove",
+        targetType: "user",
+        targetId: slice.authorId,
+        reason: null,
+        changes: [
+          { key: "story", old: full.storyId, new: null },
+          { key: "report", old: null, new: reportId },
+        ],
+      }).catch((error: unknown) => {
+        console.error(
+          `[moderation] audit write failed after removing story ${full.storyId}:`,
+          error,
+        );
+      });
+      notifyStoriesUpdate({ scope: "server", serverId: scope.serverId }, [full.storyId]);
+      notifyStoriesUpdate({ scope: "own", userId: slice.authorId });
+      return { ok: true };
+    }
+    const removed = await deleteStoryEverywhere(full.storyId, null);
+    if (!removed) {
+      throw new HttpError(400, "The reported story is already gone");
+    }
+    console.log(
+      `[moderation] operator removed story: report ${reportId}, ` +
+        `story ${full.storyId}, moderator ${user.id}`,
+    );
+    notifyStoryAudiences(removed.authorId, removed.targets, [full.storyId]);
+    await Promise.all(
+      removed.targets.serverIds.map((serverId) =>
+        logAudit({
+          serverId,
+          actorId: user.id,
+          action: "story.remove",
+          targetType: "user",
+          targetId: removed.authorId,
+          reason: null,
+          changes: [
+            { key: "story", old: full.storyId, new: null },
+            { key: "report", old: null, new: reportId },
+          ],
+        }).catch((error: unknown) => {
+          console.error(
+            `[moderation] audit write failed after removing story ${full.storyId}:`,
+            error,
+          );
+        }),
+      ),
+    );
     return { ok: true };
   },
 );

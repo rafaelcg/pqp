@@ -458,4 +458,15 @@ describe("the stories flags", () => {
     expect(dashboard).toMatch(/\bstories:\s*"/);
     expect(dashboard).toMatch(/\bstories_friends:\s*"/);
   });
+
+  it("the config route is mounted and answers from both flags, per server", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const route = /router\.get\("\/api\/stories\/config"[\s\S]*?\}\);/.exec(api)?.[0];
+    expect(route, "GET /api/stories/config is not mounted").toBeTruthy();
+    expect(route).toContain("storiesConfig(");
+    expect(route).toContain('searchParams.get("serverId")');
+    const service = readFileSync(path.join(serverSrc, "services/stories.ts"), "utf8");
+    expect(service).toMatch(/isEnabled\("stories", \{ serverId \}\)/);
+    expect(service).toMatch(/isEnabled\("stories_friends"\)/);
+  });
 });
