@@ -87,6 +87,16 @@ describe("resolveRoutedThread", () => {
     await expect(pending).resolves.toEqual({ kind: "thread", thread });
   });
 
+  it("opens a post at once, even while the thread lookup is still out", async () => {
+    await expect(
+      resolveRoutedThread(POST, {
+        listedChannelIds: new Set([FORUM]),
+        fetchPost: async () => ({ post }),
+        fetchThreads: () => new Promise(() => {}),
+      }),
+    ).resolves.toEqual({ kind: "forum-post", forumId: FORUM, post });
+  });
+
   it("does not open a post whose forum this viewer cannot list", async () => {
     await expect(
       resolveRoutedThread(POST, {

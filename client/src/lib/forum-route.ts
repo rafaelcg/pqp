@@ -42,16 +42,17 @@ export async function resolveRoutedThread(
     fetchThreads: () => Promise<{ threads: Record<string, ThreadSummary[]> }>;
   },
 ): Promise<RoutedThread | null> {
-  const [postAnswer, threadsAnswer] = await Promise.allSettled([
-    fetchPost(id),
-    fetchThreads(),
-  ]);
+  // Both start now; a post that answers is returned at once, never held
+  // behind the thread list (which may be slow, or stall).
+  const threadsLookup = settle(fetchThreads());
+  const postAnswer = await settle(fetchPost(id));
   if (postAnswer.status === "fulfilled") {
     const { post } = postAnswer.value;
     if (post.id === id && listedChannelIds.has(post.forumId)) {
       return { kind: "forum-post", forumId: post.forumId, post };
     }
   }
+  const threadsAnswer = await threadsLookup;
   if (threadsAnswer.status === "fulfilled") {
     for (const list of Object.values(threadsAnswer.value.threads)) {
       const thread = list.find((one) => one.channelId === id);
@@ -67,6 +68,14 @@ export async function resolveRoutedThread(
     throw threadsAnswer.reason;
   }
   return null;
+}
+
+/** `Promise.allSettled` for one promise: never rejects, so an unused lookup cannot go unhandled. */
+function settle<T>(promise: Promise<T>): Promise<PromiseSettledResult<T>> {
+  return promise.then(
+    (value) => ({ status: "fulfilled", value }),
+    (reason: unknown) => ({ status: "rejected", reason }),
+  );
 }
 
 /** A refusal that means "not a post, or not one you can see". */
