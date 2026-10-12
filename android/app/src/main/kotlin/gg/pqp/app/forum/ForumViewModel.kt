@@ -115,6 +115,8 @@ class ForumViewModel(
     private val onFiltersChanged: (SavedForumFilters) -> Unit = {},
     /** The search debounce; zero in tests. */
     private val searchDebounceMs: Long = 300L,
+    /** The wait before retry [attempt] of a failed merge refresh; the socket's backoff, zero in tests. */
+    private val refreshBackoffMs: (attempt: Int) -> Long = { gg.pqp.app.core.RealtimeClient.backoffMillis(it) },
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ForumUiState(filters = saved?.filters ?: ForumFilters()))
@@ -436,12 +438,30 @@ class ForumViewModel(
     fun refreshInPlace() {
         if (_state.value.loading) return
         val ticket = generation
-        viewModelScope.launch {
-            val page = runCatching { backend.page(forumId, query()) }.getOrNull() ?: return@launch
-            if (ticket != generation) return@launch
-            _state.value = _state.value.copy(list = forVisit(ForumList.refreshFirstPage(_state.value.list, page)))
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
+            // After a reconnect this read is the only way back to what was
+            // said meanwhile, so a failure is retried on the socket's backoff
+            // rather than left standing until the next reconnect.
+            for (attempt in 1..REFRESH_TRIES) {
+                val page = try {
+                    backend.page(forumId, query())
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+                if (ticket != generation) return@launch
+                if (page != null) {
+                    _state.value = _state.value.copy(list = forVisit(ForumList.refreshFirstPage(_state.value.list, page)))
+                    return@launch
+                }
+                if (attempt < REFRESH_TRIES) delay(refreshBackoffMs(attempt))
+            }
         }
     }
+
+    private var refreshJob: Job? = null
 
     override fun onCleared() {
         // Everything the list showed is read now; a list that never loaded
@@ -450,6 +470,9 @@ class ForumViewModel(
     }
 
     companion object {
+        /** Tries for one merge refresh (the first read plus two retries). */
+        internal const val REFRESH_TRIES = 3
+
         fun factory(
             session: SessionStore,
             prefs: ForumPrefs,

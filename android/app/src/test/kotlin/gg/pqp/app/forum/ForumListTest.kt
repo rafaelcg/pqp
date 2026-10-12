@@ -171,7 +171,8 @@ class ForumListTest {
         val gone = ForumList.removed(ForumList.removed(queued, "c"), "a")
         assertEquals(listOf("b"), ids(gone))
         assertTrue(gone.queued.isEmpty())
-        assertEquals(2, gone.counts?.posts)
+        // Three counted (b, a, and c when it was queued), two removed.
+        assertEquals(1, gone.counts?.posts)
         assertEquals(gone, ForumList.removed(gone, "nope"))
     }
 
@@ -181,6 +182,18 @@ class ForumListTest {
         val old = post("z", "01:00", activity = "02:00", replies = 3)
         val next = ForumList.upsert(start, old, free)
         assertEquals(listOf("b", "a"), ids(next))
+    }
+
+    @Test
+    fun `a new post deleted while it waits behind the pill comes off the count and the pill`() {
+        val start = ForumList.fromPage(page(post("b", "10:00"), post("a", "09:00")))
+        val queued = ForumList.upsert(start, post("c", "11:00"), held)
+        assertEquals(3, queued.counts?.posts)
+        assertEquals(3, queued.counts?.open)
+        val gone = ForumList.removed(queued, "c")
+        assertEquals(2, gone.counts?.posts)
+        assertEquals(2, gone.counts?.open)
+        assertTrue(gone.queued.isEmpty())
     }
 
     @Test

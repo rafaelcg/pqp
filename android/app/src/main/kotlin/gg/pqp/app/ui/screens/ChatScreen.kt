@@ -398,17 +398,15 @@ fun ChatScreen(
         landed = true
         // One frame for the list to lay the loaded pages out before scrolling.
         androidx.compose.runtime.withFrameNanos { }
-        val rows = messages.asReversed()
-        when (target) {
-            // The top of the transcript: past the oldest message, where the
-            // post's title sits. Clamped to the end of the content.
-            gg.pqp.app.forum.PostLanding.Question ->
-                listState.scrollToItem(listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1)
-            is gg.pqp.app.forum.PostLanding.FirstUnread -> {
-                val index = rows.indexOfFirst { it.id == target.messageId }
-                if (index >= 0) bringNearTop(index)
-            }
-            gg.pqp.app.forum.PostLanding.Newest -> listState.scrollToItem(0)
+        val scroll = gg.pqp.app.forum.ForumLanding.scrollFor(
+            target = target,
+            rows = messages.asReversed(),
+            hasMore = model.state.value.hasMore,
+            totalItems = listState.layoutInfo.totalItemsCount,
+        )
+        when (scroll) {
+            is gg.pqp.app.forum.LandingScroll.ToItem -> listState.scrollToItem(scroll.index)
+            is gg.pqp.app.forum.LandingScroll.NearTop -> bringNearTop(scroll.index)
         }
     }
 

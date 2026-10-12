@@ -44,8 +44,15 @@ class ForumViewModelTest {
         var bits: Long = Permission.SEND_MESSAGES
         var enabled = true
 
+        /** The next this-many page reads fail, like a flaky network. */
+        var failures = 0
+
         override suspend fun page(forumId: String, query: ForumQuery): ForumPostListResponse {
             queries += query
+            if (failures > 0) {
+                failures -= 1
+                error("offline")
+            }
             return pages.removeFirstOrNull() ?: ForumPostListResponse()
         }
         override suspend fun tags(forumId: String) = listOf(ForumTag("t1", "Bug", position = 0))
@@ -95,7 +102,7 @@ class ForumViewModelTest {
     }
 
     private fun model(backend: FakeBackend, saved: SavedForumFilters? = null, onSaved: (SavedForumFilters) -> Unit = {}) =
-        ForumViewModel(backend, "s", "f", saved, onSaved, searchDebounceMs = 0)
+        ForumViewModel(backend, "s", "f", saved, onSaved, searchDebounceMs = 0, refreshBackoffMs = { 0L })
 
     @Test
     fun `page 1 loads, then the forum is marked read, and the forum takes its slot`() = runTest {
@@ -201,6 +208,29 @@ class ForumViewModelTest {
         assertEquals("2026-10-11T09:00:00.000Z", vm.state.value.list.forumPreviousReadAt)
         assertEquals("still queued for the pill", listOf("q"), vm.state.value.list.queued.map { it.id })
         assertEquals(listOf("f", "f"), backend.joins)
+    }
+
+    @Test
+    fun `a reconnect refresh that fails is retried, so what was missed still arrives`() = runTest {
+        val backend = FakeBackend().apply { pages += page(post("b", 2), post("a", 1)) }
+        val vm = model(backend)
+        backend.failures = 2
+        backend.pages += page(post("c", 3), post("b", 2))
+        backend.connection.value = RealtimeState.Reconnecting
+        backend.connection.value = RealtimeState.Ready
+        assertEquals(listOf("c", "b"), vm.state.value.list.posts.map { it.id })
+        assertEquals(1 + ForumViewModel.REFRESH_TRIES, backend.queries.size)
+    }
+
+    @Test
+    fun `a refresh gives up after its tries and keeps what is drawn`() = runTest {
+        val backend = FakeBackend().apply { pages += page(post("b", 2), post("a", 1)) }
+        val vm = model(backend)
+        backend.failures = ForumViewModel.REFRESH_TRIES
+        backend.connection.value = RealtimeState.Reconnecting
+        backend.connection.value = RealtimeState.Ready
+        assertEquals(listOf("b", "a"), vm.state.value.list.posts.map { it.id })
+        assertEquals(1 + ForumViewModel.REFRESH_TRIES, backend.queries.size)
     }
 
     @Test

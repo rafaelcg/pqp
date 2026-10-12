@@ -162,8 +162,16 @@ class ForumPostViewModel(
             }
             is ForumFrame.Upsert -> if (frame.post.id == postId) {
                 val before = _state.value.post
-                _state.value = _state.value.copy(post = frame.post)
-                if (before?.acceptedAnswerId != frame.post.acceptedAnswerId) refreshDetail()
+                // The card follows the frame at once: gone when the answer was
+                // taken off, and never a different reply's excerpt under a new
+                // answer id while the detail that has its excerpt is read.
+                _state.value = _state.value.copy(
+                    post = frame.post,
+                    acceptedAnswer = answerFor(frame.post, _state.value.acceptedAnswer),
+                )
+                if (frame.post.acceptedAnswerId != null && before?.acceptedAnswerId != frame.post.acceptedAnswerId) {
+                    refreshDetail()
+                }
             }
         }
     }
@@ -199,6 +207,19 @@ class ForumPostViewModel(
 
         private const val OPENING_WINDOW_MS = 5_000L
 
+        /**
+         * The Solução card for [post]: none when it has no answer, the card
+         * already drawn when it is that same reply, and none (until the
+         * detail with the new excerpt lands) when the answer moved: a card
+         * quoting a different reply than the one marked is worse than no card.
+         */
+        internal fun answerFor(post: ForumPostSummary, current: ForumAcceptedAnswer?): ForumAcceptedAnswer? =
+            when {
+                post.acceptedAnswerId == null -> null
+                current?.messageId == post.acceptedAnswerId -> current
+                else -> null
+            }
+
         /** `FORUM_ANSWER_EXCERPT_MAX`, for the card drawn before the server's own excerpt lands. */
         private const val EXCERPT_MAX = 280
 
@@ -230,7 +251,10 @@ class ForumPostViewModel(
             runCatching { request() }
                 .onSuccess { updated ->
                     if (_state.value.post == drawn) {
-                        _state.value = _state.value.copy(post = updated)
+                        _state.value = _state.value.copy(
+                            post = updated,
+                            acceptedAnswer = answerFor(updated, _state.value.acceptedAnswer),
+                        )
                     } else {
                         // A newer action or frame was drawn while this one
                         // was out; its answer may be older than that.
@@ -303,14 +327,29 @@ class ForumPostViewModel(
     /** "Tirar a solução": the post stays resolved, the card goes. */
     fun unmarkAnswer() {
         val previousAnswer = _state.value.acceptedAnswer
-        _state.value = _state.value.copy(acceptedAnswer = null)
         val before = _state.value.post ?: return
-        _state.value = _state.value.copy(post = before.copy(acceptedAnswerId = null))
+        val drawn = before.copy(acceptedAnswerId = null)
+        _state.value = _state.value.copy(post = drawn, acceptedAnswer = null)
         viewModelScope.launch {
             runCatching { session.api.clearAcceptedAnswer(postId) }
-                .onSuccess { _state.value = _state.value.copy(post = it) }
+                .onSuccess { updated ->
+                    // Same rule as [change]: an answer is drawn only over the
+                    // state it was asked from; anything newer means re-read.
+                    if (_state.value.post == drawn) {
+                        _state.value = _state.value.copy(
+                            post = updated,
+                            acceptedAnswer = answerFor(updated, _state.value.acceptedAnswer),
+                        )
+                    } else {
+                        refreshDetail()
+                    }
+                }
                 .onFailure {
-                    _state.value = _state.value.copy(post = before, acceptedAnswer = previousAnswer)
+                    if (_state.value.post == drawn) {
+                        _state.value = _state.value.copy(post = before, acceptedAnswer = previousAnswer)
+                    } else {
+                        refreshDetail()
+                    }
                     _notices.tryEmit(noticeFor(it))
                 }
         }
