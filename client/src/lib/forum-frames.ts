@@ -1,16 +1,17 @@
-import type { ForumPostRemoved, ForumPostUpsert } from "@pqp/shared";
+import type { ForumConfigUpdate, ForumPostRemoved, ForumPostUpsert } from "@pqp/shared";
 
 /**
- * The two forum frames, from the one socket handler in `App.tsx` to whichever
- * forum pane is mounted. The transport holds a single message handler by
- * design, so App stays the only reader of the socket and hands these two on
- * with one line; the pane subscribes for as long as it is on screen.
+ * The forum frames (a post's row, its removal, the forum's tags and settings),
+ * from the one socket handler in `App.tsx` to whichever forum pane is
+ * mounted. The transport holds a single message handler by design, so App
+ * stays the only reader of the socket and hands these on with one line; the
+ * pane subscribes for as long as it is on screen.
  *
  * A frame for a forum nobody is looking at has no listener and is dropped,
  * which is correct: the list is read fresh when the forum is opened.
  */
 
-export type ForumFrame = ForumPostUpsert | ForumPostRemoved;
+export type ForumFrame = ForumPostUpsert | ForumPostRemoved | ForumConfigUpdate;
 
 const listeners = new Set<(frame: ForumFrame) => void>();
 

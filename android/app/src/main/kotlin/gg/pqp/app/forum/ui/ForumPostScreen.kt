@@ -76,6 +76,7 @@ import gg.pqp.app.core.Backend
 import gg.pqp.app.core.Message
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.forum.ForumLimits
+import gg.pqp.app.forum.ForumMarker
 import gg.pqp.app.forum.ForumNotice
 import gg.pqp.app.forum.ForumPostUiState
 import gg.pqp.app.forum.ForumPostViewModel
@@ -179,6 +180,7 @@ fun ForumPostScreen(
                             authorName = answer.authorName,
                             excerpt = answer.excerpt,
                             deleted = answer.deleted,
+                            marker = answer.marker(state.viewerId),
                             onJump = model::jumpToAnswer,
                         )
                     }
@@ -446,7 +448,13 @@ private fun ResolvedBadge() {
 
 /** The green "Solução" card under the question (UX §2.4 #25). */
 @Composable
-private fun SolutionCard(authorName: String?, excerpt: String?, deleted: Boolean, onJump: () -> Unit) {
+private fun SolutionCard(
+    authorName: String?,
+    excerpt: String?,
+    deleted: Boolean,
+    marker: ForumMarker?,
+    onJump: () -> Unit,
+) {
     val success = ForumColors.success()
     Column(
         Modifier
@@ -466,6 +474,21 @@ private fun SolutionCard(authorName: String?, excerpt: String?, deleted: Boolean
                 style = MaterialTheme.typography.labelSmall,
                 color = success,
             )
+            // "· marcada por {name}", as mock 02 draws it. Nobody named when
+            // the server does not know.
+            if (!deleted && marker != null) {
+                Text(
+                    text = "· " + when (marker) {
+                        ForumMarker.You -> stringResource(R.string.forum_solution_marked_by_you)
+                        is ForumMarker.Named -> stringResource(R.string.forum_solution_marked_by, marker.name)
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = success.copy(alpha = 0.8f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 6.dp).testTag("forum.solution.markedBy"),
+                )
+            }
         }
         Spacer(Modifier.height(Spacing.sm))
         if (deleted) {

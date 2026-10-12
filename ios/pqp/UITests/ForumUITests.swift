@@ -175,6 +175,46 @@ final class ForumUITests: XCTestCase {
         app.buttons["forum.composer.close"].tap()
     }
 
+    /// Staff change the forum's tags and settings while a composer is open:
+    /// the new tag shows up and "Exigir pelo menos uma tag" applies without
+    /// closing it (`forum-config-update`). Restores the forum's settings after.
+    func testTheOpenComposerFollowsTheForumsSettingsLive() throws {
+        let target = try findForum()
+        let app = launch()
+        openForum(target, in: app)
+        XCTAssertTrue(firstCard(app).waitForExistence(timeout: 10))
+        let newPost = app.descendants(matching: .any)["forum.newPost"].firstMatch
+        XCTAssertTrue(newPost.waitForExistence(timeout: 5))
+        newPost.tap()
+        let title = app.descendants(matching: .any)["forum.composer.title"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        // The keyboard's first-use sheet covers the screen on a fresh simulator.
+        if app.buttons["Continue"].waitForExistence(timeout: 2) { app.buttons["Continue"].tap() }
+        sleep(1)
+        shot(app, "forum-composer-live-before")
+
+        let before = (getJSON("/api/channels/\(target.forumId)/forum-tags") as? [String: Any])?["tags"] as? [[String: Any]] ?? []
+        func putBody(_ list: [[String: Any]]) -> [String: Any] {
+            ["tags": list.map { tag -> [String: Any] in
+                var one: [String: Any] = ["name": tag["name"] as? String ?? "", "moderated": tag["moderated"] as? Bool ?? false]
+                if let id = tag["id"] as? String { one["id"] = id }
+                return one
+            }]
+        }
+        var tags = before
+        tags.append(["name": "Novidade", "moderated": false])
+        send("PUT", "/api/channels/\(target.forumId)/forum-tags", body: putBody(tags))
+        send("PATCH", "/api/channels/\(target.forumId)/forum-settings", body: ["requireTag": true])
+        defer {
+            send("PATCH", "/api/channels/\(target.forumId)/forum-settings", body: ["requireTag": false])
+            send("PUT", "/api/channels/\(target.forumId)/forum-tags", body: putBody(before))
+        }
+        let fresh = app.descendants(matching: .any)["Novidade"].firstMatch
+        XCTAssertTrue(fresh.waitForExistence(timeout: 8), "the new tag appears in the open composer")
+        shot(app, "forum-composer-live-after")
+        app.buttons["forum.composer.close"].tap()
+    }
+
     /// The post with an accepted answer: the Solução card under the question.
     func testAResolvedPostShowsItsSolution() throws {
         let target = try findForum()
