@@ -730,7 +730,12 @@ export const ChannelList = memo(function ChannelList({
     },
     [],
   );
-  const hideEmptyTopLevel = !canManage && categories.length > 0 && !draggedId;
+  // Only a pinned channel being dragged needs the empty headers back (they
+  // are the drop that unpins it). It is dragged out of Pinados, which sits
+  // above them, so the row in the hand never moves when they appear.
+  const draggingPinned = draggedId != null && favoriteIdSet.has(draggedId);
+  const hideEmptyTopLevel =
+    !canManage && categories.length > 0 && !draggingPinned;
   const openProfile = useProfilePopover();
   const memberById = useMemo(() => {
     const map = new Map<string, ServerMember>();
@@ -2451,8 +2456,9 @@ export const ChannelList = memo(function ChannelList({
             {/* An empty "Texto" or "Voz" header is noise for a member when
                 every channel sits in a category, which is what a Discord
                 import produces. Managers keep both: their + buttons are the
-                only way to create a channel. A drag shows them again, because
-                the header is also the drop zone that unfavorites a channel. */}
+                only way to create a channel. Dragging a pinned channel shows
+                them again, because the header is also the drop zone that
+                unpins it. */}
             {(topLevelText.length > 0 || !hideEmptyTopLevel) && (
             <ChannelSection
               label={t("chrome.text")}
