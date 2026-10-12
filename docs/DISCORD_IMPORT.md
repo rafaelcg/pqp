@@ -96,11 +96,16 @@ channel private.
 
 pqp sibling groups, matching `moveChannel`:
 
-- Top-level text, top-level voice, and categories: three separate `0..n-1`
-  sequences (`parent_id IS NULL` plus `type`)
-- Inside a category: text and voice share one mixed sequence
+- Categories: one `0..n-1` sequence
+- Channels in no category: one mixed sequence for every type, in Discord's
+  sidebar order (text and forums first, then voice, each by Discord's position)
+- Inside a category: every type shares one mixed sequence
 
 Discord's global `position` is not copied as-is.
+
+With `mixed_channel_list` on for the whole instance, an import is recorded in
+`channel_layout_migrations` as already in shape, so its loose channels stay
+loose (what Discord shows) instead of being folded into "Canais" by the job.
 
 ## Roles
 

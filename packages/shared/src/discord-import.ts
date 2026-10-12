@@ -921,10 +921,14 @@ export function mapGuildTemplate(
     nestedByParent.set(row.parentTemplateId!, list);
   }
 
+  // Loose channels are one sequence in pqp (any type, one order per parent),
+  // in the order Discord draws them: text and forums first, then voice, each
+  // by Discord's own position.
   const channels: MappedImportChannel[] = [
     ...renumberGroup(categories),
-    ...renumberGroup(topText),
-    ...renumberGroup(topVoice),
+    ...[...sortByDiscordPosition(topText), ...sortByDiscordPosition(topVoice)].map(
+      (row, index) => ({ ...row, position: index }),
+    ),
   ];
   for (const group of nestedByParent.values()) {
     channels.push(...renumberGroup(group));

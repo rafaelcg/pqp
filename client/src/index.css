@@ -3060,3 +3060,311 @@ html[data-immersive-stage] [data-immersive-hide] {
 :root[data-theme="light"] [data-stream-name] {
   --stream-name: oklch(0.52 0.16 var(--stream-name-hue, 200));
 }
+
+/*
+ * STORIES. Rings, the viewer and the composer preview (components/stories/).
+ *
+ * Story content is a photograph's world, not the app's: a text card, the
+ * viewer's chrome and the scrims over a picture look the same in light and
+ * dark, the way a photo does. So these are their own tokens, white on the
+ * dark card surfaces, and only the ring follows the theme (it sits on the
+ * sidebar). Every text background is chosen for at least 4.5:1 with white.
+ *
+ * The ring is accent into warning, never solid accent: solid lime already
+ * means "speaking" and "in a call".
+ */
+:root {
+  --story-ring: conic-gradient(
+    from 210deg,
+    var(--color-accent),
+    var(--color-warning),
+    var(--color-accent)
+  );
+  --story-ring-seen: var(--color-border-strong);
+  --story-on-media: oklch(1 0 0);
+  --story-on-media-2: oklch(1 0 0 / 0.74);
+  --story-track: oklch(1 0 0 / 0.3);
+  --story-hairline: oklch(1 0 0 / 0.16);
+  --story-field-edge: oklch(1 0 0 / 0.36);
+  --story-field-fill: oklch(1 0 0 / 0.08);
+  --story-card: oklch(0.13 0.01 250);
+  --story-backdrop: oklch(0.1 0.012 250 / 0.94);
+  --story-scrim: linear-gradient(
+    180deg,
+    oklch(0 0 0 / 0.55) 0%,
+    oklch(0 0 0 / 0) 22%,
+    oklch(0 0 0 / 0) 68%,
+    oklch(0 0 0 / 0.6) 100%
+  );
+  --story-dim: oklch(0 0 0 / 0.4);
+  --story-tray: oklch(0.19 0.014 250 / 0.985);
+  --story-sticker: oklch(0.17 0.03 132 / 0.95);
+  --story-sticker-edge: oklch(0.88 0.19 125 / 0.34);
+  --story-shadow: 0 18px 40px oklch(0 0 0 / 0.55);
+  --story-hatch: repeating-linear-gradient(
+    135deg,
+    var(--color-surface-2) 0 6px,
+    var(--color-surface-1) 6px 12px
+  );
+  /* The close curve: accelerating, the opposite of emphasized. */
+  --story-ease-exit: cubic-bezier(0.3, 0, 1, 1);
+
+  --story-bg-lime: radial-gradient(80% 50% at 20% 0%, oklch(0.55 0.14 128 / 0.75) 0%, oklch(0.55 0.14 128 / 0) 70%),
+    linear-gradient(170deg, oklch(0.36 0.09 130) 0%, oklch(0.2 0.04 135) 100%);
+  --story-bg-night: radial-gradient(60% 40% at 80% 10%, oklch(0.6 0.16 265 / 0.45) 0%, oklch(0.6 0.16 265 / 0) 70%),
+    linear-gradient(180deg, oklch(0.27 0.09 265) 0%, oklch(0.16 0.04 265) 100%);
+  --story-bg-ember: radial-gradient(70% 45% at 50% 30%, oklch(0.58 0.2 25 / 0.6) 0%, oklch(0.58 0.2 25 / 0) 70%),
+    linear-gradient(170deg, oklch(0.36 0.12 28) 0%, oklch(0.18 0.05 20) 100%);
+  --story-bg-grape: radial-gradient(60% 50% at 70% 20%, oklch(0.62 0.17 300 / 0.6) 0%, oklch(0.62 0.17 300 / 0) 70%),
+    linear-gradient(160deg, oklch(0.42 0.18 295) 0%, oklch(0.2 0.08 295) 100%);
+  --story-bg-sand: radial-gradient(60% 45% at 30% 20%, oklch(0.7 0.12 75 / 0.45) 0%, oklch(0.7 0.12 75 / 0) 70%),
+    linear-gradient(170deg, oklch(0.42 0.08 65) 0%, oklch(0.22 0.04 55) 100%);
+  --story-bg-ink: radial-gradient(70% 50% at 50% 0%, oklch(0.4 0.02 250 / 0.5) 0%, oklch(0.4 0.02 250 / 0) 70%),
+    linear-gradient(180deg, oklch(0.2 0.012 250) 0%, oklch(0.11 0.01 250) 100%);
+}
+
+/* A ring: a gradient layer and a seen layer, crossfaded (never animate the
+   conic gradient itself), a gap circle that scales to set the ring's width,
+   and the face. `--story-gap-unseen` / `--story-gap-seen` are scales set by
+   the component from the ring's size, so the width change is a transform. */
+.story-ring {
+  position: relative;
+  display: block;
+  flex: none;
+  border-radius: 999px;
+}
+.story-ring > [data-ring-layer] {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+}
+.story-ring > [data-ring-layer="grad"] {
+  background: var(--story-ring);
+  transition: opacity var(--duration-slow) var(--ease-standard);
+}
+.story-ring > [data-ring-layer="seen"] {
+  background: var(--story-ring-seen);
+  opacity: 0;
+  transition: opacity var(--duration-slow) var(--ease-standard);
+}
+.story-ring > [data-ring-layer="gap"] {
+  background: var(--story-ring-bg, var(--color-surface-1));
+  transform: scale(var(--story-gap-unseen, 0.9));
+  transition: transform var(--duration-slow) var(--ease-standard);
+}
+.story-ring[data-ring="seen"] > [data-ring-layer="grad"] {
+  opacity: 0;
+}
+.story-ring[data-ring="seen"] > [data-ring-layer="seen"] {
+  opacity: 1;
+}
+.story-ring[data-ring="seen"] > [data-ring-layer="gap"] {
+  transform: scale(var(--story-gap-seen, 0.94));
+}
+.story-ring[data-ring="none"] > [data-ring-layer] {
+  opacity: 0;
+}
+.story-ring[data-ring="none"] > [data-ring-layer="gap"] {
+  transform: none;
+}
+.story-ring-label {
+  transition: color var(--duration-slow) var(--ease-standard);
+}
+
+@keyframes story-ring-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes story-ring-sweep {
+  from {
+    transform: rotate(-200deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+.story-ring-in {
+  animation: story-ring-in var(--duration-slow) var(--ease-emphasized) both;
+}
+.story-ring-in > [data-ring-layer="grad"] {
+  animation: story-ring-sweep 900ms var(--ease-emphasized) both;
+}
+@keyframes story-upload-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.story-upload-processing {
+  animation: story-upload-spin 1.4s linear infinite;
+  transform-origin: center;
+}
+
+/* The viewer. */
+.story-text-card[data-bg="lime"] {
+  background: var(--story-bg-lime);
+}
+.story-text-card[data-bg="night"] {
+  background: var(--story-bg-night);
+}
+.story-text-card[data-bg="ember"] {
+  background: var(--story-bg-ember);
+}
+.story-text-card[data-bg="grape"] {
+  background: var(--story-bg-grape);
+}
+.story-text-card[data-bg="sand"] {
+  background: var(--story-bg-sand);
+}
+.story-text-card[data-bg="ink"] {
+  background: var(--story-bg-ink);
+}
+
+/* Hold to pause: the chrome leaves after 250 ms in 200 ms, returns in 150. */
+.story-chrome {
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+[data-story-held="true"] .story-chrome {
+  opacity: 0;
+  transition: opacity var(--duration-base) var(--ease-standard) 250ms;
+}
+
+@keyframes story-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes story-tray-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes story-react-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes story-react-fly {
+  0% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-150px) scale(1.8);
+  }
+}
+@keyframes story-pill {
+  0% {
+    opacity: 0;
+  }
+  12%,
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.story-media-in {
+  animation: story-fade-in 100ms linear both;
+}
+.story-tray-up {
+  animation: story-tray-up var(--duration-base) var(--ease-emphasized) both;
+}
+.story-react-pop {
+  animation: story-react-pop var(--duration-base) var(--ease-emphasized) both;
+  animation-delay: calc(var(--i, 0) * 30ms);
+}
+.story-react-fly {
+  animation: story-react-fly 600ms var(--ease-emphasized) forwards;
+  pointer-events: none;
+}
+.story-pill {
+  animation: story-pill 1.2s var(--ease-standard) both;
+}
+.story-dim {
+  background: var(--story-dim);
+  animation: story-fade-in var(--duration-base) var(--ease-standard) both;
+}
+.story-backdrop-in {
+  animation: story-fade-in var(--duration-base) var(--ease-standard) both;
+}
+
+/* Own story: the viewers sheet rises inside the card and the story shrinks
+   above it. Transform and opacity only. */
+.story-stage {
+  transform-origin: 50% 0%;
+  transition: transform var(--duration-slow) var(--ease-emphasized);
+}
+[data-story-sheet="open"] .story-stage {
+  transform: translateY(4%) scale(0.62);
+}
+.story-sheet {
+  transform: translateY(100%);
+  transition: transform var(--duration-slow) var(--ease-emphasized);
+}
+[data-story-sheet="open"] .story-sheet {
+  transform: none;
+}
+
+/*
+ * Reduced motion: no zoom, no deck, no flying emoji, no sweep, no shrinking
+ * story. Fades stay (opacity is not motion), and so do the progress bars,
+ * which are information, not decoration.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .story-ring-in {
+    animation: story-fade-in var(--duration-fast) linear both;
+  }
+  .story-ring-in > [data-ring-layer="grad"],
+  .story-upload-processing,
+  .story-react-fly {
+    animation: none;
+  }
+  .story-ring > [data-ring-layer="gap"] {
+    transition: none;
+  }
+  .story-tray-up,
+  .story-react-pop {
+    animation: story-fade-in var(--duration-base) linear both;
+    animation-delay: 0ms;
+  }
+  [data-story-held="true"] .story-chrome {
+    opacity: 1;
+  }
+  .story-stage,
+  [data-story-sheet="open"] .story-stage {
+    transform: none;
+    transition: none;
+  }
+  .story-sheet,
+  [data-story-sheet="open"] .story-sheet {
+    transform: none;
+  }
+  .story-sheet {
+    opacity: 0;
+    transition: opacity var(--duration-fast) linear;
+  }
+  [data-story-sheet="open"] .story-sheet {
+    opacity: 1;
+  }
+}

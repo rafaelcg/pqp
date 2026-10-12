@@ -1177,15 +1177,15 @@ CREATE INDEX IF NOT EXISTS idx_channels_server
 -- ON DELETE SET NULL, not CASCADE: deleting a category must not delete every
 -- channel that was ever inside it, only uncategorize them.
 --
--- `position` is scoped by (parent_id, type) at the top level rather than by
--- parent_id alone: the sidebar renders top-level text, top-level voice and
--- categories as three separate lists, not one interleaved one, so `type` has
--- to be part of a top-level sibling group or reordering one list would
--- silently perturb the position numbers of a completely different one. Inside
--- a real category the group is not type-scoped — text and voice channels mix
--- together there, matching how the sidebar nests them under one heading. See
--- the comment on `moveChannel` in services/servers.ts for where this is
--- actually enforced.
+-- `position` is a contiguous 0..n-1 per sibling group, and there are exactly
+-- two kinds of group: the categories of a server (one sequence), and the
+-- channels of one parent, where the parent is a category or nothing at all
+-- ("loose", above the first category). Types mix inside every channel group.
+-- Until 2026-10 the loose group was split by type (text, voice, watch party
+-- each numbered apart); `channel_top_level_unify_2026_10` below renumbered it
+-- into one sequence in the old visual order, so a client that still filters
+-- by type and sorts by position reads the same order it always did. See
+-- `positionGroupTypes` in services/servers.ts and services/channel-layout.ts.
 ALTER TABLE channels ADD COLUMN IF NOT EXISTS parent_id UUID
   REFERENCES channels(id) ON DELETE SET NULL;
 
@@ -6068,3 +6068,55 @@ BEGIN
 
   INSERT INTO data_migrations (name) VALUES ('post_stories_bit_2026_10');
 END $$;
+
+-- THE CHANNEL LIST, ONE ORDER PER PARENT (services/channel-layout.ts).
+--
+-- Step 0, once per database: the loose channels of every server (no category,
+-- not a category, not a thread) were numbered per type. Renumber them into one
+-- sequence in the order the web drew them: text and forums, then voice, then
+-- watch party, each by its old position. A client that filters by type and
+-- sorts by position reads exactly what it read before; every later write
+-- (create, move, delete, the full-order PUT) keeps the one sequence.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'channel_top_level_unify_2026_10'
+  ) THEN
+    WITH ranked AS (
+      SELECT id,
+             ROW_NUMBER() OVER (
+               PARTITION BY server_id
+               ORDER BY CASE WHEN type IN ('text', 'forum') THEN 0
+                             WHEN type = 'voice' THEN 1 ELSE 2 END,
+                        position, created_at, id
+             ) - 1 AS pos
+        FROM channels
+       WHERE kind = 'server' AND server_id IS NOT NULL AND parent_id IS NULL
+         AND type NOT IN ('category', 'thread')
+    )
+    UPDATE channels c SET position = r.pos
+      FROM ranked r
+     WHERE c.id = r.id AND c.position IS DISTINCT FROM r.pos;
+    INSERT INTO data_migrations (name) VALUES ('channel_top_level_unify_2026_10');
+  END IF;
+END $$;
+
+-- Bumped by every write that changes the shape of a server's channel list
+-- (create, delete, move, a category rename, the full-order PUT, a migration),
+-- so a drag made against an old list is refused with 409 instead of undoing
+-- somebody else's change.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS channel_layout_version INTEGER NOT NULL DEFAULT 0;
+
+-- One row per server whose channel list moved to the mixed layout (or was
+-- found already in it: `category_id` NULL is a recorded no-op). The row is
+-- what makes the migration idempotent, and `snapshot` ([{id, parent_id,
+-- position}] of every sidebar row before the move) is what the operator's
+-- revert restores. A reverted row stays, with `reverted_at`, so the job never
+-- migrates that server again on its own.
+CREATE TABLE IF NOT EXISTS channel_layout_migrations (
+  server_id   UUID PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  category_id UUID REFERENCES channels(id) ON DELETE SET NULL,
+  snapshot    JSONB NOT NULL DEFAULT '[]'::jsonb,
+  migrated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  reverted_at TIMESTAMPTZ
+);
