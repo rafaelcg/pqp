@@ -181,23 +181,28 @@ class ChannelListRulesTest {
     }
 
     @Test
-    fun `sections keep the three position groups apart and draw only text and voice`() {
+    fun `sections keep the three position groups apart and draw text, forums and voice`() {
         val all = listOf(
             ch("cat", "category", pos = 0.0),
             ch("geral", "text", parent = "cat", pos = 1.0),
             ch("avisos", "text", parent = "cat", pos = 0.0),
             ch("lobby", "voice", parent = "cat", pos = 0.0),
             ch("party", "watch_party", parent = "cat"),
-            ch("forum", "forum", parent = "cat"),
+            ch("ajuda", "forum", parent = "cat", pos = 2.0),
+            ch("mystery", "something-new", parent = "cat"),
             ch("top", "text"),
+            ch("top-forum", "forum", pos = 1.0),
         )
         val sections = sectionsOf(all)
         assertEquals(listOf("text", "cat-cat-text", "cat-cat-voice"), sections.map { it.key })
-        assertEquals(listOf("avisos", "geral"), sections[1].channels.map { it.id })
+        assertEquals(listOf("top", "top-forum"), sections[0].channels.map { it.id })
+        // A forum shares the text channels' position sequence (the server
+        // groups the two), so it sorts among them.
+        assertEquals(listOf("avisos", "geral", "ajuda"), sections[1].channels.map { it.id })
         assertEquals(listOf("lobby"), sections[2].channels.map { it.id })
         assertEquals(null, sections[0].categoryId)
         assertEquals(
-            listOf("avisos", "geral", "lobby"),
+            listOf("avisos", "geral", "ajuda", "lobby"),
             channelsInCategory(sections, "cat").map { it.id },
         )
     }

@@ -106,9 +106,10 @@
                  supported links" for it in system settings. The file lives at
                  client/public/.well-known/assetlinks.json.
 
-                 Only the invite path is claimed, on purpose. Claiming `/app`
-                 would swallow every pqp.gg link a person taps into an app that
-                 has no screen for most of them yet. -->
+                 Only the invite path (and, below, a forum post's link) is
+                 claimed, on purpose. Claiming `/app` would swallow every
+                 pqp.gg link a person taps into an app that has no screen for
+                 most of them yet. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -116,6 +117,17 @@
                 <data android:scheme="https" />
                 <data android:host="pqp.gg" />
                 <data android:pathPrefix="/app/invite/" />
+            </intent-filter>
+            <!-- A forum post's own link ("Copiar link" on every client):
+                 /app/server/<sid>/channel/<forumId>/post/<postId>. The one
+                 other pqp.gg path this app has a screen for. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="pqp.gg" />
+                <data android:pathPattern="/app/server/.*/channel/.*/post/.*" />
             </intent-filter>
         </activity>
 

@@ -89,9 +89,9 @@ enum class MessageRejectReason(val wire: String) {
      */
     DatabaseUnavailable("database-unavailable"),
     /**
-     * A reply in a forum post that staff closed. Android draws no forum yet
-     * (posts arrive with forum PR 7), so today this only gives the line its
-     * own sentence instead of "failed to send".
+     * A reply in a forum post that staff closed. The post screen already
+     * swaps the composer for the closed bar when it knows, so this is the
+     * race: a post locked between the last frame and the send.
      */
     Locked("locked"),
     ;
@@ -242,6 +242,13 @@ class ChatViewModel(
      * captured, because it changes for the whole life of this object.
      */
     private val callActive: () -> Boolean = { false },
+    /**
+     * Set for a forum post: the forum, which keeps the socket's primary slot
+     * so its list stays live, while this channel (the post) rides the
+     * secondary `thread-join` slot. Null for every other chat, which takes the
+     * primary slot exactly as before.
+     */
+    private val primaryChannelId: String? = null,
 ) : ViewModel() {
 
     private val attachmentApi = AttachmentApi(session.api)
@@ -904,7 +911,43 @@ class ChatViewModel(
                         ?: failure::class.java.simpleName,
                 )
             }
-        session.realtime.joinChannel(channelId)
+        subscribe()
+    }
+
+    /** Take this chat's slot on the socket: the primary one, or the thread slot under [primaryChannelId]. */
+    private fun subscribe() {
+        val primary = primaryChannelId
+        if (primary == null) {
+            session.realtime.joinChannel(channelId)
+        } else {
+            session.realtime.joinChannel(primary)
+            session.realtime.joinThread(channelId)
+        }
+    }
+
+    /**
+     * One older page, awaited, for a caller that has to land somewhere above
+     * the newest page (a forum post opens on its question). Answers how many
+     * messages it added; 0 at the start of history or on a failure.
+     */
+    suspend fun loadOlderNow(): Int {
+        val current = _state.value
+        if (current.loadingOlder || !current.hasMore) return 0
+        val oldest = current.messages.firstOrNull()?.id ?: return 0
+        _state.value = current.copy(loadingOlder = true)
+        val page = runCatching { session.api.messages(channelId, before = oldest) }.getOrNull()
+        if (page == null) {
+            _state.value = _state.value.copy(loadingOlder = false)
+            return 0
+        }
+        val known = _state.value.messages.map { it.id }.toSet()
+        val fresh = page.messages.filterNot { it.id in known }
+        _state.value = _state.value.copy(
+            messages = fresh + _state.value.messages,
+            hasMore = page.hasMore,
+            loadingOlder = false,
+        )
+        return fresh.size
     }
 
     fun loadOlder() {
@@ -937,7 +980,7 @@ class ChatViewModel(
     private suspend fun followConnection() {
         session.realtime.state.collect { state ->
             if (state == RealtimeState.Ready) {
-                session.realtime.joinChannel(channelId)
+                subscribe()
                 catchUp()
             }
         }
@@ -1406,7 +1449,13 @@ class ChatViewModel(
         dropDiscarded()
         // Named, because there is more than one chat surface now and the
         // subscription is one per connection. See RealtimeClient.leaveChannel.
-        session.realtime.leaveChannel(channelId)
+        // A forum post leaves only its thread slot: the forum's list, still
+        // on the back stack, owns the primary one.
+        if (primaryChannelId == null) {
+            session.realtime.leaveChannel(channelId)
+        } else {
+            session.realtime.leaveThread(channelId)
+        }
     }
 
     /**
@@ -1419,7 +1468,7 @@ class ChatViewModel(
      * connected and receives nothing.
      */
     fun resubscribe() {
-        session.realtime.joinChannel(channelId)
+        subscribe()
     }
 
     private fun JsonObject.string(key: String): String? =
@@ -1478,10 +1527,20 @@ class ChatViewModel(
             serverId: String? = null,
             recorder: NoteRecorder? = null,
             callActive: () -> Boolean = { false },
+            primaryChannelId: String? = null,
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                ChatViewModel(session, channelId, files, slowmodeSeconds, serverId, recorder, callActive) as T
+                ChatViewModel(
+                    session,
+                    channelId,
+                    files,
+                    slowmodeSeconds,
+                    serverId,
+                    recorder,
+                    callActive,
+                    primaryChannelId,
+                ) as T
         }
     }
 }

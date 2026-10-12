@@ -57,7 +57,9 @@ import gg.pqp.app.onboarding.shouldRunOnboarding
 import gg.pqp.app.onboarding.ui.ArrivalBanner
 import gg.pqp.app.onboarding.ui.OnboardingFlow
 import gg.pqp.app.push.PushController
-import gg.pqp.app.push.pushOpensChat
+import gg.pqp.app.push.ChannelPushRoute
+import gg.pqp.app.push.channelPushRoute
+import gg.pqp.app.forum.forumPost
 import gg.pqp.app.push.PushPrompt
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.social.ui.ConversationRoute
@@ -150,6 +152,60 @@ import kotlinx.serialization.Serializable
 
 /** Conversas phone tabs: Friends is opened from the Conversas header, not a tab. */
 @Serializable object FriendsRoute
+/**
+ * A forum's list. [guidelines] is the channel's topic, which is the forum's
+ * "Regras do fórum"; a notification tap that knows only ids leaves it null and
+ * the row simply is not drawn.
+ */
+@Serializable data class ForumRoute(
+    val serverId: String,
+    val forumId: String,
+    val forumName: String = "",
+    val serverName: String = "",
+    val guidelines: String? = null,
+)
+
+/** One post of a forum, full screen. Its channel is the post's own id. */
+@Serializable data class ForumPostRoute(
+    val serverId: String,
+    val forumId: String,
+    val postId: String,
+    val forumName: String = "",
+)
+
+/** "Novo post". [title] fills the field when it comes from an empty search ("Postar …"). */
+@Serializable data class ForumComposerRoute(
+    val serverId: String,
+    val forumId: String,
+    val title: String? = null,
+    val forumName: String = "",
+)
+
+/**
+ * Where a channel row goes: a forum to its list, anything else to its chat.
+ * One function so the channel list, a `#channel` in a Baú post and the
+ * arrival banner cannot disagree about it.
+ */
+internal fun androidx.navigation.NavHostController.openChannel(
+    channel: gg.pqp.app.core.Channel,
+    serverId: String,
+    serverName: String,
+) {
+    if (channel.isForum) {
+        navigate(ForumRoute(serverId, channel.id, channel.name, serverName, channel.topic))
+        return
+    }
+    navigate(
+        ChatRoute(
+            channel.id,
+            channel.name,
+            channel.slowmodeSeconds,
+            serverId = serverId,
+            isVoiceChannel = channel.isVoice,
+            isWatchParty = channel.type == "watch_party",
+        ),
+    )
+}
 
 @Composable
 fun PqpApp(
@@ -450,16 +506,7 @@ private fun SignedInNav(
                         serverName = route.serverName,
                         onBack = nav::popBackStack,
                         onOpenChannel = { channel ->
-                            nav.navigate(
-                                ChatRoute(
-                                    channel.id,
-                                    channel.name,
-                                    channel.slowmodeSeconds,
-                                    serverId = route.serverId,
-                                    isVoiceChannel = channel.isVoice,
-                                    isWatchParty = channel.type == "watch_party",
-                                ),
-                            )
+                            nav.openChannel(channel, route.serverId, route.serverName)
                         },
                         onOpenBau = {
                             nav.navigate(BauRoute(route.serverId, route.serverName))
@@ -478,16 +525,59 @@ private fun SignedInNav(
                         // A `#channel` in a post opens that channel, the same way
                         // the channel list does.
                         onOpenChannel = { channel ->
-                            nav.navigate(
-                                ChatRoute(
-                                    channel.id,
-                                    channel.name,
-                                    channel.slowmodeSeconds,
-                                    serverId = route.serverId,
-                                    isVoiceChannel = channel.isVoice,
-                                    isWatchParty = channel.type == "watch_party",
-                                ),
-                            )
+                            nav.openChannel(channel, route.serverId, route.serverName)
+                        },
+                    )
+                }
+                composable<ForumRoute> { entry ->
+                    val route = entry.toRoute<ForumRoute>()
+                    gg.pqp.app.forum.ui.ForumScreen(
+                        session = session,
+                        serverId = route.serverId,
+                        serverName = route.serverName.ifEmpty {
+                            session.servers.value.firstOrNull { it.id == route.serverId }?.name.orEmpty()
+                        },
+                        forumId = route.forumId,
+                        forumName = route.forumName,
+                        guidelines = route.guidelines,
+                        onBack = nav::popBackStack,
+                        onOpenPost = { post ->
+                            nav.navigate(ForumPostRoute(route.serverId, route.forumId, post.id, route.forumName))
+                        },
+                        onCompose = { title ->
+                            nav.navigate(ForumComposerRoute(route.serverId, route.forumId, title, route.forumName))
+                        },
+                    )
+                }
+                composable<ForumPostRoute> { entry ->
+                    val route = entry.toRoute<ForumPostRoute>()
+                    gg.pqp.app.forum.ui.ForumPostScreen(
+                        session = session,
+                        serverId = route.serverId,
+                        forumId = route.forumId,
+                        forumName = route.forumName,
+                        postId = route.postId,
+                        onBack = nav::popBackStack,
+                    )
+                }
+                composable<ForumComposerRoute> { entry ->
+                    val route = entry.toRoute<ForumComposerRoute>()
+                    val forumName = route.forumName
+                    gg.pqp.app.forum.ui.ForumComposerScreen(
+                        session = session,
+                        serverId = route.serverId,
+                        forumId = route.forumId,
+                        initialTitle = route.title,
+                        onClose = nav::popBackStack,
+                        onOpenPost = { post ->
+                            nav.navigate(ForumPostRoute(route.serverId, route.forumId, post.id, forumName))
+                        },
+                        onPublished = { post ->
+                            // The new post takes the composer's place, so back
+                            // from it lands on the list, not on an empty form.
+                            nav.navigate(ForumPostRoute(route.serverId, route.forumId, post.id, forumName)) {
+                                popUpTo<ForumComposerRoute> { inclusive = true }
+                            }
                         },
                     )
                 }
@@ -767,16 +857,7 @@ private fun SignedInNav(
                     landing = landing,
                     onOpenChannel = { channel ->
                         arrival = null
-                        nav.navigate(
-                            ChatRoute(
-                                channel.id,
-                                channel.name,
-                                channel.slowmodeSeconds,
-                                serverId = landing.serverId,
-                                isVoiceChannel = channel.isVoice,
-                                isWatchParty = channel.type == "watch_party",
-                            ),
-                        )
+                        nav.openChannel(channel, landing.serverId, landing.serverName)
                     },
                     onDismiss = { arrival = null },
                 )
@@ -822,22 +903,48 @@ private suspend fun navigateToPush(
             // watch party pane, and a tap on a notification about a live party
             // is exactly the way somebody arrives at one: landing there with no
             // player would be the one route where the feature is missing.
-            val channel = runCatching { session.api.channels(target.serverId) }
-                .getOrNull()
-                ?.firstOrNull { it.id == target.channelId }
-            // A row this build cannot render (a forum, say) stays on the list
-            // rather than opening an empty chat. A miss (null) still opens: a
-            // thread is not in the channel list at all.
-            if (!pushOpensChat(channel)) return
-            nav.navigate(
-                ChatRoute(
-                    target.channelId,
-                    channel?.name.orEmpty(),
-                    serverId = target.serverId,
-                    isVoiceChannel = channel?.isVoice == true,
-                    isWatchParty = channel?.type == "watch_party",
-                ),
-            )
+            val channels = runCatching { session.api.channels(target.serverId) }.getOrNull()
+            val channel = channels?.firstOrNull { it.id == target.channelId }
+            // A forum opens its list. An id that is not in the list is a
+            // thread or a forum POST (a reply or a mention in one), and only
+            // the server knows which: a post opens on the forum with the post
+            // on top, so back goes to the list; a thread opens its chat as it
+            // always did. A type this build cannot draw stays on the list.
+            val route = channelPushRoute(channel, channels) {
+                runCatching { session.api.forumPost(target.channelId).post.forumId }.getOrNull()
+            }
+            when (route) {
+                ChannelPushRoute.Stay -> return
+                ChannelPushRoute.Forum -> nav.openChannel(channel!!, target.serverId, serverName(target.serverId))
+                is ChannelPushRoute.Post -> {
+                    val forum = channels?.firstOrNull { it.id == route.forumId }
+                    nav.navigate(
+                        ForumRoute(target.serverId, route.forumId, route.forumName, serverName(target.serverId), forum?.topic),
+                    )
+                    nav.navigate(ForumPostRoute(target.serverId, route.forumId, target.channelId, route.forumName))
+                }
+                ChannelPushRoute.Chat -> nav.navigate(
+                    ChatRoute(
+                        target.channelId,
+                        channel?.name.orEmpty(),
+                        serverId = target.serverId,
+                        isVoiceChannel = channel?.isVoice == true,
+                        isWatchParty = channel?.type == "watch_party",
+                    ),
+                )
+            }
+        }
+
+        // A post's own link (`Copiar link` on any client). The forum first,
+        // so back lands on its list; the post screen says so itself when the
+        // post is gone or was never visible.
+        is DeepLinkTarget.ForumPost -> {
+            val name = serverName(target.serverId)
+            nav.navigate(ChannelsRoute(target.serverId, name))
+            val forum = runCatching { session.api.channels(target.serverId) }.getOrNull()
+                ?.firstOrNull { it.id == target.forumId }
+            nav.navigate(ForumRoute(target.serverId, target.forumId, forum?.name.orEmpty(), name, forum?.topic))
+            nav.navigate(ForumPostRoute(target.serverId, target.forumId, target.postId, forum?.name.orEmpty()))
         }
 
         is DeepLinkTarget.Server ->

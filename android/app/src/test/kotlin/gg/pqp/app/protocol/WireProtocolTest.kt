@@ -213,6 +213,12 @@ class WireProtocolTest {
             "voice-join-refused",
             // the Baú's one live frame
             "community-home-update",
+            // The forum list's two frames. Losing either leaves the list
+            // frozen (no new posts, no bumps) or showing a deleted post that
+            // 404s on tap; the post screen also reads both (a lock or resolve
+            // by staff, and the removed state).
+            "forum-post-upsert",
+            "forum-post-removed",
             // handshake
             "ready",
         )
@@ -309,12 +315,6 @@ class WireProtocolTest {
         // send in the lost server is already refused by the API, so nothing
         // leaks; the live drop and its one-line reason are a follow-up.
         "server-removed" to "server list is re-read on open and the API already refuses the lost server; live drop is a follow-up",
-        // Forum channels (packages/shared/src/forums.ts). The channel list
-        // shows only text and voice, so a forum never reaches a screen that
-        // could hold its list; these two keep that list live, and move out of
-        // here when Android draws forums (forum PR 7).
-        "forum-post-upsert" to "no forum list on the phone yet; the channel list hides forums",
-        "forum-post-removed" to "no forum list on the phone yet; the channel list hides forums",
         // Chamar a atenção's refusal, addressed only to the socket that sent a
         // `nudge` frame. The phone sends none yet, so it can never be refused;
         // a nudge somebody else sends arrives as an ordinary message whose
