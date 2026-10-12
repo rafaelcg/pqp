@@ -935,4 +935,17 @@
     <string name="forum_composer_attach">Anexar arquivo</string>
     <string name="forum_composer_attach_image">Adicionar foto ou vídeo</string>
     <string name="forum_composer_remove_file">Tirar arquivo</string>
+
+    <!-- Chamar a atenção, atrás de GET /api/fun/config. -->
+    <string name="nudge_action">Chamar a atenção</string>
+    <string name="nudge_action_cooldown">Chamar a atenção de novo em %1$d s</string>
+    <string name="nudge_sent">Tu chamou a atenção de %1$s.</string>
+    <string name="nudge_received">%1$s chamou tua atenção!</string>
+    <string name="nudge_refused_cooldown">Calma! Espera uns segundinhos pra chamar a atenção de novo.</string>
+    <string name="nudge_refused_unanswered">%1$s ainda não respondeu. Manda uma mensagem.</string>
+    <string name="nudge_refused_busy">%1$s tá ocupado agora. Manda uma mensagem.</string>
+    <string name="nudge_refused_self_off">Tu desligou o chamar a atenção. Liga de novo na tua conta.</string>
+    <string name="nudge_refused_unavailable">Não deu pra chamar a atenção agora.</string>
+    <string name="nudge_allow">Deixar me chamarem a atenção</string>
+    <string name="nudge_allow_hint">Desligado, ninguém te chacoalha e tu também não chacoalha ninguém.</string>
 </resources>

@@ -169,6 +169,11 @@ fun YouScreen(
             PushSettingsSection(
                 Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
             )
+            // Chamar a atenção's opt-out, only while the flag is on.
+            gg.pqp.app.nudge.ui.NudgeSettingsRow(
+                session = session,
+                modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
+            )
 
             // Voice. One row for now: the check that tells "fica conectando"
             // apart from a refused session, a blocked socket and a network

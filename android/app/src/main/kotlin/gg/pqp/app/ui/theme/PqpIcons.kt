@@ -177,6 +177,10 @@ private object Lucide {
         "m9 12 2 2 4-4",
     )
 
+    val zap by lucide(
+        "M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z",
+    )
+
     val archive by lucide(
         "M3 3h18a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z",
         "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8",
@@ -596,6 +600,9 @@ object PqpIcons {
 
     /** Place or answer a conversation call. */
     val Call get() = Lucide.phone
+
+    /** Chamar a atenção: the bolt, the same glyph as the web header button. */
+    val Nudge get() = Lucide.zap
     val ShareScreen get() = Lucide.screenShare
     val StopSharing get() = Lucide.screenShareOff
     val EnterFullscreen get() = Lucide.maximize

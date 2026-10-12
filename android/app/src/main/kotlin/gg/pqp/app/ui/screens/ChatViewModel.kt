@@ -199,6 +199,10 @@ data class ChatState(
     val gifsLoading: Boolean = false,
     /** A refused edit, delete or pin, in the server's own words. Cleared when read. */
     val actionError: String? = null,
+    /** Why the last nudge did not land, or null. Said in one short line. */
+    val nudgeRefusal: gg.pqp.app.nudge.NudgeRefusal? = null,
+    /** `SystemClock.elapsedRealtime()` before which the nudge button rests, or 0. */
+    val nudgeHoldUntilMs: Long = 0L,
 )
 
 /**
@@ -1027,8 +1031,51 @@ class ChatViewModel(
                 "typing-broadcast" -> onTyping(frame)
                 "message-rejected" -> onRejected(frame)
                 "sanction-notice" -> onSanctioned(frame)
+                "nudge-refused" -> onNudgeRefused(frame)
             }
         }
+    }
+
+    /**
+     * One event per fresh nudge from somebody else, for the screen to shake
+     * and buzz. A flow of events rather than state: a shake is something that
+     * happens once, and replaying it on rotation would be a second poke nobody
+     * sent.
+     */
+    private val _nudged = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val nudged: kotlinx.coroutines.flow.SharedFlow<String> = _nudged
+
+    /**
+     * Chamar a atenção. The button rests for the cooldown at once rather than
+     * on the server's word: a second tap inside it would only be refused.
+     */
+    fun nudge() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now < _state.value.nudgeHoldUntilMs) return
+        val nonce = java.util.UUID.randomUUID().toString()
+        val left = session.realtime.sendNudge(channelId, nonce)
+        _state.value = _state.value.copy(
+            nudgeRefusal = null,
+            nudgeHoldUntilMs = gg.pqp.app.nudge.Nudge.holdAfterSend(left, now),
+        )
+    }
+
+    fun clearNudgeRefusal() {
+        _state.value = _state.value.copy(nudgeRefusal = null)
+    }
+
+    /** `nudge-refused`, addressed to this socket only. Nothing was stored. */
+    private fun onNudgeRefused(frame: JsonObject) {
+        if (frame.string("channelId") != channelId) return
+        val reason = gg.pqp.app.nudge.NudgeRefusalReason.fromWire(frame.string("reason"))
+        val retryAfterMs = (frame["retryAfterMs"] as? JsonPrimitive)?.longOrNull ?: 0L
+        val now = android.os.SystemClock.elapsedRealtime()
+        _state.value = _state.value.copy(
+            nudgeRefusal = gg.pqp.app.nudge.NudgeRefusal(reason, retryAfterMs),
+            // Only a cooldown says when to try again; any other refusal frees
+            // the button, since waiting would not change the answer.
+            nudgeHoldUntilMs = gg.pqp.app.nudge.Nudge.holdAfterRefusal(retryAfterMs, now),
+        )
     }
 
     private fun onBroadcast(frame: JsonObject) {
@@ -1044,6 +1091,13 @@ class ChatViewModel(
         }
         if (withoutOptimistic.any { it.id == message.id }) return
         _state.value = _state.value.copy(messages = withoutOptimistic + message)
+        if (gg.pqp.app.nudge.Nudge.isFresh(message, currentUserId, System.currentTimeMillis())) {
+            _nudged.tryEmit(message.authorName)
+        }
+        // They answered, so the "no reply yet" refusal no longer holds.
+        if (message.authorId != currentUserId && _state.value.nudgeRefusal != null) {
+            clearNudgeRefusal()
+        }
     }
 
     /**

@@ -942,4 +942,17 @@
     <string name="forum_composer_attach">Attach a file</string>
     <string name="forum_composer_attach_image">Add a photo or video</string>
     <string name="forum_composer_remove_file">Remove file</string>
+
+    <!-- Chamar a atenção (nudge), behind GET /api/fun/config. -->
+    <string name="nudge_action">Nudge</string>
+    <string name="nudge_action_cooldown">Nudge again in %1$d s</string>
+    <string name="nudge_sent">You nudged %1$s.</string>
+    <string name="nudge_received">%1$s nudged you!</string>
+    <string name="nudge_refused_cooldown">Easy! Wait a few seconds before nudging again.</string>
+    <string name="nudge_refused_unanswered">%1$s hasn\'t answered yet. Send a message instead.</string>
+    <string name="nudge_refused_busy">%1$s is busy right now. Send a message instead.</string>
+    <string name="nudge_refused_self_off">You turned nudges off. Turn them back on in your account.</string>
+    <string name="nudge_refused_unavailable">Couldn\'t send a nudge right now.</string>
+    <string name="nudge_allow">Let people nudge me</string>
+    <string name="nudge_allow_hint">Off means nobody can nudge you and you can\'t nudge anyone.</string>
 </resources>
