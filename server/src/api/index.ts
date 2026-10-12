@@ -8159,6 +8159,460 @@ router.delete(
   },
 );
 
+// ----------------------------------------------------------------- forums
+//
+// Forum channels (packages/shared/src/forums.ts has the contract and the REST
+// table; services/forums.ts the queries; services/forum-posts.ts the create).
+// A post is a thread channel under the forum, so its messages, reads,
+// reactions, pins, attachments and reports all go through the channel routes
+// above, gated by `canAccessChannel`, which answers for a post with the
+// forum's answer. These routes are what a post has that a chat thread does
+// not: a title, tags, pinned / locked / resolved, and the list.
+//
+// Every permission check names the FORUM, so a cargo given MANAGE_MESSAGES on
+// one forum moderates that forum and nothing else (a channel overwrite), and
+// "staff" below is MANAGE_MESSAGES or MANAGE_CHANNELS there: the pair that
+// already walks through slow mode.
+import {
+  createForumPostSchema,
+  FORUM_ERRORS,
+  hasPermission,
+  listForumPostsQuerySchema,
+  putForumTagsSchema,
+  setForumPostFollowSchema,
+  similarForumPostsQuerySchema,
+  updateForumPostSchema,
+  updateForumSettingsSchema,
+} from "@pqp/shared";
+import {
+  applyForumPostPatch,
+  checkTagChange,
+  ForumError,
+  getForumPostDetail,
+  getForumPostRow,
+  getForumPostSummary,
+  getForumPostTagIds,
+  getForumSettings,
+  invalidateForumList,
+  isReplyInPost,
+  listForumPosts,
+  listForumTagRefs,
+  listForumTags,
+  readForumPostViewers,
+  replaceForumTags,
+  setForumPostFollow,
+  similarForumPosts,
+  updateForumSettings,
+  type ForumPostPatch,
+  type ForumPostRow,
+} from "../services/forums.js";
+import { createForumPost } from "../services/forum-posts.js";
+import { findTimeoutForChannel } from "../services/sanctions.js";
+import {
+  announceForumPostRemoved,
+  announceForumPostUpdate,
+} from "../ws/chat.js";
+
+/** A forum the caller can see. 404 for anything else, like any channel miss. */
+async function requireForum(forumId: string, userId: string) {
+  const channel = await requireChannelAccess(forumId, userId);
+  if (channel.type !== "forum" || !channel.server_id) {
+    throw new NotFound("Forum not found");
+  }
+  return { ...channel, server_id: channel.server_id };
+}
+
+/**
+ * A published post the caller can see. Access is the post channel's, which
+ * `canAccessChannel` resolves through the forum, so a private forum's posts
+ * fail closed here with no forum-specific code.
+ */
+async function requireForumPost(postId: string, userId: string): Promise<ForumPostRow> {
+  await requireChannelAccess(postId, userId);
+  const post = await getForumPostRow(postId);
+  if (!post) {
+    throw new NotFound("Post not found");
+  }
+  return post;
+}
+
+async function forumPerms(serverId: string, userId: string, forumId: string) {
+  await requireServerMember(serverId, userId);
+  const perms = await computeMemberPermissions(serverId, userId, forumId);
+  return {
+    perms,
+    isStaff:
+      hasPermission(perms, Permission.MANAGE_MESSAGES) ||
+      hasPermission(perms, Permission.MANAGE_CHANNELS),
+  };
+}
+
+/** `?tag=a&tag=b` is a list; the schema takes it as one. */
+function forumListQuery(url: URL): Record<string, unknown> {
+  const params = url.searchParams;
+  const tags = params.getAll("tag");
+  const optional = (key: string) => params.get(key) ?? undefined;
+  return {
+    sort: optional("sort"),
+    tag: tags.length > 0 ? tags : undefined,
+    status: optional("status"),
+    mine: optional("mine"),
+    q: optional("q"),
+    cursor: optional("cursor"),
+    limit: optional("limit"),
+  };
+}
+
+router.get("/api/channels/:forumId/posts", async ({ url, user }, { forumId }) => {
+  await requireForum(forumId!, user.id);
+  const query = listForumPostsQuerySchema.parse(forumListQuery(url));
+  return listForumPosts({ forumId: forumId!, viewerId: user.id, query });
+});
+
+router.get(
+  "/api/channels/:forumId/posts/similar",
+  async ({ url, user }, { forumId }) => {
+    await requireForum(forumId!, user.id);
+    const { title } = similarForumPostsQuerySchema.parse({
+      title: url.searchParams.get("title") ?? "",
+    });
+    return { posts: await similarForumPosts(forumId!, title) };
+  },
+);
+
+/**
+ * Create a post (plan §1.5). Off for this server: 403 `forum_channels_off`,
+ * and nothing is written; existing posts stay readable and repliable. The
+ * timeout gate in `handleApi` already covers this path by its
+ * `/api/channels/:id` shape. A refusal from the message path is 422 with the
+ * `message-rejected` fields, and a wait also travels as `Retry-After`.
+ */
+router.post("/api/channels/:forumId/posts", async ({ req, user }, { forumId }) => {
+  const forum = await requireForum(forumId!, user.id);
+  if (!forumChannelsEnabled(forum.server_id)) {
+    throw new Forbidden(FORUM_CHANNELS_OFF);
+  }
+  const request = createForumPostSchema.parse(await readJsonBody(req));
+  const result = await createForumPost({ author: user, forum, request });
+  const body = { post: result.post, viewer: result.viewer };
+  return result.created ? created(body) : body;
+});
+
+router.get("/api/forum-posts/:postId", async ({ user }, { postId }) => {
+  await requireForumPost(postId!, user.id);
+  const detail = await getForumPostDetail(postId!, user.id);
+  if (!detail) {
+    throw new NotFound("Post not found");
+  }
+  return detail;
+});
+
+type ForumAuditAction = "forum.post_pin" | "forum.post_lock" | "forum.post_edit";
+
+/**
+ * Edit a post, field by field (forums.ts header): title, tags, resolved and
+ * the accepted answer are the author's or staff's; pin and lock are staff
+ * only; a staff-only tag is added or removed by staff only. Pin, lock and a
+ * staff edit of somebody else's post leave an audit row.
+ */
+router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
+  const post = await requireForumPost(postId!, user.id);
+  const body = updateForumPostSchema.parse(await readJsonBody(req));
+  const { perms, isStaff } = await forumPerms(post.server_id, user.id, post.forum_id);
+  const isAuthor = post.author_id !== null && post.author_id === user.id;
+
+  // `/api/forum-posts/...` names no server, so the timeout gate in
+  // `handleApi` cannot see it; editing a post is participation.
+  const timeout = await findTimeoutForChannel(user.id, post.forum_id);
+  if (timeout) {
+    throw new Forbidden(timeoutMessage(timeout));
+  }
+
+  const authorFields =
+    body.title !== undefined ||
+    body.tagIds !== undefined ||
+    body.resolved !== undefined ||
+    body.acceptedAnswerId !== undefined;
+  if (authorFields && !isAuthor && !isStaff) {
+    throw new Forbidden("You cannot edit this post");
+  }
+  if ((body.pinned !== undefined || body.locked !== undefined) && !isStaff) {
+    throw new Forbidden("You do not have permission to do that");
+  }
+  if (body.resolved === false && body.acceptedAnswerId) {
+    throw new HttpError(400, "A post with an answer is resolved");
+  }
+
+  const patch: ForumPostPatch = {};
+  const changes: Array<{ key: string; old: unknown; new: unknown }> = [];
+
+  if (body.title !== undefined && body.title !== post.title) {
+    // A rename goes through AutoMod like the title on create (staff walk
+    // through, as everywhere).
+    const automodInput = {
+      serverId: post.server_id,
+      channelId: post.forum_id,
+      authorId: user.id,
+      memberPerms: perms,
+      body: body.title,
+    };
+    const verdict = await checkAutomod(automodInput);
+    if (verdict) {
+      void recordAutomodHit(automodInput, verdict)
+        .then(applyAutomodEffects)
+        .catch((error: unknown) => {
+          console.error("[automod] forum title hit effects failed:", error);
+        });
+      throw new ForumError(422, FORUM_ERRORS.postRejected, {
+        reason: "automod",
+        ...(verdict.customMessage ? { automodMessage: verdict.customMessage } : {}),
+      });
+    }
+    patch.title = body.title;
+    changes.push({ key: "title", old: post.title, new: body.title });
+  }
+
+  if (body.tagIds !== undefined) {
+    const [forumTags, previous, settings] = await Promise.all([
+      listForumTagRefs(post.forum_id),
+      getForumPostTagIds(post.channel_id),
+      getForumSettings(post.forum_id),
+    ]);
+    checkTagChange(forumTags, body.tagIds, previous, isStaff);
+    if (settings.requireTag && body.tagIds.length === 0) {
+      throw new ForumError(422, FORUM_ERRORS.tagRequired);
+    }
+    const sameSet =
+      previous.length === body.tagIds.length &&
+      body.tagIds.every((id) => previous.includes(id));
+    if (!sameSet) {
+      patch.tagIds = body.tagIds;
+      changes.push({ key: "tagIds", old: previous, new: body.tagIds });
+    }
+  }
+
+  if (body.acceptedAnswerId) {
+    if (!(await isReplyInPost(post, body.acceptedAnswerId))) {
+      throw new ForumError(400, FORUM_ERRORS.answerInvalid);
+    }
+    if (body.acceptedAnswerId !== post.resolved_message_id) {
+      patch.acceptedAnswerId = body.acceptedAnswerId;
+      changes.push({
+        key: "acceptedAnswerId",
+        old: post.resolved_message_id,
+        new: body.acceptedAnswerId,
+      });
+    }
+    // Marking an answer resolves the post.
+    if (post.resolved_at === null) {
+      patch.resolvedAt = "now";
+      changes.push({ key: "resolved", old: false, new: true });
+    }
+  } else if (body.acceptedAnswerId === null && post.resolved_message_id !== null) {
+    // Unmarking the answer leaves the resolved state as it is.
+    patch.acceptedAnswerId = null;
+    changes.push({ key: "acceptedAnswerId", old: post.resolved_message_id, new: null });
+  }
+
+  if (body.resolved === true && post.resolved_at === null && !patch.resolvedAt) {
+    patch.resolvedAt = "now";
+    changes.push({ key: "resolved", old: false, new: true });
+  } else if (body.resolved === false) {
+    // Reopening clears the answer too.
+    if (post.resolved_at !== null) {
+      patch.resolvedAt = null;
+      changes.push({ key: "resolved", old: true, new: false });
+    }
+    // `acceptedAnswerId: null` in the same request already recorded this.
+    if (post.resolved_message_id !== null && patch.acceptedAnswerId === undefined) {
+      patch.acceptedAnswerId = null;
+      changes.push({
+        key: "acceptedAnswerId",
+        old: post.resolved_message_id,
+        new: null,
+      });
+    }
+  }
+
+  const pinChange =
+    body.pinned !== undefined && body.pinned !== (post.pinned_at !== null);
+  const lockChange =
+    body.locked !== undefined && body.locked !== (post.locked_at !== null);
+  if (pinChange) {
+    patch.pinned = body.pinned;
+  }
+  if (lockChange) {
+    patch.locked = body.locked;
+  }
+
+  const changed = Object.keys(patch).length > 0;
+  if (changed) {
+    await applyForumPostPatch(post, patch);
+  }
+
+  // The change is committed. Its two after-effects, the live row and the audit
+  // rows, run side by side and neither can skip the other: a failed audit
+  // insert must not leave every open list on the old state, and a failed
+  // summary read must not leave the change out of the audit log.
+  const live = getForumPostSummary(post.channel_id).then((summary) => {
+    if (summary && changed) {
+      announceForumPostUpdate(summary);
+    }
+    return summary;
+  });
+
+  const audit = (
+    action: ForumAuditAction,
+    entries: Array<{ key: string; old: unknown; new: unknown }>,
+  ) =>
+    logAudit({
+      serverId: post.server_id,
+      actorId: user.id,
+      action,
+      targetType: "channel",
+      targetId: post.channel_id,
+      changes: entries,
+    });
+  const audits: Promise<void>[] = [];
+  if (pinChange) {
+    audits.push(
+      audit("forum.post_pin", [
+        { key: "pinned", old: !body.pinned, new: body.pinned },
+        { key: "title", old: post.title, new: post.title },
+      ]),
+    );
+  }
+  if (lockChange) {
+    audits.push(
+      audit("forum.post_lock", [
+        { key: "locked", old: !body.locked, new: body.locked },
+        { key: "title", old: post.title, new: post.title },
+      ]),
+    );
+  }
+  // An author editing their own post is not a moderator action.
+  if (changes.length > 0 && !isAuthor) {
+    audits.push(audit("forum.post_edit", changes));
+  }
+
+  const [summary, ...audited] = await Promise.allSettled([live, ...audits]);
+  for (const result of [summary, ...audited]) {
+    if (result!.status === "rejected") {
+      throw result!.reason;
+    }
+  }
+  const updated = (summary as PromiseFulfilledResult<Awaited<typeof live>>).value;
+  if (!updated) {
+    throw new NotFound("Post not found");
+  }
+  return { post: updated };
+});
+
+/**
+ * Delete a whole post: staff only. The author removes their opening message
+ * the ordinary way and the answers other people wrote stay (open question 2).
+ * The frame goes out before the eviction, so an open panel hears why it is
+ * closing.
+ */
+router.delete("/api/forum-posts/:postId", async ({ user }, { postId }) => {
+  const post = await requireForumPost(postId!, user.id);
+  const { isStaff } = await forumPerms(post.server_id, user.id, post.forum_id);
+  if (!isStaff) {
+    throw new Forbidden("You do not have permission to do that");
+  }
+  await deleteChannel(post.channel_id);
+  invalidateForumList(post.forum_id);
+  announceForumPostRemoved(post.forum_id, post.channel_id);
+  evictChannelViewers(post.channel_id);
+  await logAudit({
+    serverId: post.server_id,
+    actorId: user.id,
+    action: "forum.post_delete",
+    targetType: "channel",
+    targetId: post.channel_id,
+    changes: [{ key: "title", old: post.title, new: null }],
+  });
+  return noContent();
+});
+
+/** Follow or stop following a post (stored now, acted on by the P2 push). */
+router.put("/api/forum-posts/:postId/follow", async ({ req, user }, { postId }) => {
+  const post = await requireForumPost(postId!, user.id);
+  const body = setForumPostFollowSchema.parse(await readJsonBody(req));
+  await setForumPostFollow(post.channel_id, user.id, body.following);
+  const [viewer] = await readForumPostViewers([post.channel_id], user.id);
+  return { viewer };
+});
+
+router.get("/api/channels/:forumId/forum-tags", async ({ user }, { forumId }) => {
+  await requireForum(forumId!, user.id);
+  return { tags: await listForumTags(forumId!) };
+});
+
+router.put("/api/channels/:forumId/forum-tags", async ({ req, user }, { forumId }) => {
+  const forum = await requireForum(forumId!, user.id);
+  await requirePermission(forum.server_id, user.id, Permission.MANAGE_CHANNELS, forum.id);
+  const body = putForumTagsSchema.parse(await readJsonBody(req));
+  const { before, after } = await replaceForumTags(forum.id, body);
+  await logAudit({
+    serverId: forum.server_id,
+    actorId: user.id,
+    action: "forum.tags_update",
+    targetType: "channel",
+    targetId: forum.id,
+    changes: [
+      {
+        key: "tags",
+        old: before.map((tag) => tag.name).join(", "),
+        new: after.map((tag) => tag.name).join(", "),
+      },
+    ],
+  });
+  return { tags: after };
+});
+
+router.get("/api/channels/:forumId/forum-settings", async ({ user }, { forumId }) => {
+  await requireForum(forumId!, user.id);
+  return { settings: await getForumSettings(forumId!) };
+});
+
+router.patch(
+  "/api/channels/:forumId/forum-settings",
+  async ({ req, user }, { forumId }) => {
+    const forum = await requireForum(forumId!, user.id);
+    await requirePermission(
+      forum.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+      forum.id,
+    );
+    const body = updateForumSettingsSchema.parse(await readJsonBody(req));
+    const { before, after } = await updateForumSettings(forum.id, body);
+    const changes: Array<{ key: string; old: unknown; new: unknown }> = [];
+    if (before.requireTag !== after.requireTag) {
+      changes.push({ key: "requireTag", old: before.requireTag, new: after.requireTag });
+    }
+    if (before.defaultSort !== after.defaultSort) {
+      changes.push({
+        key: "defaultSort",
+        old: before.defaultSort,
+        new: after.defaultSort,
+      });
+    }
+    if (changes.length > 0) {
+      await logAudit({
+        serverId: forum.server_id,
+        actorId: user.id,
+        action: "forum.settings_update",
+        targetType: "channel",
+        targetId: forum.id,
+        changes: changes,
+      });
+    }
+    return { settings: after };
+  },
+);
+
 // ----------------------------------------------------------------- search
 
 router.get("/api/servers/:serverId/search", async (ctx, { serverId }) => {
@@ -11506,6 +11960,19 @@ export async function handleApi(
     // Checked before the plain `HttpError` branch it extends, or the extra
     // fields would be silently dropped by the more general match.
     if (error instanceof HttpErrorWithDetail) {
+      sendJson(res, error.status, { error: error.message, ...error.detail }, req);
+      return;
+    }
+    // --- forums --- a refusal with its `message-rejected` fields beside
+    // `error`, and a wait as `Retry-After` too.
+    if (error instanceof ForumError) {
+      const retryAfterMs = error.detail.retryAfterMs;
+      if (typeof retryAfterMs === "number" && retryAfterMs > 0) {
+        res.setHeader(
+          "Retry-After",
+          String(Math.max(1, Math.ceil(retryAfterMs / 1000))),
+        );
+      }
       sendJson(res, error.status, { error: error.message, ...error.detail }, req);
       return;
     }
