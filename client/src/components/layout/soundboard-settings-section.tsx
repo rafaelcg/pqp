@@ -501,7 +501,7 @@ function RenameForm({
   );
 }
 
-function ClipVolume({
+export function ClipVolume({
   volume,
   label,
   onCommit,
@@ -545,7 +545,9 @@ function ClipVolume({
       let failed = false;
       // A failed save is not saved: put the old value back so the same
       // position can be tried again.
-      void Promise.resolve(commitRef.current(next))
+      // Called inside the executor, so a commit that throws before returning
+      // a promise is a rejection too, and the count above still comes down.
+      void new Promise<void>((resolve) => resolve(commitRef.current(next)))
         .catch(() => {
           failed = true;
           if (saved.current === next) {

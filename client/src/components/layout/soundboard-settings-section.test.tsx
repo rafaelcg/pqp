@@ -59,7 +59,7 @@ vi.mock("@/components/voice/soundboard-add-dialog", () => ({
 }));
 
 const { ApiError } = await import("@/lib/api");
-const { SoundboardSettingsSection } = await import("./soundboard-settings-section");
+const { ClipVolume, SoundboardSettingsSection } = await import("./soundboard-settings-section");
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -330,6 +330,33 @@ describe("clip volume while a save is in flight", () => {
     });
     expect(slider.getAttribute("aria-valuetext")).toBe("75%");
     expect(board.sounds.find((c) => c.id === "c")!.volume).toBeCloseTo(0.75);
+  });
+  it("recovers from a commit that throws before returning a promise", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const commit = vi.fn(() => {
+      throw new Error("sync");
+    });
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const render = async (volume: number) => {
+      await act(async () => {
+        root!.render(<ClipVolume volume={volume} label="Volume" onCommit={commit} />);
+      });
+    };
+    await render(0.6);
+    const slider = document.body.querySelector<HTMLElement>('[role="slider"]')!;
+    await act(async () => {
+      slider.focus();
+      slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(450);
+    });
+    expect(commit).toHaveBeenCalledTimes(1);
+    // Nothing is in flight any more, so a reload moves the thumb again.
+    await render(0.3);
+    expect(slider.getAttribute("aria-valuetext")).toBe("30%");
   });
 });
 
