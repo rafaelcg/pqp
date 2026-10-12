@@ -8,6 +8,7 @@
  */
 
 import {
+  adoptAppearancePreference,
   appearanceForcesDark,
   getAppearance,
   isRetroLookOn,
@@ -75,5 +76,27 @@ export function chooseLook(next: AppearancePreference): void {
     if (before && before !== "dark") {
       setThemePreference(before);
     }
+  }
+}
+
+/**
+ * Take the account's look, as `/api/me` returns it. A dark-only look picked on
+ * another device moves this one to dark, so note this device's mode first, the
+ * way a pick made here does. Otherwise leaving the look here would keep a Light
+ * user on Dark.
+ */
+export function adoptLook(
+  appearance: AppearancePreference | undefined,
+  /** `preferenceWriteGeneration()` when the read began, if the caller noted it. */
+  readGeneration?: number,
+): void {
+  const lookBefore = getAppearance();
+  const modeBefore = getThemeState().preference;
+  adoptAppearancePreference(appearance, readGeneration);
+  if (
+    appearanceForcesDark(getAppearance()) &&
+    !appearanceForcesDark(lookBefore)
+  ) {
+    rememberModeBeforeNight(modeBefore);
   }
 }

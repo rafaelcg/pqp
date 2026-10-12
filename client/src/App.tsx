@@ -644,7 +644,8 @@ import { useAttentionReport } from "@/hooks/use-attention";
 import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptAccentHuePreference } from "@/lib/accent";
-import { adoptAppearancePreference, getAppearance } from "@/lib/appearance";
+import { getAppearance } from "@/lib/appearance";
+import { adoptLook } from "@/lib/choose-look";
 import { useRetroLook } from "@/hooks/use-appearance";
 import { useKonamiRetro } from "@/hooks/use-konami-retro";
 import { adoptRetroFound, startRetroLookFlag } from "@/lib/retro-look";
@@ -4772,7 +4773,7 @@ function MainAppContent({
         bindPreferenceSyncAccount(me.id);
         // Always called: with no stored look it still hands a Modo 2005
         // found before the look synced up to the account (`appearance.ts`).
-        adoptAppearancePreference(me.preferences?.appearance, readGeneration);
+        adoptLook(me.preferences?.appearance, readGeneration);
         adoptRetroFound(me.preferences?.easterEggs?.retro, readGeneration);
         const nextTheme = themeToAdopt(
           me.preferences?.theme,
