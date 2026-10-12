@@ -40,7 +40,11 @@ import {
 } from "./threads.js";
 import { webhookEmbedSchema } from "./webhooks.js";
 // --- forums ---
-import { forumPostRemovedSchema, forumPostUpsertSchema } from "./forums.js";
+import {
+  forumConfigUpdateSchema,
+  forumPostRemovedSchema,
+  forumPostUpsertSchema,
+} from "./forums.js";
 import { chanceRequestSchema, chanceResultSchema } from "./chance.js";
 import { pollRequestSchema, pollSchema } from "./polls.js";
 import { AUTOMOD_CUSTOM_MESSAGE_MAX } from "./automod.js";
@@ -661,6 +665,8 @@ export const forumPostRejectedBodySchema = z.object({
   reason: messageRejectReasonSchema,
   retryAfterMs: messageRejectedSchema.shape.retryAfterMs,
   automodMessage: messageRejectedSchema.shape.automodMessage,
+  /** Which half AutoMod refused. Absent on every other reason. */
+  field: z.enum(["title", "body"]).optional(),
 });
 export type ForumPostRejectedBody = z.infer<typeof forumPostRejectedBodySchema>;
 
@@ -681,6 +687,7 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // --- forums --- the forum list's live rows, fanned out to the forum.
   forumPostUpsertSchema,
   forumPostRemovedSchema,
+  forumConfigUpdateSchema,
   // A refusal is a chat outcome: it is sent over the chat socket, in response
   // to a chat action, and it describes what happened to a message somebody
   // tried to send. It belongs in the type the chat socket is declared to carry,
@@ -870,6 +877,8 @@ export const CHAT_SERVER_MESSAGE_TYPES = [
   // these two lines a post made on the sibling instance never reaches them.
   "forum-post-upsert",
   "forum-post-removed",
+  // The forum's tags or settings, saved by staff: same audience, same reason.
+  "forum-config-update",
   "poll-update",
   // A voice note's transcript and playback copy. Addressed to the note's
   // channel on purpose: whoever can hear the audio may read the text. They

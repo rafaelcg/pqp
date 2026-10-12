@@ -5071,6 +5071,8 @@
   "forum.solution.unmark": "Unmark solution",
   "forum.solution.title": "Solution",
   "forum.solution.jump": "Go to answer",
+  "forum.solution.markedBy": "marked by {name}",
+  "forum.solution.markedByYou": "marked by you",
   "forum.solution.deleted": "The marked answer was deleted.",
   "forum.reply.placeholder": "Reply to \"{title}\"",
   "forum.locked": "This post is closed. Only staff can reply.",

@@ -247,13 +247,23 @@ function EditTagsDialog({
 function SolutionCard({
   answer,
   onJump,
+  viewerId,
   compact = false,
 }: {
   answer: ForumAcceptedAnswer;
   onJump: () => void;
+  viewerId: string | null;
   compact?: boolean;
 }) {
   const { t } = useTranslation();
+  // Who picked it, as mock 02 draws it (forum QA P9). Nobody named when the
+  // server does not know (an answer marked before it kept the marker).
+  const markedBy =
+    answer.markedById && answer.markedById === viewerId
+      ? t("forum.solution.markedByYou")
+      : answer.markedByName
+        ? t("forum.solution.markedBy", { name: answer.markedByName })
+        : null;
   return (
     <section
       aria-label={t("forum.solution.title")}
@@ -264,8 +274,13 @@ function SolutionCard({
       )}
     >
       <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide">
-        <CircleCheck className="h-3.5 w-3.5" aria-hidden />
+        <CircleCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
         {t("forum.solution.title")}
+        {markedBy && (
+          <span className="min-w-0 truncate font-normal normal-case tracking-normal opacity-80">
+            · {markedBy}
+          </span>
+        )}
       </p>
       {!compact && (
         <p className="mt-1.5 line-clamp-2 text-sm">
@@ -536,6 +551,8 @@ export function ForumPostView({
           authorName: message.authorName,
           excerpt: message.body.replace(/\s+/g, " ").trim().slice(0, 280) || null,
           createdAt: message.createdAt,
+          markedById: viewerId,
+          markedByName: currentUser?.displayName ?? null,
         });
       }
       void patch(
@@ -547,7 +564,7 @@ export function ForumPostView({
         },
       );
     },
-    [controller, patch, post],
+    [controller, patch, post, viewerId, currentUser?.displayName],
   );
 
   function toggleResolved() {
@@ -960,7 +977,7 @@ export function ForumPostView({
   const decor = {
     authorId: post.authorId,
     acceptedAnswerId: post.acceptedAnswerId,
-    afterOpening: answer ? <SolutionCard answer={answer} onJump={jumpToAnswer} /> : null,
+    afterOpening: answer ? <SolutionCard answer={answer} onJump={jumpToAnswer} viewerId={viewerId} /> : null,
     onToggleAnswer: canEdit ? toggleAnswer : undefined,
     landAtTop: firstVisit,
     listHeader: isPhone ? titleBlock : null,
@@ -1005,7 +1022,7 @@ export function ForumPostView({
           header,
           beforeList:
             answer && !openingLoaded ? (
-              <SolutionCard answer={answer} onJump={jumpToAnswer} compact />
+              <SolutionCard answer={answer} onJump={jumpToAnswer} viewerId={viewerId} compact />
             ) : null,
           decor,
           locked: post.lockedAt !== null,

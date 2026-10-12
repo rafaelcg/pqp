@@ -110,6 +110,12 @@ interface ForumComposerDialogProps {
   onPublished: (post: ForumPostSummary, viewer: ForumPostViewer) => void;
   /** A similar post was chosen: the draft stays, the post opens. */
   onOpenPost: (postId: string) => void;
+  /**
+   * The server refused the post for a rule the pane may hold stale (the
+   * forum paused, a tag now required): the pane reads that rule again, so
+   * the screen catches up with the refusal.
+   */
+  onRefused?: (kind: ForumPublishError["kind"]) => void;
 }
 
 /** Underline the words of `title` that the query also has. */
@@ -166,6 +172,7 @@ export function ForumComposerDialog({
   onClose,
   onPublished,
   onOpenPost,
+  onRefused,
 }: ForumComposerDialogProps) {
   const { t } = useTranslation();
   const titleId = useId();
@@ -331,6 +338,15 @@ export function ForumComposerDialog({
   }, [heldUntil]);
   const heldSeconds = Math.max(0, Math.ceil((heldUntil - now) / 1000));
 
+  // Staff deleted a tag while it was picked here (the list is live): it
+  // leaves the pick, or Publicar would send a tag that no longer exists.
+  useEffect(() => {
+    setTagIds((current) => {
+      const kept = current.filter((tagId) => tags.some((tag) => tag.id === tagId));
+      return kept.length === current.length ? current : kept;
+    });
+  }, [tags]);
+
   // ----------------------------------------------------------- validation
   const visibleTags = tags.filter((tag) => isStaff || !tag.moderated);
   const trimmedTitle = title.replace(/\s+/g, " ").trim();
@@ -378,6 +394,9 @@ export function ForumComposerDialog({
     } catch (error) {
       const reason = readForumPublishError(error);
       setPublishError(reason);
+      if (reason.kind === "paused" || reason.kind === "tag-required") {
+        onRefused?.(reason.kind);
+      }
       if (reason.kind === "slow-mode" && reason.retryAfterMs > 0) {
         setHeldUntil(Date.now() + reason.retryAfterMs);
         setNow(Date.now());
@@ -399,6 +418,7 @@ export function ForumComposerDialog({
     trimmedTitle,
     tagIds,
     onPublished,
+    onRefused,
   ]);
   const publishRef = useRef(publish);
   publishRef.current = publish;
