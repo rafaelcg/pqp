@@ -13,7 +13,8 @@ import {
   countChannelLayout,
   type ChannelLayoutMetrics,
 } from "./channel-layout-metrics.js";
-import { invalidateServerChannelList, listChannels } from "./servers.js";
+import { invalidateServerChannelList } from "./servers.js";
+import { channelVisibleSql } from "./users.js";
 
 /**
  * THE MIXED CHANNEL LIST, SERVER SIDE. Plan and mocks: the sidebar redesign
@@ -493,9 +494,6 @@ export async function applyChannelLayout(
   input: ChannelLayoutInput,
   options: { beforeCommit?: (client: PoolClient, moved: number) => Promise<void> } = {},
 ): Promise<ApplyResult> {
-  // Before BEGIN: nothing between BEGIN and COMMIT waits on another query's
-  // pool connection. Visibility is per viewer (privacy plus overwrites).
-  const visible = new Set((await listChannels(serverId, actorId)).map((channel) => channel.id));
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -513,6 +511,20 @@ export async function applyChannelLayout(
       countChannelLayout("staleRejected");
       return { status: "stale", version };
     }
+
+    // Visibility per viewer (privacy plus overwrites), read on this
+    // connection under the server lock, right before the write: a channel
+    // made private a moment ago is already protected here.
+    const visibleRows = await client.query<{ id: string }>(
+      `SELECT c.id
+         FROM channels c
+         JOIN server_members sm ON sm.server_id = c.server_id
+        WHERE c.server_id = $1 AND sm.user_id = $2
+          AND c.type <> 'thread'
+          AND ${channelVisibleSql("$2")}`,
+      [serverId, actorId],
+    );
+    const visible = new Set(visibleRows.rows.map((row) => row.id));
 
     const rows = await readSidebarRows(client, serverId);
     const byId = new Map(rows.map((row) => [row.id, row]));

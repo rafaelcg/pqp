@@ -663,9 +663,13 @@ export async function moveChannel(
       // above it in this same group (the old "remove, then splice at its
       // index"), before it otherwise. Read on the server's full list, which
       // has the private siblings the client never saw.
+      // In the destination's own order (position, then id), so two rows
+      // that share a position still compare the way the list draws them.
+      const targetRow = destination.rows[targetAt]!;
       const above =
         oldParentIdOf(row) === parentId &&
-        row.position < destination.rows[targetAt]!.position;
+        (row.position < targetRow.position ||
+          (row.position === targetRow.position && channelId < targetRow.id));
       clampedIndex = targetAt + (above ? 1 : 0);
     } else if (parentId === null && row.type !== "category") {
       // THE LEGACY-MOVE RULE. Every caller of this route counts the loose
