@@ -1,5 +1,6 @@
 import {
   CUSTOM_EMOJI_TOKEN_PATTERN,
+  MESSAGE_MAX_LENGTH,
   customEmojiToken,
   type ServerEmoji,
   type ServerEmojiList,
@@ -169,19 +170,33 @@ function mapOutsideCode(body: string, rewrite: (text: string) => string): string
  * `:pog:` to `<:pog:id>` for every name this server has, outside code. A name
  * the server does not have stays exactly as typed. When two entries share a
  * name, the later one wins.
+ *
+ * A token is about 39 characters longer than the name, and the composer
+ * counts what was typed. So expansion stops at `maxLength`: a name past that
+ * point stays `:name:` text rather than the send being refused as too long.
  */
 export function expandCustomEmoji(
   body: string,
   emoji: ReadonlyArray<Pick<ServerEmoji, "id" | "name">> | null | undefined,
+  maxLength: number = MESSAGE_MAX_LENGTH,
 ): string {
   if (!emoji || emoji.length === 0) {
     return body;
   }
   const byName = new Map(emoji.map((e) => [e.name, e.id]));
+  let room = maxLength - body.length;
   return mapOutsideCode(body, (text) =>
     text.replace(/(?<!<):([a-z0-9_]{2,32}):/g, (match, name: string) => {
       const id = byName.get(name);
-      return id ? customEmojiToken(name, id) : match;
+      if (!id) {
+        return match;
+      }
+      const token = customEmojiToken(name, id);
+      if (token.length - match.length > room) {
+        return match;
+      }
+      room -= token.length - match.length;
+      return token;
     }),
   );
 }

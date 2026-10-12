@@ -59,6 +59,13 @@ describe("expandCustomEmoji", () => {
     expect(expandCustomEmoji(once, LIST)).toBe(once);
   });
 
+  it("stops expanding where the body would pass the message limit", () => {
+    const body = `${"x".repeat(3940)} :pog: :pog:`;
+    const sent = expandCustomEmoji(body, LIST);
+    expect(sent).toBe(`${"x".repeat(3940)} <:pog:${POG}> :pog:`);
+    expect(sent.length).toBeLessThanOrEqual(4000);
+  });
+
   it("does nothing in a conversation (no list)", () => {
     expect(expandCustomEmoji(":pog:", null)).toBe(":pog:");
   });
