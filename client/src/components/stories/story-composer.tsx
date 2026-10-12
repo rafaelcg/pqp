@@ -20,6 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { fetchStoryAudiences } from "@/lib/stories/api";
 import { STORIES_CONFIG_OFF, loadStoriesConfig } from "@/lib/stories/config";
+import { authorInRoom, defaultCallRoom } from "@/lib/stories/call-room";
 import { postStory } from "@/lib/stories/post";
 import {
   prepareStoryFile,
@@ -50,6 +51,8 @@ export interface ComposerVoiceRoom {
 
 interface StoryComposerProps {
   request: ComposerRequest;
+  /** The signed-in account: the call sticker is live only while its author is in the room. */
+  meId: string;
   /** Voice rooms of the server the composer was opened from, for the call sticker. */
   voiceRooms: { serverId: string; serverName: string; rooms: ComposerVoiceRoom[] } | null;
   onClose: () => void;
@@ -66,7 +69,7 @@ const PROBLEM_KEY: Record<StoryFileProblem["kind"], MessageKey> = {
   unreadable: "stories.compose.unreadable",
 };
 
-export function StoryComposer({ request, voiceRooms, onClose, onPosted }: StoryComposerProps) {
+export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: StoryComposerProps) {
   const { t, locale } = useTranslation();
   const [config, setConfig] = useState<StoriesConfig>(STORIES_CONFIG_OFF);
   const [options, setOptions] = useState<StoryAudienceOptions | null>(null);
@@ -80,12 +83,11 @@ export function StoryComposer({ request, voiceRooms, onClose, onPosted }: StoryC
   const [text, setText] = useState("");
   const [callText, setCallText] = useState(() => t("stories.compose.callText"));
   const [background, setBackground] = useState<StoryBackground>("night");
-  // The room people are in already is the one worth calling people into.
-  const [roomId, setRoomId] = useState<string | null>(() => {
-    const rooms = voiceRooms?.rooms ?? [];
-    const busiest = [...rooms].sort((a, b) => b.occupants.length - a.occupants.length)[0];
-    return busiest?.id ?? null;
-  });
+  // The room the author is in (the sticker closes when they are not), else
+  // the room people are in already.
+  const [roomId, setRoomId] = useState<string | null>(() =>
+    defaultCallRoom(voiceRooms?.rooms ?? [], meId),
+  );
   const [serverIds, setServerIds] = useState<string[]>(
     request.context.kind === "server" ? [request.context.serverId] : [],
   );
@@ -428,6 +430,11 @@ export function StoryComposer({ request, voiceRooms, onClose, onPosted }: StoryC
                         : t("stories.callPicker.inRoom", { count: entry.occupants.length }),
                   }))}
                 />
+              )}
+              {room && !authorInRoom(room, meId) && (
+                <p data-story-call-hint="" className="text-xs leading-snug text-warning">
+                  {t("stories.callPicker.notInRoom", { room: room.name })}
+                </p>
               )}
               <Input
                 value={callText}

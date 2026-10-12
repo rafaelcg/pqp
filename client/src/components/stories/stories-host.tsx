@@ -136,6 +136,7 @@ export function StoriesHost({ me, bauEnabled, voiceRooms, onJoinCall, onOpenRole
       {ui.composer && (
         <StoryComposer
           request={ui.composer}
+          meId={me.id}
           voiceRooms={
             ui.composer.context.kind === "server" &&
             voiceRooms?.serverId === ui.composer.context.serverId
