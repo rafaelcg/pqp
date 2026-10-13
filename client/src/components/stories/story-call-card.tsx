@@ -194,7 +194,7 @@ export function StoryCallCard({
               background: live ? "var(--story-accent)" : "var(--story-on-media-2)",
             }}
           />
-          <span className="truncate">{label}</span>
+          <span className="truncate">{count > 0 && !ended ? `${label} · ${count}` : label}</span>
         </p>
         <p
           className="truncate font-display font-extrabold leading-tight"
