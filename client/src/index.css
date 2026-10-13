@@ -4444,6 +4444,14 @@ html[data-immersive-stage] [data-immersive-hide] {
     animation: bot-float 2.6s ease-in-out infinite;
   }
 
+  /* A face under the pointer leans in, like it noticed. */
+  .bot-face > svg {
+    transition: transform var(--duration-base) var(--ease-emphasized);
+  }
+  .bot-face:hover > svg {
+    transform: rotate(-8deg) scale(1.06);
+  }
+
   /* A new colour or face lands with a squash, keyed by remounting the face. */
   .bot-face-pop > svg {
     animation: bot-pop 0.52s var(--ease-emphasized) both;

@@ -3084,6 +3084,10 @@ const MessageRow = memo(function MessageRow({
   const authorInfo = authors.get(message.authorId);
   // A server bot's avatar is its Breu face URL, which nobody else's can be.
   const serverBot = parseBotFaceAvatar(message.authorAvatarUrl) !== null;
+  // A bot's reply that just arrived lands with a hop; one already there is still.
+  const [freshBotReply] = useState(
+    () => serverBot && Date.now() - new Date(message.createdAt).getTime() < 10_000,
+  );
   // A server bot's action card replaces its plain-text copy in the body. Only
   // for a bot author: the field is server-written, and this keeps it that way
   // on screen too.
@@ -3627,7 +3631,7 @@ const MessageRow = memo(function MessageRow({
                         name={message.authorName}
                         avatarUrl={message.authorAvatarUrl}
                         rounded="lg"
-                        className="h-9 w-9"
+                        className={cn("h-9 w-9", freshBotReply && "bot-face-pop")}
                         fallbackClassName="bg-ink-3 text-sm"
                         botFace={serverBot && (authorGone || authorInfo?.status === "offline") ? "dormindo" : undefined}
                       />
