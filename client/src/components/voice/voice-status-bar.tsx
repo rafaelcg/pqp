@@ -234,7 +234,7 @@ export function VoiceStatusBar({
   }
 
   return (
-    <div className="border-t border-ink-4/60 bg-ink px-2 py-2">
+    <div data-voice-status-bar="" className="border-t border-ink-4/60 bg-ink px-2 py-2">
       {/* Above the strip, out of the flow: in it the card lifted the whole
           bar (and the user row under it) by its own height. */}
       {(shareHintEnabled || bringFriendsHintEnabled) && (

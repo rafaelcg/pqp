@@ -98,14 +98,14 @@ test.describe("voice lobby", () => {
       expect((await stagePane.boundingBox())?.height ?? 0).toBeLessThan(2);
     }
 
-    // With the same actions in the composer, the sidebar keeps its one-line
-    // status and drops the camera, share, and the duplicate hang-up.
+    // The sidebar card keeps its camera button (and share, where the platform
+    // can share a screen) under its status even with the composer's call bar
+    // on screen, as Discord's Voice Connected panel does.
     await expect(
-      page.getByRole("button", { name: "Turn camera on", exact: true }),
-    ).toHaveCount(1);
-    await expect(
-      page.getByRole("button", { name: "Share screen", exact: true }),
-    ).toHaveCount(0);
+      page
+        .locator("[data-voice-status-bar]")
+        .getByRole("button", { name: "Turn camera on", exact: true }),
+    ).toBeVisible();
 
     await expect(
       bar.getByRole("button", { name: "Mute microphone" }),
