@@ -355,6 +355,16 @@ export function scheduleDiscardServerEmojiObject(key: string): void {
         return;
       }
       try {
+        // A retried claim (a lost 201, a client timeout) fails on name_taken
+        // with the key the first claim already stored. That object is a live
+        // emoji's picture, so a key some row still points at is never deleted.
+        const inUse = await getPool().query(
+          "SELECT 1 FROM server_emoji WHERE storage_key = $1 LIMIT 1",
+          [key],
+        );
+        if ((inUse.rowCount ?? 0) > 0) {
+          return;
+        }
         await deleteObject(key);
         return;
       } catch (error) {
