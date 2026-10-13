@@ -112,6 +112,15 @@ export const outgoingMessageCreatedPayloadSchema = z.object({
   author: outgoingWebhookAuthorSchema,
   body: z.string(),
   replyToId: z.string().uuid().nullable(),
+  /**
+   * Present only when the message is inside a forum post. Omitted on a text
+   * channel and on a chat thread, so those signed bodies stay the same shape.
+   * `channelId` is still the post. `forumId` is the parent forum.
+   * `isPostStart` is true for the opening message.
+   */
+  forumId: z.string().uuid().optional(),
+  postTitle: z.string().optional(),
+  isPostStart: z.boolean().optional(),
 });
 export type OutgoingMessageCreatedPayload = z.infer<
   typeof outgoingMessageCreatedPayloadSchema
@@ -137,9 +146,9 @@ export const outgoingWebhookSchema = z.object({
   url: z.string(),
   channelIds: z.array(z.string().uuid()),
   /**
-   * Text channels on this server that still exist, including ones this
-   * viewer cannot see. Absent ids in `channelIds` are gone. Defaulted so a
-   * response from an API that predates the field still parses.
+   * Text and forum channels on this server that still exist, including ones
+   * this viewer cannot see. Absent ids in `channelIds` are gone. Defaulted so
+   * a response from an API that predates the field still parses.
    */
   channels: z
     .array(z.object({ id: z.string().uuid(), name: z.string() }))

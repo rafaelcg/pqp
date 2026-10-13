@@ -2,10 +2,12 @@ import type { Channel, OutgoingWebhook } from "@pqp/shared";
 import { intlLocale, type Locale } from "@/lib/locale";
 import { Check, ChevronDown, Copy, Hash, Plus, Webhook } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { ChannelIcon } from "@/components/layout/channel-icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { useForumConfig } from "@/hooks/use-forum-config";
 import {
   ApiError,
   createOutgoingWebhook,
@@ -35,8 +37,14 @@ const AUTH_HEADER_OPTIONS = [
   "X-Api-Key",
 ] as const;
 
-function isServerTextChannel(channel: Channel): boolean {
-  return (channel.kind ?? "server") === "server" && channel.type === "text";
+function isOutgoingTarget(channel: Channel, forumsOn: boolean): boolean {
+  if ((channel.kind ?? "server") !== "server") {
+    return false;
+  }
+  if (channel.type === "text") {
+    return true;
+  }
+  return channel.type === "forum" && forumsOn;
 }
 
 function channelKindKey(type: string): MessageKey {
@@ -76,6 +84,9 @@ function channelRejectionMessage(
     const reason = "reason" in row && typeof row.reason === "string" ? row.reason : "";
     if (!name) {
       return [];
+    }
+    if (reason === "forums_off") {
+      return [t("integrations.channelForumsOff", { name })];
     }
     if (reason === "type") {
       return [t("integrations.channelNotText", { name, type: t(channelKindKey(type)) })];
@@ -268,7 +279,9 @@ function ChannelChips({
                 disabled && "opacity-50",
               )}
             >
-              <Hash className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span className="inline-flex shrink-0" aria-hidden>
+                <ChannelIcon channel={channel} className="h-3.5 w-3.5" />
+              </span>
               <span className="min-w-0 truncate">{channel.name}</span>
             </button>
           </li>
@@ -628,8 +641,9 @@ function HookForm({
 
 export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
   const { t, locale } = useTranslation();
+  const forums = useForumConfig(serverId);
   const [hooks, setHooks] = useState<OutgoingWebhook[]>([]);
-  const [textChannels, setTextChannels] = useState<Channel[]>([]);
+  const [serverChannels, setServerChannels] = useState<Channel[]>([]);
   const [members, setMembers] = useState<ServerMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -656,7 +670,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
       fetchMembers(serverId),
     ]);
     setHooks(hookRes.webhooks);
-    setTextChannels(channelRes.channels.filter(isServerTextChannel));
+    setServerChannels(channelRes.channels);
     setMembers(memberRes.members);
   }
 
@@ -686,6 +700,11 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
     const member = members.find((one) => one.id === id);
     return member ? memberDisplayName(member) : undefined;
   }
+
+  const textChannels = useMemo(
+    () => serverChannels.filter((channel) => isOutgoingTarget(channel, forums.enabled)),
+    [serverChannels, forums.enabled],
+  );
 
   const channelName = useMemo(() => {
     const map = new Map(textChannels.map((channel) => [channel.id, channel.name]));
