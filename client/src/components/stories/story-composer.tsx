@@ -802,29 +802,21 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const selected = layers.find((layer) => layer.id === selectedId) ?? null;
   const overlayOpen = Boolean(editing) || drawing || panel !== null;
 
-  // The selection bar sits by the layer it is about (above it, or below when the layer is near the
-  // top), never on top of words placed there.
-  const [barPlace, setBarPlace] = useState<{ left: number; top: number } | null>(null);
-  const selectedGeometry = selected ? `${selected.x}:${selected.y}:${selected.scale}:${selected.rotation}:${selected.type === "text" ? selected.text + selected.size + selected.font : ""}` : "";
+  // The selection bar stays where it always is, centered at the top of the canvas, so it never
+  // lands on a neighbouring layer; it only steps to the foot of the canvas when the selected layer
+  // reaches up into the top strip, so it is never ON the words placed there.
+  const [barAtFoot, setBarAtFoot] = useState(false);
   useLayoutEffect(() => {
     const canvas = previewRef.current;
     const layer = selected && canvas ? canvas.querySelector<HTMLElement>(`[data-story-layer="${CSS.escape(selected.id)}"]`) : null;
     if (!canvas || !layer) {
-      setBarPlace(null);
+      setBarAtFoot(false);
       return;
     }
-    const area = canvas.getBoundingClientRect();
     const box = layer.getBoundingClientRect();
-    const barHeight = 40;
-    const barHalfWidth = 76;
-    const above = box.top - area.top - barHeight - 8;
-    const top = above >= 4 ? above : Math.min(area.height - barHeight - 4, box.bottom - area.top + 8);
-    const centre = box.left - area.left + box.width / 2;
-    setBarPlace({
-      left: Math.min(area.width - barHalfWidth - 4, Math.max(barHalfWidth + 4, centre)),
-      top: Math.max(4, top),
-    });
-  }, [selected?.id, selectedGeometry, gestureActive, overlayOpen]);
+    // The bar is 40 px tall and sits 12 px down; a layer whose top is above 68 px is in its way.
+    setBarAtFoot(box.top - canvas.getBoundingClientRect().top < 12 + 40 + 16);
+  }, [selected, gestureActive, overlayOpen]);
   const canUndo = editor.past.length > 0;
   const taken = useMemo(
     () => new Set(layers.flatMap((layer) => (layer.type === "mention" ? [layer.userId] : []))),
@@ -1007,8 +999,11 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               role="toolbar"
               aria-label={describe(selected)}
               data-story-layer-bar=""
-              className="absolute z-10 flex -translate-x-1/2 justify-center gap-1.5"
-              style={barPlace ?? { left: "50%", top: 12 }}
+              className={cn(
+                "absolute inset-x-0 z-10 flex justify-center gap-1.5",
+                // In the text card the background picker holds the foot row.
+                barAtFoot ? (mode === "text" ? "bottom-[60px]" : "bottom-3") : "top-3",
+              )}
             >
               {selected.type === "text" && (
                 <button type="button" className="story-cbtn" aria-label={t("stories.editor.layer.edit")} onClick={() => openText(selected.id)}>

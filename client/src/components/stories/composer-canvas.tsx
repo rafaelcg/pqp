@@ -250,6 +250,13 @@ export function ComposerCanvas({
     if (!active || !pointers.current.has(event.pointerId)) {
       return;
     }
+    // A mouse button that came up where this page could not see it (outside the window, over a
+    // dialog) never sends its pointerup: a move with no button down ends the gesture, instead of
+    // the layer following a pointer that is only hovering.
+    if (event.pointerType === "mouse" && event.buttons === 0) {
+      finish(event, false);
+      return;
+    }
     const point = local(event);
     pointers.current.set(event.pointerId, point);
     const size = box();
