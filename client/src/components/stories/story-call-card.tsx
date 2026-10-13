@@ -93,7 +93,7 @@ export function StoryCallCard({
   /** The live state, from the story. Null on the author's canvas before posting. */
   call: StoryCallLive | null;
   /** The room as the composer knows it, before there is a live roster. */
-  preview: { channelName: string; names: string[]; authorAway?: boolean } | null;
+  preview: { channelName: string; names: string[] } | null;
   server: CallCardServer | null;
   onJoin?: (call: StoryCallLive) => void;
   className?: string;
@@ -107,9 +107,8 @@ export function StoryCallCard({
     : (preview?.names ?? []).map((name, index) => ({ id: `preview-${index}`, displayName: name, avatarUrl: null }));
   const names = call ? people.map((person) => firstName(person.displayName)) : (preview?.names ?? []);
   const count = call ? call.count : names.length;
-  // The server keeps a call open only while its author is in the room, so a card for a room the
-  // author is not in is what viewers will see: over.
-  const state = !call && preview?.authorAway ? "ended" : callCardState(call, count);
+  // An empty room is not an ended call: the card says nobody is in it and still offers the way in.
+  const state = callCardState(call, count);
   const channelName = call?.channelName ?? preview?.channelName ?? "";
   const shownNames = names.slice(0, 3);
   const extra = Math.max(0, count - shownNames.length);
