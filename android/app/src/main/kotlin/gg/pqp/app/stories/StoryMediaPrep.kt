@@ -33,6 +33,8 @@ data class PreparedMedia(
     val durationMs: Long?,
     /** A local preview for the composer: the file itself. */
     val previewUri: Uri,
+    /** False for a clip with no audio track (shot without the microphone): "mute" has nothing to do. Always true for a photo. */
+    val hasAudio: Boolean = true,
 ) {
     val isVideo: Boolean get() = contentType == "video/mp4"
 
@@ -140,12 +142,14 @@ object StoryMediaPrep {
 
     private fun prepareVideo(context: Context, uri: Uri, type: String, maxBytes: Long): PrepResult {
         val retriever = MediaMetadataRetriever()
+        var hasAudio = true
         val (durationMs, width, height) = try {
             retriever.setDataSource(context, uri)
             val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
             val w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
             val h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
             val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            hasAudio = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes"
             // A portrait phone clip is stored landscape with a rotation tag;
             // the story is drawn the way it plays.
             if (rotation == 90 || rotation == 270) Triple(duration, h, w) else Triple(duration, w, h)
@@ -179,7 +183,7 @@ object StoryMediaPrep {
             ?: context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: return PrepResult.Unreadable
         if (bytes.size > maxBytes) return PrepResult.Refused(StoriesRules.MediaRefusal.TooBig)
-        return PrepResult.Ready(PreparedMedia(bytes, "video/mp4", width, height, durationMs, uri))
+        return PrepResult.Ready(PreparedMedia(bytes, "video/mp4", width, height, durationMs, uri, hasAudio))
     }
 
     /** The stream's bytes, reading no further than [limit]: enough to know whether it is over a cap, and to keep if it is not. */

@@ -18,6 +18,12 @@ object StoriesRules {
     const val TEXT_MAX = 280
     const val REPLY_MAX = 2000
 
+    /** The longest wait between two reads of the audience list while the API is unreachable. */
+    const val RETRY_MAX_MS = 15_000L
+
+    /** The wait after [previous] in an exponential backoff that never exceeds [RETRY_MAX_MS]. */
+    fun nextRetryDelay(previous: Long): Long = (previous * 2).coerceIn(1L, RETRY_MAX_MS)
+
     /** How long after a story is on screen it counts as seen. */
     const val SEEN_AFTER_MS = 1_000L
 

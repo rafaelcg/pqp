@@ -66,9 +66,10 @@ fun StoriesSection(
             when {
                 nothingLive && strip.firstRunHint && strip.canPost ->
                     StoryFirstRunRow(me = me, onPost = { composing = true }, modifier = Modifier.padding(vertical = Spacing.sm))
-                // The server strip only appears with a story on it; an empty
-                // bubble would cost the top of every server screen forever.
-                nothingLive && serverId != null -> Unit
+                // The server strip only appears with a story on it: an empty bubble would cost the
+                // top of every server screen forever. Somebody who may post still gets one quiet
+                // line to start from once the first-run row is gone, so the way in never disappears.
+                nothingLive && serverId != null -> if (strip.canPost) StoryComposeLink(onPost = { composing = true }) else Unit
                 nothingLive && !strip.canPost -> Unit
                 else -> StoryStripRow(
                     strip = strip,
