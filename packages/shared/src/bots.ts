@@ -57,43 +57,73 @@ export const SERVER_BOT_DEFAULT_TOOLS: ServerBotTool[] = SERVER_BOT_TOOLS.filter
 );
 const botToolsSchema = z
   .array(z.enum(SERVER_BOT_TOOLS as [ServerBotTool, ...ServerBotTool[]]))
-  .max(SERVER_BOT_TOOLS.length);
+  .max(SERVER_BOT_TOOLS.length * 2)
+  .transform((tools) => [...new Set(tools)]);
+
+/** NUL, other control characters and bidi overrides: never part of a name or a prompt. */
+const UNSAFE_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u202A-\u202E\u2066-\u2069]/;
+/** Lone surrogates come from broken clients and turn into U+FFFD in Postgres. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const safeText = (max: number) =>
+  z
+    .string()
+    .max(max)
+    .refine((value) => !UNSAFE_CHARS.test(value) && !LONE_SURROGATE.test(value), "Unsupported characters");
 
 const botName = z
   .string()
   .trim()
   .min(2)
-  .max(SERVER_BOT_NAME_MAX);
+  .max(SERVER_BOT_NAME_MAX)
+  // One line, and at least two letters or digits: not an emoji alone, not
+  // zero-width characters that render as nothing.
+  .refine((value) => !/[\r\n]/.test(value), "One line")
+  .refine((value) => (value.match(/[\p{L}\p{N}]/gu) ?? []).length >= 2, "At least two letters")
+  .refine((value) => !UNSAFE_CHARS.test(value) && !LONE_SURROGATE.test(value), "Unsupported characters");
+
+/** An empty or blank status line is no status line. */
+const botTagline = customStatusSchema
+  .nullable()
+  .optional()
+  .transform((value) => (value === undefined ? undefined : value && value.trim() ? value : null));
+
+/** "" is the default model, the same as null. */
+const botModel = z
+  .string()
+  .max(200)
+  .nullable()
+  .optional()
+  .transform((value) => (value === "" ? null : value));
 
 export const createServerBotSchema = z.object({
   name: botName,
-  persona: z.string().max(SERVER_BOT_PERSONA_MAX).default(""),
-  knowledge: z.string().max(SERVER_BOT_KNOWLEDGE_MAX).default(""),
+  persona: safeText(SERVER_BOT_PERSONA_MAX).default(""),
+  knowledge: safeText(SERVER_BOT_KNOWLEDGE_MAX).default(""),
   channelIds: z.array(z.string().uuid()).max(SERVER_BOT_CHANNELS_MAX).default([]),
   answerToName: z.boolean().default(false),
-  model: z.string().max(200).nullable().optional(),
+  model: botModel,
   tools: botToolsSchema.optional(),
   color: z.enum(BOT_COLORS).optional(),
   face: z.enum(BOT_BASE_FACES).optional(),
   /** The line under its name in the member list (its recado). */
-  tagline: customStatusSchema.nullable().optional(),
+  tagline: botTagline,
 });
 export type CreateServerBotRequest = z.input<typeof createServerBotSchema>;
 
 export const updateServerBotSchema = z.object({
   name: botName.optional(),
-  persona: z.string().max(SERVER_BOT_PERSONA_MAX).optional(),
-  knowledge: z.string().max(SERVER_BOT_KNOWLEDGE_MAX).optional(),
+  persona: safeText(SERVER_BOT_PERSONA_MAX).optional(),
+  knowledge: safeText(SERVER_BOT_KNOWLEDGE_MAX).optional(),
   channelIds: z.array(z.string().uuid()).max(SERVER_BOT_CHANNELS_MAX).optional(),
   enabled: z.boolean().optional(),
   answerToName: z.boolean().optional(),
   /** `null` goes back to the default model. */
-  model: z.string().max(200).nullable().optional(),
+  model: botModel,
   tools: botToolsSchema.optional(),
   color: z.enum(BOT_COLORS).optional(),
   face: z.enum(BOT_BASE_FACES).optional(),
   /** `null` clears it. */
-  tagline: customStatusSchema.nullable().optional(),
+  tagline: botTagline,
 });
 export type UpdateServerBotRequest = z.input<typeof updateServerBotSchema>;
 

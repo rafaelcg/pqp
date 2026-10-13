@@ -18,6 +18,7 @@ import {
   type ServerBotDto,
   type ServerBotTool,
 } from "@pqp/shared";
+import type { PoolClient } from "pg";
 import { getPool, type DbUser } from "../db.js";
 import { isEnabled } from "../lib/flags.js";
 import { deriveHandle, slugifyUsername } from "./users.js";
@@ -352,34 +353,15 @@ export async function updateServerBot(input: {
     input.channelIds === undefined
       ? undefined
       : await requireServerChannels(input.serverId, input.channelIds);
-  await getPool().query(
-    `UPDATE server_bots
-        SET persona = COALESCE($3, persona),
-            knowledge = COALESCE($4, knowledge),
-            channel_ids = COALESCE($5::uuid[], channel_ids),
-            enabled = COALESCE($6, enabled),
-            answer_to_name = COALESCE($7, answer_to_name),
-            model = CASE WHEN $8::boolean THEN $9 ELSE model END,
-            tools = COALESCE($10::text[], tools),
-            color = COALESCE($11, color),
-            face = COALESCE($12, face),
-            updated_at = NOW()
-      WHERE server_id = $1 AND id = $2`,
-    [
-      input.serverId,
-      input.botId,
-      input.persona ?? null,
-      input.knowledge ?? null,
-      channelIds ?? null,
-      input.enabled ?? null,
-      input.answerToName ?? null,
-      input.model !== undefined,
-      input.model ?? null,
-      input.tools ?? null,
-      input.color ?? null,
-      input.face ?? null,
-    ],
-  );
+  // A rename moves the handle too: people call the bot by the name they see,
+  // so "Julius" answers to @julius_bot. The old handle stops working, which
+  // for a bot is the expected outcome of renaming it. Picked before the
+  // writes, which then land together or not at all.
+  const renamed = input.name !== undefined && input.name !== before.name;
+  const handle =
+    renamed && botHandleStem(input.name!) !== botHandleStem(before.name)
+      ? await allocateBotHandle(input.serverId, input.name!)
+      : null;
   // A new colour or face is a new picture, and a new line under its name:
   // the caller sends the profile frame that repaints them.
   const color = input.color ?? before.color;
@@ -388,31 +370,64 @@ export async function updateServerBot(input: {
     color !== before.color ||
     face !== before.face ||
     (input.tagline !== undefined && input.tagline !== before.tagline);
-  if (restyled) {
-    await getPool().query(
-      `UPDATE users
-          SET avatar_url = $2,
-              custom_status = CASE WHEN $3::boolean THEN $4 ELSE custom_status END
-        WHERE id = $1`,
-      [before.userId, botFaceAvatarPath(color, face), input.tagline !== undefined, input.tagline ?? null],
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `UPDATE server_bots
+          SET persona = COALESCE($3, persona),
+              knowledge = COALESCE($4, knowledge),
+              channel_ids = COALESCE($5::uuid[], channel_ids),
+              enabled = COALESCE($6, enabled),
+              answer_to_name = COALESCE($7, answer_to_name),
+              model = CASE WHEN $8::boolean THEN $9 ELSE model END,
+              tools = COALESCE($10::text[], tools),
+              color = COALESCE($11, color),
+              face = COALESCE($12, face),
+              updated_at = NOW()
+        WHERE server_id = $1 AND id = $2`,
+      [
+        input.serverId,
+        input.botId,
+        input.persona ?? null,
+        input.knowledge ?? null,
+        channelIds ?? null,
+        input.enabled ?? null,
+        input.answerToName ?? null,
+        input.model !== undefined,
+        input.model ?? null,
+        input.tools ?? null,
+        input.color ?? null,
+        input.face ?? null,
+      ],
     );
-  }
-  // A rename moves the handle too: people call the bot by the name they see,
-  // so "Julius" answers to @julius_bot. The old handle stops working, which
-  // for a bot is the expected outcome of renaming it.
-  let renamed = false;
-  if (input.name !== undefined && input.name !== before.name) {
-    const sameHandle = botHandleStem(input.name) === botHandleStem(before.name);
-    const handle = sameHandle ? null : await allocateBotHandle(input.serverId, input.name);
-    await getPool().query(
-      `UPDATE users
-          SET display_name = $2,
-              username = COALESCE($3, username),
-              discriminator = COALESCE($4, discriminator)
-        WHERE id = $1`,
-      [before.userId, input.name, handle?.username ?? null, handle?.discriminator ?? null],
-    );
-    renamed = true;
+    if (restyled || renamed) {
+      await client.query(
+        `UPDATE users
+            SET avatar_url = $2,
+                custom_status = CASE WHEN $3::boolean THEN $4 ELSE custom_status END,
+                display_name = COALESCE($5, display_name),
+                username = COALESCE($6, username),
+                discriminator = COALESCE($7, discriminator)
+          WHERE id = $1`,
+        [
+          before.userId,
+          botFaceAvatarPath(color, face),
+          input.tagline !== undefined,
+          input.tagline ?? null,
+          renamed ? input.name! : null,
+          handle?.username ?? null,
+          handle?.discriminator ?? null,
+        ],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
   forgetTriggerBot(input.serverId);
   const bot = await getServerBot(input.serverId, input.botId);
@@ -696,8 +711,10 @@ export async function maybeQueueBotReply(input: BotTriggerInput): Promise<boolea
     return false;
   }
   // A "sim" or "não" from the member a plan is waiting on. Only theirs: the
-  // lookup is by author, so anybody else's "sim" matches nothing.
-  if (confirmationWord(input.body, bot.username)) {
+  // lookup is by author, so anybody else's "sim" matches nothing. And only
+  // said to nobody or to the bot: a "sim" in reply to a friend is theirs.
+  const repliedElsewhere = input.repliedToUserId !== null && input.repliedToUserId !== bot.userId;
+  if (!repliedElsewhere && confirmationWord(input.body, bot.username)) {
     const { pendingPlanFor } = await import("./bot-actions.js");
     const planId = await pendingPlanFor(bot.id, channel.id, input.author.id);
     if (planId) {
@@ -738,7 +755,10 @@ export async function maybeQueueBotReply(input: BotTriggerInput): Promise<boolea
   // have no hourly limit. One statement, so the limits hold across machines;
   // it also says which one stopped the question, for the notice.
   const exempt = await bypassesMemberLimit(channel.server_id, input.author.id);
-  const result = await getPool().query<{
+  // One statement checks the caps and inserts, but two of the same member's
+  // messages arriving together would both read the same counts. A lock per
+  // bot and member makes the second wait for the first.
+  const result = await withRequesterLock(bot.id, input.author.id, (db) => db.query<{
     queued: boolean;
     open_runs: number;
     hour_runs: number;
@@ -800,7 +820,7 @@ export async function maybeQueueBotReply(input: BotTriggerInput): Promise<boolea
             ? "mention"
             : "name",
     ],
-  );
+  ));
   const row = result.rows[0];
   if (!row || row.queued) {
     return !!row?.queued;
@@ -824,6 +844,28 @@ export async function maybeQueueBotReply(input: BotTriggerInput): Promise<boolea
  * nothing for it, so the per-member hourly limit does not apply to them. The
  * server's daily answers and the deployment's spend ceiling still do.
  */
+async function withRequesterLock<T>(
+  botId: string,
+  requesterId: string,
+  run: (db: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+      `bot-runs:${botId}:${requesterId}`,
+    ]);
+    const result = await run(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function bypassesMemberLimit(serverId: string, userId: string): Promise<boolean> {
   const { computeMemberPermissions } = await import("./permissions.js");
   const perms = await computeMemberPermissions(serverId, userId);

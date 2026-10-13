@@ -3783,7 +3783,7 @@ import {
 } from "../services/bots.js";
 import { botModelChoices, botProviderConfigured } from "../services/bot-llm.js";
 import { answerBotAsk } from "../services/bot-runner.js";
-import { deleteBotRole, syncBotRole } from "../services/bot-role.js";
+import { deleteBotRole, renameBotRole, syncBotRole } from "../services/bot-role.js";
 import { readBotFacePng } from "../services/bot-faces.js";
 
 function botsEnabled(serverId: string): boolean {
@@ -3896,7 +3896,7 @@ router.post("/api/servers/:serverId/bots", async ({ req, user }, { serverId }) =
     });
     // Its own role, so its tools can act. A failure here leaves a bot that
     // can talk and not act; saving its tools again retries.
-    const role = await syncBotRole({ serverId: serverId!, botId: bot.id, actorId: user.id }).catch(
+    const role = await syncBotRole({ serverId: serverId!, botId: bot.id, actorId: user.id, previousTools: [] }).catch(
       (error: unknown) => {
         logEvent("bots.roleSyncFailed", { serverId, botId: bot.id, message: String(error) });
         return null;
@@ -3940,16 +3940,37 @@ router.patch(
       let { bot } = updated;
       let missing = 0n;
       const { before, renamed, restyled } = updated;
-      // New tool switches move the role with them; so does a bot whose role
-      // somebody deleted, the next time its settings are saved.
-      if (body.tools !== undefined || bot.roleId === null) {
-        const role = await syncBotRole({ serverId: serverId!, botId: bot.id, actorId: user.id });
+      // New tool switches move the role with them (and make one again if
+      // somebody deleted it). The bot is already saved, so a failure here is
+      // logged rather than turned into an error for a save that worked.
+      if (body.tools !== undefined) {
+        const role = await syncBotRole({
+          serverId: serverId!,
+          botId: bot.id,
+          actorId: user.id,
+          previousTools: before.tools,
+        }).catch((error: unknown) => {
+          logEvent("bots.roleSyncFailed", { serverId, botId: bot.id, message: String(error) });
+          return null;
+        });
         if (role) {
           bot = { ...bot, roleId: role.roleId };
           missing = role.missing;
           if (role.changed) {
             pingPermissions(serverId!);
           }
+        }
+      }
+      if (renamed && bot.roleId && bot.username !== before.username) {
+        const roleRenamed = await renameBotRole({
+          serverId: serverId!,
+          roleId: bot.roleId,
+          oldUsername: before.username,
+          newUsername: bot.username,
+          actorId: user.id,
+        }).catch(() => false);
+        if (roleRenamed) {
+          pingPermissions(serverId!);
         }
       }
       // A new name (and handle) repaints chat and the member list everywhere,
@@ -12798,7 +12819,7 @@ async function serveBotFace(
     "content-length": png.length,
     "cache-control": "public, max-age=31536000, immutable",
   });
-  res.end(png);
+  res.end(req.method === "HEAD" ? undefined : png);
 }
 
 const AVATAR_OBJECT_PATH =
@@ -13507,7 +13528,8 @@ export async function handleApi(
     return;
   }
 
-  const botFaceMatch = req.method === "GET" ? BOT_FACE_PATH.exec(pathname) : null;
+  const botFaceMatch =
+    req.method === "GET" || req.method === "HEAD" ? BOT_FACE_PATH.exec(pathname) : null;
   if (botFaceMatch) {
     await serveBotFace(req, res, botFaceMatch[1]!, botFaceMatch[2]!);
     return;

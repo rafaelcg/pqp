@@ -26,10 +26,11 @@ import {
  *   * Only somebody who may manage roles makes or changes it; for anybody else
  *     the save goes through and `missing` says what the tools still lack. An
  *     existing role is changed only by somebody it ranks below.
- *   * It carries only what the switched-on tools need, and never a bit the
- *     staff member saving it does not hold themselves (`grantablePermissions`).
- *     A bit an earlier, more powerful staff member granted is kept while its
- *     tool stays on; one whose tool goes off is removed.
+ *   * A save adds what newly switched-on tools need, and never a bit the staff
+ *     member saving it does not hold themselves (`grantablePermissions`). It
+ *     removes only bits whose tool this save switched off, and only bits the
+ *     saver holds (`clampRolePermissions`' rule). Anything else on the role,
+ *     a bit staff added by hand included, is left alone.
  *   * It is made at the lowest custom rank, as `createRole` always does, so the
  *     bot outranks nobody and its moderation tools reach only members with no
  *     role, the same reach the hierarchy gives anybody that low.
@@ -55,6 +56,8 @@ export async function syncBotRole(input: {
   serverId: string;
   botId: string;
   actorId: string;
+  /** The tools before this save; what they needed and the new ones do not is removed. */
+  previousTools?: readonly string[] | null;
 }): Promise<BotRoleSync | null> {
   const found = await getPool().query<BotRoleSource>(
     `SELECT b.user_id, b.role_id, b.tools, u.username
@@ -67,6 +70,7 @@ export async function syncBotRole(input: {
     return null;
   }
   const needed = botToolPermissions(normalizeTools(bot.tools));
+  const neededBefore = input.previousTools ? botToolPermissions(input.previousTools) : needed;
   const actorPerms = await computeMemberPermissions(input.serverId, input.actorId);
   const grantable = grantablePermissions(actorPerms);
   const existing = bot.role_id ? await getRole(bot.role_id) : null;
@@ -77,7 +81,8 @@ export async function syncBotRole(input: {
     if (!(await mayEdit(input.actorId, role))) {
       return { roleId: role.id, changed: false, missing: needed & ~current };
     }
-    const next = needed & (current | grantable);
+    const turnedOff = neededBefore & ~needed & grantable;
+    const next = (current & ~turnedOff) | (needed & ~current & grantable);
     let changed = false;
     if (next !== current) {
       await updateRole(role, { permissions: next });
@@ -132,7 +137,11 @@ export async function syncBotRole(input: {
   return { roleId: created.id, changed: true, missing: needed & ~permissions };
 }
 
-/** The bot is gone: so is the role that existed only for it. */
+/**
+ * The bot is gone: so is the role that existed only for it. Left in place when
+ * people hold it too (somebody repurposed it) or when the person deleting the
+ * bot could not delete that role themselves.
+ */
 export async function deleteBotRole(input: {
   serverId: string;
   roleId: string;
@@ -140,6 +149,14 @@ export async function deleteBotRole(input: {
 }): Promise<boolean> {
   const role = await getRole(input.roleId);
   if (!role || role.server_id !== input.serverId || role.is_everyone || role.system_key) {
+    return false;
+  }
+  const holders = await getPool().query(
+    `SELECT 1 FROM member_roles mr JOIN users u ON u.id = mr.user_id
+      WHERE mr.server_id = $1 AND mr.role_id = $2 AND NOT u.is_character LIMIT 1`,
+    [input.serverId, role.id],
+  );
+  if (holders.rows.length > 0 || !(await mayEdit(input.actorId, role))) {
     return false;
   }
   await deleteRole(role);
@@ -213,5 +230,36 @@ async function createNamedRole(
       logEvent("bots.roleNameTaken", { serverId, name });
     }
   }
-  throw new Error("No free role name for the bot");
+  // Nine taken: a random tail is as good as a name nobody chose.
+  return createRole(serverId, {
+    name: `${base.slice(0, 24)}_${Math.random().toString(36).slice(2, 7)}`,
+    permissions,
+  });
+}
+
+/**
+ * The bot was renamed: its role follows, when the role still carries the old
+ * handle (staff may have named it something else on purpose). Best effort.
+ */
+export async function renameBotRole(input: {
+  serverId: string;
+  roleId: string;
+  oldUsername: string;
+  newUsername: string;
+  actorId: string;
+}): Promise<boolean> {
+  const role = await getRole(input.roleId);
+  const clean = (name: string) => name.replace(/[^A-Za-z0-9_]+/g, "").slice(0, 28);
+  if (!role || role.server_id !== input.serverId || !role.name.startsWith(clean(input.oldUsername))) {
+    return false;
+  }
+  if (!(await mayEdit(input.actorId, role))) {
+    return false;
+  }
+  try {
+    await updateRole(role, { name: clean(input.newUsername) || role.name });
+    return true;
+  } catch {
+    return false;
+  }
 }

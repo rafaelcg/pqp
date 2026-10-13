@@ -132,7 +132,8 @@ interface ClaimedRun {
   id: string;
   bot_id: string;
   channel_id: string;
-  message_id: string;
+  /** Null once the member deleted the question; the run is then skipped. */
+  message_id: string | null;
   requester_id: string;
   plan_id: string | null;
   follow_up: boolean;
@@ -212,7 +213,8 @@ async function finishRun(
   if ((settled.rowCount ?? 0) > 0 && status !== "queued") {
     await bumpBotStats(run.bot_id, {
       runs: 1,
-      replies: status === "done" ? 1 : 0,
+      // A Cancel pressed on the card posts nothing.
+      replies: status === "done" && outcome !== "plan-cancelled-button" ? 1 : 0,
       skipped: status === "skipped" ? 1 : 0,
       failed: status === "failed" ? 1 : 0,
       asks: outcome === "asked" ? 1 : 0,
@@ -239,14 +241,14 @@ async function deferRun(run: ClaimedRun, delayMs: number): Promise<void> {
   }, delayMs + 100).unref();
 }
 
-async function reserveReply(serverId: string): Promise<boolean> {
+async function reserveReply(serverId: string, day: string): Promise<boolean> {
   const reserved = await getPool().query(
     `INSERT INTO server_bot_usage_daily AS u (day, server_id, replies)
      SELECT $3::date, $1, 1 WHERE $2::int > 0
      ON CONFLICT (day, server_id) DO UPDATE SET replies = u.replies + 1
       WHERE u.replies < $2::int
      RETURNING replies`,
-    [serverId, botRepliesPerDay(), botDay()],
+    [serverId, botRepliesPerDay(), day],
   );
   if ((reserved.rowCount ?? 0) > 0) {
     return true;
@@ -255,16 +257,26 @@ async function reserveReply(serverId: string): Promise<boolean> {
     `INSERT INTO server_bot_usage_daily AS u (day, server_id, refused)
      VALUES ($2::date, $1, 1)
      ON CONFLICT (day, server_id) DO UPDATE SET refused = u.refused + 1`,
-    [serverId, botDay()],
+    [serverId, day],
   );
   return false;
 }
 
-async function refundReply(serverId: string): Promise<void> {
+/** A reply back to the bot's server, today, when only the bot is known. */
+async function refundBotReply(botId: string): Promise<void> {
+  await getPool().query(
+    `UPDATE server_bot_usage_daily SET replies = GREATEST(replies - 1, 0)
+      WHERE day = $2::date AND server_id = (SELECT server_id FROM server_bots WHERE id = $1)`,
+    [botId, botDay()],
+  );
+}
+
+/** Give a reply back, on the day it was taken (a run can cross midnight). */
+async function refundReply(serverId: string, day: string = botDay()): Promise<void> {
   await getPool().query(
     `UPDATE server_bot_usage_daily SET replies = GREATEST(replies - 1, 0)
       WHERE day = $2::date AND server_id = $1`,
-    [serverId, botDay()],
+    [serverId, day],
   );
 }
 
@@ -609,6 +621,10 @@ async function runOne(run: ClaimedRun): Promise<void> {
   if (Date.now() - run.created_at.getTime() > STALE_AFTER_MS) {
     return finishRun(run, "skipped", "stale");
   }
+  // The member deleted the question before it was answered.
+  if (!run.message_id) {
+    return finishRun(run, "skipped", "gone");
+  }
   const ctx = await loadContext(run);
   if (!ctx || !ctx.trigger) {
     return finishRun(run, "skipped", "gone");
@@ -677,7 +693,9 @@ async function runOne(run: ClaimedRun): Promise<void> {
     }
   }
   // A re-claimed run already holds its reply from the first claim.
-  if (run.attempts === 1 && !(await reserveReply(ctx.serverId))) {
+  // The day this run's reply is charged to, so a refund lands on it too.
+  const replyDay = botDay();
+  if (run.attempts === 1 && !(await reserveReply(ctx.serverId, replyDay))) {
     await noticeDailyLimit(run, ctx.bot, "server-day");
     return finishRun(run, "skipped", "server-cap");
   }
@@ -709,7 +727,7 @@ async function runOne(run: ClaimedRun): Promise<void> {
 
   const provider = getBotProvider(ctx.model);
   if (!provider) {
-    await refundReply(ctx.serverId);
+    await refundReply(ctx.serverId, replyDay);
     return finishRun(run, "skipped", "no-provider");
   }
   const tools = [...offered.tools, ASK_TOOL];
@@ -749,7 +767,7 @@ async function runOne(run: ClaimedRun): Promise<void> {
     const spendDay = botDay();
     if (!(await reserveSpend(spendDay, estimate))) {
       if (turn === 0) {
-        await refundReply(ctx.serverId);
+        await refundReply(ctx.serverId, replyDay);
         logEvent("bots.globalCap", { serverId: ctx.serverId });
         await noticeDailyLimit(run, ctx.bot, "budget");
         return finishRun(run, "skipped", "global-cap");
@@ -777,7 +795,7 @@ async function runOne(run: ClaimedRun): Promise<void> {
       if (retriable && run.attempts < MAX_ATTEMPTS) {
         return finishRun(run, "queued", `model-error-${status ?? "network"}`);
       }
-      await refundReply(ctx.serverId);
+      await refundReply(ctx.serverId, replyDay);
       return finishRun(run, "failed", `model-error-${status ?? "network"}`);
     }
     const costMicros = botCostMicros(completion);
@@ -852,7 +870,7 @@ async function runOne(run: ClaimedRun): Promise<void> {
   }
 
   if (run.follow_up && finalText?.trim().replace(/[.!]+$/, "").toUpperCase() === SKIP) {
-    await refundReply(ctx.serverId);
+    await refundReply(ctx.serverId, replyDay);
     return finishRun(run, "skipped", "not-for-me");
   }
   const body = finalText ? sanitizeBotReply(finalText) : "";
@@ -1122,7 +1140,7 @@ async function postReply(
     author: bot,
     channelId: run.channel_id,
     body,
-    replyToId: run.message_id,
+    replyToId: run.message_id ?? undefined,
     nonce: run.id,
     ...(botCard ? { botCard } : {}),
   });
@@ -1131,7 +1149,11 @@ async function postReply(
     return finishRun(run, "done", outcome);
   }
   // Every refusal is final: AutoMod and access will say the same thing again,
-  // and a reply that waited out slow mode would arrive after the moment.
+  // and a reply that waited out slow mode would arrive after the moment. A
+  // reply never posted is not charged: give the server its reply back.
+  if (!run.plan_id) {
+    await refundBotReply(run.bot_id);
+  }
   return finishRun(run, "skipped", `post-${posted.reason}`);
 }
 
@@ -1213,7 +1235,7 @@ async function answerConfirmation(
       await markPlanCard(run.channel_id, plan.message_id, "cancelled");
       // The card already says it for a button; a typed "não" gets an answer.
       return viaButton
-        ? finishRun(run, "done", "plan-cancelled")
+        ? finishRun(run, "done", "plan-cancelled-button")
         : postReply(run, actionCtx.bot, "Beleza, cancelei. Nada foi feito.", "plan-cancelled");
     }
     return finishRun(run, "skipped", "plan-not-pending");

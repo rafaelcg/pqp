@@ -6453,7 +6453,9 @@ CREATE TABLE IF NOT EXISTS server_bot_runs (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   bot_id           UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
   channel_id       UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-  message_id       UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  -- SET NULL, not CASCADE: the member caps count these rows, and deleting
+  -- the question after its answer must not give the quota back.
+  message_id       UUID REFERENCES messages(id) ON DELETE SET NULL,
   requester_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   status           TEXT NOT NULL DEFAULT 'queued'
                    CHECK (status IN ('queued', 'running', 'done', 'skipped', 'failed')),
@@ -6475,6 +6477,19 @@ CREATE TABLE IF NOT EXISTS server_bot_runs (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_server_bot_runs_message
   ON server_bot_runs (bot_id, message_id);
+-- Databases made before the line above changed: same rule, applied once.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'server_bot_runs_message_id_fkey' AND confdeltype = 'c'
+  ) THEN
+    ALTER TABLE server_bot_runs DROP CONSTRAINT server_bot_runs_message_id_fkey;
+    ALTER TABLE server_bot_runs ALTER COLUMN message_id DROP NOT NULL;
+    ALTER TABLE server_bot_runs ADD CONSTRAINT server_bot_runs_message_id_fkey
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL;
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_server_bot_runs_due
   ON server_bot_runs (created_at) WHERE status IN ('queued', 'running');
 

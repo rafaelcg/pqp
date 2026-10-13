@@ -21,7 +21,7 @@ const { Permission, SERVER_BOT_DEFAULT_TOOLS, SERVER_BOT_TOOLS } = await import(
 const { createServerBot, deleteServerBot, resetBotTriggerCacheForTests, updateServerBot } =
   await import("./bots.js");
 const { botToolPermissions } = await import("./bot-actions.js");
-const { deleteBotRole, syncBotRole } = await import("./bot-role.js");
+const { deleteBotRole, renameBotRole, syncBotRole } = await import("./bot-role.js");
 const { botDay, nextBotDayStart } = await import("./bot-stats.js");
 const { runBotRunsTick } = await import("./bot-runner.js");
 const { setBotProviderForTests } = await import("./bot-llm.js");
@@ -183,13 +183,18 @@ describeDb("server bot foundations", () => {
       (tool) => !["create_channel", "edit_channel", "move_channel", "delete_channel"].includes(tool),
     );
     await updateServerBot({ serverId: server.id, botId: bot.id, tools: withoutChannels });
-    const second = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    const second = await syncBotRole({
+      serverId: server.id,
+      botId: bot.id,
+      actorId: owner.id,
+      previousTools: SERVER_BOT_DEFAULT_TOOLS,
+    });
     expect(second!.roleId).toBe(first!.roleId);
     expect(second!.changed).toBe(true);
     expect((await roleBits(second!.roleId!)) & Permission.MANAGE_CHANNELS).toBe(0n);
 
     await updateServerBot({ serverId: server.id, botId: bot.id, tools: [...SERVER_BOT_DEFAULT_TOOLS] });
-    await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id, previousTools: withoutChannels });
     expect((await roleBits(first!.roleId!)) & Permission.MANAGE_CHANNELS).toBe(
       Permission.MANAGE_CHANNELS,
     );
@@ -203,6 +208,44 @@ describeDb("server bot foundations", () => {
     const again = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: staff.id });
     expect(again!.changed).toBe(false);
     expect(await roleBits(synced!.roleId!)).toBe(botToolPermissions(SERVER_BOT_DEFAULT_TOOLS));
+  });
+
+  it("never strips a bit staff added by hand, nor one the saver does not hold", async () => {
+    const { owner, server, bot } = await setup();
+    const synced = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    const role = (await getRole(synced!.roleId!))!;
+    // Staff give the role something no tool needs.
+    const extra = Permission.MUTE_MEMBERS;
+    await getPool().query(`UPDATE roles SET permissions = $2 WHERE id = $1`, [
+      role.id,
+      (parsePermissions(role.permissions) | extra).toString(),
+    ]);
+    // A face change re-saves the same tools: nothing moves.
+    const same = await syncBotRole({
+      serverId: server.id,
+      botId: bot.id,
+      actorId: owner.id,
+      previousTools: SERVER_BOT_DEFAULT_TOOLS,
+    });
+    expect(same!.changed).toBe(false);
+    expect((await roleBits(role.id)) & extra).toBe(extra);
+
+    // A weaker staffer turns the channel tools off: they hold no Manage
+    // Channels, so they cannot take it away.
+    const weak = await memberWith(server.id, "weak", Permission.MANAGE_ROLES);
+    const noChannels = SERVER_BOT_DEFAULT_TOOLS.filter((tool) => !tool.includes("channel"));
+    await updateServerBot({ serverId: server.id, botId: bot.id, tools: noChannels });
+    await syncBotRole({ serverId: server.id, botId: bot.id, actorId: weak.id, previousTools: SERVER_BOT_DEFAULT_TOOLS });
+    expect((await roleBits(role.id)) & Permission.MANAGE_CHANNELS).toBe(Permission.MANAGE_CHANNELS);
+  });
+
+  it("leaves the role alone when people hold it too", async () => {
+    const { owner, server, bot } = await setup();
+    const synced = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    const person = await memberWith(server.id, "person", 0n);
+    await assignRole(server.id, person.id, synced!.roleId!);
+    expect(await deleteBotRole({ serverId: server.id, roleId: synced!.roleId!, actorId: owner.id })).toBe(false);
+    expect(await getRole(synced!.roleId!)).not.toBeNull();
   });
 
   it("makes a new role when somebody deleted the old one", async () => {
@@ -226,6 +269,55 @@ describeDb("server bot foundations", () => {
       [server.id],
     );
     expect(roles.rows.map((row) => row.id)).toEqual([a!.roleId]);
+  });
+
+  it("renames the role with the bot", async () => {
+    const { owner, server, bot } = await setup();
+    const synced = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    expect(
+      await renameBotRole({
+        serverId: server.id,
+        roleId: synced!.roleId!,
+        oldUsername: "caio_bot",
+        newUsername: "julius_bot",
+        actorId: owner.id,
+      }),
+    ).toBe(true);
+    expect((await getRole(synced!.roleId!))!.name).toBe("julius_bot");
+  });
+
+  it("keeps a member's runs when they delete their question, so the caps hold", async () => {
+    const { owner, server, channelId } = await setup();
+    const member = await memberWith(server.id, "asker", 0n);
+    const sent = await postChannelMessage({ author: member, channelId, body: "@caio_bot oi" });
+    expect(sent.ok).toBe(true);
+    await runBotRunsTick();
+    await getPool().query(`DELETE FROM messages WHERE id = $1`, [sent.ok ? sent.message.id : null]);
+    const runs = await getPool().query(`SELECT 1 FROM server_bot_runs WHERE requester_id = $1`, [member.id]);
+    expect(runs.rowCount).toBe(1);
+    void owner;
+  });
+
+  it("does not take a 'sim' said to somebody else as the answer to a plan", async () => {
+    const { confirmationWord } = await import("./bots.js");
+    expect(confirmationWord("sim")).toBe("yes");
+    // The word alone matches; the trigger is what checks who it was said to.
+    const { owner, server, channelId, bot } = await setup();
+    const friend = await memberWith(server.id, "friend", 0n);
+    const theirs = await postChannelMessage({ author: friend, channelId, body: "vamos jogar?" });
+    await getPool().query(
+      `INSERT INTO server_bot_plans (bot_id, server_id, channel_id, requester_id, run_id, actions, status, expires_at)
+       VALUES ($1, $2, $3, $4, gen_random_uuid(), '[]', 'pending', NOW() + INTERVAL '5 minutes')`,
+      [bot.id, server.id, channelId, owner.id],
+    );
+    await postChannelMessage({
+      author: owner,
+      channelId,
+      body: "sim",
+      replyToId: theirs.ok ? theirs.message.id : undefined,
+    });
+    const decisions = await getPool().query(`SELECT 1 FROM server_bot_runs WHERE trigger = 'decision'`);
+    expect(decisions.rowCount).toBe(0);
   });
 
   it("names the role around a taken name", async () => {
