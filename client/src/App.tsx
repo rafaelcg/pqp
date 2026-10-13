@@ -38,6 +38,7 @@ import {
   SIDEBAR_THREADS_PER_CHANNEL,
   withProfileUpdate,
   applyLayoutToChannels,
+  applyServerOrder,
   layoutToPayload,
   CHANNEL_LAYOUT_OFF,
   CHANNEL_LAYOUT_STALE,
@@ -372,6 +373,7 @@ import {
   listTimeouts,
   fetchMessages,
   fetchServers,
+  saveServerOrder,
   fetchUnread,
   fetchVoiceBackend,
   hideConversation,
@@ -631,9 +633,16 @@ import {
   notifyStreamStarted,
   rememberActivityChannel,
   rememberServers,
+  resolveNotificationLevel,
   setNotificationBlockedAuthors,
   unreadByServer,
 } from "@/lib/notifications";
+import {
+  hydrateInBatches,
+  reconnectNeedsUnreadRefresh,
+  serversToHydrate,
+  visibleNeedsUnreadRefresh,
+} from "@/lib/unread-hydration";
 import {
   applyPttHeldChange,
   resetPttHeld,
@@ -655,6 +664,11 @@ import { useUserStatus } from "@/hooks/use-status";
 import { useAttentionReport } from "@/hooks/use-attention";
 import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
+import { newRailOrigin } from "@/lib/server-rail-reorder";
+import {
+  createServerOrderSaver,
+  type ServerOrderSaver,
+} from "@/lib/server-order-saver";
 import { adoptAccentHuePreference } from "@/lib/accent";
 import { getAppearance } from "@/lib/appearance";
 import { adoptLook } from "@/lib/choose-look";
@@ -2705,6 +2719,55 @@ function MainAppContent({
   );
   const serversRef = useRef(servers);
   serversRef.current = servers;
+  // The server rail's order (`PUT /api/servers/order`). `railOriginRef` is this
+  // tab's own id, sent with a save and echoed on the frame the account's OTHER
+  // tabs get, so this one can skip its own echo. The saver sends one request at
+  // a time, coalesces a burst of moves and rolls back to the last order the
+  // server confirmed: see `lib/server-order-saver.ts` for why.
+  const railOriginRef = useRef<string>("");
+  if (railOriginRef.current === "") {
+    railOriginRef.current = newRailOrigin();
+  }
+  const railMovesRef = useRef(0);
+  const railSaverRef = useRef<ServerOrderSaver | null>(null);
+  if (railSaverRef.current === null) {
+    railSaverRef.current = createServerOrderSaver({
+      save: async (ids) => (await saveServerOrder(ids, railOriginRef.current)).serverIds,
+      current: () => serversRef.current.map((row) => row.id),
+      onConfirmed: (stored, latest) => {
+        if (latest) {
+          setServers((rows) => applyServerOrder(rows, stored));
+        }
+      },
+      onFailed: (confirmed) => {
+        setServers((rows) => applyServerOrder(rows, confirmed));
+        setAppNotice(null);
+        setAppError(translateMessage("chrome.railReorderFailed"));
+      },
+      onResync: () => {
+        // A read that started before the person moved something again is older
+        // than that move: `railMovesRef` says whether they did, and if so the
+        // read is dropped (the new move has its own save, and its own resync
+        // if another tab spoke meanwhile).
+        const moves = railMovesRef.current;
+        fetchServers()
+          .then(({ servers: list }) => {
+            if (railMovesRef.current !== moves) {
+              return;
+            }
+            setServers((rows) =>
+              applyServerOrder(
+                rows,
+                list.map((row) => row.id),
+              ),
+            );
+          })
+          .catch(() => {
+            // The next load reads it anyway.
+          });
+      },
+    });
+  }
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
   /**
@@ -3600,7 +3663,24 @@ function MainAppContent({
   // Conversas: the Ctrl/Cmd+K "ir pra" switcher.
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
+  /**
+   * When each channel's unread was last changed by something newer than any
+   * fetch in flight: a live frame, or the reader clearing it. A `loadUnread`
+   * response was computed before those, so it must not overwrite them.
+   */
+  const unreadTouchRef = useRef({
+    seq: 0,
+    at: new Map<string, number>(),
+    fetchByServer: new Map<string, number>(),
+  });
+  const touchUnread = useCallback((channelId: string) => {
+    const touch = unreadTouchRef.current;
+    touch.seq += 1;
+    touch.at.set(channelId, touch.seq);
+  }, []);
+
   const clearUnread = useCallback(async (channelId: string): Promise<string | null> => {
+    touchUnread(channelId);
     unreadHoldRef.current.delete(channelId);
     setUnreadHeldIds(new Set(unreadHoldRef.current));
     setUnread((prev) => {
@@ -3617,16 +3697,45 @@ function MainAppContent({
       const result = await readCursorQueue.run(channelId, () =>
         markChannelRead(channelId),
       );
+      // Touched again now that the server has the read: an unread read that
+      // began while this was in flight may have seen the old cursor.
+      touchUnread(channelId);
       return result.previousLastReadAt ?? null;
     } catch {
       // A missed read receipt only means a stale badge; not worth surfacing.
       return null;
     }
-  }, [readCursorQueue]);
+  }, [readCursorQueue, touchUnread]);
 
-  const loadUnread = useCallback(async (serverId: string) => {
+  const loadUnread = useCallback(async (serverId: string): Promise<boolean> => {
+    const touch = unreadTouchRef.current;
+    touch.seq += 1;
+    const startedAt = touch.seq;
     try {
-      const { unread: rows } = await fetchUnread(serverId);
+      const { unread: allRows } = await fetchUnread(serverId);
+      // Answers are applied in the order the reads STARTED: a read that
+      // finishes after a newer one has already been applied is stale, but an
+      // older answer that arrives first stands (it is the fallback if the
+      // newer read fails).
+      if ((touch.fetchByServer.get(serverId) ?? 0) > startedAt) {
+        return true;
+      }
+      touch.fetchByServer.set(serverId, startedAt);
+      // Rows whose channel changed after this read began (a live frame, or the
+      // reader clearing it) are newer than what the server answered.
+      const rows = allRows.filter(
+        (row) => (touch.at.get(row.channelId) ?? 0) <= startedAt,
+      );
+      // Say which server each row belongs to. The directory only knows the
+      // SELECTED server's channel list, so for any other server this is what
+      // lets the rail place the row on that server's icon (a channel the
+      // directory cannot place is skipped, by design). Never overwrites a
+      // named entry, so the open server's real list still wins.
+      for (const row of rows) {
+        if (row.count > 0 || row.mentions > 0) {
+          rememberActivityChannel(row.channelId, serverId, "server");
+        }
+      }
       setUnread((prev) => {
         const next = { ...prev };
         for (const row of rows) {
@@ -3647,9 +3756,57 @@ function MainAppContent({
         }
         return next;
       });
+      return true;
     } catch {
-      // Badges are cosmetic — never block the app on them.
+      // Badges are cosmetic — never block the app on them. The caller is told,
+      // so a hydration pass can try that server once more.
+      return false;
     }
+  }, []);
+
+  /**
+   * Fill the unread map for the servers that are not on screen (and, with
+   * `includeSelected`, the one that is). See `lib/unread-hydration.ts` for why
+   * the live frame alone cannot be trusted with the rail. One pass at a time:
+   * a newer pass makes the older one stop at its next batch.
+   */
+  const unreadPassRef = useRef(0);
+  const hydrateAllUnread = useCallback(
+    async ({ includeSelected }: { includeSelected: boolean }) => {
+      const pass = (unreadPassRef.current += 1);
+      const ids = serversToHydrate(serversRef.current, {
+        skipServerId: includeSelected ? null : selectedServerIdRef.current,
+        isMuted: (serverId) =>
+          resolveNotificationLevel(getNotificationState(), serverId, null) ===
+          "none",
+      });
+      await hydrateInBatches(ids, loadUnread, {
+        shouldStop: () => unreadPassRef.current !== pass,
+      });
+    },
+    [loadUnread],
+  );
+  const hydrateAllUnreadRef = useRef(hydrateAllUnread);
+  hydrateAllUnreadRef.current = hydrateAllUnread;
+
+  // A tab that sat hidden for a while (a laptop that slept, a backgrounded
+  // phone browser) may have lost its socket without being told, and the
+  // frames it missed are not replayed. Re-read the badges when it returns.
+  useEffect(() => {
+    let hiddenAt: number | null =
+      document.visibilityState === "hidden" ? Date.now() : null;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now();
+        return;
+      }
+      if (visibleNeedsUnreadRefresh(hiddenAt, Date.now())) {
+        void hydrateAllUnreadRef.current({ includeSelected: true });
+      }
+      hiddenAt = null;
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
 
   /**
@@ -4636,6 +4793,7 @@ function MainAppContent({
       }
       const channelId = message.channelId;
       const lastReadAt = new Date(created - 1).toISOString();
+      touchUnread(channelId);
       unreadHoldRef.current.add(channelId);
       unreadCursorByChannelRef.current[channelId] = lastReadAt;
       setUnreadHeldIds(new Set(unreadHoldRef.current));
@@ -4664,7 +4822,7 @@ function MainAppContent({
           // Badge is best-effort.
         });
     },
-    [loadUnread, readCursorQueue, selectedServerId],
+    [loadUnread, readCursorQueue, selectedServerId, touchUnread],
   );
 
   const handleMarkRead = useCallback(() => {
@@ -4722,6 +4880,30 @@ function MainAppContent({
     // second reconnect replaces the pending re-read instead of stacking one.
     let communityHomeReconnectTimer: ReturnType<typeof setTimeout> | null =
       null;
+
+    // The rail's unread for every server (`lib/unread-hydration.ts`): asked
+    // once after the first load, and again when a socket that was down long
+    // enough to have missed frames comes back. One slot, like the Baú re-read.
+    let unreadRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let unreadSocketClosedAt: number | null = null;
+    const scheduleUnreadRefresh = (includeSelected: boolean) => {
+      if (unreadRefreshTimer !== null) {
+        clearTimeout(unreadRefreshTimer);
+      }
+      // Jittered for the same reason the message refetch is: a deploy
+      // reconnects every open tab in the same few seconds. The boot call has a
+      // second job, which is to run after React has rendered the server list
+      // the bootstrap just set (the hydration reads it through a ref).
+      unreadRefreshTimer = setTimeout(
+        () => {
+          unreadRefreshTimer = null;
+          if (!cancelled) {
+            void hydrateAllUnreadRef.current({ includeSelected });
+          }
+        },
+        uniformJitterMs(300, RECONNECT_MESSAGES_JITTER_MAX_MS),
+      );
+    };
 
     function getReconnectMessagesRefetchState(channelId: string) {
       let state = reconnectMessagesRefetchState.get(channelId);
@@ -4996,6 +5178,8 @@ function MainAppContent({
         }
 
         setBootstrapReady(true);
+        // The selected server was read above; every other one is read now.
+        scheduleUnreadRefresh(false);
 
         transport.onMessage((message) => {
           if (message.type === "watch-party-waitlist-approved") {
@@ -5142,6 +5326,7 @@ function MainAppContent({
             if (activity.channelId === selectedChannelIdRef.current) {
               return;
             }
+            touchUnread(activity.channelId);
             setUnread((prev) => {
               const current = prev[activity.channelId] ?? {
                 count: 0,
@@ -5325,6 +5510,22 @@ function MainAppContent({
                 }),
               );
             });
+            return;
+          }
+
+          // Another tab or device of this account dragged its server rail. This
+          // tab follows, unless the frame is the echo of its own save (same
+          // `origin`) or a save of its own is still in the air: that answer is
+          // the truth, and applying an older frame first would flick the rail
+          // back for a moment, mid-drag.
+          if (message.type === "server-order-update") {
+            if (message.origin && message.origin === railOriginRef.current) {
+              return;
+            }
+            if (railSaverRef.current?.noteRemote()) {
+              return;
+            }
+            setServers((rows) => applyServerOrder(rows, message.serverIds));
             return;
           }
 
@@ -5767,6 +5968,7 @@ function MainAppContent({
           // Keep media. A Fly restart closes /ws with 1001; ICE and LiveKit do
           // not need that socket once they are up. Resume reattaches the peer.
           voice.notifyDisconnected();
+          unreadSocketClosedAt = Date.now();
         });
 
         transport.onAuthUnavailable(() => {
@@ -5829,6 +6031,12 @@ function MainAppContent({
               }
             }, uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS));
           }
+          // Unread badges are fed by live frames, which are not replayed: what
+          // arrived while the socket was down is only in the server's count.
+          if (reconnectNeedsUnreadRefresh(unreadSocketClosedAt, Date.now())) {
+            scheduleUnreadRefresh(true);
+          }
+          unreadSocketClosedAt = null;
           // --- forums --- the forum list refetches its first page: frames
           // sent while the socket was down are not replayed.
           dispatchForumReconnected();
@@ -5915,6 +6123,9 @@ function MainAppContent({
       }
       if (communityHomeReconnectTimer !== null) {
         clearTimeout(communityHomeReconnectTimer);
+      }
+      if (unreadRefreshTimer !== null) {
+        clearTimeout(unreadRefreshTimer);
       }
       voice.leave();
       transport.disconnect();
@@ -6734,6 +6945,18 @@ function MainAppContent({
         error instanceof Error ? error.message : "Failed to move channel",
       );
     }
+  }
+
+  /**
+   * The rail was reordered (drag, Alt+arrows, or the menu). Optimistic: the
+   * list moves now and the newest wanted order is saved by the saver, one
+   * request at a time. If a save fails the list goes back to the last order
+   * the server confirmed, with a line saying so.
+   */
+  function handleReorderServers(ids: string[]) {
+    railMovesRef.current += 1;
+    railSaverRef.current?.request(ids);
+    setServers((rows) => applyServerOrder(rows, ids));
   }
 
   function handleFavoriteChannelIdsChange(ids: string[]) {
@@ -12585,6 +12808,7 @@ function MainAppContent({
           void loadChannels(id);
           setMobileNavOpen(true);
         }}
+        onReorderServers={handleReorderServers}
         onCreateServer={() => setShowCreateServer(true)}
         onJoinServer={() => setInviteMode("join")}
         onInvite={openInviteForServer}

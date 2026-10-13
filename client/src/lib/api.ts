@@ -1318,6 +1318,15 @@ export const fetchAttachmentUrl = (attachmentId: string) =>
 export const fetchServers = () =>
   apiFetch<{ servers: Server[] }>("/api/servers");
 
+/**
+ * Save the order of THIS account's server rail. `origin` is the tab's own random
+ * id; the server echoes it on the `server-order-update` frame it sends to the
+ * account's other sockets so this tab can tell its own echo apart. Answers
+ * with the order as stored (ids this account no longer holds are dropped).
+ */
+export const saveServerOrder = (serverIds: string[], origin: string) =>
+  put<{ serverIds: string[] }>("/api/servers/order", { serverIds, origin });
+
 export const createServer = (
   name: string,
   idempotencyKey?: string,
