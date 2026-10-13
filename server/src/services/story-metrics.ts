@@ -159,7 +159,8 @@ async function readDb(): Promise<StoriesMetrics["db"]> {
        (SELECT COALESCE(SUM(media_byte_size), 0) FROM held)::text AS held_bytes,
        (SELECT EXTRACT(EPOCH FROM now() - MIN(COALESCE(s.deleted_at, s.expires_at)))
           FROM stories s
-         WHERE s.media_deleted_at IS NULL AND s.media_storage_key IS NOT NULL
+         WHERE s.media_deleted_at IS NULL
+           AND (s.media_storage_key IS NOT NULL OR cardinality(s.layer_keys) > 0)
            AND (s.status IN ('expired', 'deleted') OR s.expires_at <= now())
            AND NOT EXISTS (SELECT 1 FROM held h WHERE h.id = s.id))::text AS lag`,
   );

@@ -65,6 +65,68 @@ export const STORY_CAPTION_MAX = 200;
 export const STORY_TEXT_MAX = 280;
 export const STORY_REPLY_MAX = 2000;
 export const STORY_REMOVE_REASON_MAX = 200;
+/** The spoken version of a story, for screen readers. Clients fill it from the text layers. */
+export const STORY_ALT_TEXT_MAX = 500;
+
+// ------------------------------------------------------------------ layers
+
+/**
+ * COMPOSER V2: a story is a BASE (a photo, a video, or a text-card background)
+ * plus up to `STORY_LAYERS_MAX` LAYERS the author placed on the 9:16 canvas.
+ * Layers are data, never burned into the base: a viewer draws the base, then
+ * the layers in array order (back to front), scaled to its own canvas.
+ *
+ * Geometry is the same for every layer type. `x` and `y` are the layer's
+ * CENTER as a fraction of the canvas (0..1, left to right and top to bottom,
+ * of the 9:16 canvas), `scale` multiplies the layer's natural size (a text
+ * layer's natural size is its `size`; an image layer's is the fraction of the
+ * canvas width it was placed at, 0.4 at scale 1), and `rotation` is radians,
+ * clockwise.
+ */
+export const STORY_LAYERS_MAX = 20;
+export const STORY_LAYER_IMAGES_MAX = 6;
+export const STORY_LAYER_DRAWINGS_MAX = 1;
+export const STORY_LAYER_CALLS_MAX = 1;
+export const STORY_LAYER_MENTIONS_MAX = 5;
+export const STORY_LAYER_SCALE_MIN = 0.2;
+export const STORY_LAYER_SCALE_MAX = 5;
+/**
+ * The rotation bound, in radians. A hair above pi on purpose: a 32-bit float
+ * pi (what a phone sends) is 3.14159274..., which is more than `Math.PI`, and
+ * a bound of exactly pi would refuse a layer rotated to "upside down".
+ */
+export const STORY_LAYER_ROTATION_MAX = 3.1416;
+export const STORY_LAYER_TEXT_SIZE_MIN = 0.5;
+export const STORY_LAYER_TEXT_SIZE_MAX = 3;
+/** One layer image (a placed photo or the drawing). Clients re-encode to `STORY_IMAGE_MAX_EDGE`. */
+export const STORY_LAYER_MAX_BYTES = 8 * 1024 * 1024;
+export const STORY_LAYER_FONTS = ["classic", "bold", "typewriter", "serif", "neon"] as const;
+/**
+ * The text color palette: tokens, never free hex, so a viewer can keep every
+ * color readable in its own theme. The hex each token means is the client's.
+ */
+export const STORY_LAYER_COLORS = [
+  "white",
+  "black",
+  "lime",
+  "yellow",
+  "orange",
+  "red",
+  "pink",
+  "purple",
+  "blue",
+  "cyan",
+  "green",
+  "gray",
+] as const;
+/** Behind a text layer: nothing, a solid pill in the contrasting color, or a soft translucent one. */
+export const STORY_LAYER_TEXT_BACKGROUNDS = ["none", "solid", "soft"] as const;
+export const STORY_LAYER_ALIGNS = ["left", "center", "right"] as const;
+export const STORY_LAYER_IMAGE_SHAPES = ["rect", "rounded", "circle"] as const;
+export const STORY_LAYER_TYPES = ["text", "image", "call", "mention", "drawing"] as const;
+/** What a layer image may be. A drawing is transparent, so no JPEG. */
+export const STORY_LAYER_IMAGE_TYPES = ["image/jpeg", "image/webp", "image/png"] as const;
+export const STORY_LAYER_DRAWING_TYPES = ["image/png", "image/webp"] as const;
 
 /** How many servers one story may go to at once. */
 export const STORY_MAX_SERVER_AUDIENCES = 10;
@@ -191,6 +253,13 @@ export const storiesConfigSchema = z.object({
   maxVideoMs: z.number().int().positive(),
   maxBytes: z.number().int().positive(),
   ttlHours: z.number().int().positive(),
+  /**
+   * How many layers a story may carry (`STORY_LAYERS_MAX`), 0 or absent when
+   * the server predates layers. A client that sends `layers` to a server that answers 0
+   * (or no field at all) would have them stripped silently, so it hides the
+   * editor instead. Image and drawing layers also need `mediaEnabled`.
+   */
+  layersMax: z.number().int().nonnegative().optional(),
 });
 export type StoriesConfig = z.infer<typeof storiesConfigSchema>;
 
@@ -239,6 +308,164 @@ export const storyCallLiveSchema = z.object({
   joinable: z.boolean(),
 });
 export type StoryCallLive = z.infer<typeof storyCallLiveSchema>;
+
+
+// ------------------------------------------------------------------ layers (schemas)
+
+const layerGeometry = {
+  /** A uuid the client makes, unique inside the story. Stable across edits. */
+  id: z.string().uuid(),
+  /** Center, 0..1 of the canvas width. */
+  x: z.number().finite().min(0).max(1),
+  /** Center, 0..1 of the canvas height. */
+  y: z.number().finite().min(0).max(1),
+  scale: z.number().finite().min(STORY_LAYER_SCALE_MIN).max(STORY_LAYER_SCALE_MAX),
+  /** Radians, clockwise. */
+  rotation: z
+    .number()
+    .finite()
+    .min(-STORY_LAYER_ROTATION_MAX)
+    .max(STORY_LAYER_ROTATION_MAX),
+};
+
+const layerText = z.string().trim().min(1).max(STORY_TEXT_MAX).pipe(safeTextSchema);
+
+const textLayerFields = {
+  ...layerGeometry,
+  type: z.literal("text"),
+  text: layerText,
+  font: z.enum(STORY_LAYER_FONTS).default("classic"),
+  color: z.enum(STORY_LAYER_COLORS).default("white"),
+  background: z.enum(STORY_LAYER_TEXT_BACKGROUNDS).default("none"),
+  align: z.enum(STORY_LAYER_ALIGNS).default("center"),
+  /** Relative font size, 1 is the default. */
+  size: z
+    .number()
+    .finite()
+    .min(STORY_LAYER_TEXT_SIZE_MIN)
+    .max(STORY_LAYER_TEXT_SIZE_MAX)
+    .default(1),
+};
+
+const callLayerFields = {
+  ...layerGeometry,
+  type: z.literal("call"),
+  serverId: z.string().uuid(),
+  channelId: z.string().uuid(),
+};
+
+const mentionLayerFields = {
+  ...layerGeometry,
+  type: z.literal("mention"),
+  /** Must be somebody who can see the story. Tapping it opens their profile. */
+  userId: z.string().uuid(),
+};
+
+const imageDims = {
+  width: z.number().int().positive().max(STORY_MAX_DIMENSION),
+  height: z.number().int().positive().max(STORY_MAX_DIMENSION),
+};
+
+/**
+ * What a client declares about a layer image it is about to upload. The server
+ * never takes a storage key from a client: it mints one per layer at create,
+ * answers it as `layerUploads[].url`, and checks the stored object at publish.
+ */
+export const storyLayerUploadInputSchema = z.object({
+  contentType: z.enum(STORY_LAYER_IMAGE_TYPES),
+  byteSize: z.number().int().positive().max(STORY_LAYER_MAX_BYTES),
+  ...imageDims,
+});
+export type StoryLayerUploadInput = z.infer<typeof storyLayerUploadInputSchema>;
+
+const imageLayerInputFields = {
+  ...layerGeometry,
+  type: z.literal("image"),
+  shape: z.enum(STORY_LAYER_IMAGE_SHAPES).default("rect"),
+  upload: storyLayerUploadInputSchema,
+};
+
+const drawingLayerInputFields = {
+  ...layerGeometry,
+  type: z.literal("drawing"),
+  upload: storyLayerUploadInputSchema.extend({
+    contentType: z.enum(STORY_LAYER_DRAWING_TYPES),
+  }),
+};
+
+/**
+ * A layer as a client SENDS it in `POST /api/stories`. Strict: an unknown
+ * `type`, an out-of-range number or a bad enum value fails the whole request
+ * with 400, so an author never posts a story that silently lost a layer.
+ * Image and drawing layers carry `upload` (what the client is about to PUT),
+ * not a key.
+ */
+export const storyLayerInputSchema = z.discriminatedUnion("type", [
+  z.object(textLayerFields),
+  z.object(imageLayerInputFields),
+  z.object(callLayerFields),
+  z.object(mentionLayerFields),
+  z.object(drawingLayerInputFields),
+]);
+/** A layer as a client writes it: the text defaults (font, color, size...) may be left out. */
+export type StoryLayerInput = z.input<typeof storyLayerInputSchema>;
+/** The same layer after parsing, defaults filled in. */
+export type StoryLayerInputParsed = z.output<typeof storyLayerInputSchema>;
+
+/**
+ * A layer as a client READS it. Same geometry and the same text/call fields;
+ * an image or drawing carries `url` (a presigned GET that never outlives the
+ * story) and its pixel size instead of `upload`; a mention carries the person
+ * (`user`, no tag, no email) so the viewer can draw "@name" and open a profile
+ * without a second request.
+ *
+ * Read leniently, see `storyLayersSchema`: a client skips what it cannot parse.
+ */
+export const storyLayerSchema = z.discriminatedUnion("type", [
+  z.object(textLayerFields),
+  z.object({
+    ...layerGeometry,
+    type: z.literal("image"),
+    shape: z.enum(STORY_LAYER_IMAGE_SHAPES).default("rect"),
+    url: z.string(),
+    ...imageDims,
+  }),
+  z.object(callLayerFields),
+  z.object({
+    ...mentionLayerFields,
+    user: storyAuthorSchema,
+  }),
+  z.object({
+    ...layerGeometry,
+    type: z.literal("drawing"),
+    url: z.string(),
+    ...imageDims,
+  }),
+]);
+export type StoryLayer = z.infer<typeof storyLayerSchema>;
+export type StoryLayerType = StoryLayer["type"];
+
+/**
+ * The `layers` field of a story as a client parses it: LENIENT, one layer at a
+ * time. A layer whose `type` this build does not know (a later server may add
+ * stickers), or that fails its own schema, is dropped and the rest are kept in
+ * order. A story is never refused because one layer was not understood, and a
+ * viewer never crashes on one. Native clients do the same by hand: decode the
+ * `layers` array element by element, keep the ones whose `type` they know and
+ * whose fields decode, skip the rest.
+ *
+ * Missing means `[]` (a server that predates layers, or a story with none).
+ * Only a READ is lenient; `createStorySchema` is strict.
+ */
+export const storyLayersSchema = z
+  .array(z.unknown())
+  .default([])
+  .transform((items): StoryLayer[] =>
+    items.flatMap((item) => {
+      const parsed = storyLayerSchema.safeParse(item);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  );
 
 // ------------------------------------------------------------------ the story
 
@@ -324,6 +551,16 @@ export const storySchema = z.object({
   sticker: storyStickerSchema.nullable(),
   /** The live state of `sticker` when it is a call sticker. */
   call: storyCallLiveSchema.nullable(),
+  /**
+   * The layers, back to front (`storyLayersSchema` reads them leniently). Every
+   * story that has a call sticker answers a `call` layer here, positioned or
+   * not: a story posted by a build that predates layers gets one synthesised at
+   * the bottom center, so a viewer draws every call from `layers` alone and
+   * keeps `sticker` only as the legacy mirror.
+   */
+  layers: storyLayersSchema,
+  /** The spoken version, for screen readers. Null when the author's build wrote none. */
+  altText: z.string().nullable().default(null),
   /** Null only on the author's own story before it goes live. */
   publishedAt: z.string().nullable(),
   /** Null only on the author's own story before it goes live. */
@@ -449,15 +686,30 @@ export type StoryAudienceTargets = z.infer<typeof storyAudienceTargetsSchema>;
 /**
  * `POST /api/stories`.
  *
- * - `text`: `text` and `background`, no `media`, no `caption`. Goes live at
- *   once (no upload).
+ * - `text`: a background and words. The words are `text` (the original field,
+ *   still read by every older build) and/or text layers; with only layers the
+ *   server writes the text layers, joined by a newline, into `text` for old
+ *   builds. At least one of `text` or a layer is needed. No `media`, no `caption`.
+ *   Goes live at once when no layer needs an upload.
  * - `image`: `media` with an image type. `caption` optional.
  * - `video`: `media` with `video/mp4` and `durationMs`. `caption` optional.
  *
- * Media stories answer with `upload`: the client PUTs the bytes there with
- * exactly `upload.headers` (Content-Length is signed too, and browsers set it
- * from the body), then calls `POST /api/stories/:storyId/publish`. A story
- * never published is deleted with its object after an hour.
+ * Any kind may carry `layers` (see `STORY_LAYERS_MAX` and the bounds above),
+ * strictly validated: the request fails whole on any bad layer. `altText` is
+ * the spoken version, clients write the text layers into it.
+ *
+ * A call layer is mirrored by the server into the legacy `sticker` field, so
+ * a build that knows only `sticker` still shows it. Sending `sticker` alone
+ * (an old build) works too; sending both requires them to agree.
+ *
+ * UPLOADS. A story with media or with image/drawing layers answers `upload`
+ * (the base) and `layerUploads` (one per image/drawing layer, `layerId` naming
+ * the layer): the client PUTs each file there with exactly its `headers`
+ * (Content-Length is signed too, and browsers set it from the body), then
+ * calls `POST /api/stories/:storyId/publish` once EVERY file is up. The server
+ * checks each stored object (size, real file type, scan) at publish; a story
+ * never published is deleted with all its objects after an hour. A text story
+ * with only text/call/mention layers has no upload and is live on return.
  *
  * Needs POST_STORIES in every target server (plus no timeout, and a 72 h old
  * account in a listed community); the friends audience needs only the
@@ -471,13 +723,15 @@ export const createStorySchema = z
     text: textBodySchema.optional(),
     background: storyBackgroundSchema.optional(),
     sticker: storyStickerSchema.optional(),
+    layers: z.array(storyLayerInputSchema).max(STORY_LAYERS_MAX).default([]),
+    altText: z.string().trim().max(STORY_ALT_TEXT_MAX).pipe(safeTextSchema).optional(),
     repliesEnabled: z.boolean().default(true),
     audiences: storyAudienceTargetsSchema,
     media: storyMediaInputSchema.optional(),
     /**
      * A uuid the client makes once per story it means to post, and sends
      * again on a retry. A second create with the same id answers the first
-     * story (with a fresh upload URL while it is still waiting for its bytes)
+     * story (with fresh upload URLs while it is still waiting for its bytes)
      * instead of posting a second one. Optional; strongly recommended.
      */
     requestId: z.string().uuid().optional(),
@@ -486,7 +740,9 @@ export const createStorySchema = z
     const fail = (message: string, path: string) =>
       ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: [path] });
     if (value.kind === "text") {
-      if (!value.text) fail("A text story needs text", "text");
+      if (!value.text && value.layers.length === 0) {
+        fail("A text story needs text or at least one layer", "text");
+      }
       if (!value.background) fail("A text story needs a background", "background");
       if (value.media) fail("A text story has no media", "media");
       if (value.caption) fail("A text story has no caption", "caption");
@@ -503,14 +759,39 @@ export const createStorySchema = z
         if (value.media.durationMs === undefined) fail("A video needs its duration", "media");
       }
     }
+    if (new Set(value.layers.map((layer) => layer.id)).size !== value.layers.length) {
+      fail("Layer ids must be unique", "layers");
+    }
+    const count = (type: StoryLayerType) =>
+      value.layers.filter((layer) => layer.type === type).length;
+    if (count("image") > STORY_LAYER_IMAGES_MAX) fail("Too many photo layers", "layers");
+    if (count("drawing") > STORY_LAYER_DRAWINGS_MAX) fail("Only one drawing layer", "layers");
+    if (count("call") > STORY_LAYER_CALLS_MAX) fail("Only one call layer", "layers");
+    if (count("mention") > STORY_LAYER_MENTIONS_MAX) fail("Too many mentions", "layers");
+    const mentioned = value.layers.flatMap((layer) =>
+      layer.type === "mention" ? [layer.userId] : [],
+    );
+    if (new Set(mentioned).size !== mentioned.length) fail("Mention each person once", "layers");
+    const callLayer = value.layers.find((layer) => layer.type === "call");
+    const callTarget = callLayer?.type === "call" ? callLayer : value.sticker;
     if (
+      callLayer?.type === "call" &&
       value.sticker?.type === "call" &&
-      !value.audiences.serverIds.includes(value.sticker.serverId)
+      (callLayer.serverId !== value.sticker.serverId ||
+        callLayer.channelId !== value.sticker.channelId)
     ) {
+      fail("The call layer and the sticker must name the same room", "sticker");
+    }
+    if (callTarget && !value.audiences.serverIds.includes(callTarget.serverId)) {
       fail("The call must be in a server the story goes to", "sticker");
     }
   });
-export type CreateStoryRequest = z.infer<typeof createStorySchema>;
+/** What the server holds after parsing a create, defaults filled in. */
+export type CreateStoryParsed = z.output<typeof createStorySchema>;
+/** What a client sends: `layers` may be left out, and so may a text layer's defaults. */
+export type CreateStoryRequest = Omit<CreateStoryParsed, "layers"> & {
+  layers?: StoryLayerInput[];
+};
 
 export const storyUploadSchema = z.object({
   url: z.string(),
@@ -521,9 +802,18 @@ export const storyUploadSchema = z.object({
 });
 export type StoryUpload = z.infer<typeof storyUploadSchema>;
 
+/** One layer image's upload, `layerId` naming the image or drawing layer it is for. */
+export const storyLayerUploadSchema = storyUploadSchema.extend({
+  layerId: z.string().uuid(),
+});
+export type StoryLayerUpload = z.infer<typeof storyLayerUploadSchema>;
+
 export const createStoryResponseSchema = z.object({
   story: storySchema,
+  /** The base photo or video. Null for a text story. */
   upload: storyUploadSchema.nullable(),
+  /** One per image and drawing layer; empty when none. Upload them all before publishing. */
+  layerUploads: z.array(storyLayerUploadSchema).default([]),
 });
 export type CreateStoryResponse = z.infer<typeof createStoryResponseSchema>;
 
