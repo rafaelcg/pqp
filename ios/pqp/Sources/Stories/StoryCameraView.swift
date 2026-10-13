@@ -265,7 +265,7 @@ struct StoryCameraView: View {
             if isRecording { Task { await finishRecording() } } else { Task { await takePhoto() } }
         }
         .accessibilityAction(named: Text("Record video")) {
-            if allowsVideo, !isRecording { Task { await beginRecording() } }
+            if allowsVideo, !isRecording { Task { await beginRecording(needsFinger: false) } }
         }
     }
 
@@ -402,12 +402,10 @@ struct StoryCameraView: View {
             access = granted ? .ready : .denied
         }
         guard access == .ready else { return }
-        // The microphone is optional: no permission, or a call holding it, and
-        // the camera still works and the video is silent.
-        if recordsAudio, AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
-            _ = await AVCaptureDevice.requestAccess(for: .audio)
-            guard current() else { return }
-        }
+        // The microphone is NOT asked for here: opening the camera, and a plain
+        // tap on the shutter, need only the camera. It is asked for the first
+        // time somebody holds for a video (`prepareForVideo`), and is optional
+        // even then: refused, or a call holding it, the video is silent.
         let next = engine ?? StoryCameraEngineFactory.make(recordsAudio: recordsAudio)
         engineWantsAudio = recordsAudio
         next.onInterruption = { failure in
@@ -522,7 +520,7 @@ struct StoryCameraView: View {
             holdTask = Task {
                 try? await Task.sleep(for: .seconds(StoryShutterPress.holdThreshold))
                 guard !Task.isCancelled else { return }
-                if press.holdElapsed(at: Date()) { await beginRecording() }
+                if press.holdElapsed(at: Date()) { await beginRecording(needsFinger: true) }
             }
         }
         if isRecording {
@@ -568,9 +566,18 @@ struct StoryCameraView: View {
         }
     }
 
-    private func beginRecording() async {
+    private func beginRecording(needsFinger: Bool) async {
         guard let engine, allowsVideo, !isRecording, !busy else { return }
         busy = true
+        // The first video asks for the microphone, and the sheet takes the
+        // finger with it: if it is no longer down once the answer is in, there
+        // is nothing to record (the next hold will).
+        await engine.prepareForVideo()
+        silent = !engine.recordsAudio
+        if needsFinger, !press.isDown {
+            busy = false
+            return
+        }
         holdTick += 1
         // Recording is declared BEFORE the device confirms it: a finger that
         // lifts while it is still starting must find a recording to stop. The

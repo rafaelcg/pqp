@@ -29,6 +29,10 @@ protocol StoryCameraEngine: AnyObject {
     func capturePhoto(flash: StoryFlash) async throws -> UIImage
     func startRecording(torch: Bool) async throws
     func stopRecording() async throws -> URL
+    /// Asked for the first time a VIDEO is about to be recorded, never for a
+    /// photo: it asks for the microphone if that has not been asked yet and
+    /// puts it on the session. Without it the video is silent.
+    func prepareForVideo() async
 }
 
 /// Why the camera screen cannot show a picture right now.
@@ -218,6 +222,20 @@ final class StoryCaptureCore: @unchecked Sendable {
             device.exposurePointOfInterest = devicePoint
             device.exposureMode = .autoExpose
         }
+    }
+
+    /// The microphone, on the running session, if it is allowed and not there.
+    func addAudioIfAuthorized() -> Bool {
+        if audioInput != nil { return true }
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+              let mic = AVCaptureDevice.default(for: .audio),
+              let micInput = try? AVCaptureDeviceInput(device: mic) else { return false }
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+        guard session.canAddInput(micInput) else { return false }
+        session.addInput(micInput)
+        audioInput = micInput
+        return true
     }
 
     func setTorch(_ on: Bool) {
@@ -486,6 +504,18 @@ final class AVStoryCameraEngine: StoryCameraEngine {
 
     /// Everyone waiting for the clip (a release and an interruption can both
     /// ask): all of them are answered when it is finalized.
+    func prepareForVideo() async {
+        guard wantsAudio else { return }
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            _ = await AVCaptureDevice.requestAccess(for: .audio)
+        }
+        let core = core
+        let added: Bool = await withCheckedContinuation { continuation in
+            core.queue.async { continuation.resume(returning: core.addAudioIfAuthorized()) }
+        }
+        recordsAudio = added
+    }
+
     private var recordingWaiters: [CheckedContinuation<URL, Error>] = []
     private var recordingResult: Result<URL, Error>?
 

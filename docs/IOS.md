@@ -780,6 +780,12 @@ flip on a double tap or hold a flash across a recording.
 - **Permission states** are `StoryCameraAccess`: needs prompt, denied (offers
   Settings), restricted, no device, and "the camera is on in your call" (a
   device has one owner). Every one of them still offers the gallery and Files.
+- **The microphone is asked for the first time somebody holds for a video**
+  (`prepareForVideo`), never when the camera opens and never for a photo: a tap
+  on the shutter needs only the camera, so it works with the microphone refused
+  or never asked. If the sheet takes the finger with it, that hold records
+  nothing and the next one does. A video with no microphone is silent and the
+  badge says so.
 - **In a call, videos are silent.** A capture session with a microphone input
   takes the audio session from WebRTC, so while `voice.holdsSeat` or a DM call
   is up the camera records without a mic input, and the recording badge says so.
