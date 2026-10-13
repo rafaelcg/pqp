@@ -248,7 +248,19 @@ class SessionStore(
     fun refreshServers() {
         scope.launch {
             runCatching { api.servers() }
-                .onSuccess { _servers.value = it }
+                .onSuccess { fresh ->
+                    // A read that began before a move can land while that move's
+                    // save is still queued or in the air: keep the order the
+                    // person just chose over the one the read carries.
+                    synchronized(orderLock) {
+                        _servers.value = if (orderSavesPending > 0) {
+                            gg.pqp.app.ui.screens.ServerActions
+                                .applyOrder(fresh, _servers.value.map { it.id })
+                        } else {
+                            fresh
+                        }
+                    }
+                }
                 .onFailure { Log.w(TAG, "servers failed: ${it.message}") }
         }
     }
