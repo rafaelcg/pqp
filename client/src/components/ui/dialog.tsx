@@ -177,6 +177,59 @@ interface DialogProps {
 }
 
 /**
+ * How long a chosen menu row may still name the opener of a dialog. The menu
+ * clears its note as soon as it has settled focus; this only bounds a note
+ * whose menu never got that far.
+ */
+const CHOSEN_MENU_ROW_MS = 1_000;
+
+let chosenMenuTrigger: { element: HTMLElement; at: number } | null = null;
+
+/**
+ * A menu row was chosen. A dialog it opens may mount after the menu is gone,
+ * with focus on <body>, and that dialog still has to return focus to this
+ * trigger when it closes.
+ */
+export function noteMenuRowChosen(trigger: HTMLElement | null): void {
+  chosenMenuTrigger = trigger ? { element: trigger, at: Date.now() } : null;
+}
+
+/**
+ * The menu has settled focus itself: a dialog opening from now on finds the
+ * trigger, or whatever the row opened, as the focused element. Only clears the
+ * note this trigger made, never a newer one.
+ */
+export function forgetMenuRowChosen(trigger: HTMLElement | null): void {
+  if (chosenMenuTrigger && chosenMenuTrigger.element === trigger) {
+    chosenMenuTrigger = null;
+  }
+}
+
+/**
+ * Where focus goes back to when the dialog closes. A menu row that opened the
+ * dialog unmounts with its menu, so the menu's trigger stands in for it (Radix
+ * labels the menu with the trigger's id). When the menu has already unmounted,
+ * the row chosen a moment ago names it.
+ */
+export function dialogOpener(active: HTMLElement | null): HTMLElement | null {
+  // Read, not consumed: a render can run twice, and both must agree.
+  const chosen = chosenMenuTrigger;
+  const menu = active?.closest?.('[role="menu"][aria-labelledby]');
+  if (menu) {
+    return document.getElementById(menu.getAttribute("aria-labelledby") ?? "") ?? active;
+  }
+  if (
+    (!active || active === document.body) &&
+    chosen &&
+    chosen.element.isConnected &&
+    Date.now() - chosen.at < CHOSEN_MENU_ROW_MS
+  ) {
+    return chosen.element;
+  }
+  return active;
+}
+
+/**
  * Every modal in the app used to be a bare `<div>` overlay: no dialog role, no
  * Escape handling, no focus trap, and no focus restoration. This is the one
  * place that behaviour lives now.
@@ -210,7 +263,9 @@ export function Dialog({
   if (open && !openedRef.current) {
     openedRef.current = true;
     previouslyFocused.current =
-      typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null);
+      typeof document === "undefined"
+        ? null
+        : dialogOpener(document.activeElement as HTMLElement | null);
   } else if (!open) {
     openedRef.current = false;
   }

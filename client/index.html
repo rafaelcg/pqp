@@ -91,13 +91,25 @@
         const appearance =
           storedAppearance === "guild" || storedAppearance === "accord"
             ? "harmony"
-            : storedAppearance === "harmony" ||
-                storedAppearance === "hearth" ||
-                storedAppearance === "night"
+            : [
+                  "harmony",
+                  "hearth",
+                  "night",
+                  "halloween",
+                  "christmas",
+                  "ocean",
+                  "catppuccin",
+                  "everforest",
+                ].includes(storedAppearance)
               ? storedAppearance
               : "signal";
         document.documentElement.dataset.appearance = appearance;
-        if (appearance === "night") {
+        // Dark-only looks: keep in lockstep with `appearanceForcesDark`.
+        if (
+          appearance === "night" ||
+          appearance === "halloween" ||
+          appearance === "christmas"
+        ) {
           document.documentElement.dataset.theme = "dark";
         }
         // Modo 2005 paints over the look above (which it keeps, to go back

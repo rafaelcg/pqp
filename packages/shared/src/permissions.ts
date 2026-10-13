@@ -5,7 +5,7 @@ import { z } from "zod";
  *
  * Names follow Discord's published flags so the 8-step overwrite algorithm
  * (https://docs.discord.com/developers/topics/permissions) maps 1:1. The bit
- * *numbers* are ours (0–26). Never do this math in JS `number` — `1 << 31`
+ * *numbers* are ours (0–28). Never do this math in JS `number` — `1 << 31`
  * overflows; always `bigint`.
  *
  * On the wire, bitfields are decimal strings. In Postgres they are `BIGINT`.
@@ -59,23 +59,29 @@ export const Permission = {
    */
   POST_STORIES: 1n << 25n,
   /**
+   * Play a soundboard clip for the room. On for `@everyone`. A channel
+   * overwrite can take it away without taking SPEAK. See `soundboard.ts`.
+   */
+  USE_SOUNDBOARD: 1n << 26n,
+  /**
+   * Add, rename and delete the server's soundboard clips. Off for
+   * `@everyone`. Manager and owner have it. A role can be given it.
+   */
+  MANAGE_SOUNDBOARD: 1n << 27n,
+  /**
    * Upload, rename and delete the server's custom emoji (Discord's "Manage
    * Expressions"). Server level only, like POST_STORIES: an emoji belongs to
    * the server, so no channel overwrite editor lists it. Using an emoji needs
-   * no bit at all. Bit 28, not 26: bits 26 and 27 belong to the call
-   * soundboard (USE_SOUNDBOARD, MANAGE_SOUNDBOARD) and must stay free.
+   * no bit at all. Bit 28: bits 26 and 27 are the call soundboard
+   * (USE_SOUNDBOARD, MANAGE_SOUNDBOARD).
    */
   MANAGE_EMOJI: 1n << 28n,
 } as const;
 
 export type PermissionBit = (typeof Permission)[keyof typeof Permission];
 
-/**
- * Every defined bit. Owner and Administrator resolve to this. Bits 26 and 27
- * are not defined here yet, so this is the contiguous range below 26 plus
- * MANAGE_EMOJI, and no stored mask gains an undefined bit.
- */
-export const PERMISSION_ALL = ((1n << 26n) - 1n) | Permission.MANAGE_EMOJI;
+/** Every defined bit. Owner and Administrator resolve to this. */
+export const PERMISSION_ALL = (1n << 29n) - 1n;
 
 /**
  * Default `@everyone` mask: chat, react, attach, history, voice, own nick,
@@ -92,7 +98,8 @@ export const PERMISSION_DEFAULT_EVERYONE =
   Permission.STREAM |
   Permission.CHANGE_NICKNAME |
   Permission.ADD_REACTIONS |
-  Permission.POST_STORIES;
+  Permission.POST_STORIES |
+  Permission.USE_SOUNDBOARD;
 
 /** What a timeout leaves: you can still see the channel and scroll back. */
 export const PERMISSION_TIMEOUT_KEEP =
@@ -267,6 +274,8 @@ export const PERMISSION_FLAGS = [
   { bit: Permission.START_WATCH_PARTY, key: "START_WATCH_PARTY" },
   { bit: Permission.MANAGE_MUSIC, key: "MANAGE_MUSIC" },
   { bit: Permission.POST_STORIES, key: "POST_STORIES" },
+  { bit: Permission.USE_SOUNDBOARD, key: "USE_SOUNDBOARD" },
+  { bit: Permission.MANAGE_SOUNDBOARD, key: "MANAGE_SOUNDBOARD" },
   { bit: Permission.MANAGE_EMOJI, key: "MANAGE_EMOJI" },
 ] as const;
 

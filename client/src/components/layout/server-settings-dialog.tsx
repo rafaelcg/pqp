@@ -9,6 +9,7 @@ import {
   Globe,
   Image as ImageIcon,
   KeyRound,
+  PartyPopper,
   ScrollText,
   ShieldBan,
   ShieldCheck,
@@ -29,10 +30,11 @@ import { ServerEmojiSection } from "@/components/layout/server-emoji-section";
 import { CommunityHomeSettingsSection } from "@/components/community-home/community-home-settings-section";
 import { CommunitySettingsSection } from "@/components/communities/community-settings-section";
 import { RolesSettingsSection } from "@/components/layout/roles-settings-section";
+import { SoundboardSettingsSection } from "@/components/layout/soundboard-settings-section";
 import { OutgoingWebhooksSection } from "@/components/layout/outgoing-webhooks-section";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
 import { shouldShowCommunityHomeSettingsRow } from "@/lib/community-home";
-import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
   ApiError,
@@ -124,6 +126,9 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
     "serverSettings.audit.action.channel.voice_transport_update",
   "channel.sfu_region_update":
     "serverSettings.audit.action.channel.sfu_region_update",
+  "soundboard.create": "serverSettings.audit.action.soundboard.create",
+  "soundboard.update": "serverSettings.audit.action.soundboard.update",
+  "soundboard.delete": "serverSettings.audit.action.soundboard.delete",
   "forum.post_pin": "serverSettings.audit.action.forum.post_pin",
   "forum.post_lock": "serverSettings.audit.action.forum.post_lock",
   "forum.post_delete": "serverSettings.audit.action.forum.post_delete",
@@ -131,7 +136,7 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "forum.tags_update": "serverSettings.audit.action.forum.tags_update",
   "forum.settings_update": "serverSettings.audit.action.forum.settings_update",
   "webhook.forum_settings": "serverSettings.audit.action.webhook.forum_settings",
-  "member.timeout":"serverSettings.audit.action.member.timeout",
+  "member.timeout": "serverSettings.audit.action.member.timeout",
   "member.timeout_lift": "serverSettings.audit.action.member.timeout_lift",
   "member.voice_disconnect":
     "serverSettings.audit.action.member.voice_disconnect",
@@ -172,6 +177,71 @@ export function auditReasonKey(
   );
 }
 
+/**
+ * The first section of the rail a non-owner can see, in the rail's own order,
+ * so the dialog never opens on a pane that is not theirs (a Manage Soundboard
+ * cargo alone lands on Soundboard, a Manage Messages one on AutoMod).
+ */
+export function firstVisibleSection(
+  visible: Partial<Record<SectionId, boolean>>,
+): SectionId {
+  return SECTIONS.find((section) => visible[section.id])?.id ?? "overview";
+}
+
+/**
+ * The clip a soundboard entry is about, and for an edit what changed. Audio
+ * is not scanned, so the name is the part of this row a moderator needs, and
+ * a deleted clip's id points at nothing. Other actions render no detail.
+ * An edit written before the old value was stored (`old: null`) shows the
+ * new value alone.
+ */
+export function soundboardAuditDetails(
+  entry: Pick<AuditLogEntry, "action" | "changes">,
+  t: Translator["t"],
+): string[] {
+  if (
+    entry.action !== "soundboard.create" &&
+    entry.action !== "soundboard.update" &&
+    entry.action !== "soundboard.delete"
+  ) {
+    return [];
+  }
+  const text = (value: unknown): string | null =>
+    typeof value === "string" && value !== "" ? value : null;
+  const percent = (value: unknown): string | null =>
+    typeof value === "number" && Number.isFinite(value)
+      ? `${Math.round(value * 100)}%`
+      : null;
+  const change = (key: string) => entry.changes?.find((c) => c.key === key);
+  // A rename carries `name`; a volume-only edit names the clip as `clip`.
+  const nameChange = change("name") ?? change("clip");
+  const oldName = text(nameChange?.old);
+  const newName = text(nameChange?.new);
+  const details: string[] = [];
+  if (entry.action === "soundboard.update") {
+    if (oldName && newName) {
+      details.push(
+        t("serverSettings.audit.soundboard.renamed", { old: oldName, new: newName }),
+      );
+    } else if (newName) {
+      details.push(t("serverSettings.audit.soundboard.clip", { name: newName }));
+    }
+    const oldVolume = percent(change("volume")?.old);
+    const newVolume = percent(change("volume")?.new);
+    if (newVolume) {
+      details.push(
+        t("serverSettings.audit.soundboard.volume", {
+          old: oldVolume ?? "?",
+          new: newVolume,
+        }),
+      );
+    }
+    return details;
+  }
+  const name = entry.action === "soundboard.delete" ? oldName : newName;
+  return name ? [t("serverSettings.audit.soundboard.clip", { name })] : [];
+}
+
 /* ------------------------------------------------------------------ layout */
 
 /**
@@ -202,12 +272,13 @@ export function auditReasonKey(
  * their own dialogs already, reached from the rail and the channel row. Adding
  * a door here that opens another dialog would be a worse version of both.
  */
-type SectionId =
+export type SectionId =
   | "overview"
   | "emoji"
   | "community"
   | "access"
   | "roles"
+  | "soundboard"
   | "integrations"
   | "moderation"
   | "automod"
@@ -261,6 +332,13 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.roles",
     description: "serverSettings.roles.description",
     icon: Users,
+    ownerOnly: false,
+  },
+  {
+    id: "soundboard",
+    label: "serverSettings.section.soundboard",
+    description: "serverSettings.soundboard.description",
+    icon: PartyPopper,
     ownerOnly: false,
   },
   {
@@ -426,6 +504,7 @@ function AuditLogSection({ serverId }: { serverId: string }) {
               AUDIT_ACTION_KEYS as Partial<Record<string, MessageKey>>
             )[entry.action];
             const reasonKey = auditReasonKey(entry);
+            const details = soundboardAuditDetails(entry, t);
             return (
               <li
                 key={entry.id}
@@ -450,6 +529,14 @@ function AuditLogSection({ serverId }: { serverId: string }) {
                     </span>
                   )}
                 </p>
+                {details.map((detail) => (
+                  <p
+                    key={detail}
+                    className="text-xs text-paper [overflow-wrap:anywhere]"
+                  >
+                    {detail}
+                  </p>
+                ))}
                 <p className="text-xs text-paper-muted">
                   {new Date(entry.createdAt).toLocaleString()}
                 </p>
@@ -480,6 +567,7 @@ interface ServerSettingsDialogProps {
   currentUserId: string | null;
   canManageRoles?: boolean;
   canManageServer?: boolean;
+  canManageSoundboard?: boolean;
   /** Manage Emoji: the Emoji pane. */
   canManageEmoji?: boolean;
   canManageWebhooks?: boolean;
@@ -509,6 +597,7 @@ export function ServerSettingsDialog({
   currentUserId,
   canManageRoles = false,
   canManageServer = false,
+  canManageSoundboard = false,
   canManageEmoji = false,
   canManageWebhooks = false,
   canModerateQueue = false,
@@ -565,6 +654,7 @@ export function ServerSettingsDialog({
   const canSeeOverview = isOwner || canManageServer;
   const canSeeEmoji = (isOwner || canManageEmoji) && Boolean(serverId);
   const canSeeRoles = canManageRoles;
+  const canSeeSoundboard = canManageSoundboard;
   const canSeeIntegrations = canManageWebhooks;
   const canSeeModeration = canModerateQueue || isOwner;
   const canSeeAudit = canManageServer;
@@ -576,6 +666,7 @@ export function ServerSettingsDialog({
     canSeeOverview ||
     canSeeEmoji ||
     canSeeRoles ||
+    canSeeSoundboard ||
     canSeeIntegrations ||
     canSeeModeration ||
     canSeeAudit;
@@ -617,17 +708,16 @@ export function ServerSettingsDialog({
   // no longer exists for them.
   const firstSection: SectionId = isOwner
     ? "overview"
-    : canSeeOverview
-      ? "overview"
-      : canSeeEmoji
-        ? "emoji"
-        : canSeeRoles
-          ? "roles"
-          : canSeeIntegrations
-            ? "integrations"
-            : canSeeModeration
-              ? "moderation"
-              : "audit";
+    : firstVisibleSection({
+        overview: canSeeOverview,
+        emoji: canSeeEmoji,
+        roles: canSeeRoles,
+        soundboard: canSeeSoundboard,
+        integrations: canSeeIntegrations,
+        moderation: canSeeModeration,
+        automod: canSeeAutomod,
+        audit: canSeeAudit,
+      });
   const canSeeCommunity =
     communitiesEnabled && Boolean(serverId) && (isOwner || canManageServer);
   const openingSection: SectionId =
@@ -829,6 +919,8 @@ export function ServerSettingsDialog({
         return isOwner;
       case "roles":
         return canSeeRoles;
+      case "soundboard":
+        return canSeeSoundboard;
       case "integrations":
         return canSeeIntegrations;
       case "moderation":
@@ -1035,6 +1127,10 @@ export function ServerSettingsDialog({
 
           {active.id === "roles" && serverId && (
             <RolesSettingsSection serverId={serverId} />
+          )}
+
+          {active.id === "soundboard" && serverId && (
+            <SoundboardSettingsSection key={serverId} serverId={serverId} />
           )}
 
           {active.id === "integrations" && serverId && (

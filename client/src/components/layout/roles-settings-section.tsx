@@ -65,6 +65,8 @@ const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
   START_WATCH_PARTY: "roles.perm.START_WATCH_PARTY",
   MANAGE_MUSIC: "roles.perm.MANAGE_MUSIC",
   POST_STORIES: "roles.perm.POST_STORIES",
+  USE_SOUNDBOARD: "roles.perm.USE_SOUNDBOARD",
+  MANAGE_SOUNDBOARD: "roles.perm.MANAGE_SOUNDBOARD",
   MANAGE_EMOJI: "roles.perm.MANAGE_EMOJI",
 };
 
@@ -91,6 +93,8 @@ const FLAG_HINT: Partial<Record<PermissionFlagKey, MessageKey>> = {
   START_WATCH_PARTY: "roles.permHint.START_WATCH_PARTY",
   MANAGE_MUSIC: "roles.permHint.MANAGE_MUSIC",
   POST_STORIES: "roles.permHint.POST_STORIES",
+  USE_SOUNDBOARD: "roles.permHint.USE_SOUNDBOARD",
+  MANAGE_SOUNDBOARD: "roles.permHint.MANAGE_SOUNDBOARD",
   MANAGE_EMOJI: "roles.permHint.MANAGE_EMOJI",
 };
 
@@ -134,7 +138,15 @@ const PERMISSION_GROUPS = [
   },
   {
     heading: "roles.group.voice",
-    keys: ["CONNECT", "SPEAK", "STREAM", "START_WATCH_PARTY", "MANAGE_MUSIC"],
+    keys: [
+      "CONNECT",
+      "SPEAK",
+      "STREAM",
+      "START_WATCH_PARTY",
+      "MANAGE_MUSIC",
+      "USE_SOUNDBOARD",
+      "MANAGE_SOUNDBOARD",
+    ],
   },
 ] as const satisfies readonly {
   heading: MessageKey;

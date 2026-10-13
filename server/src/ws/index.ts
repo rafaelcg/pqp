@@ -122,6 +122,7 @@ const ACTIVITY_FRAME_TYPES: ReadonlySet<string> = new Set([
   "set-music",
   "set-music-listening",
   "live-reaction",
+  "soundboard-play",
   "voice-still-here",
 ]);
 
@@ -475,6 +476,10 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       return;
     }
 
+    // `null`, a number or an array parses fine and has no `type`.
+    if (typeof parsed !== "object" || parsed === null) {
+      return;
+    }
     const type = (parsed as { type?: unknown }).type;
     if (typeof type !== "string") {
       return;

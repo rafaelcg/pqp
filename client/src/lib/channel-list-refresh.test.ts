@@ -4,6 +4,7 @@ import { COMMUNITY_HOME_CHANNEL_ID } from "@/lib/community-home/id";
 import {
   channelListRetryDelayMs,
   createChannelListTickets,
+  vanishedChannelDecision,
   vanishedChannelFallback,
 } from "./channel-list-refresh";
 
@@ -51,6 +52,43 @@ describe("vanishedChannelFallback", () => {
     expect(
       vanishedChannelFallback([channel("cat", "category")], "avisos"),
     ).toEqual({ vanished: true, nextId: null });
+  });
+});
+
+describe("vanishedChannelDecision", () => {
+  it("stays when the open channel is in the list", () => {
+    expect(vanishedChannelDecision(list, "lobby", null)).toEqual({ action: "stay" });
+  });
+
+  it("only asks for a second list the first time the channel is missing", () => {
+    // One list without the open channel once sent a watch party spectator to
+    // #general on their own. One list is not proof.
+    expect(vanishedChannelDecision(list, "party", null)).toEqual({
+      action: "confirm",
+      channelId: "party",
+    });
+  });
+
+  it("leaves when the confirming list agrees", () => {
+    expect(vanishedChannelDecision(list, "party", "party")).toEqual({
+      action: "leave",
+      channelId: "party",
+      nextId: "geral",
+    });
+  });
+
+  it("stays when the confirming list has the channel back", () => {
+    const back = [...list, channel("party", "watch_party")];
+    expect(vanishedChannelDecision(back, "party", "party")).toEqual({
+      action: "stay",
+    });
+  });
+
+  it("confirms afresh when the person moved to another channel meanwhile", () => {
+    expect(vanishedChannelDecision(list, "avisos", "party")).toEqual({
+      action: "confirm",
+      channelId: "avisos",
+    });
   });
 });
 

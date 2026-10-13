@@ -3669,6 +3669,209 @@ router.get("/api/music/related", async (ctx) => {
   }
 });
 
+// ------------------------------------------------------------ soundboard
+
+import {
+  claimSoundboardSoundSchema,
+  createSoundboardUploadSchema,
+  Permission as SoundboardPermission,
+  SOUNDBOARD_MAX_SOUNDS,
+  updateSoundboardSoundSchema,
+} from "@pqp/shared";
+import {
+  claimSoundboardSound,
+  countSoundboardSlotsUsed,
+  createSoundboardUpload,
+  deleteSoundboardSound,
+  listSoundboardSounds,
+  SoundboardError,
+  updateSoundboardSound,
+} from "../services/soundboard.js";
+
+function soundboardHttpError(error: SoundboardError): HttpError {
+  switch (error.code) {
+    case "storage":
+      return new HttpError(503, "storage");
+    case "slots":
+      return new HttpError(409, "slots");
+    case "missing":
+      return new HttpError(404, "missing");
+    case "too_big":
+      return new HttpError(400, "too_big");
+    case "too_long":
+      return new HttpError(400, "too_long");
+    case "type":
+      return new HttpError(400, "type");
+    case "unreadable":
+      return new HttpError(400, "unreadable");
+  }
+}
+
+/**
+ * Adding or editing a clip needs the `soundboard` flag on for the server.
+ * Listing and deleting do not: a moderator can still take a clip down on a
+ * server where the flag went off.
+ */
+function requireSoundboardEnabled(serverId: string): void {
+  if (!isEnabled("soundboard", { serverId })) {
+    throw new HttpError(403, "soundboard_disabled");
+  }
+}
+
+router.get("/api/servers/:serverId/soundboard", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId, user.id);
+  // Who added each clip, for the people who manage the board only.
+  const manages = await memberHasPermission(
+    serverId!,
+    user.id,
+    SoundboardPermission.MANAGE_SOUNDBOARD,
+  );
+  const [sounds, slotsUsed] = await Promise.all([
+    listSoundboardSounds(serverId!, { withUploader: manages }),
+    countSoundboardSlotsUsed(serverId!),
+  ]);
+  return { sounds, maxSounds: SOUNDBOARD_MAX_SOUNDS, slotsUsed };
+});
+
+router.post(
+  "/api/servers/:serverId/soundboard/uploads",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    requireSoundboardEnabled(serverId!);
+    const body = createSoundboardUploadSchema.parse(await readJsonBody(req));
+    try {
+      return await createSoundboardUpload({
+        serverId,
+        contentType: body.contentType,
+        byteSize: body.byteSize,
+      });
+    } catch (error) {
+      if (error instanceof SoundboardError) {
+        throw soundboardHttpError(error);
+      }
+      throw error;
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/soundboard",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    requireSoundboardEnabled(serverId!);
+    const body = claimSoundboardSoundSchema.parse(await readJsonBody(req));
+    try {
+      const { sound, created } = await claimSoundboardSound({
+        serverId,
+        userId: user.id,
+        key: body.key,
+        name: body.name,
+        emoji: body.emoji,
+        volume: body.volume,
+      });
+      // A retried or parallel claim of the same upload answers with the row
+      // the first one made. Only the claim that made it is on the record.
+      if (created) {
+        await logAudit({
+          serverId: serverId!,
+          actorId: user.id,
+          action: "soundboard.create",
+          targetType: "soundboard_sound",
+          targetId: sound.id,
+          changes: [{ key: "name", old: null, new: sound.name }],
+        });
+      }
+      return { sound };
+    } catch (error) {
+      if (error instanceof SoundboardError) {
+        throw soundboardHttpError(error);
+      }
+      throw error;
+    }
+  },
+);
+
+router.patch(
+  "/api/servers/:serverId/soundboard/:soundId",
+  async ({ req, user }, { serverId, soundId }) => {
+    await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    requireSoundboardEnabled(serverId!);
+    if (!isUuid(soundId!)) {
+      throw new NotFound("Sound not found");
+    }
+    const body = updateSoundboardSoundSchema.parse(await readJsonBody(req));
+    const updated = await updateSoundboardSound({
+      serverId,
+      soundId,
+      name: body.name,
+      emoji: body.emoji,
+      volume: body.volume,
+    });
+    if (!updated) {
+      throw new NotFound("Sound not found");
+    }
+    const { sound, before } = updated;
+    // Only what actually moved is on the record, with what it was before.
+    // The emoji is not audited (the app never edits it); a save that changes
+    // nothing writes no row.
+    const changes: Array<{ key: string; old: string | number | null; new: string | number }> = [
+      ...(sound.name !== before.name
+        ? [{ key: "name", old: before.name, new: sound.name }]
+        : []),
+      ...(Math.fround(sound.volume) !== Math.fround(before.volume)
+        ? [{ key: "volume", old: before.volume, new: sound.volume }]
+        : []),
+    ];
+    if (changes.length > 0) {
+      // A volume-only edit still names the clip, so the log never says
+      // "edited a sound" without saying which. `clip` is context, not a change.
+      if (!changes.some((change) => change.key === "name")) {
+        changes.unshift({ key: "clip", old: null, new: sound.name });
+      }
+      await logAudit({
+        serverId: serverId!,
+        actorId: user.id,
+        action: "soundboard.update",
+        targetType: "soundboard_sound",
+        targetId: sound.id,
+        changes,
+      });
+    }
+    return { sound };
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/soundboard/:soundId",
+  async ({ user }, { serverId, soundId }) => {
+    await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    if (!isUuid(soundId!)) {
+      throw new NotFound("Sound not found");
+    }
+    let removed: string | null;
+    try {
+      removed = await deleteSoundboardSound(serverId, soundId);
+    } catch (error) {
+      if (error instanceof SoundboardError) {
+        throw soundboardHttpError(error);
+      }
+      throw error;
+    }
+    if (removed === null) {
+      throw new NotFound("Sound not found");
+    }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "soundboard.delete",
+      targetType: "soundboard_sound",
+      targetId: soundId!,
+      changes: [{ key: "name", old: removed, new: null }],
+    });
+    return { ok: true };
+  },
+);
+
 // ------------------------------------------------------------ attachments
 
 /**
@@ -9233,6 +9436,7 @@ import {
   replaceForumTags,
   setForumPostFollow,
   similarForumPosts,
+  tagRequirementBinds,
   updateForumSettings,
   writeDedupeTombstone,
   type ForumPostPatch,
@@ -9415,7 +9619,10 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
       getForumSettings(post.forum_id),
     ]);
     checkTagChange(forumTags, body.tagIds, previous, isStaff);
-    if (settings.requireTag && body.tagIds.length === 0) {
+    if (
+      body.tagIds.length === 0 &&
+      tagRequirementBinds(settings.requireTag, forumTags, isStaff)
+    ) {
       throw new ForumError(422, FORUM_ERRORS.tagRequired);
     }
     const sameSet =

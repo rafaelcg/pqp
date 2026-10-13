@@ -822,6 +822,13 @@
     <string name="forum_sort_created">Newest</string>
     <string name="forum_filter_open">Open</string>
     <string name="forum_filter_resolved">Resolved</string>
+    <string name="forum_tag_preset_question">Question</string>
+    <string name="forum_tag_preset_bug">Bug</string>
+    <string name="forum_tag_preset_suggestion">Suggestion</string>
+    <string name="forum_tag_preset_tutorial">Guide</string>
+    <string name="forum_tag_preset_release">Release</string>
+    <string name="forum_tag_preset_wip">WIP</string>
+    <string name="forum_tag_preset_discussion">Discussion</string>
     <string name="forum_filter_mine">My posts</string>
     <string name="forum_pinned">Pinned</string>
     <plurals name="forum_live">
@@ -853,8 +860,8 @@
     <string name="forum_deleted_author">Deleted account</string>
     <string name="forum_preview_deleted">The original message was deleted</string>
     <string name="forum_preview_voice">Voice message</string>
-    <string name="forum_preview_image">📷 Image</string>
-    <string name="forum_preview_video">🎬 Video</string>
+    <string name="forum_preview_image">Image</string>
+    <string name="forum_preview_video">Video</string>
     <plurals name="forum_preview_files">
         <item quantity="one">%1$d file</item>
         <item quantity="other">%1$d files</item>
@@ -935,6 +942,8 @@
     <string name="forum_composer_tags_required">at least 1</string>
     <string name="forum_composer_tags_required_error">Pick at least one tag.</string>
     <string name="forum_composer_tags_max">Up to %1$d tags.</string>
+    <string name="forum_composer_tags_none_to_pick">This forum asks for a tag, but there isn\'t one you can pick yet. You can post without it.</string>
+    <string name="forum_edit_tags_none">This forum has no tags to pick yet.</string>
     <string name="forum_composer_similar_title_short">Similar questions</string>
     <string name="forum_composer_similar_footer">None of these help? Go ahead and post.</string>
     <string name="forum_composer_draft_saved">Draft saved</string>

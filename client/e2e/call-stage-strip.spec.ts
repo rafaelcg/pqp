@@ -210,6 +210,9 @@ function strip(page: Page) {
 test("a room bigger than the strip: four faces, a +2, and everyone one tap away", async ({
   page,
 }) => {
+  // Six listener accounts, a share, fullscreen and two phone widths: past the
+  // two-minute default on a CI runner.
+  test.setTimeout(240_000);
   const { channelId, inviteCode } = await seedRoom();
   const names: string[] = [];
   for (const suffix of LISTENER_SUFFIXES) {
@@ -218,6 +221,11 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
 
   const sockets: ListenerSocket[] = [];
   try {
+    // The strip stands down while the expanded channel list already lists
+    // the room (`roomListOnScreen`), so fold the list to its icons first.
+    await page.addInitScript(() => {
+      localStorage.setItem("pqp:channel-sidebar", "icons");
+    });
     await openApp(page);
     await page.getByRole("button", { name: /lobby/i }).first().dblclick();
     await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
@@ -315,7 +323,12 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
 
     // The same panel from the sidebar seat, which is where the moderator
     // actually clicked: that row has advertised itself as a button since it
-    // was written and did nothing when pressed.
+    // was written and did nothing when pressed. Expanding the list to reach
+    // it also stands the strip down, because the list now lists the room.
+    await page
+      .getByRole("button", { name: "Expand the channel list" })
+      .click();
+    await expect(strip(page)).toHaveCount(0);
     await page
       .getByRole("button", { name: `${chipName}, in voice` })
       .click();
@@ -327,10 +340,19 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
     ).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("peer-audio-menu")).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Collapse the channel list" })
+      .click();
+    await expect(strip(page)).toBeVisible();
 
     // Hiding the strip leaves the share the whole stage, and is remembered.
-    await page.getByRole("button", { name: "Hide participants" }).click();
+    // From the keyboard, with focus kept on the (now "show") button.
+    await page.getByRole("button", { name: "Hide participants" }).focus();
+    await page.keyboard.press("Enter");
     await expect(strip(page)).toHaveAttribute("data-open", "false");
+    await expect(
+      page.getByRole("button", { name: "Show participants" }),
+    ).toBeFocused();
     await expect(strip(page).locator("[data-call-listener]")).toHaveCount(0);
     expect(
       await page.evaluate(() => localStorage.getItem("pqp:participant-rail")),
@@ -351,6 +373,42 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
 
     await page.getByRole("button", { name: "Show participants" }).click();
     await expect(strip(page)).toHaveAttribute("data-open", "true");
+
+    // Stage fullscreen: the composer is out of sight, so the bar floats over
+    // the stage. The strip stops above the bar's band rather than at the
+    // stage's edge, or its chips cover mute and hang-up.
+    // Every step bounded, so a failure names the step instead of running
+    // out the test's clock.
+    await page
+      .getByTestId("call-stage-collapsed")
+      .getByTestId("call-more")
+      .click({ timeout: 10_000 });
+    await page
+      .getByRole("menuitem", { name: "View fullscreen" })
+      .click({ timeout: 10_000 });
+    const bar = page.getByTestId("call-controls-bar");
+    await expect(bar).toBeVisible({ timeout: 10_000 });
+    await page.mouse.move(700, 300);
+    await page.mouse.move(710, 310);
+    await expect(strip(page)).toBeVisible({ timeout: 10_000 });
+    const chip = strip(page).locator("[data-call-listener]").first();
+    await expect(chip).toBeVisible({ timeout: 10_000 });
+    const leave = bar.getByRole("button", { name: "Leave", exact: true });
+    await expect(leave).toBeVisible({ timeout: 10_000 });
+    const chipBox = await chip.boundingBox({ timeout: 10_000 });
+    const leaveBox = await leave.boundingBox({ timeout: 10_000 });
+    expect(chipBox!.y + chipBox!.height).toBeLessThanOrEqual(leaveBox!.y + 1);
+    await expect
+      .poll(() => unreachableStageControls(page), { timeout: 5_000 })
+      .toEqual([]);
+    // Out through the bar's own menu, which works whether the browser granted
+    // real fullscreen or the stage expanded in the page.
+    await page.mouse.move(700, 300);
+    await bar.getByTestId("call-more").click({ timeout: 10_000 });
+    await page
+      .getByRole("menuitem", { name: "Exit fullscreen" })
+      .click({ timeout: 10_000 });
+    await expect(bar).toHaveCount(0, { timeout: 10_000 });
 
     // On a phone the control pill folds onto a second line, and the strip is
     // stacked above the bar: its reserve has to grow with the pill, or the

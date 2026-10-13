@@ -1,10 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { PttHoldControl } from "./ptt-hold-control";
 
 describe("PttHoldControl", () => {
   it("stays 36px on the docked bar, same as the tiles", () => {
     const html = renderToStaticMarkup(
+      <TooltipProvider>
       <PttHoldControl
         blocked={false}
         listenOnly={false}
@@ -12,10 +14,13 @@ describe("PttHoldControl", () => {
         keyLabel=" "
         windowFocused
         inBar
-      />,
+      />
+      </TooltipProvider>,
     );
     expect(html).toContain("h-9");
     expect(html).toContain("max-h-9");
+    expect(html).toContain("w-fit");
+    expect(html).not.toContain("max-w-[22rem]");
     expect(html).toContain("leading-none");
     expect(html).not.toContain("leading-4");
   });

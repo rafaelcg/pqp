@@ -19,7 +19,12 @@ import {
   injectMarketingHead,
   marketingPageFromMetaPath,
 } from "../src/lib/marketing-meta";
-import { injectMarketingBody } from "../src/lib/marketing-prerender";
+import {
+  injectMarketingBody,
+  PRERENDERED_MARKETING_PAGES,
+  type MarketingChrome,
+} from "../src/lib/marketing-prerender";
+import type { EdgeConfig } from "../src/lib/edge-config";
 import {
   markdownTwinFor,
   prefersMarkdown,
@@ -87,6 +92,8 @@ interface PagesContext {
     ASSETS?: { fetch: (input: Request | string | URL) => Promise<Response> };
   };
   next: () => Promise<Response>;
+  /** Keeps background work alive after the response. Absent in tests. */
+  waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 /** The edge has no patience and neither does WhatsApp's unfurler. */
@@ -106,6 +113,35 @@ async function resolveApiOrigin(context: PagesContext): Promise<string | null> {
   if (fromEnv) {
     return fromEnv.replace(/\/+$/, "");
   }
+  const apiUrl = (await readEdgeConfig(context))?.apiUrl;
+  const trimmed = typeof apiUrl === "string" ? apiUrl.trim() : "";
+  return trimmed ? trimmed.replace(/\/+$/, "") : null;
+}
+
+/** How long one isolate trusts what it read for the marketing chrome. */
+const CHROME_MEMO_MS = 60_000;
+/**
+ * The communities flag sits on the path of five marketing pages. The API
+ * answers it `no-store`, and from a colo far from São Paulo it takes most of a
+ * second, so the answer is kept in the colo's cache and served stale while a
+ * background request refreshes it. Only a colo with no copy at all waits, and
+ * at most this long; the request keeps running (up to `API_TIMEOUT_MS`) to
+ * fill the cache for the next reader.
+ */
+const COMMUNITIES_WAIT_MS = 1_000;
+const COMMUNITIES_FRESH_MS = 5 * 60_000;
+const COMMUNITIES_CACHE_KEY = "https://pqp-edge.internal/communities-config";
+
+// Only settled answers are remembered across requests. A request never waits
+// on another request's unsettled work without a timer of its own: on Workers,
+// work a cancelled request started may never settle.
+let edgeConfigMemo: { at: number; value: Partial<EdgeConfig> } | null = null;
+
+/** `/edge-config.json` (`src/lib/edge-config.ts`), or null when it cannot be read. */
+async function readEdgeConfig(context: PagesContext): Promise<Partial<EdgeConfig> | null> {
+  if (edgeConfigMemo && Date.now() - edgeConfigMemo.at < CHROME_MEMO_MS) {
+    return edgeConfigMemo.value;
+  }
   const assets = context.env.ASSETS;
   if (!assets) {
     return null;
@@ -116,12 +152,159 @@ async function resolveApiOrigin(context: PagesContext): Promise<string | null> {
     if (!response.ok) {
       return null;
     }
-    const config = (await response.json()) as { apiUrl?: string };
-    const apiUrl = config.apiUrl?.trim();
-    return apiUrl ? apiUrl.replace(/\/+$/, "") : null;
+    const value = (await response.json()) as Partial<EdgeConfig> | null;
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+    // A failed read is not remembered: profile unfurls read the same file.
+    edgeConfigMemo = { at: Date.now(), value };
+    return value;
   } catch {
     return null;
   }
+}
+
+let communitiesMemo: { at: number; enabled: boolean } | null = null;
+/**
+ * The API request this isolate has on the way, shared until it settles. It is
+ * trusted no longer than the request's own timeout, so one that never settles
+ * cannot stop the next.
+ */
+let communitiesInFlight: { at: number; request: Promise<boolean | null> } | null = null;
+
+function coloCache(): Cache | null {
+  return (globalThis as { caches?: { default?: Cache } }).caches?.default ?? null;
+}
+
+/**
+ * The API's answer, stored in the colo cache. Null when it did not answer.
+ * Never rejects, and settles within `API_TIMEOUT_MS`, edge-config read included.
+ */
+async function fetchCommunities(context: PagesContext): Promise<boolean | null> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(null);
+    }, API_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([askCommunities(context, controller.signal), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function askCommunities(
+  context: PagesContext,
+  signal: AbortSignal,
+): Promise<boolean | null> {
+  try {
+    const apiOrigin = await resolveApiOrigin(context);
+    if (!apiOrigin) {
+      return null;
+    }
+    const response = await fetch(`${apiOrigin}/api/public/communities/config`, {
+      signal,
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const enabled = ((await response.json()) as { enabled?: unknown }).enabled === true;
+    // Best effort, and outside the deadline: a slow write never hides the answer.
+    const put = coloCache()
+      ?.put(
+        COMMUNITIES_CACHE_KEY,
+        new Response(JSON.stringify({ enabled, at: Date.now() }), {
+          headers: { "cache-control": "max-age=86400" },
+        }),
+      )
+      .catch(() => undefined);
+    if (put) {
+      context.waitUntil?.(put);
+    }
+    return enabled;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Asks the API, or joins the request this isolate already has on the way, so
+ * a slow API gets one request per isolate and not one per page. The request
+ * outlives the page that started it (`waitUntil`).
+ */
+function refreshCommunities(context: PagesContext): Promise<boolean | null> {
+  if (communitiesInFlight && Date.now() - communitiesInFlight.at < API_TIMEOUT_MS) {
+    return communitiesInFlight.request;
+  }
+  const request = fetchCommunities(context);
+  const inFlight = { at: Date.now(), request };
+  communitiesInFlight = inFlight;
+  context.waitUntil?.(request);
+  void request.then((enabled) => {
+    if (communitiesInFlight === inFlight) {
+      communitiesInFlight = null;
+    }
+    // No answer is remembered for a minute too, so a down API is not asked on
+    // every page. It keeps the answer already remembered, or reads as off.
+    communitiesMemo = {
+      at: Date.now(),
+      enabled: enabled ?? communitiesMemo?.enabled ?? false,
+    };
+  });
+  return request;
+}
+
+/** The API's `COMMUNITIES_ENABLED`, from the public config the landing reads. False when unknown. */
+async function communitiesEnabled(context: PagesContext): Promise<boolean> {
+  if (communitiesMemo && Date.now() - communitiesMemo.at < CHROME_MEMO_MS) {
+    return communitiesMemo.enabled;
+  }
+  const cached = await coloCache()
+    ?.match(COMMUNITIES_CACHE_KEY)
+    .catch(() => undefined);
+  if (cached) {
+    try {
+      const { enabled, at } = (await cached.json()) as { enabled?: unknown; at?: number };
+      if (typeof at !== "number" || Date.now() - at > COMMUNITIES_FRESH_MS) {
+        void refreshCommunities(context);
+      }
+      communitiesMemo = { at: Date.now(), enabled: enabled === true };
+      return enabled === true;
+    } catch {
+      // An unreadable entry is a miss.
+    }
+  }
+  // Each page stops waiting on its own timer; the request keeps going.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const answer = await Promise.race([
+    refreshCommunities(context),
+    new Promise<"waited">((resolve) => {
+      timer = setTimeout(() => resolve("waited"), COMMUNITIES_WAIT_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+  return answer === true;
+}
+
+/** What the live nav and footer would show, as far as the edge can tell. */
+async function marketingChrome(context: PagesContext): Promise<MarketingChrome> {
+  const [config, communities] = await Promise.all([
+    readEdgeConfig(context),
+    communitiesEnabled(context),
+  ]);
+  return {
+    communities,
+    supportPage: config?.supportPage === true,
+    playStore: config?.playStore === true,
+    iosBetaUrl:
+      typeof config?.iosBetaUrl === "string" && config.iosBetaUrl.trim()
+        ? config.iosBetaUrl.trim()
+        : undefined,
+  };
 }
 
 async function fetchProfile(
@@ -389,6 +572,11 @@ async function handleRequest(context: PagesContext): Promise<Response> {
     return context.next();
   }
 
+  // Started beside the page fetch, so it costs nothing once memoized.
+  const chrome =
+    marketing && PRERENDERED_MARKETING_PAGES.includes(marketing)
+      ? marketingChrome(context)
+      : null;
   const response = await context.next();
   const contentType = response.headers.get("content-type") ?? "";
   if (!response.ok || !contentType.includes("text/html")) {
@@ -418,6 +606,7 @@ async function handleRequest(context: PagesContext): Promise<Response> {
         injectMarketingHead(html, marketing, locale),
         marketing,
         locale,
+        chrome ? await chrome : undefined,
       ),
     );
   }

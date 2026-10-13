@@ -255,6 +255,27 @@ export function deleteObjectsInBackground(keys: string[]): void {
   })();
 }
 
+/**
+ * Every soundboard object the server owns: saved clips plus uploads still on
+ * the ledger. Both tables cascade away with the server, and with them the
+ * only record of the keys, so they are read before the delete like the rest.
+ */
+async function serverSoundboardKeys(
+  serverId: string,
+  db: Pick<PoolClient, "query"> = getPool(),
+): Promise<string[]> {
+  if (!isStorageConfigured()) {
+    return [];
+  }
+  const result = await db.query<{ storage_key: string }>(
+    `SELECT storage_key FROM soundboard_sounds WHERE server_id = $1
+     UNION
+     SELECT storage_key FROM soundboard_pending_uploads WHERE server_id = $1`,
+    [serverId],
+  );
+  return result.rows.map((row) => row.storage_key);
+}
+
 async function ownerLocaleFor(
   db: Pick<PoolClient, "query">,
   userId: string,
@@ -1033,6 +1054,9 @@ export async function deleteServer(
       [serverId],
     );
     if ((locked.rowCount ?? 0) > 0) {
+      // Read under the server lock: an upload ticket takes the same lock, so
+      // none can slip in between this read and the cascade.
+      keys.push(...(await serverSoundboardKeys(serverId, client)));
       const members = await client.query<{ user_id: string }>(
         `SELECT user_id FROM server_members WHERE server_id = $1`,
         [serverId],
