@@ -258,9 +258,16 @@ export function isStoryVideoType(value: string): boolean {
 export const STORY_SNIFF_BYTES = 12;
 
 /**
- * The `ftyp` major brands that are an MP4 a player plays as video. HEIC
- * (`heic`, `mif1`), AVIF (`avif`) and QuickTime (`qt  `) are ISO BMFF too, and
- * an iPhone photo renamed `.mp4` must not pass as one.
+ * The `ftyp` major brands that are an MP4 or QuickTime movie a player plays as
+ * video. HEIC (`heic`, `mif1`) and AVIF (`avif`) are ISO BMFF too, and an
+ * iPhone photo renamed `.mp4` must not pass as one.
+ *
+ * QuickTime (`qt  `, a `.mov`, what an iPhone's camera roll and AirDrop hand
+ * over) IS accepted: it is the same boxes as MP4 around the same codecs, the
+ * server's tools already read every upload with the mov/mp4 demuxer (ffmpeg's
+ * `mov` IS the QuickTime one), and the video job refuses anything that is not
+ * H.264 (an iPhone's default HEVC, ProRes) or has no video stream. It is stored
+ * and served under the wire type `video/mp4`, like every recording.
  */
 const MP4_BRANDS = new Set([
   "isom",
@@ -275,6 +282,7 @@ const MP4_BRANDS = new Set([
   "MSNV",
   "dash",
   "mmp4",
+  "qt  ",
 ]);
 
 /**

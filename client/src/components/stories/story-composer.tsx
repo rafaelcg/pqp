@@ -1174,7 +1174,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
           data-story-file=""
           accept={
             config.videoEnabled
-              ? "image/jpeg,image/png,image/webp,video/mp4"
+              ? "image/jpeg,image/png,image/webp,video/mp4,video/quicktime,.mov"
               : "image/jpeg,image/png,image/webp"
           }
           onChange={(event) => {

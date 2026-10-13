@@ -5490,7 +5490,7 @@
   "stories.compose.replace": "Replace",
   "stories.compose.tooLong": "This video is {seconds} s. The limit is 30 s.",
   "stories.compose.tooBig": "File too big. Up to 25 MB.",
-  "stories.compose.wrongType": "That format won't work. Use JPG, PNG, WebP or MP4.",
+  "stories.compose.wrongType": "That format won't work. Use JPG, PNG, WebP, MP4 or MOV.",
   "stories.compose.wrongTypeNoVideo": "That format won't work. Use JPG, PNG or WebP.",
   "stories.compose.unreadable": "Couldn't read that file.",
   "stories.compose.mediaOff": "Photos and videos aren't on here yet. Post a text.",

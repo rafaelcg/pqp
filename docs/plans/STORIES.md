@@ -1254,6 +1254,21 @@ server-side transcode (CPU the worker does not have today) or a viewer that
 cannot play half the stories. Chrome, Edge and Safari cover nearly all web
 users, and the one hole is Firefox.
 
+**QuickTime (`.mov`) is accepted as it is** (2026-10-13; what an iPhone's camera roll
+and AirDrop hand over). The question was whether the server's probe can take a
+QuickTime movie with H.264/AAC, or whether the browser must remux it. It can, with
+no remux and no new demuxer: ffmpeg's `mov` demuxer, which every upload is already
+read with, IS the QuickTime one (QuickTime and MP4 are the same boxes), the video
+job's H.264 check refuses what QuickTime usually carries that we cannot play
+(an iPhone's default HEVC, ProRes) and a file with no video stream, and the sniffer
+only had to stop refusing the `ftyp` brand `qt  ` (HEIC and AVIF stay refused). It
+is stored and served under the wire type `video/mp4`, like every recording; the
+picker sends `.mov` / `video/quicktime`. The one hole is an HEVC `.mov`: the web
+composer previews it where the browser can decode it (Safari, Chrome on a Mac) and
+the server then refuses it at processing, which the author sees as "didn't upload";
+a transcode would need CPU the worker does not have (the same reason as WebM).
+Phones are unchanged.
+
 What the web composer does: pick a recorder type in this order,
 `video/mp4;codecs=avc1.42E01E,mp4a.40.2`, `video/mp4;codecs=avc1`, `video/mp4`,
 with `MediaRecorder.isTypeSupported`. When none is supported (Firefox), hide

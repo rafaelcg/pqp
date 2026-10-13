@@ -143,6 +143,10 @@ const { deleteAccount } = await import("../services/account.js");
 const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0]);
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 const MP4 = Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+/** The start of a QuickTime movie: `ftyp` with the major brand "qt  ". */
+const MOV = Uint8Array.from([0, 0, 0, 0x14, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20]);
+/** The start of a HEIC photo: `ftyp` with the major brand "heic". */
+const HEIC = Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]);
 
 describeDb("stories", () => {
   let http: Server;
@@ -780,7 +784,7 @@ describeDb("stories", () => {
       resetStoryProcessorCacheForTests();
     });
 
-    async function mintVideo() {
+    async function mintVideo(prefix: Uint8Array = MP4) {
       as(alice);
       const created = await call("POST", "/api/stories", {
         kind: "video",
@@ -796,7 +800,7 @@ describeDb("stories", () => {
           [id],
         )
       ).rows[0]!.media_storage_key;
-      storage.objects.set(key, { contentLength: 8000, contentType: "video/mp4", prefix: MP4 });
+      storage.objects.set(key, { contentLength: 8000, contentType: "video/mp4", prefix });
       const published = await call("POST", `/api/stories/${id}/publish`);
       expect(published.status).toBe(200);
       expect(published.body.story.own.status).toBe("processing");
@@ -819,6 +823,37 @@ describeDb("stories", () => {
       expect(seen!.media).toMatchObject({ contentType: "video/mp4", durationMs: 20_000 });
       expect(seen!.media!.posterUrl).toContain("poster.jpg");
       expect((await processStoryVideos()).outcome).toBe("idle");
+    });
+
+    it("takes a QuickTime movie (.mov) as it is: same boxes, same codecs, stored and served as video/mp4", async () => {
+      probe.mockResolvedValue({ durationMs: 12_000, videoCodec: "h264", width: 1080, height: 1920 });
+      const id = await mintVideo(MOV);
+      expect(await processStoryVideos()).toMatchObject({ storyId: id, outcome: "live", wentLive: true });
+      const [seen] = await read(bob, [id]);
+      expect(seen!.media).toMatchObject({ contentType: "video/mp4", durationMs: 12_000 });
+    });
+
+    it("still refuses a QuickTime movie that is not H.264 (an iPhone's default HEVC, ProRes)", async () => {
+      probe.mockResolvedValue({ durationMs: 12_000, videoCodec: "hevc", width: 1080, height: 1920 });
+      const id = await mintVideo(MOV);
+      expect((await processStoryVideos()).outcome).toBe("refused");
+      expect(await read(bob, [id])).toEqual([]);
+    });
+
+    it("still refuses a HEIC photo that says it is a video", async () => {
+      as(alice);
+      const created = await call("POST", "/api/stories", {
+        kind: "video",
+        caption: "foto",
+        audiences: { serverIds: [serverId] },
+        media: { contentType: "video/mp4", byteSize: 8000, width: 720, height: 1280, durationMs: 5_000 },
+      });
+      const id = created.body.story.id as string;
+      const key = (
+        await getPool().query<{ media_storage_key: string }>(`SELECT media_storage_key FROM stories WHERE id = $1`, [id])
+      ).rows[0]!.media_storage_key;
+      storage.objects.set(key, { contentLength: 8000, contentType: "video/mp4", prefix: HEIC });
+      expect((await call("POST", `/api/stories/${id}/publish`)).status).toBe(409);
     });
 
     it("refuses a video over 31 s, whatever the client said", async () => {
