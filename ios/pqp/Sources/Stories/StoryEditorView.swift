@@ -61,7 +61,7 @@ struct StoryEditorView: View {
     @State private var callLive: [String: StoryCallLive] = [:]
     @State private var didAutoOpen = false
 
-    var body: some View {
+    private var stage: some View {
         GeometryReader { proxy in
             let canvas = canvasSize(in: proxy.size)
             ZStack {
@@ -74,31 +74,53 @@ struct StoryEditorView: View {
 
                 chrome(canvas)
 
-                if let target = textTarget {
-                    let place = textPlace(for: target)
-                    StoryTextEditView(
-                        data: place.data, scale: place.scale,
-                        center: CGPoint(
-                            x: (proxy.size.width - canvas.width) / 2 + place.x * canvas.width,
-                            y: (proxy.size.height - canvas.height) / 2 + place.y * canvas.height
-                        ),
-                        rotation: place.rotation, canvasWidth: canvas.width
-                    ) { result in
-                        finishText(target, result)
-                    }
-                    .id(target.id)
-                    .transition(.opacity)
-                    .zIndex(5)
-                }
-                if drawing {
-                    StoryDrawView(canvas: canvas, initial: model.drawing) { strokes in
-                        finishDrawing(strokes, canvas: canvas)
-                    }
-                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
-                    .zIndex(5)
-                }
+                textOverlay(canvas, in: proxy.size)
+                drawOverlay(canvas, in: proxy.size)
             }
         }
+    }
+
+    /// The text tool, on the line it is editing and nowhere else.
+    @ViewBuilder
+    private func textOverlay(_ canvas: CGSize, in size: CGSize) -> some View {
+        if let target = textTarget {
+            let place = textPlace(for: target)
+            let center = CGPoint(
+                x: (size.width - canvas.width) / 2 + place.x * canvas.width,
+                y: (size.height - canvas.height) / 2 + place.y * canvas.height
+            )
+            StoryTextEditView(
+                data: place.data, scale: place.scale, center: center,
+                rotation: place.rotation, canvasWidth: canvas.width
+            ) { result in
+                finishText(target, result)
+            }
+            .id(target.id)
+            .transition(.opacity)
+            .zIndex(5)
+        }
+    }
+
+    @ViewBuilder
+    private func drawOverlay(_ canvas: CGSize, in size: CGSize) -> some View {
+        if drawing {
+            StoryDrawView(canvas: canvas, initial: model.drawing) { strokes in
+                finishDrawing(strokes, canvas: canvas)
+            }
+            .position(x: size.width / 2, y: size.height / 2)
+            .zIndex(5)
+        }
+    }
+
+    // The modifiers are split over three small functions: one long chain
+    // after a big `GeometryReader` is more than the compiler will type-check in
+    // reasonable time on a slower machine.
+    var body: some View {
+        withLifecycle(withSheets(withFeedback(stage)))
+    }
+
+    private func withFeedback<V: View>(_ view: V) -> some View {
+        view
         // The keyboard must not squeeze the canvas: the line being typed is
         // edited IN PLACE, so the canvas keeps its size and place under it.
         .ignoresSafeArea(.keyboard)
@@ -110,6 +132,10 @@ struct StoryEditorView: View {
             guard let item else { return }
             Task { await addPhoto(item) }
         }
+    }
+
+    private func withSheets<V: View>(_ view: V) -> some View {
+        view
         .sheet(isPresented: $showingTray) {
             StoryStickerTray(
                 isFull: model.isFull,
@@ -141,6 +167,10 @@ struct StoryEditorView: View {
             .presentationDetents([.large])
             .presentationBackground(Palette.ink)
         }
+    }
+
+    private func withLifecycle<V: View>(_ view: V) -> some View {
+        view
         .confirmationDialog(Text("Discard this story?"), isPresented: $confirmingDiscard, titleVisibility: .visible) {
             Button("Discard", role: .destructive) { onClose() }
             Button("Keep editing", role: .cancel) {}
