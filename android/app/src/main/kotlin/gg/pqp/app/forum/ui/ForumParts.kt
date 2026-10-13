@@ -101,7 +101,7 @@ fun ForumBadge(kind: BadgeKind, modifier: Modifier = Modifier) {
 }
 
 /**
- * A post's tag: emoji and name, 20dp, fully round. A staff-only tag gets the
+ * A post's tag: icon and name, 20dp, fully round. A staff-only tag gets the
  * inset ring so it reads as official on every card.
  */
 @Composable
@@ -122,12 +122,12 @@ fun ForumTagChip(tag: ForumTag, modifier: Modifier = Modifier, raised: Boolean =
             .padding(horizontal = 8.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        tag.emoji?.takeIf { it.isNotBlank() }?.let { emoji ->
-            Text(text = emoji, style = MaterialTheme.typography.labelMedium)
+        if (tag.hasGlyph()) {
+            ForumTagGlyph(tag, size = 12.dp)
             Spacer(Modifier.width(4.dp))
         }
         Text(
-            text = tag.name,
+            text = tag.displayName(),
             style = MaterialTheme.typography.labelMedium.copy(letterSpacing = MaterialTheme.typography.bodySmall.letterSpacing),
             color = colors.onSurfaceVariant,
             maxLines = 1,

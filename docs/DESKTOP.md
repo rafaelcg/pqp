@@ -178,6 +178,36 @@ system picker could hand over a surface without one. `screenPermission` +
 missing. Flipping `useSystemPicker` back to `true` in `main.js` is the one-line
 rollback if that grant turns out to be the bigger problem.
 
+**When the sound fails, the picture still goes out (PQP-31).** On Windows 11
+the loopback device can refuse to open after the picker has closed. Chromium
+then rejects the whole capture with `NotReadableError`, and the handler never
+learns about it. From the shell that publishes `capabilities.silentRetry`:
+
+1. The handler remembers the surface of a request it answered with loopback
+   (`electron/lib/share-silent-retry.js`). Every new request clears it.
+2. The page sees a `NotReadableError` and calls `shareSilentRetryArm()`. The
+   arm succeeds only if the request that just failed carried loopback, in the
+   last 15 seconds, and came from the same frame.
+3. The page asks again with `audio: false`. The handler returns the same
+   surface, video only, with no second picker. A request from any other frame
+   gets the picker.
+4. The share starts and the stage shows `voice.notice.shareAudioFallback`:
+   shared without sound, plus the Chrome tab path for sound.
+
+An older shell, a browser, or a failed retry keeps the old path: the error and
+the "Compartilhar sem som" button. With nothing on stage, both show in the
+docked call bar (`components/voice/docked-share-error.tsx`). Before, the
+picker closed and nothing was shown. Code: `client/src/lib/share-silent-fallback.ts`.
+
+A watch party goes silent the same way, from the setup preview's pick
+(`watchParty.setup.soundFailed` under the preview) and from a share started
+during the party. Live, the host gets a warning instead of the 12-second
+notice: it sits above the transmission readout and stays until the share
+ends or the host closes it (`VoiceState.watchPartyShareSilent`,
+`components/voice/watch-party-silent-share-warning.tsx`). The preview marks
+its stream, so the call learns at go-live that the sound failed
+(`lostSoundToFailure`).
+
 **Frame rate and size** stay the page's business, not the shell's:
 `screenCaptureOptions` asks for 1080p at 30 (60 when the HLS ladder wants it)
 and the watch party lowers the capture's height with `applyConstraints` while it

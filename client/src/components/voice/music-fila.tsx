@@ -184,7 +184,9 @@ export function MusicFila({
             className={iconClass}
             disabled={!canManage || queue.length < 2}
           />
-          {current && !onStage ? (
+          {/* The sheet sits on the bar, which carries this toggle. The drawer
+              is away from the call, with no bar under it. */}
+          {!sheet && current && !onStage ? (
             <Tooltip label={t("music.stage.watch")} side="left">
               <button
                 type="button"

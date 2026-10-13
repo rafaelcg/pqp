@@ -11279,6 +11279,10 @@ function MainAppContent({
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.sharePublishRecovering
             }
+            shareSilent={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.watchPartyShareSilent
+            }
             someoneIsSharing={(
               voiceState.occupancy[selectedChannel.id] ?? []
             ).some((peer) => peer.sharingScreen)}
@@ -11621,6 +11625,10 @@ function MainAppContent({
             sharePublishRecovering={
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.sharePublishRecovering
+            }
+            shareSilent={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.watchPartyShareSilent
             }
             someoneIsSharing={(
               voiceState.occupancy[selectedChannel.id] ?? []
