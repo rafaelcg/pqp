@@ -477,7 +477,7 @@ export function Dialog({
             fill && "h-[calc(100%-1.5rem)] sm:h-full",
             // Settings: a fixed height so the rail stays put between panes,
             // but not the whole of a tall monitor.
-            fill && size === "2xl" && "sm:h-[min(100%,48rem)]",
+            fill && size === "2xl" && "sm:h-[min(100%,56rem)]",
             phoneFullScreen && "max-sm:h-full max-sm:max-h-full max-sm:border-0",
             width,
           )}
