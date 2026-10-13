@@ -12,7 +12,6 @@ import {
 import {
   autoscrollStep,
   clampTop,
-  dropLineY,
   keyMoveTarget,
   moveId,
   railKeyMove,
@@ -60,6 +59,9 @@ const MOUSE_SLOP_PX = 5;
 const TOUCH_SLOP_PX = 10;
 const LONG_PRESS_MS = 380;
 const DEFAULT_GAP_PX = 8;
+/** How big the lifted ghost is, and how long the others take to slide apart. */
+const GHOST_SCALE = 1.05;
+const SLIDE_MS = 180;
 
 interface Gesture {
   id: string;
@@ -82,8 +84,6 @@ interface Gesture {
 
 export interface RailDrag {
   id: string;
-  /** The drop line's top in the list's own coordinates, or null for "no change". */
-  lineY: number | null;
 }
 
 export interface UseServerRailReorder {
@@ -181,8 +181,23 @@ export function useServerRailReorder({
       window.cancelAnimationFrame(g.frame);
     }
     gesture.current = null;
-    // The lifted tile is moved by hand (see `frame`); hand it back.
-    items.current.get(g.id)?.style.removeProperty("transform");
+    if (g.active) {
+      // Where every tile is RIGHT NOW (the ghost under the pointer, the others
+      // slid apart): the glide into the final layout starts from here. After a
+      // drop that is already where the others will be, so only the ghost
+      // travels; after Esc everything glides back.
+      pendingRects.current = measureRelative();
+      for (const el of items.current.values()) {
+        el.style.transition = "none";
+        el.style.removeProperty("transform");
+      }
+      window.requestAnimationFrame(() => {
+        for (const el of items.current.values()) {
+          el.style.removeProperty("transition");
+        }
+      });
+      setSettle((value) => value + 1);
+    }
     document.body.style.removeProperty("user-select");
     document.body.style.removeProperty("-webkit-user-select");
     window.removeEventListener("pointermove", onMoveRef.current);
@@ -197,7 +212,7 @@ export function useServerRailReorder({
         suppressClick.current = false;
       }, 50);
     }
-  }, []);
+  }, [measureRelative]);
 
   const frame = useCallback(() => {
     const g = gesture.current;
@@ -215,23 +230,38 @@ export function useServerRailReorder({
     const top = clampTop(g.slots, raw);
     const target = targetSlot(g.slots, top + slot.height / 2);
     const offset = top - slot.top;
+    // Everything below goes straight onto the elements, not through React
+    // state: this runs every frame, and a state change would re-render the
+    // whole rail (every tile, every menu) sixty times a second.
     if (offset !== g.offset) {
       g.offset = offset;
-      // Straight onto the element, not through React state: this runs every
-      // frame, and a state change would re-render the whole rail (every tile,
-      // every menu) sixty times a second. React only hears about the drop
-      // target, which changes a handful of times per drag.
       const el = items.current.get(g.id);
       if (el) {
-        el.style.transform = `translateY(${offset}px) scale(1.06)`;
+        el.style.transform = `translateY(${offset}px) scale(${GHOST_SCALE})`;
       }
     }
     if (target !== g.target) {
       g.target = target;
-      const line = dropLineY(g.slots, g.from, target, g.gap);
-      setDrag({
-        id: g.id,
-        lineY: line === null ? null : line - g.listTop,
+      // The other tiles slide apart to open the gap where the ghost will land:
+      // the ones between the old slot and the new one move a tile's pitch
+      // toward the old slot. The list never changes height, so the rail does
+      // not jump, and the slot the ghost left is filled by its neighbour.
+      const pitch = slot.height + g.gap;
+      const { ids: current } = latest.current;
+      current.forEach((id, index) => {
+        if (index === g.from) {
+          return;
+        }
+        let shift = 0;
+        if (index > g.from && index <= target) {
+          shift = -pitch;
+        } else if (index < g.from && index >= target) {
+          shift = pitch;
+        }
+        const el = items.current.get(id);
+        if (el) {
+          el.style.transform = shift === 0 ? "" : `translateY(${shift}px)`;
+        }
       });
     }
     g.frame = window.requestAnimationFrame(frame);
@@ -295,11 +325,17 @@ export function useServerRailReorder({
           // No haptics here; the lift is visible anyway.
         }
       }
+      // The ghost follows the pointer with no transition; every other tile
+      // slides (under reduced motion it simply jumps).
+      const slide = reducedMotion() ? "none" : `transform ${SLIDE_MS}ms var(--ease-emphasized, ease-out)`;
+      for (const [id, el] of items.current) {
+        el.style.transition = id === g.id ? "none" : slide;
+      }
       const lifted = items.current.get(g.id);
       if (lifted) {
-        lifted.style.transform = "translateY(0px) scale(1.06)";
+        lifted.style.transform = `translateY(0px) scale(${GHOST_SCALE})`;
       }
-      setDrag({ id: g.id, lineY: null });
+      setDrag({ id: g.id });
       g.frame = window.requestAnimationFrame(frame);
     },
     [frame, stopGesture],
@@ -337,24 +373,15 @@ export function useServerRailReorder({
       if (g.active && g.target !== g.from) {
         const { ids: current, onReorder: save, announce: say } = latest.current;
         const next = moveId(current, g.id, g.target);
-        // Where every tile is right now (the dragged one under the pointer):
-        // the glide to the new order starts from here.
-        const rects = measureRelative();
-        pendingRects.current = rects;
+        // Measured and cleared by `stopGesture`, below, before React commits.
         save(next, g.id);
         setMessage((previous) =>
           nextMessage(previous, say(g.id, g.target + 1, current.length)),
         );
-      } else if (g.active) {
-        pendingRects.current = measureRelative();
       }
-      const wasActive = g.active;
       stopGesture();
-      if (wasActive) {
-        setSettle((value) => value + 1);
-      }
     },
-    [measureRelative, stopGesture],
+    [stopGesture],
   );
 
   const onCancel = useCallback(
