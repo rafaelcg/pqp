@@ -20,6 +20,7 @@
     "bench": "node bench/theme-tokens.mjs && node bench/theme-runtime.mjs",
     "bench:runtime": "node bench/theme-runtime.mjs",
     "i18n:check": "node scripts/check-i18n.mjs",
+    "prerender:copy": "node scripts/gen-prerender-copy.mjs",
     "og:image": "node scripts/og-image/render.mjs"
   },
   "dependencies": {
