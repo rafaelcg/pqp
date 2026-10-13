@@ -131,6 +131,26 @@ object StoriesRules {
         else -> 0
     }
 
+    /** An EXIF orientation as the two things that undo it: flip left to right first, then turn. */
+    data class ExifTurn(val degrees: Int, val mirrored: Boolean)
+
+    /**
+     * All eight EXIF orientations, the mirrored four included. The story camera
+     * writes a front-camera shot as a mirrored orientation (so the file matches
+     * the preview), and the pre-P decode path has to honour it by hand;
+     * `ImageDecoder` does it on its own.
+     */
+    fun exifTurn(exifOrientation: Int): ExifTurn = when (exifOrientation) {
+        2 -> ExifTurn(0, true)
+        3 -> ExifTurn(180, false)
+        4 -> ExifTurn(180, true)
+        5 -> ExifTurn(270, true)
+        6 -> ExifTurn(90, false)
+        7 -> ExifTurn(90, true)
+        8 -> ExifTurn(270, false)
+        else -> ExifTurn(0, false)
+    }
+
     /** Why a picked file cannot be a story, said before anything is uploaded. */
     enum class MediaRefusal { WrongType, TooBig, TooLong }
 
