@@ -360,7 +360,9 @@ struct CreateStoryResponse: Codable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         story = try c.decode(Story.self, forKey: .story)
         upload = try c.decodeIfPresent(StoryUpload.self, forKey: .upload)
-        layerUploads = (try? c.decodeIfPresent([StoryLayerUploadTarget].self, forKey: .layerUploads)) ?? []
+        // Absent is "no pictures"; present and unreadable is an error, so a
+        // story is never published without the files it declared.
+        layerUploads = try c.decodeIfPresent([StoryLayerUploadTarget].self, forKey: .layerUploads) ?? []
     }
 }
 

@@ -16,8 +16,7 @@ struct StoryTextEditView: View {
     /// Radians, as the layer has it.
     let rotation: Double
     let canvasWidth: CGFloat
-    /// The text and the scale it ended on; nil when it was cancelled or left
-    /// empty.
+    /// The text and the scale it ended on; nil when it was cancelled.
     let onDone: ((StoryTextData, Double)?) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -230,9 +229,11 @@ struct StoryTextEditView: View {
         .padding(.bottom, 10)
     }
 
+    /// Done. What was typed is reported as it is, EMPTY included: the editor
+    /// decides what an emptied line means (the layer goes away). Cancel, the X,
+    /// reports nothing at all.
     private func finish() {
-        let trimmed = data.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        onDone(trimmed.isEmpty ? nil : (data, scale))
+        onDone((data, scale))
     }
 }
 

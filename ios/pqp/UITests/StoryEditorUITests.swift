@@ -229,6 +229,27 @@ final class StoryEditorUITests: XCTestCase {
         XCTAssertTrue(app.buttons["composer.mode.text"].exists)
     }
 
+    /// Emptying a line and tapping Done removes the layer; the X leaves it alone.
+    func testEmptyingALineRemovesItAndCancelKeepsIt() throws {
+        let (app, serverId) = try launch()
+        openComposer(app, serverId: serverId)
+        app.buttons["composer.mode.text"].tap()
+        addText(app, "abc")
+        // Cancel keeps what was there, whatever was typed.
+        layer(app, "abc").tap()
+        let input = app.textViews["text.input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.typeText(" mudou")
+        app.buttons["text.cancel"].tap()
+        XCTAssertTrue(layer(app, "abc").waitForExistence(timeout: 5), "Cancel leaves the line as it was")
+        // Emptied, then Done: gone.
+        layer(app, "abc").tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 3))
+        app.buttons["text.done"].tap()
+        XCTAssertTrue(waitForGone(layer(app, "abc")), "An emptied line is removed")
+    }
+
     /// A long press opens the layer's menu, and its buttons are tappable (they
     /// sit above the gesture surface, not under it).
     func testLongPressOpensTheMenuAndDeleteWorks() throws {
