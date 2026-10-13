@@ -38,6 +38,7 @@ import {
   SIDEBAR_THREADS_PER_CHANNEL,
   withProfileUpdate,
   applyLayoutToChannels,
+  applyServerOrder,
   layoutToPayload,
   CHANNEL_LAYOUT_OFF,
   CHANNEL_LAYOUT_STALE,
@@ -372,6 +373,7 @@ import {
   listTimeouts,
   fetchMessages,
   fetchServers,
+  saveServerOrder,
   fetchUnread,
   fetchVoiceBackend,
   hideConversation,
@@ -662,6 +664,11 @@ import { useUserStatus } from "@/hooks/use-status";
 import { useAttentionReport } from "@/hooks/use-attention";
 import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
+import { newRailOrigin } from "@/lib/server-rail-reorder";
+import {
+  createServerOrderSaver,
+  type ServerOrderSaver,
+} from "@/lib/server-order-saver";
 import { adoptAccentHuePreference } from "@/lib/accent";
 import { getAppearance } from "@/lib/appearance";
 import { adoptLook } from "@/lib/choose-look";
@@ -2712,6 +2719,55 @@ function MainAppContent({
   );
   const serversRef = useRef(servers);
   serversRef.current = servers;
+  // The server rail's order (`PUT /api/servers/order`). `railOriginRef` is this
+  // tab's own id, sent with a save and echoed on the frame the account's OTHER
+  // tabs get, so this one can skip its own echo. The saver sends one request at
+  // a time, coalesces a burst of moves and rolls back to the last order the
+  // server confirmed: see `lib/server-order-saver.ts` for why.
+  const railOriginRef = useRef<string>("");
+  if (railOriginRef.current === "") {
+    railOriginRef.current = newRailOrigin();
+  }
+  const railMovesRef = useRef(0);
+  const railSaverRef = useRef<ServerOrderSaver | null>(null);
+  if (railSaverRef.current === null) {
+    railSaverRef.current = createServerOrderSaver({
+      save: async (ids) => (await saveServerOrder(ids, railOriginRef.current)).serverIds,
+      current: () => serversRef.current.map((row) => row.id),
+      onConfirmed: (stored, latest) => {
+        if (latest) {
+          setServers((rows) => applyServerOrder(rows, stored));
+        }
+      },
+      onFailed: (confirmed) => {
+        setServers((rows) => applyServerOrder(rows, confirmed));
+        setAppNotice(null);
+        setAppError(translateMessage("chrome.railReorderFailed"));
+      },
+      onResync: () => {
+        // A read that started before the person moved something again is older
+        // than that move: `railMovesRef` says whether they did, and if so the
+        // read is dropped (the new move has its own save, and its own resync
+        // if another tab spoke meanwhile).
+        const moves = railMovesRef.current;
+        fetchServers()
+          .then(({ servers: list }) => {
+            if (railMovesRef.current !== moves) {
+              return;
+            }
+            setServers((rows) =>
+              applyServerOrder(
+                rows,
+                list.map((row) => row.id),
+              ),
+            );
+          })
+          .catch(() => {
+            // The next load reads it anyway.
+          });
+      },
+    });
+  }
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
   /**
@@ -5457,6 +5513,22 @@ function MainAppContent({
             return;
           }
 
+          // Another tab or device of this account dragged its server rail. This
+          // tab follows, unless the frame is the echo of its own save (same
+          // `origin`) or a save of its own is still in the air: that answer is
+          // the truth, and applying an older frame first would flick the rail
+          // back for a moment, mid-drag.
+          if (message.type === "server-order-update") {
+            if (message.origin && message.origin === railOriginRef.current) {
+              return;
+            }
+            if (railSaverRef.current?.noteRemote()) {
+              return;
+            }
+            setServers((rows) => applyServerOrder(rows, message.serverIds));
+            return;
+          }
+
           // Another tab or device of this account changed its status. Without
           // this the user panel here read the old choice until a reload.
           if (message.type === "own-status") {
@@ -6873,6 +6945,18 @@ function MainAppContent({
         error instanceof Error ? error.message : "Failed to move channel",
       );
     }
+  }
+
+  /**
+   * The rail was reordered (drag, Alt+arrows, or the menu). Optimistic: the
+   * list moves now and the newest wanted order is saved by the saver, one
+   * request at a time. If a save fails the list goes back to the last order
+   * the server confirmed, with a line saying so.
+   */
+  function handleReorderServers(ids: string[]) {
+    railMovesRef.current += 1;
+    railSaverRef.current?.request(ids);
+    setServers((rows) => applyServerOrder(rows, ids));
   }
 
   function handleFavoriteChannelIdsChange(ids: string[]) {
@@ -12724,6 +12808,7 @@ function MainAppContent({
           void loadChannels(id);
           setMobileNavOpen(true);
         }}
+        onReorderServers={handleReorderServers}
         onCreateServer={() => setShowCreateServer(true)}
         onJoinServer={() => setInviteMode("join")}
         onInvite={openInviteForServer}
