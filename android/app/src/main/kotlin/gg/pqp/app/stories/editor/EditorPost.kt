@@ -22,8 +22,9 @@ object EditorPost {
 
     /**
      * `layers` for `POST /api/stories`, back to front. A photo or drawing
-     * needs its prepared [files] entry (the declared size is the file's own),
-     * else it is left out rather than posted without bytes.
+     * needs its prepared [files] entry (the declared size is the file's own);
+     * with none the whole post fails ([IllegalStateException]), rather than a
+     * story that quietly leaves out something the author placed.
      */
     fun layersJson(layers: List<EditorLayer>, files: Map<String, LayerFile>): List<JsonObject> = layers.mapNotNull { layer ->
         when (layer) {
@@ -36,10 +37,10 @@ object EditorPost {
                     layer.id, layer.x, layer.y, layer.scale, layer.rotation, layer.shape,
                     StoryLayers.uploadJson(it.contentType, it.bytes.size.toLong(), it.width, it.height),
                 )
-            }
+            } ?: error("The photo layer ${layer.id} has no prepared file")
             is InkLayer -> files[layer.id]?.let {
                 StoryLayers.drawingJson(layer.id, StoryLayers.uploadJson(it.contentType, it.bytes.size.toLong(), it.width, it.height))
-            }
+            } ?: error("The drawing ${layer.id} has no prepared file")
             is MentionLayer -> StoryLayers.mentionJson(layer.id, layer.x, layer.y, layer.scale, layer.rotation, layer.userId)
             is CallLayer -> StoryLayers.callJson(layer.id, layer.x, layer.y, layer.scale, layer.rotation, layer.serverId, layer.channelId)
         }

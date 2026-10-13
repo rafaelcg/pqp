@@ -662,7 +662,8 @@ private suspend fun postStory(
                     is PhotoLayer -> layerFiles[layer.id]?.let { put(layer.id, it) }
                     is InkLayer -> {
                         val (w, h) = InkRenderer.exportSize()
-                        put(layer.id, LayerFile(layer.id, "image/png", InkRenderer.renderPng(layer.strokes, w, h), w, h))
+                        val png = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { InkRenderer.renderPng(layer.strokes, w, h) }
+                        put(layer.id, LayerFile(layer.id, "image/png", png, w, h))
                     }
                     else -> Unit
                 }

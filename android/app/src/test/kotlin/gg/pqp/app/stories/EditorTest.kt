@@ -166,7 +166,7 @@ class EditorTest {
     }
 
     @Test
-    fun `a photo declares the size of the file it will upload, and one with no file is left out`() {
+    fun `a photo declares the size of the file it will upload, and one with no file fails the post`() {
         val photo = PhotoLayer("p1", shape = "circle", source = "content://x", width = 900, height = 1200)
         val file = LayerFile("p1", "image/jpeg", ByteArray(4321), 900, 1200)
         val json = EditorPost.layersJson(listOf(photo), mapOf("p1" to file)).single()
@@ -176,7 +176,7 @@ class EditorTest {
         assertEquals("image/jpeg", upload.str("contentType"))
         assertEquals(4321.0, upload.num("byteSize")!!, 0.0)
         assertEquals(900.0, upload.num("width")!!, 0.0)
-        assertTrue(EditorPost.layersJson(listOf(photo), emptyMap()).isEmpty())
+        assertTrue(runCatching { EditorPost.layersJson(listOf(photo), emptyMap()) }.isFailure)
     }
 
     @Test

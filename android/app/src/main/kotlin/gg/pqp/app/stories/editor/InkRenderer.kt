@@ -84,6 +84,17 @@ object InkRenderer {
 
         fun bitmapFor(strokes: List<Stroke>, width: Int, height: Int): Bitmap? {
             if (strokes.isEmpty() || width <= 0 || height <= 0) return null
+            val kept = this.strokes
+            val current = bitmap
+            if (current != null && kept != null && kept !== strokes && this.width == width && this.height == height &&
+                strokes.size == kept.size + 1 && kept.indices.all { kept[it] === strokes[it] }
+            ) {
+                // One stroke committed on top of what is already drawn: add that stroke, do not replay the history.
+                // (An undo or a redo takes the full path below; each is one step.)
+                drawStroke(Canvas(current), strokes.last(), width.toFloat(), height.toFloat())
+                this.strokes = strokes
+                return current
+            }
             if (bitmap == null || this.strokes !== strokes || this.width != width || this.height != height) {
                 bitmap?.recycle()
                 bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also {

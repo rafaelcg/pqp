@@ -633,7 +633,7 @@ private fun LayerHost(
                 is CallLayer -> CallLayerContent(
                     roomName = layer.roomName,
                     serverName = layer.serverName,
-                    faces = env.occupancy[layer.channelId].orEmpty().map { CallFace(it.userId, it.displayName, it.avatarUrl) },
+                    faces = env.occupancy[layer.channelId].orEmpty().take(3).map { CallFace(it.userId, it.displayName, it.avatarUrl) },
                     callLabel = stringResource(R.string.stories_sticker_call),
                     joinLabel = stringResource(R.string.stories_editor_call_join),
                     canvasWidthPx = canvas.width,
