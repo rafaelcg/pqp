@@ -19,6 +19,8 @@ import {
 import { useEffect, useId, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Hash, MessagesSquare, Shuffle, Volume2 } from "lucide-react";
 import { BotFace } from "@/components/bots/bot-face";
+import { RadioChoices } from "@/components/bots/radio-choices";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Confetti } from "@/components/onboarding/confetti";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { Button } from "@/components/ui/button";
@@ -29,6 +31,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, createServerBot, fetchChannels } from "@/lib/api";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 
 /**
@@ -106,6 +109,10 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
   const [missing, setMissing] = useState(0n);
   const scroller = useRef<HTMLDivElement>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // A create that answers after the wizard was closed must not reopen it at "born".
+  const openRef = useRef(open);
+  openRef.current = open;
 
   useEffect(() => {
     if (!open) return;
@@ -128,14 +135,32 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
   const index = step === "born" ? STEPS.length : STEPS.indexOf(step);
   const name = draft.name.trim();
   const shownName = name || t("bots.wizard.unnamed");
-  const nameOk = name.length >= 2;
+  // Two letters or digits, so an emoji or a pair of spaces is not a name.
+  const nameOk = (name.match(/[\p{L}\p{N}]/gu) ?? []).length >= 2;
+  const touched =
+    draft.name !== EMPTY_BOT_DRAFT.name ||
+    draft.persona !== "" ||
+    draft.knowledge !== "" ||
+    draft.tagline !== "" ||
+    draft.channelIds.length > 0;
 
   function update(patch: Partial<BotDraft>, bounce = false) {
     setDraft((d) => ({ ...d, ...patch }));
     if (bounce) setPop((n) => n + 1);
   }
 
+  /** Escape, X: ask before throwing away answers; never mid-create. */
+  function requestClose() {
+    if (saving) return;
+    if (step !== "born" && touched) {
+      setConfirmDiscard(true);
+      return;
+    }
+    close();
+  }
+
   function close() {
+    setConfirmDiscard(false);
     onClose();
     // Next time it opens from the start.
     setStep("face");
@@ -159,20 +184,24 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
         answerToName: draft.answerToName,
         tools: draft.tools,
       });
+      if (!openRef.current) return;
       const lacking = parsePermissions(result.missingPermissions ?? "0");
       setCreated(result.bot);
       setMissing(lacking);
       setStep("born");
     } catch (err) {
+      const nameTaken = err instanceof ApiError && err.status === 409 && err.message.includes("name");
       setError(
-        err instanceof ApiError && err.status === 409
-          ? err.message.includes("name")
-            ? "serverSettings.bots.error.name"
-            : "serverSettings.bots.error.limit"
-          : err instanceof ApiError && err.status === 403
-            ? "serverSettings.bots.error.disabled"
-            : "serverSettings.bots.error.generic",
+        nameTaken
+          ? "serverSettings.bots.error.name"
+          : err instanceof ApiError && err.status === 409
+            ? "serverSettings.bots.error.limit"
+            : err instanceof ApiError && err.status === 403
+              ? "serverSettings.bots.error.disabled"
+              : "serverSettings.bots.error.generic",
       );
+      // The name is fixed on the first step, so that is where its error goes.
+      if (nameTaken) setStep("face");
     } finally {
       setSaving(false);
     }
@@ -196,7 +225,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
   return (
     <Dialog
       open={open}
-      onClose={close}
+      onClose={requestClose}
       size="full"
       fill
       closeOnBackdrop={false}
@@ -225,7 +254,12 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
             </Button>
           </div>
         ) : (
-          <div className="flex w-full items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2">
+            {error && (
+              <p role="alert" className="w-full text-sm text-danger">
+                {t(error)}
+              </p>
+            )}
             {index > 0 ? (
               <Button type="button" variant="ghost" onClick={back}>
                 <ArrowLeft className="mr-1.5 h-4 w-4" aria-hidden />
@@ -292,6 +326,9 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                     maxLength={SERVER_BOT_NAME_MAX}
                     placeholder={t("serverSettings.bots.namePlaceholder")}
                     onChange={(e) => update({ name: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && nameOk) next();
+                    }}
                   />
                   <p className="text-xs text-text-tertiary">
                     {nameOk
@@ -315,47 +352,45 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
 
                 <fieldset className="space-y-2">
                   <legend className="text-sm font-medium text-text">{t("bots.wizard.face.color")}</legend>
-                  <div className="flex flex-wrap gap-2" role="radiogroup">
-                    {BOT_COLORS.map((color) => (
-                      <button
-                        key={color}
-                        type="button"
-                        role="radio"
-                        aria-checked={draft.color === color}
-                        aria-label={t(`bots.color.${color}`)}
-                        onClick={() => update({ color }, true)}
-                        className={cn(
-                          "grid h-11 w-11 place-items-center rounded-full border-2 transition-transform duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)] active:scale-95",
-                          draft.color === color ? "border-text" : "border-transparent",
-                        )}
-                      >
-                        <BotFace color={color} face="oi" live={false} className="h-8 w-8" />
-                      </button>
-                    ))}
-                  </div>
+                  <RadioChoices
+                    label={t("bots.wizard.face.color")}
+                    values={BOT_COLORS}
+                    value={draft.color}
+                    onChange={(color) => update({ color }, true)}
+                    itemLabel={(color) => t(`bots.color.${color}`)}
+                    itemClassName={(selected) =>
+                      cn(
+                        "grid h-11 w-11 place-items-center rounded-full border-2 bg-surface-2 transition-transform duration-[var(--duration-fast)] active:scale-95",
+                        selected ? "border-text" : "border-transparent",
+                      )
+                    }
+                    renderItem={(color) => <BotFace color={color} face="oi" live={false} className="h-8 w-8" />}
+                  />
                 </fieldset>
 
                 <fieldset className="space-y-2">
                   <legend className="text-sm font-medium text-text">{t("bots.wizard.face.face")}</legend>
-                  <div className="flex flex-wrap gap-2" role="radiogroup">
-                    {BOT_BASE_FACES.map((face) => (
-                      <button
-                        key={face}
-                        type="button"
-                        role="radio"
-                        aria-checked={draft.face === face}
-                        onClick={() => update({ face }, true)}
-                        className={cn(
-                          "flex w-[4.5rem] flex-col items-center gap-1 rounded-[var(--radius-card)] border px-2 py-2 text-xs font-semibold transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]",
-                          draft.face === face
+                  <div className="flex flex-wrap gap-2">
+                    <RadioChoices
+                      label={t("bots.wizard.face.face")}
+                      values={BOT_BASE_FACES}
+                      value={draft.face}
+                      onChange={(face) => update({ face }, true)}
+                      itemClassName={(selected) =>
+                        cn(
+                          "flex w-[4.5rem] flex-col items-center gap-1 rounded-[var(--radius-card)] border px-2 py-2 text-xs font-semibold transition-colors duration-[var(--duration-fast)]",
+                          selected
                             ? "border-accent bg-accent-soft text-on-accent-soft"
                             : "border-border bg-surface-2 text-text-secondary hover:text-text",
-                        )}
-                      >
-                        <BotFace color={draft.color} face={face} live={false} className="h-9 w-9" />
-                        {t(`bots.face.${face}`)}
-                      </button>
-                    ))}
+                        )
+                      }
+                      renderItem={(face) => (
+                        <>
+                          <BotFace color={draft.color} face={face} live={false} className="h-9 w-9" />
+                          {t(`bots.face.${face}`)}
+                        </>
+                      )}
+                    />
                     <Button
                       type="button"
                       variant="secondary"
@@ -383,6 +418,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                     placeholder={t("bots.wizard.face.taglinePlaceholder")}
                     onChange={(e) => update({ tagline: e.target.value })}
                   />
+                  <Counter value={draft.tagline.length} max={80} />
                 </div>
               </>
             )}
@@ -432,6 +468,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                     placeholder={t("serverSettings.bots.personaPlaceholder")}
                     onChange={(e) => update({ persona: e.target.value })}
                   />
+                  <Counter value={draft.persona.length} max={SERVER_BOT_PERSONA_MAX} />
                 </div>
               </>
             )}
@@ -452,7 +489,10 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                   placeholder={t("serverSettings.bots.knowledgePlaceholder")}
                   onChange={(e) => update({ knowledge: e.target.value })}
                 />
-                <p className="text-xs text-text-tertiary">{t("bots.wizard.knows.hint")}</p>
+                <div className="flex gap-3">
+                  <p className="flex-1 text-xs text-text-tertiary">{t("bots.wizard.knows.hint")}</p>
+                  <Counter value={draft.knowledge.length} max={SERVER_BOT_KNOWLEDGE_MAX} />
+                </div>
               </>
             )}
 
@@ -480,6 +520,11 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                     />
                   ))}
                 </div>
+                {draft.channelIds.length === 0 && (
+                  <p className="rounded-[var(--radius-card)] bg-warning-soft p-3 text-sm text-on-warning-soft">
+                    {t("bots.wizard.lives.none", { name: shownName })}
+                  </p>
+                )}
                 <Switch
                   checked={draft.answerToName}
                   onCheckedChange={(on) => update({ answerToName: on })}
@@ -500,11 +545,6 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                   tools={draft.tools}
                   onChange={(tools) => update({ tools })}
                 />
-                {error && (
-                  <p role="alert" className="text-sm text-danger">
-                    {t(error)}
-                  </p>
-                )}
               </>
             )}
 
@@ -553,7 +593,24 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
           <IdCard draft={draft} name={shownName} />
         </aside>
       </div>
+      <ConfirmDialog
+        open={confirmDiscard}
+        title={t("bots.wizard.discard.title")}
+        description={t("bots.wizard.discard.body", { name: shownName })}
+        confirmLabel={t("bots.wizard.discard.confirm")}
+        onConfirm={close}
+        onClose={() => setConfirmDiscard(false)}
+      />
     </Dialog>
+  );
+}
+
+function Counter({ value, max }: { value: number; max: number }) {
+  const { locale } = useTranslation();
+  return (
+    <p className={cn("shrink-0 text-right text-xs", value >= max ? "text-warning" : "text-text-tertiary")}>
+      {value.toLocaleString(intlLocale(locale))} / {max.toLocaleString(intlLocale(locale))}
+    </p>
   );
 }
 
@@ -579,9 +636,14 @@ function HowTo({ title, body }: { title: string; body: string }) {
 /** The bot's "carteirinha": what it is so far, filling in as the steps go. */
 function IdCard({ draft, name }: { draft: BotDraft; name: string }) {
   const { t } = useTranslation();
+  const personaName = (persona: string): string => {
+    const preset = PERSONA_PRESETS.find((p) => t(`serverSettings.bots.preset.${p}.text`) === persona);
+    return preset ? t(`serverSettings.bots.preset.${preset}.name`) : t("bots.card.voiceOwn");
+  };
   const rows: Array<[string, string | null]> = [
     [t("bots.card.name"), draft.name.trim() ? name : null],
-    [t("bots.card.voice"), draft.persona.trim() ? draft.persona.trim() : null],
+    [t("bots.card.voice"), draft.persona.trim() ? personaName(draft.persona) : null],
+    [t("bots.card.tagline"), draft.tagline.trim() || null],
     [t("bots.card.knows"), draft.knowledge.trim() ? t("bots.card.knowsValue", { count: draft.knowledge.trim().length }) : null],
     [t("bots.card.lives"), draft.channelIds.length ? t("bots.card.livesValue", { count: draft.channelIds.length }) : null],
     [t("bots.card.powers"), t("bots.card.powersValue", { count: draft.tools.length })],

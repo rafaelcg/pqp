@@ -13,14 +13,22 @@ export function useBotInvite(
 ): boolean {
   const [offer, setOffer] = useState(false);
   useEffect(() => {
+    // Never carry the last server's answer onto this one while it loads.
+    setOffer(false);
     if (!serverId || !canManageServer) {
-      setOffer(false);
       return;
     }
     let live = true;
-    void Promise.all([fetchBotsConfig(serverId), fetchServerBots(serverId)])
-      .then(([config, list]) => {
-        if (live) setOffer(config.enabled && list.bots.length < config.maxBots);
+    // The config is cheap and answers "bots are off" for most servers; the
+    // list (which carries persona and knowledge) is fetched only past it.
+    void fetchBotsConfig(serverId)
+      .then(async (config) => {
+        if (!config.enabled) return false;
+        const list = await fetchServerBots(serverId);
+        return list.bots.length < config.maxBots;
+      })
+      .then((next) => {
+        if (live) setOffer(next);
       })
       .catch(() => {
         if (live) setOffer(false);

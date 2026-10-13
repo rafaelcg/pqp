@@ -2987,12 +2987,14 @@ function MainAppContent({
     [startScreenShareGated],
   );
   const perms = usePermissions(selectedServerId);
+  const rosterBotCount = serverMembers.filter((member) => member.isCharacter).length;
   // Before any early return: the member list's "create a bot" row.
   const botInviteOffered = useBotInvite(
     selection.kind === "server" ? selectedServerId : null,
     perms.can(Permission.MANAGE_SERVER),
-    // Asked again whenever either place a bot is made or deleted closes.
-    `${botWizardOpen}:${serverSettingsOpen}`,
+    // Asked again when either place a bot is made or deleted closes, and when
+    // the roster's bots change (one made or deleted from another tab).
+    `${botWizardOpen}:${serverSettingsOpen}:${rosterBotCount}`,
   );
   const permsRef = useRef(perms);
   permsRef.current = perms;

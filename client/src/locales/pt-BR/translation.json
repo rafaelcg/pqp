@@ -5923,7 +5923,6 @@
   "bots.card.name": "Nome",
   "bots.card.voice": "Jeito",
   "bots.card.knows": "Sabe",
-  "bots.card.knowsValue": "{count} letras de contexto",
   "bots.card.lives": "Mora em",
   "bots.card.livesValue_one": "{count} canal",
   "bots.card.livesValue_other": "{count} canais",
@@ -5967,5 +5966,15 @@
   "bots.wizard.adjust": "Ajustar o {name}",
   "bots.memberList.heading": "Bots",
   "bots.memberList.create": "Criar um bot",
-  "bots.memberList.hint": "Responde a galera quando chamam"
+  "bots.memberList.hint": "Responde a galera quando chamam",
+  "bots.wizard.lives.none": "Sem canal marcado, o {name} não responde em lugar nenhum. Dá pra marcar depois nas configurações.",
+  "bots.wizard.discard.title": "Descartar este bot?",
+  "bots.wizard.discard.body": "O que você preencheu pro {name} vai se perder.",
+  "bots.wizard.discard.confirm": "Descartar",
+  "bots.card.tagline": "Recado",
+  "bots.card.voiceOwn": "Do seu jeito",
+  "bots.card.knowsValue_one": "{count} letra de contexto",
+  "bots.card.knowsValue_other": "{count} letras de contexto",
+  "bots.settings.danger": "Apagar o bot",
+  "bots.settings.dangerBody": "O {name} sai do servidor e o cargo dele some. As mensagens antigas ficam."
 }

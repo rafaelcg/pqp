@@ -81,8 +81,9 @@ const line = (pen: Pen, d: string, width = pen.stroke): string =>
   `<path d="${d}" fill="none" stroke="${pen.ink}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round"/>`;
 const ellipse = (pen: Pen, cx: number, cy: number, rx: number, ry: number): string =>
   `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="${pen.ink}"/>`;
+// The tilt sits on a wrapper so the CSS float on `.bf-hand` does not replace it.
 const hand = (pen: Pen, cx: number, cy: number, rotate = 0): string =>
-  `<ellipse class="bf-hand" cx="${cx}" cy="${cy}" rx="12" ry="14" fill="${pen.body}" stroke="${pen.ink}" stroke-width="${pen.stroke}"${rotate ? ` transform="rotate(${rotate} ${cx} ${cy})"` : ""}/>`;
+  `<g${rotate ? ` transform="rotate(${rotate} ${cx} ${cy})"` : ""}><ellipse class="bf-hand" cx="${cx}" cy="${cy}" rx="12" ry="14" fill="${pen.body}" stroke="${pen.ink}" stroke-width="${pen.stroke}"/></g>`;
 const text = (pen: Pen, x: number, y: number, size: number, value: string, opacity = 1): string =>
   `<text x="${x}" y="${y}" font-family="Gabarito, system-ui, sans-serif" font-weight="700" font-size="${size}" fill="${pen.ink}"${opacity < 1 ? ` opacity="${opacity}"` : ""}>${value}</text>`;
 
@@ -287,7 +288,8 @@ export function botFaceAvatarPath(color: BotColor, face: BotBaseFace): string {
   return `/api/bot-faces/${color}/${face}.png?v=${BOT_FACE_PNG_VERSION}`;
 }
 
-const PATH_PATTERN = /\/api\/bot-faces\/([a-z]+)\/([a-z]+)\.png(?:\?|$)/;
+// Only the root-relative path the API itself stores for a bot, never a typed URL.
+const PATH_PATTERN = /^\/api\/bot-faces\/([a-z]+)\/([a-z]+)\.png(?:\?|$)/;
 
 /** A bot face URL back to its colour and face, or null for any other avatar. */
 export function parseBotFaceAvatar(url: string | null | undefined): { color: BotColor; face: BotBaseFace } | null {

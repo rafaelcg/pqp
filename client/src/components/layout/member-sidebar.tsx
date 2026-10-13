@@ -917,6 +917,8 @@ function MemberRow({
               className="h-8 w-8"
               rounded="full"
               fallbackClassName="bg-ink-3 text-xs"
+              // A switched-off server bot is listed offline: it sleeps.
+              botFace={member.isCharacter && member.status === "offline" ? "dormindo" : undefined}
             />
             {/* Null means the payload carried no status at all — a group
                 conversation's participants. Nothing is drawn rather than a

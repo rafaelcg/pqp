@@ -12,6 +12,7 @@ import {
 import { useEffect, useId, useState } from "react";
 import { AtSign, ListChecks, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { BotFace } from "@/components/bots/bot-face";
+import { RadioChoices } from "@/components/bots/radio-choices";
 import {
   EMPTY_BOT_DRAFT,
   PERSONA_PRESETS,
@@ -209,6 +210,14 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
     );
   }
 
+  if (!bot && error) {
+    return (
+      <p role="alert" className="text-sm text-danger">
+        {t(error)}
+      </p>
+    );
+  }
+
   if (!bot) {
     return (
       <>
@@ -277,44 +286,40 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
               onChange={(e) => edit({ name: e.target.value })}
             />
           </div>
-          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={t("bots.wizard.face.color")}>
-            {BOT_COLORS.map((color) => (
-              <button
-                key={color}
-                type="button"
-                role="radio"
-                aria-checked={draft.color === color}
-                aria-label={t(`bots.color.${color}`)}
-                onClick={() => edit({ color })}
-                className={cn(
-                  "grid h-10 w-10 place-items-center rounded-full border-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]",
-                  draft.color === color ? "border-text" : "border-transparent",
-                )}
-              >
-                <BotFace color={color} face="oi" live={false} className="h-7 w-7" />
-              </button>
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={t("bots.wizard.face.face")}>
-            {BOT_BASE_FACES.map((face) => (
-              <button
-                key={face}
-                type="button"
-                role="radio"
-                aria-checked={draft.face === face}
-                onClick={() => edit({ face })}
-                className={cn(
-                  "flex w-16 flex-col items-center gap-1 rounded-[var(--radius-card)] border px-1 py-1.5 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]",
-                  draft.face === face
-                    ? "border-accent bg-accent-soft text-on-accent-soft"
-                    : "border-border bg-surface-2 text-text-secondary",
-                )}
-              >
+          <RadioChoices
+            label={t("bots.wizard.face.color")}
+            values={BOT_COLORS}
+            value={draft.color}
+            onChange={(color) => edit({ color })}
+            itemLabel={(color) => t(`bots.color.${color}`)}
+            itemClassName={(selected) =>
+              cn(
+                "grid h-10 w-10 place-items-center rounded-full border-2 bg-surface-2",
+                selected ? "border-text" : "border-transparent",
+              )
+            }
+            renderItem={(color) => <BotFace color={color} face="oi" live={false} className="h-7 w-7" />}
+          />
+          <RadioChoices
+            label={t("bots.wizard.face.face")}
+            values={BOT_BASE_FACES}
+            value={draft.face}
+            onChange={(face) => edit({ face })}
+            itemClassName={(selected) =>
+              cn(
+                "flex w-16 flex-col items-center gap-1 rounded-[var(--radius-card)] border px-1 py-1.5 text-xs font-semibold",
+                selected
+                  ? "border-accent bg-accent-soft text-on-accent-soft"
+                  : "border-border bg-surface-2 text-text-secondary",
+              )
+            }
+            renderItem={(face) => (
+              <>
                 <BotFace color={draft.color} face={face} live={false} className="h-8 w-8" />
                 {t(`bots.face.${face}`)}
-              </button>
-            ))}
-          </div>
+              </>
+            )}
+          />
           <div className="space-y-2">
             <label htmlFor={ids.tagline} className="text-sm font-medium text-text">
               {t("bots.wizard.face.tagline")}
@@ -453,13 +458,21 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
           </Button>
         )}
         {saved && !dirty && <span className="text-sm text-text-tertiary">{t("serverSettings.bots.saved")}</span>}
-        <Button type="button" variant="danger" className="ml-auto" onClick={() => setConfirmDelete(true)}>
-          <Trash2 className="mr-2 h-4 w-4" aria-hidden />
-          {t("serverSettings.bots.delete")}
-        </Button>
       </div>
 
       <p className="text-xs text-text-tertiary">{t("serverSettings.bots.howTo", { handle: `@${bot.username}` })}</p>
+
+      <SettingsGroup title={t("bots.settings.danger")}>
+        <div className="flex flex-wrap items-center gap-3 p-4">
+          <p className="min-w-0 flex-1 text-sm text-text-secondary">
+            {t("bots.settings.dangerBody", { name: bot.name })}
+          </p>
+          <Button type="button" variant="danger" onClick={() => setConfirmDelete(true)}>
+            <Trash2 className="mr-2 h-4 w-4" aria-hidden />
+            {t("serverSettings.bots.delete")}
+          </Button>
+        </div>
+      </SettingsGroup>
 
       <ConfirmDialog
         open={confirmDelete}

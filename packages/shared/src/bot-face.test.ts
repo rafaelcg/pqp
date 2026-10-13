@@ -34,10 +34,7 @@ describe("bot face avatar paths", () => {
     for (const color of BOT_COLORS) {
       for (const face of BOT_BASE_FACES) {
         expect(parseBotFaceAvatar(botFaceAvatarPath(color, face))).toEqual({ color, face });
-        expect(parseBotFaceAvatar(`https://api.pqp.gg${botFaceAvatarPath(color, face)}`)).toEqual({
-          color,
-          face,
-        });
+        expect(parseBotFaceAvatar(`https://evil.example${botFaceAvatarPath(color, face)}`)).toBeNull();
       }
     }
   });

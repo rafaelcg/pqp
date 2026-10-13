@@ -5992,7 +5992,6 @@
   "bots.card.name": "Nombre",
   "bots.card.voice": "Estilo",
   "bots.card.knows": "Sabe",
-  "bots.card.knowsValue": "{count} caracteres de contexto",
   "bots.card.lives": "Vive en",
   "bots.card.livesValue_one": "{count} canal",
   "bots.card.livesValue_other": "{count} canales",
@@ -6036,5 +6035,15 @@
   "bots.wizard.adjust": "Ajustar a {name}",
   "bots.memberList.heading": "Bots",
   "bots.memberList.create": "Crear un bot",
-  "bots.memberList.hint": "Responde a la gente cuando lo llaman"
+  "bots.memberList.hint": "Responde a la gente cuando lo llaman",
+  "bots.wizard.lives.none": "Sin canales marcados, {name} no responde en ningún lado. Puedes marcarlos después en la configuración.",
+  "bots.wizard.discard.title": "¿Descartar este bot?",
+  "bots.wizard.discard.body": "Lo que llenaste para {name} se perderá.",
+  "bots.wizard.discard.confirm": "Descartar",
+  "bots.card.tagline": "Estado",
+  "bots.card.voiceOwn": "Con tus palabras",
+  "bots.card.knowsValue_one": "{count} carácter de contexto",
+  "bots.card.knowsValue_other": "{count} caracteres de contexto",
+  "bots.settings.danger": "Borrar el bot",
+  "bots.settings.dangerBody": "{name} sale del servidor y su rol desaparece. Sus mensajes antiguos se quedan."
 }
