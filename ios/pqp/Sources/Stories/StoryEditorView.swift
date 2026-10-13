@@ -85,9 +85,11 @@ struct StoryEditorView: View {
     private func textOverlay(_ canvas: CGSize, in size: CGSize) -> some View {
         if let target = textTarget {
             let place = textPlace(for: target)
+            let originX: CGFloat = (size.width - canvas.width) / 2
+            let originY: CGFloat = (size.height - canvas.height) / 2
             let center = CGPoint(
-                x: (size.width - canvas.width) / 2 + place.x * canvas.width,
-                y: (size.height - canvas.height) / 2 + place.y * canvas.height
+                x: originX + CGFloat(place.x) * canvas.width,
+                y: originY + CGFloat(place.y) * canvas.height
             )
             StoryTextEditView(
                 data: place.data, scale: place.scale, center: center,
@@ -295,7 +297,7 @@ struct StoryEditorView: View {
     private func menu(_ canvas: CGSize) -> some View {
         if let id = menuFor, let layer = model.layer(id) {
             let size = model.sizes[id] ?? .zero
-            let top = layer.y * canvas.height - size.height * layer.scale / 2 - 34
+            let top: CGFloat = CGFloat(layer.y) * canvas.height - size.height * CGFloat(layer.scale) / 2 - 34
             let y = min(max(top, 28), canvas.height - 40)
             HStack(spacing: 4) {
                 menuButton("square.3.layers.3d.top.filled", String(localized: "Bring to front"), id: "menu.front") {
@@ -316,7 +318,7 @@ struct StoryEditorView: View {
             .padding(6)
             .background(Capsule().fill(.black.opacity(0.78)))
             .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
-            .position(x: min(max(layer.x * canvas.width, 70), canvas.width - 70), y: y)
+            .position(x: min(max(CGFloat(layer.x) * canvas.width, 70), canvas.width - 70), y: y)
             .transition(.opacity)
         }
     }

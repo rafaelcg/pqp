@@ -482,7 +482,7 @@ enum StoryCanvas {
     /// bounding box is. `slop` widens it for a thumb.
     static func hit(_ layer: StoryLayer, size: CGSize, at point: CGPoint, canvas: CGSize, slop: CGFloat = 12) -> Bool {
         guard !layer.isDrawing, size.width > 0, size.height > 0 else { return false }
-        let center = CGPoint(x: layer.x * canvas.width, y: layer.y * canvas.height)
+        let center = CGPoint(x: CGFloat(layer.x) * canvas.width, y: CGFloat(layer.y) * canvas.height)
         let dx = point.x - center.x
         let dy = point.y - center.y
         let cosine = cos(-layer.rotation)
