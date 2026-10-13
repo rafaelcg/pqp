@@ -410,21 +410,14 @@ export function ServerRail({
         className="h-px w-8 shrink-0 rounded-full bg-ink-4/70"
       />
 
-      {/* The reorderable part: only servers live in here. The drop line is
-          drawn in this box's own coordinates, between two tiles. */}
+      {/* The reorderable part: only servers live in here. While one is dragged
+          the others slide apart to open the gap where it will land; there is no
+          line, because the gap is the indicator. */}
       <div
         ref={reorder.listRef}
         data-rail-list=""
         className="relative flex shrink-0 flex-col items-center gap-2"
       >
-      {reorder.drag?.lineY != null && (
-        <span
-          aria-hidden="true"
-          data-rail-drop-line=""
-          style={{ top: reorder.drag.lineY }}
-          className="pointer-events-none absolute left-1/2 z-30 h-1 w-14 -translate-x-1/2 -translate-y-1/2 rounded-full bg-paper shadow-[0_0_0_2px_var(--color-signal)]"
-        />
-      )}
       {servers.map((server, index) => {
         const selected = selectedServerId === server.id;
         const lifted = reorder.drag?.id === server.id ? reorder.drag : null;
@@ -540,7 +533,7 @@ export function ServerRail({
               style={lifted ? { zIndex: 20 } : undefined}
               className={cn(
                 "relative inline-flex select-none [-webkit-touch-callout:none]",
-                lifted && "rounded-xl opacity-90 shadow-lg shadow-black/40",
+                lifted && "rounded-xl shadow-xl shadow-black/30",
               )}
             >
           <ContextMenu
