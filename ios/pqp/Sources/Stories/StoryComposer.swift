@@ -202,7 +202,9 @@ struct StoryComposer: View {
                 .padding(.top, 6)
                 Spacer(minLength: 0)
                 if let error { errorPill(error).padding(.bottom, 10) }
-                if configFailed { configFailedBanner.padding(.bottom, 10) }
+                // Above the zoom pill and the shutter row, which sit over the
+                // mode bar.
+                if configFailed { configFailedBanner.padding(.horizontal, 12).padding(.bottom, 262) }
                 modeBar
             }
         }
@@ -225,7 +227,6 @@ struct StoryComposer: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(Capsule().fill(.black.opacity(0.7)))
-        .accessibilityIdentifier("composer.configFailed")
     }
 
     private func errorPill(_ text: String) -> some View {

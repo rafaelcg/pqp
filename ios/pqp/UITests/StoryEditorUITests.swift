@@ -220,8 +220,8 @@ final class StoryEditorUITests: XCTestCase {
     func testTheComposerRecoversWhenTheConfigCannotBeLoaded() throws {
         let (app, serverId) = try launch(["PQP_STORY_CONFIG_FAIL": "once"])
         openComposer(app, serverId: serverId)
-        let banner = app.descendants(matching: .any)["composer.configFailed"].firstMatch
-        XCTAssertTrue(banner.waitForExistence(timeout: 15), "It says it could not reach the server")
+        let banner = app.buttons["composer.retry"]
+        XCTAssertTrue(banner.waitForExistence(timeout: 15), "It says it could not reach the server, with a way to retry")
         XCTAssertTrue(app.buttons["camera.shutter"].exists, "The camera still works meanwhile")
         snap(app, "composer-config-failed")
         app.buttons["composer.retry"].tap()
