@@ -199,6 +199,23 @@ describe("the auto-reload loop guard", () => {
     expect(autoReloadAllowed("b2", storage)).toBe(false);
   });
 
+  it("remembers every build, so a target that alternates gets one reload each and no more", () => {
+    const storage = memoryStorage();
+    recordAutoReload("b2", 1_000, storage);
+    recordAutoReload("b3", 2_000, storage);
+    // A rollback, or a CDN answering with two builds in turn: b2 again.
+    expect(autoReloadAllowed("b2", storage)).toBe(false);
+    expect(autoReloadAllowed("b3", storage)).toBe(false);
+    expect(autoReloadAllowed("b4", storage)).toBe(true);
+  });
+
+  it("reads the single-record form an earlier version of the guard wrote", () => {
+    const storage = memoryStorage();
+    storage.setItem("pqp:update-auto-reload", JSON.stringify({ target: "b2", at: 1 }));
+    expect(autoReloadAllowed("b2", storage)).toBe(false);
+    expect(autoReloadAllowed("b3", storage)).toBe(true);
+  });
+
   it("does not hold a newer build back for the last one's reload", () => {
     const storage = memoryStorage();
     recordAutoReload("b2", 1_000, storage);

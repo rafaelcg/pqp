@@ -150,7 +150,11 @@ export function BuildWatcher({
     // to fifteen seconds): somebody may have joined a call or started a watch
     // party since this was decided, and an automatic reload never takes either.
     // Only the operator's critical update goes through.
-    const mayReload = () => Boolean(build.critical) || !isBusyNow();
+    // The same goes for somebody who started typing in them, unless the tab is
+    // hidden (the rule above: a hidden tab reloads whatever is in it).
+    const mayReload = () =>
+      Boolean(build.critical) ||
+      (!isBusyNow() && (document.visibilityState === "hidden" || !isTypingNow()));
     // A rejection here is not the person's problem: the indicator is still up,
     // and the loop guard above means this will not be tried again.
     void Promise.resolve(apply(build.latestBuild, mayReload))

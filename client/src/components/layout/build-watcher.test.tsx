@@ -9,6 +9,7 @@ import {
   type BuildStaleness,
 } from "@/lib/update-prompt-state";
 import { markActivity, resetActivityForTests } from "@/lib/user-activity";
+import { autoReloadAllowed } from "@/lib/update-policy";
 import { BuildWatcher } from "./build-watcher";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -186,6 +187,19 @@ describe("BuildWatcher", () => {
     expect(lastMayReload?.()).toBe(false);
   });
 
+  it("asks again about typing at the last moment: a draft started while the worker was coming up is not lost", async () => {
+    await mount();
+    nobodyHere();
+    act(() => setBuildStaleness(stale()));
+    expect(applied).toBe(1);
+    expect(lastMayReload?.()).toBe(true);
+    const box = document.createElement("textarea");
+    document.body.append(box);
+    box.focus();
+    box.value = "half a sentence";
+    expect(lastMayReload?.()).toBe(false);
+  });
+
   it("lets the critical update through the last-moment check: the operator chose that", async () => {
     await mount();
     act(() => setInCall(true));
@@ -201,7 +215,7 @@ describe("BuildWatcher", () => {
     expect(applied).toBe(1);
     await act(async () => {});
     // The one reload this build is allowed is not spent by one that never happened.
-    expect(window.sessionStorage.getItem("pqp:update-auto-reload")).toBe("");
+    expect(autoReloadAllowed("def456")).toBe(true);
   });
 
   it("reloads right after a call ends, even with somebody at the page", async () => {

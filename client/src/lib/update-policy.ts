@@ -169,18 +169,27 @@ interface Attempt {
   at: number;
 }
 
-function readAttempt(storage: StorageLike): Attempt | null {
+/** How many builds the guard remembers: enough that A, B, A, B never gets a second go at A. */
+const MAX_ATTEMPTS = 20;
+
+/** Every build this session has already reloaded toward, oldest first. */
+function readAttempts(storage: StorageLike): Attempt[] {
   try {
     const raw = storage.getItem(ATTEMPT_KEY);
     if (!raw) {
-      return null;
+      return [];
     }
-    const parsed = JSON.parse(raw) as Partial<Attempt>;
-    return typeof parsed.target === "string" && typeof parsed.at === "number"
-      ? { target: parsed.target, at: parsed.at }
-      : null;
+    const parsed = JSON.parse(raw) as unknown;
+    // The first version of the guard kept one `{ target, at }`.
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    return list.flatMap((item) => {
+      const { target, at } = (item ?? {}) as Partial<Attempt>;
+      return typeof target === "string" && typeof at === "number"
+        ? [{ target, at }]
+        : [];
+    });
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -190,8 +199,11 @@ function readAttempt(storage: StorageLike): Attempt | null {
  *
  * It used to be once per quarter of an hour, which is a loop with a long period:
  * a page that keeps landing on the build it was already on (a CDN serving the
- * old page, a deploy half propagated) would reload itself all day. The person's
- * own click on the indicator is never limited by this.
+ * old page, a deploy half propagated) would reload itself all day. It
+ * remembers every build it has tried, not only the last one, so a target that
+ * alternates (a rollback, a CDN answering with two builds in turn) gets one
+ * reload per build and no more. The person's own click on the indicator is
+ * never limited by this.
  *
  * `sessionStorage` survives the reload this guards, which in-memory state does
  * not, so it is the only honest record; where it cannot be read or written
@@ -210,14 +222,14 @@ export function autoReloadAllowed(
   } catch {
     return false;
   }
-  const last = readAttempt(storage);
-  return !last || last.target !== target;
+  return !readAttempts(storage).some((attempt) => attempt.target === target);
 }
 
 /**
  * Take the record back: an automatic reload that was written down and then
- * refused at the last moment (somebody joined a call while the worker was being
- * brought up) never happened, and must not use up this build's one reload.
+ * refused at the last moment (somebody joined a call, or started typing, while
+ * the worker was being brought up) never happened, and must not use up this
+ * build's one reload.
  */
 export function forgetAutoReload(
   target: string,
@@ -227,10 +239,8 @@ export function forgetAutoReload(
     return;
   }
   try {
-    const last = readAttempt(storage);
-    if (last && last.target === target) {
-      storage.setItem(ATTEMPT_KEY, "");
-    }
+    const kept = readAttempts(storage).filter((attempt) => attempt.target !== target);
+    storage.setItem(ATTEMPT_KEY, JSON.stringify(kept));
   } catch {
     // Nothing to do: the guard stays, and the person's own click still works.
   }
@@ -246,7 +256,10 @@ export function recordAutoReload(
     return false;
   }
   try {
-    storage.setItem(ATTEMPT_KEY, JSON.stringify({ target, at: now }));
+    const kept = readAttempts(storage)
+      .filter((attempt) => attempt.target !== target)
+      .slice(-(MAX_ATTEMPTS - 1));
+    storage.setItem(ATTEMPT_KEY, JSON.stringify([...kept, { target, at: now }]));
     return true;
   } catch {
     return false;

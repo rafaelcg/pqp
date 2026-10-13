@@ -261,6 +261,10 @@ export async function applyUpdate(
   } catch {
     // Reload anyway: a failed purge is no worse than not having tried.
   }
+  // Asked once more, after the purge, because the purge takes a moment too. The
+  // page that stays has no precache, but it does not need one while it runs: a
+  // navigation falls through to the network, which is exactly what the purge is
+  // for. A call is not given up for it.
   if (!mayReload()) {
     return "aborted";
   }
