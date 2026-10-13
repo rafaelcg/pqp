@@ -75,7 +75,8 @@ import { DEFAULT_DRAW, DrawBar, DrawOverlay, type DrawSettings } from "./compose
 import { CallPickerSheet, MentionSheet, StickerTray } from "./composer-stickers";
 import { TextEditor } from "./composer-text";
 import { ModeTabs, StoryButton, type ModeOption } from "./composer-ui";
-import { CallSticker, StoryContent, type StoryDisplay } from "./story-content";
+import { StoryCallCard } from "./story-call-card";
+import { StoryContent, type StoryDisplay } from "./story-content";
 import type { DisplayLayer } from "./story-layers";
 
 /**
@@ -110,7 +111,7 @@ interface StoryComposerProps {
   /** The signed-in account: the call card is live only while its author is in the room. */
   meId: string;
   /** Voice rooms of the server the composer was opened from, for the call card. */
-  voiceRooms: { serverId: string; serverName: string; rooms: ComposerVoiceRoom[] } | null;
+  voiceRooms: { serverId: string; serverName: string; serverIconUrl?: string | null; rooms: ComposerVoiceRoom[] } | null;
   onClose: () => void;
   /** The posted card flies into this ring (design §4, Posting). */
   onPosted?: (preview: HTMLElement | null) => void;
@@ -495,9 +496,10 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       const room = placed?.type === "call" ? voiceRooms?.rooms.find((entry) => entry.id === placed.channelId) : null;
       const channelName = placed?.type === "call" ? (room?.name ?? placed.channelName) : "";
       return (
-        <CallSticker
+        <StoryCallCard
           call={null}
-          layered
+          passThrough
+          server={voiceRooms ? { name: voiceRooms.serverName, iconUrl: voiceRooms.serverIconUrl ?? null } : null}
           preview={{ channelName, names: (room?.occupants ?? []).map((person) => person.displayName.split(/\s+/)[0] ?? "") }}
         />
       );
@@ -523,6 +525,8 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     background: mode === "camera" ? null : background,
     caption: null,
     mediaUrl: media?.previewUrl ?? null,
+    mediaWidth: media?.width ?? null,
+    mediaHeight: media?.height ?? null,
     posterUrl: null,
     call: null,
     callPreview: null,
@@ -920,7 +924,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               onChooseFile={() => fileInput.current?.click()}
             />
           ) : (
-            <StoryContent story={display} still={false} playVideo muted={false} paused={false} loop />
+            <StoryContent story={display} still={false} playVideo muted={false} paused={false} loop withLayers={false} />
           )}
 
           {hasBase && (

@@ -215,4 +215,17 @@ test("posts a text card with layers and a mention; the server keeps them", async
   expect(story.layers.map((layer) => layer.type).sort()).toEqual(canDraw ? ["drawing", "mention", "text"] : ["mention", "text"]);
   expect(story.altText).toContain("bora?");
   expect(story.altText).toContain("Bia Guest");
+
+  // And the viewer draws them: the text where it was put, the mention as a button, the
+  // drawing as a layer, every one inside the 9:16 layer canvas.
+  await page.getByRole("button", { name: "Your story, view" }).click();
+  const viewer = page.locator("[data-story-viewer]");
+  await expect(viewer.locator("[data-story-layer-canvas]")).toBeVisible({ timeout: 15_000 });
+  await expect(viewer.locator('[data-layer-type="text"]')).toContainText("bora?");
+  await expect(viewer.locator('[data-layer-type="drawing"]')).toHaveCount(canDraw ? 1 : 0);
+  const mention = viewer.locator("button[data-story-mention]");
+  await expect(mention).toContainText("@Bia Guest");
+  // Tapping a mention opens that person's card over the story.
+  await mention.click();
+  await expect(page.getByText("Bia Guest").first()).toBeVisible();
 });

@@ -4125,6 +4125,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   --story-text-soft: oklch(0 0 0 / 0.5);
   --story-layer-shadow: 0 4px 18px oklch(0 0 0 / 0.35);
   --story-text-shadow: 0 1px 10px oklch(0 0 0 / 0.28);
+  /* The call card's own surface, opaque: the ring a face wears so it reads on the card. */
+  --story-sticker-solid: oklch(0.17 0.03 132);
 }
 .story-tl {
   --tl-fg: var(--story-c-white);
@@ -4259,7 +4261,23 @@ html[data-immersive-stage] [data-immersive-hide] {
   transform: translateX(-50%) scale(1.22);
   background: var(--color-danger);
 }
+/* The live dot on a call card: a ring that breathes out while people are in. */
+.story-live-dot {
+  animation: story-live-pulse 1.8s var(--ease-standard) infinite;
+}
+@keyframes story-live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--story-accent) 55%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 1.6cqw color-mix(in oklch, var(--story-accent) 0%, transparent);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
+  .story-live-dot {
+    animation: none;
+  }
   .story-trash {
     transition: none;
   }
