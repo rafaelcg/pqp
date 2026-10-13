@@ -3588,6 +3588,10 @@ html[data-immersive-stage] [data-immersive-hide] {
     oklch(0 0 0 / 0) 68%,
     oklch(0 0 0 / 0.6) 100%
   );
+  /* The viewer's header and reply row are drawn over the picture: each sits on
+     its own soft gradient so white type reads on a bright photo. */
+  --story-head-scrim: linear-gradient(180deg, oklch(0 0 0 / 0.42) 0%, oklch(0 0 0 / 0) 100%);
+  --story-foot-scrim: linear-gradient(0deg, oklch(0 0 0 / 0.5) 0%, oklch(0 0 0 / 0) 100%);
   --story-dim: oklch(0 0 0 / 0.4);
   --story-tray: oklch(0.19 0.014 250 / 0.985);
   --story-sticker: oklch(0.17 0.03 132 / 0.95);
