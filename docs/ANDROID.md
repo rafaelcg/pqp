@@ -2317,11 +2317,48 @@ does with it.
   1080p is shrunk, both by Media3 Transformer to 720p H.264/AAC
   (`VideoPrep`, rules in `TrimRules`). A refusal still happens before any byte
   leaves.
+- **Editor and layers.** After the camera (or the TEXTO and CALL tabs, which
+  open a card with no picture) comes the editor, `stories/editor/`: a 9:16
+  canvas with the base under it and up to 20 layers on top, posted as data next
+  to the base (`layers` and `altText` on `POST /api/stories`), never burned in.
+  The layers are text (five fonts, twelve color tokens, no / solid / soft
+  background, alignment, size), photos from the gallery or the camera (rect,
+  rounded or circle), freehand ink (pen, marker, highlighter, eraser; one
+  layer, exported as a transparent PNG by the same renderer that draws it
+  on screen), a mention and the call card. A text card is `kind: "text"`, a
+  `background` and layers, with no `text`.
+  - **Gestures.** One finger drags, two scale and turn, and once a layer has
+    been touched a pinch anywhere on the canvas turns it. It clicks onto the
+    middle lines and quarter turns with a light haptic and lets go again when
+    the finger moves on (the finger's own numbers are kept unsnapped); a trash
+    circle appears while one is held and deletes it on release; a tap on text
+    edits it; a long press opens bring forward / shape / delete. Undo steps
+    back one action at a time (a whole drag is one step). `StoryEditorGestureTest`
+    (instrumented, `connectedDebugAndroidTest`) sends real pinches.
+  - **Sizes are shares of the canvas width**, never dp, so a story reads the
+    same on any phone: a text layer's `size` 1 is 7% of the width, a photo at
+    scale 1 is 40% (the schema's own rule), text wraps at 84%. A picture near
+    9:16 fills the canvas, anything else is shown whole over a blurred copy of
+    itself (a video gets black bars): `BaseFit`.
+  - **Accessibility.** Every layer is a node with its own description and
+    TalkBack actions (move up, down, left, right, bigger, smaller, turn, bring
+    forward, edit, delete), since a drag cannot be done without sight. The
+    story's `altText` is its text layers read in order.
+  - **Call card.** Picking the room is a sheet whose header is fixed and whose
+    list scrolls on its own (the old picker was one fixed-height scroll, and the
+    "you are not in the room" line pushed the second room under the edge). Each
+    room says who is in it now; a card for a room the author is not in is
+    flagged until they join. The server stays ticked and locked in "Quem vê".
+  - A server that predates layers (`layersMax` 0) gets the old shape: the words
+    folded into the card's `text`, or a photo's `caption`, with only the text
+    tool left.
+  - Muting a video story drops its audio track with Media3 before the upload.
 - **Motion.** All Compose, so it follows the animator duration scale; at zero
   the deck transform and the drag shrink are skipped and the gestures keep
   working. The recording clock and the trim loop read the wall clock, never an
   animation, so a clip still stops at 30 s with "Remove animations" on
-  (`CameraTest` pins it).
+  (`CameraTest` pins it), and the long press that opens a layer's menu is
+  timed against the clock too.
 
 Rules are pure and tested in `StoriesTest` (`stories/StoriesRules.kt`).
 

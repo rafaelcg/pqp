@@ -120,5 +120,40 @@ object VideoPrep {
         }
     }
 
+    /**
+     * The same clip with its sound taken out: what "mute" on a video story
+     * means. Only the audio track is dropped, so the video is copied across
+     * rather than re-encoded, which makes it quick.
+     */
+    @OptIn(UnstableApi::class)
+    suspend fun removeAudio(context: Context, source: Uri): Uri = withContext(Dispatchers.Main) {
+        val target = StoryCaptureFiles.create(context, "mp4")
+        var transformer: Transformer? = null
+        try {
+            val edited = EditedMediaItem.Builder(MediaItem.fromUri(source)).setRemoveAudio(true).build()
+            val result = CompletableDeferred<Uri>()
+            transformer = Transformer.Builder(context)
+                .addListener(
+                    object : Transformer.Listener {
+                        override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                            result.complete(target.uri)
+                        }
+
+                        override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+                            result.completeExceptionally(exportException)
+                        }
+                    },
+                )
+                .build()
+            transformer.start(edited, target.file.absolutePath)
+            result.await()
+        } catch (e: Exception) {
+            // Whatever failed (the setup, the start, the export), the half-made file goes with it.
+            runCatching { transformer?.cancel() }
+            target.file.delete()
+            throw e
+        }
+    }
+
     private const val PROGRESS_POLL_MS = 200L
 }

@@ -22,6 +22,12 @@ data class StoriesConfig(
     val maxVideoMs: Long = 30_000,
     val maxBytes: Long = 25L * 1024 * 1024,
     val ttlHours: Int = 24,
+    /**
+     * How many layers a story may carry. 0 (or absent) is a server that
+     * predates layers, which would silently strip them on create: the editor
+     * hides its layer tools against it.
+     */
+    val layersMax: Int = 0,
 )
 
 @Serializable
@@ -179,6 +185,10 @@ data class CreateStoryRequest(
     val repliesEnabled: Boolean = true,
     val audiences: StoryAudienceTargets,
     val media: StoryMediaInput? = null,
+    /** `storyLayerInputSchema`, back to front. Built by `StoryLayers`, never from free text. */
+    val layers: List<kotlinx.serialization.json.JsonObject> = emptyList(),
+    /** The text layers read out, for a screen reader. */
+    val altText: String? = null,
     /**
      * Made once per story the person means to post and resent on a retry: a
      * second create with the same id answers the first story instead of
@@ -196,7 +206,12 @@ data class StoryUpload(
 )
 
 @Serializable
-data class CreateStoryResponse(val story: Story, val upload: StoryUpload? = null)
+data class CreateStoryResponse(
+    val story: Story,
+    val upload: StoryUpload? = null,
+    /** One per photo and drawing layer. Every one is PUT before the story is published. */
+    val layerUploads: List<StoryLayerUploadSlot> = emptyList(),
+)
 
 @Serializable
 data class PublishStoryResponse(val story: Story)
