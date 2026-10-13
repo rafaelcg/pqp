@@ -145,7 +145,12 @@ test("A posts a text story; B sees the ring, opens it, reacts and replies; A see
     await page.getByRole("menuitem", { name: "Post a story" }).click();
     const composer = page.getByRole("dialog", { name: "New story" });
     await expect(composer).toBeVisible();
-    await composer.getByRole("radio", { name: "Text" }).click();
+    // With no object storage the composer opens straight on the text card, its editor already up (and the
+    // tabs out of the way); with storage it opens on the camera and the Text tab is the way in.
+    const textTab = composer.getByRole("radio", { name: "Text" });
+    await expect(textTab.or(composer.locator("[data-story-text]"))).toBeVisible();
+    // (If the editor came up by itself in the meantime the tab is gone and there is nothing to click.)
+    await textTab.click({ timeout: 3000 }).catch(() => undefined);
     await composer.locator("[data-story-text]").fill("bora de cs hoje?");
     await composer.locator("[data-story-text-done]").click();
     await composer.locator("[data-story-bg='grape']").click();

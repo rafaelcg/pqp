@@ -1,4 +1,4 @@
-import { Brush, Check, Eraser, Highlighter, Pen, Undo2 } from "lucide-react";
+import { Brush, Check, Eraser, Highlighter, Pen, Redo2, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
@@ -171,13 +171,17 @@ export function DrawBar({
   settings,
   onChange,
   onUndo,
+  onRedo,
   canUndo,
+  canRedo,
   onDone,
 }: {
   settings: DrawSettings;
   onChange: (next: DrawSettings) => void;
   onUndo: () => void;
+  onRedo: () => void;
   canUndo: boolean;
+  canRedo: boolean;
   onDone: () => void;
 }) {
   const { t } = useTranslation();
@@ -207,6 +211,9 @@ export function DrawBar({
         </div>
         <button type="button" className="story-cbtn" aria-label={t("stories.editor.undo")} disabled={!canUndo} onClick={onUndo}>
           <Undo2 className="h-[18px] w-[18px]" aria-hidden />
+        </button>
+        <button type="button" className="story-cbtn" aria-label={t("stories.editor.redo")} disabled={!canRedo} onClick={onRedo}>
+          <Redo2 className="h-[18px] w-[18px]" aria-hidden />
         </button>
         <button
           type="button"

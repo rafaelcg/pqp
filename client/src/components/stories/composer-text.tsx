@@ -231,13 +231,13 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: Text
       aria-label={t("stories.editor.textTool")}
       data-story-text-editor=""
       onKeyDown={onKeyDown}
-      className="absolute inset-0 z-30"
+      className="absolute inset-0 z-30 overflow-hidden"
     >
       {/* Tapping outside the words ends the edit, as Done does. */}
       <button
         type="button"
         tabIndex={-1}
-        aria-label={t("stories.compose.done")}
+        aria-hidden="true"
         data-story-text-backdrop=""
         className="story-dim absolute inset-0 cursor-default"
         onClick={() => onDone(fields, shownScale)}

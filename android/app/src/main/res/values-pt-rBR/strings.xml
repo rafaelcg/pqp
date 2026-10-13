@@ -33,6 +33,8 @@
     <string name="servers_create_name">Nome do servidor</string>
     <string name="servers_create_confirm">Criar</string>
     <string name="server_actions">Ações da comunidade</string>
+    <string name="server_move_up">Mover pra cima</string>
+    <string name="server_move_down">Mover pra baixo</string>
     <string name="server_leave">Sair da comunidade</string>
     <string name="server_leave_title">Sair de %1$s?</string>
     <string name="server_leave_body">Você deixa de ver os canais e as mensagens de lá. Dá para voltar depois com um convite novo.</string>

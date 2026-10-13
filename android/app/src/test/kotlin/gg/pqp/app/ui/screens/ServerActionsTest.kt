@@ -1,6 +1,8 @@
 package gg.pqp.app.ui.screens
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,6 +37,38 @@ class ServerActionsTest {
         assertTrue(ServerActions.deleteConfirmationMatches("Owned With Others", "Owned With Others"))
         assertFalse(ServerActions.deleteConfirmationMatches("Owned With Other", "Owned With Others"))
         assertFalse(ServerActions.deleteConfirmationMatches("", "Owned With Others"))
+    }
+
+    private fun server(id: String) = gg.pqp.app.core.ServerSummary(
+        id = id,
+        name = id,
+        ownerId = "u",
+        createdAt = "2026-01-01T00:00:00Z",
+    )
+
+    @Test
+    fun `a server moves one place up or down in the list`() {
+        val list = listOf(server("a"), server("b"), server("c"))
+        assertEquals(listOf("b", "a", "c"), ServerActions.reordered(list, "a", 1)!!.map { it.id })
+        assertEquals(listOf("a", "c", "b"), ServerActions.reordered(list, "c", -1)!!.map { it.id })
+    }
+
+    @Test
+    fun `applying an order changes only the order`() {
+        val list = listOf(server("a"), server("b"), server("c"))
+        assertEquals(listOf("c", "a", "b"), ServerActions.applyOrder(list, listOf("c", "a", "b")).map { it.id })
+        // An id the list does not hold is ignored; one the order does not name
+        // keeps its place after the named ones.
+        assertEquals(listOf("b", "a", "c"), ServerActions.applyOrder(list, listOf("zzz", "b")).map { it.id })
+    }
+
+    @Test
+    fun `moving past either end, or an unknown server, changes nothing`() {
+        val list = listOf(server("a"), server("b"), server("c"))
+        assertNull(ServerActions.reordered(list, "a", -1))
+        assertNull(ServerActions.reordered(list, "c", 1))
+        assertNull(ServerActions.reordered(list, "zzz", 1))
+        assertNull(ServerActions.reordered(emptyList(), "a", 1))
     }
 
     @Test
