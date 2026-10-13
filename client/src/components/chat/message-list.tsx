@@ -5,7 +5,8 @@ import type {
   ThreadSummary,
   WebhookEmbed,
 } from "@pqp/shared";
-import { MESSAGE_BULK_DELETE_MAX } from "@pqp/shared";
+import { ServerBotTags } from "@/components/bots/server-bot-tags";
+import { MESSAGE_BULK_DELETE_MAX, parseBotFaceAvatar } from "@pqp/shared";
 import {
   AlertCircle,
   CircleCheck,
@@ -2793,25 +2794,6 @@ function BotActivityRows({
   );
 }
 
-/** BOT and BETA beside a server bot's name; "removido" once it left the server. */
-function ServerBotTags({ gone = false }: { gone?: boolean }) {
-  const { t } = useTranslation();
-  return (
-    <span className="inline-flex items-center gap-1 self-center">
-      <span className="rounded-[var(--radius-tick)] bg-accent-soft px-1 py-px text-[10px] font-bold uppercase tracking-wide text-on-accent-soft">
-        {t("chat.botTag")}
-      </span>
-      {gone ? (
-        <span className="rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-text-tertiary">
-          {t("chat.botRemoved")}
-        </span>
-      ) : (
-        <BetaTag />
-      )}
-    </span>
-  );
-}
-
 /**
  * What a screen reader gets for one message, as a single accessible name on
  * its row: who, when, whether it answers something else, the content itself,
@@ -3731,7 +3713,7 @@ const MessageRow = memo(function MessageRow({
                       {t("forum.badge.op")}
                     </span>
                   )}
-                  {authorGone && (
+                  {authorGone && !serverBot && (
                     <span
                       className="self-center rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-text-tertiary"
                       title={t("chat.authorGoneHint", { name: message.authorName })}

@@ -6095,5 +6095,15 @@
   "qaBots.ask.answered": "Answered",
   "qaBots.ask.expired": "Expired",
   "chat.authorGone": "salió",
-  "chat.authorGoneHint": "{name} ya no está en el servidor."
+  "chat.authorGoneHint": "{name} ya no está en el servidor.",
+  "chat.botTag": "Bot",
+  "chat.botRemoved": "eliminado",
+  "chat.botActivity.thinkingPill": "Pensando…",
+  "chat.botActivity.stillThinking": "Sigue pensando…",
+  "chat.botActivity.slowHint": "Esta es difícil. Ya responde.",
+  "bots.profile.beta": "Los bots están en beta y pueden equivocarse. Revisa antes de confiar.",
+  "bots.profile.seesTitle": "Lo que ve {name}",
+  "bots.profile.seesBody": "Los mensajes de los canales donde responde. Los procesa Anthropic (Claude). Nada de eso entrena modelos.",
+  "bots.profile.callWith": "Llámalo con {handle} en un canal donde vive.",
+  "bots.profile.call": "Llamar a {name}"
 }

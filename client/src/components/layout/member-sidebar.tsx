@@ -24,7 +24,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { PublicUser, VoiceParticipant } from "@pqp/shared";
+import { parseBotFaceAvatar, type PublicUser, type VoiceParticipant } from "@pqp/shared";
 import { RightColumnTabs } from "@/components/chat/right-column-tabs";
 import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -37,6 +37,7 @@ import {
   type ModerationSubject,
 } from "@/components/user/member-moderation-dialog";
 import { BotFace } from "@/components/bots/bot-face";
+import { ServerBotTags } from "@/components/bots/server-bot-tags";
 import { BetaTag } from "@/components/ui/beta-tag";
 import {
   moderationActions,
@@ -895,6 +896,7 @@ function MemberRow({
   // makes one row taller than its neighbours for no visible reason.
   const recado = blocked ? null : member.customStatus?.trim() || null;
 
+  const serverBot = parseBotFaceAvatar(member.avatarUrl) !== null;
   return (
     <ContextMenu items={items}>
       <div
@@ -948,10 +950,12 @@ function MemberRow({
               <RankMarks
                 marks={identityMarks({
                   rank: member.role,
-                  isCharacter: member.isCharacter,
+                  // A server bot says so in words (BOT, BETA) instead.
+                  isCharacter: serverBot ? false : member.isCharacter,
                   ...rankBadges(member.roleIds, roles),
                 })}
               />
+              {serverBot && <ServerBotTags />}
             </span>
             {recado && (
               <span

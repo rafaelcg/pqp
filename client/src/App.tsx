@@ -3883,6 +3883,7 @@ function MainAppContent({
         isCharacter: member.isCharacter,
         handle: member.handle ?? null,
         customStatus: member.customStatus ?? null,
+        avatarUrl: member.avatarUrl ?? null,
       });
     }
     for (const person of conversationParticipants ?? []) {
