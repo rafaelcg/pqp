@@ -598,23 +598,13 @@ private fun LayerHost(
         add(CustomAccessibilityAction(delete) { session.remove(latest.id); true })
     }
 
-    Box(
-        Modifier.layout { measurable, constraints ->
-            val placeable = measurable.measure(Constraints())
-            layout(constraints.maxWidth, constraints.maxHeight) {
-                placeable.placeWithLayer(
-                    (layer.x * canvas.width - placeable.width / 2f).roundToInt(),
-                    (layer.y * canvas.height - placeable.height / 2f).roundToInt(),
-                ) {
-                    val s = layer.scale * shrinkScale
-                    scaleX = s
-                    scaleY = s
-                    rotationZ = Math.toDegrees(layer.rotation.toDouble()).toFloat()
-                    transformOrigin = TransformOrigin.Center
-                    this.alpha = alpha
-                }
-            }
-        },
+    PlacedLayer(
+        x = layer.x,
+        y = layer.y,
+        scale = layer.scale * shrinkScale,
+        rotation = layer.rotation,
+        canvas = canvas,
+        alpha = alpha,
     ) {
         Box(
             Modifier
@@ -630,12 +620,10 @@ private fun LayerHost(
                 is TextLayer -> TextLayerContent(layer.text, layer.font, layer.color, layer.background, layer.align, layer.size, canvas.width)
                 is PhotoLayer -> PhotoLayerContent(layer.source, layer.shape, layer.width, layer.height, canvas.width, photoLabel)
                 is MentionLayer -> MentionLayerContent(layer.name, canvas.width)
-                is CallLayer -> CallLayerContent(
-                    roomName = layer.roomName,
-                    serverName = layer.serverName,
-                    faces = env.occupancy[layer.channelId].orEmpty().take(3).map { CallFace(it.userId, it.displayName, it.avatarUrl) },
-                    callLabel = stringResource(R.string.stories_sticker_call),
-                    joinLabel = stringResource(R.string.stories_editor_call_join),
+                is CallLayer -> CallLayerPreview(
+                    layer = layer,
+                    faces = env.occupancy[layer.channelId].orEmpty().take(CallFaces.SHOWN).map { CallFace(it.userId, it.displayName, it.avatarUrl) },
+                    count = env.occupancy[layer.channelId].orEmpty().size,
                     canvasWidthPx = canvas.width,
                 )
                 is InkLayer -> Unit

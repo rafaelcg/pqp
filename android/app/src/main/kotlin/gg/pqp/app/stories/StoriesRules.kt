@@ -43,15 +43,29 @@ object StoriesRules {
         minOf(10_000L, 5_000L + 50L * text.codePointCount(0, text.length))
 
     /**
-     * How long a story stays on screen before the next one. A video runs its
-     * own length; a call sticker gets 8 s so somebody can read who is in the
-     * room; a text card scales with what there is to read.
+     * Every word on a story, in order: its text layers; else a card's own `text`;
+     * else a photo's caption (a story from before layers, which a screen reader
+     * also hears as the picture's description). Never both a layer's words and
+     * the caption: `altText` already says the layers.
      */
-    fun displayMs(story: Story): Long = when {
-        story.kind == "video" -> story.media?.durationMs?.takeIf { it > 0 } ?: PHOTO_DISPLAY_MS
-        story.sticker?.type == "call" -> CALL_DISPLAY_MS
-        story.kind == "text" -> textDisplayMs(story.text.orEmpty())
-        else -> PHOTO_DISPLAY_MS
+    fun wordsOf(story: Story): String {
+        val layers = story.layers.filterIsInstance<TextStoryLayer>().joinToString("\n") { it.text }
+        return layers.ifBlank { if (story.kind == "text") story.text.orEmpty() else story.caption.orEmpty() }
+    }
+
+    /**
+     * How long a story stays on screen before the next one. A video runs its
+     * own length; a call card gets 8 s so somebody can read who is in the room;
+     * anything with words scales with what there is to read (5 s plus 50 ms a
+     * character, at most 10 s), so a long caption on a photo is not gone before
+     * it is read; and a photo is 5 s.
+     */
+    fun displayMs(story: Story): Long {
+        if (story.kind == "video") return story.media?.durationMs?.takeIf { it > 0 } ?: PHOTO_DISPLAY_MS
+        val words = wordsOf(story)
+        val reading = if (words.isBlank()) PHOTO_DISPLAY_MS else textDisplayMs(words)
+        val hasCall = story.sticker?.type == "call" || story.call != null || story.layers.any { it is CallStoryLayer }
+        return if (hasCall) maxOf(CALL_DISPLAY_MS, reading) else reading
     }
 
     private fun parse(iso: String?): Long? =

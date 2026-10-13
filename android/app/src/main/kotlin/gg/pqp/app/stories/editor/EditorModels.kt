@@ -87,13 +87,14 @@ data class MentionLayer(
 data class CallLayer(
     override val id: String,
     override val x: Float = 0.5f,
-    override val y: Float = 0.78f,
+    override val y: Float = 0.7f,
     override val scale: Float = 1f,
     override val rotation: Float = 0f,
     val serverId: String,
     val channelId: String,
     val roomName: String,
     val serverName: String = "",
+    val serverIconUrl: String? = null,
 ) : EditorLayer {
     override val type get() = "call"
     override fun placed(x: Float, y: Float, scale: Float, rotation: Float) = copy(x = x, y = y, scale = scale, rotation = rotation)

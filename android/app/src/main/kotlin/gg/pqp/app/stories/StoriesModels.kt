@@ -111,6 +111,14 @@ data class Story(
     val media: StoryMedia? = null,
     val sticker: StorySticker? = null,
     val call: StoryCallLive? = null,
+    /**
+     * The layers drawn over the base, back to front. Decoded one by one: a
+     * layer this build cannot read is dropped, never a reason to lose the story.
+     */
+    @Serializable(with = StoryLayersSerializer::class)
+    val layers: List<StoryLayer> = emptyList(),
+    /** The story's words read out, for a screen reader. */
+    val altText: String? = null,
     val publishedAt: String? = null,
     val expiresAt: String? = null,
     val audiences: List<StoryAudience> = emptyList(),
