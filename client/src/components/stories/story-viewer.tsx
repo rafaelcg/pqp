@@ -61,6 +61,7 @@ import {
 } from "@/lib/stories/format";
 import { commitSeenStories, noteStoriesSeen } from "@/lib/stories/seen-store";
 import { flushStoryViews, queueStoryViews } from "@/lib/stories/views-queue";
+import { useStoryCardSize } from "@/lib/stories/viewer-size";
 import { ringAudienceKey, showStoriesNotice, type ViewerRequest } from "@/lib/stories/ui-store";
 import {
   createViewerState,
@@ -152,6 +153,9 @@ export function StoryViewer({
 }: StoryViewerProps) {
   const { t } = useTranslation();
   const wide = useMediaQuery("(min-width: 640px)", true);
+  const cardSize = useStoryCardSize();
+  // The header and the reply bar grow with a desktop card (phones: untouched).
+  const chromeZoom = wide && cardSize.zoom !== 1 ? cardSize.zoom : undefined;
   const [state, dispatch] = useReducer(viewerReducer, request, (req) =>
     createViewerState(req.people, { personIndex: req.startIndex }),
   );
@@ -1095,11 +1099,13 @@ export function StoryViewer({
       data-story-held={held ? "true" : "false"}
       className={cn(
         "relative flex flex-col overflow-hidden",
-        wide
-          ? "h-[min(650px,calc(100dvh-96px))] aspect-[366/650] rounded-[14px] shadow-[var(--story-shadow)]"
-          : "h-full w-full",
+        wide ? "rounded-[14px] shadow-[var(--story-shadow)]" : "h-full w-full",
       )}
-      style={{ background: "var(--story-card)", touchAction: "none" }}
+      style={{
+        background: "var(--story-card)",
+        touchAction: "none",
+        ...(wide ? { width: cardSize.width, height: cardSize.height } : null),
+      }}
     >
       <div className="relative min-h-0 flex-1">
         {deck && (
@@ -1183,7 +1189,10 @@ export function StoryViewer({
           </div>
 
           {/* Chrome: bars and header. */}
-          <div className="story-chrome pointer-events-none absolute inset-x-0 top-0 z-10 px-3 pt-3">
+          <div
+            className="story-chrome pointer-events-none absolute inset-x-0 top-0 z-10 px-3 pt-3"
+            style={{ zoom: chromeZoom }}
+          >
             <div className="flex gap-1" aria-hidden>
               {(person?.storyIds ?? []).map((id, index) => (
                 <span
@@ -1353,7 +1362,10 @@ export function StoryViewer({
       </div>
 
       {/* Footer. */}
-      <div className="story-chrome relative z-10 flex min-h-16 shrink-0 items-center gap-2 px-3 pb-[env(safe-area-inset-bottom)]">
+      <div
+        className="story-chrome relative z-10 flex min-h-16 shrink-0 items-center gap-2 px-3 pb-[env(safe-area-inset-bottom)]"
+        style={{ zoom: chromeZoom }}
+      >
         {story && isOwn ? (
           <button
             type="button"
