@@ -93,7 +93,7 @@ export function WebhooksSection({
   }
 
   async function copyUrl(webhook: Webhook) {
-    const fullUrl = `${getApiBaseUrl()}${webhook.url}`;
+    const fullUrl = `${getApiBaseUrl() || window.location.origin}${webhook.url}`;
     try {
       await navigator.clipboard.writeText(fullUrl);
       setCopiedId(webhook.id);
@@ -156,7 +156,7 @@ export function WebhooksSection({
             </div>
             <div className="mt-2 flex gap-2">
               <code className="min-w-0 flex-1 truncate rounded bg-ink px-2 py-1 text-xs text-paper-muted">
-                {getApiBaseUrl()}
+                {getApiBaseUrl() || window.location.origin}
                 {webhook.url}
               </code>
               <Button
