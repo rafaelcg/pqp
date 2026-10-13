@@ -222,6 +222,14 @@ export const FEATURE_FLAGS = {
     codeDefault: true,
     perServer: false,
   },
+  user_stats: {
+    description:
+      "Conta por pessoa e por dia o tempo em call, o tempo compartilhando tela, as músicas postas na fila e as watch parties assistidas, pra Retrospectiva (desligado: nada novo é gravado).",
+    env: "USER_STATS",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    perServer: false,
+  },
   ws_auth_admission: {
     description:
       "Fila na chegada dos sockets: uma rajada de reconexão (deploy) espera na porta do WebSocket, não no pool do Postgres (desligado: todos de uma vez).",

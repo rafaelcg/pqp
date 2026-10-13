@@ -57,6 +57,11 @@ import {
   recordVoiceOccupancySample,
   rollUpAndPruneVoiceOccupancy,
 } from "./services/voice-occupancy.js";
+import {
+  USER_STATS_SAMPLE_INTERVAL_MS,
+  USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS,
+  userStats,
+} from "./services/user-stats.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 import {
   sweepStaleWatchPartyDrafts,
@@ -455,6 +460,16 @@ export function startColdJobs(): ColdJobs {
       recordVoiceOccupancySample,
     ),
     every(DAILY_MS, "voice-occupancy", rollUpAndPruneVoiceOccupancy),
+    // Per-person counts for the Retrospectiva: call and share time from live
+    // seats (same sources as occupancy, same refusal to invent zeros in a
+    // blind worker), and the parties each person watched, copied before the
+    // viewer table's 24h prune. See services/user-stats.ts.
+    every(USER_STATS_SAMPLE_INTERVAL_MS, "user-stats", () => userStats.sample()),
+    every(
+      USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS,
+      "user-stats-parties",
+      () => userStats.copyWatchParties(),
+    ),
     // A live watch party whose host has been gone longer than the grace
     // window ends here. Same minute tick as the reminders on purpose: a party
     // that has lost its host is a scheduling fact, not a media one, and the

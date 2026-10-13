@@ -75,6 +75,14 @@ vi.mock("./services/voice-occupancy.js", () => ({
     minutesPruned: 0,
   })),
 }));
+vi.mock("./services/user-stats.js", () => ({
+  USER_STATS_SAMPLE_INTERVAL_MS: 60_000,
+  USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS: 15 * 60_000,
+  userStats: {
+    sample: vi.fn(async () => ({ source: "local" as const, written: 0 })),
+    copyWatchParties: vi.fn(async () => 0),
+  },
+}));
 vi.mock("./services/watch-parties.js", () => ({
   sweepWatchPartyHosts: vi.fn(async () => ({ ended: [] })),
 }));
@@ -141,6 +149,10 @@ import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
 } from "./services/voice-occupancy.js";
+import {
+  USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS,
+  userStats,
+} from "./services/user-stats.js";
 import {
   ATTACHMENT_SWEEP_INTERVAL_MS,
   CHANNEL_SESSION_REMINDER_INTERVAL_MS,
@@ -223,11 +235,13 @@ describe("cold jobs", () => {
     // sweep (a minute) and the stories video job (5 s), both asserted below;
     // 25 with the channel layout migration job (a minute, asserted below);
     // 26 with the soundboard upload sweep (a minute, asserted below);
-    // 27 with the custom emoji quarantine sweep (hourly, asserted below).
+    // 27 with the custom emoji quarantine sweep (hourly, asserted below); 29
+    // with the Retrospectiva's seat sampler (a minute) and watched-party copy
+    // (15 minutes), both asserted below.
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(27);
+    expect(jobs.count).toBe(29);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -249,6 +263,10 @@ describe("cold jobs", () => {
     expect(sweepCommunityHomeTranslations).toHaveBeenCalledTimes(4);
     // And four of the video subtitles sweep, on the same minute.
     expect(sweepCommunityHomeCaptions).toHaveBeenCalledTimes(4);
+    // The Retrospectiva's seat sampler: a minute, none at boot, like occupancy.
+    expect(userStats.sample).toHaveBeenCalledTimes(4);
+    // The watched-party copy runs every 15 minutes, so not yet at four.
+    expect(userStats.copyWatchParties).not.toHaveBeenCalled();
     // The stories expiry sweep: a minute, so four. It has no boot run: a
     // minute is the whole grace the 24 h promise allows anyway.
     expect(sweepStories).toHaveBeenCalledTimes(4);
@@ -289,6 +307,11 @@ describe("cold jobs", () => {
     // not by anything on the media path. Same cadence as the reminders on
     // purpose: losing a host is a scheduling fact, not a stream one.
     expect(sweepWatchPartyHosts).toHaveBeenCalled();
+    // A day and more has passed: the copy has ticked every 15 minutes, which
+    // is well inside the viewer table's 24h prune.
+    expect(
+      vi.mocked(userStats.copyWatchParties).mock.calls.length,
+    ).toBeGreaterThanOrEqual(DAILY_MS / USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS);
   });
 
   it("a failing sweep is logged and the timer survives", async () => {

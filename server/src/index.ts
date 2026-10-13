@@ -82,6 +82,7 @@ import {
 } from "./voice/hls-egress.js";
 import { hlsViewerCounter } from "./voice/hls-viewer-counts.js";
 import { userActivity } from "./services/user-activity.js";
+import { userStats } from "./services/user-stats.js";
 import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js";
 import { startFeatureFlags } from "./lib/flags.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
@@ -710,6 +711,7 @@ function startVoiceRegistry(): (() => Promise<void>) | null {
 let stopVoiceHeartbeat: (() => Promise<void>) | null = null;
 let stopHlsViewerCounter: (() => Promise<void>) | null = null;
 let stopUserActivity: (() => Promise<void>) | null = null;
+let stopUserStats: (() => Promise<void>) | null = null;
 
 async function main() {
   // `WORKER_MODE=worker` on this entry point means "be the worker": hand off
@@ -802,6 +804,9 @@ async function main() {
   // Who opened the app today: noted at WS auth, flushed once a minute as one
   // statement. Wherever the sockets are.
   stopUserActivity = userActivity.start();
+  // Tracks queued in calls, for the Retrospectiva: noted where a music write
+  // is accepted, flushed once a minute. Wherever the sockets are.
+  stopUserStats = userStats.start();
 
   if (runsColdJobs(role)) {
     coldJobs = startColdJobs();
@@ -915,6 +920,7 @@ async function shutdown(signal: string) {
   // The last minute of viewer sightings, before the pool goes.
   await stopHlsViewerCounter?.();
   await stopUserActivity?.();
+  await stopUserStats?.();
   // Last, so the presence withdrawals that closing those sockets produces still
   // have a bus to travel on. Best-effort — anything that misses the window is
   // covered by the contribution TTL on the other instances.
