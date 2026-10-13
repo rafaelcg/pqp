@@ -154,16 +154,16 @@ object StoryMediaPrep {
         } finally {
             runCatching { retriever.release() }
         }
-        // A provider that cannot say how long the file is answers -1: count it by
-        // reading, rather than treating "unknown" as "small" and letting an
-        // oversized clip through to a refusal when it could have been shrunk.
-        val size = runCatching {
-            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
-        }.getOrNull()?.takeIf { it >= 0 } ?: countBytes(context, uri)
         if (width <= 0 || height <= 0 || durationMs == null || durationMs <= 0) return PrepResult.Unreadable
         // A container Android can read but a story cannot carry (a .mov, a .webm) is
-        // not worked on: the type is the refusal.
+        // refused by its type, before anything is read to find out how big it is.
         if (type != "video/mp4") return PrepResult.Refused(StoriesRules.MediaRefusal.WrongType, durationMs)
+        // A provider that cannot say how long the file is answers -1: count it by
+        // reading, but only as far as the decision needs (past the cap it is
+        // already "too big to send as it is"), so a huge clip is not read to its end twice.
+        val size = runCatching {
+            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
+        }.getOrNull()?.takeIf { it >= 0 } ?: countBytes(context, uri, limit = maxBytes + 1)
         val work = TrimRules.work(durationMs, size.coerceAtLeast(0), width, height, maxBytes)
         if (work != null) return PrepResult.NeedsWork(uri, durationMs, width, height, tooLong = work == TrimRules.Work.Trim)
         StoriesRules.checkMedia(type, size.coerceAtLeast(0), durationMs, maxBytes)?.let {
@@ -174,11 +174,12 @@ object StoryMediaPrep {
         return PrepResult.Ready(PreparedMedia(bytes, "video/mp4", width, height, durationMs, uri))
     }
 
-    private fun countBytes(context: Context, uri: Uri): Long = runCatching {
+    /** Bytes in the stream, counting no further than [limit]: enough to know whether it is over a cap. */
+    private fun countBytes(context: Context, uri: Uri, limit: Long): Long = runCatching {
         context.contentResolver.openInputStream(uri)?.use { stream ->
             val buffer = ByteArray(64 * 1024)
             var total = 0L
-            while (true) {
+            while (total < limit) {
                 val read = stream.read(buffer)
                 if (read < 0) break
                 total += read
