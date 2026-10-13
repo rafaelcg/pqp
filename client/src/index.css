@@ -4083,3 +4083,181 @@ html[data-immersive-stage] [data-immersive-hide] {
     animation: story-fade-in var(--duration-fast) linear both;
   }
 }
+
+/* ------------------------------------------------------------------
+   Story layers: the palette a text layer and a drawing take their color
+   from (a token on the wire, never free hex), and how a text layer is set.
+   A layer is laid out in units of the canvas WIDTH (cqw), so it is the same
+   story on a 390 px phone and a 1440 px window. The sizes are the contract
+   in `lib/stories/layers.ts`: 8cqw x size for type, 84cqw at most wide.
+   ------------------------------------------------------------------ */
+:root {
+  --story-c-white: oklch(1 0 0);
+  --story-c-white-on: oklch(0.16 0.012 250);
+  --story-c-black: oklch(0.14 0.01 250);
+  --story-c-black-on: oklch(1 0 0);
+  --story-c-lime: oklch(0.88 0.19 125);
+  --story-c-lime-on: oklch(0.16 0.012 250);
+  --story-c-yellow: oklch(0.91 0.17 95);
+  --story-c-yellow-on: oklch(0.16 0.012 250);
+  --story-c-orange: oklch(0.77 0.17 55);
+  --story-c-orange-on: oklch(0.16 0.012 250);
+  --story-c-red: oklch(0.62 0.22 25);
+  --story-c-red-on: oklch(1 0 0);
+  --story-c-pink: oklch(0.75 0.18 350);
+  --story-c-pink-on: oklch(0.16 0.012 250);
+  --story-c-purple: oklch(0.56 0.21 300);
+  --story-c-purple-on: oklch(1 0 0);
+  --story-c-blue: oklch(0.58 0.19 255);
+  --story-c-blue-on: oklch(1 0 0);
+  --story-c-cyan: oklch(0.86 0.12 205);
+  --story-c-cyan-on: oklch(0.16 0.012 250);
+  --story-c-green: oklch(0.7 0.18 150);
+  --story-c-green-on: oklch(0.16 0.012 250);
+  --story-c-gray: oklch(0.66 0.01 250);
+  --story-c-gray-on: oklch(0.16 0.012 250);
+  --story-text-soft: oklch(0 0 0 / 0.5);
+  --story-layer-shadow: 0 4px 18px oklch(0 0 0 / 0.35);
+  --story-text-shadow: 0 1px 10px oklch(0 0 0 / 0.28);
+}
+.story-tl {
+  --tl-fg: var(--story-c-white);
+  --tl-on: var(--story-c-white-on);
+  width: max-content;
+  max-width: 84cqw;
+  font-size: calc(var(--tl-size, 1) * 8cqw);
+  line-height: 1.14;
+  color: var(--tl-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: var(--tl-align, center);
+  font-family: "Instrument Sans", system-ui, sans-serif;
+  font-weight: 700;
+  text-shadow: var(--story-text-shadow);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.story-tl[data-color="white"] { --tl-fg: var(--story-c-white); --tl-on: var(--story-c-white-on); }
+.story-tl[data-color="black"] { --tl-fg: var(--story-c-black); --tl-on: var(--story-c-black-on); }
+.story-tl[data-color="lime"] { --tl-fg: var(--story-c-lime); --tl-on: var(--story-c-lime-on); }
+.story-tl[data-color="yellow"] { --tl-fg: var(--story-c-yellow); --tl-on: var(--story-c-yellow-on); }
+.story-tl[data-color="orange"] { --tl-fg: var(--story-c-orange); --tl-on: var(--story-c-orange-on); }
+.story-tl[data-color="red"] { --tl-fg: var(--story-c-red); --tl-on: var(--story-c-red-on); }
+.story-tl[data-color="pink"] { --tl-fg: var(--story-c-pink); --tl-on: var(--story-c-pink-on); }
+.story-tl[data-color="purple"] { --tl-fg: var(--story-c-purple); --tl-on: var(--story-c-purple-on); }
+.story-tl[data-color="blue"] { --tl-fg: var(--story-c-blue); --tl-on: var(--story-c-blue-on); }
+.story-tl[data-color="cyan"] { --tl-fg: var(--story-c-cyan); --tl-on: var(--story-c-cyan-on); }
+.story-tl[data-color="green"] { --tl-fg: var(--story-c-green); --tl-on: var(--story-c-green-on); }
+.story-tl[data-color="gray"] { --tl-fg: var(--story-c-gray); --tl-on: var(--story-c-gray-on); }
+.story-tl[data-font="bold"] {
+  font-family: "Gabarito", "Instrument Sans", system-ui, sans-serif;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  line-height: 1.04;
+}
+.story-tl[data-font="typewriter"] {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.story-tl[data-font="serif"] {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  font-style: italic;
+}
+.story-tl[data-font="neon"] {
+  font-family: "Gabarito", "Instrument Sans", system-ui, sans-serif;
+  font-weight: 800;
+  text-shadow:
+    0 0 0.1em var(--tl-fg),
+    0 0 0.4em var(--tl-fg),
+    0 0 0.9em var(--tl-fg);
+}
+.story-tl[data-bg="solid"] {
+  background: var(--tl-fg);
+  color: var(--tl-on);
+  text-shadow: none;
+  padding: 0.14em 0.36em;
+  border-radius: 0.3em;
+}
+.story-tl[data-bg="soft"] {
+  background: var(--story-text-soft);
+  padding: 0.14em 0.36em;
+  border-radius: 0.3em;
+}
+.story-tl[data-font="neon"][data-bg="solid"] {
+  text-shadow: none;
+}
+
+/* The editor's selection frame, drawn at a constant size however much the
+   layer is scaled (--inv is 1 / scale). */
+.story-layer {
+  touch-action: none;
+  cursor: grab;
+  outline: none;
+}
+.story-layer:active {
+  cursor: grabbing;
+}
+.story-layer-frame {
+  pointer-events: none;
+  position: absolute;
+  inset: -6px;
+  border: calc(1.5px * var(--inv, 1)) solid var(--story-on-media);
+  border-radius: calc(6px * var(--inv, 1));
+  box-shadow: 0 0 0 calc(1px * var(--inv, 1)) var(--story-dim);
+}
+.story-layer:focus-visible .story-layer-frame {
+  border-color: var(--story-accent);
+}
+.story-layer-handle {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  height: 22px;
+  width: 22px;
+  transform: translate(50%, 50%) scale(var(--inv, 1));
+  border-radius: 9999px;
+  border: 2px solid var(--story-card);
+  background: var(--story-on-media);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.story-guide {
+  pointer-events: none;
+  z-index: 4;
+  position: absolute;
+  background: var(--story-accent);
+  opacity: 0.9;
+}
+.story-trash {
+  pointer-events: none;
+  z-index: 4;
+  position: absolute;
+  left: 50%;
+  bottom: 4%;
+  display: flex;
+  height: 14cqw;
+  width: 14cqw;
+  transform: translateX(-50%);
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: var(--story-dim);
+  color: var(--story-on-media);
+  transition:
+    transform var(--duration-fast) var(--ease-emphasized),
+    background var(--duration-fast) var(--ease-standard);
+}
+.story-trash[data-hot="true"] {
+  transform: translateX(-50%) scale(1.22);
+  background: var(--color-danger);
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-trash {
+    transition: none;
+  }
+  .story-trash[data-hot="true"] {
+    transform: translateX(-50%);
+  }
+}

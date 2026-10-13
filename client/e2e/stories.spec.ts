@@ -147,6 +147,7 @@ test("A posts a text story; B sees the ring, opens it, reacts and replies; A see
     await expect(composer).toBeVisible();
     await composer.getByRole("radio", { name: "Text" }).click();
     await composer.locator("[data-story-text]").fill("bora de cs hoje?");
+    await composer.locator("[data-story-text-done]").click();
     await composer.locator("[data-story-bg='grape']").click();
     // Pre-ticked where A was: this server (the chip says so, the sheet ticks it).
     await expect(composer.locator("[data-story-audience]")).toContainText("Stories ");

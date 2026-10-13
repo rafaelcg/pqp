@@ -1,5 +1,6 @@
 import {
   STORY_IMAGE_MAX_EDGE,
+  STORY_LAYER_MAX_BYTES,
   STORY_MAX_BYTES,
   STORY_MAX_VIDEO_MS,
   STORY_SNIFF_BYTES,
@@ -241,6 +242,82 @@ export function mediaInputFor(media: PreparedStoryMedia): StoryMediaInput {
     height: media.height,
     ...(media.durationMs !== null ? { durationMs: media.durationMs } : {}),
   };
+}
+
+export interface PreparedLayerImage {
+  blob: Blob;
+  contentType: "image/jpeg" | "image/webp" | "image/png";
+  width: number;
+  height: number;
+  /** An object URL for the editor. The caller revokes it. */
+  previewUrl: string;
+}
+
+/** A placed photo is shown at 40% of the canvas width, so it never needs the base photo's resolution. */
+export const LAYER_IMAGE_MAX_EDGE = 1080;
+
+/**
+ * A photo to place ON a story. Same checks as the base (type from the bytes,
+ * EXIF gone because the pixels are redrawn) but it keeps transparency: a PNG or
+ * WebP goes up as one, anything else as a JPEG. Over the layer cap (8 MiB) it is
+ * re-encoded once more as a JPEG, which is always smaller.
+ */
+export async function prepareLayerImage(file: Blob): Promise<
+  { ok: true; layer: PreparedLayerImage } | { ok: false; problem: StoryFileProblem }
+> {
+  const sniffed = await sniffFile(file);
+  if (!sniffed || !isStoryImageType(sniffed)) {
+    return { ok: false, problem: { kind: "wrong-type" } };
+  }
+  if (file.size > STORY_MAX_BYTES * 4) {
+    return { ok: false, problem: { kind: "too-big" } };
+  }
+  const sourceUrl = URL.createObjectURL(file);
+  try {
+    const image = await loadImage(sourceUrl);
+    const size = fitWithin(image.naturalWidth, image.naturalHeight, LAYER_IMAGE_MAX_EDGE);
+    const canvas = document.createElement("canvas");
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return { ok: false, problem: { kind: "unreadable" } };
+    }
+    context.drawImage(image, 0, 0, size.width, size.height);
+    const encode = (type: string, quality?: number) =>
+      new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, quality));
+    let blob: Blob | null = null;
+    let contentType: PreparedLayerImage["contentType"] = "image/jpeg";
+    if (sniffed !== "image/jpeg") {
+      const webp = await encode("image/webp", 0.9);
+      if (webp && webp.type === "image/webp") {
+        blob = webp;
+        contentType = "image/webp";
+      } else {
+        blob = await encode("image/png");
+        contentType = "image/png";
+      }
+    }
+    if (!blob || blob.size > STORY_LAYER_MAX_BYTES) {
+      // JPEG has no alpha: paint the transparent pixels dark rather than black-by-accident.
+      context.globalCompositeOperation = "destination-over";
+      context.fillStyle = "black";
+      context.fillRect(0, 0, size.width, size.height);
+      blob = await encode("image/jpeg", 0.88);
+      contentType = "image/jpeg";
+    }
+    if (!blob || blob.size > STORY_LAYER_MAX_BYTES) {
+      return { ok: false, problem: { kind: "too-big" } };
+    }
+    return {
+      ok: true,
+      layer: { blob, contentType, width: size.width, height: size.height, previewUrl: URL.createObjectURL(blob) },
+    };
+  } catch {
+    return { ok: false, problem: { kind: "unreadable" } };
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
 }
 
 /**

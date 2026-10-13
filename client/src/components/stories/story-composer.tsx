@@ -1,9 +1,25 @@
-import { Camera, ChevronLeft, Headphones, ImageIcon, Loader2, Type, X } from "lucide-react";
+import {
+  ArrowUpToLine,
+  Camera,
+  ChevronLeft,
+  Circle,
+  Loader2,
+  Pen,
+  PenLine,
+  RectangleHorizontal,
+  Square,
+  Sticker,
+  Trash2,
+  Type,
+  Undo2,
+  X,
+  ImagePlus,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -12,21 +28,37 @@ import { createPortal } from "react-dom";
 import {
   STORY_BACKGROUNDS,
   STORY_CAPTION_MAX,
+  STORY_LAYER_IMAGE_SHAPES,
+  STORY_LAYER_IMAGES_MAX,
+  STORY_LAYERS_MAX,
   STORY_TEXT_MAX,
   type StoriesConfig,
   type StoryAudienceOptions,
   type StoryBackground,
-  type StorySticker,
 } from "@pqp/shared";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { fetchStoryAudiences } from "@/lib/stories/api";
 import { STORIES_CONFIG_OFF, loadStoriesConfig } from "@/lib/stories/config";
-import { authorInRoom, defaultCallRoom } from "@/lib/stories/call-room";
 import { captureStill } from "@/lib/stories/camera";
+import { colorFromTokens, hasInk, renderDrawingBlob, type Stroke } from "@/lib/stories/drawing";
+import {
+  DEFAULT_TEXT,
+  altTextFor,
+  canAddLayer,
+  editorReducer,
+  initialEditorState,
+  newLayerId,
+  toLayerInput,
+  type EditorLayer,
+  type ImageShape,
+  type TextLayerFields,
+} from "@/lib/stories/layers";
+import { loadMentionPeople, type MentionPerson } from "@/lib/stories/mention-people";
 import { postStory } from "@/lib/stories/post";
 import {
   preparedFromStill,
+  prepareLayerImage,
   prepareRecordedClip,
   prepareStoryFile,
   type PrepareResult,
@@ -38,8 +70,13 @@ import type { ComposerRequest } from "@/lib/stories/ui-store";
 import { cn } from "@/lib/utils";
 import { AudienceChip, AudienceSheet, audienceSummary } from "./composer-audience";
 import { CameraControlsRow, CameraStage } from "./composer-camera";
+import { ComposerCanvas } from "./composer-canvas";
+import { DEFAULT_DRAW, DrawBar, DrawOverlay, type DrawSettings } from "./composer-draw";
+import { CallPickerSheet, MentionSheet, StickerTray } from "./composer-stickers";
+import { TextEditor } from "./composer-text";
 import { ModeTabs, StoryButton, type ModeOption } from "./composer-ui";
-import { StoryContent, TEXT_CARD_BOX_CLASS, textCardSizeClass, type StoryDisplay } from "./story-content";
+import { CallSticker, StoryContent, type StoryDisplay } from "./story-content";
+import type { DisplayLayer } from "./story-layers";
 
 /**
  * "Novo story" on the web: a phone-shaped column, the same on a desktop and at
@@ -47,10 +84,14 @@ import { StoryContent, TEXT_CARD_BOX_CLASS, textCardSizeClass, type StoryDisplay
  *
  * It opens on the camera. Tap the shutter for a photo, hold it (or press the
  * record button) for a video of up to 30 s; the gallery button, a file dropped
- * anywhere on the composer and Ctrl+V all arrive at the same place, and then
- * the canvas shows the picture with a caption field and "Postar". Text and
- * "Chama pra call" are the other two modes, each a card on one of six
- * backgrounds.
+ * anywhere on the composer and Ctrl+V all arrive at the same place. Text is the
+ * other starting point, a card on one of six backgrounds.
+ *
+ * Once there is a base the canvas is an editor: text, photos, a drawing, a
+ * mention and the call card are LAYERS, each dragged, pinched, turned and
+ * deleted on the canvas itself (`composer-canvas.tsx`). The layers go up as
+ * data, not burned into the picture, so every viewer draws them at its own
+ * size.
  *
  * "Quem vê" starts ticked where the person was (decision 3), lists every
  * server with stories on, greys out the ones they may not post to with the
@@ -66,16 +107,17 @@ export interface ComposerVoiceRoom {
 
 interface StoryComposerProps {
   request: ComposerRequest;
-  /** The signed-in account: the call sticker is live only while its author is in the room. */
+  /** The signed-in account: the call card is live only while its author is in the room. */
   meId: string;
-  /** Voice rooms of the server the composer was opened from, for the call sticker. */
+  /** Voice rooms of the server the composer was opened from, for the call card. */
   voiceRooms: { serverId: string; serverName: string; rooms: ComposerVoiceRoom[] } | null;
   onClose: () => void;
   /** The posted card flies into this ring (design §4, Posting). */
   onPosted?: (preview: HTMLElement | null) => void;
 }
 
-type Mode = "camera" | "text" | "call";
+type Mode = "camera" | "text";
+type Panel = "stickers" | "call" | "mention" | "audience" | null;
 
 const PROBLEM_KEY: Record<StoryFileProblem["kind"], MessageKey> = {
   "wrong-type": "stories.compose.wrongType",
@@ -84,45 +126,64 @@ const PROBLEM_KEY: Record<StoryFileProblem["kind"], MessageKey> = {
   unreadable: "stories.compose.unreadable",
 };
 
+const SHAPE_KEY: Record<ImageShape, MessageKey> = {
+  rect: "stories.editor.shape.rect",
+  rounded: "stories.editor.shape.rounded",
+  circle: "stories.editor.shape.circle",
+};
+
 function modeFor(tab: ComposerRequest["tab"]): Mode {
-  return tab === "text" ? "text" : tab === "call" ? "call" : "camera";
+  return tab === "text" || tab === "call" ? "text" : "camera";
+}
+
+function isVideoFile(file: File): boolean {
+  return file.type.startsWith("video/");
 }
 
 export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: StoryComposerProps) {
   const { t, locale } = useTranslation();
   const [config, setConfig] = useState<StoriesConfig>(STORIES_CONFIG_OFF);
+  const [configReady, setConfigReady] = useState(false);
   const [options, setOptions] = useState<StoryAudienceOptions | null>(null);
   const [optionsFailed, setOptionsFailed] = useState(false);
   const [mode, setMode] = useState<Mode>(() => modeFor(request.tab));
   const [media, setMedia] = useState<PreparedStoryMedia | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
-  const [caption, setCaption] = useState("");
-  const [text, setText] = useState("");
-  const [callText, setCallText] = useState(() => t("stories.compose.callText"));
+  // Photos being prepared to place: several can be in flight, and each one holds a layer slot.
+  const [photoJobs, setPhotoJobs] = useState(0);
+  const pendingPhotos = useRef(0);
+  const photoUrls = useRef(new Set<string>());
   const [background, setBackground] = useState<StoryBackground>("night");
-  // The room the author is in (the sticker closes when they are not), else
-  // the room people are in already.
-  const [roomId, setRoomId] = useState<string | null>(() =>
-    defaultCallRoom(voiceRooms?.rooms ?? [], meId),
-  );
+  const [editor, dispatch] = useReducer(editorReducer, initialEditorState);
+  const { layers, selectedId } = editor;
+  const [editing, setEditing] = useState<{ id: string | null } | null>(null);
+  const [textStyle, setTextStyle] = useState<Omit<TextLayerFields, "text">>(DEFAULT_TEXT);
+  const [drawing, setDrawing] = useState(false);
+  const [drawSettings, setDrawSettings] = useState<DrawSettings>(DEFAULT_DRAW);
+  const [panel, setPanel] = useState<Panel>(null);
+  const [mentionPeople, setMentionPeople] = useState<MentionPerson[] | null>(null);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  const [gestureActive, setGestureActive] = useState(false);
   const [serverIds, setServerIds] = useState<string[]>(
     request.context.kind === "server" ? [request.context.serverId] : [],
   );
   const [friends, setFriends] = useState(request.context.kind === "friends");
   const [repliesEnabled, setRepliesEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [sheetOpen, setSheetOpen] = useState(false);
   const [flash, setFlash] = useState(0);
-  const [configReady, setConfigReady] = useState(false);
   const [tabHidden, setTabHidden] = useState(() => document.visibilityState === "hidden");
   const fileInput = useRef<HTMLInputElement>(null);
+  const photoInput = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
+  const autoOpenedText = useRef(false);
   // The newest file wins: a slow decode of an earlier pick must not replace
   // the one chosen after it.
   const fileTicket = useRef(0);
+  const layersRef = useRef(layers);
+  layersRef.current = layers;
 
   const loadOptions = () => {
     setOptionsFailed(false);
@@ -164,6 +225,34 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     }
   }, [media]);
 
+  // A placed photo's object URL lives as long as something can still show it: the layer, or an
+  // undo step that would bring it back. Once none can (the step aged out), it is released.
+  useEffect(() => {
+    const live = new Set<string>();
+    for (const snapshot of [...editor.past, editor.layers]) {
+      for (const layer of snapshot) {
+        if (layer.type === "image") {
+          live.add(layer.previewUrl);
+        }
+      }
+    }
+    for (const url of [...photoUrls.current]) {
+      if (!live.has(url)) {
+        URL.revokeObjectURL(url);
+        photoUrls.current.delete(url);
+      }
+    }
+  }, [editor.past, editor.layers]);
+  useEffect(
+    () => () => {
+      for (const url of photoUrls.current) {
+        URL.revokeObjectURL(url);
+      }
+      photoUrls.current.clear();
+    },
+    [],
+  );
+
   // The camera light goes out the moment the tab is not looked at.
   useEffect(() => {
     const onVisibility = () => setTabHidden(document.visibilityState === "hidden");
@@ -171,8 +260,11 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
 
+  const hasBase = (mode === "camera" && Boolean(media)) || mode === "text";
+  const showingCamera = mode === "camera" && !media;
+
   // ---------------------------------------------------------------- camera
-  const cameraActive = mode === "camera" && !media && config.mediaEnabled && !tabHidden && !submitting;
+  const cameraActive = showingCamera && config.mediaEnabled && !tabHidden && !submitting;
   const camera = useCamera(cameraActive);
 
   const alive = useRef(true);
@@ -254,6 +346,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     acceptMedia(preparedFromStill(still));
   }
 
+  /** A file to be the story's picture or clip. */
   async function takeFile(file: File | null | undefined) {
     if (!file) {
       return;
@@ -280,6 +373,66 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     acceptMedia(result.media);
   }
 
+  /** A picture to PLACE on the story, anywhere on the canvas. */
+  async function placePhoto(file: File | null | undefined) {
+    if (!file) {
+      return;
+    }
+    // Slots are claimed before the wait: a batch of photos cannot all see the same free room.
+    const reserved = pendingPhotos.current;
+    const photos = layersRef.current.filter((layer) => layer.type === "image").length;
+    if (layersRef.current.length + reserved >= STORY_LAYERS_MAX || photos + reserved >= STORY_LAYER_IMAGES_MAX) {
+      setProblem(
+        t(layersRef.current.length + reserved >= STORY_LAYERS_MAX ? "stories.editor.limit.layers" : "stories.editor.limit.image"),
+      );
+      return;
+    }
+    pendingPhotos.current += 1;
+    setPhotoJobs(pendingPhotos.current);
+    setProblem(null);
+    let result: Awaited<ReturnType<typeof prepareLayerImage>>;
+    try {
+      result = await prepareLayerImage(file);
+    } finally {
+      pendingPhotos.current -= 1;
+      setPhotoJobs(pendingPhotos.current);
+    }
+    if (!result.ok) {
+      showProblem(result.problem);
+      return;
+    }
+    if (!alive.current) {
+      URL.revokeObjectURL(result.layer.previewUrl);
+      return;
+    }
+    photoUrls.current.add(result.layer.previewUrl);
+    const spread = (layersRef.current.filter((layer) => layer.type === "image").length % 4) * 0.04;
+    dispatch({
+      type: "add",
+      layer: { id: newLayerId(), type: "image", x: 0.5 + spread, y: 0.45 + spread, scale: 1, rotation: 0, shape: "rect", ...result.layer },
+    });
+    setPanel(null);
+  }
+
+  /**
+   * What a dropped or pasted file does. With no picture yet it becomes the
+   * picture. With one, a photo is placed on top of it (move it wherever it
+   * belongs) and a video replaces it.
+   */
+  function takeFiles(files: readonly File[]) {
+    const [first] = files;
+    if (!first || !config.mediaEnabled) {
+      return;
+    }
+    if (media && !isVideoFile(first)) {
+      for (const file of files.filter((entry) => !isVideoFile(entry)).slice(0, 6)) {
+        void placePhoto(file);
+      }
+      return;
+    }
+    void takeFile(first);
+  }
+
   useEffect(() => {
     if (request.file) {
       void takeFile(request.file);
@@ -288,47 +441,46 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Paste a screenshot anywhere in the composer (Ctrl+V).
+  // Paste a screenshot anywhere in the composer (Ctrl+V), unless a field is taking the paste.
   useEffect(() => {
     if (!config.mediaEnabled) {
       return;
     }
     function onPaste(event: ClipboardEvent) {
-      const file = [...(event.clipboardData?.files ?? [])][0];
-      if (file) {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) {
+        return;
+      }
+      const files = [...(event.clipboardData?.files ?? [])];
+      if (files.length > 0) {
         event.preventDefault();
-        void takeFile(file);
+        takeFiles(files);
       }
     }
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.mediaEnabled, config.maxBytes, config.maxVideoMs, config.videoEnabled]);
+  }, [config.mediaEnabled, config.maxBytes, config.maxVideoMs, config.videoEnabled, media]);
 
   function retake() {
     // Whatever was still being prepared is dropped (its ticket is stale now), and so is its overlay.
     fileTicket.current += 1;
     setPreparing(false);
     setMedia(null);
-    setCaption("");
     setProblem(null);
+    setDrawing(false);
+    setEditing(null);
   }
 
-  // ---------------------------------------------------------------- state
-  const room = voiceRooms?.rooms.find((entry) => entry.id === roomId) ?? null;
-  const sticker: StorySticker | null =
-    mode === "call" && room && voiceRooms
-      ? { type: "call", serverId: voiceRooms.serverId, channelId: room.id }
-      : null;
-
+  // ---------------------------------------------------------------- the call card
+  const callLayer = layers.find((layer): layer is Extract<EditorLayer, { type: "call" }> => layer.type === "call");
+  const lockedServerId = callLayer?.serverId ?? null;
+  const lockedServerCanPost = Boolean(
+    lockedServerId && options?.servers.some((server) => server.serverId === lockedServerId && server.canPost),
+  );
   // The call lives in one server: the story has to go there too, which only
   // works where the author may post. Elsewhere the call cannot be posted at
   // all, and the server stays unticked with its reason.
-  const lockedServerId = sticker?.serverId ?? null;
-  const lockedServerCanPost = Boolean(
-    lockedServerId &&
-      options?.servers.some((server) => server.serverId === lockedServerId && server.canPost),
-  );
   const effectiveServerIds = useMemo(
     () =>
       lockedServerId && lockedServerCanPost && !serverIds.includes(lockedServerId)
@@ -337,63 +489,217 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     [lockedServerId, lockedServerCanPost, serverIds],
   );
 
-  const body = mode === "call" ? callText : text;
+  const renderCall = useCallback(
+    (layer: Extract<DisplayLayer, { type: "call" }>) => {
+      const placed = layersRef.current.find((entry) => entry.id === layer.id);
+      const room = placed?.type === "call" ? voiceRooms?.rooms.find((entry) => entry.id === placed.channelId) : null;
+      const channelName = placed?.type === "call" ? (room?.name ?? placed.channelName) : "";
+      return (
+        <CallSticker
+          call={null}
+          layered
+          preview={{ channelName, names: (room?.occupants ?? []).map((person) => person.displayName.split(/\s+/)[0] ?? "") }}
+        />
+      );
+    },
+    [voiceRooms],
+  );
+
   const ready =
     !preparing &&
+    photoJobs === 0 &&
     !submitting &&
     !recorder.recording &&
+    !editing &&
+    !drawing &&
     (effectiveServerIds.length > 0 || friends) &&
-    (mode === "camera" ? Boolean(media) : body.trim().length > 0) &&
-    (mode !== "call" || (Boolean(sticker) && lockedServerCanPost));
+    (mode === "camera" ? Boolean(media) : layers.length > 0) &&
+    (!callLayer || lockedServerCanPost);
 
   const display: StoryDisplay = {
     id: "draft",
     kind: mode === "camera" ? (media?.kind ?? "image") : "text",
     text: null,
-    background: mode === "camera" ? null : mode === "call" ? "lime" : background,
+    background: mode === "camera" ? null : background,
     caption: null,
     mediaUrl: media?.previewUrl ?? null,
     posterUrl: null,
     call: null,
-    callPreview:
-      mode === "call" && room
-        ? { channelName: room.name, names: room.occupants.map((person) => person.displayName.split(/\s+/)[0] ?? "") }
-        : null,
+    callPreview: null,
   };
 
-  function submit() {
+  async function submit() {
     if (!ready) {
       return;
     }
     setSubmitting(true);
     const audiences = { serverIds: effectiveServerIds, friends };
+    const current = layersRef.current;
+    const drawingLayer = current.find((layer): layer is Extract<EditorLayer, { type: "drawing" }> => layer.type === "drawing");
+    const drawingFile = drawingLayer ? await renderDrawingBlob(drawingLayer.strokes as Stroke[], colorFromTokens) : null;
+    if (drawingLayer && hasInk(drawingLayer.strokes) && !drawingFile) {
+      // The drawing could not be turned into a picture: posting without it would drop what was drawn.
+      setProblem(t("stories.compose.unreadable"));
+      setSubmitting(false);
+      return;
+    }
+    const layerFiles = new Map<string, Blob>();
+    const inputs = current.flatMap((layer) => {
+      if (layer.type === "image") {
+        layerFiles.set(layer.id, layer.blob);
+      }
+      if (layer.type === "drawing" && drawingFile) {
+        layerFiles.set(layer.id, drawingFile.blob);
+      }
+      const input = toLayerInput(layer, drawingFile ?? undefined);
+      return input ? [input] : [];
+    });
+    const altText = altTextFor(current, "", (name) => t("stories.editor.altMention", { name }));
+    // The words go up twice: as layers, and as the plain caption older builds still read.
+    const words = current
+      .filter((layer): layer is Extract<EditorLayer, { type: "text" }> => layer.type === "text")
+      .sort((a, b) => a.y - b.y || a.x - b.x)
+      .map((layer) => layer.text.trim().replace(/\s+/g, " "))
+      .join(" ")
+      .slice(0, STORY_TEXT_MAX);
+    const caption = words.slice(0, STORY_CAPTION_MAX);
+    const common = {
+      ...(altText ? { altText } : {}),
+      ...(inputs.length > 0 ? { layers: inputs } : {}),
+      repliesEnabled,
+      audiences,
+    };
     const draft =
       mode === "camera" && media
         ? {
-            request: {
-              kind: media.kind,
-              ...(caption.trim() ? { caption: caption.trim() } : {}),
-              repliesEnabled,
-              audiences,
-            },
+            request: { kind: media.kind, ...(caption ? { caption } : {}), ...common },
             media,
+            layerFiles,
           }
         : {
-            request: {
-              kind: "text" as const,
-              text: body.trim(),
-              background: mode === "call" ? ("lime" as const) : background,
-              ...(sticker ? { sticker } : {}),
-              repliesEnabled,
-              audiences,
-            },
+            request: { kind: "text" as const, background, ...(words ? { text: words } : {}), ...common },
             media: null,
+            layerFiles,
           };
     onPosted?.(previewRef.current);
     // The media's object URL now belongs to the post; do not revoke it here.
     setMedia(null);
     void postStory(draft);
     onClose();
+  }
+
+  // ---------------------------------------------------------------- text
+  const editingLayer = editing?.id ? layers.find((layer) => layer.id === editing.id) : null;
+  const editingFields: TextLayerFields | null = editing
+    ? editingLayer?.type === "text"
+      ? editingLayer
+      : { text: "", ...textStyle }
+    : null;
+
+  const openText = useCallback(
+    (id: string | null) => {
+      setPanel(null);
+      setDrawing(false);
+      setEditing({ id });
+    },
+    [],
+  );
+
+  function finishText(fields: TextLayerFields) {
+    const trimmed = fields.text.trim();
+    const { text: _text, ...style } = fields;
+    setTextStyle(style);
+    if (editing?.id) {
+      if (trimmed) {
+        dispatch({ type: "patch", id: editing.id, patch: { ...style, text: trimmed } });
+      } else {
+        dispatch({ type: "remove", id: editing.id });
+      }
+    } else if (trimmed) {
+      if (!canAddLayer(layersRef.current, "text")) {
+        setProblem(t("stories.editor.limit.layers"));
+      } else {
+        const count = layersRef.current.filter((layer) => layer.type === "text").length;
+        dispatch({
+          type: "add",
+          layer: { id: newLayerId(), type: "text", x: 0.5, y: 0.4 + ((count * 0.07) % 0.3), scale: 1, rotation: 0, ...style, text: trimmed },
+        });
+      }
+    }
+    setEditing(null);
+  }
+
+  // "Chama pra call" from a menu: start on a card with the room picker already open.
+  useEffect(() => {
+    if (request.tab === "call" && voiceRooms) {
+      setPanel("call");
+    }
+    // Once, for the way the composer was opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The text card starts on the keyboard: nothing else to do there until there are words.
+  useEffect(() => {
+    if (mode === "text" && layers.length === 0 && !autoOpenedText.current && configReady && request.tab !== "call") {
+      autoOpenedText.current = true;
+      setEditing({ id: null });
+    }
+  }, [mode, layers.length, configReady, request.tab]);
+
+  // ---------------------------------------------------------------- draw
+  const drawingLayer = layers.find((layer): layer is Extract<EditorLayer, { type: "drawing" }> => layer.type === "drawing");
+  const strokes = (drawingLayer?.strokes ?? []) as readonly Stroke[];
+
+  function commitStroke(stroke: Stroke) {
+    if (drawingLayer) {
+      dispatch({ type: "patch", id: drawingLayer.id, patch: { strokes: [...drawingLayer.strokes, stroke] } });
+    } else {
+      if (!canAddLayer(layersRef.current, "drawing")) {
+        setProblem(t("stories.editor.limit.layers"));
+        return;
+      }
+      dispatch({
+        type: "add",
+        layer: { id: newLayerId(), type: "drawing", x: 0.5, y: 0.5, scale: 1, rotation: 0, strokes: [stroke] },
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------- mention + call
+  function openMention() {
+    setPanel("mention");
+    setMentionLoading(true);
+    void loadMentionPeople({ serverIds: effectiveServerIds, friends }, meId)
+      .catch((): MentionPerson[] => [])
+      .then((people) => {
+        setMentionPeople(people);
+        setMentionLoading(false);
+      });
+  }
+
+  function addMention(person: MentionPerson) {
+    if (!canAddLayer(layersRef.current, "mention")) {
+      setProblem(t("stories.editor.limit.mention"));
+      setPanel(null);
+      return;
+    }
+    const count = layersRef.current.filter((layer) => layer.type === "mention").length;
+    dispatch({
+      type: "add",
+      layer: { id: newLayerId(), type: "mention", x: 0.5, y: 0.56 + count * 0.07, scale: 1, rotation: 0, userId: person.id, name: person.displayName },
+    });
+    setPanel(null);
+  }
+
+  function addCall(room: ComposerVoiceRoom) {
+    if (!voiceRooms || !canAddLayer(layersRef.current, "call")) {
+      return;
+    }
+    dispatch({
+      type: "add",
+      layer: { id: newLayerId(), type: "call", x: 0.5, y: 0.76, scale: 1, rotation: 0, serverId: voiceRooms.serverId, channelId: room.id, channelName: room.name },
+    });
+    setPanel(null);
   }
 
   // ---------------------------------------------------------------- focus + keys
@@ -414,13 +720,23 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      if (sheetOpen) {
-        setSheetOpen(false);
+      if (panel) {
+        setPanel(null);
+      } else if (drawing) {
+        setDrawing(false);
       } else if (recorder.recording) {
         recorder.stop();
+      } else if (selectedId) {
+        dispatch({ type: "select", id: null });
       } else {
         onClose();
       }
+      return;
+    }
+    const typing = (event.target as HTMLElement).tagName === "TEXTAREA" || (event.target as HTMLElement).tagName === "INPUT";
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z" && !typing && !editing) {
+      event.preventDefault();
+      dispatch({ type: "undo" });
       return;
     }
     if (event.key !== "Tab" || !rootRef.current) {
@@ -454,21 +770,37 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       disabled: !config.mediaEnabled,
     },
     { value: "text", label: t("stories.compose.modeText"), icon: <Type className="h-3.5 w-3.5" aria-hidden /> },
-    ...(voiceRooms
-      ? [
-          {
-            value: "call" as const,
-            label: t("stories.compose.modeCall"),
-            icon: <Headphones className="h-3.5 w-3.5" aria-hidden />,
-          },
-        ]
-      : []),
   ];
 
   const summary = audienceSummary({ options, serverIds: effectiveServerIds, friends }, t);
   const numberFormat = new Intl.NumberFormat(locale);
-  const showingCamera = mode === "camera" && !media;
-  const canvasText = mode === "text" ? text : callText;
+  const selected = layers.find((layer) => layer.id === selectedId) ?? null;
+  const overlayOpen = Boolean(editing) || drawing || panel !== null;
+  const canUndo = editor.past.length > 0;
+  const taken = useMemo(
+    () => new Set(layers.flatMap((layer) => (layer.type === "mention" ? [layer.userId] : []))),
+    [layers],
+  );
+
+  function describe(layer: EditorLayer): string {
+    switch (layer.type) {
+      case "text":
+        return t("stories.editor.layer.text", { text: layer.text });
+      case "image":
+        return t("stories.editor.layer.image");
+      case "drawing":
+        return t("stories.editor.layer.drawing");
+      case "call":
+        return t("stories.editor.layer.call", { room: layer.channelName });
+      case "mention":
+        return t("stories.editor.layer.mention", { name: layer.name });
+    }
+  }
+
+  function cycleShape(layer: Extract<EditorLayer, { type: "image" }>) {
+    const next = STORY_LAYER_IMAGE_SHAPES[(STORY_LAYER_IMAGE_SHAPES.indexOf(layer.shape) + 1) % STORY_LAYER_IMAGE_SHAPES.length]!;
+    dispatch({ type: "patch", id: layer.id, patch: { shape: next } });
+  }
 
   return createPortal(
     <div
@@ -488,7 +820,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
         refuseLabel={t("stories.compose.mediaOff")}
         size="pane"
         className="story-cmp"
-        onDrop={(items) => void takeFile(items.files[0])}
+        onDrop={(items) => takeFiles(items.files)}
       >
         <div className="story-cmp-head">
           <button
@@ -500,16 +832,74 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
           >
             <X className="h-[18px] w-[18px]" aria-hidden />
           </button>
-          {media && (
+          {media && !drawing && (
             <button
               type="button"
               className="story-cbtn"
               data-story-retake=""
+              aria-label={t("stories.compose.retake")}
               onClick={retake}
             >
               <ChevronLeft className="h-[18px] w-[18px]" aria-hidden />
-              {t("stories.compose.retake")}
+              <span className="hidden sm:inline">{t("stories.compose.retake")}</span>
             </button>
+          )}
+          {hasBase && !drawing && (
+            <div role="toolbar" aria-label={t("stories.editor.tools")} className="ml-auto flex items-center gap-1.5">
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-tool-text=""
+                aria-label={t("stories.editor.tool.text")}
+                onClick={() => openText(null)}
+              >
+                <Type className="h-[18px] w-[18px]" aria-hidden />
+              </button>
+              {config.mediaEnabled && (
+                <button
+                  type="button"
+                  className="story-cbtn"
+                  data-story-tool-photo=""
+                  aria-label={t("stories.editor.tool.photo")}
+                  onClick={() => photoInput.current?.click()}
+                >
+                  <ImagePlus className="h-[18px] w-[18px]" aria-hidden />
+                </button>
+              )}
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-tool-draw=""
+                aria-label={t("stories.editor.tool.draw")}
+                onClick={() => {
+                  setPanel(null);
+                  setEditing(null);
+                  dispatch({ type: "select", id: null });
+                  setDrawing(true);
+                }}
+              >
+                <Pen className="h-[18px] w-[18px]" aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-tool-stickers=""
+                aria-label={t("stories.editor.tool.stickers")}
+                onClick={() => setPanel("stickers")}
+              >
+                <Sticker className="h-[18px] w-[18px]" aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-undo=""
+                aria-label={t("stories.editor.undo")}
+                disabled={!canUndo}
+                onClick={() => dispatch({ type: "undo" })}
+              >
+                <Undo2 className="h-[18px] w-[18px]" aria-hidden />
+              </button>
+            </div>
           )}
         </div>
 
@@ -530,58 +920,95 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
             <StoryContent story={display} still={false} playVideo muted={false} paused={false} loop />
           )}
 
-          {mode === "camera" && !media && !config.mediaEnabled && (
-            <div className="absolute inset-0 flex items-center justify-center" style={{ color: "var(--story-on-media-2)" }}>
-              <ImageIcon className="h-8 w-8" aria-hidden />
-            </div>
-          )}
-
-          {(mode === "text" || mode === "call") && (
-            <CanvasText
-              value={canvasText}
-              onChange={mode === "text" ? setText : setCallText}
-              placeholder={t("stories.compose.textPlaceholder")}
-              label={t("stories.compose.textLabel")}
-              dataAttr={mode === "text" ? "data-story-text" : "data-story-call-text"}
-              autoFocus={mode === "text"}
-              pinned={mode === "call"}
+          {hasBase && (
+            <ComposerCanvas
+              layers={layers}
+              selectedId={selectedId}
+              dispatch={dispatch}
+              hiddenId={editing?.id ?? (drawing ? (drawingLayer?.id ?? null) : null)}
+              interactive={!overlayOpen}
+              renderCall={renderCall}
+              onEditText={openText}
+              describe={describe}
+              onGesture={setGestureActive}
             />
           )}
 
-          {mode === "text" && (
-            <BackgroundPicker value={background} onChange={setBackground} />
+          {mode === "text" && layers.length === 0 && !editing && (
+            <p
+              className="pointer-events-none absolute inset-x-[12%] top-[40%] text-center text-sm font-semibold"
+              style={{ color: "var(--story-on-media-2)" }}
+            >
+              {t("stories.editor.textCardHint")}
+            </p>
           )}
 
-          {mode === "call" && voiceRooms && (
-            <CallRoomPanel
-              voiceRooms={voiceRooms}
-              roomId={roomId}
-              onRoom={setRoomId}
-              meId={meId}
-              room={room}
-            />
+          {mode === "text" && !overlayOpen && <BackgroundPicker value={background} onChange={setBackground} />}
+
+          {drawing && (
+            <DrawOverlay strokes={strokes} settings={drawSettings} onStroke={commitStroke} />
           )}
 
-          {mode === "camera" && media && config.mediaEnabled && (
-            <div className="absolute inset-x-3 bottom-3">
-              <input
-                value={caption}
-                maxLength={STORY_CAPTION_MAX}
-                onChange={(event) => setCaption(event.target.value)}
-                placeholder={t("stories.compose.captionPlaceholder")}
-                aria-label={t("stories.compose.caption")}
-                data-story-caption=""
-                className="h-11 w-full story-field rounded-full border px-4 text-[16px] font-medium outline-none"
-                style={{
-                  background: "var(--story-dim)",
-                  borderColor: "var(--story-field-edge)",
-                  color: "var(--story-on-media)",
-                }}
-              />
+          {selected && !gestureActive && !overlayOpen && selected.type !== "drawing" && (
+            <div
+              role="toolbar"
+              aria-label={describe(selected)}
+              data-story-layer-bar=""
+              className="absolute inset-x-0 top-3 z-10 flex justify-center gap-1.5"
+            >
+              {selected.type === "text" && (
+                <button type="button" className="story-cbtn" aria-label={t("stories.editor.layer.edit")} onClick={() => openText(selected.id)}>
+                  <PenLine className="h-[18px] w-[18px]" aria-hidden />
+                </button>
+              )}
+              {selected.type === "image" && (
+                <button
+                  type="button"
+                  className="story-cbtn"
+                  data-story-shape=""
+                  aria-label={t("stories.editor.layer.shape", { shape: t(SHAPE_KEY[selected.shape]) })}
+                  onClick={() => cycleShape(selected)}
+                >
+                  {selected.shape === "circle" ? (
+                    <Circle className="h-[18px] w-[18px]" aria-hidden />
+                  ) : selected.shape === "rounded" ? (
+                    <RectangleHorizontal className="h-[18px] w-[18px]" aria-hidden />
+                  ) : (
+                    <Square className="h-[18px] w-[18px]" aria-hidden />
+                  )}
+                </button>
+              )}
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-forward=""
+                aria-label={t("stories.editor.layer.forward")}
+                onClick={() => dispatch({ type: "forward", id: selected.id })}
+              >
+                <ArrowUpToLine className="h-[18px] w-[18px]" aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-delete=""
+                aria-label={t("stories.editor.layer.delete")}
+                onClick={() => dispatch({ type: "remove", id: selected.id })}
+              >
+                <Trash2 className="h-[18px] w-[18px]" aria-hidden />
+              </button>
             </div>
           )}
 
-          {preparing && (
+          {editingFields && (
+            <TextEditor
+              key={editing?.id ?? "new"}
+              initial={editingFields}
+              onDone={finishText}
+              onCancel={() => setEditing(null)}
+            />
+          )}
+
+          {(preparing || photoJobs > 0) && (
             <div
               role="status"
               className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2"
@@ -596,8 +1023,9 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
             <p
               role="alert"
               data-story-problem=""
-              className="absolute inset-x-3 top-3 z-10 rounded-[14px] px-3.5 py-2.5 text-center text-sm font-semibold leading-snug"
+              className="absolute inset-x-3 top-3 z-50 rounded-[14px] px-3.5 py-2.5 text-center text-sm font-semibold leading-snug"
               style={{ background: "var(--story-tray)", color: "var(--story-on-media)", boxShadow: "var(--story-shadow)" }}
+              onClick={() => setProblem(null)}
             >
               {problem}
             </p>
@@ -611,7 +1039,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
             <CameraControlsRow
               camera={camera}
               recorder={recorder}
-              shutterDisabled={preparing}
+              shutterDisabled={preparing || photoJobs > 0}
               onChooseFile={() => fileInput.current?.click()}
               onPhoto={() => void takePhoto()}
               onRecordStart={() => void recorder.start()}
@@ -619,16 +1047,26 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
             />
           )}
 
-          {!showingCamera && (
+          {drawing && (
+            <DrawBar
+              settings={drawSettings}
+              onChange={setDrawSettings}
+              canUndo={canUndo}
+              onUndo={() => dispatch({ type: "undo" })}
+              onDone={() => setDrawing(false)}
+            />
+          )}
+
+          {!showingCamera && !drawing && (
             <div className="flex items-center gap-2.5 px-2">
-              <AudienceChip summary={summary} onOpen={() => setSheetOpen(true)} />
-              <StoryButton data-story-post="" disabled={!ready} onClick={submit}>
+              <AudienceChip summary={summary} onOpen={() => setPanel("audience")} />
+              <StoryButton data-story-post="" disabled={!ready} onClick={() => void submit()}>
                 {t("stories.audience.post")}
               </StoryButton>
             </div>
           )}
 
-          {!media && (
+          {!media && !drawing && (
             <ModeTabs
               label={t("stories.compose.title")}
               value={mode}
@@ -644,7 +1082,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
           )}
         </div>
 
-        {sheetOpen && (
+        {panel === "audience" && (
           <AudienceSheet
             state={{
               options,
@@ -655,7 +1093,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               repliesEnabled,
             }}
             numberFormat={numberFormat}
-            onClose={() => setSheetOpen(false)}
+            onClose={() => setPanel(null)}
             onRetry={loadOptions}
             onToggleServer={(serverId, next) =>
               setServerIds((current) =>
@@ -664,6 +1102,38 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
             }
             onToggleFriends={setFriends}
             onRepliesChange={setRepliesEnabled}
+          />
+        )}
+        {panel === "stickers" && (
+          <StickerTray
+            onClose={() => setPanel(null)}
+            onCall={() => setPanel("call")}
+            onMention={openMention}
+            onPhoto={() => {
+              setPanel(null);
+              photoInput.current?.click();
+            }}
+            callAvailable={Boolean(voiceRooms)}
+            callPlaced={Boolean(callLayer)}
+            mentionFull={!canAddLayer(layers, "mention")}
+          />
+        )}
+        {panel === "call" && voiceRooms && (
+          <CallPickerSheet
+            serverName={voiceRooms.serverName}
+            rooms={voiceRooms.rooms}
+            meId={meId}
+            onPick={addCall}
+            onClose={() => setPanel(null)}
+          />
+        )}
+        {panel === "mention" && (
+          <MentionSheet
+            people={mentionPeople}
+            loading={mentionLoading}
+            taken={taken}
+            onPick={addMention}
+            onClose={() => setPanel(null)}
           />
         )}
 
@@ -679,66 +1149,34 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               : "image/jpeg,image/png,image/webp"
           }
           onChange={(event) => {
-            void takeFile(event.target.files?.[0]);
+            const file = event.target.files?.[0];
+            // A picture chosen while editing one is a photo to place; with none yet it is the picture.
+            if (file && media && !isVideoFile(file)) {
+              void placePhoto(file);
+            } else {
+              void takeFile(file);
+            }
+            event.target.value = "";
+          }}
+        />
+        <input
+          ref={photoInput}
+          type="file"
+          multiple
+          className="hidden"
+          tabIndex={-1}
+          data-story-photo-file=""
+          accept="image/jpeg,image/png,image/webp"
+          onChange={(event) => {
+            for (const file of [...(event.target.files ?? [])].slice(0, 6)) {
+              void placePhoto(file);
+            }
             event.target.value = "";
           }}
         />
       </FileDropZone>
     </div>,
     document.body,
-  );
-}
-
-/**
- * The words on a text card, typed straight onto it. It uses the card's own
- * box and size classes, so what is typed is exactly where it will be posted.
- */
-function CanvasText({
-  value,
-  onChange,
-  placeholder,
-  label,
-  dataAttr,
-  autoFocus,
-  pinned,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-  placeholder: string;
-  label: string;
-  dataAttr: string;
-  autoFocus: boolean;
-  /** The sticker sits under it: keep the box short. */
-  pinned: boolean;
-}) {
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (element) {
-      element.style.height = "auto";
-      element.style.height = `${element.scrollHeight}px`;
-    }
-  }, [value]);
-  const extra = { [dataAttr]: "" };
-  return (
-    <textarea
-      ref={ref}
-      value={value}
-      maxLength={STORY_TEXT_MAX}
-      rows={1}
-      autoFocus={autoFocus}
-      onChange={(event) => onChange(event.target.value)}
-      placeholder={placeholder}
-      aria-label={label}
-      {...extra}
-      className={cn(
-        TEXT_CARD_BOX_CLASS,
-        textCardSizeClass(value),
-        "story-field resize-none overflow-hidden border-0 bg-transparent p-0 outline-none",
-        pinned && "max-h-[30%]",
-      )}
-      style={{ color: "var(--story-on-media)", caretColor: "var(--story-accent)" }}
-    />
   );
 }
 
@@ -754,7 +1192,7 @@ function BackgroundPicker({
     <div
       role="radiogroup"
       aria-label={t("stories.compose.background")}
-      className="absolute inset-x-0 bottom-3 flex justify-center gap-2.5 px-3"
+      className="absolute inset-x-0 bottom-3 z-10 flex justify-center gap-2.5 px-3"
     >
       {STORY_BACKGROUNDS.map((key, index) => (
         <button
@@ -778,73 +1216,6 @@ function BackgroundPicker({
           data-bg={key}
         />
       ))}
-    </div>
-  );
-}
-
-function CallRoomPanel({
-  voiceRooms,
-  roomId,
-  onRoom,
-  meId,
-  room,
-}: {
-  voiceRooms: { serverId: string; serverName: string; rooms: ComposerVoiceRoom[] };
-  roomId: string | null;
-  onRoom: (id: string | null) => void;
-  meId: string;
-  room: ComposerVoiceRoom | null;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div
-      className="absolute inset-x-3 bottom-3 max-h-[46%] space-y-2 overflow-y-auto rounded-[16px] p-3"
-      style={{ background: "var(--story-tray)", boxShadow: "var(--story-shadow)" }}
-    >
-      <p className="text-xs leading-snug" style={{ color: "var(--story-on-media-2)" }}>
-        {t("stories.callPicker.body")}
-      </p>
-      {voiceRooms.rooms.length === 0 ? (
-        <p className="text-sm" style={{ color: "var(--story-on-media-2)" }}>
-          {t("stories.callPicker.empty")}
-        </p>
-      ) : (
-        <div role="radiogroup" aria-label={t("stories.callPicker.rooms", { server: voiceRooms.serverName })} className="space-y-1">
-          {voiceRooms.rooms.map((entry) => {
-            const selected = entry.id === roomId;
-            return (
-              <button
-                key={entry.id}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => onRoom(entry.id)}
-                className="flex w-full items-center justify-between gap-3 rounded-[12px] px-3 py-2 text-left"
-                style={{
-                  background: selected ? "var(--story-field-fill)" : "transparent",
-                  boxShadow: selected ? "inset 0 0 0 1.5px var(--story-accent)" : "inset 0 0 0 1px var(--story-hairline)",
-                }}
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-semibold" style={{ color: "var(--story-on-media)" }}>
-                    {entry.name}
-                  </span>
-                  <span className="block truncate text-xs" style={{ color: "var(--story-on-media-2)" }}>
-                    {entry.occupants.length === 0
-                      ? t("stories.callPicker.emptyRoom")
-                      : t("stories.callPicker.inRoom", { count: entry.occupants.length })}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-      {room && !authorInRoom(room, meId) && (
-        <p data-story-call-hint="" className="text-xs leading-snug text-warning">
-          {t("stories.callPicker.notInRoom", { room: room.name })}
-        </p>
-      )}
     </div>
   );
 }
