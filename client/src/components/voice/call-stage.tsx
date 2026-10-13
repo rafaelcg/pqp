@@ -2947,10 +2947,10 @@ function ActiveCall({
             <p
               className={cn(
                 STAGE_OVERLAY_PILL,
-                "max-w-full text-sm font-semibold text-paper",
+                "max-w-full overflow-hidden text-sm font-semibold text-paper",
               )}
             >
-              <span className="truncate">{title}</span>
+              <span className="min-w-0 truncate">{title}</span>
             </p>
           )}
           <p
