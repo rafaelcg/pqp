@@ -1,4 +1,8 @@
 import type {
+  CreateServerBotRequest,
+  ServerBotDto,
+  ServerBotsConfig,
+  UpdateServerBotRequest,
   ForumPostDetailResponse,
   ForumSettings,
   ForumTag,
@@ -2644,3 +2648,31 @@ export const deleteSoundboardSound = (serverId: string, soundId: string) =>
   apiFetch<{ ok: true }>(`/api/servers/${serverId}/soundboard/${soundId}`, {
     method: "DELETE",
   });
+
+// ------------------------------------------------------------ server bots
+
+/** `GET /api/bots/config?serverId=`: the `custom_bots` flag and a model to answer. */
+export const fetchBotsConfig = (serverId: string) =>
+  apiFetch<ServerBotsConfig>(`/api/bots/config?serverId=${encodeURIComponent(serverId)}`);
+
+export const fetchServerBots = (serverId: string) =>
+  apiFetch<{ bots: ServerBotDto[]; maxBots: number }>(`/api/servers/${serverId}/bots`);
+
+export const createServerBot = (serverId: string, body: CreateServerBotRequest) =>
+  post<{ bot: ServerBotDto }>(`/api/servers/${serverId}/bots`, body);
+
+export const updateServerBot = (
+  serverId: string,
+  botId: string,
+  body: UpdateServerBotRequest,
+) => patch<{ bot: ServerBotDto }>(`/api/servers/${serverId}/bots/${botId}`, body);
+
+export const deleteServerBot = (serverId: string, botId: string) =>
+  apiFetch<{ ok: true }>(`/api/servers/${serverId}/bots/${botId}`, { method: "DELETE" });
+
+/** A bot plan card's Confirm or Cancel. 409 means already decided or expired. */
+export const decideBotPlan = (planId: string, decision: "yes" | "no") =>
+  post<{ ok: true }>(`/api/bots/plans/${planId}/decision`, { decision });
+
+export const answerBotAsk = (messageId: string, option: number) =>
+  post<{ ok: true }>(`/api/bots/asks/${messageId}/answer`, { option });

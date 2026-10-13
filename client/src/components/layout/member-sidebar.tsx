@@ -374,6 +374,9 @@ export const MemberSidebar = memo(function MemberSidebar({
       case "role":
         label = section.label ?? t("memberList.admins");
         break;
+      case "bots":
+        label = t("memberList.bots");
+        break;
       case "friends":
         label = t("memberList.friends");
         break;

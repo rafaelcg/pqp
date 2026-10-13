@@ -5219,7 +5219,8 @@ function MainAppContent({
             message.type === "presence-delta" ||
             message.type === "typing-broadcast" ||
             message.type === "poll-update" ||
-            message.type === "message-rejected"
+            message.type === "message-rejected" ||
+            message.type === "bot-notice"
           ) {
             // Somebody else's message landed in the channel on screen. It is
             // read once the reader can see it (tab visible, list at its live
@@ -12086,6 +12087,8 @@ function MainAppContent({
         isLoadingOlder={chat.isLoadingOlder()}
         isLoadingNewer={chat.isLoadingNewer()}
         typingUsers={chat.getTypingUsers()}
+        botNotice={chat.getBotNotice()}
+        onDismissBotNotice={chat.dismissBotNotice}
         canModerate={canManageMessages}
         blockedAuthorIds={blockedUserIds}
         highlightMessageId={highlightMessageId}

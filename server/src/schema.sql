@@ -1305,6 +1305,11 @@ CREATE INDEX IF NOT EXISTS idx_webhooks_channel ON webhooks (channel_id);
 -- sent with its own `embeds` array (this column) in the same request.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS webhook_embeds JSONB;
 
+-- A server bot's action card (packages/shared/src/bots.ts): the plan waiting
+-- for "sim", or what each step did. Written only by the bot runner; the body
+-- keeps a plain-text copy for clients that do not draw it.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS bot_card JSONB;
+
 -- Discord's own webhooks let a single execution override the display name
 -- and avatar the webhook otherwise defaults to — one CI job posting as
 -- "Build Bot" and another as "Deploy Bot" through the same token. Per
@@ -6405,3 +6410,137 @@ CREATE TABLE IF NOT EXISTS server_emoji_quarantine (
 
 CREATE INDEX IF NOT EXISTS idx_server_emoji_quarantine_at
   ON server_emoji_quarantine (quarantined_at);
+
+-- Server bots (docs/plans/CUSTOM_BOTS.md). A bot is a `users` row with
+-- `is_character` (so it carries the bot mark, cannot DM, cannot join voice and
+-- is skipped by outgoing webhooks) plus this row, which says whose it is and
+-- what it knows. Nothing authenticates as it: pqp's own worker posts for it.
+-- One per server while pqp pays for every reply; the unique index is the rule,
+-- and dropping it is how that number goes up.
+CREATE TABLE IF NOT EXISTS server_bots (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  persona     TEXT NOT NULL DEFAULT '',
+  knowledge   TEXT NOT NULL DEFAULT '',
+  -- The channels it answers in. Empty answers nowhere, so a new channel is
+  -- never one the bot talks in until somebody ticks it.
+  channel_ids UUID[] NOT NULL DEFAULT '{}',
+  enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+  -- Also wake on the bot's name said as a whole word, not only on @handle.
+  -- Off by default: a name like "Caio" is also somebody in the room.
+  answer_to_name BOOLEAN NOT NULL DEFAULT FALSE,
+  -- `provider:model` from the deployment's offered list (BOTS_MODEL_CHOICES).
+  -- NULL, or a pick no longer offered, answers with the default.
+  model       TEXT,
+  -- The tools switched on (SERVER_BOT_TOOLS names). NULL is the default set,
+  -- so a tool added later reaches existing bots only through the default.
+  tools       TEXT[],
+  created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_server_bots_one_per_server
+  ON server_bots (server_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_server_bots_user ON server_bots (user_id);
+
+-- One reply to write. Enqueued after the triggering message commits, claimed
+-- with FOR UPDATE SKIP LOCKED plus a lease (the `speech_jobs` shape), and
+-- unique per (bot, message) so a replayed send never queues a second answer.
+-- The run id doubles as the reply's nonce, which is what keeps a run claimed
+-- twice (a model call that outlived its lease) from posting twice.
+CREATE TABLE IF NOT EXISTS server_bot_runs (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bot_id           UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
+  channel_id       UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  message_id       UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  requester_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status           TEXT NOT NULL DEFAULT 'queued'
+                   CHECK (status IN ('queued', 'running', 'done', 'skipped', 'failed')),
+  attempts         INTEGER NOT NULL DEFAULT 0,
+  leased_by        TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  outcome          TEXT,
+  -- Set on a run that answers a plan's confirmation ("sim" / "não") rather
+  -- than a question: it runs no model and executes or cancels that plan.
+  plan_id          UUID,
+  -- Not called by name: the member's next message after an answer. The model
+  -- may answer SKIP when it was meant for somebody else.
+  follow_up        BOOLEAN NOT NULL DEFAULT FALSE,
+  -- A plan card's button: 'yes' or 'no'. NULL reads the trigger's own text
+  -- ("sim" / "não").
+  decision         TEXT CHECK (decision IN ('yes', 'no')),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at      TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_server_bot_runs_message
+  ON server_bot_runs (bot_id, message_id);
+CREATE INDEX IF NOT EXISTS idx_server_bot_runs_due
+  ON server_bot_runs (created_at) WHERE status IN ('queued', 'running');
+
+-- Replies per server per UTC day, reserved before the model is called (a
+-- conditional upsert, so two workers cannot both take the last one).
+CREATE TABLE IF NOT EXISTS server_bot_usage_daily (
+  day           DATE NOT NULL,
+  server_id     UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  replies       INTEGER NOT NULL DEFAULT 0,
+  refused       INTEGER NOT NULL DEFAULT 0,
+  input_tokens  BIGINT NOT NULL DEFAULT 0,
+  output_tokens BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, server_id)
+);
+
+-- The whole deployment's model spend per UTC day, in millionths of a dollar.
+-- Each call reserves its worst case first and settles to the real cost after,
+-- so the ceiling holds across every worker even while calls are in flight.
+CREATE TABLE IF NOT EXISTS server_bot_spend_daily (
+  day             DATE PRIMARY KEY,
+  reserved_micros BIGINT NOT NULL DEFAULT 0,
+  calls           INTEGER NOT NULL DEFAULT 0,
+  refused         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_runs_requester
+  ON server_bot_runs (bot_id, requester_id, created_at);
+
+-- A batch of actions a bot staged for one request. Few and reversible runs at
+-- once (`executing` from birth); otherwise it waits `pending` for the
+-- requester's "sim". The actions and their wording are built by code at
+-- staging time, so what a "sim" approves is exactly what was shown. Claimed
+-- with a conditional UPDATE, so a double "sim" runs it once.
+CREATE TABLE IF NOT EXISTS server_bot_plans (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bot_id           UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
+  server_id        UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  channel_id       UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  requester_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- The run that staged it. Unique so a re-claimed run finds its plan instead
+  -- of asking the model again.
+  run_id           UUID NOT NULL UNIQUE,
+  -- The bot's message that shows the plan, once posted: its card is updated
+  -- when the plan is decided, and a button's answer replies to it.
+  message_id       UUID,
+  actions          JSONB NOT NULL,
+  status           TEXT NOT NULL
+                   CHECK (status IN ('pending', 'executing', 'done', 'cancelled', 'expired')),
+  expires_at       TIMESTAMPTZ NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_plans_pending
+  ON server_bot_plans (bot_id, channel_id, requester_id) WHERE status = 'pending';
+
+-- One row per executed step, written BEFORE the step runs. A worker that
+-- takes over a plan never runs a step that already has a row: `running` with
+-- no outcome means "may have happened" and is not retried.
+CREATE TABLE IF NOT EXISTS server_bot_actions (
+  plan_id          UUID NOT NULL REFERENCES server_bot_plans(id) ON DELETE CASCADE,
+  step             INTEGER NOT NULL,
+  bot_id           UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
+  tool             TEXT NOT NULL,
+  status           TEXT NOT NULL CHECK (status IN ('running', 'done', 'failed')),
+  result           JSONB,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (plan_id, step)
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_actions_hour
+  ON server_bot_actions (bot_id, created_at);

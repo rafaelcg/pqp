@@ -112,6 +112,7 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   voice_notes: (raw) => raw === "true",
   soundboard: (raw) => raw === "true",
+  custom_bots: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   voice_note_transcription: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.

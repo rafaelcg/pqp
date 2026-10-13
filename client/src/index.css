@@ -4285,3 +4285,57 @@ html[data-immersive-stage] [data-immersive-hide] {
     transform: translateX(-50%);
   }
 }
+
+/* A server bot at work (`BotActivityRows`): the label shimmers while a tool
+   runs. Plain muted text when motion is reduced. */
+@keyframes bot-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+.bot-shimmer {
+  color: var(--color-paper-muted);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bot-shimmer {
+    background: linear-gradient(
+        90deg,
+        var(--color-paper-muted) 35%,
+        var(--color-paper) 50%,
+        var(--color-paper-muted) 65%
+      )
+      0 0 / 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: bot-shimmer 1.8s linear infinite;
+  }
+}
+
+/* A bot action card (`BotActionCard`): rows rise in one after another, and
+   each row's check pops once it lands. */
+@keyframes bot-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bot-step-in {
+    animation: bot-step-in 0.28s var(--ease-emphasized) both;
+  }
+
+  .bot-step-pop {
+    animation: badge-pop 0.32s var(--ease-emphasized) both;
+  }
+}

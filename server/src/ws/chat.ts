@@ -31,6 +31,9 @@ import {
   type ProfileUpdate,
   type ServerRemoved,
   type VoiceNoteListened,
+  type BotActionCard,
+  type BotNotice,
+  botNoticeSchema,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { DatabaseUnavailableError } from "../db.js";
@@ -53,6 +56,7 @@ import {
   mapMessage,
 } from "../services/messages.js";
 import { enqueueOutgoingMessageCreated } from "../services/outgoing-webhooks.js";
+import { maybeQueueBotReply } from "../services/bots.js";
 import { recordActivationStep } from "../services/activation.js";
 import { closePoll, votePoll } from "../services/polls.js";
 import {
@@ -220,6 +224,7 @@ const COMMUNITY_HOME_TOPIC = "chat.community-home";
 const CHANNELS_TOPIC = "chat.channels";
 const MEMBERSHIP_TOPIC = "chat.membership";
 const VOICE_LISTENED_TOPIC = "chat.voice-listened";
+const BOT_NOTICE_TOPIC = "chat.bot-notice";
 
 interface PresenceUser {
   id: string;
@@ -930,6 +935,27 @@ export function notifyVoiceNoteListened(
   if (isBusEnabled()) {
     publishToCluster(VOICE_LISTENED_TOPIC, { frame, userIds });
   }
+}
+
+/**
+ * Tell one member, on every socket they hold, why a server bot did not answer
+ * them. Fire-and-forget: a lost notice is the silence it exists to replace,
+ * never worse.
+ */
+export function notifyBotNotice(frame: BotNotice, userId: string): void {
+  deliverBotNotice(frame, userId);
+  if (isBusEnabled()) {
+    publishToCluster(BOT_NOTICE_TOPIC, { frame, userId });
+  }
+}
+
+function deliverBotNotice(frame: BotNotice, userId: string): void {
+  const payload = encode(frame);
+  forEachSocketOfUser(userId, (socket) => {
+    if (socket.readyState === 1) {
+      socket.send(payload);
+    }
+  });
 }
 
 /** The local half, and the only thing a bus frame may call. */
@@ -2281,6 +2307,8 @@ export type PostChannelMessageInput = {
   systemKind?: MessageSystemKind;
   /** A story reply: the story the message quotes. Conversations only. */
   storyId?: string;
+  /** A server bot's action card. Only the bot runner sets it. */
+  botCard?: BotActionCard;
 };
 
 export type PostChannelMessageResult =
@@ -2537,8 +2565,8 @@ async function postChannelMessageAttempt(
       extraUserIds: hereUserIds,
       canMentionEveryone,
     },
-    input.chance || input.poll || input.systemKind
-      ? { chance: input.chance, poll: input.poll, systemKind: input.systemKind }
+    input.chance || input.poll || input.systemKind || input.botCard
+      ? { chance: input.chance, poll: input.poll, systemKind: input.systemKind, botCard: input.botCard }
       : undefined,
     input.nonce,
     channel?.kind !== "server" ? (input.storyId ?? null) : null,
@@ -2597,6 +2625,22 @@ async function postChannelMessageAttempt(
     });
   } catch (error) {
     console.error("[outgoing-webhooks] enqueue failed:", error);
+  }
+
+  // A server bot answers a mention or a reply to it (services/bots.ts). After
+  // the commit, like the hook above, and just as unable to fail the send: the
+  // message already landed, so an error here means no answer and nothing else.
+  try {
+    await maybeQueueBotReply({
+      author: input.author,
+      channel: channel ?? null,
+      messageId: dbMessage.id,
+      body: dbMessage.body,
+      repliedToUserId: parent?.author_id ?? null,
+      hasAttachments: (input.attachmentIds?.length ?? 0) > 0,
+    });
+  } catch (error) {
+    console.error("[bots] enqueue failed:", error);
   }
 
   const message = mapMessage(dbMessage);
@@ -3379,6 +3423,15 @@ subscribeToCluster(FRIEND_TOPIC, (data) => {
  * strings: without them the only alternative is to guess who to tell, and a
  * receipt delivered to the wrong person is worse than one not delivered.
  */
+subscribeToCluster(BOT_NOTICE_TOPIC, (data) => {
+  const record = asRecord(data);
+  const parsed = botNoticeSchema.safeParse(record?.frame);
+  if (!parsed.success || typeof record?.userId !== "string") {
+    return;
+  }
+  deliverBotNotice(parsed.data, record.userId);
+});
+
 subscribeToCluster(VOICE_LISTENED_TOPIC, (data) => {
   const record = asRecord(data);
   const parsed = voiceNoteListenedSchema.safeParse(record?.frame);

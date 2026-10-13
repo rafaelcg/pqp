@@ -62,6 +62,7 @@ import { StatusDot } from "@/components/user/status-dot";
 import { AttachmentGrid } from "@/components/chat/attachment-grid";
 import { VoiceNoteNamesContext } from "@/components/chat/voice-note-card";
 import { MessageBody } from "@/components/chat/message-body";
+import { BotActionCard, BotNoticeRow } from "@/components/chat/bot-action-card";
 import { ChanceCard } from "@/components/chat/chance-card";
 import { PollCard } from "@/components/chat/poll-card";
 import { BauPostCard } from "@/components/chat/bau-post-card";
@@ -98,7 +99,7 @@ import {
   type ChatMessage,
   type TypingUser,
 } from "@/hooks/use-chat";
-import type { MemberRole, UserStatus } from "@pqp/shared";
+import type { BotNotice, MemberRole, UserStatus } from "@pqp/shared";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { messageRoutePath } from "@/lib/app-route";
 import { QUICK_REACTIONS } from "@/lib/emoji-shortcodes";
@@ -117,7 +118,7 @@ import {
   placeAnchoredPanel,
 } from "@/lib/anchored-panel";
 import { formatReactionWho } from "@/lib/reaction-who";
-import { translateMessage, useTranslation } from "@/lib/i18n";
+import { translateMessage, useTranslation, type MessageKey } from "@/lib/i18n";
 import { toggleMessageSelection } from "@/lib/message-selection";
 import { splitArrivals } from "@/lib/message-arrivals";
 import { scrollWithin } from "@/lib/scroll-within";
@@ -274,6 +275,9 @@ interface MessageListProps {
   isLoadingOlder?: boolean;
   isLoadingNewer?: boolean;
   typingUsers?: TypingUser[];
+  /** Why a server bot did not answer this member here, for them alone. */
+  botNotice?: BotNotice | null;
+  onDismissBotNotice?: () => void;
   canModerate?: boolean;
   /**
    * Authors this reader has blocked. Their messages are collapsed here rather
@@ -561,6 +565,8 @@ export const MessageList = memo(function MessageList({
   isLoadingOlder = false,
   isLoadingNewer = false,
   typingUsers = [],
+  botNotice = null,
+  onDismissBotNotice,
   canModerate = false,
   blockedAuthorIds = EMPTY_BLOCKED,
   highlightMessageId = null,
@@ -2309,6 +2315,7 @@ export const MessageList = memo(function MessageList({
         onClose={() => setBulkConfirmOpen(false)}
       />
 
+      {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
       <TypingIndicator users={typingUsers} />
 
       {jumpNotice && (
@@ -2618,10 +2625,15 @@ function TypingIndicator({ users }: { users: TypingUser[] }) {
       </p>
     );
   }
+  const bots = users.filter((user) => user.activity);
+  const people = users.filter((user) => !user.activity);
   if (users.length === 0) {
     return null;
   }
-  const names = users.map((user) => user.displayName);
+  if (people.length === 0) {
+    return <BotActivityRows users={bots} />;
+  }
+  const names = people.map((user) => user.displayName);
   const label =
     names.length === 1
       ? t("chat.typing_one", { name: names[0]! })
@@ -2630,6 +2642,7 @@ function TypingIndicator({ users }: { users: TypingUser[] }) {
         : t("chat.typing_other", { count: names.length });
 
   return (
+    <>
     <p
       className="shrink-0 px-4 pb-1 text-xs text-paper-muted"
       aria-live="polite"
@@ -2647,6 +2660,60 @@ function TypingIndicator({ users }: { users: TypingUser[] }) {
         {label}…
       </span>
     </p>
+    {bots.length > 0 && <BotActivityRows users={bots} />}
+    </>
+  );
+}
+
+/** Translation keys for a bot's tools; anything else reads as "working". */
+const BOT_ACTIVITY_KEYS: Record<string, MessageKey> = {
+  list_channels: "chat.botActivity.list_channels",
+  list_members: "chat.botActivity.list_members",
+  create_channel: "chat.botActivity.create_channel",
+  edit_channel: "chat.botActivity.edit_channel",
+  move_channel: "chat.botActivity.move_channel",
+  delete_channel: "chat.botActivity.delete_channel",
+  post_message: "chat.botActivity.post_message",
+  pin_message: "chat.botActivity.pin_message",
+  create_thread: "chat.botActivity.create_thread",
+  create_forum_post: "chat.botActivity.create_forum_post",
+  create_bau_post: "chat.botActivity.create_bau_post",
+  delete_message: "chat.botActivity.delete_message",
+  timeout_member: "chat.botActivity.timeout_member",
+  kick_member: "chat.botActivity.kick_member",
+  ban_member: "chat.botActivity.ban_member",
+  read_channel: "chat.botActivity.read_channel",
+  list_bans: "chat.botActivity.list_bans",
+  create_invite: "chat.botActivity.create_invite",
+  remove_timeout: "chat.botActivity.remove_timeout",
+  unban_member: "chat.botActivity.unban_member",
+  ask_member: "chat.botActivity.ask_member",
+  list_forum_posts: "chat.botActivity.list_forum_posts",
+  reply_forum_post: "chat.botActivity.reply_forum_post",
+  create_poll: "chat.botActivity.create_poll",
+  read_poll: "chat.botActivity.read_poll",
+  vote_poll: "chat.botActivity.vote_poll",
+};
+
+/**
+ * A server bot at work, in place of "typing": what it is doing right now, with
+ * a shimmer while it runs. Driven by the `activity` on its typing frames.
+ */
+function BotActivityRows({ users }: { users: TypingUser[] }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex shrink-0 flex-col gap-1 px-4 pb-1" aria-live="polite">
+      {users.map((user) => {
+        const tool = user.activity?.tool ?? null;
+        const key = tool === null ? "chat.botActivity.thinking" : (BOT_ACTIVITY_KEYS[tool] ?? "chat.botActivity.working");
+        return (
+          <span key={user.userId} className="inline-flex items-center gap-1.5 text-xs">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 text-paper-muted motion-safe:animate-spin" aria-hidden />
+            <span className="bot-shimmer">{t(key, { name: user.displayName })}…</span>
+          </span>
+        );
+      })}
+    </div>
   );
 }
 
@@ -2936,6 +3003,10 @@ const MessageRow = memo(function MessageRow({
       : message.body;
   const hideBodyForBauCard = shownBody === "";
   const authorInfo = authors.get(message.authorId);
+  // A server bot's action card replaces its plain-text copy in the body. Only
+  // for a bot author: the field is server-written, and this keeps it that way
+  // on screen too.
+  const botCard = message.botCard && authorInfo?.isCharacter ? message.botCard : null;
   const mentionsYou = messageMentionsYou(
     message,
     currentUsername,
@@ -3620,7 +3691,16 @@ const MessageRow = memo(function MessageRow({
                       currentUserId={currentUserId}
                     />
                   ) : null}
-                  {message.chance ? (
+                  {botCard ? (
+                    <>
+                      {botCard.lead && (
+                        <div className="markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90">
+                          <MessageBody body={botCard.lead} currentUsername={currentUsername} />
+                        </div>
+                      )}
+                      <BotActionCard card={botCard} messageId={message.id} createdAt={message.createdAt} currentUserId={currentUserId} />
+                    </>
+                  ) : message.chance ? (
                     <ChanceCard result={message.chance} />
                   ) : message.poll ? (
                     <PollCard

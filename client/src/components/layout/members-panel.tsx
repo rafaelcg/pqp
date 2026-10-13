@@ -1371,7 +1371,9 @@ export function MembersPanel({
               ? (section.label ?? t("memberList.admins"))
               : section.kind === "offline"
                 ? t("memberList.offline")
-                : t("memberList.online");
+                : section.kind === "bots"
+                  ? t("memberList.bots")
+                  : t("memberList.online");
           const heading = t("memberList.sectionHeading", {
             label,
             count: section.members.length,

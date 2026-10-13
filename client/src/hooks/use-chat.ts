@@ -1,5 +1,6 @@
 import type {
   Attachment,
+  BotNotice,
   ChanceRequest,
   ChatClientMessage,
   ChatServerMessage,
@@ -163,6 +164,8 @@ export function failedSendCopy(
 export interface TypingUser {
   userId: string;
   displayName: string;
+  /** A server bot at work: the tool it runs, or null while it thinks. */
+  activity?: { tool: string | null };
 }
 
 /** What the composer needs to hand back when sending a reply. */
@@ -260,6 +263,8 @@ function byPosition(a: ChatMessage, b: ChatMessage): number {
 
 /** How long a typing indicator survives without a refresh. */
 const TYPING_TTL_MS = 5_000;
+/** A bot's model turn can run past a person's typing ping; its message ends it. */
+const BOT_ACTIVITY_TTL_MS = 30_000;
 /** Do not tell the server about every keystroke. */
 const TYPING_THROTTLE_MS = 2_500;
 /** A send with no broadcast back within this window is treated as failed. */
@@ -458,7 +463,16 @@ export function createChatController(
    */
   let jumpSeq = 0;
 
-  const typing = new Map<string, { displayName: string; expiresAt: number }>();
+  const typing = new Map<
+    string,
+    { displayName: string; expiresAt: number; activity?: { tool: string | null } }
+  >();
+  /**
+   * Why a server bot did not answer this member here, sent to them alone
+   * (`bot-notice`). Shown until dismissed, until the bot speaks in the
+   * channel, or until the time it named has passed.
+   */
+  let botNotice: BotNotice | null = null;
   /**
    * `getTypingUsers()` used to build a brand-new array on every call, even
    * when nobody's typing state had actually changed — and it is called on
@@ -916,6 +930,7 @@ export function createChatController(
     }
     retryUnlockTimers.clear();
     typing.clear();
+    botNotice = null;
     for (const message of messages) {
       revokeLocalPreviews(message);
     }
@@ -1109,6 +1124,20 @@ export function createChatController(
       return presence;
     },
 
+    getBotNotice(): BotNotice | null {
+      if (botNotice?.retryAt && new Date(botNotice.retryAt).getTime() <= Date.now()) {
+        return null;
+      }
+      return botNotice;
+    },
+
+    dismissBotNotice() {
+      if (botNotice) {
+        botNotice = null;
+        emit();
+      }
+    },
+
     getTypingUsers(): TypingUser[] {
       const now = Date.now();
       const active = [...typing.entries()].filter(
@@ -1123,7 +1152,7 @@ export function createChatController(
       // each field, so no display name can forge a collision.
       const key = JSON.stringify(
         active
-          .map(([userId, entry]) => [userId, entry.displayName] as const)
+          .map(([userId, entry]) => [userId, entry.displayName, entry.activity?.tool ?? ""] as const)
           .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
       );
       if (key === typingUsersCacheKey) {
@@ -1133,6 +1162,7 @@ export function createChatController(
       typingUsersCache = active.map(([userId, entry]) => ({
         userId,
         displayName: entry.displayName,
+        ...(entry.activity ? { activity: entry.activity } : {}),
       }));
       return typingUsersCache;
     },
@@ -1743,6 +1773,13 @@ export function createChatController(
           }
 
           const incoming = toChatMessage(message.message);
+          // A bot's "working" row ends with its message, not with a timer.
+          if (typing.get(incoming.authorId)?.activity) {
+            typing.delete(incoming.authorId);
+          }
+          if (botNotice?.botUserId === incoming.authorId) {
+            botNotice = null;
+          }
 
           // Our own message coming back: swap the optimistic bubble in place so
           // it does not appear twice and does not jump position.
@@ -1870,6 +1907,15 @@ export function createChatController(
           return;
         }
 
+        case "bot-notice": {
+          if (message.channelId !== channelId) {
+            return;
+          }
+          botNotice = message;
+          emit();
+          return;
+        }
+
         case "typing-broadcast": {
           if (
             message.channelId !== channelId ||
@@ -1879,7 +1925,8 @@ export function createChatController(
           }
           typing.set(message.userId, {
             displayName: message.displayName,
-            expiresAt: Date.now() + TYPING_TTL_MS,
+            expiresAt: Date.now() + (message.activity ? BOT_ACTIVITY_TTL_MS : TYPING_TTL_MS),
+            ...(message.activity ? { activity: message.activity } : {}),
           });
           startTypingSweep();
           emit();

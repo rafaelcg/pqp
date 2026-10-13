@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import {
   STORY_IDS_MAX,
   STORY_POSTS_PER_MINUTE,
@@ -3759,6 +3760,228 @@ router.get("/api/music/related", async (ctx) => {
     throw error;
   }
 });
+
+// ------------------------------------------------------------ server bots
+
+import {
+  botPlanDecisionSchema,
+  botAskAnswerSchema,
+  createServerBotSchema,
+  SERVER_BOTS_MAX,
+  updateServerBotSchema,
+  type ServerBotsConfig,
+} from "@pqp/shared";
+import {
+  BotError,
+  createServerBot,
+  deleteServerBot,
+  listAnsweringBotUserIds,
+  listServerBots,
+  queuePlanDecision,
+  updateServerBot,
+} from "../services/bots.js";
+import { botModelChoices, botProviderConfigured } from "../services/bot-llm.js";
+import { answerBotAsk } from "../services/bot-runner.js";
+
+function botsEnabled(serverId: string): boolean {
+  return isEnabled("custom_bots", { serverId }) && botProviderConfigured();
+}
+
+/** A model pick must be one the deployment offers right now. */
+function requireOfferedModel(model: string | null | undefined): void {
+  if (model && !botModelChoices().some((choice) => choice.id === model)) {
+    throw new HttpError(400, "model");
+  }
+}
+
+function botHttpError(error: BotError): HttpError {
+  switch (error.code) {
+    case "limit":
+      return new HttpError(409, "limit");
+    case "missing":
+      return new NotFound("Bot not found");
+    case "channel":
+      return new HttpError(400, "channel");
+    case "name":
+      return new HttpError(409, "name");
+  }
+}
+
+router.get("/api/bots/config", async ({ url }): Promise<ServerBotsConfig> => {
+  const serverId = url.searchParams.get("serverId");
+  return {
+    enabled: !!serverId && isUuid(serverId) && botsEnabled(serverId),
+    maxBots: SERVER_BOTS_MAX,
+    models: botModelChoices().map((choice) => ({ id: choice.id, label: choice.label })),
+  };
+});
+
+// Manage Server, for reading too: the persona and the knowledge are staff
+// notes, not something every member should be able to pull.
+router.get("/api/servers/:serverId/bots", async ({ user }, { serverId }) => {
+  await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+  return { bots: await listServerBots(serverId!), maxBots: SERVER_BOTS_MAX };
+});
+
+/** A plan card's Confirm or Cancel. Only the member who asked may press them. */
+router.post("/api/bots/plans/:planId/decision", async ({ req, user }, { planId }) => {
+  if (!isUuid(planId!)) {
+    throw new NotFound("Plan not found");
+  }
+  const { decision } = botPlanDecisionSchema.parse(await readJsonBody(req));
+  const outcome = await queuePlanDecision({ planId: planId!, userId: user.id, decision });
+  if (outcome === "missing" || outcome === "off") {
+    throw new NotFound("Plan not found");
+  }
+  if (outcome === "not-yours") {
+    throw new Forbidden("Only the member who asked can decide");
+  }
+  if (outcome === "decided" || outcome === "expired") {
+    throw new HttpError(409, outcome);
+  }
+  return new Accepted({ ok: true });
+});
+
+/** A question card's answer button. Only the member who was asked may press it. */
+router.post("/api/bots/asks/:messageId/answer", async ({ req, user }, { messageId }) => {
+  if (!isUuid(messageId!)) {
+    throw new NotFound("Question not found");
+  }
+  const { option } = botAskAnswerSchema.parse(await readJsonBody(req));
+  const outcome = await answerBotAsk({ messageId: messageId!, user, option });
+  if (outcome === "missing" || outcome === "off") {
+    throw new NotFound("Question not found");
+  }
+  if (outcome === "not-yours") {
+    throw new Forbidden("Only the member who was asked can answer");
+  }
+  if (outcome === "decided" || outcome === "expired" || outcome === "refused") {
+    throw new HttpError(409, outcome);
+  }
+  return { ok: true };
+});
+
+router.post("/api/servers/:serverId/bots", async ({ req, user }, { serverId }) => {
+  await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+  if (!botsEnabled(serverId!)) {
+    throw new HttpError(403, "bots_disabled");
+  }
+  const body = createServerBotSchema.parse(await readJsonBody(req));
+  requireOfferedModel(body.model);
+  try {
+    const bot = await createServerBot({
+      serverId: serverId!,
+      createdBy: user.id,
+      name: body.name,
+      persona: body.persona,
+      knowledge: body.knowledge,
+      channelIds: body.channelIds,
+      answerToName: body.answerToName,
+      model: body.model ?? null,
+      ...(body.tools ? { tools: body.tools } : {}),
+    });
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "bot.create",
+      targetType: "server_bot",
+      targetId: bot.id,
+      changes: [{ key: "name", old: null, new: bot.name }],
+    });
+    return { bot };
+  } catch (error) {
+    if (error instanceof BotError) {
+      throw botHttpError(error);
+    }
+    throw error;
+  }
+});
+
+router.patch(
+  "/api/servers/:serverId/bots/:botId",
+  async ({ req, user }, { serverId, botId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    if (!isUuid(botId!)) {
+      throw new NotFound("Bot not found");
+    }
+    const body = updateServerBotSchema.parse(await readJsonBody(req));
+    requireOfferedModel(body.model);
+    // Switching a bot off, or editing it, stays open with the flag off: staff
+    // can always quiet their own bot. Switching it ON needs the feature.
+    if (body.enabled === true && !botsEnabled(serverId!)) {
+      throw new HttpError(403, "bots_disabled");
+    }
+    try {
+      const updated = await updateServerBot({ serverId: serverId!, botId: botId!, ...body });
+      if (!updated) {
+        throw new NotFound("Bot not found");
+      }
+      const { bot, before, renamed } = updated;
+      // A new name (and handle) repaints chat and the member list everywhere,
+      // the same frame a person's own rename sends.
+      if (renamed) {
+        const account = await getUserById(bot.userId);
+        if (account) {
+          await announceProfile(account);
+        }
+      }
+      const changes = [
+        ...(bot.name !== before.name ? [{ key: "name", old: before.name, new: bot.name }] : []),
+        ...(bot.enabled !== before.enabled
+          ? [{ key: "enabled", old: before.enabled, new: bot.enabled }]
+          : []),
+        ...(bot.persona !== before.persona ? [{ key: "persona", old: null, new: null }] : []),
+        ...(bot.knowledge !== before.knowledge ? [{ key: "knowledge", old: null, new: null }] : []),
+        ...(bot.model !== before.model ? [{ key: "model", old: before.model, new: bot.model }] : []),
+        ...(bot.tools.join() !== before.tools.join()
+          ? [{ key: "tools", old: before.tools.join(", "), new: bot.tools.join(", ") }]
+          : []),
+        ...(bot.channelIds.join() !== before.channelIds.join()
+          ? [{ key: "channels", old: before.channelIds.length, new: bot.channelIds.length }]
+          : []),
+      ];
+      if (changes.length > 0) {
+        await logAudit({
+          serverId: serverId!,
+          actorId: user.id,
+          action: "bot.update",
+          targetType: "server_bot",
+          targetId: bot.id,
+          changes: [{ key: "bot", old: null, new: bot.name }, ...changes],
+        });
+      }
+      return { bot };
+    } catch (error) {
+      if (error instanceof BotError) {
+        throw botHttpError(error);
+      }
+      throw error;
+    }
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/bots/:botId",
+  async ({ user }, { serverId, botId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    if (!isUuid(botId!)) {
+      throw new NotFound("Bot not found");
+    }
+    const removed = await deleteServerBot(serverId!, botId!);
+    if (!removed) {
+      throw new NotFound("Bot not found");
+    }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "bot.delete",
+      targetType: "server_bot",
+      targetId: removed.id,
+      changes: [{ key: "name", old: removed.name, new: null }],
+    });
+    return { ok: true };
+  },
+);
 
 // ------------------------------------------------------------ soundboard
 
@@ -10064,9 +10287,16 @@ router.get("/api/servers/:serverId/members", async ({ user }, { serverId }) => {
   // offline. Paint them online on this roster while the server's outgoing
   // hook is `active` — that is "Grok can still be woken", not a stored
   // presence bit. A live socket still wins (idle / dnd / invisible).
-  const hookListening = members.some((member) => member.isCharacter)
+  const hasCharacter = members.some((member) => member.isCharacter);
+  const hookListening = hasCharacter
     ? await serverHasActiveOutgoingWebhook(serverId!)
     : false;
+  // A server bot has no socket either. It is online while it would answer:
+  // enabled, the flag on here, and a model to call.
+  const answeringBots =
+    hasCharacter && botsEnabled(serverId!)
+      ? await listAnsweringBotUserIds(serverId!)
+      : new Set<string>();
   return {
     members: members.map((member) => ({
       ...member,
@@ -10074,7 +10304,7 @@ router.get("/api/servers/:serverId/members", async ({ user }, { serverId }) => {
       status: statusWithCharacterHook(
         statuses.get(member.id) ?? "offline",
         member.isCharacter,
-        hookListening,
+        hookListening || answeringBots.has(member.id),
       ),
     })),
   };
@@ -14073,3 +14303,70 @@ router.patch(
     return { ok: true, showOnProfile: body.showOnProfile };
   },
 );
+
+/**
+ * Run one route as `user`, in process, for a server bot's actions
+ * (`services/bot-actions.ts`). The route does everything it does for a person:
+ * its own permission and rank checks, its audit row, its broadcast. What
+ * `handleApi` does BEFORE the router is not repeated here, on purpose: the
+ * caller has no Bearer to resolve, and it re-applies the gates that matter for
+ * a bot itself (the bot's timeout, its own hourly cap).
+ *
+ * Never reached from the network, and the caller builds every path and body
+ * itself from a fixed table; nothing here takes a path from a model.
+ */
+export async function invokeApiAsUser(
+  user: DbUser,
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: unknown }> {
+  const url = new URL(path, "http://localhost");
+  const matched = router.match(method, url.pathname);
+  if (!matched) {
+    return { status: 404, body: { error: "Not found" } };
+  }
+  const payload = body === undefined ? "" : JSON.stringify(body);
+  const req = Object.assign(Readable.from(payload ? [Buffer.from(payload)] : []), {
+    method,
+    url: `${url.pathname}${url.search}`,
+    headers: {
+      "content-type": "application/json",
+      "content-length": String(Buffer.byteLength(payload)),
+    },
+  }) as unknown as IncomingMessage;
+  const headers = new Map<string, string>();
+  const res = {
+    setHeader(name: string, value: string) {
+      headers.set(name.toLowerCase(), String(value));
+    },
+    getHeader(name: string) {
+      return headers.get(name.toLowerCase());
+    },
+  } as unknown as ServerResponse;
+  try {
+    const ctx: RequestContext = { req, res, url, user, ageGate: "passed" };
+    const result = await runWithRoute(`${method} ${matched.routePath}`, () =>
+      matched.handler(ctx, matched.params),
+    );
+    if (result instanceof Created) return { status: 201, body: result.body };
+    if (result instanceof Accepted) return { status: 202, body: result.body };
+    if (result instanceof Etagged) return { status: 200, body: result.body };
+    if (result instanceof NoContent) return { status: 204, body: null };
+    if (result instanceof StreamedResponse || result instanceof RawResponse) {
+      return { status: 500, body: { error: "Unsupported response" } };
+    }
+    return { status: 200, body: result };
+  } catch (error) {
+    if (error instanceof HttpErrorWithDetail || error instanceof ForumError) {
+      return { status: error.status, body: { error: error.message, ...error.detail } };
+    }
+    if (error instanceof HttpError) {
+      return { status: error.status, body: { error: error.message } };
+    }
+    if (error && typeof error === "object" && "name" in error && error.name === "ZodError") {
+      return { status: 400, body: { error: "Invalid request" } };
+    }
+    throw error;
+  }
+}

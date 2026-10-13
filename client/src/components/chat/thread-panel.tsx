@@ -421,6 +421,8 @@ export function ThreadPanel({
         isLoadingOlder={controller.isLoadingOlder()}
         isLoadingNewer={controller.isLoadingNewer()}
         typingUsers={controller.getTypingUsers()}
+        botNotice={controller.getBotNotice()}
+        onDismissBotNotice={() => controller.dismissBotNotice()}
         canModerate={canModerate}
         blockedAuthorIds={blockedAuthorIds}
         onReplyTo={setReplyTarget}

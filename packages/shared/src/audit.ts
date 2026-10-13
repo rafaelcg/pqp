@@ -217,6 +217,13 @@ export const AUDIT_ACTIONS = [
   "soundboard.create",
   "soundboard.update",
   "soundboard.delete",
+  /**
+   * A server bot created, edited (name, persona, knowledge, channels, on/off)
+   * or deleted. Target is the `server_bots` row; `changes` names the bot.
+   */
+  "bot.create",
+  "bot.update",
+  "bot.delete",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

@@ -52,6 +52,7 @@ import {
 } from "./services/outgoing-webhooks.js";
 import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
 import { startSpeechJobPoller } from "./services/speech-worker.js";
+import { startBotRunPoller } from "./services/bot-runner.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -422,6 +423,13 @@ export function startColdJobs(): ColdJobs {
     // take a job they cannot finish.
     (() => {
       const poller = startSpeechJobPoller();
+      return () => poller.stop();
+    })(),
+    // Server bot replies (`server_bot_runs`, services/bot-runner.ts). Same
+    // adaptive shape, woken by the NOTIFY the trigger sends on enqueue. A
+    // process with no model provider (production without a key) claims nothing.
+    (() => {
+      const poller = startBotRunPoller();
       return () => poller.stop();
     })(),
     every(
