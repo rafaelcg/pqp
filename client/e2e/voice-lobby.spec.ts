@@ -62,11 +62,11 @@ test.describe("voice lobby", () => {
 
     const leave = page.getByRole("main").getByRole("button", { name: "Leave", exact: true });
     await expect(leave).toBeInViewport();
-    // The dock's Leave is the way out. The sidebar's red X stays hidden
-    // while that button is on screen, so the bar does not carry two hang-ups.
+    // The dock's Leave is one way out. The sidebar card keeps its own red
+    // hang-up, camera and share beside it, so both are on screen at once.
     await expect(
       page.getByRole("button", { name: "Disconnect from voice" }),
-    ).toHaveCount(0);
+    ).toBeVisible();
     // Mute is in two places on purpose: the user panel, and the bar, where a
     // phone (whose panel is behind the drawer) can reach it. Deafen stays in
     // the panel alone.
@@ -98,14 +98,14 @@ test.describe("voice lobby", () => {
       expect((await stagePane.boundingBox())?.height ?? 0).toBeLessThan(2);
     }
 
-    // With the same actions in the composer, the sidebar keeps its one-line
-    // status and drops the camera, share, and the duplicate hang-up.
+    // The sidebar card keeps its camera button (and share, where the platform
+    // can share a screen) under its status even with the composer's call bar
+    // on screen, as Discord's Voice Connected panel does.
     await expect(
-      page.getByRole("button", { name: "Turn camera on", exact: true }),
-    ).toHaveCount(1);
-    await expect(
-      page.getByRole("button", { name: "Share screen", exact: true }),
-    ).toHaveCount(0);
+      page
+        .locator("[data-voice-status-bar]")
+        .getByRole("button", { name: "Turn camera on", exact: true }),
+    ).toBeVisible();
 
     await expect(
       bar.getByRole("button", { name: "Mute microphone" }),
