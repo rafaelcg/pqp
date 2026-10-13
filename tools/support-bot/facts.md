@@ -31,7 +31,9 @@ possível deste sistema.
 - Quem decide por onde a voz passa é o servidor, sala por sala. Ninguém precisa
   configurar nada.
 - Chamada na DM e call em servidor com menos de 10 membros começam numa ligação
-  direta: o áudio vai de cada pessoa direto pra cada outra pessoa.
+  direta: o áudio vai de cada pessoa direto pra cada outra pessoa. A exceção é
+  um canal de watch party num servidor com watch party ligada: ele usa o
+  servidor de mídia desde o começo, mesmo num servidor pequeno.
 - Comunidade pública e servidor com 10 membros ou mais usam o servidor de mídia
   (LiveKit) desde o começo. Aí cada pessoa manda o áudio uma vez só e o servidor
   repassa pra todo mundo. Não é ligação direta.
@@ -54,9 +56,11 @@ possível deste sistema.
   call, o mesmo ajuste aparece no menu "Vídeo que você envia", na barra da call.
 - A qualidade escolhida é um teto, não uma garantia. Se a conexão de quem
   compartilha não aguenta, a imagem diminui pra não travar.
-- Quadros por segundo da tela: Automático (60 quando a conexão aguenta, senão
-  30), 30 fps ou 60 fps. Fica em Configurações, Voz e vídeo, e também no menu da
-  call.
+- Quadros por segundo da tela: Automático, 30 fps ou 60 fps. Fica em
+  Configurações, Voz e vídeo, e também no menu da call. Automático não olha a
+  conexão: pede 60 fps, e numa watch party segue a qualidade da transmissão
+  (60 fps só quando ela está em 1080p60). Pra conexão fraca, o que ajuda é o
+  "Priorizar fluidez" ou "Priorizar nitidez" do próximo item.
 - No menu da call dá pra escolher o que acontece quando a conexão aperta:
   "Priorizar fluidez" (o padrão: segura os quadros e baixa a resolução, melhor
   pra jogo e vídeo) ou "Priorizar nitidez" (segura a resolução e baixa os
