@@ -170,6 +170,25 @@ final class StoryEditorUITests: XCTestCase {
         XCTAssertTrue(app.buttons["stories.own"].waitForExistence(timeout: 25), "Posted with a text layer and a call layer")
     }
 
+    /// A long press opens the layer's menu, and its buttons are tappable (they
+    /// sit above the gesture surface, not under it).
+    func testLongPressOpensTheMenuAndDeleteWorks() throws {
+        let (app, serverId) = try launch()
+        openComposer(app, serverId: serverId)
+        app.buttons["composer.mode.text"].tap()
+        addText(app, "apaga eu")
+        let element = layer(app, "apaga eu")
+        XCTAssertTrue(element.waitForExistence(timeout: 5))
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1.0)
+        let delete = app.buttons["menu.delete"]
+        _ = delete.waitForExistence(timeout: 5)
+        snap(app, "editor-layer-menu")
+        XCTAssertTrue(delete.exists, "The menu opens")
+        snap(app, "editor-layer-menu")
+        delete.tap()
+        XCTAssertTrue(waitForGone(layer(app, "apaga eu")), "Delete in the menu removes the layer")
+    }
+
     /// A mention: the stickers tray lists the people of the server, and the
     /// pick is a pill on the canvas.
     func testAMentionIsAStickerOnTheCanvas() throws {

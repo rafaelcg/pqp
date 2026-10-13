@@ -2391,6 +2391,16 @@
         }
       }
     },
+    "Couldn't load everyone." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar todo mundo."
+          }
+        }
+      }
+    },
     "Couldn't load posts." : {
       "localizations" : {
         "pt-BR" : {

@@ -117,6 +117,9 @@ struct StoryComposer: View {
                 request: builtRequest,
                 media: finalMedia
             ) {
+                // Posted: the temporary exports are no longer needed.
+                StoryImport.remove(finalMedia?.fileURL)
+                StoryImport.remove(draft?.fileURL)
                 showingAudience = false
                 onPosted()
                 dismiss()
@@ -912,18 +915,29 @@ struct StoryAudienceSheet: View {
         )
         do {
             let created = try await session.api.createStory(body)
-            // Every file goes up before the story is published: the base
-            // photo or video, then each placed photo and the drawing.
-            if let upload = created.upload, let media {
-                try await StoryUploader.put(media.data, to: upload)
-            }
+            // Every file goes up before the story is published: the base photo
+            // or video, and each placed photo and the drawing, all at once (they
+            // are independent, and the post waits for the slowest, not the sum).
+            // A story with nothing to upload (text, a call, a mention) is live
+            // on the create answer and has nothing to publish.
+            var files: [(Data, StoryUpload)] = []
+            if let upload = created.upload, let media { files.append((media.data, upload)) }
             for target in created.layerUploads {
                 guard let file = request.layerFiles[target.layerId] else { continue }
-                try await StoryUploader.put(file.data, to: StoryUpload(url: target.url, method: target.method, headers: target.headers))
+                files.append((file.data, StoryUpload(url: target.url, method: target.method, headers: target.headers)))
+            }
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for (data, upload) in files {
+                    group.addTask { try await StoryUploader.put(data, to: upload) }
+                }
+                try await group.waitForAll()
             }
             if created.upload != nil || !created.layerUploads.isEmpty {
                 _ = try await session.api.publishStory(id: created.story.id)
             }
+            // A failed attempt is retried with the same `requestId`, which the
+            // server answers with the SAME pending story and fresh upload
+            // URLs; a story that is never published is deleted after an hour.
             onPosted()
         } catch {
             failed = true

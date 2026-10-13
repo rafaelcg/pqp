@@ -420,7 +420,7 @@ final class StoryLayersTests: XCTestCase {
         XCTAssertTrue(model.files.isEmpty)
     }
 
-    func testDeletingALayerDropsItsBytes() {
+    func testDeletingALayerDropsItsBytesAndUndoBringsThemBack() {
         let model = editor()
         let file = StoryLayerFile(data: Data([1]), contentType: "image/jpeg", width: 10, height: 10)
         let id = model.addImage(file, preview: UIImage())!
@@ -429,9 +429,68 @@ final class StoryLayersTests: XCTestCase {
         XCTAssertNil(model.files[id])
         XCTAssertNil(model.previews[id])
         model.undo()
-        // The layer is back; its file is not, so a post would fail loudly
-        // rather than upload nothing: the editor re-adds a photo instead.
         XCTAssertEqual(model.layers.count, 1)
+        XCTAssertEqual(model.files[id]?.data, Data([1]), "The photo comes back with its bytes, so it draws and uploads")
+        XCTAssertNotNil(model.previews[id])
+    }
+
+    func testUndoBringsBackADeletedCallWithItsCard() {
+        let model = editor()
+        let id = model.addCall(serverId: id1, channelId: id2, info: StoryCallLayerInfo(roomName: "Lobby", serverName: "QG", serverIconUrl: nil))!
+        model.delete(id: id)
+        XCTAssertNil(model.callInfo)
+        model.undo()
+        XCTAssertEqual(model.callInfo?.roomName, "Lobby")
+    }
+
+    /// The system cutting a gesture off (an alert, a call) rolls it back; being
+    /// cut off over the bin must not delete.
+    func testACancelledGestureOverTheBinDeletesNothingAndMovesNothing() {
+        let model = editor(with: [textLayer()])
+        let bin = StorySnap.trashFrame(canvas: canvas)
+        _ = model.beginGesture(at: CGPoint(x: 180, y: 320))
+        model.drag(translation: CGSize(width: 0, height: 300), touch: CGPoint(x: bin.midX, y: bin.midY))
+        XCTAssertTrue(model.overTrash)
+        model.cancelGesture()
+        XCTAssertEqual(model.layers.count, 1)
+        XCTAssertEqual(model.layers[0].y, 0.5, accuracy: 0.001, "Back where it was")
+        XCTAssertFalse(model.overTrash)
+        XCTAssertNil(model.activeId)
+    }
+
+    // MARK: - Reading what the server and the cache give back
+
+    /// A `null` or a scalar in the list is skipped and the layer after it is
+    /// kept; a cursor that never moved would loop for ever on the `null`.
+    func testNullsAndScalarsInTheListAreSteppedOver() throws {
+        let layers = try decodeLayers("""
+        [null, 7, "x", {"id":"a","type":"text","x":0.5,"y":0.5,"scale":1,"rotation":0,"text":"um"}, null,
+         {"id":"b","type":"poll","x":0.5,"y":0.5,"scale":1,"rotation":0},
+         {"id":"c","type":"text","x":0.5,"y":0.5,"scale":1,"rotation":0,"text":"dois"}]
+        """)
+        XCTAssertEqual(layers.map(\.id), ["a", "c"])
+    }
+
+    /// The read cache writes a story back out and reads it again: picture and
+    /// mention layers have to survive the round trip.
+    func testAStoryKeepsItsLayersThroughTheCache() throws {
+        let json = """
+        {"id":"\(id1)","author":{"id":"\(user)","displayName":"Bia","avatarUrl":null},"kind":"image","caption":null,"text":null,"background":null,
+         "media":{"url":"https://x.y/a.jpg","posterUrl":null,"contentType":"image/jpeg","width":720,"height":1280,"durationMs":null},
+         "sticker":null,"call":null,"publishedAt":null,"expiresAt":null,"audiences":[],
+         "viewer":{"seen":false,"reaction":null,"canReply":false,"replyBlockedReason":null,"canModerate":[]},"own":null,
+         "layers":[
+          {"id":"a","type":"image","x":0.4,"y":0.6,"scale":1.2,"rotation":0.1,"shape":"circle","url":"https://x.y/p.jpg","width":720,"height":1280},
+          {"id":"b","type":"drawing","x":0.5,"y":0.5,"scale":1,"rotation":0,"url":"https://x.y/d.png","width":810,"height":1440},
+          {"id":"c","type":"mention","x":0.5,"y":0.2,"scale":1,"rotation":0,"userId":"\(user)","user":{"id":"\(user)","displayName":"Bia Souza","avatarUrl":null,"handle":"bia"}},
+          {"id":"d","type":"call","x":0.5,"y":0.8,"scale":1,"rotation":0,"serverId":"\(id2)","channelId":"\(id3)"},
+          {"id":"e","type":"text","x":0.5,"y":0.3,"scale":1,"rotation":0,"text":"oi","font":"neon","color":"pink"}]}
+        """
+        let story = try Coding.decoder.decode(Story.self, from: Data(json.utf8))
+        XCTAssertEqual(story.layers.count, 5)
+        let written = try Coding.encoder.encode(story)
+        let again = try Coding.decoder.decode(Story.self, from: written)
+        XCTAssertEqual(again.layers, story.layers, "Nothing is lost on the way through the cache")
     }
 
     func testBringToFrontReorders() {
