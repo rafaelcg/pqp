@@ -6299,8 +6299,15 @@ export function createVoiceController(transport: RealtimeTransport) {
       // take startMuted. A second join() (Strict Mode, drop+click) is
       // not consent to unmute, and the server seat is born unmuted.
       if (fromIdle) {
-        state.isMuted = options?.startMuted ?? state.isMuted;
-        muteBeforeDeafen = state.isDeafened ? state.isMuted : null;
+        const chosenMuted = options?.startMuted ?? state.isMuted;
+        // Deafened means muted, whatever the join asked for.
+        state.isMuted = state.isDeafened || chosenMuted;
+        // When already deafened (a join that timed out after the deafen),
+        // `state.isMuted` is the deafen mute, not the choice from before it.
+        // Keep the remembered choice; only an explicit startMuted replaces it.
+        muteBeforeDeafen = state.isDeafened
+          ? (options?.startMuted ?? muteBeforeDeafen ?? chosenMuted)
+          : null;
       } else {
         applyPreservedSelfVoice();
       }

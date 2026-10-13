@@ -4911,6 +4911,36 @@ describe("deafen restores the mic the person had", () => {
     expect(voice.getState().isMuted).toBe(true);
   });
 
+  it("keeps an open mic choice when a join times out while deafened and is retried", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    vi.useFakeTimers();
+    try {
+      await voice.join(CHANNEL);
+      // Deafen while the join is still waiting for its welcome, then let the
+      // join time out so the controller is idle and still deafened.
+      voice.toggleDeafen();
+      await vi.advanceTimersByTimeAsync(13_000);
+      expect(voice.getState().status).toBe("idle");
+      expect(voice.getState().isDeafened).toBe(true);
+      expect(voice.getState().isMuted).toBe(true);
+
+      await voice.join(CHANNEL);
+      voice.handleSignaling(welcome("mesh"));
+      await vi.advanceTimersByTimeAsync(0);
+      // Still deafened after the join: the outgoing mic stays closed.
+      expect(voice.getState().isDeafened).toBe(true);
+      expect(voice.getState().isMuted).toBe(true);
+      expect(voice.getState().isTransmitting).toBe(false);
+
+      voice.toggleDeafen();
+      expect(voice.getState().isDeafened).toBe(false);
+      expect(voice.getState().isMuted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not publish an open mic on the SFU when undeafen restores a mute", async () => {
     const { voice } = await connected("livekit");
     voice.toggleMute();
