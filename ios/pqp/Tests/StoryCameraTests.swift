@@ -41,6 +41,21 @@ final class StoryCameraTests: XCTestCase {
         XCTAssertEqual(press.up(at: t0.addingTimeInterval(31)), .nothing)
     }
 
+    /// The limit ends the recording with the finger still down. Moving that
+    /// finger must not read as a new press and start a second recording.
+    func testAFingerStillDownAfterTheLimitStartsNothingNew() {
+        var press = StoryShutterPress()
+        let t0 = Date()
+        press.down(at: t0)
+        XCTAssertTrue(press.holdElapsed(at: t0.addingTimeInterval(0.4)))
+        press.recordingEnded()
+        press.down(at: t0.addingTimeInterval(31))
+        XCTAssertFalse(press.holdElapsed(at: t0.addingTimeInterval(32)), "Still the old press, and spent")
+        XCTAssertEqual(press.up(at: t0.addingTimeInterval(33)), .nothing)
+        press.down(at: t0.addingTimeInterval(40))
+        XCTAssertEqual(press.up(at: t0.addingTimeInterval(40.1)), .photo, "The next press is a fresh one")
+    }
+
     func testALongPressThatNeverStartedRecordingTakesNoPhoto() {
         var press = StoryShutterPress()
         let t0 = Date()

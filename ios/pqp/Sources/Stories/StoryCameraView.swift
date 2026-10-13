@@ -171,6 +171,9 @@ struct StoryCameraView: View {
             tool(symbol: "folder", label: String(localized: "Choose a file"), id: "camera.files") { onFiles() }
         }
         .opacity(isRecording ? 0 : 1)
+        // Invisible is not out of the way: a tap on a hidden button would
+        // still land and release the camera under a recording.
+        .allowsHitTesting(!isRecording)
         .animation(.easeOut(duration: 0.15), value: isRecording)
     }
 
@@ -413,6 +416,8 @@ struct StoryCameraView: View {
         do {
             try await next.start()
         } catch {
+            // An older start failing must not wipe a newer one's state.
+            guard current() else { return }
             access = .noDevice
             engine = nil
             return
@@ -436,9 +441,14 @@ struct StoryCameraView: View {
         generation += 1
         holdTask?.cancel()
         limitTask?.cancel()
-        if isRecording { Task { await finishRecording() } }
-        engine?.stop()
+        // The clip is finalized before the capture is torn down.
+        let closing = engine
+        let wasRecording = isRecording
         running = false
+        Task {
+            if wasRecording { await finishRecording() }
+            closing?.stop()
+        }
     }
 
     private func handleInterruption(_ failure: StoryCameraFailure) {

@@ -40,6 +40,9 @@ struct StoryShutterPress: Equatable {
     /// False when this server has video off: a hold is then just a slow tap,
     /// and the shutter only ever takes photos.
     var allowsVideo = true
+    /// The press has done what it was going to do (a recording ended under the
+    /// finger): the rest of the gesture, until it lifts, does nothing.
+    private(set) var isSpent = false
 
     var isDown: Bool { startedAt != nil }
 
@@ -50,7 +53,7 @@ struct StoryShutterPress: Equatable {
 
     /// Called when the hold timer fires. True when recording should begin now.
     mutating func holdElapsed(at date: Date) -> Bool {
-        guard allowsVideo, let startedAt, !isRecording,
+        guard allowsVideo, !isSpent, let startedAt, !isRecording,
               date.timeIntervalSince(startedAt) >= Self.holdThreshold - 0.001
         else { return false }
         isRecording = true
@@ -61,8 +64,10 @@ struct StoryShutterPress: Equatable {
         defer {
             startedAt = nil
             isRecording = false
+            isSpent = false
         }
         guard let startedAt else { return .nothing }
+        if isSpent { return .nothing }
         if isRecording { return .recordingStopped }
         if !allowsVideo { return .photo }
         return date.timeIntervalSince(startedAt) < Self.holdThreshold ? .photo : .nothing
@@ -72,7 +77,9 @@ struct StoryShutterPress: Equatable {
     /// the release that follows must not take a photo.
     mutating func recordingEnded() {
         isRecording = false
-        startedAt = nil
+        // The finger is still down: it stays down, spent, so a later move of
+        // it is not read as the start of a new press (and a second recording).
+        isSpent = true
     }
 }
 
