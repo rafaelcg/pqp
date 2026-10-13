@@ -506,10 +506,12 @@ struct StoryEditorView: View {
 
     private func finishText(_ target: TextTarget, _ result: (StoryTextData, Double)?) {
         textTarget = nil
-        guard let (data, scale) = result else {
-            // Emptied an existing line: it goes away.
-            if case .edit(let id) = target, case .text(let old)? = model.layer(id)?.content,
-               old.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { model.delete(id: id) }
+        // Cancelled: nothing changes.
+        guard let (data, scale) = result else { return }
+        // Done on nothing: a new line is not made, and an existing one that was
+        // emptied goes away.
+        if data.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if case .edit(let id) = target { model.delete(id: id) }
             return
         }
         switch target {

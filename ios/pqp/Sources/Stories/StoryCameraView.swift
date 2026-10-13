@@ -601,6 +601,13 @@ struct StoryCameraView: View {
         isRecording = true
         do {
             try await engine.startRecording(torch: flash.torchesVideo && position == .back)
+            // Released (or stopped by an interruption) while it was starting:
+            // the stop is already on its way, and a timer for a recording that
+            // is over must not be installed.
+            guard isRecording else {
+                busy = false
+                return
+            }
             limitTask?.cancel()
             limitTask = Task {
                 try? await Task.sleep(for: .milliseconds(StoryLimits.maxVideoMs))

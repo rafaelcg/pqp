@@ -92,7 +92,7 @@ struct StoryGestureSurface: UIViewRepresentable {
                                   touch: g.location(in: view))
             case .ended:
                 finished()
-            case .cancelled, .failed:
+            case .cancelled:
                 finished(cancelled: true)
             default: break
             }
@@ -109,7 +109,7 @@ struct StoryGestureSurface: UIViewRepresentable {
                 parent.model.pinch(scale: Double(g.scale))
             case .ended:
                 finished()
-            case .cancelled, .failed:
+            case .cancelled:
                 finished(cancelled: true)
             default: break
             }
@@ -126,7 +126,7 @@ struct StoryGestureSurface: UIViewRepresentable {
                 parent.model.rotate(by: Double(g.rotation))
             case .ended:
                 finished()
-            case .cancelled, .failed:
+            case .cancelled:
                 finished(cancelled: true)
             default: break
             }
