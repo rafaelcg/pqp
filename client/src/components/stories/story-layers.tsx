@@ -3,6 +3,7 @@ import type { StoryLayer } from "@pqp/shared";
 import { colorFromTokens, paintStrokes, type Stroke } from "@/lib/stories/drawing";
 import {
   IMAGE_BASE_CQW,
+  IMAGE_ROUNDED_CQW,
   MENTION_BASE_CQW,
   layerStyle,
   type ImageShape,
@@ -81,7 +82,7 @@ function ImageLayerView({ layer }: { layer: Extract<DisplayLayer, { type: "image
         // A circle crops to a square; the others keep the picture's own shape.
         aspectRatio: circle ? "1 / 1" : `${layer.width} / ${layer.height}`,
         objectFit: "cover",
-        borderRadius: circle ? "50%" : layer.shape === "rounded" ? "5cqw" : 0,
+        borderRadius: circle ? "50%" : layer.shape === "rounded" ? `${IMAGE_ROUNDED_CQW}cqw` : 0,
         boxShadow: "var(--story-layer-shadow)",
       }}
     />

@@ -1,4 +1,4 @@
-import { STORY_IMAGE_MAX_EDGE } from "@pqp/shared";
+import { STORY_LAYOUT } from "@pqp/shared";
 
 /**
  * The draw tool. A drawing is kept as STROKES (vectors in canvas units), not as
@@ -143,10 +143,9 @@ export function hasInk(strokes: readonly Stroke[]): boolean {
   return strokes.some((stroke) => stroke.tool !== "eraser" && stroke.points.length >= 2);
 }
 
-/** The canvas size a drawing is exported at: 9:16 with the long side at the story image limit. */
+/** The canvas size a drawing is exported at: STORY_LAYOUT's, 9:16, the same on every platform. */
 export function exportSize(): { width: number; height: number } {
-  const height = STORY_IMAGE_MAX_EDGE;
-  return { width: Math.round((height * 9) / 16), height };
+  return { width: STORY_LAYOUT.drawingWidth, height: STORY_LAYOUT.drawingHeight };
 }
 
 export async function renderDrawingBlob(

@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import {
+  STORY_LAYOUT,
   STORY_LAYER_IMAGE_SHAPES,
   STORY_LAYER_SCALE_MAX,
   STORY_LAYER_SCALE_MIN,
@@ -30,14 +31,19 @@ import type { Stroke } from "./drawing";
  *   text is `8% x size` of the width as a font size, laid out in at most
  *   84% of the width; a photo is 40% of the width (height by aspect; a circle
  *   is cropped to a square); a mention chip is 5% type; a call card is 82%.
+ *   The values are `STORY_LAYOUT` in `@pqp/shared`; do not copy them here.
+ * - A drawing sits at the BOTTOM of the stack, just above the base.
  * - Layers outside the canvas are clipped by it.
  */
 
-export const TEXT_BASE_CQW = 8;
-export const TEXT_MAX_WIDTH_CQW = 84;
-export const IMAGE_BASE_CQW = 40;
-export const CALL_CARD_CQW = 82;
-export const MENTION_BASE_CQW = 5;
+// The numbers are STORY_LAYOUT's (packages/shared): one table for web, iOS and Android.
+// In `cqw`, 1% of the canvas width.
+export const TEXT_BASE_CQW = STORY_LAYOUT.textSize * 100;
+export const TEXT_MAX_WIDTH_CQW = STORY_LAYOUT.textMaxWidth * 100;
+export const IMAGE_BASE_CQW = STORY_LAYOUT.imageWidth * 100;
+export const IMAGE_ROUNDED_CQW = STORY_LAYOUT.imageRoundedRadius * 100;
+export const CALL_CARD_CQW = STORY_LAYOUT.callCardWidth * 100;
+export const MENTION_BASE_CQW = STORY_LAYOUT.mentionFont * 100;
 
 export interface LayerGeometry {
   id: string;
@@ -238,9 +244,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (!canAddLayer(state.layers, action.layer.type)) {
         return state;
       }
+      const added = clampGeometry(action.layer);
       return {
-        layers: [...state.layers, clampGeometry(action.layer)],
-        selectedId: action.layer.type === "drawing" ? null : action.layer.id,
+        // A drawing goes under everything placed (index 0, just above the base); the rest on top.
+        layers: action.layer.type === "drawing" ? [added, ...state.layers] : [...state.layers, added],
+        selectedId: action.layer.type === "drawing" ? state.selectedId : action.layer.id,
         past: push(state.past, state.layers),
       };
     }

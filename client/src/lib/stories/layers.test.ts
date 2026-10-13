@@ -53,6 +53,13 @@ describe("editorReducer", () => {
     expect(state.selectedId).toBe(uuid(2));
   });
 
+  it("puts a drawing at the bottom of the stack (index 0, under everything placed) and keeps the selection", () => {
+    const drawing: EditorLayer = { id: uuid(9), type: "drawing", x: 0.5, y: 0.5, scale: 1, rotation: 0, strokes: [] };
+    const state = run({ type: "add", layer: text(1) }, { type: "add", layer: text(2) }, { type: "add", layer: drawing });
+    expect(state.layers.map((layer) => layer.id)).toEqual([uuid(9), uuid(1), uuid(2)]);
+    expect(state.selectedId).toBe(uuid(2));
+  });
+
   it("undo steps back one action at a time", () => {
     const state = run({ type: "add", layer: text(1) }, { type: "add", layer: text(2) }, { type: "undo" });
     expect(state.layers.map((layer) => layer.id)).toEqual([uuid(1)]);

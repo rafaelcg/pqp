@@ -4092,30 +4092,32 @@ html[data-immersive-stage] [data-immersive-hide] {
    in `lib/stories/layers.ts`: 8cqw x size for type, 84cqw at most wide.
    ------------------------------------------------------------------ */
 :root {
-  --story-c-white: oklch(1 0 0);
-  --story-c-white-on: oklch(0.16 0.012 250);
-  --story-c-black: oklch(0.14 0.01 250);
-  --story-c-black-on: oklch(1 0 0);
-  --story-c-lime: oklch(0.88 0.19 125);
-  --story-c-lime-on: oklch(0.16 0.012 250);
-  --story-c-yellow: oklch(0.91 0.17 95);
-  --story-c-yellow-on: oklch(0.16 0.012 250);
-  --story-c-orange: oklch(0.77 0.17 55);
-  --story-c-orange-on: oklch(0.16 0.012 250);
-  --story-c-red: oklch(0.62 0.22 25);
-  --story-c-red-on: oklch(1 0 0);
-  --story-c-pink: oklch(0.75 0.18 350);
-  --story-c-pink-on: oklch(0.16 0.012 250);
-  --story-c-purple: oklch(0.56 0.21 300);
-  --story-c-purple-on: oklch(1 0 0);
-  --story-c-blue: oklch(0.58 0.19 255);
-  --story-c-blue-on: oklch(1 0 0);
-  --story-c-cyan: oklch(0.86 0.12 205);
-  --story-c-cyan-on: oklch(0.16 0.012 250);
-  --story-c-green: oklch(0.7 0.18 150);
-  --story-c-green-on: oklch(0.16 0.012 250);
-  --story-c-gray: oklch(0.66 0.01 250);
-  --story-c-gray-on: oklch(0.16 0.012 250);
+  /* One table for web, iOS and Android: STORY_TEXT_COLOR_HEX in @pqp/shared (a test keeps them equal).
+     The -on color is what a solid pill holds: black on all but black. */
+  --story-c-white: #FFFFFF;
+  --story-c-white-on: #000000;
+  --story-c-black: #000000;
+  --story-c-black-on: #FFFFFF;
+  --story-c-lime: #BBEC4C;
+  --story-c-lime-on: #000000;
+  --story-c-yellow: #FFD60A;
+  --story-c-yellow-on: #000000;
+  --story-c-orange: #FF9500;
+  --story-c-orange-on: #000000;
+  --story-c-red: #FF3B30;
+  --story-c-red-on: #000000;
+  --story-c-pink: #FF5FA2;
+  --story-c-pink-on: #000000;
+  --story-c-purple: #AF52DE;
+  --story-c-purple-on: #000000;
+  --story-c-blue: #0A84FF;
+  --story-c-blue-on: #000000;
+  --story-c-cyan: #64D2FF;
+  --story-c-cyan-on: #000000;
+  --story-c-green: #30D158;
+  --story-c-green-on: #000000;
+  --story-c-gray: #8E8E93;
+  --story-c-gray-on: #000000;
   --story-text-soft: oklch(0 0 0 / 0.5);
   --story-layer-shadow: 0 4px 18px oklch(0 0 0 / 0.35);
   --story-text-shadow: 0 1px 10px oklch(0 0 0 / 0.28);
