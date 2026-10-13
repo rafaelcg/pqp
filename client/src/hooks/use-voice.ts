@@ -64,6 +64,7 @@ import {
   systemAudioStrippedNoticeKey,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
+import { lostSoundToFailure, retryShareWithoutSound } from "@/lib/share-silent-fallback";
 import {
   armOrFallBackToChromiumAudio,
   attachNativeShareAudio,
@@ -694,6 +695,19 @@ export interface VoiceState {
    * its own does not.
    */
   screenShareAudioFailed: boolean;
+  /**
+   * The message of the last screen share that failed to start, the same
+   * string as `error`. The docked call bar shows the share error only while
+   * `error` still equals this, so another error or a cleared one hides it.
+   */
+  screenShareError: string | null;
+  /**
+   * Our own watch party share is live without the film's sound because the
+   * computer's sound failed to open (PQP-31). The host's warning stays up for
+   * as long as this is true instead of auto-hiding like `notice`: the whole
+   * audience is affected and the host is the only one who can fix it.
+   */
+  watchPartyShareSilent: boolean;
   /**
    * We are the SFU presenter of a watch party and our OWN screen-share
    * publication is not currently live — a reconnect dropped it and the client
@@ -1920,6 +1934,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     isShareCursorVisible: false,
     shareCaptureHint: null,
     screenShareAudioFailed: false,
+    screenShareError: null,
+    watchPartyShareSilent: false,
     sharePublishRecovering: false,
     incomingCalls: [],
     isCameraOn: false,
@@ -4045,6 +4061,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.isSharingScreenAudio = false;
     state.isSharingSystemAudio = false;
     state.isShareCursorVisible = false;
+    state.watchPartyShareSilent = false;
     // The capture is gone, so the publish watchdog has nothing to watch: stop
     // it and drop any recovering flag rather than leave a timer firing against
     // a share that ended.
@@ -5101,6 +5118,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       isShareCursorVisible: false,
       shareCaptureHint: null,
       screenShareAudioFailed: false,
+      screenShareError: null,
+      watchPartyShareSilent: false,
       sharePublishRecovering: false,
       incomingCalls: state.incomingCalls,
       isCameraOn: false,
@@ -6819,6 +6838,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           meshShareLimit(),
           canPromoteTransport(),
         );
+        state.screenShareError = state.error;
         emit();
         return;
       }
@@ -6828,6 +6848,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // programmatic call, not a user tapping a button we should not have shown.
       if (!supportsScreenShare()) {
         state.error = screenShareUnsupportedMessage();
+        state.screenShareError = state.error;
         emit();
         return;
       }
@@ -6881,6 +6902,9 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
 
       let stream: MediaStream;
+      // PQP-31: the sound failed and the shell gave the same surface back
+      // without it. Said once the share is up.
+      let sharedWithoutSoundAfterFailure = false;
       // A stream the caller already opened (the watch party preview) is
       // published as it is. The picker has already run, the host has already
       // looked at the result, and asking again here would broadcast a
@@ -6891,40 +6915,56 @@ export function createVoiceController(transport: RealtimeTransport) {
       try {
         stream = await navigator.mediaDevices.getDisplayMedia(options);
       } catch (err) {
-        // A browser that refuses the *shape* of the request rather than the
-        // request itself would otherwise cost the user their screen share
-        // entirely, so ask again the old way. Only for the two names that mean
-        // "I do not understand this request", because only those are thrown
-        // before the picker opens. Everything else (the person cancelling,
-        // the OS refusing the capture, the chosen surface failing to start)
-        // happens *after* they already chose something, and asking again there
-        // would put a second picker on screen with nothing to explain it.
-        const shapeRefused =
-          err instanceof Error &&
-          (err.name === "TypeError" || err.name === "NotSupportedError");
-        if (!shapeRefused) {
-          state.error = screenShareErrorMessage(err);
-          // Everything audio can do to a capture, it does to the whole capture:
-          // the video was fine and the person still got nothing. Offer the same
-          // share without sound rather than leaving them to work out that the
-          // toggle on the other bar is what took their screen away. Cancelling
-          // the picker lands here too and is not a failure to recover from.
-          state.screenShareAudioFailed =
-            askedForAudio &&
+        const silent = await retryShareWithoutSound({
+          err,
+          options,
+          env: captureEnv,
+          desktop: getDesktop(),
+          getDisplayMedia: (retry) => navigator.mediaDevices.getDisplayMedia(retry),
+        });
+        if (silent) {
+          stream = silent;
+          sharedWithoutSoundAfterFailure = true;
+        } else {
+          // A browser that refuses the *shape* of the request rather than the
+          // request itself would otherwise cost the user their screen share
+          // entirely, so ask again the old way. Only for the two names that mean
+          // "I do not understand this request", because only those are thrown
+          // before the picker opens. Everything else (the person cancelling,
+          // the OS refusing the capture, the chosen surface failing to start)
+          // happens *after* they already chose something, and asking again there
+          // would put a second picker on screen with nothing to explain it.
+          const shapeRefused =
             err instanceof Error &&
-            err.name !== "NotAllowedError";
-          // The audio graph the arm built is for a share that did not happen.
-          discardPrimedNativeShareAudio();
-          emit();
-          return;
-        }
-        try {
-          stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        } catch {
-          state.error = screenShareErrorMessage(err);
-          discardPrimedNativeShareAudio();
-          emit();
-          return;
+            (err.name === "TypeError" || err.name === "NotSupportedError");
+          if (!shapeRefused) {
+            state.error = screenShareErrorMessage(err);
+            state.screenShareError = state.error;
+            // Everything audio can do to a capture, it does to the whole capture:
+            // the video was fine and the person still got nothing. Offer the same
+            // share without sound rather than leaving them to work out that the
+            // toggle on the other bar is what took their screen away. Cancelling
+            // the picker lands here too and is not a failure to recover from.
+            // A shell with `silentRetry` already did this above; this is the
+            // browser and every older shell.
+            state.screenShareAudioFailed =
+              askedForAudio &&
+              err instanceof Error &&
+              err.name !== "NotAllowedError";
+            // The audio graph the arm built is for a share that did not happen.
+            discardPrimedNativeShareAudio();
+            emit();
+            return;
+          }
+          try {
+            stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+          } catch {
+            state.error = screenShareErrorMessage(err);
+            state.screenShareError = state.error;
+            discardPrimedNativeShareAudio();
+            emit();
+            return;
+          }
         }
       }
       }
@@ -6932,6 +6972,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!track) {
         for (const t of stream.getTracks()) t.stop();
         state.error = translateMessage("voice.error.noVideoTrack");
+        state.screenShareError = state.error;
         discardPrimedNativeShareAudio();
         emit();
         return;
@@ -6957,6 +6998,13 @@ export function createVoiceController(transport: RealtimeTransport) {
             desktopAppAvailable: false,
           }),
         );
+      }
+      // The watch party preview opened its capture itself, so a silent
+      // fallback there is read off the stream it handed over.
+      const lostSound =
+        sharedWithoutSoundAfterFailure || lostSoundToFailure(intent.stream);
+      if (lostSound && intent.watchParty !== true) {
+        state.notice = translateMessage("voice.notice.shareAudioFallback");
       }
       // The shell's capture joins the stream here, after the strip (it is
       // not the mixer, so there is nothing in it to strip) and before
@@ -7099,6 +7147,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.isSharingScreen = true;
       state.localScreenStream = stream;
       state.isSharingScreenAudio = hasAudio;
+      state.watchPartyShareSilent = lostSound && intent.watchParty === true;
       // A new share answers whatever the last one's dead-picture card said.
       state.shareCaptureHint = null;
       shareStartedAt = Date.now();
@@ -7172,6 +7221,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         void publishMicArchiveIfRecording();
       } catch (err) {
         state.error = screenShareErrorMessage(err);
+        state.screenShareError = state.error;
         await stopScreenShareInternal();
         emit();
       }
