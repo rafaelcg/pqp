@@ -228,6 +228,8 @@ export interface MessageAuthorInfo {
    * that quietly drops a field.
    */
   customStatus?: string | null;
+  /** The roster's picture: a server bot's Breu, for its activity row. */
+  avatarUrl?: string | null;
 }
 
 export interface MessageRoleColor {
@@ -2316,7 +2318,7 @@ export const MessageList = memo(function MessageList({
       />
 
       {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
-      <TypingIndicator users={typingUsers} />
+      <TypingIndicator users={typingUsers} authors={authors} />
 
       {jumpNotice && (
         <p
@@ -2609,7 +2611,13 @@ function EmptyState({
   );
 }
 
-function TypingIndicator({ users }: { users: TypingUser[] }) {
+function TypingIndicator({
+  users,
+  authors,
+}: {
+  users: TypingUser[];
+  authors: ReadonlyMap<string, MessageAuthorInfo>;
+}) {
   const { t } = useTranslation();
   const retro = useRetroLook();
   if (retro) {
@@ -2631,7 +2639,7 @@ function TypingIndicator({ users }: { users: TypingUser[] }) {
     return null;
   }
   if (people.length === 0) {
-    return <BotActivityRows users={bots} />;
+    return <BotActivityRows users={bots} authors={authors} />;
   }
   const names = people.map((user) => user.displayName);
   const label =
@@ -2660,7 +2668,7 @@ function TypingIndicator({ users }: { users: TypingUser[] }) {
         {label}…
       </span>
     </p>
-    {bots.length > 0 && <BotActivityRows users={bots} />}
+    {bots.length > 0 && <BotActivityRows users={bots} authors={authors} />}
     </>
   );
 }
@@ -2699,21 +2707,100 @@ const BOT_ACTIVITY_KEYS: Record<string, MessageKey> = {
  * A server bot at work, in place of "typing": what it is doing right now, with
  * a shimmer while it runs. Driven by the `activity` on its typing frames.
  */
-function BotActivityRows({ users }: { users: TypingUser[] }) {
+/** Past this a bot's thinking says so, so a slow answer does not read as a hang. */
+const BOT_SLOW_MS = 15_000;
+
+/**
+ * A server bot at work, drawn as the start of its reply: its face (focused on
+ * a tool, curious while it thinks), its name with BOT and BETA, and what it is
+ * doing now. Replaced by the message itself when it posts.
+ */
+function BotActivityRows({
+  users,
+  authors,
+}: {
+  users: TypingUser[];
+  authors: ReadonlyMap<string, MessageAuthorInfo>;
+}) {
   const { t } = useTranslation();
+  const started = useRef(new Map<string, number>());
+  const [, tick] = useState(0);
+  const now = Date.now();
+  for (const user of users) {
+    if (!started.current.has(user.userId)) started.current.set(user.userId, now);
+  }
+  for (const id of [...started.current.keys()]) {
+    if (!users.some((user) => user.userId === id)) started.current.delete(id);
+  }
+  useEffect(() => {
+    if (users.length === 0) return;
+    const timer = setTimeout(() => tick((n) => n + 1), 1000);
+    return () => clearTimeout(timer);
+  });
   return (
-    <div className="flex shrink-0 flex-col gap-1 px-4 pb-1" aria-live="polite">
+    <div className="flex shrink-0 flex-col gap-2 px-4 pb-2" aria-live="polite">
       {users.map((user) => {
         const tool = user.activity?.tool ?? null;
-        const key = tool === null ? "chat.botActivity.thinking" : (BOT_ACTIVITY_KEYS[tool] ?? "chat.botActivity.working");
+        const slow = tool === null && now - (started.current.get(user.userId) ?? now) > BOT_SLOW_MS;
+        const key =
+          tool === null
+            ? slow
+              ? "chat.botActivity.stillThinking"
+              : "chat.botActivity.thinkingPill"
+            : (BOT_ACTIVITY_KEYS[tool] ?? "chat.botActivity.working");
+        const avatarUrl = authors.get(user.userId)?.avatarUrl ?? null;
         return (
-          <span key={user.userId} className="inline-flex items-center gap-1.5 text-xs">
-            <Loader2 className="h-3.5 w-3.5 shrink-0 text-paper-muted motion-safe:animate-spin" aria-hidden />
-            <span className="bot-shimmer">{t(key, { name: user.displayName })}…</span>
-          </span>
+          <div key={user.userId} className="flex items-center gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full ring-2 ring-[var(--color-accent-soft)]">
+              <UserAvatar
+                name={user.displayName}
+                avatarUrl={avatarUrl}
+                className="h-8 w-8"
+                rounded="full"
+                fallbackClassName="bg-ink-3 text-xs"
+                botFace={tool === null ? "oi" : "focado"}
+              />
+            </span>
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 text-sm font-bold text-text">
+                {user.displayName}
+                <ServerBotTags />
+              </p>
+              {tool === null ? (
+                <p className="text-sm text-text-secondary">
+                  <span className="bot-shimmer">{t(key, { name: user.displayName })}</span>
+                  {slow && <span className="block text-xs text-text-tertiary">{t("chat.botActivity.slowHint")}</span>}
+                </p>
+              ) : (
+                <span className="mt-0.5 inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-sm text-text-secondary">
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" aria-hidden />
+                  <span className="bot-shimmer">{t(key, { name: user.displayName })}</span>
+                </span>
+              )}
+            </div>
+          </div>
         );
       })}
     </div>
+  );
+}
+
+/** BOT and BETA beside a server bot's name; "removido" once it left the server. */
+function ServerBotTags({ gone = false }: { gone?: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <span className="inline-flex items-center gap-1 self-center">
+      <span className="rounded-[var(--radius-tick)] bg-accent-soft px-1 py-px text-[10px] font-bold uppercase tracking-wide text-on-accent-soft">
+        {t("chat.botTag")}
+      </span>
+      {gone ? (
+        <span className="rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-text-tertiary">
+          {t("chat.botRemoved")}
+        </span>
+      ) : (
+        <BetaTag />
+      )}
+    </span>
   );
 }
 
@@ -3003,6 +3090,8 @@ const MessageRow = memo(function MessageRow({
       : message.body;
   const hideBodyForBauCard = shownBody === "";
   const authorInfo = authors.get(message.authorId);
+  // A server bot's avatar is its Breu face URL, which nobody else's can be.
+  const serverBot = parseBotFaceAvatar(message.authorAvatarUrl) !== null;
   // A server bot's action card replaces its plain-text copy in the body. Only
   // for a bot author: the field is server-written, and this keeps it that way
   // on screen too.
@@ -3544,6 +3633,7 @@ const MessageRow = memo(function MessageRow({
                         rounded="lg"
                         className="h-9 w-9"
                         fallbackClassName="bg-ink-3 text-sm"
+                        botFace={serverBot && (authorGone || authorInfo?.status === "offline") ? "dormindo" : undefined}
                       />
                     )}
                   </AuthorButton>
@@ -3612,10 +3702,12 @@ const MessageRow = memo(function MessageRow({
                       marks={identityMarks({
                         rank: authorInfo?.rank,
                         isWebhook: message.isWebhook,
-                        isCharacter: authorInfo?.isCharacter,
+                        // A server bot says so in words (BOT, BETA) instead.
+                        isCharacter: serverBot ? false : authorInfo?.isCharacter,
                         ...rankBadges(authorInfo?.roleIds, roles),
                       })}
                     />
+                    {serverBot && <ServerBotTags gone={authorGone} />}
                   </span>
                   {forumOp && (
                     <span
