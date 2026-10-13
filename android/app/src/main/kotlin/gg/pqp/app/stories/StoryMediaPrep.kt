@@ -20,10 +20,10 @@ import kotlinx.coroutines.withContext
  *   1440 px. Re-encoding from pixels is what strips EXIF, location included.
  *   `ImageDecoder` applies the camera's rotation first, so the picture stands
  *   the right way up without the tag that said how.
- * - A video is measured, not transcoded: MP4 only, at most 30 s and 25 MB,
- *   refused with the reason before anything is uploaded. Transcoding to 720p
- *   (Media3 Transformer) is a follow-up; a phone clip that fits the limits
- *   plays everywhere as it is.
+ * - A video is measured first. A clip that fits (MP4, at most 30 s and 25 MB)
+ *   goes as it is, the way the story camera records it. One that does not is
+ *   handed back as [PrepResult.NeedsWork], and `VideoPrep` trims it to the 30 s
+ *   the person picked and shrinks it to 720p.
  */
 data class PreparedMedia(
     val bytes: ByteArray,
@@ -44,6 +44,20 @@ sealed interface PrepResult {
     data class Ready(val media: PreparedMedia) : PrepResult
     data class Refused(val reason: StoriesRules.MediaRefusal, val durationMs: Long? = null) : PrepResult
     data object Unreadable : PrepResult
+
+    /**
+     * A video that is a real video but not yet a story: longer than 30 s (the
+     * person chooses which 30 s) or a clip that fits the length and is over the
+     * size cap or too sharp for it (it is shrunk). `VideoPrep` turns it into a
+     * file that is `Ready`.
+     */
+    data class NeedsWork(
+        val uri: Uri,
+        val durationMs: Long,
+        val width: Int,
+        val height: Int,
+        val tooLong: Boolean,
+    ) : PrepResult
 }
 
 object StoryMediaPrep {
@@ -95,6 +109,7 @@ object StoryMediaPrep {
      * than needed (bounds first, then a power-of-two sample, so a 48 MP photo
      * never becomes 190 MB of pixels), and stand the picture up from its EXIF
      * orientation, because re-encoding drops the tag that said how to turn it.
+     * That includes the mirrored orientations a front-camera shot carries.
      */
     private fun decodeLegacy(context: Context, uri: Uri): Bitmap? {
         val resolver = context.contentResolver
@@ -113,9 +128,12 @@ object StoryMediaPrep {
                 )
             }
         }.getOrNull() ?: android.media.ExifInterface.ORIENTATION_NORMAL
-        val degrees = StoriesRules.rotationDegrees(orientation)
-        if (degrees == 0) return bitmap
-        val turn = android.graphics.Matrix().apply { postRotate(degrees.toFloat()) }
+        val (degrees, mirrored) = StoriesRules.exifTurn(orientation)
+        if (degrees == 0 && !mirrored) return bitmap
+        val turn = android.graphics.Matrix().apply {
+            if (mirrored) postScale(-1f, 1f)
+            if (degrees != 0) postRotate(degrees.toFloat())
+        }
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, turn, true)
             .also { if (it !== bitmap) bitmap.recycle() }
     }
@@ -139,10 +157,15 @@ object StoryMediaPrep {
         val size = runCatching {
             context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
         }.getOrNull() ?: -1L
+        if (width <= 0 || height <= 0 || durationMs == null || durationMs <= 0) return PrepResult.Unreadable
+        // A container Android can read but a story cannot carry (a .mov, a .webm) is
+        // not worked on: the type is the refusal.
+        if (type != "video/mp4") return PrepResult.Refused(StoriesRules.MediaRefusal.WrongType, durationMs)
+        val work = TrimRules.work(durationMs, size.coerceAtLeast(0), width, height, maxBytes)
+        if (work != null) return PrepResult.NeedsWork(uri, durationMs, width, height, tooLong = work == TrimRules.Work.Trim)
         StoriesRules.checkMedia(type, size.coerceAtLeast(0), durationMs, maxBytes)?.let {
             return PrepResult.Refused(it, durationMs)
         }
-        if (width <= 0 || height <= 0) return PrepResult.Unreadable
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return PrepResult.Unreadable
         if (bytes.size > maxBytes) return PrepResult.Refused(StoriesRules.MediaRefusal.TooBig)
         return PrepResult.Ready(PreparedMedia(bytes, "video/mp4", width, height, durationMs, uri))

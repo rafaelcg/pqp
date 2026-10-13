@@ -1,15 +1,9 @@
 package gg.pqp.app.stories.ui
 
-import android.content.Context
-import android.content.Intent
-import android.graphics.Bitmap
-import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -62,7 +56,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -80,7 +73,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import gg.pqp.app.R
@@ -98,6 +90,8 @@ import gg.pqp.app.stories.StoryAudienceTargets
 import gg.pqp.app.stories.StoryMediaInput
 import gg.pqp.app.stories.StoryMediaPrep
 import gg.pqp.app.stories.StorySticker
+import gg.pqp.app.stories.VideoPrep
+import gg.pqp.app.stories.camera.StoryCameraScreen
 import gg.pqp.app.stories.createStory
 import gg.pqp.app.stories.publishStory
 import gg.pqp.app.stories.storyAudiences
@@ -105,14 +99,9 @@ import gg.pqp.app.stories.uploadStoryMedia
 import gg.pqp.app.ui.theme.Palette
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
-import java.io.File
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private enum class ComposeMode { Text, Camera, Call }
-
-private enum class CaptureKind { Photo, Video }
 
 private sealed interface PostState {
     data object Idle : PostState
@@ -184,63 +173,74 @@ fun StoryComposer(
     }
 
     val tooLong = { seconds: Long -> context.getString(R.string.stories_compose_too_long, (seconds / 1000).toInt()) }
+    // A video that needs cutting (longer than 30 s) opens the trim screen; one
+    // that only needs shrinking goes straight to the cutter.
+    var trimming by remember { mutableStateOf<PrepResult.NeedsWork?>(null) }
+    var working by remember { mutableStateOf<Float?>(null) }
+    var workJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+
+    val show: (PrepResult) -> Unit = { result ->
+        when (result) {
+            is PrepResult.Ready -> media = result.media
+            is PrepResult.Refused -> refusal = when (result.reason) {
+                StoriesRules.MediaRefusal.TooLong -> tooLong(result.durationMs ?: 0)
+                StoriesRules.MediaRefusal.TooBig -> context.getString(R.string.stories_compose_too_big)
+                StoriesRules.MediaRefusal.WrongType -> context.getString(R.string.stories_compose_wrong_type)
+            }
+            PrepResult.Unreadable -> refusal = context.getString(R.string.stories_compose_unreadable)
+            // Cut and shrunk once already and still not a story: say so, do not loop.
+            is PrepResult.NeedsWork -> refusal = context.getString(R.string.stories_compose_too_big)
+        }
+    }
+    val cutVideo: (PrepResult.NeedsWork, Long, Long) -> Unit = { work, startMs, endMs ->
+        trimming = null
+        working = 0f
+        workJob = scope.launch {
+            try {
+                val out = VideoPrep.export(context, work.uri, startMs, endMs, work.width, work.height) { working = it }
+                show(StoryMediaPrep.prepare(context, out, config.maxBytes).let {
+                    if (it is PrepResult.NeedsWork) PrepResult.Refused(StoriesRules.MediaRefusal.TooBig) else it
+                })
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                refusal = context.getString(R.string.stories_trim_failed)
+            } finally {
+                working = null
+                workJob = null
+            }
+        }
+    }
     val accept: (Uri?) -> Unit = { uri ->
         if (uri != null) {
             preparing = true
             refusal = null
             scope.launch {
-                when (val result = StoryMediaPrep.prepare(context, uri, config.maxBytes)) {
-                    is PrepResult.Ready -> media = result.media
-                    is PrepResult.Refused -> refusal = when (result.reason) {
-                        StoriesRules.MediaRefusal.TooLong -> tooLong(result.durationMs ?: 0)
-                        StoriesRules.MediaRefusal.TooBig -> context.getString(R.string.stories_compose_too_big)
-                        StoriesRules.MediaRefusal.WrongType -> context.getString(R.string.stories_compose_wrong_type)
-                    }
-                    PrepResult.Unreadable -> refusal = context.getString(R.string.stories_compose_unreadable)
-                }
+                val result = StoryMediaPrep.prepare(context, uri, config.maxBytes)
                 preparing = false
+                if (result is PrepResult.NeedsWork) {
+                    if (result.tooLong) {
+                        trimming = result
+                    } else {
+                        cutVideo(result, 0L, result.durationMs.coerceAtMost(StoriesRules.MAX_VIDEO_MS))
+                    }
+                } else {
+                    show(result)
+                }
             }
         }
     }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), accept)
-    var captureUri by remember { mutableStateOf<Uri?>(null) }
-    val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        if (ok) accept(captureUri)
-    }
-    val recordVideo = rememberLauncherForActivityResult(CaptureShortVideo()) { ok ->
-        if (ok) accept(captureUri)
-    }
-
-    // The app declares CAMERA (calls use it), and Android then refuses
-    // ACTION_IMAGE_CAPTURE / VIDEO_CAPTURE with a SecurityException until the
-    // permission is granted, even though the camera app is the one shooting.
-    // So: ask first, and never let a refused launch take the app down.
-    val unreadable = context.getString(R.string.stories_compose_unreadable)
-    val launchCapture: (CaptureKind) -> Unit = { kind ->
-        captureUri = captureTarget(context, if (kind == CaptureKind.Photo) "jpg" else "mp4")
-        captureUri?.let { uri ->
-            runCatching {
-                if (kind == CaptureKind.Photo) takePhoto.launch(uri) else recordVideo.launch(uri)
-            }.onFailure { refusal = unreadable }
-        }
-    }
-    var pendingCapture by remember { mutableStateOf<CaptureKind?>(null) }
-    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        val kind = pendingCapture
-        pendingCapture = null
-        if (granted && kind != null) launchCapture(kind)
-    }
-    val withCamera: (CaptureKind) -> Unit = { kind ->
-        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
-            context,
-            android.Manifest.permission.CAMERA,
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        if (granted) {
-            launchCapture(kind)
-        } else {
-            pendingCapture = kind
-            cameraPermission.launch(android.Manifest.permission.CAMERA)
-        }
+    val openGallery: () -> Unit = {
+        pick.launch(
+            PickVisualMediaRequest(
+                if (config.videoEnabled) {
+                    ActivityResultContracts.PickVisualMedia.ImageAndVideo
+                } else {
+                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                },
+            ),
+        )
     }
 
     val ready = when (mode) {
@@ -320,6 +320,9 @@ fun StoryComposer(
         }
     }
 
+    // The live camera owns the whole screen until there is something to edit.
+    val showingCamera = mode == ComposeMode.Camera && media == null && config.mediaEnabled
+
     Dialog(
         // Not while posting: closing mid-post would cancel the upload or the
         // publish and leave a story that never goes live (the server sweeps
@@ -334,157 +337,176 @@ fun StoryComposer(
                 .background(Color.Black)
                 .testTag("stories.composer"),
         ) {
-            // The canvas: what the story will look like.
-            when {
-                mode == ComposeMode.Camera && media != null -> MediaPreview(media!!)
-                mode == ComposeMode.Camera -> Box(Modifier.fillMaxSize().background(Color(0xFF15191E)))
-                else -> Box(Modifier.fillMaxSize().background(backgroundBrush(background)))
-            }
-            // Controls stay legible over a bright photo or clip.
-            if (mode == ComposeMode.Camera && media != null) {
-                Box(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(320.dp)
-                        .background(
-                            androidx.compose.ui.graphics.Brush.verticalGradient(
-                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f)),
-                            ),
-                        ),
-                )
-            }
-
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .imePadding(),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(Spacing.sm)) {
-                    IconButton(
-                        onClick = onDismiss,
-                        enabled = post != PostState.Posting,
-                        modifier = Modifier.testTag("stories.composer.close"),
-                    ) {
-                        Icon(PqpIcons.Close, contentDescription = stringResource(R.string.stories_viewer_close), tint = Color.White)
-                    }
-                    Text(
-                        stringResource(R.string.stories_compose_title),
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (mode == ComposeMode.Camera && media != null) {
-                        androidx.compose.material3.TextButton(
-                            onClick = {
-                                media = null
-                                caption = ""
+            if (showingCamera) {
+                StoryCameraScreen(
+                    videoEnabled = config.videoEnabled,
+                    busy = preparing,
+                    message = refusal,
+                    onClose = onDismiss,
+                    onGallery = openGallery,
+                    onCaptured = { accept(it) },
+                    modeTabs = {
+                        ModeTabs(
+                            mode = mode,
+                            mediaEnabled = config.mediaEnabled,
+                            onMode = {
+                                mode = it
+                                refusal = null
+                                if (it == ComposeMode.Call && text.isBlank()) {
+                                    text = context.getString(R.string.stories_call_default_text)
+                                }
                             },
-                            modifier = Modifier.testTag("stories.composer.change"),
-                        ) { Text(stringResource(R.string.stories_compose_change), color = Color.White) }
-                    }
-                }
-
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    when (mode) {
-                        ComposeMode.Camera -> if (media == null) {
-                            CameraChoices(
-                                videoEnabled = config.videoEnabled,
-                                preparing = preparing,
-                                refusal = refusal,
-                                onPhoto = { withCamera(CaptureKind.Photo) },
-                                onVideo = { withCamera(CaptureKind.Video) },
-                                onGallery = {
-                                    pick.launch(
-                                        PickVisualMediaRequest(
-                                            if (config.videoEnabled) {
-                                                ActivityResultContracts.PickVisualMedia.ImageAndVideo
-                                            } else {
-                                                ActivityResultContracts.PickVisualMedia.ImageOnly
-                                            },
-                                        ),
-                                    )
-                                },
-                            )
-                        }
-                        ComposeMode.Text, ComposeMode.Call -> CardEditor(
-                            text = text,
-                            onText = { text = it.take(StoriesRules.TEXT_MAX) },
-                            background = background,
                         )
-                    }
-                }
-
-                if (mode == ComposeMode.Camera && media != null) {
-                    TextField(
-                        value = caption,
-                        onValueChange = { caption = it.take(StoriesRules.CAPTION_MAX) },
-                        placeholder = { Text(stringResource(R.string.stories_compose_caption)) },
-                        singleLine = true,
-                        colors = darkFieldColors(),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = Spacing.gutter)
-                            .testTag("stories.composer.caption"),
-                    )
-                }
-                if (mode != ComposeMode.Camera) {
-                    BackgroundSwatches(selected = background, onPick = { background = it })
-                }
-                if (mode == ComposeMode.Call) {
-                    CallPicker(
-                        session = session,
-                        options = options,
-                        selected = callChannel,
-                        onPick = { callChannel = it },
-                        meId = (phase as? SessionPhase.Ready)?.me?.id,
-                        occupancy = occupancy,
-                    )
-                }
-
-                ModeTabs(
-                    mode = mode,
-                    mediaEnabled = config.mediaEnabled,
-                    onMode = {
-                        mode = it
-                        if (it == ComposeMode.Call && text.isBlank()) {
-                            text = context.getString(R.string.stories_call_default_text)
-                        }
                     },
                 )
-                if (audienceFailed && options == null) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
+            } else {
+                // The canvas: what the story will look like.
+                when {
+                    mode == ComposeMode.Camera && media != null -> MediaPreview(media!!)
+                    mode == ComposeMode.Camera -> Box(Modifier.fillMaxSize().background(Color(0xFF15191E)))
+                    else -> Box(Modifier.fillMaxSize().background(backgroundBrush(background)))
+                }
+                // Controls stay legible over a bright photo or clip.
+                if (mode == ComposeMode.Camera && media != null) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomCenter)
                             .fillMaxWidth()
-                            .padding(horizontal = Spacing.gutter)
-                            .testTag("stories.composer.audienceFailed"),
-                    ) {
+                            .height(320.dp)
+                            .background(
+                                androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f)),
+                                ),
+                            ),
+                    )
+                }
+
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .navigationBarsPadding()
+                        .imePadding(),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(Spacing.sm)) {
+                        IconButton(
+                            onClick = onDismiss,
+                            enabled = post != PostState.Posting,
+                            modifier = Modifier.testTag("stories.composer.close"),
+                        ) {
+                            Icon(PqpIcons.Close, contentDescription = stringResource(R.string.stories_viewer_close), tint = Color.White)
+                        }
                         Text(
-                            stringResource(R.string.stories_audience_failed),
+                            stringResource(R.string.stories_compose_title),
                             color = Color.White,
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.weight(1f),
                         )
-                        androidx.compose.material3.TextButton(
-                            onClick = { audienceAttempt += 1 },
-                            modifier = Modifier.testTag("stories.composer.audienceRetry"),
-                        ) { Text(stringResource(R.string.connection_retry), color = Palette.Signal) }
+                        if (mode == ComposeMode.Camera && media != null) {
+                            androidx.compose.material3.TextButton(
+                                onClick = {
+                                    media = null
+                                    caption = ""
+                                },
+                                modifier = Modifier.testTag("stories.composer.change"),
+                            ) { Text(stringResource(R.string.stories_compose_change), color = Color.White) }
+                        }
                     }
+
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        when (mode) {
+                            // The picture is the canvas itself (drawn behind); the live
+                            // camera is `showingCamera` above.
+                            ComposeMode.Camera -> Unit
+                            ComposeMode.Text, ComposeMode.Call -> CardEditor(
+                                text = text,
+                                onText = { text = it.take(StoriesRules.TEXT_MAX) },
+                                background = background,
+                            )
+                        }
+                    }
+
+                    if (mode == ComposeMode.Camera && media != null) {
+                        TextField(
+                            value = caption,
+                            onValueChange = { caption = it.take(StoriesRules.CAPTION_MAX) },
+                            placeholder = { Text(stringResource(R.string.stories_compose_caption)) },
+                            singleLine = true,
+                            colors = darkFieldColors(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.gutter)
+                                .testTag("stories.composer.caption"),
+                        )
+                    }
+                    if (mode != ComposeMode.Camera) {
+                        BackgroundSwatches(selected = background, onPick = { background = it })
+                    }
+                    if (mode == ComposeMode.Call) {
+                        CallPicker(
+                            session = session,
+                            options = options,
+                            selected = callChannel,
+                            onPick = { callChannel = it },
+                            meId = (phase as? SessionPhase.Ready)?.me?.id,
+                            occupancy = occupancy,
+                        )
+                    }
+
+                    ModeTabs(
+                        mode = mode,
+                        mediaEnabled = config.mediaEnabled,
+                        onMode = {
+                            mode = it
+                            if (it == ComposeMode.Call && text.isBlank()) {
+                                text = context.getString(R.string.stories_call_default_text)
+                            }
+                        },
+                    )
+                    if (audienceFailed && options == null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.gutter)
+                                .testTag("stories.composer.audienceFailed"),
+                        ) {
+                            Text(
+                                stringResource(R.string.stories_audience_failed),
+                                color = Color.White,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                            androidx.compose.material3.TextButton(
+                                onClick = { audienceAttempt += 1 },
+                                modifier = Modifier.testTag("stories.composer.audienceRetry"),
+                            ) { Text(stringResource(R.string.connection_retry), color = Palette.Signal) }
+                        }
+                    }
+                    Button(
+                        onClick = { choosingAudience = true },
+                        enabled = ready && options != null,
+                        shape = MaterialTheme.shapes.small,
+                        colors = ButtonDefaults.buttonColors(containerColor = Palette.Signal, contentColor = Palette.Ink),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.gutter, vertical = Spacing.sm)
+                            .testTag("stories.composer.next"),
+                    ) { Text(stringResource(R.string.stories_compose_next)) }
                 }
-                Button(
-                    onClick = { choosingAudience = true },
-                    enabled = ready && options != null,
-                    shape = MaterialTheme.shapes.small,
-                    colors = ButtonDefaults.buttonColors(containerColor = Palette.Signal, contentColor = Palette.Ink),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.gutter, vertical = Spacing.sm)
-                        .testTag("stories.composer.next"),
-                ) { Text(stringResource(R.string.stories_compose_next)) }
             }
+        }
+
+        trimming?.let { work ->
+            StoryTrimScreen(
+                uri = work.uri,
+                durationMs = work.durationMs,
+                onConfirm = { startMs, endMs -> cutVideo(work, startMs, endMs) },
+                onCancel = { trimming = null },
+            )
+        }
+        working?.let { progress ->
+            StoryVideoWorking(progress = progress, onCancel = { workJob?.cancel() })
         }
 
         if (choosingAudience) {
@@ -501,53 +523,6 @@ fun StoryComposer(
             )
         }
     }
-}
-
-@Composable
-private fun CameraChoices(
-    videoEnabled: Boolean,
-    preparing: Boolean,
-    refusal: String?,
-    onPhoto: () -> Unit,
-    onVideo: () -> Unit,
-    onGallery: () -> Unit,
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(Spacing.md),
-        modifier = Modifier.padding(Spacing.xl),
-    ) {
-        if (preparing) {
-            CircularProgressIndicator(color = Color.White)
-            return@Column
-        }
-        ChoiceButton(stringResource(R.string.stories_compose_take_photo), "stories.composer.photo", onPhoto)
-        if (videoEnabled) ChoiceButton(stringResource(R.string.stories_compose_record_video), "stories.composer.video", onVideo)
-        ChoiceButton(stringResource(R.string.stories_compose_gallery), "stories.composer.gallery", onGallery)
-        refusal?.let {
-            Text(
-                it,
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.testTag("stories.composer.refusal"),
-            )
-        }
-    }
-}
-
-@Composable
-private fun ChoiceButton(label: String, tag: String, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        shape = MaterialTheme.shapes.small,
-        // The scheme's outline is drawn for a page, not for a black camera
-        // canvas, where it disappears; a white hairline reads on both.
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(52.dp)
-            .testTag(tag),
-    ) { Text(label, color = Color.White) }
 }
 
 @Composable
@@ -885,27 +860,10 @@ private fun AudienceRow(title: String, subtitle: String?, checked: Boolean, enab
 
 @Composable
 private fun MediaPreview(media: PreparedMedia) {
-    if (!media.isVideo) {
+    if (media.isVideo) {
+        StoryVideoSurface(uri = media.previewUri, muted = false, modifier = Modifier.fillMaxSize())
+    } else {
         AsyncImage(model = media.previewUri, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-        return
-    }
-    val context = LocalContext.current
-    var frame by remember(media) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(media) {
-        frame = withContext(Dispatchers.IO) {
-            runCatching {
-                val retriever = MediaMetadataRetriever()
-                try {
-                    retriever.setDataSource(context, media.previewUri)
-                    retriever.getFrameAtTime(0)
-                } finally {
-                    retriever.release()
-                }
-            }.getOrNull()
-        }
-    }
-    frame?.let {
-        Image(bitmap = it.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
     }
 }
 
@@ -920,18 +878,3 @@ private fun darkFieldColors() = TextFieldDefaults.colors(
     focusedPlaceholderColor = Color.White.copy(alpha = 0.6f),
     unfocusedPlaceholderColor = Color.White.copy(alpha = 0.6f),
 )
-
-/** A file in the app's cache for the system camera to write into. */
-private fun captureTarget(context: Context, extension: String): Uri? = runCatching {
-    val dir = File(context.cacheDir, "stories").apply { mkdirs() }
-    val file = File(dir, "capture-${System.currentTimeMillis()}.$extension")
-    FileProvider.getUriForFile(context, "${context.packageName}.stories", file)
-}.getOrNull()
-
-/** The system camera, told to stop at 30 s, the story limit. */
-private class CaptureShortVideo : ActivityResultContracts.CaptureVideo() {
-    override fun createIntent(context: Context, input: Uri): Intent =
-        super.createIntent(context, input)
-            .putExtra(MediaStore.EXTRA_DURATION_LIMIT, (StoriesRules.MAX_VIDEO_MS / 1000).toInt())
-            .putExtra(MediaStore.EXTRA_VIDEO_QUALITY, 1)
-}

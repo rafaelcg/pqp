@@ -2284,16 +2284,31 @@ does with it.
   DM quoting the story; reactions stay on the story. The menu has mute, report
   (`subjectType: "story"`, `minor_sexual` included), delete for the author and
   "Tirar do {servidor}" for each server the viewer moderates.
-- **Composer.** TEXTO / CÂMERA / CALL, then "Quem vê". The system camera and the
-  photo picker, so no storage permission; the camera permission is asked for
-  first because the app declares it (Android refuses `IMAGE_CAPTURE` from an
-  app that declares CAMERA without holding it, and that crash was found in QA).
-  A photo is re-encoded (1440 px long side, EXIF gone). A video is measured,
-  not transcoded: MP4, at most 30 s and 25 MB, refused with the reason before
-  any upload.
+- **Composer.** TEXTO / CÂMERA / CALL, then "Quem vê". CÂMERA opens on a live
+  camera (`stories/camera/`, CameraX), not on buttons: a 9:16 preview, a
+  shutter that takes a photo on a tap and records while it is held (a ring
+  fills over 30 s, sliding up zooms), front and back lens (the button or a
+  double tap, with a blurred still covering the swap), flash (the screen
+  lights up on the front lens, which has no unit; the torch lights while
+  filming), pinch to zoom, tap to focus. Photo, preview and clip share one 9:16
+  view port, so the file is cropped to what the screen showed, and a front shot
+  is mirrored into the file (EXIF flip, honoured by hand below API 28) so it
+  matches the preview. The gallery is the system photo picker (photos and
+  videos), so no storage permission. The camera permission has its own states:
+  asked on first open, "allow" while the system will still ask, "open settings"
+  once it will not (re-read on resume), and a photo-picker fallback in every
+  one of them; no microphone permission records a silent clip and says so.
+  A photo is re-encoded (1440 px long side, EXIF gone). A video that fits goes
+  as it is; one over 30 s opens "Escolhe os 30 segundos" (a 30 s window to slide
+  over a filmstrip, looping while it moves) and one over 25 MB or sharper than
+  1080p is shrunk, both by Media3 Transformer to 720p H.264/AAC
+  (`VideoPrep`, rules in `TrimRules`). A refusal still happens before any byte
+  leaves.
 - **Motion.** All Compose, so it follows the animator duration scale; at zero
   the deck transform and the drag shrink are skipped and the gestures keep
-  working.
+  working. The recording clock and the trim loop read the wall clock, never an
+  animation, so a clip still stops at 30 s with "Remove animations" on
+  (`CameraTest` pins it).
 
 Rules are pure and tested in `StoriesTest` (`stories/StoriesRules.kt`).
 

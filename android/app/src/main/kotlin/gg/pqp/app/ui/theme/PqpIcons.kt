@@ -488,6 +488,29 @@ private object Lucide {
         "M7 9a2 2 0 1 0 4 0a2 2 0 1 0 -4 0",
         "m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21",
     )
+
+    // The story camera.
+    val camera by lucide(
+        "M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z",
+        "M9 13a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+    )
+    val switchCamera by lucide(
+        "M11 19H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5",
+        "M13 5h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5",
+        "M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+        "m18 22-3-3 3-3",
+        "m6 2 3 3-3 3",
+    )
+    val zapOff by lucide(
+        "M10.513 4.856 13.12 2.17a.5.5 0 0 1 .86.46l-1.377 4.317",
+        "M15.656 10H20a1 1 0 0 1 .78 1.63l-1.72 1.773",
+        "M16.273 16.273 10.88 21.83a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14H4a1 1 0 0 1-.78-1.63l4.507-4.643",
+        "m2 2 20 20",
+    )
+    val video by lucide(
+        "m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5",
+        "M4 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z",
+    )
 }
 
 /**
@@ -627,4 +650,11 @@ object PqpIcons {
     val Reopen get() = Lucide.rotateCcw
     val Tag get() = Lucide.tag
     val Image get() = Lucide.image
+
+    // The story camera.
+    val Camera get() = Lucide.camera
+    val FlipCamera get() = Lucide.switchCamera
+    val Flash get() = Lucide.zap
+    val FlashOff get() = Lucide.zapOff
+    val Video get() = Lucide.video
 }
