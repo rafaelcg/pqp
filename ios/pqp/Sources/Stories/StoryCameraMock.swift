@@ -63,6 +63,8 @@ final class MockStoryCameraEngine: StoryCameraEngine {
         }
     }
 
+    func prepareForVideo() async {}
+
     func startRecording(torch: Bool) async throws {
         recordingStartedAt = Date()
     }

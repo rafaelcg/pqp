@@ -780,6 +780,12 @@ flip on a double tap or hold a flash across a recording.
 - **Permission states** are `StoryCameraAccess`: needs prompt, denied (offers
   Settings), restricted, no device, and "the camera is on in your call" (a
   device has one owner). Every one of them still offers the gallery and Files.
+- **The microphone is asked for the first time somebody holds for a video**
+  (`prepareForVideo`), never when the camera opens and never for a photo: a tap
+  on the shutter needs only the camera, so it works with the microphone refused
+  or never asked. If the sheet takes the finger with it, that hold records
+  nothing and the next one does. A video with no microphone is silent and the
+  badge says so.
 - **In a call, videos are silent.** A capture session with a microphone input
   takes the audio session from WebRTC, so while `voice.holdsSeat` or a DM call
   is up the camera records without a mic input, and the recording badge says so.
@@ -821,8 +827,9 @@ one of text / image / drawing / call / mention), never burned into the picture.
   its text so the box behind it hugs the words while typing. Tapping a text
   layer edits it. **Photos** come from `PhotosPicker` (re-encoded to 1440 px,
   no EXIF, at most 6), **drawing** is PencilKit (pen, marker, highlighter,
-  eraser) exported as ONE transparent 810x1440 PNG, the lowest layer above the
-  base. **Stickers**: the call (one per story, picked from the voice rooms of the
+  eraser) exported as ONE transparent 810x1440 PNG. Layer order is creation
+  order for every type, the drawing included: a new drawing goes on top, an
+  existing one redrawn keeps its place. **Stickers**: the call (one per story, picked from the voice rooms of the
   servers you can post to, with who is in them now) and mentions (friends and the
   members of the server the composer opened from, up to 5, each once).
 - **Posting**: `POST /api/stories` with `layers` (picture layers declare an

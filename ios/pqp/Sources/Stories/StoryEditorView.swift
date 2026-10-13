@@ -32,8 +32,10 @@ struct StoryEditorView: View {
     let onNext: () -> Void
     let canAdvance: Bool
 
+    /// The line the text tool is on: a new one (at the place it will start) or
+    /// an existing layer, edited where it is.
     private enum TextTarget: Identifiable {
-        case new
+        case new(x: Double, y: Double)
         case edit(String)
         var id: String {
             switch self {
@@ -73,12 +75,18 @@ struct StoryEditorView: View {
                 chrome(canvas)
 
                 if let target = textTarget {
+                    let place = textPlace(for: target)
                     StoryTextEditView(
-                        data: textData(for: target), isNew: { if case .new = target { true } else { false } }(),
-                        canvasWidth: canvas.width
+                        data: place.data, scale: place.scale,
+                        center: CGPoint(
+                            x: (proxy.size.width - canvas.width) / 2 + place.x * canvas.width,
+                            y: (proxy.size.height - canvas.height) / 2 + place.y * canvas.height
+                        ),
+                        rotation: place.rotation, canvasWidth: canvas.width
                     ) { result in
                         finishText(target, result)
                     }
+                    .id(target.id)
                     .transition(.opacity)
                     .zIndex(5)
                 }
@@ -91,6 +99,9 @@ struct StoryEditorView: View {
                 }
             }
         }
+        // The keyboard must not squeeze the canvas: the line being typed is
+        // edited IN PLACE, so the canvas keeps its size and place under it.
+        .ignoresSafeArea(.keyboard)
         .sensoryFeedback(.impact(flexibility: .rigid, intensity: 0.5), trigger: snapTick)
         .sensoryFeedback(.impact(weight: .medium), trigger: trashTick)
         .sensoryFeedback(.success, trigger: deleteTick)
@@ -101,6 +112,7 @@ struct StoryEditorView: View {
         }
         .sheet(isPresented: $showingTray) {
             StoryStickerTray(
+                isFull: model.isFull,
                 canAddCall: model.canAddCall(), canAddMention: model.canAddMention(),
                 onCall: { showingTray = false; showingCall = true },
                 onMention: { showingTray = false; showingMention = true }
@@ -123,7 +135,7 @@ struct StoryEditorView: View {
             ) { person in
                 showingMention = false
                 if model.addMention(userId: person.id, user: person.author) == nil {
-                    show(String(localized: "You can't add that mention."))
+                    show(model.isFull ? Self.fullNotice : String(localized: "You can't add that mention."))
                 }
             }
             .presentationDetents([.large])
@@ -139,7 +151,7 @@ struct StoryEditorView: View {
             model.onDelete = { deleteTick += 1 }
             guard !didAutoOpen else { return }
             didAutoOpen = true
-            if opensText, !model.hasContent { textTarget = .new }
+            if opensText, !model.hasContent { textTarget = newText() }
             if opensCall, !model.hasCall { showingCall = true }
         }
         .task(id: model.layers.map(\.id)) { await refreshCallState() }
@@ -159,6 +171,8 @@ struct StoryEditorView: View {
             baseView(canvas)
             ForEach(model.layers) { layer in
                 StoryPlacedLayer(layer: layer, context: layerContext(canvas), selected: model.selectedId == layer.id && !model.isDragging)
+                    // The line being typed is drawn by the text tool, in its place.
+                    .opacity(isEditing(layer.id) ? 0 : 1)
                     .accessibilityAddTraits(layer.isText ? .isButton : [])
                     .accessibilityHint(layer.isText ? Text("Double tap to edit") : Text(""))
                     .accessibilityAction(named: Text("Edit")) { if layer.isText { textTarget = .edit(layer.id) } }
@@ -359,12 +373,24 @@ struct StoryEditorView: View {
             if case .card = base {
                 backgroundMenu
             }
-            roundButton("scribble.variable", String(localized: "Draw"), id: "editor.draw") { drawing = true }
+            roundButton("scribble.variable", String(localized: "Draw"), id: "editor.draw") {
+                // A new drawing is a layer like the others and counts against
+                // the ceiling; redrawing the one that exists does not.
+                if model.isFull, model.drawingLayer == nil { show(Self.fullNotice) } else { drawing = true }
+            }
             roundButton("photo.badge.plus", String(localized: "Add a photo"), id: "editor.photo") {
-                if model.canAddImage() { showingPhotos = true } else { show(String(localized: "That's the most photos a story can hold.")) }
+                if model.isFull {
+                    show(Self.fullNotice)
+                } else if model.canAddImage() {
+                    showingPhotos = true
+                } else {
+                    show(String(localized: "That's the most photos a story can hold."))
+                }
             }
             roundButton("face.smiling", String(localized: "Stickers"), id: "editor.stickers") { showingTray = true }
-            Button { textTarget = .new } label: {
+            Button {
+                if model.isFull { show(Self.fullNotice) } else { textTarget = newText() }
+            } label: {
                 Text(verbatim: "Aa")
                     .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(.white)
@@ -425,27 +451,45 @@ struct StoryEditorView: View {
         if layer.isText { textTarget = .edit(id) }
     }
 
-    private func textData(for target: TextTarget) -> StoryTextData {
+    private func isEditing(_ id: String) -> Bool {
+        if case .edit(let editing)? = textTarget { return editing == id }
+        return false
+    }
+
+    /// What every "add" says when the story already holds the ceiling (20).
+    static var fullNotice: String { String(localized: "That's the most things a story can hold.") }
+
+    private func newText() -> TextTarget {
+        let start = model.nextTextCenter()
+        return .new(x: start.x, y: start.y)
+    }
+
+    /// Everything the text tool needs to put the line where it is.
+    private func textPlace(for target: TextTarget) -> (data: StoryTextData, x: Double, y: Double, scale: Double, rotation: Double) {
         switch target {
-        case .new: StoryTextData(text: "")
+        case .new(let x, let y):
+            return (StoryTextData(text: ""), x, y, 1, 0)
         case .edit(let id):
-            if case .text(let data)? = model.layer(id)?.content { data } else { StoryTextData(text: "") }
+            if let layer = model.layer(id), case .text(let data) = layer.content {
+                return (data, layer.x, layer.y, layer.scale, layer.rotation)
+            }
+            return (StoryTextData(text: ""), 0.5, 0.5, 1, 0)
         }
     }
 
-    private func finishText(_ target: TextTarget, _ result: StoryTextData?) {
+    private func finishText(_ target: TextTarget, _ result: (StoryTextData, Double)?) {
         textTarget = nil
-        guard let result else {
+        guard let (data, scale) = result else {
             // Emptied an existing line: it goes away.
-            if case .edit(let id) = target, case .text(let data)? = model.layer(id)?.content,
-               data.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { model.delete(id: id) }
+            if case .edit(let id) = target, case .text(let old)? = model.layer(id)?.content,
+               old.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { model.delete(id: id) }
             return
         }
         switch target {
-        case .new:
-            if model.addText(result) == nil { show(String(localized: "That's the most things a story can hold.")) }
+        case .new(let x, let y):
+            if model.addText(data, x: x, y: y, scale: scale) == nil { show(Self.fullNotice) }
         case .edit(let id):
-            model.updateText(id: id, result)
+            model.commitText(id: id, data, scale: scale)
         }
     }
 
@@ -458,6 +502,10 @@ struct StoryEditorView: View {
         }
         guard let png = StoryDrawingExport.png(strokes, canvas: canvas) else {
             show(String(localized: "Couldn't save the drawing."))
+            return
+        }
+        if model.isFull, model.drawingLayer == nil {
+            show(Self.fullNotice)
             return
         }
         model.setDrawing(
@@ -479,14 +527,14 @@ struct StoryEditorView: View {
         }
         let file = StoryLayerFile(data: draft.data, contentType: draft.contentType, width: draft.width, height: draft.height)
         if model.addImage(file, preview: draft.preview) == nil {
-            show(String(localized: "That's the most photos a story can hold."))
+            show(model.isFull ? Self.fullNotice : String(localized: "That's the most photos a story can hold."))
         }
     }
 
     private func addCall(_ choice: StoryCallChoice) {
         let info = StoryCallLayerInfo(roomName: choice.channelName, serverName: choice.serverName, serverIconUrl: choice.serverIconUrl)
         if model.addCall(serverId: choice.serverId, channelId: choice.channelId, info: info) == nil {
-            show(String(localized: "A story can have one call."))
+            show(model.isFull ? Self.fullNotice : String(localized: "A story can have one call."))
         }
     }
 

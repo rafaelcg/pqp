@@ -2451,6 +2451,16 @@
         }
       }
     },
+    "Couldn't reach pqp. Check your connection." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra falar com o pqp. Vê a tua conexão."
+          }
+        }
+      }
+    },
     "Couldn't save the drawing." : {
       "localizations" : {
         "pt-BR" : {
