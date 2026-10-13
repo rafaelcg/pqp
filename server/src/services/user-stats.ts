@@ -286,19 +286,26 @@ export function createUserStatsRecorder(
   }
 
   /**
-   * Ticks run one at a time, in order. `every()` does not wait for the last
-   * tick, so a slow write could let a newer minute land first, and the
-   * forward-only `voice_sampled_at` guard would then refuse the older retry.
-   * Each tick keeps the time it was called with.
+   * One tick at a time. `every()` does not wait for the last tick, so a slow
+   * write could let a newer minute land first, and the forward-only
+   * `voice_sampled_at` guard would then refuse the older retry. A tick that
+   * arrives while one is still running is skipped, as `flushMusic` does:
+   * queueing it would grow without bound in a slow stretch and later credit
+   * whoever is seated at catch-up for minutes nobody read.
    */
-  let sampling: Promise<unknown> = Promise.resolve();
+  let sampling: Promise<{ source: UserStatsSource; written: number }> | null =
+    null;
 
   function sample(
     at: Date = new Date(now()),
   ): Promise<{ source: UserStatsSource; written: number }> {
-    const run = sampling.then(() => sampleOnce(at));
-    sampling = run.catch(() => undefined);
-    return run;
+    if (sampling) {
+      return sampling;
+    }
+    sampling = sampleOnce(at).finally(() => {
+      sampling = null;
+    });
+    return sampling;
   }
 
   async function sampleOnce(
@@ -630,7 +637,7 @@ export function createUserStatsRecorder(
       creditSeq = 0;
       attemptedSeq = 0;
       failedSamples = [];
-      sampling = Promise.resolve();
+      sampling = null;
       lastBlindWarningAt = 0;
       m = emptyMetrics();
     },

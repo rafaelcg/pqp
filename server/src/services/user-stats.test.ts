@@ -394,33 +394,31 @@ describeDb("user stats", () => {
     expect(await stats()).toEqual({ [ana]: { voice: 0, share: 0, music: 1 } });
   });
 
-  it("runs overlapping ticks one at a time, oldest first", async () => {
-    const order: string[] = [];
+  it("skips a tick that arrives while the last one is still running", async () => {
     let releaseFirst!: () => void;
     const firstHeld = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
-    let calls = 0;
+    let reads = 0;
     const r = createUserStatsRecorder({
       enabled: () => true,
       readSeats: async () => {
-        calls += 1;
-        const tick = calls;
-        order.push(`start ${tick}`);
-        if (tick === 1) {
+        reads += 1;
+        if (reads === 1) {
           await firstHeld;
         }
-        order.push(`end ${tick}`);
         return { source: "local", seats: [] };
       },
     });
     const first = r.sample(new Date("2026-10-10T12:00:00Z"));
     const second = r.sample(new Date("2026-10-10T12:01:00Z"));
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(order).toEqual(["start 1"]);
+    expect(second).toBe(first);
     releaseFirst();
     await Promise.all([first, second]);
-    expect(order).toEqual(["start 1", "end 1", "start 2", "end 2"]);
+    expect(reads).toBe(1);
+    // The next tick after the slow one runs normally.
+    await r.sample(new Date("2026-10-10T12:02:00Z"));
+    expect(reads).toBe(2);
   });
 
   it("counts one add once, however many writes report it", async () => {
