@@ -1,3 +1,4 @@
+import type { ServerBotActivityItem } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { logEvent } from "../lib/log.js";
 import { ACTIVITY_TIMEZONE, activityDay } from "./user-activity.js";
@@ -155,4 +156,73 @@ export async function pruneBotPeopleDaily(): Promise<number> {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message.slice(0, 200) : String(error);
+}
+
+/**
+ * Today's numbers and the latest things a bot did, for its settings page.
+ * Actions come from the live tables (they cascade with the bot, which is fine:
+ * the page is about this bot); the day's totals from the rollup.
+ */
+export async function readBotOverview(botId: string): Promise<{
+  creatorName: string | null;
+  actionsToday: number;
+  confirmedToday: number;
+  recent: ServerBotActivityItem[];
+} | null> {
+  const bot = await getPool().query<{ creator: string | null; server_id: string; user_id: string }>(
+    `SELECT u.display_name AS creator, b.server_id, b.user_id
+       FROM server_bots b LEFT JOIN users u ON u.id = b.created_by
+      WHERE b.id = $1`,
+    [botId],
+  );
+  const row = bot.rows[0];
+  if (!row) return null;
+  const today = await getPool().query<{ actions: number; confirmed: number }>(
+    `SELECT COALESCE(SUM(actions_done + actions_failed), 0)::int AS actions,
+            COALESCE(SUM(plans_confirmed), 0)::int AS confirmed
+       FROM server_bot_stats_daily
+      WHERE day = $1::date AND server_id = $2 AND bot_user_id = $3`,
+    [botDay(), row.server_id, row.user_id],
+  );
+  const recent = await getPool().query<{
+    kind: "action" | "cancelled";
+    tool: string | null;
+    label: string | null;
+    status: string;
+    requester: string | null;
+    confirmed: boolean;
+    at: Date;
+  }>(
+    `(SELECT 'action' AS kind, a.tool, p.actions -> a.step ->> 'label' AS label, a.status,
+             u.display_name AS requester, p.message_id IS NOT NULL AND p.status <> 'executing' AS confirmed,
+             a.created_at AS at
+        FROM server_bot_actions a
+        JOIN server_bot_plans p ON p.id = a.plan_id
+        LEFT JOIN users u ON u.id = p.requester_id
+       WHERE a.bot_id = $1
+       ORDER BY a.created_at DESC LIMIT 8)
+     UNION ALL
+     (SELECT 'cancelled' AS kind, NULL AS tool, jsonb_array_length(p.actions)::text AS label, 'cancelled' AS status,
+             u.display_name AS requester, FALSE AS confirmed, COALESCE(p.finished_at, p.created_at) AS at
+        FROM server_bot_plans p
+        LEFT JOIN users u ON u.id = p.requester_id
+       WHERE p.bot_id = $1 AND p.status = 'cancelled'
+       ORDER BY p.created_at DESC LIMIT 4)
+     ORDER BY at DESC LIMIT 8`,
+    [botId],
+  );
+  return {
+    creatorName: row.creator,
+    actionsToday: today.rows[0]?.actions ?? 0,
+    confirmedToday: today.rows[0]?.confirmed ?? 0,
+    recent: recent.rows.map((item) => ({
+      kind: item.kind,
+      tool: item.tool,
+      label: item.label ?? "",
+      status: (["running", "done", "failed", "cancelled"].includes(item.status) ? item.status : "done") as ServerBotActivityItem["status"],
+      requesterName: item.requester,
+      confirmed: item.confirmed,
+      at: item.at.toISOString(),
+    })),
+  };
 }

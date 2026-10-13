@@ -22,7 +22,7 @@ const { createServerBot, deleteServerBot, resetBotTriggerCacheForTests, updateSe
   await import("./bots.js");
 const { botToolPermissions } = await import("./bot-actions.js");
 const { deleteBotRole, renameBotRole, syncBotRole } = await import("./bot-role.js");
-const { botDay, nextBotDayStart } = await import("./bot-stats.js");
+const { botDay, bumpBotStats, nextBotDayStart, readBotOverview } = await import("./bot-stats.js");
 const { runBotRunsTick } = await import("./bot-runner.js");
 const { setBotProviderForTests } = await import("./bot-llm.js");
 const { postChannelMessage, resetChatRateLimits } = await import("../ws/chat.js");
@@ -318,6 +318,36 @@ describeDb("server bot foundations", () => {
     });
     const decisions = await getPool().query(`SELECT 1 FROM server_bot_runs WHERE trigger = 'decision'`);
     expect(decisions.rowCount).toBe(0);
+  });
+
+  it("reads the settings overview: creator, today's actions and what it did last", async () => {
+    const { owner, server, channelId, bot } = await setup();
+    const plan = await getPool().query<{ id: string }>(
+      `INSERT INTO server_bot_plans (bot_id, server_id, channel_id, requester_id, run_id, actions, status, expires_at)
+       VALUES ($1, $2, $3, $4, gen_random_uuid(), $5, 'done', NOW())
+       RETURNING id`,
+      [
+        bot.id,
+        server.id,
+        channelId,
+        owner.id,
+        JSON.stringify([{ tool: "create_channel", label: "Criar #torneio em Jogos", input: {}, destructive: false }]),
+      ],
+    );
+    await getPool().query(
+      `INSERT INTO server_bot_actions (plan_id, step, bot_id, tool, status) VALUES ($1, 0, $2, 'create_channel', 'done')`,
+      [plan.rows[0]!.id, bot.id],
+    );
+    await bumpBotStats(bot.id, { actionsDone: 1, plansConfirmed: 1 });
+    const overview = await readBotOverview(bot.id);
+    expect(overview).toMatchObject({ creatorName: "Rafa", actionsToday: 1, confirmedToday: 1 });
+    expect(overview!.recent[0]).toMatchObject({
+      kind: "action",
+      tool: "create_channel",
+      label: "Criar #torneio em Jogos",
+      status: "done",
+      requesterName: "Rafa",
+    });
   });
 
   it("names the role around a taken name", async () => {

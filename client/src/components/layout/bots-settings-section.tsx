@@ -8,6 +8,7 @@ import {
   type Channel,
   type ServerBotDto,
   type ServerBotModelChoice,
+  type ServerBotOverview,
 } from "@pqp/shared";
 import { useEffect, useId, useState } from "react";
 import { AtSign, ListChecks, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
@@ -20,8 +21,9 @@ import {
   channelIcon,
   type BotDraft,
 } from "@/components/bots/bot-wizard";
-import { SettingsGroup, SettingsNotice } from "@/components/settings/kit";
-import { BetaTag } from "@/components/ui/beta-tag";
+import { BotOverviewPanel, BotTabs, type BotTab } from "@/components/bots/bot-overview";
+import { ServerBotTags } from "@/components/bots/server-bot-tags";
+import { SettingsGroup, SettingsNotice, UnsavedChangesBar } from "@/components/settings/kit";
 import { Button } from "@/components/ui/button";
 import { CheckRow } from "@/components/ui/check-row";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -32,6 +34,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   ApiError,
   deleteServerBot,
+  fetchBotOverview,
   fetchBotsConfig,
   fetchChannels,
   fetchServerBots,
@@ -46,6 +49,10 @@ function chatChannels(channels: Channel[]): Channel[] {
   return channels.filter(
     (c) => c.type === "text" || c.type === "voice" || c.type === "watch_party" || c.type === "forum",
   );
+}
+
+function formatDay(iso: string, locale: Parameters<typeof intlLocale>[0]): string {
+  return new Date(iso).toLocaleDateString(intlLocale(locale), { day: "numeric", month: "long" });
 }
 
 function errorKey(err: unknown): MessageKey {
@@ -100,6 +107,22 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
   const [error, setError] = useState<MessageKey | null>(null);
   const [missing, setMissing] = useState(0n);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [tab, setTab] = useState<BotTab>("overview");
+  const [overview, setOverview] = useState<ServerBotOverview | null>(null);
+  const botId = bot?.id ?? null;
+
+  useEffect(() => {
+    if (!botId) return;
+    let live = true;
+    void fetchBotOverview(serverId, botId)
+      .then((next) => {
+        if (live) setOverview(next);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [serverId, botId, saved]);
 
   useEffect(() => {
     let live = true;
@@ -234,30 +257,47 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
   const off = !bot.enabled;
   return (
     <div className="space-y-6 pb-4">
-      <section className="flex items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface-card p-4">
-        <BotFace
-          color={draft.color}
-          face={off ? "dormindo" : draft.face}
-          variant="full"
-          title={bot.name}
-          className="h-16 w-16"
-        />
+      <header className="flex flex-wrap items-start gap-4">
+        <span className="relative shrink-0">
+          <BotFace
+            color={draft.color}
+            face={off ? "dormindo" : draft.face}
+            variant="full"
+            title={bot.name}
+            className="h-16 w-16"
+          />
+          {!off && (
+            <span className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full bg-success ring-2 ring-[var(--color-surface-1)]" aria-hidden />
+          )}
+        </span>
         <div className="min-w-0 flex-1">
-          <p className="flex items-center gap-2 truncate font-semibold text-text">
+          <p className="flex items-center gap-2 truncate font-display text-2xl font-extrabold text-text">
             {bot.name}
-            <BetaTag />
+            <ServerBotTags />
           </p>
           <p className="truncate text-sm text-text-tertiary">
             @{bot.username}
-            {bot.tagline ? ` · ${bot.tagline}` : ""}
+            {overview?.creatorName
+              ? ` · ${t("bots.settings.createdBy", { name: overview.creatorName, date: formatDay(bot.createdAt, locale) })}`
+              : ""}
           </p>
-          <p className="mt-1 text-xs text-text-tertiary">
-            {off
-              ? t("bots.settings.sleeping", { name: bot.name })
-              : t("bots.settings.usage", { used: bot.repliesToday, max: bot.repliesPerDay })}
-          </p>
+          <button
+            type="button"
+            className="mt-1 text-sm font-semibold text-accent hover:underline"
+            onClick={() => setTab("voice")}
+          >
+            {t("bots.settings.editFace")}
+          </button>
         </div>
-        <div className="shrink-0">
+        <div className="flex shrink-0 items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface-card px-4 py-3">
+          <div>
+            <p className="text-sm font-semibold text-text">
+              {off ? t("bots.settings.asleep") : t("bots.settings.awake")}
+            </p>
+            <p className="whitespace-nowrap text-xs text-text-tertiary">
+              {off ? t("bots.settings.asleepHint") : t("bots.settings.awakeHint")}
+            </p>
+          </div>
           <Switch
             checked={bot.enabled}
             onCheckedChange={(on) => void setEnabled(on)}
@@ -265,13 +305,20 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
             hideLabel
           />
         </div>
-      </section>
+      </header>
 
       {missing !== 0n && (
         <SettingsNotice tone="warning" title={t("bots.settings.missingTitle")}>
           {t("bots.settings.missingBody", { name: bot.name })}
         </SettingsNotice>
       )}
+
+      <BotTabs value={tab} onChange={setTab} />
+
+      {tab === "overview" && <BotOverviewPanel bot={bot} overview={overview} channels={channels} />}
+
+      {tab === "voice" && (
+        <>
 
       <SettingsGroup title={t("bots.settings.group.face")}>
         <div className="space-y-4 p-4">
@@ -385,6 +432,11 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
         </div>
       </SettingsGroup>
 
+        </>
+      )}
+
+      {tab === "powers" && (
+        <>
       <SettingsGroup title={t("bots.settings.group.lives")} description={t("serverSettings.bots.channelsHint")}>
         <div className="space-y-3 p-2">
           <div className="max-h-64 overflow-y-auto">
@@ -442,26 +494,6 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
         </SettingsGroup>
       )}
 
-      {error && (
-        <p role="alert" className="text-sm text-danger">
-          {t(error)}
-        </p>
-      )}
-
-      <div className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-border bg-surface-1 py-3">
-        <Button type="button" disabled={!nameOk || !dirty || saving} onClick={() => void save()}>
-          {t("serverSettings.bots.save")}
-        </Button>
-        {dirty && (
-          <Button type="button" variant="ghost" onClick={() => setDraft(draftOf(bot))}>
-            {t("bots.settings.discard")}
-          </Button>
-        )}
-        {saved && !dirty && <span className="text-sm text-text-tertiary">{t("serverSettings.bots.saved")}</span>}
-      </div>
-
-      <p className="text-xs text-text-tertiary">{t("serverSettings.bots.howTo", { handle: `@${bot.username}` })}</p>
-
       <SettingsGroup title={t("bots.settings.danger")}>
         <div className="flex flex-wrap items-center gap-3 p-4">
           <p className="min-w-0 flex-1 text-sm text-text-secondary">
@@ -473,6 +505,23 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
           </Button>
         </div>
       </SettingsGroup>
+        </>
+      )}
+
+      <p className="text-xs text-text-tertiary">{t("serverSettings.bots.howTo", { handle: `@${bot.username}` })}</p>
+
+      <div className="sticky bottom-0">
+        <UnsavedChangesBar
+          visible={dirty || saving || saved}
+          saving={saving}
+          saved={saved && !dirty}
+          error={error ? t(error) : null}
+          onDiscard={() => setDraft(draftOf(bot))}
+          onSave={() => {
+            if (nameOk) void save();
+          }}
+        />
+      </div>
 
       <ConfirmDialog
         open={confirmDelete}

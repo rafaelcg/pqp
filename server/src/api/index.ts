@@ -3770,12 +3770,14 @@ import {
   SERVER_BOTS_MAX,
   serializePermissions as serializeBotPermissions,
   updateServerBotSchema,
+  type ServerBotOverview,
   type ServerBotsConfig,
 } from "@pqp/shared";
 import {
   BotError,
   createServerBot,
   deleteServerBot,
+  getServerBot,
   listAnsweringBotUserIds,
   listServerBots,
   queuePlanDecision,
@@ -3785,6 +3787,7 @@ import { botModelChoices, botProviderConfigured } from "../services/bot-llm.js";
 import { answerBotAsk } from "../services/bot-runner.js";
 import { deleteBotRole, renameBotRole, syncBotRole } from "../services/bot-role.js";
 import { readBotFacePng } from "../services/bot-faces.js";
+import { readBotOverview } from "../services/bot-stats.js";
 
 function botsEnabled(serverId: string): boolean {
   return isEnabled("custom_bots", { serverId }) && botProviderConfigured();
@@ -3825,6 +3828,26 @@ router.get("/api/servers/:serverId/bots", async ({ user }, { serverId }) => {
   await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
   return { bots: await listServerBots(serverId!), maxBots: SERVER_BOTS_MAX };
 });
+
+router.get(
+  "/api/servers/:serverId/bots/:botId/overview",
+  async ({ user }, { serverId, botId }): Promise<ServerBotOverview> => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    if (!isUuid(botId!)) {
+      throw new NotFound("Bot not found");
+    }
+    const bot = await getServerBot(serverId!, botId!);
+    const overview = bot ? await readBotOverview(bot.id) : null;
+    if (!bot || !overview) {
+      throw new NotFound("Bot not found");
+    }
+    return {
+      ...overview,
+      repliesToday: bot.repliesToday,
+      repliesPerDay: bot.repliesPerDay,
+    };
+  },
+);
 
 /** A plan card's Confirm or Cancel. Only the member who asked may press them. */
 router.post("/api/bots/plans/:planId/decision", async ({ req, user }, { planId }) => {

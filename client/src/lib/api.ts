@@ -1,6 +1,7 @@
 import type {
   CreateServerBotRequest,
   ServerBotDto,
+  ServerBotOverview,
   ServerBotsConfig,
   UpdateServerBotRequest,
   ForumPostDetailResponse,
@@ -2670,6 +2671,10 @@ export const updateServerBot = (
     `/api/servers/${serverId}/bots/${botId}`,
     body,
   );
+
+/** The bot settings page's first tab: today's numbers and recent activity. */
+export const fetchBotOverview = (serverId: string, botId: string) =>
+  apiFetch<ServerBotOverview>(`/api/servers/${serverId}/bots/${botId}/overview`);
 
 export const deleteServerBot = (serverId: string, botId: string) =>
   apiFetch<{ ok: true }>(`/api/servers/${serverId}/bots/${botId}`, { method: "DELETE" });

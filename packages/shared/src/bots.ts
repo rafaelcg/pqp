@@ -162,6 +162,31 @@ export interface ServerBotDto {
   repliesPerDay: number;
 }
 
+/** One line of a bot's recent activity, for its settings overview. */
+export interface ServerBotActivityItem {
+  kind: "action" | "cancelled";
+  /** The step's tool, or null for a cancelled plan. */
+  tool: string | null;
+  /** The step's own words (code-built, pt-BR), or the plan's step count. */
+  label: string;
+  status: "running" | "done" | "failed" | "cancelled";
+  requesterName: string | null;
+  /** Whether the step waited for a "sim" before it ran. */
+  confirmed: boolean;
+  at: string;
+}
+
+/** `GET /api/servers/:id/bots/:botId/overview`: the settings page's first tab. */
+export interface ServerBotOverview {
+  creatorName: string | null;
+  repliesToday: number;
+  repliesPerDay: number;
+  actionsToday: number;
+  /** Plans that waited for a "sim" today and got it. */
+  confirmedToday: number;
+  recent: ServerBotActivityItem[];
+}
+
 /**
  * The card a bot's message carries when it acts: the plan waiting for "sim",
  * or what each step did. Written by server code only, never by a client or
