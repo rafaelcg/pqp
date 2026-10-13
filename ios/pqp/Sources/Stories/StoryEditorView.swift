@@ -200,20 +200,7 @@ struct StoryEditorView: View {
         ZStack {
             baseView(canvas)
             ForEach(model.layers) { layer in
-                StoryPlacedLayer(layer: layer, context: layerContext(canvas), selected: model.selectedId == layer.id && !model.isDragging)
-                    // The line being typed is drawn by the text tool, in its place.
-                    .opacity(isEditing(layer.id) ? 0 : 1)
-                    .accessibilityAddTraits(layer.isText ? .isButton : [])
-                    .accessibilityHint(layer.isText ? Text("Double tap to edit") : Text(""))
-                    .accessibilityAction(named: Text("Edit")) { if layer.isText { textTarget = .edit(layer.id) } }
-                    .accessibilityAction(named: Text("Move up")) { model.nudge(id: layer.id, dx: 0, dy: -0.05) }
-                    .accessibilityAction(named: Text("Move down")) { model.nudge(id: layer.id, dx: 0, dy: 0.05) }
-                    .accessibilityAction(named: Text("Move left")) { model.nudge(id: layer.id, dx: -0.05, dy: 0) }
-                    .accessibilityAction(named: Text("Move right")) { model.nudge(id: layer.id, dx: 0.05, dy: 0) }
-                    .accessibilityAction(named: Text("Bigger")) { model.resize(id: layer.id, by: 1.15) }
-                    .accessibilityAction(named: Text("Smaller")) { model.resize(id: layer.id, by: 1 / 1.15) }
-                    .accessibilityAction(named: Text("Bring to front")) { model.bringToFront(id: layer.id) }
-                    .accessibilityAction(named: Text("Delete")) { model.delete(id: layer.id) }
+                editableLayer(layer, canvas: canvas)
             }
             guides(canvas)
             trash(canvas)
@@ -232,6 +219,14 @@ struct StoryEditorView: View {
         .onPreferenceChange(StoryLayerSizesKey.self) { sizes in
             if model.sizes != sizes { model.sizes = sizes }
         }
+    }
+
+    /// A layer on the canvas, with the things a screen reader can do to it.
+    private func editableLayer(_ layer: StoryLayer, canvas: CGSize) -> some View {
+        StoryPlacedLayer(layer: layer, context: layerContext(canvas), selected: model.selectedId == layer.id && !model.isDragging)
+            // The line being typed is drawn by the text tool, in its place.
+            .opacity(isEditing(layer.id) ? 0 : 1)
+            .modifier(StoryLayerAccessibility(layer: layer, model: model) { textTarget = .edit(layer.id) })
     }
 
     @ViewBuilder
@@ -665,5 +660,40 @@ struct StoryLoopPlayerView: UIViewRepresentable {
     static func dismantleUIView(_ view: View, coordinator: ()) {
         view.player.pause()
         view.looper = nil
+    }
+}
+
+
+/// What VoiceOver can do to a layer: edit a line of text, move it, size it,
+/// bring it forward, delete it. (A modifier of its own, so the canvas body stays
+/// small enough to type-check quickly.)
+private struct StoryLayerAccessibility: ViewModifier {
+    let layer: StoryLayer
+    let model: StoryEditorModel
+    let onEdit: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .accessibilityAddTraits(layer.isText ? .isButton : [])
+            .accessibilityHint(layer.isText ? Text("Double tap to edit") : Text(""))
+            .accessibilityAction(named: Text("Edit")) { if layer.isText { onEdit() } }
+            .modifier(StoryLayerMoveActions(id: layer.id, model: model))
+    }
+}
+
+private struct StoryLayerMoveActions: ViewModifier {
+    let id: String
+    let model: StoryEditorModel
+
+    func body(content: Content) -> some View {
+        content
+            .accessibilityAction(named: Text("Move up")) { model.nudge(id: id, dx: 0, dy: -0.05) }
+            .accessibilityAction(named: Text("Move down")) { model.nudge(id: id, dx: 0, dy: 0.05) }
+            .accessibilityAction(named: Text("Move left")) { model.nudge(id: id, dx: -0.05, dy: 0) }
+            .accessibilityAction(named: Text("Move right")) { model.nudge(id: id, dx: 0.05, dy: 0) }
+            .accessibilityAction(named: Text("Bigger")) { model.resize(id: id, by: 1.15) }
+            .accessibilityAction(named: Text("Smaller")) { model.resize(id: id, by: 1 / 1.15) }
+            .accessibilityAction(named: Text("Bring to front")) { model.bringToFront(id: id) }
+            .accessibilityAction(named: Text("Delete")) { model.delete(id: id) }
     }
 }
