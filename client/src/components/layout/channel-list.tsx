@@ -740,6 +740,12 @@ export const ChannelList = memo(function ChannelList({
     },
     [],
   );
+  // Only a pinned channel being dragged needs the empty headers back (they
+  // are the drop that unpins it). It is dragged out of Pinados, which sits
+  // above them, so the row in the hand never moves when they appear.
+  const draggingPinned = draggedId != null && favoriteIdSet.has(draggedId);
+  const hideEmptyTopLevel =
+    !canManage && categories.length > 0 && !draggingPinned;
   const openProfile = useProfilePopover();
   const memberById = useMemo(() => {
     const map = new Map<string, ServerMember>();
@@ -2495,6 +2501,13 @@ export const ChannelList = memo(function ChannelList({
               renderMixedList()
             ) : (
             <>
+            {/* An empty "Texto" or "Voz" header is noise for a member when
+                every channel sits in a category, which is what a Discord
+                import produces. Managers keep both: their + buttons are the
+                only way to create a channel. Dragging a pinned channel shows
+                them again, because the header is also the drop zone that
+                unpins it. */}
+            {(topLevelText.length > 0 || !hideEmptyTopLevel) && (
             <ChannelSection
               label={t("chrome.text")}
               fold={textFold}
@@ -2537,7 +2550,9 @@ export const ChannelList = memo(function ChannelList({
             >
               {textFold.shown.map((channel) => renderRow(channel, topLevelText))}
             </ChannelSection>
+            )}
 
+            {(topLevelVoice.length > 0 || !hideEmptyTopLevel) && (
             <ChannelSection
               label={t("chrome.voice")}
               fold={voiceFold}
@@ -2571,6 +2586,7 @@ export const ChannelList = memo(function ChannelList({
                 renderRow(channel, topLevelVoice),
               )}
             </ChannelSection>
+            )}
 
             {(categories.length > 0 || canManage) && (
               <div className="mb-4">
