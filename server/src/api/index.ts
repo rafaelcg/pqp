@@ -771,6 +771,7 @@ import {
   clampCohortWeeks,
   userActivityReport,
 } from "../services/user-activity.js";
+import { ADMIN_BOTS_PATH, botsAdminReport } from "../services/bot-admin.js";
 import {
   ADMIN_METRICS_PATH,
   getAdminMetrics,
@@ -2355,6 +2356,19 @@ router.get(ADMIN_USER_ACTIVITY_PATH, async ({ url, user }) => {
 });
 
 /**
+ * Server bots for the operator: adoption, use, the funnel, cost against the
+ * day's ceiling, and the limits that stopped an answer. Counts and money only,
+ * no persona, no message, no person. The dashboard's "bots · beta" section.
+ * See services/bot-admin.ts.
+ */
+router.get(ADMIN_BOTS_PATH, async ({ user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return botsAdminReport();
+});
+
+/**
  * Aggregate counts for the operator dashboard. Same gate, same 404. The other
  * way in, a machine token, is resolved in `handleApi` before Clerk runs, so
  * this handler only ever sees a signed-in moderator. See services/metrics.ts
@@ -2520,6 +2534,12 @@ const ADMIN_MACHINE_ROUTES: {
     method: "GET",
     path: ADMIN_USER_ACTIVITY_PATH,
     run: async (_req, query) => userActivityReport(userActivityQuery(query)),
+  },
+  // Server bots: counts and money, no persona, no message, no person.
+  {
+    method: "GET",
+    path: ADMIN_BOTS_PATH,
+    run: async () => botsAdminReport(),
   },
   // The feedback queue: the whole text, the author's tag and handle, and
   // where they were. The first route on this token that names a person,

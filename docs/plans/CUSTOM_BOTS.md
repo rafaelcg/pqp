@@ -147,7 +147,7 @@ With Haiku 5.5 ($0.10 input, $0.50 output per million tokens), a chat reply of a
 - Test that an action's broadcasts reach clients from `pqp-worker`: `channels-update`, `thread-update`, pin updates and the removal notice after a kick or ban.
 - Decide whether every mention should think. Offering tools turns on adaptive thinking, so a plain question went from 119 to 514 output tokens (about $0.0003 a reply on Haiku 5.5, about 5 seconds).
 - Add a per-creator daily cap. Today one person who owns many servers gets the per-server cap on each.
-- Add bot counters to `GET /api/admin/metrics`.
+- Bot counters: done in the operator dashboard, "bots · beta" (`GET /api/admin/bots`, `server/src/services/bot-admin.ts`). They are a separate read, not part of `/api/admin/metrics`.
 - Check the bot mark and reply rendering on iOS and Android, and draw `botCard` there. Today they show the plain-text copy.
 - Rebuild Caio on this feature in the QG, then disable the Grok outgoing webhook.
 

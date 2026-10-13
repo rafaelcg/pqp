@@ -433,6 +433,15 @@
     border-radius: 3px;
   }
 
+  /* bots · beta: today's spend against the day's ceiling. A bar that turns
+     colour with the share, so the reading is the colour and not a number to
+     work out. */
+  .meter { height: 10px; border-radius: 6px; background: var(--surface-3); overflow: hidden; margin: 8px 0 4px; }
+  .meter > i { display: block; height: 100%; border-radius: 6px; background: var(--success); min-width: 0; }
+  .meter.warn > i { background: var(--warning); }
+  .meter.bad > i { background: var(--danger); }
+  .meter-foot { display: flex; justify-content: space-between; gap: 12px; font-size: 11.5px; color: var(--muted); }
+
   .health.host { }
   .host .meta-row { display: flex; flex-wrap: wrap; gap: 6px; }
   .tag {
@@ -1187,6 +1196,7 @@
       <button class="nav-item" role="tab" id="tab-moderacao" aria-controls="pane-moderacao" aria-selected="false" data-tab="moderacao"><span class="ico" aria-hidden="true">⚑</span>moderação<span class="tcount" id="tabModCount" hidden>0</span></button>
       <span class="nav-grp">produto</span>
       <button class="nav-item" role="tab" id="tab-pessoas" aria-controls="pane-pessoas" aria-selected="false" data-tab="pessoas"><span class="ico" aria-hidden="true">☺</span>pessoas e conteúdo</button>
+      <button class="nav-item" role="tab" id="tab-bots" aria-controls="pane-bots" aria-selected="false" data-tab="bots"><span class="ico" aria-hidden="true">◈</span>bots · beta</button>
       <span class="nav-grp">plataforma</span>
       <button class="nav-item" role="tab" id="tab-infra" aria-controls="pane-infra" aria-selected="false" data-tab="infra"><span class="ico" aria-hidden="true">⚙</span>infra</button>
     </nav>
@@ -2237,6 +2247,230 @@
   </section>
 
   </div><!-- /pane-pessoas -->
+
+  <div class="pane" id="pane-bots" role="tabpanel" aria-labelledby="tab-bots" hidden>
+
+  <div class="pane-head">
+    <h1>bots · beta</h1>
+    <span class="pane-q">os bots de servidor: quem tem um, o que pedem a ele, se responde e quanto custa</span>
+  </div>
+
+  <!-- ============ BOTS ============
+       One read (/bots, the api's /api/admin/bots), fetched when this tab
+       opens and then at most once a minute while it has been opened. Counts
+       and money only: no persona, no message, no person. The verdict is
+       computed in insights.js (botsHealth), which is tested. The days are
+       São Paulo days, the same ones the daily reply cap and the dollar
+       ceiling reset on. -->
+  <section id="secBots" aria-label="bots em beta">
+    <div class="sec-head">
+      <h2>como estão os bots</h2>
+      <span class="rule"></span>
+      <span class="note" id="botNote">abre quando você entra nesta aba</span>
+    </div>
+    <div class="grid g-1">
+      <div id="botVerdict"><!-- injected --></div>
+    </div>
+    <div id="botItems"><!-- injected: what is wrong, worst first --></div>
+
+    <div class="stat-row" style="margin-top:14px">
+      <div class="stat-mini">
+        <span class="k">bots agora</span>
+        <span class="v num" id="botCount">-</span>
+        <span class="k" style="color:var(--faint)" id="botCountNote">-</span>
+      </div>
+      <div class="stat-mini">
+        <span class="k">criados · 31 dias</span>
+        <span class="v num" id="botCreated">-</span>
+        <span class="k" style="color:var(--faint)">só os que ainda existem</span>
+      </div>
+      <div class="stat-mini">
+        <span class="k">apagados que rodaram</span>
+        <span class="v num" id="botDeleted">-</span>
+        <span class="k" style="color:var(--faint)">nos 31 dias</span>
+      </div>
+      <div class="stat-mini">
+        <span class="k">pessoas · hoje</span>
+        <span class="v num" id="botPeopleToday">-</span>
+        <span class="k" style="color:var(--faint)" id="botPeopleNote">-</span>
+      </div>
+      <div class="stat-mini">
+        <span class="k">servidores usando · hoje</span>
+        <span class="v num" id="botServersToday">-</span>
+        <span class="k" style="color:var(--faint)" id="botServersNote">-</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="secBotsUse" aria-label="uso dos bots">
+    <div class="sec-head">
+      <h2>uso e custo por dia</h2>
+      <span class="rule"></span>
+      <span class="note" id="botUseNote">31 dias · fuso são paulo</span>
+    </div>
+    <div class="grid g-2">
+      <div class="card pad">
+        <p class="subtle-title">execuções, respostas e falhas por dia</p>
+        <div class="chart-scroll" id="botRunsChart"><!-- injected --></div>
+        <div class="legend" id="botRunsLegend"><!-- injected --></div>
+      </div>
+      <div class="card pad">
+        <p class="subtle-title">gasto por dia em dólares</p>
+        <div class="chart-scroll" id="botCostChart"><!-- injected --></div>
+        <div class="legend" id="botCostLegend"><!-- injected --></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="secBotsFunnel" aria-label="funil dos bots">
+    <div class="sec-head">
+      <h2>do chamado à ação</h2>
+      <span class="rule"></span>
+      <span class="note">contagens por etapa, não uma fila que afunila</span>
+    </div>
+    <div class="grid g-2">
+      <div class="card pad">
+        <p class="subtle-title">hoje</p>
+        <div class="wide-dist" id="botFunnelToday"><!-- injected --></div>
+      </div>
+      <div class="card pad">
+        <p class="subtle-title">últimos 30 dias e hoje</p>
+        <div class="wide-dist" id="botFunnelWindow"><!-- injected --></div>
+      </div>
+    </div>
+    <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:10px 0 0">
+      um plano pequeno e reversível roda sem pedir confirmação, então "confirmou" conta só os que esperaram um "sim" e fica abaixo de "montou um plano". "ações feitas" conta passos, e um plano tem vários. um "sim" também é uma execução. a porcentagem é sobre a etapa indicada.
+    </p>
+  </section>
+
+  <section id="secBotsUses" aria-label="para que servem os bots">
+    <div class="sec-head">
+      <h2>para que servem</h2>
+      <span class="rule"></span>
+      <span class="note" id="botUsesNote">ferramentas: 31 dias · gatilhos: 7 dias</span>
+    </div>
+    <div class="grid g-2">
+      <div class="card pad">
+        <p class="subtle-title">ferramentas mais usadas · passos feitos · % que falhou</p>
+        <div class="wide-dist" id="botTools"><!-- injected --></div>
+      </div>
+      <div class="card pad">
+        <p class="subtle-title">o que chamou o bot · últimos 7 dias</p>
+        <div class="wide-dist" id="botTriggers"><!-- injected --></div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:10px 0 0">
+          vem das execuções que ainda existem: o bot que foi apagado leva as suas junto.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="secBotsCost" aria-label="custo dos bots">
+    <div class="sec-head">
+      <h2>custo</h2>
+      <span class="rule"></span>
+      <span class="note" id="botCostNote">dólares, a instância inteira</span>
+    </div>
+    <div class="grid g-1">
+      <div class="card pad">
+        <div class="stat-row">
+          <div class="stat-mini" id="botSpendTile">
+            <span class="k">gasto hoje</span>
+            <span class="v num" id="botSpendToday">-</span>
+            <span class="k" style="color:var(--faint)" id="botSpendNote">-</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">31 dias</span>
+            <span class="v num" id="botSpendWindow">-</span>
+            <span class="k" style="color:var(--faint)">soma dos dias</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">por 1.000 respostas · hoje</span>
+            <span class="v num" id="botPerK">-</span>
+            <span class="k" style="color:var(--faint)" id="botPerKNote">-</span>
+          </div>
+          <div class="stat-mini" id="botRefusedTile">
+            <span class="k">chamadas recusadas · hoje</span>
+            <span class="v num" id="botRefused">-</span>
+            <span class="k" style="color:var(--faint)" id="botRefusedNote">-</span>
+          </div>
+        </div>
+        <div class="meter" id="botMeter" role="img" aria-label="gasto de hoje contra o teto"><i style="width:0"></i></div>
+        <div class="meter-foot"><span id="botMeterLeft">-</span><span id="botMeterRight">-</span></div>
+      </div>
+    </div>
+    <div class="grid g-2" style="margin-top:18px">
+      <div class="card pad">
+        <p class="subtle-title">por modelo · últimos 7 dias</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>modelo</th>
+                <th class="r">execuções</th>
+                <th class="r">tokens (ent. · saída)</th>
+                <th class="r">custo</th>
+              </tr>
+            </thead>
+            <tbody id="botModelBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card pad">
+        <p class="subtle-title">servidores que mais gastam · 31 dias</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>servidor</th>
+                <th class="r">execuções</th>
+                <th class="r">respostas</th>
+                <th class="r">falhas</th>
+                <th class="r">custo</th>
+              </tr>
+            </thead>
+            <tbody id="botServerBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <p class="m-note" id="botCostCaveat" style="font-size:11.5px;color:var(--muted);margin:12px 0 0">
+      o gasto do dia é o que a instância reservou e acertou com o custo real de cada chamada ao modelo, na mesma conta do teto. "por 1.000 respostas" divide esse gasto pelas respostas postadas, então chamadas que acabaram em "skip", pergunta ou falha entram no custo e não no divisor. o custo por modelo e o por servidor vêm de fontes diferentes (as execuções de 7 dias e o histórico diário), por isso os totais não precisam bater.
+    </p>
+  </section>
+
+  <section id="secBotsLimits" aria-label="limites dos bots">
+    <div class="sec-head">
+      <h2>limites</h2>
+      <span class="rule"></span>
+      <span class="note">o que os limites seguraram</span>
+    </div>
+    <div class="grid g-1">
+      <div class="card pad">
+        <div class="stat-row">
+          <div class="stat-mini" id="botCapTile">
+            <span class="k">respostas recusadas · hoje</span>
+            <span class="v num" id="botCapToday">-</span>
+            <span class="k" style="color:var(--faint)" id="botCapNote">-</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">respostas recusadas · 31 dias</span>
+            <span class="v num" id="botCapWindow">-</span>
+            <span class="k" style="color:var(--faint)" id="botCapCap">-</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">chamadas recusadas pelo teto · 31 dias</span>
+            <span class="v num" id="botCeilWindow">-</span>
+            <span class="k" style="color:var(--faint)">teto de dólares do dia</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:2px 0 0">
+          o aviso que a pessoa recebe quando um limite segura a resposta não é guardado em lugar nenhum, então não há contagem de avisos aqui. o que existe é quantas respostas e chamadas foram recusadas.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  </div><!-- /pane-bots -->
 
   <div class="pane" id="pane-controles" role="tabpanel" aria-labelledby="tab-controles" hidden>
 
@@ -4998,6 +5232,367 @@
     actLoad(false);
   }
 
+  /* ---------------- bots · beta ----------------
+     Reads /bots (the api's /api/admin/bots): adoption, use, the funnel, what
+     the bots are asked to do, cost against the day's ceiling and the limits
+     that held an answer. Counts and money only, no persona, no message and no
+     person; server names are the one label. Read when the tab is opened, then
+     at most once a minute while it has been opened (the api also caches it
+     for 30 s), and on "atualizar". The verdict is PQPInsights.botsHealth. */
+  var BOTS_REFRESH_MS = 60000;
+  var bots = { report: null, loadedAt: 0, inflight: false, asked: false };
+  var BOT_SECTIONS = ["secBotsUse", "secBotsFunnel", "secBotsUses", "secBotsCost", "secBotsLimits"];
+  var BOT_TRIGGER = {
+    mention: "menção",
+    reply: "resposta ao bot",
+    name: "pelo nome",
+    follow_up: "continuação",
+    decision: "sim ou não",
+    unknown: "sem gatilho"
+  };
+  var BOT_TRIGGER_TITLE = {
+    mention: "alguém marcou o bot com @",
+    reply: "alguém respondeu a uma mensagem do bot",
+    name: "o nome do bot foi dito como palavra inteira",
+    follow_up: "a mensagem seguinte da pessoa, sem marcar o bot",
+    decision: "um \"sim\" ou \"não\" (ou o botão) para um plano",
+    unknown: "execução sem gatilho gravado"
+  };
+
+  /** Money with room for fractions of a cent: a reply costs about US$ 0,0005. */
+  function botUsd(n) {
+    if (typeof n !== "number" || !isFinite(n)) return "-";
+    if (n > 0 && n < 0.01) return "US$ " + n.toFixed(4).replace(".", ",");
+    return fmtUsd(n);
+  }
+
+  /** Token counts are long; the cell's title carries the exact number. */
+  function botTokens(n) {
+    if (typeof n !== "number" || !isFinite(n)) return "-";
+    if (n >= 1000000) return fmtDec(n / 1000000) + " mi";
+    if (n >= 1000) return fmt(Math.round(n / 1000)) + " mil";
+    return fmt(n);
+  }
+
+  /** The tile's tone: bad, warn or none. */
+  function botTone(id, state) {
+    var box = $(id);
+    if (box) box.className = "stat-mini" + (state === "bad" ? " bad" : state === "warn" ? " attn" : "");
+  }
+
+  /** Rows of label, bar, count and a short text, bars scaled to the largest. */
+  function botRows(boxId, rows, empty) {
+    var box = $(boxId);
+    if (!box) return;
+    box.innerHTML = "";
+    if (!rows.length) {
+      box.appendChild(el("p", "m-note", esc(empty)));
+      return;
+    }
+    var peak = 1;
+    rows.forEach(function (r) { peak = Math.max(peak, r.n); });
+    rows.forEach(function (r) {
+      var row = el("div", "dist-row" + (r.n ? "" : " zero"));
+      row.innerHTML =
+        '<span class="dr-k" title="' + esc(r.title || r.label) + '">' + esc(r.label) + '</span>' +
+        '<span class="dr-bar"><i class="' + (r.cls || "") + '" style="width:' +
+          (r.n ? Math.max(3, (r.n / peak) * 100) : 0).toFixed(1) + '%"></i></span>' +
+        '<span class="dr-n num">' + fmt(r.n) + '</span>' +
+        '<span class="dr-p num">' + esc(r.text == null ? "-" : r.text) + '</span>';
+      box.appendChild(row);
+    });
+  }
+
+  function botTicks(days) {
+    var ticks = [];
+    for (var i = days.length - 1; i >= 0; i -= 10) ticks.push([i, fmtDayShort(days[i].day)]);
+    if (ticks.length && ticks[ticks.length - 1][0] >= 5) ticks.push([0, fmtDayShort(days[0].day)]);
+    return ticks;
+  }
+
+  /** Spend per day as columns against the ceiling's dashed line. Its own
+      chart because seriesChart labels its axis in whole numbers, and a day of
+      bots costs cents. The scale always reaches the ceiling, so a quiet week
+      looks as far from it as it is. */
+  function botCostChart(days, ceiling) {
+    var box = $("botCostChart");
+    if (!box) return;
+    box.innerHTML = "";
+    var W = Math.max(300, Math.round(box.clientWidth || 360)), H = 240;
+    var padL = 56, padR = 10, padT = 22, padB = 26;
+    var max = 0;
+    days.forEach(function (d) { max = Math.max(max, d.usd); });
+    var top = Math.max(max, ceiling > 0 ? ceiling : 0) || 1;
+    var innerW = W - padL - padR, innerH = H - padT - padB;
+    var baseY = padT + innerH;
+    var slot = innerW / Math.max(days.length, 1);
+    var bw = Math.max(3, slot * 0.66);
+    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img" });
+    svg.setAttribute("aria-label", "gasto dos bots por dia, em dólares, contra o teto");
+    [0, 0.5, 1].forEach(function (frac) {
+      var gy = baseY - innerH * frac;
+      svg.appendChild(svgEl("line", {
+        x1: padL, x2: W - padR, y1: gy, y2: gy, stroke: "var(--border)", "stroke-width": "1",
+        "stroke-dasharray": frac === 0 ? "0" : "3 5", opacity: frac === 0 ? "0.9" : "0.55"
+      }));
+      var lbl = svgEl("text", {
+        x: padL - 7, y: gy + 3.5, "text-anchor": "end", fill: "var(--faint)",
+        "font-size": "10", "font-family": "Instrument Sans, sans-serif"
+      });
+      lbl.textContent = frac === 0 ? "0" : botUsd(top * frac);
+      svg.appendChild(lbl);
+    });
+    days.forEach(function (d, j) {
+      var h = (d.usd / top) * innerH;
+      if (d.usd > 0) h = Math.max(h, 2);
+      var rect = svgEl("rect", {
+        x: (padL + slot * j + (slot - bw) / 2).toFixed(1), width: bw.toFixed(1),
+        y: (baseY - h).toFixed(1), height: h.toFixed(1), rx: Math.min(3, bw / 2).toFixed(1),
+        fill: "var(--accent)", opacity: j === days.length - 1 ? "0.45" : "0.85"
+      });
+      var title = svgEl("title", {});
+      title.textContent = fmtDayNamed(d.day) + (j === days.length - 1 ? " (em curso)" : "") +
+        "\n" + botUsd(d.usd) + " · " + fmt(d.calls) + (d.calls === 1 ? " chamada" : " chamadas") +
+        (d.refused ? " · " + fmt(d.refused) + " recusadas" : "");
+      rect.appendChild(title);
+      svg.appendChild(rect);
+    });
+    if (ceiling > 0) {
+      var cy = baseY - (ceiling / top) * innerH;
+      svg.appendChild(svgEl("line", {
+        x1: padL, x2: W - padR, y1: cy.toFixed(1), y2: cy.toFixed(1),
+        stroke: "var(--danger)", "stroke-width": "1.5", "stroke-dasharray": "5 4"
+      }));
+    }
+    botTicks(days).forEach(function (pair) {
+      var t = svgEl("text", {
+        x: (padL + slot * pair[0] + slot / 2).toFixed(1), y: (baseY + 15).toFixed(1),
+        "text-anchor": pair[0] === 0 ? "start" : pair[0] === days.length - 1 ? "end" : "middle",
+        fill: "var(--faint)", "font-size": "10", "font-family": "Instrument Sans, sans-serif"
+      });
+      t.textContent = pair[1];
+      svg.appendChild(t);
+    });
+    var cap = svgEl("text", {
+      x: padL, y: padT - 7, fill: "var(--muted)", "font-size": "10.5", "font-family": "Instrument Sans, sans-serif"
+    });
+    cap.textContent = "o último dia está em curso";
+    svg.appendChild(cap);
+    box.appendChild(svg);
+    var legend = $("botCostLegend");
+    if (legend) {
+      legend.innerHTML = '<span><i class="swatch" style="background:var(--accent)"></i>gasto no dia</span>' +
+        (ceiling > 0 ? '<span><i class="swatch" style="background:var(--danger)"></i>teto de ' + esc(fmtUsd(ceiling)) + " por dia</span>" : "");
+    }
+  }
+
+  function botRunsChart(days) {
+    var box = $("botRunsChart");
+    if (!box) return;
+    box.innerHTML = "";
+    var series = [
+      { key: "runs", label: "execuções", color: "var(--series-2)" },
+      { key: "replies", label: "respostas", color: "var(--accent)" },
+      { key: "failed", label: "falhas", color: "var(--danger)", dashed: true }
+    ];
+    box.appendChild(seriesChart(series.map(function (s) {
+      return {
+        label: s.label, color: s.color, dashed: s.dashed,
+        values: days.map(function (d) { return Number(d[s.key]) || 0; })
+      };
+    }), {
+      mode: "lines",
+      width: box.clientWidth,
+      label: "execuções, respostas e falhas dos bots por dia",
+      caption: "o último dia está em curso",
+      ticks: botTicks(days),
+      hitTitle: function (a, b) {
+        var d = days[b];
+        return fmtDayNamed(d.day) + "\nexecuções " + fmt(d.runs) + " · respostas " + fmt(d.replies) +
+          " · falhas " + fmt(d.failed) + "\npessoas " + fmt(d.people) + " · servidores " + fmt(d.servers) +
+          "\nplanos " + fmt(d.plans) + " · ações feitas " + fmt(d.actionsDone);
+      }
+    }));
+    var legend = $("botRunsLegend");
+    if (legend) {
+      legend.innerHTML = series.map(function (s) {
+        return '<span><i class="swatch" style="background:' + s.color + (s.dashed ? ";opacity:0.55" : "") + '"></i>' +
+          esc(s.label) + "</span>";
+      }).join("");
+    }
+  }
+
+  function botFunnel(boxId, f) {
+    function share(n, d) { return d ? fmtPct(n, d) : "-"; }
+    botRows(boxId, [
+      { label: "chamado", title: "execuções: menção, resposta, nome, continuação ou um sim", n: f.called, text: "" },
+      { label: "respondeu", title: "execuções que postaram uma resposta; % das chamadas", n: f.answered, text: share(f.answered, f.called), cls: "good" },
+      { label: "montou um plano", title: "planos de ação montados; % das chamadas", n: f.staged, text: share(f.staged, f.called) },
+      { label: "confirmou", title: "planos confirmados com sim ou botão; % dos planos", n: f.confirmed, text: share(f.confirmed, f.staged) },
+      { label: "ações feitas", title: "passos de plano que rodaram e deram certo", n: f.actionsDone, text: "", cls: "good" }
+    ], "nada ainda");
+  }
+
+  function botRender(r) {
+    var verdict = window.PQPInsights.botsHealth(r, Date.now());
+    var host = $("botVerdict");
+    if (host) {
+      var cls = verdict.state === "off" ? "raw" : verdict.state === "ok" ? "" : verdict.state;
+      host.innerHTML = '<div class="insight ' + cls + '">' +
+        '<div class="ih"><span class="dot' + (verdict.state === "off" ? "" : " live") + '"></span><h3>' +
+          esc(verdict.head) + '</h3></div>' +
+        '<p>' + esc(verdict.body) + '</p>' +
+        '<div class="figs">' + verdict.figs.map(function (f) {
+          return '<span class="f"><span>' + esc(f[0]) + '</span><b class="num">' + esc(f[1]) + '</b></span>';
+        }).join("") + '</div>' +
+        '<div class="src">/api/admin/bots · dias de são paulo</div></div>';
+    }
+    var itemsBox = $("botItems");
+    if (itemsBox) {
+      itemsBox.innerHTML = "";
+      verdict.items.slice(1).forEach(function (it) {
+        var row = el("div", "note-item " + (it.state === "bad" ? "bad" : "mid"));
+        row.setAttribute("role", "status");
+        row.innerHTML = '<div class="ni-body"><p class="ni-text">' + esc(it.text) + '</p></div>';
+        row.style.marginTop = "8px";
+        itemsBox.appendChild(row);
+      });
+    }
+
+    var a = r.adoption, u = r.usage, c = r.cost, l = r.limits;
+    var days = u.days;
+    setText("botCount", fmt(a.bots));
+    setText("botCountNote", fmt(a.enabled) + (a.enabled === 1 ? " ligado" : " ligados") + " · " +
+      fmt(a.servers) + (a.servers === 1 ? " servidor" : " servidores"));
+    setText("botCreated", fmt(a.createdInWindow));
+    setText("botDeleted", fmt(a.deletedInWindow));
+    setText("botPeopleToday", fmt(u.distinct.peopleToday));
+    setText("botPeopleNote", "31 dias: " + fmt(u.distinct.peopleWindow) + " pessoas diferentes");
+    setText("botServersToday", fmt(u.distinct.serversToday));
+    setText("botServersNote", "31 dias: " + fmt(u.distinct.serversWindow) + " servidores diferentes");
+
+    botRunsChart(days);
+    botCostChart(c.days, c.ceilingUsd);
+    botFunnel("botFunnelToday", r.funnel.today);
+    botFunnel("botFunnelWindow", r.funnel.window);
+
+    botRows("botTools", r.uses.tools.map(function (t) {
+      var total = t.done + t.failed;
+      return {
+        label: t.tool, title: t.tool + ": " + fmt(t.done) + " feitos, " + fmt(t.failed) + " falharam",
+        n: t.done, text: t.failed ? fmtPct(t.failed, total) : "",
+        cls: total >= 4 && t.failed / total >= 0.25 ? "bad" : ""
+      };
+    }), "nenhum plano rodou ainda");
+    var triggerTotal = sum(r.uses.triggers7d.map(function (t) { return t.runs; }));
+    botRows("botTriggers", r.uses.triggers7d.map(function (t) {
+      return {
+        label: BOT_TRIGGER[t.trigger] || t.trigger, title: BOT_TRIGGER_TITLE[t.trigger] || t.trigger,
+        n: t.runs, text: fmtPct(t.runs, triggerTotal)
+      };
+    }), "nenhuma execução nos últimos 7 dias");
+
+    var share = c.ceilingUsd > 0 ? c.todayUsd / c.ceilingUsd : null;
+    var refused = l.refusedCallsToday;
+    var spendState = refused > 0 || (share !== null && share >= 1) ? "bad" : share !== null && share >= 0.7 ? "warn" : "";
+    setText("botSpendToday", botUsd(c.todayUsd));
+    setText("botSpendNote", share === null ? "sem teto configurado" : fmtPct(c.todayUsd, c.ceilingUsd) + " do teto de " + fmtUsd(c.ceilingUsd));
+    botTone("botSpendTile", spendState);
+    setText("botSpendWindow", botUsd(c.windowUsd));
+    setText("botPerK", c.perThousandRepliesToday == null ? "-" : botUsd(c.perThousandRepliesToday));
+    setText("botPerKNote", "31 dias: " + (c.perThousandRepliesWindow == null ? "-" : botUsd(c.perThousandRepliesWindow)));
+    setText("botRefused", fmt(refused));
+    setText("botRefusedNote", refused ? "o teto do dia foi atingido" : "nenhuma");
+    botTone("botRefusedTile", refused ? "bad" : "");
+    var meter = $("botMeter");
+    if (meter) {
+      meter.className = "meter" + (spendState === "bad" ? " bad" : spendState === "warn" ? " warn" : "");
+      var fill = meter.firstElementChild;
+      if (fill) fill.style.width = (share === null ? 0 : Math.min(100, share * 100)).toFixed(1) + "%";
+      meter.setAttribute("aria-label", "gasto de hoje: " + botUsd(c.todayUsd) +
+        (share === null ? "" : " de " + fmtUsd(c.ceilingUsd)));
+    }
+    setText("botMeterLeft", botUsd(c.todayUsd) + " gastos hoje");
+    var left = Date.parse(c.nextResetAt) - Date.now();
+    setText("botMeterRight", (c.ceilingUsd > 0 ? "teto " + fmtUsd(c.ceilingUsd) + " · " : "") +
+      (left > 0 ? "zera em " + (left >= 3600000 ? fmt(Math.floor(left / 3600000)) + " h " : "") +
+        fmt(Math.floor((left % 3600000) / 60000)) + " min" : "zera agora"));
+
+    var modelBody = $("botModelBody");
+    if (modelBody) {
+      modelBody.innerHTML = c.byModel7d.length ? c.byModel7d.map(function (m) {
+        return "<tr><td>" + (m.model
+          ? '<span class="srv-name">' + esc(m.model) + "</span>"
+          : '<span style="color:var(--faint)" title="execução que não chegou a chamar um modelo: pulada, recusada ou o sim de um plano">sem modelo</span>') + "</td>" +
+          '<td class="r num">' + fmt(m.runs) + "</td>" +
+          '<td class="r num" style="white-space:nowrap" title="' + fmt(m.inputTokens) + " de entrada, " + fmt(m.outputTokens) + ' de saída">' + botTokens(m.inputTokens) + " · " + botTokens(m.outputTokens) + "</td>" +
+          '<td class="r num cell-strong" style="white-space:nowrap">' + botUsd(m.usd) + "</td></tr>";
+      }).join("") : '<tr><td colspan="4" style="color:var(--faint)">nenhuma execução nos últimos 7 dias</td></tr>';
+    }
+    var serverBody = $("botServerBody");
+    if (serverBody) {
+      serverBody.innerHTML = c.topServers.length ? c.topServers.map(function (s) {
+        return "<tr><td>" + (s.name
+          ? '<span class="srv-name">' + esc(s.name) + "</span>"
+          : '<span style="color:var(--faint)">servidor apagado</span>') + "</td>" +
+          '<td class="r num">' + fmt(s.runs) + "</td>" +
+          '<td class="r num">' + fmt(s.replies) + "</td>" +
+          '<td class="r num' + (s.failed ? " cell-bad" : "") + '">' + fmt(s.failed) + "</td>" +
+          '<td class="r num cell-strong" style="white-space:nowrap">' + botUsd(s.usd) + "</td></tr>";
+      }).join("") : '<tr><td colspan="5" style="color:var(--faint)">nenhum gasto nos 31 dias</td></tr>';
+    }
+
+    setText("botCapToday", fmt(l.refusedRepliesToday));
+    setText("botCapNote", l.serversRefusedToday
+      ? fmt(l.serversRefusedToday) + (l.serversRefusedToday === 1 ? " servidor bateu" : " servidores bateram") + " o limite do dia"
+      : "nenhum servidor bateu o limite");
+    botTone("botCapTile", l.refusedRepliesToday ? "warn" : "");
+    setText("botCapWindow", fmt(l.refusedRepliesWindow));
+    setText("botCapCap", "limite: " + fmt(l.repliesPerServerDay) + " respostas por servidor por dia");
+    setText("botCeilWindow", fmt(l.refusedCallsWindow));
+  }
+
+  function botFail(e) {
+    var reason = e && e.message ? e.message : String(e);
+    // An API older than this report answers the machine token with 401 on a
+    // path it does not know, not 404: both mean "not deployed yet".
+    if (reason.indexOf("404") !== -1 || reason.indexOf("401") !== -1) {
+      setText("botNote", "esta api ainda não tem esse relatório");
+      sectionUnavailable("secBots", "o relatório de bots");
+      BOT_SECTIONS.forEach(function (id) { var s = $(id); if (s) s.style.display = "none"; });
+      return;
+    }
+    setText("botNote", "a leitura falhou · " + reason);
+  }
+
+  function botLoad(force) {
+    if (bots.inflight) return;
+    if (!force && bots.report && (Date.now() - bots.loadedAt) < BOTS_REFRESH_MS) return;
+    bots.inflight = true;
+    setText("botNote", bots.report ? "atualizando" : "carregando");
+    fetchJson("/bots").then(function (r) {
+      bots.inflight = false;
+      if (!r || !r.usage || !Array.isArray(r.usage.days) || !r.cost || !r.adoption) {
+        botFail(new Error("payload inesperado"));
+        return;
+      }
+      sectionRestore("secBots");
+      BOT_SECTIONS.forEach(function (id) { var s = $(id); if (s) s.style.display = ""; });
+      bots.report = r;
+      bots.loadedAt = Date.now();
+      setText("botNote", "31 dias · fuso são paulo · lido " + fmtTime(r.generatedAt));
+      botRender(r);
+    }).catch(function (e) {
+      bots.inflight = false;
+      botFail(e);
+    });
+  }
+
+  function botOnShown() {
+    bots.asked = true;
+    botLoad(false);
+  }
+
   /* ---------------- feedback queue ----------------
      Reads /operator/feedback (the api's /api/admin/feedback): the whole text,
      who sent it (tag, @handle, account age, how many they have sent) and where
@@ -5638,7 +6233,7 @@
      hash is the only state: it survives a reload and can be pasted to
      yourself, and an unknown one falls back to the first pane rather than
      leaving the page with nothing visible. */
-  var TABS = ["agora", "tempo", "controles", "pessoas", "moderacao", "infra"];
+  var TABS = ["agora", "tempo", "controles", "pessoas", "bots", "moderacao", "infra"];
 
   /* ================= controles: the only writes on this page =================
 
@@ -6550,6 +7145,7 @@
     // fetched once on load (see wireOccupancy) and refreshed at most every
     // five minutes, whichever section is showing.
     if (name === "tempo") { occOnShown(); actOnShown(); }
+    if (name === "bots") botOnShown();
     if (name === "moderacao") fbOnShown();
     if (name === "controles") ctlOnShown();
     if (!opts || !opts.silent) {
@@ -7074,6 +7670,7 @@
     // occupancy read must not delay the numbers an incident is read from.
     occTick(false);
     if (act.asked) actLoad(false);
+    if (bots.asked) botLoad(false);
     var metricsReq = fetchJson("/metrics").then(function (d) {
       if (!d || typeof d !== "object" || !d.users) throw new Error("payload inesperado");
       applyMetrics(d);
@@ -7121,6 +7718,7 @@
       refreshBtn.addEventListener("click", function () {
         occTick(true);
         if (act.asked) actLoad(true);
+        if (bots.asked) botLoad(true);
         if (fbq.asked) fbLoad(false);
         // The controls section does not poll, so this button is the only way
         // to re-read it without a write. Only when it has been opened at all.
