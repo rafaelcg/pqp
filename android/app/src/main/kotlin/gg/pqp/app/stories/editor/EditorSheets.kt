@@ -116,6 +116,7 @@ data class CallRoomOption(
     val serverName: String,
     val channelId: String,
     val channelName: String,
+    val serverIconUrl: String? = null,
 )
 
 /**

@@ -2293,10 +2293,35 @@ does with it.
 - **Viewer.** A full-screen dialog over whatever opened it: tap to step, hold
   to pause, swipe across for the next person (a deck: the outgoing card
   recedes), swipe down to close. Clocks are linear (photo 5 s, text 5 s plus
-  50 ms a character, call sticker 8 s, video its own length). Replies become a
+  50 ms a character, call card 8 s, video its own length; words on any story
+  stretch its clock the same way, ten seconds at most). Replies become a
   DM quoting the story; reactions stay on the story. The menu has mute, report
   (`subjectType: "story"`, `minor_sexual` included), delete for the author and
   "Tirar do {servidor}" for each server the viewer moderates.
+  - **Layers.** `StoryCanvas` draws the base and then each layer in order on a
+    9:16 canvas as wide as the screen allows, clipped at its edge, through the
+    same `PlacedLayer` and layer drawings as the editor, so a story reads as it
+    was made. `Story.layers` is decoded one element at a time
+    (`StoryLayersSerializer`): a layer this build cannot read (a type a later
+    server added, a field that does not decode) is dropped, order kept, and the
+    story is never lost to it. A story from before layers is drawn as it always
+    was: its photo, its centred text, its call card where the sticker sat
+    (`visibleLayers` synthesises the call layer for a server that does not).
+  - **What is tappable.** Mentions (a sheet with the person, "Adicionar amigo"
+    and, when they have a handle, "Ver perfil" on their public page) and the
+    call card (joins, then closes the viewer). Text and photos are not: a tap on
+    them steps the story. The story waits while the sheet is up.
+  - **The call card** is one drawing for the editor's preview and the viewer's
+    result (`StoryCallCard`): the server's icon, the room, up to three live
+    faces and "+n", the head count, a live dot that pulses while people are in,
+    and "Entrar" when the server says it can be joined. Four states from the
+    live `call` object: in the call, nobody in the call right now, full, and a
+    quiet "A call acabou" with no button after the room empties or the author
+    leaves it. The whole card is one TalkBack button ("Na call agora: Lobby,
+    Sandbox, 3 pessoas na call. Entrar").
+  - **TalkBack.** The base carries the story's `altText` (its text layers, in
+    order, else its caption) as its description, and the text layers are hidden
+    from the reader when it is there, so nothing is read twice.
 - **Composer.** TEXTO / CÂMERA / CALL, then "Quem vê". CÂMERA opens on a live
   camera (`stories/camera/`, CameraX), not on buttons: a 9:16 preview, a
   shutter that takes a photo on a tap and records while it is held (a ring

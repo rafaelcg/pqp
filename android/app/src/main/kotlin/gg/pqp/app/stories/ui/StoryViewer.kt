@@ -307,7 +307,9 @@ private fun DeckPage(
     var reporting by remember { mutableStateOf<Story?>(null) }
     var confirmingDelete by remember { mutableStateOf<Story?>(null) }
     var muted by remember { mutableStateOf(true) }
-    val paused = holding || typing || sheetOpen || menuOpen || reporting != null || confirmingDelete != null
+    // Somebody a mention opened: the story waits while their card is up.
+    var profile by remember { mutableStateOf<StoryAuthor?>(null) }
+    val paused = holding || typing || sheetOpen || menuOpen || reporting != null || confirmingDelete != null || profile != null
 
     val story = stories?.getOrNull(index)
     val progress = remember(story?.id) { Animatable(0f) }
@@ -394,26 +396,20 @@ private fun DeckPage(
                         }
                         .testTag("stories.viewer.content"),
                 ) {
-                    StoryBody(
+                    StoryCanvas(
                         story = story,
+                        session = session,
                         active = active,
                         paused = paused,
                         muted = muted,
                         onVideoProgress = { videoProgress = it },
                         onVideoEnded = advance,
+                        onJoinCall = { call ->
+                            onJoinCall(call.serverId, call.channelId, call.channelName)
+                            onClose()
+                        },
+                        onOpenMention = { profile = it },
                     )
-                    story.call?.let { call ->
-                        CallStickerCard(
-                            call = call,
-                            onJoin = {
-                                onJoinCall(call.serverId, call.channelId, call.channelName)
-                                onClose()
-                            },
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .padding(top = 160.dp),
-                        )
-                    }
                 }
 
                 // Writing a reply: the story pauses and steps back.
@@ -513,6 +509,10 @@ private fun DeckPage(
                 confirmingDelete = target
             },
         )
+    }
+
+    profile?.let { person ->
+        StoryProfileSheet(person = person, session = session, meId = meId, onDismiss = { profile = null })
     }
 
     reporting?.let { target ->
@@ -690,53 +690,17 @@ private fun StoryMenu(
     }
 }
 
-/** What fills the screen: the picture, the clip, or the text card. */
+/** A story's clip, played once over its poster; the canvas decides whether it fills or fits. */
 @OptIn(UnstableApi::class)
 @Composable
-private fun StoryBody(
-    story: Story,
-    active: Boolean,
-    paused: Boolean,
-    muted: Boolean,
-    onVideoProgress: (Float) -> Unit,
-    onVideoEnded: () -> Unit,
-) {
-    val media = story.media
-    when {
-        story.kind == "text" -> TextCard(story.text.orEmpty(), story.background)
-        story.own?.status == "processing" || story.own?.status == "pending" -> Box(Modifier.fillMaxSize()) {
-            Text(
-                stringResource(R.string.stories_own_processing),
-                color = Color.White,
-                modifier = Modifier.align(Alignment.Center),
-            )
-        }
-        story.kind == "video" && media != null -> StoryVideo(
-            url = absolute(media.url),
-            posterUrl = media.posterUrl?.let(::absolute),
-            active = active,
-            paused = paused,
-            muted = muted,
-            onProgress = onVideoProgress,
-            onEnded = onVideoEnded,
-        )
-        media != null -> AsyncImage(
-            model = absolute(media.url),
-            contentDescription = story.caption,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize(),
-        )
-    }
-}
-
-@OptIn(UnstableApi::class)
-@Composable
-private fun StoryVideo(
+internal fun StoryVideo(
     url: String,
     posterUrl: String?,
     active: Boolean,
     paused: Boolean,
     muted: Boolean,
+    /** Near 9:16 (`BaseFit`): cropped to fill the canvas rather than shown whole. */
+    fill: Boolean,
     onProgress: (Float) -> Unit,
     onEnded: () -> Unit,
 ) {
@@ -774,6 +738,13 @@ private fun StoryVideo(
     Box(Modifier.fillMaxSize()) {
         AndroidView(
             factory = { PlayerView(it).apply { useController = false; this.player = player } },
+            update = {
+                it.resizeMode = if (fill) {
+                    androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                } else {
+                    androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
+            },
             modifier = Modifier.fillMaxSize(),
         )
         // The poster until the first frame, so the open never flashes black.
@@ -821,68 +792,6 @@ fun backgroundBrush(key: String?): Brush {
 fun textOn(background: String?): Color = when (background) {
     "lime", "sand" -> Palette.Ink
     else -> Color.White
-}
-
-/** The call sticker, live: who is in the room right now, and one tap to join. */
-@Composable
-private fun CallStickerCard(
-    call: gg.pqp.app.stories.StoryCallLive,
-    onJoin: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .padding(horizontal = Spacing.xl)
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium)
-            .background(Color.Black.copy(alpha = 0.55f))
-            .border(1.dp, Palette.Signal.copy(alpha = 0.6f), MaterialTheme.shapes.medium)
-            .padding(Spacing.md)
-            .testTag("stories.callSticker"),
-    ) {
-        Text(
-            text = stringResource(
-                when (call.state) {
-                    "live" -> R.string.stories_call_live
-                    "full" -> R.string.stories_call_full
-                    else -> R.string.stories_call_ended
-                },
-            ).uppercase(),
-            color = Palette.Signal,
-            style = MaterialTheme.typography.labelSmall,
-        )
-        Text(call.channelName, color = Color.White, style = MaterialTheme.typography.titleMedium)
-        if (call.participants.isNotEmpty()) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = Spacing.xs)) {
-                call.participants.take(5).forEach { person ->
-                    Box(Modifier.padding(end = 2.dp)) { AuthorAvatar(person, 22.dp) }
-                }
-                Spacer(Modifier.width(Spacing.xs))
-                Text(
-                    call.participants.joinToString(", ") { it.displayName.substringBefore(' ') },
-                    color = Color.White.copy(alpha = 0.8f),
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        if (call.joinable) {
-            Button(
-                onClick = onJoin,
-                shape = MaterialTheme.shapes.small,
-                colors = ButtonDefaults.buttonColors(containerColor = Palette.Signal, contentColor = Palette.Ink),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = Spacing.sm)
-                    .testTag("stories.callSticker.join"),
-            ) {
-                Icon(PqpIcons.Listening, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(Spacing.xs))
-                Text(stringResource(R.string.stories_call_join))
-            }
-        }
-    }
 }
 
 @Composable

@@ -450,13 +450,14 @@ fun StoryComposer(
                                         CallLayer(
                                             id = callLayer?.id ?: editor.newId(),
                                             x = callLayer?.x ?: 0.5f,
-                                            y = callLayer?.y ?: 0.78f,
+                                            y = callLayer?.y ?: 0.7f,
                                             scale = callLayer?.scale ?: 1f,
                                             rotation = callLayer?.rotation ?: 0f,
                                             serverId = room.serverId,
                                             channelId = room.channelId,
                                             roomName = room.channelName,
                                             serverName = room.serverName,
+                                            serverIconUrl = room.serverIconUrl,
                                         ),
                                     )
                                 },
@@ -573,7 +574,7 @@ private fun rememberCallRooms(session: SessionStore, options: StoryAudienceOptio
         rooms = servers.flatMap { server ->
             runCatching { session.api.channels(server.serverId) }.getOrDefault(emptyList())
                 .filter { it.type == "voice" }
-                .map { CallRoomOption(it.serverId ?: server.serverId, server.serverName, it.id, it.name) }
+                .map { CallRoomOption(it.serverId ?: server.serverId, server.serverName, it.id, it.name, server.iconUrl) }
         }
     }
     return rooms

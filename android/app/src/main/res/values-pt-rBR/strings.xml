@@ -985,6 +985,11 @@
     <string name="stories_viewer_reacted">Reagiu %1$s</string>
     <string name="stories_viewer_friends">Amigos</string>
     <string name="stories_viewer_close">Fechar</string>
+    <string name="stories_viewer_mention">Marcação: %1$s. Abre o perfil.</string>
+    <string name="stories_profile_add_friend">Adicionar amigo</string>
+    <string name="stories_profile_view">Ver perfil</string>
+    <string name="stories_profile_request_sent">Pedido enviado.</string>
+    <string name="stories_profile_now_friends">Agora são amigos.</string>
     <string name="stories_viewer_more">Mais</string>
     <string name="stories_viewer_send">Mandar</string>
     <string name="stories_viewer_paused">Pausado</string>
@@ -1010,6 +1015,7 @@
     <string name="stories_call_live">Na call agora</string>
     <string name="stories_call_join">Entrar na call</string>
     <string name="stories_call_ended">A call acabou</string>
+    <string name="stories_call_empty">Ninguém na call agora</string>
     <string name="stories_call_full">A sala lotou</string>
     <string name="stories_compose_title">Novo story</string>
     <string name="stories_compose_mode_text">Texto</string>
