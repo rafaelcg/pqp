@@ -406,7 +406,14 @@ struct StoryCameraView: View {
         // tap on the shutter, need only the camera. It is asked for the first
         // time somebody holds for a video (`prepareForVideo`), and is optional
         // even then: refused, or a call holding it, the video is silent.
-        let next = engine ?? StoryCameraEngineFactory.make(recordsAudio: recordsAudio)
+        // Every start gets an engine of its own, and only ever stops that one:
+        // an older start that was overtaken can then never shut down the
+        // camera a newer start is using.
+        if let previous = engine {
+            previous.stop()
+            engine = nil
+        }
+        let next = StoryCameraEngineFactory.make(recordsAudio: recordsAudio)
         engineWantsAudio = recordsAudio
         next.onInterruption = { failure in
             Task { @MainActor in handleInterruption(failure) }
@@ -414,8 +421,8 @@ struct StoryCameraView: View {
         do {
             try await next.start()
         } catch {
-            // Whatever opened is closed: a failed start must not leave the
-            // device held by an engine nothing refers to any more.
+            // Whatever this start opened is closed: a failed start must not
+            // leave the device held by an engine nothing refers to any more.
             next.stop()
             // An older start failing must not wipe a newer one's state.
             guard current() else { return }
@@ -571,8 +578,15 @@ struct StoryCameraView: View {
         busy = true
         // The first video asks for the microphone, and the sheet takes the
         // finger with it: if it is no longer down once the answer is in, there
-        // is nothing to record (the next hold will).
+        // is nothing to record (the next hold will). The camera may also have
+        // been released or replaced while the sheet was up: then this engine is
+        // not the one on screen and nothing is recorded on it.
+        let startedOn = generation
         await engine.prepareForVideo()
+        guard startedOn == generation, self.engine === engine else {
+            busy = false
+            return
+        }
         silent = !engine.recordsAudio
         if needsFinger, !press.isDown {
             busy = false
