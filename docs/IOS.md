@@ -753,6 +753,48 @@ that the web got in PR #84. Neither has been seen on a phone yet: the picture a
 quality choice produces exists only on a live connection, which is what
 `VideoSendReport` and the Video section of Settings are for.
 
+## Stories: the camera and the sources
+
+The composer opens on the camera (`StoryCameraView`), the way Instagram's does.
+It replaced `UIImagePickerController`, which could not show a progress ring,
+flip on a double tap or hold a flash across a recording.
+
+- **Tap the shutter for a photo, hold it for a video** up to 30 s with a ring
+  that fills as it records. The tap/hold decision is `StoryShutterPress`, pure
+  and tested; the recording starts under the finger at 0.35 s, not after it
+  lifts. Past 30 s the recording ends on its own and the release that follows
+  does not take a photo. Dragging up while holding zooms.
+- **Front and back**, by the button or a double tap on the preview. Pinch to
+  zoom (a phone with an ultra-wide lens shows 0.5x below 1x), tap to focus,
+  flash off/on/auto (a torch while a video records; a white screen for a
+  selfie, since the front camera has no flash).
+- **The front camera is mirrored in the photo and the video**, to match the
+  preview, as every selfie camera of a social app does it. It is one line,
+  `connection.isVideoMirrored` in `StoryCaptureCore.applyOrientationAndMirroring`.
+- **Gallery** is `PhotosPicker` (photos and videos, no library permission),
+  **Files** is `fileImporter`. A video past 30 s opens `StoryTrimView`: a
+  filmstrip of the clip and a window of exactly 30 s that slides along it, the
+  chosen part looping above. Up to a second over is cut to the limit without
+  asking, because a recording stops a frame or two late (the server accepts up
+  to `STORY_MAX_PROBED_VIDEO_MS`, 31 s).
+- **Permission states** are `StoryCameraAccess`: needs prompt, denied (offers
+  Settings), restricted, no device, and "the camera is on in your call" (a
+  device has one owner). Every one of them still offers the gallery and Files.
+- **In a call, videos are silent.** A capture session with a microphone input
+  takes the audio session from WebRTC, so while `voice.holdsSeat` or a DM call
+  is up the camera records without a mic input, and the recording badge says so.
+
+The AVFoundation half (`StoryCaptureCore`) runs only on a phone. A simulator has
+no capture device, so a debug build with `PQP_STORY_CAMERA=mock` swaps in
+`MockStoryCameraEngine` (a moving gradient, a rendered photo, a real H.264 file
+of the held length). It is compiled out of the choice on a release build.
+`PQP_STORY_CAMERA_ACCESS=denied|restricted|undetermined` forces a permission
+screen and `PQP_STORY_FIXTURE_VIDEO=<seconds>` feeds the composer a synthetic
+clip, both debug only. `StoryCameraTests` covers the decisions, the scripted
+camera and the trim export; `StoryCameraUITests` drives the whole flow on the
+mock. **Owed: a pass on a real phone** (front/back flip, torch, pinch, hold to
+record, the mic prompt, an interruption by a call).
+
 ## Copy and pt-BR
 
 All UI copy lives inline in Swift and is collected into

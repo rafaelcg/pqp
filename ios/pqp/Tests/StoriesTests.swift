@@ -242,7 +242,8 @@ final class StoriesTests: XCTestCase {
     }
 
     /// A real clip through the real export: 720p MP4 at most, its length
-    /// kept, a poster drawn, and a 31 s one refused before any upload.
+    /// kept, a poster drawn, and a 33 s one refused before any upload (the
+    /// composer offers the trimmer first; this is the backstop under it).
     func testVideoPrepExportsAnMp4AndRefusesALongOne() async throws {
         let short = try await makeClip(seconds: 2)
         let draft = try await StoryMediaPrep.video(at: short, maxVideoMs: StoryLimits.maxVideoMs)
@@ -251,12 +252,12 @@ final class StoriesTests: XCTestCase {
         XCTAssertEqual(Double(draft.durationMs ?? 0), 2_000, accuracy: 150)
         XCTAssertGreaterThan(draft.data.count, 0)
 
-        let long = try await makeClip(seconds: 31)
+        let long = try await makeClip(seconds: 33)
         do {
             _ = try await StoryMediaPrep.video(at: long, maxVideoMs: StoryLimits.maxVideoMs)
-            XCTFail("A 31 s video must be refused")
+            XCTFail("A 33 s video must be refused")
         } catch let failure as StoryMediaPrep.Failure {
-            XCTAssertEqual(failure.message, String(localized: "This video is \(31) s. The limit is 30 s."))
+            XCTAssertEqual(failure.message, String(localized: "This video is \(33) s. The limit is 30 s."))
         }
     }
 

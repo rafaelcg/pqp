@@ -60,9 +60,9 @@
 		</dict>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>pqp uses your camera for video and screen sharing.</string>
+	<string>pqp uses your camera for video calls and to shoot stories.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>pqp uses your microphone for voice calls and to record voice messages.</string>
+	<string>pqp uses your microphone for voice calls, voice messages and the sound of your story videos.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>pqp lets you send photos from your library.</string>
 	<key>PqpApiHost</key>

@@ -121,6 +121,16 @@
         }
       }
     },
+    "%@ to %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ a %@"
+          }
+        }
+      }
+    },
     "%@ turned replies off" : {
       "localizations" : {
         "pt-BR" : {
@@ -911,6 +921,16 @@
         }
       }
     },
+    "A setting on this phone doesn't let apps use the camera. You can still pick from your photos." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uma configuração desse celular não deixa os apps usarem a câmera. Tu ainda pode escolher da galeria."
+          }
+        }
+      }
+    },
     "Activity" : {
       "localizations" : {
         "pt-BR" : {
@@ -1581,6 +1601,16 @@
         }
       }
     },
+    "Camera access is off" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O acesso à câmera tá desligado"
+          }
+        }
+      }
+    },
     "Camera access is off. Enable it in Settings." : {
       "localizations" : {
         "pt-BR" : {
@@ -1727,6 +1757,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escolha"
+          }
+        }
+      }
+    },
+    "Choose a file" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolher um arquivo"
           }
         }
       }
@@ -2231,12 +2271,42 @@
         }
       }
     },
+    "Couldn't save the video. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra salvar o vídeo. Tenta de novo."
+          }
+        }
+      }
+    },
     "Couldn't save. Try again." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Não deu pra salvar. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Couldn't start recording. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra começar a gravar. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Couldn't take the photo. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra tirar a foto. Tenta de novo."
           }
         }
       }
@@ -2951,6 +3021,36 @@
         }
       }
     },
+    "Flash auto" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Flash automático"
+          }
+        }
+      }
+    },
+    "Flash off" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Flash desligado"
+          }
+        }
+      }
+    },
+    "Flash on" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Flash ligado"
+          }
+        }
+      }
+    },
     "Flip camera" : {
       "localizations" : {
         "pt-BR" : {
@@ -3201,6 +3301,16 @@
         }
       }
     },
+    "Front" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frontal"
+          }
+        }
+      }
+    },
     "Gallery" : {
       "localizations" : {
         "pt-BR" : {
@@ -3417,6 +3527,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esconder isso"
+          }
+        }
+      }
+    },
+    "Hold to record a video up to 30 seconds" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Segura pra gravar um vídeo de até 30 segundos"
           }
         }
       }
@@ -4411,6 +4531,16 @@
         }
       }
     },
+    "No camera on this device" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse aparelho não tem câmera"
+          }
+        }
+      }
+    },
     "No camera or screen share in this channel." : {
       "localizations" : {
         "pt-BR" : {
@@ -4597,6 +4727,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nenhum servidor ainda"
+          }
+        }
+      }
+    },
+    "No sound" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem som"
           }
         }
       }
@@ -5081,6 +5221,16 @@
         }
       }
     },
+    "Open Settings" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir Ajustes"
+          }
+        }
+      }
+    },
     "Open source. Self-host it, or use the hosted one. Same product either way." : {
       "localizations" : {
         "pt-BR" : {
@@ -5137,6 +5287,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ainda tem gente nessas comunidades, então a gente não vai apagar elas por baixo das pessoas. Nas configurações de cada comunidade, passe ela pra outro membro ou apague você mesmo."
+          }
+        }
+      }
+    },
+    "Part of the video" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trecho do vídeo"
           }
         }
       }
@@ -5207,6 +5367,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Upload de foto está desligado aqui."
+          }
+        }
+      }
+    },
+    "Pick a photo or a video instead." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolhe uma foto ou um vídeo."
           }
         }
       }
@@ -5577,6 +5747,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Reconectando…"
+          }
+        }
+      }
+    },
+    "Record video" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravar vídeo"
           }
         }
       }
@@ -6761,6 +6941,16 @@
         }
       }
     },
+    "Stop recording" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parar de gravar"
+          }
+        }
+      }
+    },
     "Stop sharing your screen" : {
       "localizations" : {
         "pt-BR" : {
@@ -6891,6 +7081,16 @@
         }
       }
     },
+    "Take photo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tirar foto"
+          }
+        }
+      }
+    },
     "Tech" : {
       "localizations" : {
         "pt-BR" : {
@@ -6981,12 +7181,32 @@
         }
       }
     },
+    "The camera is blocked on this phone" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A câmera tá bloqueada nesse celular"
+          }
+        }
+      }
+    },
     "The camera turned on but no picture is getting through. Turn it off and on again." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "A câmera ligou, mas nenhuma imagem está chegando. Desligue e ligue de novo."
+          }
+        }
+      }
+    },
+    "The camera was interrupted. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A câmera foi interrompida. Tenta de novo."
           }
         }
       }
@@ -7361,6 +7581,16 @@
         }
       }
     },
+    "This video is %@. Pick the 30 s that go in your story." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse vídeo tem %@. Escolhe os 30 s que vão pro teu story."
+          }
+        }
+      }
+    },
     "This video is %lld s. The limit is 30 s." : {
       "localizations" : {
         "pt-BR" : {
@@ -7581,6 +7811,26 @@
         }
       }
     },
+    "Turn it off in the call to shoot here. You can still pick from your photos." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desliga na call pra gravar aqui. Tu ainda pode escolher da galeria."
+          }
+        }
+      }
+    },
+    "Turn it on in Settings to shoot a story. You can still pick from your photos." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liga nos Ajustes pra gravar um story. Tu ainda pode escolher uma foto da galeria."
+          }
+        }
+      }
+    },
     "Turn on notifications" : {
       "localizations" : {
         "pt-BR" : {
@@ -7787,6 +8037,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Enviando…"
+          }
+        }
+      }
+    },
+    "Use this part" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar esse trecho"
           }
         }
       }
@@ -8461,6 +8721,16 @@
         }
       }
     },
+    "Your camera is on in the call" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tua câmera tá ligada na call"
+          }
+        }
+      }
+    },
     "Your conversations live here" : {
       "localizations" : {
         "pt-BR" : {
@@ -8957,6 +9227,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "atualizou um canal"
+          }
+        }
+      }
+    },
+    "Zoom" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom"
           }
         }
       }
