@@ -749,13 +749,15 @@ interface CallRoom {
  * with no faces, no count and no join button. The voice module is imported
  * lazily; a read with no call never loads it.
  */
+type CallRow = Pick<StoryRow, "id" | "author_id" | "sticker">;
+
 async function resolveCalls(
   viewerId: string,
-  rows: StoryRow[],
+  rows: CallRow[],
 ): Promise<Map<string, StoryCallLive>> {
   const out = new Map<string, StoryCallLive>();
   const stickered = rows.filter(
-    (row): row is StoryRow & { sticker: StorySticker } => row.sticker?.type === "call",
+    (row): row is CallRow & { sticker: StorySticker } => row.sticker?.type === "call",
   );
   if (stickered.length === 0) {
     return out;
@@ -833,13 +835,57 @@ async function resolveCalls(
       )
     : { rows: [] };
   const byId = new Map(people.rows.map((person) => [person.id, person]));
+  // Whether the AUTHOR can still use the room (one permission read per distinct author and room).
+  const authorAccess = new Map<string, Promise<boolean>>();
+  const authorCanUse = (authorId: string, room: CallRoom) => {
+    const key = `${authorId}:${room.channelId}`;
+    let known = authorAccess.get(key);
+    if (!known) {
+      known = computeMemberPermissions(room.serverId, authorId, room.channelId).then(
+        (perms) => hasPermission(perms, Permission.VIEW_CHANNEL) && hasPermission(perms, Permission.CONNECT),
+      );
+      authorAccess.set(key, known);
+    }
+    return known;
+  };
   for (const row of stickered) {
     const room = rooms.get(row.sticker.channelId);
+    if (!room) {
+      // The channel is gone: the one thing, with the author losing access, that ends a card.
+      out.set(row.id, {
+        serverId: row.sticker.serverId,
+        channelId: row.sticker.channelId,
+        channelName: "",
+        participants: [],
+        count: 0,
+        state: "ended",
+        joinable: false,
+      });
+      continue;
+    }
     // A room the viewer cannot see is not named to them at all: no call.
-    if (!room || room.serverId !== row.sticker.serverId || !room.viewerCanSee) {
+    if (room.serverId !== row.sticker.serverId || !room.viewerCanSee) {
       continue;
     }
     if (!room.viewerCanJoin) {
+      // Named, but the roster is theirs to see only with CONNECT: no faces, no count, no way in.
+      // That is not "ended": nothing ended, they just cannot enter.
+      out.set(row.id, {
+        serverId: room.serverId,
+        channelId: room.channelId,
+        channelName: room.name,
+        participants: [],
+        count: 0,
+        state: "live",
+        joinable: false,
+      });
+      continue;
+    }
+    if (!room.rosterKnown) {
+      continue;
+    }
+    if (!(await authorCanUse(row.author_id, room))) {
+      // The author can no longer connect to the room (removed, or the role lost): the card is over.
       out.set(row.id, {
         serverId: room.serverId,
         channelId: room.channelId,
@@ -851,12 +897,10 @@ async function resolveCalls(
       });
       continue;
     }
-    if (!room.rosterKnown) {
-      continue;
-    }
-    const live = room.seated.includes(row.author_id);
-    const full = live && room.transport === "mesh" && room.seated.length >= MESH_VOICE_LIMIT;
-    const state: StoryCallLive["state"] = !live ? "ended" : full ? "full" : "live";
+    // An EMPTY room is not an ended call: the card reads "nobody in the call right now" and still
+    // offers the way in (joining an empty room is fine). `full` is only a mesh room at its limit.
+    const full = room.transport === "mesh" && room.seated.length >= MESH_VOICE_LIMIT;
+    const state: StoryCallLive["state"] = full ? "full" : "live";
     out.set(row.id, {
       serverId: room.serverId,
       channelId: room.channelId,
@@ -1158,6 +1202,8 @@ interface StripRow {
   latest_at: Date;
   expires_at: Date;
   unseen: boolean;
+  /** The call stickers in the author's live stories here (resolved to `has_call` after the query). */
+  call_stickers: CallRow[];
   has_call: boolean;
   author_name: string;
   author_avatar: string | null;
@@ -1194,16 +1240,19 @@ async function stripRows(
               max(l.published_at) AS latest_at,
               max(l.expires_at) AS expires_at,
               bool_or(v.story_id IS NULL) AS unseen,
-              -- COALESCE: a story with no sticker compares NULL, and bool_or
-              -- over nothing but NULLs is NULL, which the contract says is a
-              -- boolean (hasCall).
-              COALESCE(bool_or(l.sticker->>'type' = 'call'), FALSE) AS has_call
+              -- The call stickers themselves, so the ring can say whether anyone is IN the
+              -- room right now (a sticker in the row is content, not liveness).
+              COALESCE(
+                jsonb_agg(jsonb_build_object('id', l.id, 'author_id', l.author_id, 'sticker', l.sticker))
+                  FILTER (WHERE l.sticker->>'type' = 'call'),
+                '[]'::jsonb
+              ) AS call_stickers
          FROM live l
          LEFT JOIN story_views v ON v.story_id = l.id AND v.viewer_id = $1
         GROUP BY l.author_id
      )
      SELECT g.author_id, g.story_ids, g.latest_at, g.expires_at,
-            (g.unseen AND g.author_id <> $1) AS unseen, g.has_call,
+            (g.unseen AND g.author_id <> $1) AS unseen, g.call_stickers,
             u.display_name AS author_name, u.avatar_url AS author_avatar,
             u.handle AS author_handle
        FROM grouped g
@@ -1223,7 +1272,18 @@ async function stripRows(
       LIMIT ${STORY_STRIP_MAX_AUTHORS + 1}`,
     params,
   );
-  return result.rows;
+  // The "em call" badge is liveness: only while somebody is in the room, as this viewer may see it.
+  const live = await resolveCalls(
+    String(params[0]),
+    result.rows.flatMap((row) => row.call_stickers),
+  );
+  return result.rows.map((row) => ({
+    ...row,
+    has_call: row.call_stickers.some((entry) => {
+      const call = live.get(entry.id);
+      return Boolean(call && call.state !== "ended" && call.count > 0);
+    }),
+  }));
 }
 
 /** The viewer is not blocked either way, and has not muted the author. */
