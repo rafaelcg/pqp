@@ -28,7 +28,7 @@ describe("storyCardSize", () => {
   });
 
   it("shrinks to fit a very short window instead of overflowing it", () => {
-    for (const h of [400, 500, 560]) {
+    for (const h of [200, 400, 500, 560]) {
       const size = storyCardSize(1280, h);
       expect(size.height).toBeLessThanOrEqual(h);
       expect(size.width).toBeGreaterThan(0);

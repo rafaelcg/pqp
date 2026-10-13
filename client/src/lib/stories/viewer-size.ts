@@ -22,7 +22,7 @@ const SIDE_ROOM_XL = 456;
 const XL = 1280;
 /** Least room kept for the card beside the arrows on a very narrow window. */
 const MIN_WIDTH = 240;
-const TINY_WIDTH = 60;
+const TINY_WIDTH = 1;
 
 export interface StoryCardSize {
   /** Canvas width, which is also the card's and the reply bar's. */
