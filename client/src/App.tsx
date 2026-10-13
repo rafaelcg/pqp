@@ -204,6 +204,7 @@ import {
 } from "@/lib/whats-new-feed";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import { BotWizard } from "@/components/bots/bot-wizard";
+import { BotIntroHint } from "@/components/bots/bot-intro-hint";
 import { useBotInvite } from "@/lib/use-bot-invite";
 import { CreateServerDialog } from "@/components/layout/create-server-dialog";
 import {
@@ -12200,6 +12201,15 @@ function MainAppContent({
       {/* Against the composer it explains, not floating in a corner: the frame
           names the channel the refused action happened in, so a notice from
           another room would be answering a question nobody asked here. */}
+      {/* Staff made the bot; the tip is for everybody else. */}
+      {selection.kind === "server" && selectedServerId && !canManageServer && (
+        <BotIntroHint
+          serverId={selectedServerId}
+          messages={chat.getMessages()}
+          members={serverMembers}
+          onSayHi={(username) => setComposerInsert(`@${username} oi!`)}
+        />
+      )}
       {sanctionNotice && sanctionNotice.channelId === selectedChannel.id && (
         <SanctionNoticeBar
           notice={sanctionNotice}

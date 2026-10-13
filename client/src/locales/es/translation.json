@@ -6149,5 +6149,10 @@
   "bots.intro.edit": "Editar",
   "bots.intro.done": "Listo",
   "bots.intro.post": "Publicar en {channel}",
-  "bots.intro.posted": "Publicado en {channel}."
+  "bots.intro.posted": "Publicado en {channel}.",
+  "bots.introHint.label": "Conoce a {name}",
+  "bots.introHint.title": "Conoce a {name}",
+  "bots.introHint.body": "El bot de este servidor. Llámalo con {handle} o responde a uno de sus mensajes. Está en beta, así que aún puede equivocarse. Lee los canales donde responde; los procesa Anthropic y nada de eso entrena modelos.",
+  "bots.introHint.later": "Ahora no",
+  "bots.introHint.sayHi": "Saludar"
 }

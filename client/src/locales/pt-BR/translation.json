@@ -6080,5 +6080,10 @@
   "bots.intro.edit": "Editar",
   "bots.intro.done": "Pronto",
   "bots.intro.post": "Postar no {channel}",
-  "bots.intro.posted": "Postado no {channel}."
+  "bots.intro.posted": "Postado no {channel}.",
+  "bots.introHint.label": "Conheça o {name}",
+  "bots.introHint.title": "Conheça o {name}",
+  "bots.introHint.body": "O bot deste servidor. Chame com {handle} ou responda a uma mensagem dele. Está em beta, então ainda pode errar. Ele lê os canais onde responde; quem processa é a Anthropic, e nada disso treina modelos.",
+  "bots.introHint.later": "Agora não",
+  "bots.introHint.sayHi": "Dizer oi"
 }

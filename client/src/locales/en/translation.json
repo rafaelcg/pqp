@@ -6080,5 +6080,10 @@
   "bots.intro.edit": "Edit",
   "bots.intro.done": "Done",
   "bots.intro.post": "Post in {channel}",
-  "bots.intro.posted": "Posted in {channel}."
+  "bots.intro.posted": "Posted in {channel}.",
+  "bots.introHint.label": "Meet {name}",
+  "bots.introHint.title": "Meet {name}",
+  "bots.introHint.body": "This server's bot. Call it with {handle} or reply to one of its messages. It's in beta, so it can still make mistakes. It reads the channels it answers in; Anthropic processes them, and none of it trains models.",
+  "bots.introHint.later": "Not now",
+  "bots.introHint.sayHi": "Say hi"
 }
