@@ -59,6 +59,26 @@ vi.mock("../voice/hls-playlist-proxy.js", async (importOriginal) => {
   return { ...actual, resolveHlsSessionId: resolveHlsSessionIdSpy };
 });
 
+/**
+ * A clock the route's rate limiters can be frozen on. `createRateLimiter`
+ * captures `Date.now` when `./index.js` is first evaluated, so spying on
+ * `Date.now` later does not reach it. This wrapper is installed BEFORE that
+ * import and follows the real clock until a test freezes it. Without it, the
+ * per-session limiter (120 tokens, 10 refilled a second) refilled while 130
+ * sequential requests ran on a slow CI runner, and the last one got through.
+ */
+const realDateNow = Date.now.bind(Date);
+const clock = {
+  frozenAt: null as number | null,
+  freeze() {
+    clock.frozenAt = realDateNow();
+  },
+  thaw() {
+    clock.frozenAt = null;
+  },
+};
+Date.now = () => clock.frozenAt ?? realDateNow();
+
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
@@ -133,6 +153,11 @@ describeDb("POST /api/live-hls/telemetry", () => {
 
   afterEach(() => {
     actor = null;
+    clock.thaw();
+  });
+
+  afterAll(() => {
+    Date.now = realDateNow;
   });
 
   it("refuses an unauthenticated batch", async () => {
@@ -713,6 +738,7 @@ describeDb("POST /api/live-hls/telemetry", () => {
       // lookup, every one of these 130 would still call it before being
       // refused; if it gates the lookup as intended, the calls that got a
       // 429 make no call to it at all.
+      clock.freeze();
       let rejected = 0;
       for (let i = 0; i < 130; i++) {
         const fakeViewer = {
@@ -750,6 +776,9 @@ describeDb("POST /api/live-hls/telemetry", () => {
    * limiter can be what trips.
    */
   it("rate-limits a session receiving far more batches than one real party would, across many accounts", async () => {
+    // Frozen so no tokens refill between requests: exactly the 120 the bucket
+    // holds are accepted, however slow the machine running this is.
+    clock.freeze();
     let lastStatus = 200;
     let accepted = 0;
     for (let i = 0; i < 130; i++) {
@@ -773,7 +802,7 @@ describeDb("POST /api/live-hls/telemetry", () => {
       }
     }
     expect(lastStatus).toBe(429);
-    expect(accepted).toBeLessThan(130);
+    expect(accepted).toBe(120);
     expect(hlsTelemetryActivity().batchesRejectedRateLimit).toBeGreaterThan(0);
   });
 });

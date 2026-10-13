@@ -483,6 +483,21 @@ async function waitFor(check: () => boolean | Promise<boolean>, what: string, ms
   }
 }
 
+/**
+ * How long a test waits for a session to move to the other machine. A
+ * handover is about six database round trips in a row across two processes:
+ * the new seat is written, the owner hears over the bus, reads the registry,
+ * releases the rows, and the other machine reads them and adopts. Delaying
+ * every registry read in this file showed the wait grows by about six times
+ * the read latency (100 ms per read: 0.7 s, 1 s per read: 6.2 s), so 8 s runs
+ * out at roughly 1.3 s per read. CI runs three test files at once on a small
+ * runner against one Postgres. If a lookup also answers before the new seat
+ * lands, the owner asks again after its 10 s recheck (`SHARER_RECHECK_MS`), so
+ * 15 s keeps a slow run from failing a session that was still arriving.
+ * A session that really never moves still fails, 15 s later.
+ */
+const HANDOVER_WAIT_MS = 15_000;
+
 interface Presenter {
   userId: string;
   peerId: string;
@@ -775,7 +790,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     const a2 = await bootInstance("api-a#2");
     expect(owners(channel)).toEqual(["api-a#2"]);
     await presenterResumes(b1, presenter, channel);
-    await waitFor(() => owners(channel).join() === "api-b#1", "the session to follow the presenter to api-b");
+    await waitFor(() => owners(channel).join() === "api-b#1", "the session to follow the presenter to api-b", HANDOVER_WAIT_MS);
     // Longer than the grace that used to end it, with the presenter on api-b.
     await new Promise((resolve) => setTimeout(resolve, 800));
     expect(owners(channel)).toEqual(["api-b#1"]);
@@ -795,7 +810,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     await b2.voice.sweepHlsSharersWithoutSession();
     expect(owners(channel)).toEqual(["api-b#2"]);
     await presenterResumes(a2, presenter, channel);
-    await waitFor(() => owners(channel).join() === "api-a#2", "the session to follow the presenter to api-a#2");
+    await waitFor(() => owners(channel).join() === "api-a#2", "the session to follow the presenter to api-a#2", HANDOVER_WAIT_MS);
 
     // ---- no deploy, just a blip: the presenter's socket drops on api-a#2
     // and reconnects through the proxy to api-b#2, both machines alive. The
@@ -805,7 +820,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(owners(channel)).toEqual(["api-a#2"]);
     await presenterResumes(b2, presenter, channel);
-    await waitFor(() => owners(channel).join() === "api-b#2", "the session to follow the presenter to api-b#2");
+    await waitFor(() => owners(channel).join() === "api-b#2", "the session to follow the presenter to api-b#2", HANDOVER_WAIT_MS);
     await new Promise((resolve) => setTimeout(resolve, 800));
     // And the sweep, run on both machines, changes nothing on a healthy party.
     await a2.voice.sweepHlsSharersWithoutSession();
