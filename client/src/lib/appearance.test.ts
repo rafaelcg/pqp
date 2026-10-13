@@ -41,6 +41,8 @@ describe("isAppearance", () => {
       "harmony",
       "hearth",
       "night",
+      "halloween",
+      "christmas",
       "ocean",
       "catppuccin",
       "everforest",
@@ -57,8 +59,10 @@ describe("isAppearance", () => {
     expect(isAppearance(null)).toBe(false);
   });
 
-  it("pins Night to dark and leaves the other looks free", () => {
+  it("pins Night and the seasonal looks to dark and leaves the others free", () => {
     expect(appearanceForcesDark("night")).toBe(true);
+    expect(appearanceForcesDark("halloween")).toBe(true);
+    expect(appearanceForcesDark("christmas")).toBe(true);
     expect(appearanceForcesDark("signal")).toBe(false);
     expect(appearanceForcesDark("harmony")).toBe(false);
     expect(appearanceForcesDark("hearth")).toBe(false);

@@ -21,7 +21,13 @@ import { getDesktop } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { SUPPORTED_LOCALES, setLocalePreference, type Locale } from "@/lib/locale";
 import { ACCENT_SWATCHES, effectiveAccentHue, type AccentHuePreference } from "@/lib/accent";
-import type { AppearancePreference, Look } from "@/lib/appearance";
+import {
+  appearanceForcesDark,
+  type AppearancePreference,
+  type Look,
+} from "@/lib/appearance";
+import { chooseLook } from "@/lib/choose-look";
+import { LookMiniature, lookAccent } from "@/components/settings/look-miniature";
 import {
   chooseRetroLook,
   isRetroNew,
@@ -30,6 +36,7 @@ import {
   setRetroToasts,
   useRetroState,
 } from "@/lib/retro-look";
+import { currentSeason, isLookOffered } from "@/lib/seasonal-looks";
 import type { ContrastPreference } from "@/lib/contrast";
 import type { ThemePreference } from "@/lib/theme";
 import { queuePreferenceSync, usePreferenceSyncFailed } from "@/lib/preferences";
@@ -129,32 +136,13 @@ const THEME_OPTIONS: { value: ThemePreference; label: MessageKey }[] = [
  */
 const PHONE_TARGETS = "max-sm:[&>[role=radio]]:h-11";
 
-/**
- * Where "the mode before Night" is remembered. Night pins the mode to dark and
- * the theme store writes that over the account's choice, so without this note
- * leaving Night would leave a person who used Light (or Automático) on Dark.
- * Local to this browser on purpose: another device has its own history.
- */
-export const MODE_BEFORE_NIGHT_KEY = "pqp:mode-before-night";
-
-export function rememberModeBeforeNight(mode: ThemePreference): void {
-  try {
-    localStorage.setItem(MODE_BEFORE_NIGHT_KEY, mode);
-  } catch {
-    // Remembering is a convenience; leaving Night then stays on Dark.
-  }
-}
-
-/** The remembered mode, once. Reading it forgets it. */
-export function takeModeBeforeNight(): ThemePreference | null {
-  try {
-    const raw = localStorage.getItem(MODE_BEFORE_NIGHT_KEY);
-    localStorage.removeItem(MODE_BEFORE_NIGHT_KEY);
-    return raw === "light" || raw === "dark" || raw === "system" ? raw : null;
-  } catch {
-    return null;
-  }
-}
+// Moved to `lib/choose-look.ts` so the seasonal card shares them; re-exported
+// for the imports that grew around this file.
+export {
+  MODE_BEFORE_NIGHT_KEY,
+  rememberModeBeforeNight,
+  takeModeBeforeNight,
+} from "@/lib/choose-look";
 
 /**
  * Mode (claro, escuro, automático). Not part of `LocalSettings`: it applies on
@@ -167,11 +155,13 @@ function BrightnessRow() {
   const { t } = useTranslation();
   const { appearance } = useAppearance();
   const { preference, resolved, setPreference } = useTheme();
-  const nightLocked = appearance === "night";
+  const nightLocked = appearanceForcesDark(appearance);
   const shown = nightLocked ? "dark" : preference;
 
   const description = nightLocked
-    ? t("settings.appearance.themeNightLocked")
+    ? t("settings.appearance.themeDarkOnlyLocked", {
+        look: t(`settings.appearance.preset.${appearance}`),
+      })
     : preference === "system"
       ? t("settings.appearance.themeFollowing", {
           theme: t(
@@ -196,7 +186,9 @@ function BrightnessRow() {
               setPreference(next);
             }
           }}
-          lockedHint={t("settings.appearance.themeNightTip")}
+          lockedHint={t("settings.appearance.themeDarkOnlyTip", {
+            look: t(`settings.appearance.preset.${appearance}`),
+          })}
           options={THEME_OPTIONS.map((option) => ({
             value: option.value,
             label: t(option.label),
@@ -340,6 +332,16 @@ const PQP_LOOKS: LookOption[] = [
     label: "settings.appearance.preset.night",
     badge: "settings.appearance.preset.nightOnly",
   },
+  {
+    value: "halloween",
+    label: "settings.appearance.preset.halloween",
+    badge: "settings.appearance.preset.seasonal",
+  },
+  {
+    value: "christmas",
+    label: "settings.appearance.preset.christmas",
+    badge: "settings.appearance.preset.seasonal",
+  },
 ];
 
 /** Ported open-source palettes, credited in `index.css` and DECISIONS.md. */
@@ -351,15 +353,18 @@ const COMMUNITY_LOOKS: LookOption[] = [
 
 function LookRow() {
   const { t } = useTranslation();
-  const { appearance, look, setAppearance } = useAppearance();
-  const { preference, resolved, setPreference } = useTheme();
+  const { appearance, look } = useAppearance();
+  const { resolved } = useTheme();
   const { preference: accentPreference } = useAccentHue();
   const retro = useRetroState();
   // The miniatures are drawn the way the app would look after the pick: in the
-  // current mode and, when there is one, in the person's own accent. Night is
-  // dark whatever the mode is.
-  const mode = appearance === "night" ? "dark" : resolved;
+  // current mode and, when there is one, in the person's own accent. A
+  // dark-only look is dark whatever the mode is.
+  const mode = appearanceForcesDark(appearance) ? "dark" : resolved;
   const customAccent = accentPreference !== "default";
+  // Read once per mount: a season does not start while the tab is open often
+  // enough to be worth a timer.
+  const [season] = useState(() => currentSeason());
 
   function choose(next: Look) {
     if (next === look) {
@@ -369,24 +374,7 @@ function LookRow() {
       void chooseRetroLook();
       return;
     }
-    if (next === appearance) {
-      // Leaving Modo 2005 for the look that was under it: nothing else moves.
-      setAppearance(next);
-      return;
-    }
-    if (next === "night") {
-      // Choosing Night pins the mode to dark. Note what it was first.
-      rememberModeBeforeNight(preference);
-      setAppearance(next);
-      return;
-    }
-    setAppearance(next);
-    if (appearance === "night") {
-      const before = takeModeBeforeNight();
-      if (before && before !== "dark") {
-        setPreference(before);
-      }
-    }
+    chooseLook(next);
   }
 
   const toOption = (option: LookOption): SettingsChoice<Look> => ({
@@ -401,7 +389,9 @@ function LookRow() {
       />
     ),
   });
-  const pqpOptions = PQP_LOOKS.map(toOption);
+  const pqpOptions = PQP_LOOKS.filter((option) =>
+    isLookOffered(option.value, appearance, season),
+  ).map(toOption);
   // Modo 2005 only once this browser found it, and never while the operator
   // has it switched off.
   if (isRetroOffered(retro)) {
@@ -429,7 +419,7 @@ function LookRow() {
         label={t("settings.appearance.preset.groupName", { group: caption })}
         value={look}
         onValueChange={choose}
-        columns={4}
+        columns={options.length > 4 ? 3 : 4}
         options={options}
       />
     </div>
@@ -483,80 +473,6 @@ function RetroRows() {
         onCheckedChange={setRetroToasts}
       />
     </>
-  );
-}
-
-/**
- * A look's own accent, as the stylesheet would paint it in a mode: the dark
- * swatch, or that swatch mixed toward black for light. For the places that
- * must show it while a custom accent is overriding `--color-accent`.
- */
-function lookAccent(look: AppearancePreference, mode: "light" | "dark"): string {
-  const swatch = `var(--swatch-${look}-accent)`;
-  return mode === "light" && look !== "night"
-    ? `color-mix(in oklch, ${swatch} 62%, black)`
-    : swatch;
-}
-
-/**
- * Miniature app chrome in the look's own swatches. The drawing is the
- * `appearance-preview*` recipe in `index.css`; only the colours vary.
- *
- * The swatches are dark. A light miniature is the same swatch mixed toward
- * white (and its ink flipped to the near-black rail), so nothing here is a new
- * colour, only a mix of ones the stylesheet already defines. A custom accent
- * wears the live accent token, which already follows the mode.
- */
-function LookMiniature({
-  look,
-  mode,
-  customAccent,
-}: {
-  look: AppearancePreference;
-  mode: "light" | "dark";
-  customAccent: boolean;
-}) {
-  const light = mode === "light" && look !== "night";
-  const swatch = (part: string) => `var(--swatch-${look}-${part})`;
-  const toward = (part: string, share: number) =>
-    `color-mix(in oklch, ${swatch(part)} ${share}%, white)`;
-  // The live accent token follows the page's mode, so it only suits a card
-  // drawn in that same mode (Night stays dark on a light page).
-  const accent =
-    customAccent && (light ? "light" : "dark") === mode
-      ? "var(--color-accent)"
-      : lookAccent(look, mode);
-  const style = (
-    light
-      ? ({
-          "--preview-rail": toward("rail", 18),
-          "--preview-list": toward("list", 12),
-          "--preview-surface": toward("surface", 5),
-          "--preview-accent": accent,
-          "--swatch-ink": "var(--swatch-signal-rail)",
-        } as CSSProperties)
-      : ({
-          "--preview-rail": swatch("rail"),
-          "--preview-list": swatch("list"),
-          "--preview-surface": swatch("surface"),
-          "--preview-accent": accent,
-        } as CSSProperties)
-  );
-  return (
-    <span className="appearance-preview" style={style}>
-      <span className="appearance-preview-rail" />
-      <span className="appearance-preview-list">
-        <span className="appearance-preview-channel" />
-        <span className="appearance-preview-channel" />
-        <span className="appearance-preview-channel" />
-      </span>
-      <span className="appearance-preview-chat">
-        <span className="appearance-preview-message" />
-        <span className="appearance-preview-message" />
-        <span className="appearance-preview-message" />
-        <span className="appearance-preview-composer" />
-      </span>
-    </span>
   );
 }
 

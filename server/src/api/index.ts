@@ -9011,6 +9011,7 @@ import {
   replaceForumTags,
   setForumPostFollow,
   similarForumPosts,
+  tagRequirementBinds,
   updateForumSettings,
   writeDedupeTombstone,
   type ForumPostPatch,
@@ -9193,7 +9194,10 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
       getForumSettings(post.forum_id),
     ]);
     checkTagChange(forumTags, body.tagIds, previous, isStaff);
-    if (settings.requireTag && body.tagIds.length === 0) {
+    if (
+      body.tagIds.length === 0 &&
+      tagRequirementBinds(settings.requireTag, forumTags, isStaff)
+    ) {
       throw new ForumError(422, FORUM_ERRORS.tagRequired);
     }
     const sameSet =

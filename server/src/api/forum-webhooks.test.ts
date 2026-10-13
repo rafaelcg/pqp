@@ -426,6 +426,39 @@ describeDb("webhooks into a forum", () => {
     expect(third.body.ignored_tags).toEqual(["Dúvida"]);
   });
 
+  it("starter tags: a feed can name them in any shipped language while they are untouched", async () => {
+    // "Lançamento" and "Dúvida" were created by an older client, so the server
+    // recognised them as the `release` and `question` starters.
+    const webhook = await makeWebhook();
+    const localized = await execute(webhook.url, {
+      content: "Nova versão",
+      thread_name: "Versão 3.0",
+      applied_tags: ["Release", "Question", "lanzamiento"],
+    });
+    expect(localized.status, JSON.stringify(localized.body)).toBe(200);
+    expect(new Set(localized.body.post!.tagIds)).toEqual(
+      new Set([tags["Lançamento"], tags["Dúvida"]]),
+    );
+
+    // Once staff rename one, only its own name answers.
+    const renamed = await call(alice, "PUT", `/api/channels/${forumId}/forum-tags`, {
+      tags: [
+        { id: tags["Notícias"]!, name: "Notícias", moderated: false },
+        { id: tags["Lançamento"]!, name: "Novidade", moderated: false },
+        { id: tags["Dúvida"]!, name: "Dúvida", moderated: false },
+        { id: tags["Oficial"]!, name: "Oficial", moderated: true },
+      ],
+    });
+    expect(renamed.status).toBe(200);
+    const after = await execute(webhook.url, {
+      content: "Outra versão",
+      thread_name: "Versão 3.1",
+      applied_tags: ["Release", "Novidade"],
+    });
+    expect(after.body.post!.tagIds).toEqual([tags["Lançamento"]]);
+    expect(after.body.ignored_tags).toEqual(["Release"]);
+  });
+
   it("thread-id-reply: lands in this forum's post; a locked post refuses; another forum's post is 404", async () => {
     const webhook = await makeWebhook();
     const created = await execute(webhook.url, fixture("monitorss-forum"));

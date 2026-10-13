@@ -27,6 +27,8 @@ export const APPEARANCES = [
   "ocean",
   "catppuccin",
   "everforest",
+  "halloween",
+  "christmas",
 ] as const satisfies readonly AppearancePreference[];
 
 /**
@@ -80,10 +82,15 @@ export function mergeAccountAppearance(input: {
   return { retro: false, base: input.account, push: false };
 }
 
+/** Night and the seasonal looks only exist in dark. */
 export function appearanceForcesDark(
   appearance: AppearancePreference,
 ): boolean {
-  return appearance === "night";
+  return (
+    appearance === "night" ||
+    appearance === "halloween" ||
+    appearance === "christmas"
+  );
 }
 
 export function isAppearance(value: string | null): value is AppearancePreference {
@@ -253,7 +260,7 @@ export function setAppearancePreference(appearance: AppearancePreference): void 
   writeFlag(RETRO_SYNCED_STORAGE_KEY, true);
   storeAppearance(appearance);
   commit(appearance);
-  // Night also pins brightness. One PATCH so the account learns both keys
+  // Night and the seasonal looks also pin brightness. One PATCH so the account learns both keys
   // without a second immediate write. Local theme persist is theme.ts's
   // appearance subscription, which must not import this module.
   queuePreferenceSync(

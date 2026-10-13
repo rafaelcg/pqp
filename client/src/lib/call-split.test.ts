@@ -16,6 +16,7 @@ vi.stubGlobal("localStorage", {
 });
 
 const {
+  fitToPictureDelta,
   CALL_SPLIT_DEFAULT,
   CALL_SPLIT_DIVIDER_PX,
   MIN_CHAT_HEIGHT_PX,
@@ -564,5 +565,56 @@ describe("the audience's watch layout", () => {
       ...splitBounds("side-by-side", "watch-audience"),
     });
     expect(stagePx).toBe(Math.round((2000 - CALL_SPLIT_DIVIDER_PX) * 0.5));
+  });
+});
+
+describe("fitToPictureDelta", () => {
+  it("shrinks a stacked stage by the letterbox bands", () => {
+    // 16:9 in a 1000x700 box draws 1000x563: 137px of black to give back.
+    expect(
+      fitToPictureDelta({
+        boxWidth: 1000,
+        boxHeight: 700,
+        videoWidth: 1280,
+        videoHeight: 720,
+        sideBySide: false,
+      }),
+    ).toBe(-137);
+  });
+
+  it("grows a stacked stage that pillarboxes the picture", () => {
+    expect(
+      fitToPictureDelta({
+        boxWidth: 1000,
+        boxHeight: 400,
+        videoWidth: 1280,
+        videoHeight: 720,
+        sideBySide: false,
+      }),
+    ).toBe(163);
+  });
+
+  it("works on the width side by side", () => {
+    expect(
+      fitToPictureDelta({
+        boxWidth: 900,
+        boxHeight: 450,
+        videoWidth: 1280,
+        videoHeight: 720,
+        sideBySide: true,
+      }),
+    ).toBe(-100);
+  });
+
+  it("does nothing before the picture has a size", () => {
+    expect(
+      fitToPictureDelta({
+        boxWidth: 900,
+        boxHeight: 450,
+        videoWidth: 0,
+        videoHeight: 0,
+        sideBySide: false,
+      }),
+    ).toBe(0);
   });
 });

@@ -146,6 +146,16 @@
   --color-flag-es-red: #aa151b;
   --color-flag-es-yellow: #f1bf00;
 
+  /*
+   * Text and icons drawn ON a video: the watch party player's bar, its live
+   * chip and its viewer count. A film is dark whatever the app's theme, so
+   * these do not retint. Light on the black stage in every theme, the way
+   * any video player draws its controls; in the light theme the player's
+   * controls used to inherit near-black text and vanish into the picture.
+   */
+  --color-on-media: oklch(0.97 0.005 95);
+  --color-on-media-muted: oklch(0.8 0.008 95);
+
   /* The `* Fallback` names are metric-adjusted local fonts declared in
      fonts.css, so the swap to the real face barely moves the text. */
   --font-sans:
@@ -469,6 +479,14 @@
   --swatch-everforest-list: oklch(0.3597 0.0169 227.06);
   --swatch-everforest-surface: oklch(0.3239 0.0153 240.42);
   --swatch-everforest-accent: oklch(0.7732 0.0906 125.78);
+  --swatch-halloween-rail: oklch(0.13 0.045 305);
+  --swatch-halloween-list: oklch(0.18 0.05 305);
+  --swatch-halloween-surface: oklch(0.22 0.055 305);
+  --swatch-halloween-accent: oklch(0.76 0.17 55);
+  --swatch-christmas-rail: oklch(0.24 0.09 20);
+  --swatch-christmas-list: oklch(0.18 0.03 165);
+  --swatch-christmas-surface: oklch(0.22 0.035 165);
+  --swatch-christmas-accent: oklch(0.85 0.14 90);
   /* Modo 2005's tile is drawn, not swatched: a title bar and three gems. */
   --swatch-retro-bar: oklch(0.75 0.09 250);
   --swatch-retro-body: oklch(0.96 0.02 245);
@@ -597,6 +615,23 @@
   --rgb-picker-color: 40, 44, 52;
   --rgb-picker-accent: 90, 130, 40;
   --picker-border: oklch(0.86 0.01 95);
+}
+
+/*
+ * Text drawn on the call stage's dark pills (the top overlay's labels over a
+ * share or a camera). The pill is black whatever the theme, so the text roles
+ * take the on-media colours, and in a light theme the accent and the warning
+ * step back to their dark-theme values, which are the ones that read on black.
+ * Put it on the overlay that holds the pills, not on the controls that keep
+ * their own themed background.
+ */
+.on-media-scope {
+  --color-paper: var(--color-on-media);
+  --color-paper-muted: var(--color-on-media-muted);
+}
+:root[data-theme="light"] .on-media-scope {
+  --color-signal: oklch(0.88 0.19 125);
+  --color-warning: oklch(0.8 0.14 85);
 }
 
 /*
@@ -1371,6 +1406,98 @@
   --retro-nudge-ink: oklch(0.52 0.19 30);
   --retro-shadow: 0 8px 24px oklch(0.3 0.06 255 / 0.3);
   --retro-frame-shadow: 0 1px 2px oklch(0.31 0.06 255 / 0.25);
+}
+
+/*
+ * Seasonal looks. Offered in the picker and by a corner card only in their
+ * season (`lib/seasonal-looks.ts`), but a stored pick keeps working all year,
+ * so these blocks stay.
+ *
+ * Both are dark only, like Night. Halloween: aubergine surfaces, a near-black
+ * rail, pumpkin accent. Christmas: pine surfaces, a cranberry rail and a gold
+ * accent, never red, because a red primary button would read as the danger
+ * colour.
+ */
+:root[data-appearance="halloween"] {
+  --color-surface-0: oklch(0.18 0.05 305);
+  --color-surface-1: oklch(0.22 0.055 305);
+  --color-surface-2: oklch(0.27 0.06 305);
+  --color-surface-3: oklch(0.33 0.065 305);
+  --color-rail: oklch(0.13 0.045 305);
+
+  --color-border: oklch(0.36 0.06 305);
+  --color-border-strong: oklch(0.48 0.065 305);
+
+  --color-text: oklch(0.94 0.02 80);
+  --color-text-secondary: oklch(0.84 0.025 70);
+  --color-text-tertiary: oklch(0.75 0.03 60);
+
+  --color-accent: oklch(0.76 0.17 55);
+  --color-accent-hover: oklch(0.68 0.16 50);
+  --color-on-accent: oklch(0.18 0.05 305);
+  --color-accent-soft: oklch(0.33 0.08 50);
+  --color-on-accent-soft: oklch(0.86 0.12 60);
+
+  --color-code-bg: oklch(0.15 0.045 305);
+  --color-code-text: oklch(0.8 0.15 60);
+
+  --color-focus-ring: oklch(0.76 0.17 55 / 0.6);
+  --color-selection: oklch(0.76 0.17 55 / 0.32);
+  --color-indicator: oklch(0.94 0.02 80);
+
+  --shadow-speaking: 0 0 10px oklch(0.76 0.17 55 / 0.45);
+  --glow-accent: oklch(0.45 0.14 50 / 0.22);
+  --glow-accent-soft: oklch(0.76 0.17 55 / 0.07);
+
+  --gradient-app-1: oklch(0.32 0.1 50 / 0.3);
+  --gradient-app-2: oklch(0.26 0.09 305 / 0.42);
+
+  --rgb-picker-background: 40, 28, 48;
+  --rgb-picker-input: 30, 20, 38;
+  --rgb-picker-color: 240, 232, 218;
+  --rgb-picker-accent: 240, 140, 50;
+  --picker-border: oklch(0.36 0.06 305);
+}
+
+:root[data-appearance="christmas"] {
+  --color-surface-0: oklch(0.18 0.03 165);
+  --color-surface-1: oklch(0.22 0.035 165);
+  --color-surface-2: oklch(0.27 0.04 165);
+  --color-surface-3: oklch(0.33 0.045 165);
+  --color-rail: oklch(0.24 0.09 20);
+
+  --color-border: oklch(0.35 0.04 165);
+  --color-border-strong: oklch(0.47 0.045 165);
+
+  --color-text: oklch(0.95 0.012 95);
+  --color-text-secondary: oklch(0.85 0.015 110);
+  --color-text-tertiary: oklch(0.76 0.02 130);
+
+  --color-accent: oklch(0.85 0.14 90);
+  --color-accent-hover: oklch(0.76 0.13 85);
+  --color-on-accent: oklch(0.2 0.03 165);
+  --color-accent-soft: oklch(0.34 0.06 90);
+  --color-on-accent-soft: oklch(0.9 0.11 92);
+
+  --color-code-bg: oklch(0.15 0.025 165);
+  --color-code-text: oklch(0.85 0.14 90);
+
+  --color-focus-ring: oklch(0.85 0.14 90 / 0.6);
+  --color-selection: oklch(0.85 0.14 90 / 0.3);
+  --color-indicator: oklch(0.95 0.012 95);
+
+  --shadow-speaking: 0 0 10px oklch(0.85 0.14 90 / 0.42);
+  --glow-accent: oklch(0.45 0.1 90 / 0.2);
+  --glow-accent-soft: oklch(0.85 0.14 90 / 0.06);
+
+  --gradient-app-1: oklch(0.3 0.1 20 / 0.28);
+  --gradient-app-2: oklch(0.26 0.06 165 / 0.4);
+
+  --rgb-picker-background: 26, 44, 36;
+  --rgb-picker-input: 18, 34, 27;
+  --rgb-picker-color: 240, 238, 228;
+  --rgb-picker-accent: 232, 196, 80;
+  --picker-border: oklch(0.35 0.04 165);
 }
 
 /*
