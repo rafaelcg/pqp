@@ -81,9 +81,19 @@ Rules:
 5. A created channel gets a `new:N` ref that later actions in the same request can use.
 6. The route's audit row has the bot as the actor and "pedido por @x" as the reason.
 7. Messages are named by their `[mN]` number in the conversation, never by id.
-8. Never: roles, permissions, making a channel private, events, web search, DMs.
+8. Never: roles, permissions, making a channel private, events, web search, DMs. The model never touches a role. The bot's own role is made by code when staff save its tools (see below).
 9. The reply carries a card (`messages.bot_card`, `botCard` on the message): the plan waiting for "sim", or each step with its outcome. Only server code writes it, and the web client draws it only for a bot author. The body keeps a plain-text copy for clients that do not draw cards.
 10. While the bot works, its typing frames carry `activity: { tool }`. The web client shows "Julius está criando um canal…" with a shimmer instead of "digitando".
+
+### The bot's role
+
+A bot with no role holds only @everyone's permissions, so its key fails every write. Creating a bot, or saving its tools, makes or adjusts a role for it (`server/src/services/bot-role.ts`, `server_bots.role_id`):
+
+1. The role is named after the handle (`julius_bot`) and sits at the lowest custom rank. The bot outranks nobody.
+2. It carries the bits the switched-on tools need, and never a bit the person saving does not hold.
+3. A bit a more powerful staff member granted stays while its tool stays on. Turning the tool off removes it.
+4. Only somebody with Manage Roles makes or changes it. An existing role changes only when it ranks below the person saving. Otherwise the save still works and the role is left alone.
+5. Each change is in the audit log under the person who saved. Deleting the bot deletes its role. If somebody deletes the role, the next save makes a new one.
 11. `ask_member` asks the requester one question with two to four answers, instead of guessing. It ends the request: any write staged in the same turn is dropped. The question is posted with an `ask` card that lasts ten minutes. Only the requester gets buttons (`POST /api/bots/asks/:messageId/answer`). A press claims the card with a conditional `UPDATE`, then posts the chosen answer as the requester's own reply to the question, which starts a new run. Typing an answer also works.
 
 12. A tool behind a feature that is off is not offered, and the prompt says why: `create_forum_post` and the forum type of `create_channel` need `forum_channels` on for the server, and `create_bau_post` needs Baú on.
@@ -106,16 +116,24 @@ Two switches in the "Imagens e voz" group, on by default: `see_images` and `hear
 | Variable | Default | Meaning |
 |---|---|---|
 | `CUSTOM_BOTS` | off | Flag default. The dashboard override wins. |
-| `BOTS_REPLIES_PER_SERVER_DAY` | 200 | Replies per server per UTC day. |
+| `BOTS_REPLIES_PER_SERVER_DAY` | 200 | Replies per server per São Paulo day. |
 | `BOTS_RUNS_PER_MEMBER_HOUR` | 20 | Questions one member may ask one bot per hour. The server's owner and members with Administrator have no hourly limit. A member has at most two open questions per bot. The second waits until the first is answered, and its transcript includes that answer. A third is not answered. |
-| `BOTS_MAX_USD_PER_DAY` | 5 | Model spend for the whole deployment per UTC day. |
+| `BOTS_MAX_USD_PER_DAY` | 5 | Model spend for the whole deployment per São Paulo day. |
 | `BOTS_ACTIONS_PER_HOUR` | 30 | Actions one bot may run per hour. |
 | (code) | 10 | Actions one request may stage. |
 | `BOTS_MODEL_CHOICES` | Haiku 5.5, plus Gemma 4 31B and Nemotron 3 Super (free, dev only) | `provider:model=Label;...`. Providers: `anthropic`, `openrouter`. |
 | `BOTS_MODEL` / `BOTS_PROVIDER` | unset | Moves a choice to the top. The top choice is the default. |
 | `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY` | unset | With neither set: a fixture answers outside production, and bots are off in production. |
 
-Usage is in `server_bot_usage_daily` (per server) and `server_bot_spend_daily` (deployment).
+Every day here is São Paulo's (`botDay` in `server/src/services/bot-stats.ts`), so a limit resets at midnight in Brazil.
+
+Usage is in `server_bot_usage_daily` (per server) and `server_bot_spend_daily` (deployment). Each run also stores its trigger (mention, reply, name, follow_up, decision), model, model calls, tokens and cost.
+
+The operator's history is in three tables with no foreign keys, so a deleted bot or server keeps its past:
+
+- `server_bot_stats_daily`: runs, replies, skips, failures, questions, plans, confirmations, cancellations, actions, tokens and cost, per day, server and bot.
+- `server_bot_tools_daily`: plan steps per tool, done and failed.
+- `server_bot_people_daily`: who asked, only to count distinct people. Rows older than 90 days are deleted.
 
 When a limit stops an answer, the member gets a `bot-notice` frame on their own sockets: which limit, and when the bot answers again. The web client shows it above the composer, to that member only, until they dismiss it or the bot speaks. A follow-up outside its window gets no notice, because it was not meant for the bot.
 
@@ -139,4 +157,4 @@ With Haiku 5.5 ($0.10 input, $0.50 output per million tokens), a chat reply of a
 2. Run `pnpm dev`.
 3. Open server settings, then Bots. Create a bot and tick a channel.
 4. In that channel, type `@<name>_bot` and a question.
-5. For actions, give the bot a role with the permissions it needs, for example Manage Channels. Then ask it to create a channel.
+5. For actions, ask it to create a channel. The bot's role already has Manage Channels when you created the bot with that tool on.

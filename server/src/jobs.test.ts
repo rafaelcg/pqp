@@ -121,6 +121,11 @@ vi.mock("./ws/chat.js", () => ({ notifyChannelsUpdate: vi.fn(async () => {}) }))
 vi.mock("./services/server-emoji-scan.js", () => ({
   sweepQuarantinedServerEmoji: vi.fn(async () => 0),
 }));
+// `bot-foundations.test.ts` pins what the bot tables hold; here only the
+// cadence of the per-person prune.
+vi.mock("./services/bot-stats.js", () => ({
+  pruneBotPeopleDaily: vi.fn(async () => 0),
+}));
 
 import {
   sweepOrphanedAttachments,
@@ -144,6 +149,7 @@ import { sweepWatchPartyHosts } from "./services/watch-parties.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { processStoryVideos, sweepStories } from "./services/story-media.js";
 import { runChannelLayoutMigrations } from "./services/channel-layout.js";
+import { pruneBotPeopleDaily } from "./services/bot-stats.js";
 import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
@@ -237,11 +243,13 @@ describe("cold jobs", () => {
     // 26 with the soundboard upload sweep (a minute, asserted below);
     // 27 with the custom emoji quarantine sweep (hourly, asserted below); 29
     // with the Retrospectiva's seat sampler (a minute) and watched-party copy
-    // (15 minutes), both asserted below.
+    // (15 minutes), both asserted below; 30 with the server bot run poller
+    // (adaptive, like the speech poller); 31 with the bot people prune
+    // (six hours, asserted below).
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(29);
+    expect(jobs.count).toBe(31);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -290,8 +298,11 @@ describe("cold jobs", () => {
     // The emoji quarantine sweep: hourly, no boot run.
     expect(sweepQuarantinedServerEmoji).toHaveBeenCalledTimes(1);
     expect(pruneAuditLog).not.toHaveBeenCalled();
+    // The bot people prune: every six hours, no boot run.
+    expect(pruneBotPeopleDaily).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(DAILY_MS);
+    expect(pruneBotPeopleDaily).toHaveBeenCalledTimes(4);
     expect(pruneAuditLog).toHaveBeenCalledTimes(1);
     expect(sweepMessageRetention).toHaveBeenCalledTimes(1);
     expect(sweepSlowModeClocks).toHaveBeenCalledTimes(1);

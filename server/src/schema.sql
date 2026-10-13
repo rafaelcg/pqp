@@ -6478,7 +6478,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_server_bot_runs_message
 CREATE INDEX IF NOT EXISTS idx_server_bot_runs_due
   ON server_bot_runs (created_at) WHERE status IN ('queued', 'running');
 
--- Replies per server per UTC day, reserved before the model is called (a
+-- Replies per server per São Paulo day (bot-stats.ts `botDay`), reserved before the model is called (a
 -- conditional upsert, so two workers cannot both take the last one).
 CREATE TABLE IF NOT EXISTS server_bot_usage_daily (
   day           DATE NOT NULL,
@@ -6490,7 +6490,7 @@ CREATE TABLE IF NOT EXISTS server_bot_usage_daily (
   PRIMARY KEY (day, server_id)
 );
 
--- The whole deployment's model spend per UTC day, in millionths of a dollar.
+-- The whole deployment's model spend per São Paulo day, in millionths of a dollar.
 -- Each call reserves its worst case first and settles to the real cost after,
 -- so the ceiling holds across every worker even while calls are in flight.
 CREATE TABLE IF NOT EXISTS server_bot_spend_daily (
@@ -6544,3 +6544,60 @@ CREATE TABLE IF NOT EXISTS server_bot_actions (
 );
 CREATE INDEX IF NOT EXISTS idx_server_bot_actions_hour
   ON server_bot_actions (bot_id, created_at);
+
+-- The role a bot acts through, made with the bot: exactly the permissions its
+-- switched-on tools need, never more than whoever switched them on holds, at
+-- the lowest custom rank so it outranks nobody. Deleting the role takes those
+-- powers away (SET NULL); the next save of the bot's tools makes it again.
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS role_id UUID REFERENCES roles(id) ON DELETE SET NULL;
+
+-- What started a run and what it cost, written as each model call returns.
+-- `trigger`: mention, reply, name, follow_up or decision (a plan's "sim").
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS trigger TEXT;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS model TEXT;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS turns INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS input_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS output_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cost_micros BIGINT NOT NULL DEFAULT 0;
+
+-- The operator's history of bots (services/bot-stats.ts), per São Paulo day.
+-- No foreign keys on purpose: a deleted bot or server keeps its past here,
+-- while its runs, plans and actions cascade away with it.
+CREATE TABLE IF NOT EXISTS server_bot_stats_daily (
+  day             DATE NOT NULL,
+  server_id       UUID NOT NULL,
+  bot_user_id     UUID NOT NULL,
+  runs            INTEGER NOT NULL DEFAULT 0,
+  replies         INTEGER NOT NULL DEFAULT 0,
+  skipped         INTEGER NOT NULL DEFAULT 0,
+  failed          INTEGER NOT NULL DEFAULT 0,
+  asks            INTEGER NOT NULL DEFAULT 0,
+  plans           INTEGER NOT NULL DEFAULT 0,
+  plans_confirmed INTEGER NOT NULL DEFAULT 0,
+  plans_cancelled INTEGER NOT NULL DEFAULT 0,
+  actions_done    INTEGER NOT NULL DEFAULT 0,
+  actions_failed  INTEGER NOT NULL DEFAULT 0,
+  input_tokens    BIGINT NOT NULL DEFAULT 0,
+  output_tokens   BIGINT NOT NULL DEFAULT 0,
+  cost_micros     BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, server_id, bot_user_id)
+);
+
+-- Who asked, per day, only to count distinct people. Pruned after 90 days.
+CREATE TABLE IF NOT EXISTS server_bot_people_daily (
+  day       DATE NOT NULL,
+  server_id UUID NOT NULL,
+  user_id   UUID NOT NULL,
+  runs      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, server_id, user_id)
+);
+
+-- Plan steps by tool: what bots are used for.
+CREATE TABLE IF NOT EXISTS server_bot_tools_daily (
+  day       DATE NOT NULL,
+  server_id UUID NOT NULL,
+  tool      TEXT NOT NULL,
+  done      INTEGER NOT NULL DEFAULT 0,
+  failed    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, server_id, tool)
+);

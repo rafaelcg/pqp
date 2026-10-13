@@ -107,7 +107,12 @@ export interface ServerBotDto {
   /** The tools switched on. */
   tools: ServerBotTool[];
   createdAt: string;
-  /** Replies posted today (UTC) and today's cap, for the settings page. */
+  /**
+   * The role the bot acts through, made when staff save its tools; null when
+   * somebody deleted it (saving the tools again makes a new one).
+   */
+  roleId: string | null;
+  /** Replies posted today (São Paulo day) and today's cap, for the settings page. */
   repliesToday: number;
   repliesPerDay: number;
 }

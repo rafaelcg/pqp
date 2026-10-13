@@ -12,6 +12,7 @@ import { isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
 import { broadcastToChannel, postChannelMessage } from "../ws/chat.js";
 import { BOT_RUNS_CHANNEL, botRepliesPerDay, sendBotNotice } from "./bots.js";
+import { botDay, bumpBotPerson, bumpBotStats, nextBotDayStart } from "./bot-stats.js";
 import {
   findMessageByNonce,
   getHydratedMessage,
@@ -121,7 +122,7 @@ const MAX_TURNS = 6;
 const REPLY_MAX_CHARS = 1900;
 const MAX_USER_MENTIONS = 3;
 
-/** The deployment's model spend per UTC day, in dollars. */
+/** The deployment's model spend per São Paulo day, in dollars. */
 export function botDailyUsdCeiling(): number {
   const raw = Number(process.env.BOTS_MAX_USD_PER_DAY);
   return Number.isFinite(raw) && raw >= 0 ? raw : 5;
@@ -141,12 +142,17 @@ interface ClaimedRun {
 }
 
 async function claimRuns(limit: number): Promise<ClaimedRun[]> {
-  await getPool().query(
+  const exhausted = await getPool().query<{ bot_id: string; requester_id: string }>(
     `UPDATE server_bot_runs
         SET status = 'failed', outcome = 'attempts', finished_at = NOW()
-      WHERE status = 'running' AND lease_expires_at < NOW() AND attempts >= $1`,
+      WHERE status = 'running' AND lease_expires_at < NOW() AND attempts >= $1
+      RETURNING bot_id, requester_id`,
     [MAX_ATTEMPTS],
   );
+  for (const run of exhausted.rows) {
+    await bumpBotStats(run.bot_id, { runs: 1, failed: 1 });
+    await bumpBotPerson(run.bot_id, run.requester_id);
+  }
   const claimed = await getPool().query<ClaimedRun>(
     `WITH due AS (
        SELECT id FROM server_bot_runs r
@@ -193,7 +199,7 @@ async function finishRun(
   status: "done" | "skipped" | "failed" | "queued",
   outcome: string,
 ): Promise<void> {
-  await getPool().query(
+  const settled = await getPool().query(
     `UPDATE server_bot_runs
         SET status = $3, outcome = $4,
             finished_at = CASE WHEN $3 = 'queued' THEN NULL ELSE NOW() END,
@@ -202,6 +208,17 @@ async function finishRun(
     [run.id, INSTANCE_ID, status, outcome],
   );
   logEvent("bots.run", { runId: run.id, botId: run.bot_id, status, outcome });
+  // Fenced like the update: only the worker that settled the run counts it.
+  if ((settled.rowCount ?? 0) > 0 && status !== "queued") {
+    await bumpBotStats(run.bot_id, {
+      runs: 1,
+      replies: status === "done" ? 1 : 0,
+      skipped: status === "skipped" ? 1 : 0,
+      failed: status === "failed" ? 1 : 0,
+      asks: outcome === "asked" ? 1 : 0,
+    });
+    await bumpBotPerson(run.bot_id, run.requester_id);
+  }
 }
 
 /**
@@ -225,20 +242,20 @@ async function deferRun(run: ClaimedRun, delayMs: number): Promise<void> {
 async function reserveReply(serverId: string): Promise<boolean> {
   const reserved = await getPool().query(
     `INSERT INTO server_bot_usage_daily AS u (day, server_id, replies)
-     SELECT (NOW() AT TIME ZONE 'UTC')::date, $1, 1 WHERE $2::int > 0
+     SELECT $3::date, $1, 1 WHERE $2::int > 0
      ON CONFLICT (day, server_id) DO UPDATE SET replies = u.replies + 1
       WHERE u.replies < $2::int
      RETURNING replies`,
-    [serverId, botRepliesPerDay()],
+    [serverId, botRepliesPerDay(), botDay()],
   );
   if ((reserved.rowCount ?? 0) > 0) {
     return true;
   }
   await getPool().query(
     `INSERT INTO server_bot_usage_daily AS u (day, server_id, refused)
-     VALUES ((NOW() AT TIME ZONE 'UTC')::date, $1, 1)
+     VALUES ($2::date, $1, 1)
      ON CONFLICT (day, server_id) DO UPDATE SET refused = u.refused + 1`,
-    [serverId],
+    [serverId, botDay()],
   );
   return false;
 }
@@ -246,49 +263,76 @@ async function reserveReply(serverId: string): Promise<boolean> {
 async function refundReply(serverId: string): Promise<void> {
   await getPool().query(
     `UPDATE server_bot_usage_daily SET replies = GREATEST(replies - 1, 0)
-      WHERE day = (NOW() AT TIME ZONE 'UTC')::date AND server_id = $1`,
-    [serverId],
+      WHERE day = $2::date AND server_id = $1`,
+    [serverId, botDay()],
   );
 }
 
-async function recordTokens(serverId: string, input: number, output: number): Promise<void> {
+/**
+ * One model call's tokens and cost: on the server's day, on the run itself
+ * (not fenced by the lease: a call that outlived it was still paid for), and
+ * on the operator's history.
+ */
+async function recordCall(
+  run: ClaimedRun,
+  serverId: string,
+  call: { model: string; input: number; output: number; costMicros: number },
+): Promise<void> {
   await getPool().query(
     `UPDATE server_bot_usage_daily
         SET input_tokens = input_tokens + $2, output_tokens = output_tokens + $3
-      WHERE day = (NOW() AT TIME ZONE 'UTC')::date AND server_id = $1`,
-    [serverId, input, output],
+      WHERE day = $4::date AND server_id = $1`,
+    [serverId, call.input, call.output, botDay()],
   );
+  await getPool().query(
+    `UPDATE server_bot_runs
+        SET model = $2, turns = turns + 1, input_tokens = input_tokens + $3,
+            output_tokens = output_tokens + $4, cost_micros = cost_micros + $5
+      WHERE id = $1`,
+    [run.id, call.model, call.input, call.output, call.costMicros],
+  );
+  await bumpBotStats(run.bot_id, {
+    inputTokens: call.input,
+    outputTokens: call.output,
+    costMicros: call.costMicros,
+  });
 }
 
-async function reserveSpend(micros: number): Promise<boolean> {
+/**
+ * Reserve a call's worst case on `day`. The caller settles on the same day it
+ * reserved, so a call that runs across midnight does not move money between
+ * two days.
+ */
+async function reserveSpend(day: string, micros: number): Promise<boolean> {
   const ceiling = Math.floor(botDailyUsdCeiling() * 1_000_000);
   const reserved = await getPool().query(
     `INSERT INTO server_bot_spend_daily AS s (day, reserved_micros, calls)
-     SELECT (NOW() AT TIME ZONE 'UTC')::date, $1::bigint, 1 WHERE $1::bigint <= $2::bigint
+     SELECT $3::date, $1::bigint, 1 WHERE $1::bigint <= $2::bigint
      ON CONFLICT (day) DO UPDATE
         SET reserved_micros = s.reserved_micros + EXCLUDED.reserved_micros, calls = s.calls + 1
       WHERE s.reserved_micros + EXCLUDED.reserved_micros <= $2::bigint
      RETURNING reserved_micros`,
-    [micros, ceiling],
+    [micros, ceiling, day],
   );
   if ((reserved.rowCount ?? 0) > 0) {
     return true;
   }
   await getPool().query(
     `INSERT INTO server_bot_spend_daily AS s (day, refused)
-     VALUES ((NOW() AT TIME ZONE 'UTC')::date, 1)
+     VALUES ($1::date, 1)
      ON CONFLICT (day) DO UPDATE SET refused = s.refused + 1`,
+    [day],
   );
   return false;
 }
 
 /** Replace the worst case reserved with what the call really cost. */
-async function settleSpend(reservedMicros: number, actualMicros: number): Promise<void> {
+async function settleSpend(day: string, reservedMicros: number, actualMicros: number): Promise<void> {
   await getPool().query(
     `UPDATE server_bot_spend_daily
         SET reserved_micros = GREATEST(reserved_micros - $1::bigint + $2::bigint, 0)
-      WHERE day = (NOW() AT TIME ZONE 'UTC')::date`,
-    [reservedMicros, actualMicros],
+      WHERE day = $3::date`,
+    [reservedMicros, actualMicros, day],
   );
 }
 
@@ -702,7 +746,8 @@ async function runOne(run: ClaimedRun): Promise<void> {
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     });
-    if (!(await reserveSpend(estimate))) {
+    const spendDay = botDay();
+    if (!(await reserveSpend(spendDay, estimate))) {
       if (turn === 0) {
         await refundReply(ctx.serverId);
         logEvent("bots.globalCap", { serverId: ctx.serverId });
@@ -720,7 +765,7 @@ async function runOne(run: ClaimedRun): Promise<void> {
         maxTokens,
       });
     } catch (error) {
-      await settleSpend(estimate, 0);
+      await settleSpend(spendDay, estimate, 0);
       const status = (error as { status?: number }).status;
       const retriable = isRetriableProviderError(error);
       logEvent("bots.modelError", {
@@ -735,12 +780,14 @@ async function runOne(run: ClaimedRun): Promise<void> {
       await refundReply(ctx.serverId);
       return finishRun(run, "failed", `model-error-${status ?? "network"}`);
     }
-    await settleSpend(estimate, botCostMicros(completion));
-    await recordTokens(
-      ctx.serverId,
-      completion.inputTokens + completion.cacheReadTokens + completion.cacheWriteTokens,
-      completion.outputTokens,
-    );
+    const costMicros = botCostMicros(completion);
+    await settleSpend(spendDay, estimate, costMicros);
+    await recordCall(run, ctx.serverId, {
+      model: completion.model,
+      input: completion.inputTokens + completion.cacheReadTokens + completion.cacheWriteTokens,
+      output: completion.outputTokens,
+      costMicros,
+    });
     logEvent("bots.completion", {
       runId: run.id,
       turn,
@@ -1014,21 +1061,24 @@ async function explainFailures(
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
   });
-  if (!(await reserveSpend(estimate))) {
+  const spendDay = botDay();
+  if (!(await reserveSpend(spendDay, estimate))) {
     return fallback;
   }
   try {
     const completion = await provider.complete({ system, messages, maxTokens: EXPLAIN_MAX_TOKENS });
-    await settleSpend(estimate, botCostMicros(completion));
-    await recordTokens(
-      actionCtx.serverId,
-      completion.inputTokens + completion.cacheReadTokens + completion.cacheWriteTokens,
-      completion.outputTokens,
-    );
+    const costMicros = botCostMicros(completion);
+    await settleSpend(spendDay, estimate, costMicros);
+    await recordCall(run, actionCtx.serverId, {
+      model: completion.model,
+      input: completion.inputTokens + completion.cacheReadTokens + completion.cacheWriteTokens,
+      output: completion.outputTokens,
+      costMicros,
+    });
     const text = completion.text ? sanitizeBotReply(dropMention(completion.text, null)) : "";
     return text || fallback;
   } catch (error) {
-    await settleSpend(estimate, 0);
+    await settleSpend(spendDay, estimate, 0);
     logEvent("bots.explainError", {
       runId: run.id,
       message: error instanceof Error ? error.message.slice(0, 200) : String(error),
@@ -1048,8 +1098,7 @@ async function cardLead(messageId: string): Promise<string | null> {
 
 /** A daily limit reached: tell the member, who would otherwise hear nothing. */
 async function noticeDailyLimit(run: ClaimedRun, bot: DbUser, reason: "server-day" | "budget"): Promise<void> {
-  const midnight = new Date();
-  midnight.setUTCHours(24, 0, 0, 0);
+  const midnight = nextBotDayStart();
   await sendBotNotice(
     run.channel_id,
     { userId: bot.id, displayName: bot.display_name },

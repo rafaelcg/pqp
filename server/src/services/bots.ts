@@ -15,6 +15,7 @@ import { getPool, type DbUser } from "../db.js";
 import { isEnabled } from "../lib/flags.js";
 import { deriveHandle, slugifyUsername } from "./users.js";
 import { invalidateServerAudience } from "./servers.js";
+import { botDay } from "./bot-stats.js";
 
 /**
  * Server bots: the data and the trigger. What a bot SAYS is in
@@ -31,7 +32,7 @@ import { invalidateServerAudience } from "./servers.js";
 /** The LISTEN channel the enqueue NOTIFYs and the runner's poller listens on. */
 export const BOT_RUNS_CHANNEL = "pqp_bot_run_due";
 
-/** Replies one server's bot may post per UTC day. */
+/** Replies one server's bot may post per São Paulo day. */
 export function botRepliesPerDay(): number {
   const raw = Number(process.env.BOTS_REPLIES_PER_SERVER_DAY);
   return Number.isInteger(raw) && raw >= 0 ? raw : 200;
@@ -63,6 +64,7 @@ interface BotRow {
   answer_to_name: boolean;
   model: string | null;
   tools: string[] | null;
+  role_id: string | null;
   created_at: Date;
   display_name: string;
   username: string;
@@ -71,7 +73,7 @@ interface BotRow {
 
 const BOT_SELECT = `
   SELECT b.id, b.server_id, b.user_id, b.persona, b.knowledge, b.channel_ids,
-         b.enabled, b.answer_to_name, b.model, b.tools, b.created_at, u.display_name, u.username, u.avatar_url
+         b.enabled, b.answer_to_name, b.model, b.tools, b.role_id, b.created_at, u.display_name, u.username, u.avatar_url
     FROM server_bots b
     JOIN users u ON u.id = b.user_id`;
 
@@ -91,6 +93,7 @@ function toDto(row: BotRow, repliesToday: number): ServerBotDto {
     model: row.model,
     tools: normalizeTools(row.tools),
     createdAt: row.created_at.toISOString(),
+    roleId: row.role_id,
     repliesToday,
     repliesPerDay: botRepliesPerDay(),
   };
@@ -99,8 +102,8 @@ function toDto(row: BotRow, repliesToday: number): ServerBotDto {
 async function repliesToday(serverId: string): Promise<number> {
   const result = await getPool().query<{ replies: number }>(
     `SELECT replies FROM server_bot_usage_daily
-      WHERE day = (NOW() AT TIME ZONE 'UTC')::date AND server_id = $1`,
-    [serverId],
+      WHERE day = $2::date AND server_id = $1`,
+    [serverId, botDay()],
   );
   return result.rows[0]?.replies ?? 0;
 }
@@ -537,8 +540,8 @@ export async function queuePlanDecision(input: {
   // or a Cancel after a Confirm, inserts nothing.
   const queued = await getPool().query(
     `WITH run AS (
-       INSERT INTO server_bot_runs (bot_id, channel_id, message_id, requester_id, plan_id, decision)
-       VALUES ($1, $2, $3, $4, $5, $6)
+       INSERT INTO server_bot_runs (bot_id, channel_id, message_id, requester_id, plan_id, decision, trigger)
+       VALUES ($1, $2, $3, $4, $5, $6, 'decision')
        ON CONFLICT (bot_id, message_id) DO NOTHING
        RETURNING id
      )
@@ -637,8 +640,8 @@ export async function maybeQueueBotReply(input: BotTriggerInput): Promise<boolea
     if (planId) {
       const queued = await getPool().query(
         `WITH run AS (
-           INSERT INTO server_bot_runs (bot_id, channel_id, message_id, requester_id, plan_id)
-           VALUES ($1, $2, $3, $4, $5)
+           INSERT INTO server_bot_runs (bot_id, channel_id, message_id, requester_id, plan_id, trigger)
+           VALUES ($1, $2, $3, $4, $5, 'decision')
            ON CONFLICT (bot_id, message_id) DO NOTHING
            RETURNING id
          )
@@ -702,8 +705,8 @@ export async function maybeQueueBotReply(input: BotTriggerInput): Promise<boolea
               AND latest.finished_at > NOW() - make_interval(secs => $8))) AS window_open
      ),
      run AS (
-       INSERT INTO server_bot_runs (bot_id, channel_id, message_id, requester_id, follow_up)
-       SELECT $1, $2, $3, $4, $7 FROM stats
+       INSERT INTO server_bot_runs (bot_id, channel_id, message_id, requester_id, follow_up, trigger)
+       SELECT $1, $2, $3, $4, $7, $11 FROM stats
         WHERE stats.open_runs < $9
           AND ($10 OR stats.hour_runs < $6)
           AND stats.window_open
@@ -726,6 +729,13 @@ export async function maybeQueueBotReply(input: BotTriggerInput): Promise<boolea
       BOT_FOLLOW_UP_SECONDS,
       BOT_OPEN_RUNS_PER_REQUESTER,
       exempt,
+      followUp
+        ? "follow_up"
+        : input.repliedToUserId === bot.userId
+          ? "reply"
+          : mentioned.includes(bot.username)
+            ? "mention"
+            : "name",
     ],
   );
   const row = result.rows[0];

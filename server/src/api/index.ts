@@ -3782,6 +3782,7 @@ import {
 } from "../services/bots.js";
 import { botModelChoices, botProviderConfigured } from "../services/bot-llm.js";
 import { answerBotAsk } from "../services/bot-runner.js";
+import { deleteBotRole, syncBotRole } from "../services/bot-role.js";
 
 function botsEnabled(serverId: string): boolean {
   return isEnabled("custom_bots", { serverId }) && botProviderConfigured();
@@ -3888,7 +3889,18 @@ router.post("/api/servers/:serverId/bots", async ({ req, user }, { serverId }) =
       targetId: bot.id,
       changes: [{ key: "name", old: null, new: bot.name }],
     });
-    return { bot };
+    // Its own role, so its tools can act. A failure here leaves a bot that
+    // can talk and not act; saving its tools again retries.
+    const role = await syncBotRole({ serverId: serverId!, botId: bot.id, actorId: user.id }).catch(
+      (error: unknown) => {
+        logEvent("bots.roleSyncFailed", { serverId, botId: bot.id, message: String(error) });
+        return null;
+      },
+    );
+    if (role?.changed) {
+      pingPermissions(serverId!);
+    }
+    return { bot: role ? { ...bot, roleId: role.roleId } : bot };
   } catch (error) {
     if (error instanceof BotError) {
       throw botHttpError(error);
@@ -3916,7 +3928,19 @@ router.patch(
       if (!updated) {
         throw new NotFound("Bot not found");
       }
-      const { bot, before, renamed } = updated;
+      let { bot } = updated;
+      const { before, renamed } = updated;
+      // New tool switches move the role with them; so does a bot whose role
+      // somebody deleted, the next time its settings are saved.
+      if (body.tools !== undefined || bot.roleId === null) {
+        const role = await syncBotRole({ serverId: serverId!, botId: bot.id, actorId: user.id });
+        if (role) {
+          bot = { ...bot, roleId: role.roleId };
+          if (role.changed) {
+            pingPermissions(serverId!);
+          }
+        }
+      }
       // A new name (and handle) repaints chat and the member list everywhere,
       // the same frame a person's own rename sends.
       if (renamed) {
@@ -3970,6 +3994,12 @@ router.delete(
     const removed = await deleteServerBot(serverId!, botId!);
     if (!removed) {
       throw new NotFound("Bot not found");
+    }
+    if (
+      removed.roleId &&
+      (await deleteBotRole({ serverId: serverId!, roleId: removed.roleId, actorId: user.id }))
+    ) {
+      pingPermissions(serverId!);
     }
     await logAudit({
       serverId: serverId!,

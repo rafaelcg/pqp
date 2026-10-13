@@ -14,6 +14,7 @@ import {
 import { getPool, type DbUser } from "../db.js";
 import { logEvent } from "../lib/log.js";
 import { runWithBotRequester } from "./audit.js";
+import { bumpBotStats, bumpBotTool } from "./bot-stats.js";
 import type { BotToolSpec } from "./bot-llm.js";
 import type { PollRequest } from "@pqp/shared";
 import { forumChannelsEnabled } from "../lib/forum-config.js";
@@ -41,7 +42,8 @@ import { listChannels } from "./servers.js";
  *     that takes a plan over skips any step with a row.
  *   * NO ROLES. Nothing here creates, edits, grants or removes a role or a
  *     permission, and `edit_channel` cannot make a channel private. Staff do
- *     that by hand.
+ *     that by hand. The bot's own role is made and kept in step with its tool
+ *     switches when staff save them (`bot-role.ts`), never by the model.
  */
 
 /** Writes one request may stage. */
@@ -1510,6 +1512,21 @@ function withoutForumType(spec: BotToolSpec): BotToolSpec {
   };
 }
 
+/**
+ * The server permissions these tools need: what the bot's own role carries
+ * (`bot-role.ts`). Reads and polls need none beyond @everyone's.
+ */
+export function botToolPermissions(tools: Iterable<string>): bigint {
+  const on = new Set(tools);
+  let bits = 0n;
+  for (const tool of TOOLS) {
+    if (tool.permission && on.has(tool.spec.name)) {
+      bits |= tool.permission;
+    }
+  }
+  return bits;
+}
+
 export async function toolsFor(
   ctx: BotActionContext,
 ): Promise<{ tools: BotToolSpec[]; unavailable: string[] }> {
@@ -1633,6 +1650,9 @@ export async function savePlan(
      RETURNING *`,
     [ctx.botId, ctx.serverId, ctx.channelId, ctx.requesterId, runId, JSON.stringify(actions), status, BOT_PLAN_TTL_MS / 1000],
   );
+  if (result.rows[0]) {
+    await bumpBotStats(ctx.botId, { plans: 1 });
+  }
   return result.rows[0] ?? null;
 }
 
@@ -1678,16 +1698,24 @@ export async function claimPlan(planId: string, requesterId: string): Promise<Pl
       RETURNING *`,
     [planId, requesterId],
   );
+  if (result.rows[0]) {
+    await bumpBotStats(result.rows[0].bot_id, { plansConfirmed: 1 });
+  }
   return result.rows[0] ?? null;
 }
 
 export async function cancelPlan(planId: string, requesterId: string): Promise<boolean> {
   const result = await getPool().query(
     `UPDATE server_bot_plans SET status = 'cancelled', finished_at = NOW()
-      WHERE id = $1 AND requester_id = $2 AND status = 'pending'`,
+      WHERE id = $1 AND requester_id = $2 AND status = 'pending'
+      RETURNING bot_id`,
     [planId, requesterId],
   );
-  return (result.rowCount ?? 0) > 0;
+  const cancelled = result.rows[0] as { bot_id: string } | undefined;
+  if (cancelled) {
+    await bumpBotStats(cancelled.bot_id, { plansCancelled: 1 });
+  }
+  return cancelled !== undefined;
 }
 
 /** The message that asks for the "sim". Built from the stored actions only. */
@@ -1855,5 +1883,7 @@ async function runStep(
     [plan.id, step, result.ok ? "done" : "failed", JSON.stringify(result)],
   );
   logEvent("bots.action", { planId: plan.id, step, tool: action.tool, ok: result.ok });
+  await bumpBotStats(ctx.botId, result.ok ? { actionsDone: 1 } : { actionsFailed: 1 });
+  await bumpBotTool(ctx.botId, action.tool, result.ok);
   return result;
 }
