@@ -76,6 +76,8 @@ final class StoryEditorUITests: XCTestCase {
         app.buttons["composer.mode.text"].tap()
         let input = app.textViews["text.input"]
         XCTAssertTrue(input.waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["camera.shutter"].exists, "A text story shows its background, not the camera")
+        XCTAssertFalse(app.descendants(matching: .any)["camera.mock.preview"].exists)
         input.typeText("bora jogar")
         snap(app, "editor-text-typing")
         app.buttons["text.font.serif"].tap()
@@ -146,6 +148,10 @@ final class StoryEditorUITests: XCTestCase {
         XCTAssertTrue(app.buttons["camera.shutter"].waitForExistence(timeout: 15))
         app.buttons["camera.shutter"].tap()
         XCTAssertTrue(app.buttons["editor.text"].waitForExistence(timeout: 15), "The shot opens in the editor")
+        // The camera is released and its UI is gone: nothing of it under the editor.
+        for id in ["camera.shutter", "camera.flip", "camera.flash", "camera.files", "camera.zoom", "composer.gallery"] {
+            XCTAssertFalse(app.buttons[id].exists, "\(id) is gone once the shot is taken")
+        }
         snap(app, "editor-photo")
         app.buttons["editor.text"].tap()
         addText(app, "setup novo")
@@ -207,6 +213,20 @@ final class StoryEditorUITests: XCTestCase {
         // One undo step takes the whole edit back and leaves the line there.
         app.buttons["editor.undo"].tap()
         XCTAssertTrue(layer(app, "ancora").waitForExistence(timeout: 5), "One undo reverts the edit, not the line")
+    }
+
+    /// The composer opened while the API cannot be reached says so and recovers
+    /// with "Try again" (the first ask is made to fail once on a debug build).
+    func testTheComposerRecoversWhenTheConfigCannotBeLoaded() throws {
+        let (app, serverId) = try launch(["PQP_STORY_CONFIG_FAIL": "once"])
+        openComposer(app, serverId: serverId)
+        let banner = app.descendants(matching: .any)["composer.configFailed"].firstMatch
+        XCTAssertTrue(banner.waitForExistence(timeout: 15), "It says it could not reach the server")
+        XCTAssertTrue(app.buttons["camera.shutter"].exists, "The camera still works meanwhile")
+        snap(app, "composer-config-failed")
+        app.buttons["composer.retry"].tap()
+        XCTAssertTrue(waitForGone(banner), "Try again recovers")
+        XCTAssertTrue(app.buttons["composer.mode.text"].exists)
     }
 
     /// A long press opens the layer's menu, and its buttons are tappable (they
