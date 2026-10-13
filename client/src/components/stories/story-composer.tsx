@@ -501,11 +501,16 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
           call={null}
           passThrough
           server={voiceRooms ? { name: voiceRooms.serverName, iconUrl: voiceRooms.serverIconUrl ?? null } : null}
-          preview={{ channelName, names: (room?.occupants ?? []).map((person) => person.displayName.split(/\s+/)[0] ?? "") }}
+          preview={{
+            channelName,
+            names: (room?.occupants ?? []).map((person) => person.displayName.split(/\s+/)[0] ?? ""),
+            // What viewers will see: the card only stays open while its author is in the room.
+            authorAway: !room || !room.occupants.some((person) => person.id === meId),
+          }}
         />
       );
     },
-    [voiceRooms],
+    [voiceRooms, meId],
   );
 
   const ready =
