@@ -382,3 +382,97 @@ test("editing a text layer happens in place: it does not move, resize or untilt,
   await expect(layer).not.toContainText("editado");
   expect((await geometry(layer)).scale).toBeCloseTo(before.scale, 5);
 });
+
+test("a layer never scales past the canvas, and the corner handle turns only past its dead zone or with Shift", async ({ page }) => {
+  const ctx = await setup();
+  const composer = await openTextComposer(page, ctx);
+  await addText(composer, "limite");
+  const layer = composer.locator('[data-layer-type="text"]').first();
+  const surface = (await composer.locator("[data-story-surface]").boundingBox())!;
+  const width = async () => (await layer.boundingBox())!.width;
+
+  // The wheel and the keyboard stop where the layer fills the canvas.
+  const at = (await layer.boundingBox())!;
+  await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+  for (let i = 0; i < 10; i += 1) {
+    await page.mouse.wheel(0, -400);
+    await page.waitForTimeout(30);
+  }
+  await expect.poll(width).toBeLessThanOrEqual(surface.width + 1.5);
+  // The wheel commits its scale a moment after the last notch.
+  await page.waitForTimeout(450);
+  await layer.focus();
+  for (let i = 0; i < 10; i += 1) {
+    await page.keyboard.press("+");
+  }
+  expect(await width()).toBeLessThanOrEqual(surface.width + 1.5);
+  expect(await width()).toBeGreaterThan(surface.width * 0.9);
+
+  // The handle: a pull with a small wobble is a pure scale; a swing turns it; Shift only turns.
+  for (let i = 0; i < 6; i += 1) {
+    await page.keyboard.press("-");
+  }
+  const before = await geometry(layer);
+  const handle = (await composer.locator("[data-story-handle]").boundingBox())!;
+  const hx = handle.x + handle.width / 2;
+  const hy = handle.y + handle.height / 2;
+  const box = (await layer.boundingBox())!;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  const radius = Math.hypot(hx - cx, hy - cy);
+  const angle = Math.atan2(hy - cy, hx - cx);
+  const wobble = (4 * Math.PI) / 180;
+  await page.mouse.move(hx, hy);
+  await page.mouse.down();
+  await page.mouse.move(cx + radius * 1.2 * Math.cos(angle + wobble), cy + radius * 1.2 * Math.sin(angle + wobble), { steps: 8 });
+  await page.mouse.up();
+  const pulled = await geometry(layer);
+  expect(pulled.rotation).toBeCloseTo(before.rotation, 6);
+  expect(pulled.scale).toBeGreaterThan(before.scale);
+
+  const handle2 = (await composer.locator("[data-story-handle]").boundingBox())!;
+  const h2x = handle2.x + handle2.width / 2;
+  const h2y = handle2.y + handle2.height / 2;
+  const box2 = (await layer.boundingBox())!;
+  const c2x = box2.x + box2.width / 2;
+  const c2y = box2.y + box2.height / 2;
+  const r2 = Math.hypot(h2x - c2x, h2y - c2y);
+  const a2 = Math.atan2(h2y - c2y, h2x - c2x);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(h2x, h2y);
+  await page.mouse.down();
+  await page.mouse.move(c2x + r2 * 1.5 * Math.cos(a2 + wobble), c2y + r2 * 1.5 * Math.sin(a2 + wobble), { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  const shifted = await geometry(layer);
+  expect(shifted.scale).toBeCloseTo(pulled.scale, 6);
+  expect(Math.abs(shifted.rotation - pulled.rotation)).toBeGreaterThan(0.03);
+});
+
+test("layer order is creation order: a drawing is created on top, and drawing again brings it back to the top", async ({ page }) => {
+  const ctx = await setup();
+  const composer = await openTextComposer(page, ctx);
+  await addText(composer, "primeiro");
+  const canDraw = (await composer.locator("[data-story-tool-draw]").count()) > 0;
+  test.skip(!canDraw, "object storage is off: there is no draw tool");
+  const order = () =>
+    composer.locator("[data-story-surface] [data-layer-type]").evaluateAll((elements) => elements.map((element) => (element as HTMLElement).dataset.layerType));
+  const stroke = async () => {
+    await composer.locator("[data-story-tool-draw]").click();
+    const box = (await composer.locator("[data-story-draw-surface]").boundingBox())!;
+    await page.mouse.move(box.x + 60, box.y + 80);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 160, box.y + 150, { steps: 6 });
+    await page.mouse.up();
+    await composer.locator("[data-story-draw-done]").click();
+  };
+  await stroke();
+  expect(await order()).toEqual(["text", "drawing"]);
+  await addText(composer, "segundo");
+  expect(await order()).toEqual(["text", "drawing", "text"]);
+  await stroke();
+  expect(await order()).toEqual(["text", "text", "drawing"]);
+  // The stroke and the move are one undo step.
+  await composer.locator("[data-story-undo]").click();
+  expect(await order()).toEqual(["text", "drawing", "text"]);
+});

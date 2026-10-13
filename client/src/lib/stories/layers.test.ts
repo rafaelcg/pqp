@@ -53,11 +53,28 @@ describe("editorReducer", () => {
     expect(state.selectedId).toBe(uuid(2));
   });
 
-  it("puts a drawing at the bottom of the stack (index 0, under everything placed) and keeps the selection", () => {
+  it("layer order is creation order: a new drawing goes on top, and keeps the selection", () => {
     const drawing: EditorLayer = { id: uuid(9), type: "drawing", x: 0.5, y: 0.5, scale: 1, rotation: 0, strokes: [] };
     const state = run({ type: "add", layer: text(1) }, { type: "add", layer: text(2) }, { type: "add", layer: drawing });
-    expect(state.layers.map((layer) => layer.id)).toEqual([uuid(9), uuid(1), uuid(2)]);
+    expect(state.layers.map((layer) => layer.id)).toEqual([uuid(1), uuid(2), uuid(9)]);
     expect(state.selectedId).toBe(uuid(2));
+    // Later layers go above it.
+    const later = editorReducer(state, { type: "add", layer: text(3) });
+    expect(later.layers.map((layer) => layer.id)).toEqual([uuid(1), uuid(2), uuid(9), uuid(3)]);
+    // Bring to front works on it.
+    expect(editorReducer(later, { type: "forward", id: uuid(9) }).layers.map((layer) => layer.id)).toEqual([uuid(1), uuid(2), uuid(3), uuid(9)]);
+  });
+
+  it("drawing again moves the single drawing back to the top, in one undo step", () => {
+    const drawing: EditorLayer = { id: uuid(9), type: "drawing", x: 0.5, y: 0.5, scale: 1, rotation: 0, strokes: [] };
+    const state = run({ type: "add", layer: drawing }, { type: "add", layer: text(1) }, { type: "add", layer: text(2) });
+    expect(state.layers.map((layer) => layer.id)).toEqual([uuid(9), uuid(1), uuid(2)]);
+    const redrawn = editorReducer(state, { type: "patch", id: uuid(9), patch: { strokes: [[]] } as Partial<EditorLayer>, toTop: true });
+    expect(redrawn.layers.map((layer) => layer.id)).toEqual([uuid(1), uuid(2), uuid(9)]);
+    // Already on top: nothing to move.
+    expect(editorReducer(redrawn, { type: "patch", id: uuid(9), patch: {}, toTop: true }).layers.map((layer) => layer.id)).toEqual([uuid(1), uuid(2), uuid(9)]);
+    const undone = editorReducer(redrawn, { type: "undo" });
+    expect(undone.layers.map((layer) => layer.id)).toEqual([uuid(9), uuid(1), uuid(2)]);
   });
 
   it("undo steps back one action at a time", () => {

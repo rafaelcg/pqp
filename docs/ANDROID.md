@@ -2301,7 +2301,11 @@ does with it.
   - **Layers.** `StoryCanvas` draws the base and then each layer in order on a
     9:16 canvas as wide as the screen allows, clipped at its edge, through the
     same `PlacedLayer` and layer drawings as the editor, so a story reads as it
-    was made. `Story.layers` is decoded one element at a time
+    was made. The author's canvas is never cropped: on a screen taller or
+    wider than 9:16 it is shown whole and the rest of the screen is the story's
+    own base, softened (a clip's poster, the photo, decoded at 48 px and stretched,
+    which costs no render effect; a card's gradient end colours). The progress bars, the header and
+    the reply row sit inside the canvas (`CanvasInsets`), never across its edge. `Story.layers` is decoded one element at a time
     (`StoryLayersSerializer`): a layer this build cannot read (a type a later
     server added, a field that does not decode) is dropped, order kept, and the
     story is never lost to it. A story from before layers is drawn as it always
@@ -2335,7 +2339,13 @@ does with it.
   videos), so no storage permission. The camera permission has its own states:
   asked on first open, "allow" while the system will still ask, "open settings"
   once it will not (re-read on resume), and a photo-picker fallback in every
-  one of them; no microphone permission records a silent clip and says so.
+  one of them. **Only the camera is asked for on open.** The microphone is
+  asked the first time a hold turns into a recording (the dialog takes that
+  touch, so nothing is filmed; the next hold films), never on a plain tap, so a
+  tap on the shutter always takes the photo. No microphone permission records
+  a silent clip and says so; a clip with no audio track has no mute button in
+  the editor (`PreparedMedia.hasAudio`) and no sound button in the viewer
+  (read from the player's tracks).
   A photo is re-encoded (1440 px long side, EXIF gone). A video that fits goes
   as it is; one over 30 s opens "Escolhe os 30 segundos" (a 30 s window to slide
   over a filmstrip, looping while it moves) and one over 25 MB or sharper than
@@ -2350,8 +2360,25 @@ does with it.
   background, alignment, size), photos from the gallery or the camera (rect,
   rounded or circle), freehand ink (pen, marker, highlighter, eraser; one
   layer, exported as a transparent PNG by the same renderer that draws it
-  on screen), a mention and the call card. A text card is `kind: "text"`, a
+  on screen), a mention and the call card. **Layer order is creation order, for
+  every type, the drawing included**: a new drawing is added at the top, whatever
+  is made after it goes above it, and "bring forward" works on it like any layer.
+  There is one drawing per story, so a new drawing session that starts with
+  layers above it brings it back to the top (one undo step) rather than
+  drawing under a photo placed since (`LayerOps.inkToFront`, `withStroke`). The
+  earlier rule, "ink is always the lowest layer", made a stroke over a photo
+  invisible. A text card is `kind: "text"`, a
   `background` and layers, with no `text`.
+  - **Tools stay on the canvas.** On a screen taller than 9:16 the tool buttons
+    sit inside the canvas, a little in from its edge, instead of straddling it
+    (a translucent disc across the edge reads as a dark half circle on the
+    picture): `CanvasInsets`, used by the editor, the camera, the text tool and
+    the viewer. On a 9:16 screen they sit under the system bars as before.
+  - **Limits say so.** At 20 layers, or 6 photos, the text, photo and sticker
+    tools are drawn faint and a tap says why (the draw tool stays while a
+    drawing exists). A tap on empty canvas opens the text tool; an empty text
+    card says "Toca pra escrever". "Trazer pra frente" is only offered on a
+    layer with something above it.
   - **Gestures.** One finger drags, two scale and turn, and once a layer has
     been touched a pinch anywhere on the canvas turns it. It clicks onto the
     middle lines and quarter turns with a light haptic and lets go again when
@@ -2369,6 +2396,18 @@ does with it.
     TalkBack actions (move up, down, left, right, bigger, smaller, turn, bring
     forward, edit, delete), since a drag cannot be done without sight. The
     story's `altText` is its text layers read in order.
+  - **The audience list recovers.** The composer reads "who sees it" with a
+    backoff (1 s doubling to 15 s), again the moment the live connection is back
+    and from a "Tentar de novo" button on the pill, so a composer opened while
+    the API is down keeps the photo and the words and posts once it is back.
+    Posting a call card for a room its author is not in asks first (the server
+    reads such a card as "A call acabou" until the author joins).
+  - **The photo picker** is asked for one item through `PickVisualMediaList`,
+    which hands back everything that came back (a long press on a thumbnail
+    starts a selection in recent pickers, though with one item allowed the
+    picker keeps only the last tap). The story's base takes the first and
+    says so; each photo picked for a layer becomes a layer, up to the limits,
+    and what did not fit is said.
   - **Call card.** Picking the room is a sheet whose header is fixed and whose
     list scrolls on its own (the old picker was one fixed-height scroll, and the
     "you are not in the room" line pushed the second room under the edge). Each

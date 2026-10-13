@@ -56,6 +56,7 @@ export {
   notifyChannelsUpdate,
   resolveChannelsUpdateAudience,
   notifyServerRemoved,
+  notifyServerOrder,
   applyAutomodEffects,
   postChannelMessage,
   resolveEmbedInBackground,

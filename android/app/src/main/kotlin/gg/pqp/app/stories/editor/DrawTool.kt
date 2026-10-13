@@ -122,13 +122,13 @@ fun DrawSurface(session: EditorSession, canvas: LayerMath.Canvas, modifier: Modi
 
 /** The controls over the canvas while drawing: brush, size, color, undo, done. */
 @Composable
-fun DrawControls(session: EditorSession, onDone: () -> Unit, modifier: Modifier = Modifier) {
+fun DrawControls(session: EditorSession, onDone: () -> Unit, modifier: Modifier = Modifier, canvasGap: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp.Hairline) {
     val haptics = LocalHapticFeedback.current
     val pen = session.pen
     Column(modifier.fillMaxSize()) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(Spacing.sm),
+            modifier = Modifier.fillMaxWidth().toolsTop(canvasGap).padding(Spacing.sm),
         ) {
             if (session.canUndo) {
                 ToolButton(PqpIcons.Undo, stringResource(R.string.stories_editor_undo), "stories.editor.draw.undo") {
@@ -296,6 +296,8 @@ fun ToolButton(
     tag: String,
     modifier: Modifier = Modifier,
     tint: Color = Color.White,
+    /** At a limit: drawn faint, still tappable (a tap says why). */
+    dimmed: Boolean = false,
     onClick: () -> Unit,
 ) {
     Box(
@@ -310,5 +312,5 @@ fun ToolButton(
             }
             .clickable(onClick = onClick)
             .testTag(tag),
-    ) { Icon(icon, contentDescription = null, tint = tint) }
+    ) { Icon(icon, contentDescription = null, tint = if (dimmed) tint.copy(alpha = 0.4f) else tint) }
 }

@@ -28,7 +28,9 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.BoxWithConstraints
+import gg.pqp.app.stories.editor.toolsBottom
+import gg.pqp.app.stories.editor.toolsTop
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
@@ -307,12 +309,15 @@ private fun DeckPage(
     var reporting by remember { mutableStateOf<Story?>(null) }
     var confirmingDelete by remember { mutableStateOf<Story?>(null) }
     var muted by remember { mutableStateOf(true) }
+    // Whether the clip on screen has a sound track at all (a clip shot with no microphone has none).
+    var hasAudio by remember(deck) { mutableStateOf(true) }
     // Somebody a mention opened: the story waits while their card is up.
     var profile by remember { mutableStateOf<StoryAuthor?>(null) }
     val paused = holding || typing || sheetOpen || menuOpen || reporting != null || confirmingDelete != null || profile != null
 
     val story = stories?.getOrNull(index)
     val progress = remember(story?.id) { Animatable(0f) }
+    LaunchedEffect(story?.id) { hasAudio = true }
     var videoProgress by remember(story?.id) { mutableFloatStateOf(0f) }
 
     val advance: () -> Unit = {
@@ -355,7 +360,9 @@ private fun DeckPage(
     val pauseLabel = stringResource(R.string.stories_viewer_pause)
     val resumeLabel = stringResource(R.string.stories_viewer_resume)
 
-    Box(modifier.fillMaxSize().background(Color.Black)) {
+    BoxWithConstraints(modifier.fillMaxSize().background(Color.Black)) {
+        // The bar above and below the 9:16 canvas on a taller screen: the bars and the header sit inside it.
+        val gap = gg.pqp.app.stories.editor.CanvasInsets.gap(maxWidth, maxHeight)
         when {
             failed -> Text(
                 stringResource(R.string.error_network),
@@ -404,6 +411,7 @@ private fun DeckPage(
                         muted = muted,
                         onVideoProgress = { videoProgress = it },
                         onVideoEnded = advance,
+                        onHasAudio = { hasAudio = it },
                         onJoinCall = { call ->
                             onJoinCall(call.serverId, call.channelId, call.channelName)
                             onClose()
@@ -420,7 +428,7 @@ private fun DeckPage(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .statusBarsPadding()
+                        .toolsTop(gap)
                         .graphicsLayer { alpha = chromeAlpha }
                         .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent)))
                         .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
@@ -435,6 +443,7 @@ private fun DeckPage(
                         story = story,
                         contextLabel = contextLabel,
                         muted = muted,
+                        hasSound = hasAudio,
                         onToggleMute = { muted = !muted },
                         menuOpen = menuOpen,
                         onMenu = { menuOpen = it },
@@ -472,8 +481,8 @@ private fun DeckPage(
                         .fillMaxWidth()
                         .graphicsLayer { alpha = chromeAlpha }
                         .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f))))
-                        .navigationBarsPadding()
-                        .imePadding()
+                        // With the keyboard up the reply sits on it; otherwise inside the canvas, not across its edge.
+                        .then(if (typing) Modifier.navigationBarsPadding().imePadding() else Modifier.toolsBottom(gap))
                         .padding(Spacing.md),
                 ) {
                     story.caption?.takeIf { it.isNotBlank() && story.kind != "text" }?.let {
@@ -582,6 +591,7 @@ private fun Header(
     story: Story,
     contextLabel: String,
     muted: Boolean,
+    hasSound: Boolean,
     onToggleMute: () -> Unit,
     menuOpen: Boolean,
     onMenu: (Boolean) -> Unit,
@@ -616,7 +626,7 @@ private fun Header(
                 maxLines = 1,
             )
         }
-        if (story.kind == "video") {
+        if (story.kind == "video" && hasSound) {
             IconButton(onClick = onToggleMute) {
                 Icon(
                     if (muted) PqpIcons.Deafened else PqpIcons.Listening,
@@ -703,6 +713,8 @@ internal fun StoryVideo(
     fill: Boolean,
     onProgress: (Float) -> Unit,
     onEnded: () -> Unit,
+    /** Whether the clip has a sound track at all: a clip shot with no microphone has none, and the sound button has nothing to do. */
+    onHasAudio: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     var ready by remember(url) { mutableStateOf(false) }
@@ -718,6 +730,10 @@ internal fun StoryVideo(
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) ready = true
                 if (state == Player.STATE_ENDED) onEnded()
+            }
+
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                if (!tracks.isEmpty) onHasAudio(tracks.containsType(androidx.media3.common.C.TRACK_TYPE_AUDIO))
             }
         }
         player.addListener(listener)
@@ -778,7 +794,12 @@ fun TextCard(text: String, background: String?, modifier: Modifier = Modifier, f
 
 /** `STORY_BACKGROUNDS`: two stops each, so a card has depth without an image. */
 fun backgroundBrush(key: String?): Brush {
-    val (top, bottom) = when (key) {
+    val (top, bottom) = backgroundColors(key)
+    return Brush.verticalGradient(listOf(top, bottom))
+}
+
+/** A card's two stops, top then bottom. */
+fun backgroundColors(key: String?): Pair<Color, Color> = when (key) {
         "lime" -> Palette.Signal to Palette.SignalDim
         "ember" -> Color(0xFF7A1F12) to Color(0xFFE0662E)
         "grape" -> Color(0xFF2B1446) to Color(0xFF7B3FB0)
@@ -786,8 +807,6 @@ fun backgroundBrush(key: String?): Brush {
         "ink" -> Color(0xFF0A0A0A) to Color(0xFF2A2F36)
         else -> Color(0xFF0B1020) to Color(0xFF1E2A4A)
     }
-    return Brush.verticalGradient(listOf(top, bottom))
-}
 
 fun textOn(background: String?): Color = when (background) {
     "lime", "sand" -> Palette.Ink

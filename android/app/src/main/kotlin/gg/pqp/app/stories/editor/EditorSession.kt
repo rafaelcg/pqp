@@ -107,6 +107,12 @@ class EditorSession {
 
     fun layer(id: String): EditorLayer? = layers.firstOrNull { it.id == id }
 
+    /** The draw tool opened: a drawing already made goes to the top (one undo step) so the next stroke is seen. */
+    fun beginDrawing() {
+        val next = LayerOps.inkToFront(layers)
+        if (next != layers) commit(next)
+    }
+
     fun addStroke(stroke: Stroke) = commit(LayerOps.withStroke(layers, ::newId, stroke))
 
     val hasInk: Boolean get() = layers.any { it is InkLayer }

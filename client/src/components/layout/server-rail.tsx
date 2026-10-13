@@ -1,4 +1,6 @@
 import {
+  ArrowDown,
+  ArrowUp,
   Compass,
   Eye,
   EyeOff,
@@ -14,6 +16,7 @@ import {
   Users,
 } from "lucide-react";
 import type { DmSummary, PublicUser, Server } from "@pqp/shared";
+import { useId, useMemo } from "react";
 import {
   formatBadgeCount,
   type UnreadState,
@@ -44,6 +47,7 @@ import {
 import { conversationsWithUnread } from "@/lib/conversation-list";
 import { conversationTitle } from "@/lib/conversations";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { useServerRailReorder } from "@/hooks/use-server-rail-reorder";
 import { cn } from "@/lib/utils";
 
 interface ServerRailProps {
@@ -137,6 +141,14 @@ interface ServerRailProps {
   mobileNavOpen?: boolean;
   onSelectHome: () => void;
   onSelectServer: (serverId: string) => void;
+  /**
+   * Save a new order for the servers on this rail (drag, Alt+arrows, or the
+   * menu). Absent means the rail is not reorderable (a build or a test that
+   * does not own the list). The caller applies it optimistically and rolls
+   * back on failure; `servers` is what the rail draws, so the new order must
+   * come back through that prop.
+   */
+  onReorderServers?: (serverIds: string[]) => void;
   onCreateServer: () => void;
   onJoinServer: () => void;
   onInvite: (serverId: string) => void;
@@ -195,6 +207,7 @@ export function ServerRail({
   onUnpinConversation,
   onSelectHome,
   onSelectServer,
+  onReorderServers,
   onCreateServer,
   onJoinServer,
   onInvite,
@@ -231,12 +244,32 @@ export function ServerRail({
   const foldedFaces = waitingFaces.length - shownFaces.length;
   const doorCount = conversationsHome ? waiting.length : homeUnread.count;
 
+  // Dragging a server, Alt+arrows and the menu all end in the same call. Chats
+  // (the door above), the divider and the add / discover buttons below are not
+  // in this list, so none of them can be moved or displaced.
+  const serverIds = useMemo(() => servers.map((server) => server.id), [servers]);
+  const reorderHintId = useId();
+  const reorder = useServerRailReorder({
+    ids: serverIds,
+    enabled: !!onReorderServers,
+    onReorder: (next) => onReorderServers?.(next),
+    announce: (id, position, total) =>
+      t("chrome.railMoved", {
+        name: servers.find((server) => server.id === id)?.name ?? "",
+        n: position,
+        total,
+      }),
+  });
+
   return (
     <nav
+      ref={reorder.navRef}
+      data-rail-dragging={reorder.drag ? "" : undefined}
       data-immersive-hide=""
       data-rail-phone-hidden={phoneHidden ? "" : undefined}
       className={cn(
-        "flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3",
+        "relative flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3",
+        reorder.drag && "cursor-grabbing",
         phoneHidden &&
           (mobileNavOpen
             ? "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:h-auto"
@@ -377,8 +410,24 @@ export function ServerRail({
         className="h-px w-8 shrink-0 rounded-full bg-ink-4/70"
       />
 
-      {servers.map((server) => {
+      {/* The reorderable part: only servers live in here. The drop line is
+          drawn in this box's own coordinates, between two tiles. */}
+      <div
+        ref={reorder.listRef}
+        data-rail-list=""
+        className="relative flex shrink-0 flex-col items-center gap-2"
+      >
+      {reorder.drag?.lineY != null && (
+        <span
+          aria-hidden="true"
+          data-rail-drop-line=""
+          style={{ top: reorder.drag.lineY }}
+          className="pointer-events-none absolute left-1/2 z-30 h-1 w-14 -translate-x-1/2 -translate-y-1/2 rounded-full bg-paper shadow-[0_0_0_2px_var(--color-signal)]"
+        />
+      )}
+      {servers.map((server, index) => {
         const selected = selectedServerId === server.id;
+        const lifted = reorder.drag?.id === server.id ? reorder.drag : null;
         const totals = serverUnread[server.id] ?? null;
         const levels = serverNotificationControls(server.id, notifications);
         const muted = levels.level === "none";
@@ -440,6 +489,27 @@ export function ServerRail({
             onSelect: () => setServerStreamAlerts(server.id, !alertsOn),
           });
         }
+        if (onReorderServers && servers.length > 1) {
+          // The same move as Alt+arrows, for the mouse, the phone and anybody
+          // who would not find a keyboard chord.
+          items.push(
+            { id: "sep-order", label: "", separator: true },
+            {
+              id: "move-up",
+              label: t("chrome.moveUp"),
+              icon: ArrowUp,
+              disabled: index === 0,
+              onSelect: () => reorder.moveTo(server.id, index - 1),
+            },
+            {
+              id: "move-down",
+              label: t("chrome.moveDown"),
+              icon: ArrowDown,
+              disabled: index === servers.length - 1,
+              onSelect: () => reorder.moveTo(server.id, index + 1),
+            },
+          );
+        }
         if (server.role !== "owner") {
           items.push(
             { id: "sep", label: "", separator: true },
@@ -458,7 +528,21 @@ export function ServerRail({
           // button. Both primitives want `asChild` on the same node, and
           // neither forwards through the other.
           <Tooltip key={server.id} label={server.name} side="right" tone="rail">
-            <span className="relative inline-flex">
+            <span
+              ref={reorder.itemRef(server.id)}
+              data-rail-item={server.id}
+              data-rail-reorderable={
+                onReorderServers && servers.length > 1 ? "" : undefined
+              }
+              data-rail-lifted={lifted ? "" : undefined}
+              {...(onReorderServers ? reorder.itemProps(server.id) : {})}
+              // Its transform is set by the hook, frame by frame, outside React.
+              style={lifted ? { zIndex: 20 } : undefined}
+              className={cn(
+                "relative inline-flex select-none [-webkit-touch-callout:none]",
+                lifted && "rounded-xl opacity-90 shadow-lg shadow-black/40",
+              )}
+            >
           <ContextMenu
             items={items}
             onOpenChange={
@@ -475,6 +559,10 @@ export function ServerRail({
               type="button"
               onClick={() => onSelectServer(server.id)}
               aria-label={server.name}
+              aria-describedby={onReorderServers ? reorderHintId : undefined}
+              aria-keyshortcuts={
+                onReorderServers ? "Alt+ArrowUp Alt+ArrowDown" : undefined
+              }
               className={cn(
                 "group relative flex h-12 w-12 items-center justify-center rounded-xl font-display text-sm font-bold transition-colors",
                 selected
@@ -545,6 +633,17 @@ export function ServerRail({
           </Tooltip>
         );
       })}
+      </div>
+      {onReorderServers && (
+        <>
+          <span id={reorderHintId} className="sr-only">
+            {t("chrome.railReorderHint")}
+          </span>
+          <span role="status" aria-live="polite" className="sr-only">
+            {reorder.message}
+          </span>
+        </>
+      )}
       <Tooltip label={t("empty.createServer")} side="right" tone="rail">
         <Button
           variant="secondary"

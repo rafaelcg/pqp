@@ -2,10 +2,20 @@ import { describe, expect, it } from "vitest";
 import {
   STORY_LAYER_COLORS,
   STORY_LAYOUT,
+  STORY_SAFE_AREA,
   STORY_TEXT_COLOR_HEX,
   storyBaseFit,
   storyTextOnColorHex,
 } from "./stories.js";
+
+describe("STORY_SAFE_AREA", () => {
+  it("leaves a real rectangle between the viewer's bars, and a bigger bottom than top (the reply row)", () => {
+    expect(STORY_SAFE_AREA).toEqual({ x: 0.05, top: 0.1, bottom: 0.13 });
+    expect(1 - 2 * STORY_SAFE_AREA.x).toBeGreaterThan(0.8);
+    expect(1 - STORY_SAFE_AREA.top - STORY_SAFE_AREA.bottom).toBeGreaterThan(0.7);
+    expect(STORY_SAFE_AREA.bottom).toBeGreaterThan(STORY_SAFE_AREA.top);
+  });
+});
 
 describe("STORY_LAYOUT", () => {
   it("is the canonical table the three clients draw from", () => {

@@ -108,6 +108,8 @@ import androidx.lifecycle.Observer
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import gg.pqp.app.R
+import gg.pqp.app.stories.editor.toolsBottom
+import gg.pqp.app.stories.editor.toolsTop
 import gg.pqp.app.ui.theme.Palette
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
@@ -115,6 +117,14 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 private enum class CameraPhase { Starting, Live, Busy, NoCamera }
+
+/**
+ * Whether the microphone has been asked for in this process. The camera asks for
+ * the CAMERA permission when it opens and nothing else: a tap for a photo never
+ * shows a microphone dialog. The microphone is asked for the first time a hold
+ * turns into a recording, which is the moment it is needed.
+ */
+private var microphoneAsked = false
 
 private fun Context.activity(): Activity? {
     var current: Context? = this
@@ -173,6 +183,7 @@ fun StoryCameraScreen(
 
     var camGranted by remember { mutableStateOf(context.has(Manifest.permission.CAMERA)) }
     var micGranted by remember { mutableStateOf(context.has(Manifest.permission.RECORD_AUDIO)) }
+    var micAsked by remember { mutableStateOf(microphoneAsked) }
     var asked by rememberSaveable { mutableStateOf(false) }
     // Whether the system will still show its dialog. It is only knowable after
     // an answer, and it is state, not a value read while drawing: a denial
@@ -192,17 +203,18 @@ fun StoryCameraScreen(
         canAskAgain = askAgainPossible()
         micCanAskAgain = micAskAgainPossible()
     }
+    // Only the camera, up front. The microphone waits for the first hold (see `startClip`), so a
+    // plain tap on the shutter is never answered with a dialog about recording audio.
     LaunchedEffect(Unit) {
-        val wantMic = videoEnabled && !micGranted
-        if (!asked && (!camGranted || wantMic)) {
+        if (!asked && !camGranted) {
             asked = true
-            permissions.launch(
-                listOfNotNull(
-                    Manifest.permission.CAMERA.takeUnless { camGranted },
-                    Manifest.permission.RECORD_AUDIO.takeIf { wantMic },
-                ).toTypedArray(),
-            )
+            permissions.launch(arrayOf(Manifest.permission.CAMERA))
         }
+    }
+    val askMicrophone: () -> Unit = {
+        micAsked = true
+        microphoneAsked = true
+        permissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
     }
     // Back from the system settings with the permission turned on.
     LifecycleResumeEffect(Unit) {
@@ -331,16 +343,23 @@ fun StoryCameraScreen(
     }
     val startClip: () -> Unit = {
         failure = null
-        val started = controller.startRecording { event ->
-            if (!alive) return@startRecording
-            when (event) {
-                is StoryCameraController.ClipEvent.Finished ->
-                    if (CaptureRules.keepClip(event.durationMs)) onCapturedNow(event.uri)
-                is StoryCameraController.ClipEvent.Failed -> failure = clipFailed
-                else -> Unit
+        if (!micGranted && (!micAsked || micCanAskAgain)) {
+            // The first hold on a phone that has not been asked: the system dialog takes the
+            // touch, so nothing is recorded; once answered, the next hold films (with sound
+            // if it was allowed, silent and said so if not).
+            askMicrophone()
+        } else {
+            val started = controller.startRecording { event ->
+                if (!alive) return@startRecording
+                when (event) {
+                    is StoryCameraController.ClipEvent.Finished ->
+                        if (CaptureRules.keepClip(event.durationMs)) onCapturedNow(event.uri)
+                    is StoryCameraController.ClipEvent.Failed -> failure = clipFailed
+                    else -> Unit
+                }
             }
+            if (started) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         }
-        if (started) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
     }
     val stopClip: () -> Unit = {
         if (recording) {
@@ -360,12 +379,14 @@ fun StoryCameraScreen(
 
     // --- layout ---
 
-    Box(
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
             .testTag("stories.camera"),
     ) {
+        // The bar above and below a 9:16 canvas on a taller screen: the buttons sit inside the canvas, not across its edge.
+        val gap = gg.pqp.app.stories.editor.CanvasInsets.gap(maxWidth, maxHeight)
         BoxWithConstraints(Modifier.fillMaxSize()) {
             // The canvas is 9:16. On a taller phone the bars above and below hold the controls.
             val width = minOf(maxWidth, maxHeight * 9f / 16f)
@@ -464,7 +485,7 @@ fun StoryCameraScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .statusBarsPadding()
+                .toolsTop(gap)
                 .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
         ) {
             if (!recording) {
@@ -499,7 +520,7 @@ fun StoryCameraScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .navigationBarsPadding()
+                .toolsBottom(gap)
                 .padding(bottom = Spacing.sm),
         ) {
             val notice = failure ?: message
@@ -516,7 +537,7 @@ fun StoryCameraScreen(
                         .padding(horizontal = Spacing.md, vertical = Spacing.sm)
                         .testTag("stories.camera.notice"),
                 )
-            } else if (camGranted && !micGranted && videoEnabled && !recording && phase == CameraPhase.Live) {
+            } else if (camGranted && !micGranted && micAsked && videoEnabled && !recording && phase == CameraPhase.Live) {
                 // Not a dead end: ask again while the system will, else send them to Settings.
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -536,7 +557,7 @@ fun StoryCameraScreen(
                     androidx.compose.material3.TextButton(
                         onClick = {
                             if (micCanAskAgain) {
-                                permissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+                                askMicrophone()
                             } else {
                                 openAppSettings(context)
                             }

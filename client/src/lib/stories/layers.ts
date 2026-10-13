@@ -32,7 +32,8 @@ import type { Stroke } from "./drawing";
  *   84% of the width; a photo is 40% of the width (height by aspect; a circle
  *   is cropped to a square); a mention chip is 5% type; a call card is 82%.
  *   The values are `STORY_LAYOUT` in `@pqp/shared`; do not copy them here.
- * - A drawing sits at the BOTTOM of the stack, just above the base.
+ * - Layer order is creation order for every type: a new drawing goes on TOP, and a second
+ *   drawing session moves the single drawing back to the top (one undo step).
  * - Layers outside the canvas are clipped by it.
  */
 
@@ -196,7 +197,7 @@ export const initialEditorState: EditorState = { layers: [], selectedId: null, p
 export type EditorAction =
   | { type: "add"; layer: EditorLayer }
   /** Replace a layer's fields. `transient` skips the history entry (a gesture in flight). */
-  | { type: "patch"; id: string; patch: Partial<EditorLayer>; transient?: boolean }
+  | { type: "patch"; id: string; patch: Partial<EditorLayer>; transient?: boolean; toTop?: boolean }
   /** Push the pre-gesture layers as one undo step. Dispatched once at the start of a gesture. */
   | { type: "checkpoint" }
   | { type: "remove"; id: string }
@@ -249,8 +250,9 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       }
       const added = clampGeometry(action.layer);
       return {
-        // A drawing goes under everything placed (index 0, just above the base); the rest on top.
-        layers: action.layer.type === "drawing" ? [added, ...state.layers] : [...state.layers, added],
+        // Creation order, the drawing included: it goes on top (a drawing is not selected: it has
+        // no frame to move).
+        layers: [...state.layers, added],
         selectedId: action.layer.type === "drawing" ? state.selectedId : action.layer.id,
         past: push(state.past, state.layers),
         future: [],
@@ -265,6 +267,10 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       }
       const layers = state.layers.slice();
       layers[index] = clampGeometry({ ...layers[index]!, ...action.patch } as EditorLayer);
+      if (action.toTop && index !== layers.length - 1) {
+        // One history step for the change and the move: a drawing drawn on again surfaces.
+        layers.push(...layers.splice(index, 1));
+      }
       return {
         ...state,
         layers,
