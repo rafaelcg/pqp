@@ -107,9 +107,19 @@ describe("keeping a layer on the canvas", () => {
   });
   it("a layer that is already too big is not forced smaller, only kept from growing", () => {
     const big = { width: 600, height: 60 };
-    expect(clampScaleToFit(1, big, 0, canvas, 1)).toBe(1);
-    expect(clampScaleToFit(1.5, big, 0, canvas, 1)).toBe(1);
-    expect(clampScaleToFit(0.5, big, 0, canvas, 1)).toBe(0.5);
+    const began = { scale: 1, rotation: 0 };
+    expect(clampScaleToFit(1, big, 0, canvas, began)).toBe(1);
+    expect(clampScaleToFit(1.5, big, 0, canvas, began)).toBe(1);
+    expect(clampScaleToFit(0.5, big, 0, canvas, began)).toBe(0.5);
+  });
+  it("a layer that fitted is held to the fit at its NEW rotation: turning cannot push it past the canvas", () => {
+    // 300 x 60 fits a 400 wide canvas at scale 1.3, but turned a quarter its 300 is vertical (711 tall)
+    // and 60 is horizontal: it fits at a much bigger scale, so turn the other way round to lose room.
+    const tall = { width: 60, height: 300 };
+    const began = { scale: 2, rotation: 0 }; // 120 x 600 at scale 2: fits 711
+    const turned = clampScaleToFit(2, tall, Math.PI / 2, canvas, began);
+    // Turned a quarter its 300 runs across: 400 / 300 at most.
+    expect(turned).toBeCloseTo(400 / 300, 5);
   });
   it("keys and the wheel stop at the canvas too", () => {
     expect(wheelScale(1.3, -5000, { natural, rotation: 0, canvas })).toBeCloseTo(400 / 300, 5);

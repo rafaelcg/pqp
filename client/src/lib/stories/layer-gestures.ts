@@ -50,7 +50,7 @@ export function pinch(
   return {
     x: start.x + (toMid.x - fromMid.x) / canvas.width,
     y: start.y + (toMid.y - fromMid.y) / canvas.height,
-    scale: clampScaleToFit(start.scale * factor, fit, rotation, canvas, start.scale),
+    scale: clampScaleToFit(start.scale * factor, fit, rotation, canvas, start),
     rotation,
   };
 }
@@ -86,7 +86,7 @@ export function handleDrag(
   return {
     ...start,
     scale: options.canvas
-      ? clampScaleToFit(start.scale * factor, options.fit, rotation, options.canvas, start.scale)
+      ? clampScaleToFit(start.scale * factor, options.fit, rotation, options.canvas, start)
       : clampScale(start.scale * factor),
     rotation,
   };
@@ -122,18 +122,21 @@ export function maxScaleToFit(natural: Natural | null | undefined, rotation: num
 }
 
 /**
- * `startScale`: where the layer already was. A layer that is bigger than the canvas already (an
- * old story, a long text) is never forced smaller by a gesture that does not make it bigger; it
- * only cannot grow past the larger of the fit and where it began.
+ * `start`: where the layer was when the gesture began. A layer that did not fit the canvas then
+ * (an old story, a long text) is never forced smaller by a gesture that does not make it bigger:
+ * it only cannot grow past the larger of the fit and where it began. A layer that DID fit is
+ * held to the fit at its new rotation, so turning it cannot push it past the canvas.
  */
 export function clampScaleToFit(
   scale: number,
   natural: Natural | null | undefined,
   rotation: number,
   canvas: Box,
-  startScale = 0,
+  start?: { scale: number; rotation: number },
 ): number {
-  const cap = Math.max(STORY_LAYER_SCALE_MIN, maxScaleToFit(natural, rotation, canvas), startScale);
+  const fitNow = Math.max(STORY_LAYER_SCALE_MIN, maxScaleToFit(natural, rotation, canvas));
+  const wasOversized = Boolean(start && start.scale > maxScaleToFit(natural, start.rotation, canvas) + 1e-6);
+  const cap = wasOversized ? Math.max(fitNow, start!.scale) : fitNow;
   return clamp(clampScale(scale), STORY_LAYER_SCALE_MIN, clampScale(cap));
 }
 
@@ -176,7 +179,7 @@ export function nearSafeEdge(
 /** A scroll-wheel notch scales; the sign is the usual one (scroll up grows). */
 export function wheelScale(scale: number, deltaY: number, fit?: { natural: Natural | null; rotation: number; canvas: Box }): number {
   const next = scale * Math.exp(-deltaY * 0.0015);
-  return fit ? clampScaleToFit(next, fit.natural, fit.rotation, fit.canvas, scale) : clampScale(next);
+  return fit ? clampScaleToFit(next, fit.natural, fit.rotation, fit.canvas, { scale, rotation: fit.rotation }) : clampScale(next);
 }
 
 // ------------------------------------------------------------------ snapping
@@ -240,7 +243,7 @@ export function keyboardTransform(
 ): Transform | null {
   const step = shift ? 0.05 : 0.01;
   const scaled = (value: number, rotation: number) =>
-    fit ? clampScaleToFit(value, fit.natural, rotation, fit.canvas, start.scale) : clampScale(value);
+    fit ? clampScaleToFit(value, fit.natural, rotation, fit.canvas, start) : clampScale(value);
   switch (key) {
     case "ArrowLeft":
       return { ...start, x: clamp(start.x - step, 0, 1) };
