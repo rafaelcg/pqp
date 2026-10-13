@@ -2672,6 +2672,10 @@ export const updateServerBot = (
     body,
   );
 
+/** The wizard's last step: post the bot's hello, as the bot, in one of its channels. */
+export const postBotIntro = (serverId: string, botId: string, body: { channelId: string; body: string }) =>
+  post<{ messageId: string }>(`/api/servers/${serverId}/bots/${botId}/intro`, body);
+
 /** The bot settings page's first tab: today's numbers and recent activity. */
 export const fetchBotOverview = (serverId: string, botId: string) =>
   apiFetch<ServerBotOverview>(`/api/servers/${serverId}/bots/${botId}/overview`);

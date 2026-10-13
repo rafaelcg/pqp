@@ -8,6 +8,7 @@ import {
   SERVER_BOT_NAME_MAX,
   SERVER_BOT_PERSONA_MAX,
   SERVER_BOT_TOOL_GROUPS,
+  botActionCardSchema,
   parsePermissions,
   type BotBaseFace,
   type BotColor,
@@ -17,8 +18,24 @@ import {
   type ServerBotToolGroup,
 } from "@pqp/shared";
 import { useEffect, useId, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Hash, MessagesSquare, Shuffle, Volume2 } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Ban,
+  ChevronDown,
+  Hash,
+  Image as ImageIcon,
+  MessagesSquare,
+  Search,
+  Send,
+  ShieldCheck,
+  Shuffle,
+  Volume2,
+  type LucideIcon,
+} from "lucide-react";
 import { BotFace } from "@/components/bots/bot-face";
+import { BotActionCard } from "@/components/chat/bot-action-card";
+import { ServerBotTags } from "@/components/bots/server-bot-tags";
 import { RadioChoices } from "@/components/bots/radio-choices";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Confetti } from "@/components/onboarding/confetti";
@@ -29,7 +46,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { ApiError, createServerBot, fetchChannels } from "@/lib/api";
+import { ApiError, createServerBot, fetchChannels, postBotIntro } from "@/lib/api";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
@@ -562,6 +579,12 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                   <HowTo title={t("bots.wizard.born.reply")} body={t("bots.wizard.born.replyBody", { name: created.name })} />
                   <HowTo title={t("bots.wizard.born.work")} body={t("bots.wizard.born.workBody")} />
                 </ul>
+                <IntroPreview
+                  bot={created}
+                  serverId={serverId}
+                  serverName={serverName}
+                  channels={channels.filter((channel) => created.channelIds.includes(channel.id))}
+                />
                 {missing !== 0n && (
                   <p className="rounded-[var(--radius-card)] bg-warning-soft p-3 text-sm text-on-warning-soft">
                     {t("bots.wizard.born.missing", { name: created.name })}
@@ -573,23 +596,31 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
           </div>
         </div>
 
-        <aside className="relative hidden w-[22rem] shrink-0 flex-col items-center gap-5 overflow-hidden border-l border-border bg-surface-0 px-6 py-8 md:flex">
+        <aside className="relative hidden w-[24rem] shrink-0 flex-col items-center justify-center gap-5 overflow-y-auto overflow-x-hidden border-l border-border bg-surface-0 px-6 py-8 md:flex">
           {step === "born" && <Confetti />}
-          <p className="max-w-[16rem] rounded-[var(--radius-card)] bg-surface-2 px-3 py-2 text-center text-sm font-medium text-text">
-            {step === "born"
-              ? t("bots.wizard.stage.born")
-              : nameOk
-                ? t("bots.wizard.stage.hello", { name })
-                : t("bots.wizard.stage.waiting")}
-          </p>
-          <BotFace
-            key={pop}
-            color={draft.color}
-            face={stageFace}
-            variant="full"
-            title={shownName}
-            className="bot-face-pop h-48 w-48"
-          />
+          {step === "lives" ? (
+            <StageChannels draft={draft} channels={channels} name={shownName} serverName={serverName} />
+          ) : step === "powers" ? (
+            <StagePlan draft={draft} name={shownName} />
+          ) : (
+            <>
+              <p className="max-w-[16rem] rounded-[var(--radius-card)] bg-surface-2 px-3 py-2 text-center text-sm font-medium text-text">
+                {step === "born"
+                  ? t("bots.wizard.stage.born")
+                  : nameOk
+                    ? t("bots.wizard.stage.hello", { name })
+                    : t("bots.wizard.stage.waiting")}
+              </p>
+              <BotFace
+                key={pop}
+                color={draft.color}
+                face={stageFace}
+                variant="full"
+                title={shownName}
+                className="bot-face-pop h-48 w-48"
+              />
+            </>
+          )}
           <IdCard draft={draft} name={shownName} />
         </aside>
       </div>
@@ -611,6 +642,181 @@ function Counter({ value, max }: { value: number; max: number }) {
     <p className={cn("shrink-0 text-right text-xs", value >= max ? "text-warning" : "text-text-tertiary")}>
       {value.toLocaleString(intlLocale(locale))} / {max.toLocaleString(intlLocale(locale))}
     </p>
+  );
+}
+
+/** Breu holding on to the top edge of a card, looking at what is in it. */
+function Peeker({ color, face }: { color: BotDraft["color"]; face: "focado" | "curioso" | "oi" }) {
+  return (
+    <BotFace
+      color={color}
+      face={face}
+      variant="full"
+      className="pointer-events-none absolute -top-16 right-6 h-20 w-20"
+    />
+  );
+}
+
+/** The "lives" step's stage: the server's channel list, with the bot's marked. */
+function StageChannels({
+  draft,
+  channels,
+  name,
+  serverName,
+}: {
+  draft: BotDraft;
+  channels: Channel[];
+  name: string;
+  serverName: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="relative mt-16 w-full rounded-[var(--radius-card)] border border-border bg-surface-1 p-3">
+      <Peeker color={draft.color} face="curioso" />
+      <p className="mb-2 px-1 text-sm font-semibold text-text">{serverName}</p>
+      <ul className="space-y-0.5">
+        {channels.slice(0, 9).map((channel) => {
+          const lives = draft.channelIds.includes(channel.id);
+          return (
+            <li
+              key={channel.id}
+              className={cn(
+                "flex items-center gap-2 rounded-[var(--radius-control)] px-1.5 py-1 text-sm",
+                lives ? "text-text" : "text-text-tertiary",
+              )}
+            >
+              {channelIcon(channel)}
+              <span className="min-w-0 flex-1 truncate">{channel.name}</span>
+              {lives && <BotFace color={draft.color} face="oi" live={false} className="h-5 w-5" title={name} />}
+            </li>
+          );
+        })}
+      </ul>
+      {draft.channelIds.length === 0 && (
+        <p className="mt-2 px-1 text-xs text-text-tertiary">{t("bots.wizard.stage.noChannels", { name })}</p>
+      )}
+    </div>
+  );
+}
+
+/** The "powers" step's stage: what a plan from this bot will look like. */
+function StagePlan({ draft, name }: { draft: BotDraft; name: string }) {
+  const { t } = useTranslation();
+  const sample = botActionCardSchema.parse({
+    kind: "plan",
+    confirmBy: "você",
+    confirmById: SAMPLE_VIEWER,
+    planId: SAMPLE_VIEWER,
+    expiresAt: new Date(Date.now() + 252_000).toISOString(),
+    items: [
+      { tool: "delete_channel", label: "Apagar o canal #memes-antigos", status: "pending", detail: null },
+      { tool: "create_channel", label: "Criar #memes na categoria Geral", status: "pending", detail: null },
+    ],
+  });
+  return (
+    <div className="w-full space-y-3">
+      <p className="text-sm text-text-secondary">{t("bots.wizard.stage.planHint", { name })}</p>
+      <div className="relative mt-16" inert>
+        <Peeker color={draft.color} face="focado" />
+        <BotActionCard card={sample} messageId={SAMPLE_VIEWER} createdAt="2026-01-01T00:00:00Z" currentUserId={SAMPLE_VIEWER} botName={name} />
+      </div>
+    </div>
+  );
+}
+
+const SAMPLE_VIEWER = "00000000-0000-4000-8000-000000000001";
+
+/**
+ * The bot's first message, shown before it is posted: staff read it, edit it
+ * if they like, and post it in one of its channels. Nothing is posted without
+ * that click.
+ */
+function IntroPreview({
+  bot,
+  serverId,
+  serverName,
+  channels,
+}: {
+  bot: ServerBotDto;
+  serverId: string;
+  serverName: string;
+  channels: Channel[];
+}) {
+  const { t } = useTranslation();
+  const home = channels.find((channel) => channel.type === "text") ?? channels[0] ?? null;
+  const [text, setText] = useState(() =>
+    t("bots.intro.template", {
+      name: bot.name,
+      server: serverName,
+      handle: `@${bot.username}`,
+      channels: channels
+        .slice(0, 3)
+        .map((channel) => `#${channel.name}`)
+        .join(", "),
+    }),
+  );
+  const [editing, setEditing] = useState(false);
+  const [state, setState] = useState<"idle" | "posting" | "posted" | "failed">("idle");
+  if (!home) return null;
+  async function postIt() {
+    setState("posting");
+    try {
+      await postBotIntro(serverId, bot.id, { channelId: home!.id, body: text });
+      setState("posted");
+    } catch {
+      setState("failed");
+    }
+  }
+  return (
+    <div className="rounded-[var(--radius-card)] border border-border bg-surface-card p-3">
+      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary">
+        {t("bots.intro.preview", { channel: `#${home.name}` })}
+      </p>
+      <div className="flex gap-3">
+        <BotFace color={bot.color} face={bot.face} className="h-9 w-9" />
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-1.5 text-sm font-bold text-text">
+            {bot.name}
+            <ServerBotTags />
+          </p>
+          {editing ? (
+            <Textarea
+              aria-label={t("bots.intro.edit")}
+              className="mt-1"
+              value={text}
+              maxLength={1900}
+              onChange={(e) => setText(e.target.value)}
+            />
+          ) : (
+            <p className="mt-0.5 whitespace-pre-wrap text-sm text-text-secondary">{text}</p>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {state === "posted" ? (
+              <p className="text-sm text-success">{t("bots.intro.posted", { channel: `#${home.name}` })}</p>
+            ) : (
+              <>
+                <Button type="button" size="sm" variant="secondary" onClick={() => setEditing((on) => !on)}>
+                  {editing ? t("bots.intro.done") : t("bots.intro.edit")}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={state === "posting" || !text.trim()}
+                  onClick={() => void postIt()}
+                >
+                  {t("bots.intro.post", { channel: `#${home.name}` })}
+                </Button>
+                {state === "failed" && (
+                  <span role="alert" className="text-xs text-danger">
+                    {t("serverSettings.bots.error.generic")}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -665,7 +871,49 @@ function IdCard({ draft, name }: { draft: BotDraft; name: string }) {
   );
 }
 
-/** The tool switches by group, saying which ones always wait for a "sim". */
+const GROUP_ICON: Record<ServerBotToolGroup, LucideIcon> = {
+  senses: ImageIcon,
+  lookup: Search,
+  channels: Hash,
+  posting: Send,
+  moderation: Ban,
+};
+
+/** Steps that always wait for a "sim", whatever the count. */
+const CONFIRM_TOOLS = new Set<string>([
+  "delete_channel",
+  ...(SERVER_BOT_TOOL_GROUPS.moderation as readonly string[]),
+]);
+
+type ToolMode = "reads" | "now" | "confirms";
+
+function toolMode(group: ServerBotToolGroup, tool: string): ToolMode {
+  if (group === "senses" || group === "lookup") return "reads";
+  return CONFIRM_TOOLS.has(tool) ? "confirms" : "now";
+}
+
+function ModeChip({ mode }: { mode: ToolMode }) {
+  const { t } = useTranslation();
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-tick)] px-1.5 py-px text-[10px] font-semibold",
+        mode === "reads" && "bg-surface-3 text-text-secondary",
+        mode === "now" && "bg-accent-soft text-on-accent-soft",
+        mode === "confirms" && "bg-warning-soft text-on-warning-soft",
+      )}
+    >
+      {mode === "confirms" && <ShieldCheck className="h-3 w-3" aria-hidden />}
+      {t(`bots.tools.mode.${mode}`)}
+    </span>
+  );
+}
+
+/**
+ * The tool switches by group: a switch for the whole group, its tools under
+ * it, and for each whether it only reads, acts at once (up to three) or
+ * always waits for a "sim".
+ */
 export function ToolPicker({
   tools,
   onChange,
@@ -674,34 +922,86 @@ export function ToolPicker({
   onChange: (tools: ServerBotTool[]) => void;
 }) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState<ServerBotToolGroup | null>("channels");
   return (
     <div className="space-y-3">
-      {TOOL_GROUPS.map(([group, groupTools]) => {
-        const on = groupTools.filter((tool) => tools.includes(tool)).length;
-        return (
-          <div key={group} className="rounded-[var(--radius-card)] border border-border bg-surface-card p-2">
-            <div className="flex items-center gap-2 px-2 pb-1 pt-1">
-              <p className="text-sm font-semibold text-text">{t(`serverSettings.bots.toolGroup.${group}`)}</p>
-              <span className="text-xs text-text-tertiary">
-                {t("bots.tools.count", { on, total: groupTools.length })}
-              </span>
-              {group === "moderation" && (
-                <span className="ml-auto text-xs text-warning">{t("bots.tools.asksFirst")}</span>
+      <div className="flex flex-wrap gap-1.5">
+        <ModeChip mode="reads" />
+        <ModeChip mode="now" />
+        <ModeChip mode="confirms" />
+      </div>
+      <div className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-card">
+        {TOOL_GROUPS.map(([group, groupTools]) => {
+          const on = groupTools.filter((tool) => tools.includes(tool));
+          const Icon = GROUP_ICON[group];
+          const expanded = open === group;
+          return (
+            <div key={group}>
+              <div className="flex items-center gap-3 px-3 py-2.5">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text-secondary">
+                  <Icon className="h-4 w-4" aria-hidden />
+                </span>
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  onClick={() => setOpen(expanded ? null : group)}
+                  className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]"
+                >
+                  <span className="flex items-center gap-1.5 text-sm font-semibold text-text">
+                    {t(`serverSettings.bots.toolGroup.${group}`)}
+                    <ChevronDown
+                      className={cn(
+                        "h-3.5 w-3.5 text-text-tertiary transition-transform duration-[var(--duration-fast)]",
+                        expanded && "rotate-180",
+                      )}
+                      aria-hidden
+                    />
+                  </span>
+                  <span className="block truncate text-xs text-text-tertiary">
+                    {t("bots.tools.count", { on: on.length, total: groupTools.length })} ·{" "}
+                    {t(`bots.tools.groupHint.${group}`)}
+                  </span>
+                </button>
+                {group === "moderation" && <ModeChip mode="confirms" />}
+                <div className="shrink-0">
+                <Switch
+                  checked={on.length > 0}
+                  onCheckedChange={(checked) =>
+                    onChange(
+                      checked
+                        ? [...new Set([...tools, ...groupTools])]
+                        : tools.filter((tool) => !(groupTools as readonly string[]).includes(tool)),
+                    )
+                  }
+                  label={t(`serverSettings.bots.toolGroup.${group}`)}
+                  hideLabel
+                />
+                </div>
+              </div>
+              {expanded && (
+                <div className="space-y-0.5 pb-2 pl-14 pr-3">
+                  {groupTools.map((tool) => (
+                    <div key={tool} className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <CheckRow
+                          checked={tools.includes(tool)}
+                          onCheckedChange={(checked) =>
+                            onChange(checked ? [...tools, tool] : tools.filter((name) => name !== tool))
+                          }
+                          label={t(`serverSettings.bots.tool.${tool}`)}
+                        />
+                      </div>
+                      <span className="flex w-44 shrink-0 justify-end">
+                        <ModeChip mode={toolMode(group, tool)} />
+                      </span>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
-            {groupTools.map((tool) => (
-              <CheckRow
-                key={tool}
-                checked={tools.includes(tool)}
-                onCheckedChange={(checked) =>
-                  onChange(checked ? [...tools, tool] : tools.filter((name) => name !== tool))
-                }
-                label={t(`serverSettings.bots.tool.${tool}`)}
-              />
-            ))}
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
       <p className="text-xs text-text-tertiary">{t("bots.tools.role")}</p>
     </div>
   );

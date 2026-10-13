@@ -3766,6 +3766,7 @@ router.get("/api/music/related", async (ctx) => {
 import {
   botPlanDecisionSchema,
   botAskAnswerSchema,
+  botIntroSchema,
   createServerBotSchema,
   SERVER_BOTS_MAX,
   serializePermissions as serializeBotPermissions,
@@ -3848,6 +3849,43 @@ router.get(
     };
   },
 );
+
+/**
+ * The bot introduces itself: staff read and edit the hello on the wizard's last
+ * step, and it is posted as the bot in one of the channels it lives in. The
+ * text is the staff member's, so the audit log says who posted it.
+ */
+router.post("/api/servers/:serverId/bots/:botId/intro", async ({ req, user }, { serverId, botId }) => {
+  await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+  if (!isUuid(botId!)) {
+    throw new NotFound("Bot not found");
+  }
+  const body = botIntroSchema.parse(await readJsonBody(req));
+  const bot = await getServerBot(serverId!, botId!);
+  if (!bot) {
+    throw new NotFound("Bot not found");
+  }
+  if (!bot.channelIds.includes(body.channelId)) {
+    throw new HttpError(400, "The bot does not live in that channel");
+  }
+  const author = await getUserById(bot.userId);
+  if (!author) {
+    throw new NotFound("Bot not found");
+  }
+  const posted = await postChannelMessage({ author, channelId: body.channelId, body: body.body.trim() });
+  if (!posted.ok) {
+    throw new HttpError(409, posted.reason);
+  }
+  await logAudit({
+    serverId: serverId!,
+    actorId: user.id,
+    action: "bot.update",
+    targetType: "server_bot",
+    targetId: bot.id,
+    changes: [{ key: "intro", old: null, new: posted.message.id }],
+  });
+  return { messageId: posted.message.id };
+});
 
 /** A plan card's Confirm or Cancel. Only the member who asked may press them. */
 router.post("/api/bots/plans/:planId/decision", async ({ req, user }, { planId }) => {

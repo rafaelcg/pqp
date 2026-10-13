@@ -6064,5 +6064,21 @@
   "bots.overview.confirmedBy": "confirmed by {who}",
   "bots.overview.askedBy": "asked by {who}",
   "bots.overview.planCancelled": "Plan cancelled",
-  "bots.overview.failed": "failed"
+  "bots.overview.failed": "failed",
+  "bots.tools.mode.reads": "Reads only",
+  "bots.tools.mode.now": "Acts at once, up to 3",
+  "bots.tools.mode.confirms": "Always asks first",
+  "bots.tools.groupHint.senses": "Sees images and hears voice notes",
+  "bots.tools.groupHint.lookup": "Channels, members, polls",
+  "bots.tools.groupHint.channels": "Create, change, move and delete channels",
+  "bots.tools.groupHint.posting": "Posts, pins, threads, forum, polls, invites",
+  "bots.tools.groupHint.moderation": "Starts off. Never touches roles.",
+  "bots.wizard.stage.noChannels": "Tick a channel and {name} moves in.",
+  "bots.wizard.stage.planHint": "In beta it can make mistakes. So when it matters, {name} shows the plan and waits for you:",
+  "bots.intro.template": "Hey everyone! I'm {name}, {server}'s bot. Call me with {handle} in {channels} whenever you need.",
+  "bots.intro.preview": "Intro preview · goes to {channel}",
+  "bots.intro.edit": "Edit",
+  "bots.intro.done": "Done",
+  "bots.intro.post": "Post in {channel}",
+  "bots.intro.posted": "Posted in {channel}."
 }

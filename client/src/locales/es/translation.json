@@ -6133,5 +6133,21 @@
   "bots.overview.confirmedBy": "confirmado por {who}",
   "bots.overview.askedBy": "pedido por {who}",
   "bots.overview.planCancelled": "Plan cancelado",
-  "bots.overview.failed": "falló"
+  "bots.overview.failed": "falló",
+  "bots.tools.mode.reads": "Solo lee",
+  "bots.tools.mode.now": "Actúa al momento, hasta 3",
+  "bots.tools.mode.confirms": "Siempre pide confirmación",
+  "bots.tools.groupHint.senses": "Ve imágenes y escucha notas de voz",
+  "bots.tools.groupHint.lookup": "Canales, miembros, encuestas",
+  "bots.tools.groupHint.channels": "Crear, cambiar, mover y borrar canales",
+  "bots.tools.groupHint.posting": "Posts, fijados, hilos, foro, encuestas, invitaciones",
+  "bots.tools.groupHint.moderation": "Empieza apagada. Nunca toca roles.",
+  "bots.wizard.stage.noChannels": "Marca un canal y {name} se muda ahí.",
+  "bots.wizard.stage.planHint": "En beta puede equivocarse. Por eso, cuando es serio, {name} muestra el plan y te espera:",
+  "bots.intro.template": "¡Hola a todos! Soy {name}, el bot de {server}. Llámame con {handle} en {channels} cuando quieras.",
+  "bots.intro.preview": "Vista previa · va a {channel}",
+  "bots.intro.edit": "Editar",
+  "bots.intro.done": "Listo",
+  "bots.intro.post": "Publicar en {channel}",
+  "bots.intro.posted": "Publicado en {channel}."
 }

@@ -221,6 +221,12 @@ export const botActionCardSchema = z.object({
 });
 export type BotActionCard = z.infer<typeof botActionCardSchema>;
 
+/** `POST /api/servers/:id/bots/:botId/intro`: staff post the bot's hello, as the bot. */
+export const botIntroSchema = z.object({
+  channelId: z.string().uuid(),
+  body: safeText(1900).refine((value) => value.trim().length > 0, "Empty"),
+});
+
 /** `POST /api/bots/plans/:planId/decision`: a plan card's buttons. */
 export const botPlanDecisionSchema = z.object({ decision: z.enum(["yes", "no"]) });
 
