@@ -148,14 +148,17 @@ boot-script rule as theme and appearance.
 ## Stage 4 — named appearance presets
 
 A second axis, not a second `data-theme` value. Brightness stays
-`light | dark | system`. The skin is `signal | harmony | hearth | night` (plus the seasonal looks, stage 5.5), stored as
+`light | dark | system`. The skin is `signal | harmony | hearth | night` plus the
+ported `ocean | catppuccin | everforest` (and the seasonal looks, stage 5.5), stored as
 `pqp-appearance` and `user_preferences.settings.appearance`.
 
 `signal` is the default pqp look (labelled Classic / Clássico in the picker). `harmony` and `hearth` retint role tokens only.
 `night` is a near-black look (true black page and rail, lifted panels). It is
 dark-only: picking it pins brightness to dark, and Light / System stay off
 until another look is chosen. They do not change layout. They do not use another product's
-name or brand hex values. Hearth tints the rail; it does not paint a two-tone
+name or brand hex values. The exception is the three ported looks, credited copies
+of MIT palettes (see `DECISIONS.md`); they follow light and dark like the others.
+Hearth tints the rail; it does not paint a two-tone
 sidebar, because that needs an `--color-on-sidebar` token the message pane does
 not share.
 
@@ -240,7 +243,7 @@ inputs. Stage 5 is a hue only. A full token form is stage 6, and it is enough.
 | 2 | Light + System, Clerk bridge, anti-flash | 3–4 days | The actual feature |
 | 3 | `user_preferences`, settings sync | ~2 days | All settings follow the user |
 | 3.5 | High contrast (`default` / `more` / `system`) | ~half a day | Accessibility |
-| 4 | Named presets (`signal` / `harmony` / `hearth` / `night`) | ~1 day | Extra looks without layout clones |
+| 4 | Named presets (`signal` / `harmony` / `hearth` / `night` + three ported) | ~1 day | Extra looks without layout clones |
 | 5 | Accent hue picker | ~half a day | Colour without a new skin |
 | 6 | Custom themes, server branding | — | Upside |
 | 7 | Free-form CSS | — | Never |

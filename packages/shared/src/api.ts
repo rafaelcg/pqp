@@ -86,9 +86,11 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
  * Named token skins, independent of light/dark/system. `signal` is the
  * default pqp look. `harmony` and `hearth` take the mood of other chat apps
  * without using those apps' names or brand colours. `night` is a near-black
- * skin for dark, not a clone of another product's AMOLED theme. `retro` is
- * Modo 2005, the hidden look a person finds with `/2005`; it is accepted here
- * before any client can pick it, so the API that stores it ships first.
+ * skin for dark, not a clone of another product's AMOLED theme. `ocean`,
+ * `catppuccin` and `everforest` are the deliberate exception: credited ports
+ * of MIT palettes (see DECISIONS.md). `retro` is Modo 2005, the hidden look a
+ * person finds with `/2005`; it is accepted here before any client can pick
+ * it, so the API that stores it ships first.
  * `halloween` and `christmas` are dark-only seasonal looks: the client only
  * offers them in their season, but a stored pick keeps working all year, so
  * these values are permanent once shipped.
@@ -110,6 +112,9 @@ export const APPEARANCE_PREFERENCES = [
   "harmony",
   "hearth",
   "night",
+  "ocean",
+  "catppuccin",
+  "everforest",
   "retro",
   "halloween",
   "christmas",
