@@ -306,6 +306,20 @@ class StoriesTest {
     }
 
     @Test
+    fun `the ring badge is the strip's hasCall and nothing a story's call says`() {
+        // hasCall is true only while somebody is in the room: a live card over an
+        // empty room (#1210) leaves it false, and the badge follows the field.
+        val strip = PqpJson.decodeFromString(
+            StoryStrip.serializer(),
+            """{"enabled":true,"canPost":true,"own":null,"items":[
+               {"author":{"id":"a","displayName":"Gabi"},"storyIds":["s"],"latestAt":"x","expiresAt":"y","unseen":true,"hasCall":true},
+               {"author":{"id":"b","displayName":"Bia"},"storyIds":["t"],"latestAt":"x","expiresAt":"y","unseen":true,"hasCall":false}],
+               "firstRunHint":false}""",
+        )
+        assertEquals(listOf(true, false), strip.items.map { it.hasCall })
+    }
+
+    @Test
     fun `a story report is the story subject with its server context`() {
         val body = ReportDraft.body(ReportTarget.Story("st", "Bia", "qg"), ReportReason.MinorSexual, "  ")
         assertEquals("story", body.subjectType)

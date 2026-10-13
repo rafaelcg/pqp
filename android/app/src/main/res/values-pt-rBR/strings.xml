@@ -976,7 +976,7 @@
     <string name="stories_yours">Teu story</string>
     <string name="stories_open">Story de %1$s</string>
     <string name="stories_unseen">novo</string>
-    <string name="stories_call_badge">tem card de call</string>
+    <string name="stories_call_badge">tem gente na call</string>
     <string name="stories_empty_title">Ninguém postou ainda</string>
     <string name="stories_empty_body">Mostra o que tá rolando: um clipe, teu setup, que horas tu entra. Some em 24\u00A0h.</string>
     <string name="stories_empty_cta">Postar</string>
@@ -1018,6 +1018,7 @@
     <string name="stories_call_join">Entrar na call</string>
     <string name="stories_call_ended">A call acabou</string>
     <string name="stories_call_empty">Ninguém na call agora</string>
+    <string name="stories_call_locked">Tu não pode entrar nessa sala</string>
     <string name="stories_call_full">A sala lotou</string>
     <string name="stories_compose_title">Novo story</string>
     <string name="stories_compose_mode_text">Texto</string>
@@ -1166,7 +1167,6 @@
     <string name="stories_sticker_call">Chama pra call</string>
     <string name="stories_call_picker_body">Quem tocar entra direto. O card mostra quem tá lá dentro na hora.</string>
     <string name="stories_call_picker_none">Nenhuma sala de voz nos servidores marcados.</string>
-    <string name="stories_call_not_in_room">Tu não tá no %1$s. O card só deixa entrar enquanto tu tá na\u00A0call.</string>
     <string name="stories_call_picker_empty">vazia</string>
     <string name="stories_call_default_text">bora pra call?</string>
     <string name="stories_audience_title">Quem vê</string>
@@ -1234,10 +1234,6 @@
     <string name="stories_editor_card_hint">Toca pra escrever</string>
     <string name="stories_audience_load_failed">Não deu pra carregar quem vê</string>
     <string name="stories_audience_loading">Carregando…</string>
-    <string name="stories_call_confirm_title">Tu não tá na call</string>
-    <string name="stories_call_confirm_body">Até tu entrar no\u00A0%1$s, o card aparece como \"A call acabou\" pra todo mundo. Posta mesmo assim?</string>
-    <string name="stories_call_confirm_yes">Postar mesmo assim</string>
-    <string name="stories_call_confirm_no">Voltar</string>
     <string name="stories_picker_one_only">Só cabe uma foto por story, usei a primeira.</string>
     <string name="stories_picker_some_did_not_fit">Algumas fotos não couberam.</string>
     <string name="stories_empty_compact_cta">Postar um story</string>

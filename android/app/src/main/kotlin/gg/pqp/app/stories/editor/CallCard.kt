@@ -52,27 +52,41 @@ enum class CallCardState {
     /** People are in it. */
     Live,
 
-    /** Nobody is in it (yet, or any more): still joinable while it is the author's room. */
+    /** Nobody is in it (yet, or any more): the room is still the author's and still joinable. */
     Empty,
 
-    /** At its limit: the faces, no way in. */
+    /** The room exists and is open to the author, but this viewer may not connect to it: no button, a short reason. */
+    Locked,
+
+    /** A peer-to-peer room at its seat limit: the faces, no way in. */
     Full,
 
-    /** The room emptied or the author left it: a quiet card, no button. */
+    /** The channel is gone or the author lost the right to use it: a quiet card, no button. */
     Ended,
 }
 
 /**
- * The server's `state` and head count as one of the four things the card can
- * say. A `live` room with nobody in it (the editor's preview of a room that has
- * no one yet) reads as empty, not as a live call with zero people.
+ * The server's `state`, head count and `joinable` as one of the five things the
+ * card can say (the semantics of `story.call`, #1210).
+ *
+ * - `ended` only when the channel was deleted or the author lost CONNECT.
+ * - `full` is a mesh room at its seat limit.
+ * - `live` stays live with nobody in it: that is [CallCardState.Empty], and it is
+ *   joinable. A `live` room this viewer cannot connect to is [CallCardState.Locked],
+ *   whatever the head count.
+ *
+ * [joinable] defaults to true for the editor's preview, which has no viewer to refuse.
  */
-fun callCardState(serverState: String, count: Int): CallCardState = when {
+fun callCardState(serverState: String, count: Int, joinable: Boolean = true): CallCardState = when {
     serverState == "ended" -> CallCardState.Ended
     serverState == "full" -> CallCardState.Full
+    !joinable -> CallCardState.Locked
     count <= 0 -> CallCardState.Empty
     else -> CallCardState.Live
 }
+
+/** Whether the lime "Entrar" pill belongs on a card in [state]: only a room somebody may walk into. */
+fun callCardCanJoin(state: CallCardState): Boolean = state == CallCardState.Live || state == CallCardState.Empty
 
 /** How many faces are drawn, and what "+n" says about the rest. */
 object CallFaces {
@@ -112,25 +126,29 @@ fun StoryCallCard(
     val density = LocalDensity.current
     fun dp(share: Float): Dp = with(density) { (u * share).toDp() }
     val ended = state == CallCardState.Ended
-    val joinable = onJoin != null && (state == CallCardState.Live || state == CallCardState.Empty)
+    val joinable = onJoin != null && callCardCanJoin(state)
+    val locked = state == CallCardState.Locked
     val shape = RoundedCornerShape(dp(0.05f))
 
     val statusLabel = stringResource(
         when (state) {
             CallCardState.Live -> R.string.stories_call_live
             CallCardState.Empty -> R.string.stories_call_empty
+            // Locked says what the room holds, then why there is no button.
+            CallCardState.Locked -> if (count > 0) R.string.stories_call_live else R.string.stories_call_empty
             CallCardState.Full -> R.string.stories_call_full
             CallCardState.Ended -> R.string.stories_call_ended
         },
     )
     val peopleLabel = if (count > 0 && !ended) pluralStringResource(R.plurals.stories_editor_call_in_room, count, count) else null
     val join = stringResource(R.string.stories_editor_call_join)
+    val lockedReason = if (locked) stringResource(R.string.stories_call_locked) else null
     val description = buildString {
         append(statusLabel)
-        append(": ")
-        append(roomName)
+        if (roomName.isNotBlank()) append(": ").append(roomName)
         if (serverName.isNotBlank()) append(", ").append(serverName)
         peopleLabel?.let { append(", ").append(it) }
+        lockedReason?.let { append(". ").append(it) }
         if (joinable) append(". ").append(join)
     }
 
@@ -171,27 +189,41 @@ fun StoryCallCard(
                     color = if (ended) Color.White.copy(alpha = 0.6f) else Palette.Signal,
                     fontFamily = InstrumentSans,
                     fontWeight = FontWeight.Bold,
-                    fontSize = with(LocalDensity.current) { (u * 0.027f).toSp() },
+                    fontSize = with(LocalDensity.current) { (u * 0.024f).toSp() },
                     // Capitals set tight run their words together at this size.
-                    letterSpacing = 0.04.em,
+                    letterSpacing = 0.03.em,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Text(
-                roomName,
-                color = Color.White,
-                fontFamily = Gabarito,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = with(LocalDensity.current) { (u * 0.05f).toSp() },
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            // A deleted channel has no name left to show.
+            if (roomName.isNotBlank()) {
+                Text(
+                    roomName,
+                    color = Color.White,
+                    fontFamily = Gabarito,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = with(LocalDensity.current) { (u * 0.05f).toSp() },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             if (serverName.isNotBlank()) {
                 Text(
                     serverName,
                     color = Color.White.copy(alpha = 0.65f),
                     fontFamily = InstrumentSans,
+                    fontSize = with(LocalDensity.current) { (u * 0.029f).toSp() },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (lockedReason != null) {
+                Text(
+                    lockedReason,
+                    color = Palette.Warning,
+                    fontFamily = InstrumentSans,
+                    fontWeight = FontWeight.SemiBold,
                     fontSize = with(LocalDensity.current) { (u * 0.029f).toSp() },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -206,14 +238,14 @@ fun StoryCallCard(
             ) {
                 faces.take(CallFaces.SHOWN).forEach {
                     Box(Modifier.border(dp(0.004f), Color.Black, CircleShape).clip(CircleShape)) {
-                        Avatar(name = it.name, url = it.avatarUrl, seed = it.id, size = dp(0.07f))
+                        Avatar(name = it.name, url = it.avatarUrl, seed = it.id, size = dp(0.064f))
                     }
                 }
                 val more = CallFaces.more(count)
                 if (more > 0) {
                     Box(
                         contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(dp(0.07f)).clip(CircleShape).background(Color.White.copy(alpha = 0.22f)),
+                        modifier = Modifier.size(dp(0.064f)).clip(CircleShape).background(Color.White.copy(alpha = 0.22f)),
                     ) {
                         Text(
                             "+$more",
@@ -226,7 +258,7 @@ fun StoryCallCard(
                 }
             }
         }
-        if (showJoin && (state == CallCardState.Live || state == CallCardState.Empty)) {
+        if (showJoin && callCardCanJoin(state)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier

@@ -983,7 +983,7 @@
     <string name="stories_yours">Your story</string>
     <string name="stories_open">%1$s\'s story</string>
     <string name="stories_unseen">new</string>
-    <string name="stories_call_badge">has a call card</string>
+    <string name="stories_call_badge">someone is in the call</string>
     <string name="stories_empty_title">Nobody has posted yet</string>
     <string name="stories_empty_body">Show what\'s up: a clip, your setup, when you\'re getting on. Gone in 24\u00A0h.</string>
     <string name="stories_empty_cta">Post</string>
@@ -1025,6 +1025,7 @@
     <string name="stories_call_join">Join the call</string>
     <string name="stories_call_ended">The call ended</string>
     <string name="stories_call_empty">Nobody in the call</string>
+    <string name="stories_call_locked">You can\'t join this room</string>
     <string name="stories_call_full">The room is full</string>
     <string name="stories_compose_title">New story</string>
     <string name="stories_compose_mode_text">Text</string>
@@ -1173,7 +1174,6 @@
     <string name="stories_sticker_call">Call people in</string>
     <string name="stories_call_picker_body">Whoever taps joins right away. The card shows who\'s in there live.</string>
     <string name="stories_call_picker_none">No voice rooms in the servers you picked.</string>
-    <string name="stories_call_not_in_room">You\'re not in %1$s. The card only lets people in while you\'re in the\u00A0call.</string>
     <string name="stories_call_picker_empty">empty</string>
     <string name="stories_call_default_text">who\'s up for a call?</string>
     <string name="stories_audience_title">Who sees it</string>
@@ -1241,10 +1241,6 @@
     <string name="stories_editor_card_hint">Tap to write</string>
     <string name="stories_audience_load_failed">Couldn\'t load who can see it</string>
     <string name="stories_audience_loading">Loading…</string>
-    <string name="stories_call_confirm_title">You\'re not in the call</string>
-    <string name="stories_call_confirm_body">Until you join %1$s, the card reads \"The call ended\" to everyone. Post anyway?</string>
-    <string name="stories_call_confirm_yes">Post anyway</string>
-    <string name="stories_call_confirm_no">Go back</string>
     <string name="stories_picker_one_only">One picture per story, so the first one is used.</string>
     <string name="stories_picker_some_did_not_fit">Some photos did not fit.</string>
     <string name="stories_empty_compact_cta">Post a story</string>
