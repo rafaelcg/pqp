@@ -32,6 +32,10 @@ export function VoiceChannelStage({
   onScreenFrameRateChange,
   onStartScreenShare,
   onShareWithoutSound,
+  onDismissError,
+  composerHidden,
+  stageHidden,
+  roomListOnScreen,
   onStopScreenShare,
   onFocusScreenShare,
   inputMode,
@@ -42,6 +46,8 @@ export function VoiceChannelStage({
   onSetScreenVolume,
   onDismissShare,
   onWatchShare,
+  onDismissCamera,
+  onWatchCamera,
   onRetryPeer,
   onToggleRaisedHand,
   canLowerHands = false,
@@ -80,6 +86,13 @@ export function VoiceChannelStage({
     intent?: { preferBrowserTab?: boolean },
   ) => void | Promise<void>;
   onShareWithoutSound?: () => void;
+  onDismissError?: () => void;
+  /** See `CallStage`\'s prop of the same name. */
+  composerHidden?: boolean;
+  /** The video pane is put away; the controls stay in the composer. */
+  stageHidden?: boolean;
+  /** See `CallStage`'s prop of the same name. */
+  roomListOnScreen?: boolean;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -90,6 +103,8 @@ export function VoiceChannelStage({
   onSetScreenVolume?: (userId: string, volume: number) => void;
   onDismissShare?: (peerId: string) => void;
   onWatchShare?: (peerId: string) => void;
+  onDismissCamera?: (peerId: string) => void;
+  onWatchCamera?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
   /** Our own hand in this room's queue. */
   onToggleRaisedHand?: () => void;
@@ -136,6 +151,10 @@ export function VoiceChannelStage({
       onScreenFrameRateChange={onScreenFrameRateChange}
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
+      onDismissError={onDismissError}
+      composerHidden={composerHidden}
+      stageHidden={stageHidden}
+      roomListOnScreen={roomListOnScreen}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
       inputMode={inputMode}
@@ -146,6 +165,8 @@ export function VoiceChannelStage({
       onSetScreenVolume={onSetScreenVolume}
       onDismissShare={onDismissShare}
       onWatchShare={onWatchShare}
+      onDismissCamera={onDismissCamera}
+      onWatchCamera={onWatchCamera}
       onRetryPeer={onRetryPeer}
       onToggleRaisedHand={onToggleRaisedHand}
       canLowerHands={canLowerHands}

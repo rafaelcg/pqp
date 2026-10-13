@@ -136,13 +136,26 @@ export const STAGE_COLUMN_RESERVE_PX = 300;
  */
 export const STAGE_TALL_RESERVE_PX = 230;
 
+/**
+ * The tall rule less the chat's music bar (`--chat-music-h`, set by the call
+ * split), and never under half. For a phone held sideways with the controls
+ * floating on the picture: the picture keeps its height and the chat takes
+ * what is left, except that a playing track's bar would push the message
+ * box off the screen.
+ */
+const STAGE_HEIGHT_TALL_LESS_MUSIC =
+  "h-[max(calc(max(68svh,280px)_-_var(--chat-music-h,0px)),calc(max(68svh,280px)_/_2))]";
+
 export function stageHeightClass(input: {
   anyVideo: boolean;
   musicPictureOnly: boolean;
+  /** The chat's music bar is under a sideways picture. */
+  musicGivesWay?: boolean;
 }): string {
-  return input.anyVideo && !input.musicPictureOnly
-    ? STAGE_HEIGHT_TALL
-    : STAGE_HEIGHT_SHORT;
+  if (!input.anyVideo || input.musicPictureOnly) {
+    return STAGE_HEIGHT_SHORT;
+  }
+  return input.musicGivesWay ? STAGE_HEIGHT_TALL_LESS_MUSIC : STAGE_HEIGHT_TALL;
 }
 
 /** Prefix so a camera solo does not collide with that peer's screen share. */

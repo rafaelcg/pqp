@@ -53,6 +53,7 @@ const {
   pickerAudioState,
 } = require("./lib/display-sources");
 const { displayRequestAllowed } = require("./lib/display-origin.js");
+const { createShareSilentRetry, requesterKey } = require("./lib/share-silent-retry");
 const {
   createLinuxShareAudio,
   SHARE_SOURCE_LABEL: LINUX_SHARE_SOURCE_LABEL,
@@ -1247,6 +1248,8 @@ const linuxShareAudio =
 
 let linuxShareAudioStartSeq = 0;
 
+const shareSilentRetry = createShareSilentRetry();
+
 /** How long a share may wait on the sound server before going out silent. */
 const LINUX_SHARE_AUDIO_START_TIMEOUT_MS = 3000;
 
@@ -1301,7 +1304,7 @@ async function startLinuxShareAudio() {
  * returns a plausible-looking list of nothing useful, and the only way to know
  * is to ask again.
  */
-async function chooseDisplaySource(audioRequested) {
+async function chooseDisplaySource(audioRequested, requester = null) {
   const platform = process.platform;
   // Read first and exactly once per request: an arm is good for the next
   // share only, including one that ends at the permission dialog below.
@@ -1312,6 +1315,14 @@ async function chooseDisplaySource(audioRequested) {
   const linuxAudioArmed = platform === "linux" && linuxShareAudio?.consumeArm() === true;
   // Whatever the last share left running belongs to a share that is over.
   shareAudioController?.stop();
+
+  // PQP-31: the previous request carried loopback, Chromium could not open
+  // it and failed the whole capture, and the page armed a video-only retry.
+  // Same surface, no picker, no sound, and only for the frame that armed it.
+  const silentRetrySource = shareSilentRetry.take(audioRequested, requester);
+  if (silentRetrySource) {
+    return captureResponse(silentRetrySource, platform, false, os.release());
+  }
 
   if (screenPermission(platform, macScreenAccessStatus()) === "blocked") {
     await explainScreenPermission();
@@ -1389,12 +1400,16 @@ async function chooseDisplaySource(audioRequested) {
   // The picker checkbox is the consent. `audioRequested` is only whether the
   // page asked for a track Chromium will accept; an auto-pick (one surface,
   // no dialog) never attaches loopback, because nobody ticked anything.
-  return captureResponse(
+  const response = captureResponse(
     source,
     platform,
     audioRequested && choice.shareAudio === true,
     os.release(),
   );
+  if (response?.audio === "loopback") {
+    shareSilentRetry.rememberLoopback(source, requester);
+  }
+  return response;
 }
 
 function configureSessionSecurity(appOrigin) {
@@ -1478,7 +1493,7 @@ function configureSessionSecurity(appOrigin) {
         callback(null);
         return;
       }
-      chooseDisplaySource(request?.audioRequested === true)
+      chooseDisplaySource(request?.audioRequested === true, requesterKey(request?.frame))
         .then((response) => {
           // `null` cancels. Chromium turns that into a NotAllowedError, which
           // the client already words as "blocked or cancelled" rather than as
@@ -2548,6 +2563,16 @@ if (probingShareAudio) {
       return false;
     }
     return shareAudio().arm();
+  });
+
+  // PQP-31: the share the page just asked for failed. True when that request
+  // carried loopback a moment ago, and the next video-only request will reuse
+  // its surface without opening the picker (`lib/share-silent-retry.js`).
+  ipcMain.handle("pqp:share-silent-retry-arm", (event) => {
+    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return false;
+    }
+    return shareSilentRetry.arm(requesterKey(event.senderFrame));
   });
 
   ipcMain.handle("pqp:native-share-audio-claim", async (event) => {

@@ -5679,6 +5679,152 @@ CREATE TABLE IF NOT EXISTS forum_tags (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_forum_tags_name
   ON forum_tags (forum_id, lower(name));
 
+-- A tag's picture is an ICON KEY from a curated set (`FORUM_TAG_ICONS` in
+-- packages/shared/src/forums.ts); each client draws its own art for it.
+-- `emoji` stays for rows that predate icons, imports and old phone builds; a
+-- client that knows icons draws the icon and falls back to the emoji.
+-- No CHECK on the key on purpose: adding a key to the set must not need a
+-- migration, and the PUT validates it.
+ALTER TABLE forum_tags ADD COLUMN IF NOT EXISTS icon TEXT
+  CHECK (icon IS NULL OR char_length(icon) <= 32);
+-- A starter tag ("question", "release"...) shows in each viewer's language
+-- while this is set. The PUT clears it when staff rename the tag.
+ALTER TABLE forum_tags ADD COLUMN IF NOT EXISTS preset TEXT
+  CHECK (preset IS NULL OR char_length(preset) <= 32);
+
+-- One-shot: existing tags get the icon that reads as the emoji they have, and
+-- a starter tag nobody renamed (its name is one of the preset's names in en,
+-- pt-BR or es) gets its preset. The two lists below are the TypeScript tables
+-- `FORUM_TAG_ICONS` + `FORUM_TAG_EMOJI_ALIASES` and `FORUM_TAG_PRESET_NAMES`;
+-- `forum-tag-icons.test.ts` fails if they drift. A starter tag with no emoji
+-- takes the preset's own icon, but one whose emoji staff chose and we cannot
+-- map keeps that emoji and no icon, so the glyph they picked still shows.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'forum_tag_icons_presets_2026_10'
+  ) THEN
+    RETURN;
+  END IF;
+
+  UPDATE forum_tags t
+     SET preset = p.preset
+    FROM (VALUES
+      ('question', 'question'),
+      ('duvida', 'question'),
+      ('dúvida', 'question'),
+      ('duda', 'question'),
+      ('bug', 'bug'),
+      ('suggestion', 'suggestion'),
+      ('sugestao', 'suggestion'),
+      ('sugestão', 'suggestion'),
+      ('sugerencia', 'suggestion'),
+      ('guide', 'tutorial'),
+      ('tutorial', 'tutorial'),
+      ('release', 'release'),
+      ('lancamento', 'release'),
+      ('lançamento', 'release'),
+      ('lanzamiento', 'release'),
+      ('wip', 'wip'),
+      ('discussion', 'discussion'),
+      ('discussao', 'discussion'),
+      ('discussão', 'discussion'),
+      ('discusion', 'discussion'),
+      ('discusión', 'discussion')
+    ) AS p(name, preset)
+   WHERE t.preset IS NULL AND lower(t.name) = p.name;
+
+  UPDATE forum_tags t
+     SET icon = e.icon
+    FROM (VALUES
+      ('❓', 'question'),
+      ('🆘', 'help'),
+      ('🐛', 'bug'),
+      ('💡', 'idea'),
+      ('📝', 'feedback'),
+      ('💬', 'discussion'),
+      ('🗳️', 'poll'),
+      ('📢', 'announcement'),
+      ('📰', 'news'),
+      ('🚀', 'release'),
+      ('🔄', 'update'),
+      ('🛠️', 'wip'),
+      ('💻', 'code'),
+      ('📚', 'guide'),
+      ('📜', 'rules'),
+      ('✅', 'solved'),
+      ('⚠️', 'warning'),
+      ('🔒', 'security'),
+      ('📌', 'pinned'),
+      ('📅', 'event'),
+      ('✨', 'showcase'),
+      ('🎨', 'art'),
+      ('📷', 'photo'),
+      ('🎬', 'video'),
+      ('🎞️', 'clip'),
+      ('📺', 'stream'),
+      ('🎵', 'music'),
+      ('🎮', 'game'),
+      ('😂', 'meme'),
+      ('☕', 'offtopic'),
+      ('👥', 'community'),
+      ('🎁', 'gift'),
+      ('🏆', 'trophy'),
+      ('🔥', 'hot'),
+      ('⭐', 'star'),
+      ('❤️', 'heart'),
+      ('🔗', 'link'),
+      ('🛠', 'wip'),
+      ('🔧', 'wip'),
+      ('🔨', 'wip'),
+      ('🚧', 'wip'),
+      ('🗳', 'poll'),
+      ('⚠', 'warning'),
+      ('🚨', 'warning'),
+      ('❤', 'heart'),
+      ('💖', 'heart'),
+      ('🎞', 'clip'),
+      ('✂️', 'clip'),
+      ('📣', 'announcement'),
+      ('📖', 'guide'),
+      ('🎉', 'event'),
+      ('🗓️', 'event'),
+      ('☑️', 'solved'),
+      ('✔️', 'solved'),
+      ('🙋', 'help'),
+      ('🤔', 'question'),
+      ('❔', 'question'),
+      ('🧠', 'idea'),
+      ('🎥', 'video'),
+      ('📹', 'video'),
+      ('🖼️', 'art'),
+      ('🎧', 'music'),
+      ('🎶', 'music'),
+      ('🕹️', 'game'),
+      ('🤣', 'meme'),
+      ('🔐', 'security'),
+      ('🛡️', 'security'),
+      ('📍', 'pinned'),
+      ('🌟', 'star'),
+      ('🎙️', 'stream')
+    ) AS e(emoji, icon)
+   WHERE t.icon IS NULL AND btrim(t.emoji) = e.emoji;
+
+  UPDATE forum_tags t
+     SET icon = CASE t.preset
+       WHEN 'question' THEN 'question'
+       WHEN 'bug' THEN 'bug'
+       WHEN 'suggestion' THEN 'idea'
+       WHEN 'tutorial' THEN 'guide'
+       WHEN 'release' THEN 'release'
+       WHEN 'wip' THEN 'wip'
+       WHEN 'discussion' THEN 'discussion'
+     END
+   WHERE t.icon IS NULL AND t.preset IS NOT NULL AND t.emoji IS NULL;
+
+  INSERT INTO data_migrations (name) VALUES ('forum_tag_icons_presets_2026_10');
+END $$;
+
 CREATE TABLE IF NOT EXISTS forum_post_tags (
   post_id UUID NOT NULL REFERENCES forum_posts(channel_id) ON DELETE CASCADE,
   tag_id UUID NOT NULL REFERENCES forum_tags(id) ON DELETE CASCADE,

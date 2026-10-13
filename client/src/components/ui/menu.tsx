@@ -1,5 +1,7 @@
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import {
+  useCallback,
+  useEffect,
   useRef,
   type ComponentType,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -58,18 +60,45 @@ export function Menu({
   // Inside a fullscreen element when there is one, or the menu opens where
   // nothing can see it (the watch player's layout picker, 2026-09-25).
   const portalHost = useFullscreenPortalHost();
+  // Radix reports a close from an effect on its Root, so a Root that goes
+  // away while open (its row removed the picture, its items ran out, it
+  // remounted elsewhere) never says it closed. Whoever listens (the call
+  // stage's idle fade) would then hold on to "open" for good. Track it here
+  // and report the close ourselves when the Root goes.
+  const openRef = useRef(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  const reportOpen = useCallback((open: boolean) => {
+    openRef.current = open;
+    onOpenChangeRef.current?.(open);
+  }, []);
+  const rendered = items.length > 0 && !disabled;
+  useEffect(() => {
+    if (!rendered && openRef.current) {
+      reportOpen(false);
+    }
+  }, [rendered, reportOpen]);
+  useEffect(
+    () => () => {
+      if (openRef.current) {
+        openRef.current = false;
+        onOpenChangeRef.current?.(false);
+      }
+    },
+    [],
+  );
   const triggerRef = useRef<HTMLElement>(null);
   // Set when the menu closes because a row was chosen, not Escape or a
   // click outside. A row that opens a dialog hands focus to that dialog, and
   // Radix's own return-to-trigger would run after it and pull focus back out
   // from under the modal (Enter then reopened the menu behind it).
   const chosenRef = useRef(false);
-  if (items.length === 0 || disabled) {
+  if (!rendered) {
     return <>{children}</>;
   }
 
   return (
-    <DropdownMenuPrimitive.Root onOpenChange={onOpenChange}>
+    <DropdownMenuPrimitive.Root onOpenChange={reportOpen}>
       <DropdownMenuPrimitive.Trigger asChild ref={triggerRef as never}>
         {children}
       </DropdownMenuPrimitive.Trigger>
@@ -82,7 +111,7 @@ export function Menu({
           // Named so a test can address the open menu without matching
           // translated labels.
           data-server-menu=""
-          className="elevation-3 z-[100] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto overscroll-contain rounded-[var(--radius-card)] p-1 animate-fade-in min-w-[11.5rem]"
+          className="elevation-3 z-[100] max-h-[var(--radix-dropdown-menu-content-available-height)] max-w-[var(--radix-dropdown-menu-content-available-width)] overflow-y-auto overscroll-contain rounded-[var(--radius-card)] p-1 animate-fade-in min-w-[11.5rem]"
           onClickCapture={(event: ReactMouseEvent) => {
             if ((event.target as Element).closest?.('[role^="menuitem"]')) {
               chosenRef.current = true;

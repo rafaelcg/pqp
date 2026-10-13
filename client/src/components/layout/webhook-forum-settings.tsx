@@ -5,11 +5,13 @@ import {
 } from "@pqp/shared";
 import { ChevronDown, Tag as TagGlyph } from "lucide-react";
 import { useId, useRef, useState } from "react";
+import { ForumTagIcon } from "@/components/forum/forum-tag-icon";
 import { SettingsInlineStatus } from "@/components/settings/kit/inline-status";
 import { useInlineSave } from "@/components/settings/kit/use-inline-save";
 import { CheckRow } from "@/components/ui/check-row";
 import { RadioGroup, type RadioOption } from "@/components/ui/radio-group";
 import { putWebhookForumSettings } from "@/lib/api";
+import { forumTagIconComponent, useForumTagLabel } from "@/lib/forum-tag-icons";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -70,12 +72,17 @@ export function WebhookForumSettingsPanel({
   const mode: AllowMode = settings.allowedTagIds === null ? "all" : "chosen";
   const allowed = new Set(settings.allowedTagIds ?? []);
   const defaults = new Set(settings.defaultTagIds);
+  const nameOf = useForumTagLabel();
   const tagLabel = (tag: ForumTag) =>
-    tag.moderated ? `${tag.name} · ${t("webhooks.forum.staffOnly")}` : tag.name;
-  // Its own column, a tag glyph where there is no emoji, so every name starts
-  // at the same x (forum QA P13).
+    tag.moderated ? `${nameOf(tag)} · ${t("webhooks.forum.staffOnly")}` : nameOf(tag);
+  // Its own column, a tag glyph where there is no icon or emoji, so every name
+  // starts at the same x (forum QA P13).
   const tagIcon = (tag: ForumTag) =>
-    tag.emoji ? tag.emoji : <TagGlyph className="h-3.5 w-3.5" />;
+    forumTagIconComponent(tag) || tag.emoji ? (
+      <ForumTagIcon tag={tag} className="h-3.5 w-3.5" />
+    ) : (
+      <TagGlyph className="h-3.5 w-3.5" />
+    );
 
   const dedupeOptions: RadioOption<number>[] = [
     ...DEDUPE_PRESETS.map((hours) => ({ value: hours, label: dedupeLabel(hours) })),

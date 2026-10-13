@@ -85,6 +85,7 @@ const idle: VoiceState = {
   cameraPeerIds: [],
   focusedScreenPeerId: null,
   dismissedSharePeerIds: [],
+  dismissedCameraPeerIds: [],
   audibleScreenPeerIds: [],
   localScreenStream: null,
   isSharingScreenAudio: false,
@@ -92,6 +93,8 @@ const idle: VoiceState = {
   isShareCursorVisible: false,
   shareCaptureHint: null,
   screenShareAudioFailed: false,
+  screenShareError: null,
+  watchPartyShareSilent: false,
   sharePublishRecovering: false,
   incomingCalls: [],
   isCameraOn: false,
@@ -102,14 +105,14 @@ const idle: VoiceState = {
   channelMusic: {},
 };
 
-function render(voiceState: VoiceState) {
+function render(voiceState: VoiceState, collapsed = false) {
   return renderToStaticMarkup(
     <TooltipProvider>
       <CallControls
         voiceState={voiceState}
-        collapsed={false}
+        collapsed={collapsed}
         canExpand={false}
-        userCollapsed={false}
+        userCollapsed={collapsed}
         fullscreenAvailable={false}
         isFullscreen={false}
         onToggleFullscreen={() => {}}
@@ -137,16 +140,23 @@ function render(voiceState: VoiceState) {
  */
 describe("CallControls in a watch party room", () => {
   it("hides the Watch party button from the audience (canStream false)", () => {
-    const html = render({ ...idle, canStream: false });
-    expect(html).not.toContain("lucide-monitor-play");
-    expect(html).not.toContain("lucide-screen-share");
-    expect(html).not.toContain("watch-party");
+    for (const collapsed of [false, true]) {
+      const html = render({ ...idle, canStream: false }, collapsed);
+      expect(html).not.toContain("lucide-monitor-play");
+      expect(html).not.toContain("lucide-screen-share");
+    }
   });
 
-  it("shows the Watch party action in the more menu for the presenter", () => {
-    const html = render({ ...idle, canStream: true });
-    expect(html).toContain("lucide-screen-share");
-    expect(html).toContain('data-call-more="watch-party share-cursor join-leave-sounds"');
+  it("offers the presenter Watch party from Mais, on both bars (canStream true)", () => {
+    // The docked strip and the stage bar carry one set: share on the bar,
+    // Watch party in "Mais", whose rows only render once the menu opens
+    // (what it offers is pinned in call-menu-items.test.ts).
+    for (const collapsed of [false, true]) {
+      const html = render({ ...idle, canStream: true }, collapsed);
+      expect(html).toContain("lucide-screen-share");
+      expect(html).toContain('data-testid="call-more"');
+      expect(html).not.toContain("lucide-monitor-play");
+    }
   });
 });
 
