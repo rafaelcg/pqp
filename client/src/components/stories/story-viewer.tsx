@@ -793,6 +793,11 @@ export function StoryViewer({
         return;
       }
       const typing = document.activeElement === replyRef.current;
+      // Escape closes only the topmost thing: a profile card opened from a mention is above the
+      // viewer, so it takes the key (it closes itself) and the viewer stays.
+      if (event.key === "Escape" && document.querySelector("[data-profile-card]")) {
+        return;
+      }
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -1449,7 +1454,7 @@ export function StoryViewer({
               className="absolute inset-x-0 bottom-0 -z-10 h-28"
               style={{ background: "var(--story-foot-scrim)" }}
             />
-            <div className="pointer-events-auto flex items-center gap-1.5">
+            <div className="pointer-events-auto flex items-center gap-1.5" data-story-owner-bar={story && isOwn ? "" : undefined}>
         {story && isOwn ? (
           <button
             type="button"
