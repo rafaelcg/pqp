@@ -5,6 +5,8 @@ import {
   RECORDER_VIDEO_BITS_PER_SECOND,
   MIN_CLIP_MS,
   cameraAvailability,
+  needsPortraitCrop,
+  portraitCropStream,
   classifyCameraError,
   nextDeviceId,
   pickRecorderType,
@@ -221,7 +223,12 @@ export function useRecorder(
   stream: MediaStream | null,
   onClip: (clip: RecordedClip) => void,
   maxMs = STORY_MAX_VIDEO_MS,
+  /** The preview element: a source that is not near 9:16 is recorded cut to what it shows. */
+  getPreview?: () => HTMLVideoElement | null,
 ): RecorderControls {
+  const getPreviewRef = useRef(getPreview);
+  getPreviewRef.current = getPreview;
+  const cropStop = useRef<(() => void) | null>(null);
   const onClipRef = useRef(onClip);
   onClipRef.current = onClip;
   const mimeType = useMemo(
@@ -300,6 +307,15 @@ export function useRecorder(
       return false;
     }
     chunks.current = [];
+    // A webcam sends 16:9 and the preview shows the middle 9:16: record that, not the whole frame.
+    const preview = getPreviewRef.current?.() ?? null;
+    if (preview && preview.videoWidth > 0 && needsPortraitCrop(preview.videoWidth, preview.videoHeight)) {
+      const cropped = portraitCropStream(preview);
+      if (cropped) {
+        cropStop.current = cropped.stop;
+        tracks = [...cropped.stream.getVideoTracks(), ...tracks.filter((track) => track.kind === "audio")];
+      }
+    }
     let next: MediaRecorder;
     try {
       next = new MediaRecorder(new MediaStream(tracks), {
@@ -308,6 +324,8 @@ export function useRecorder(
         audioBitsPerSecond: RECORDER_AUDIO_BITS_PER_SECOND,
       });
     } catch {
+      cropStop.current?.();
+      cropStop.current = null;
       releaseMic();
       return false;
     }
@@ -317,6 +335,8 @@ export function useRecorder(
       }
     };
     next.onstop = () => {
+      cropStop.current?.();
+      cropStop.current = null;
       clearTimer();
       releaseMic();
       const durationMs = Math.min(maxMs, Date.now() - startedAt.current);
@@ -341,6 +361,8 @@ export function useRecorder(
     try {
       next.start();
     } catch {
+      cropStop.current?.();
+      cropStop.current = null;
       recorder.current = null;
       releaseMic();
       return false;
@@ -370,6 +392,8 @@ export function useRecorder(
   useEffect(
     () => () => {
       startTicket.current += 1;
+      cropStop.current?.();
+      cropStop.current = null;
       clearTimer();
       releaseMic();
       if (recorder.current && recorder.current.state !== "inactive") {

@@ -3899,6 +3899,17 @@ html[data-immersive-stage] [data-immersive-hide] {
     --story-cmp-bottom: 168px;
   }
 }
+/* A soft keyboard rising over the text being edited lifts the whole stage, the layer's own
+   position untouched, and it settles back after. Instant under reduced motion. */
+.story-cmp-lift {
+  transform: translateY(calc(var(--story-lift, 0px) * -1));
+  transition: transform var(--duration-base) var(--ease-emphasized);
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-cmp-lift {
+    transition: none;
+  }
+}
 .story-cmp-head {
   display: flex;
   height: var(--story-cmp-top);
