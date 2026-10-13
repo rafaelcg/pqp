@@ -508,20 +508,19 @@ final class AVStoryCameraEngine: StoryCameraEngine {
     }
 
     private func recordingFinished(_ result: Result<URL, Error>) {
-        if !recordingWaiters.isEmpty {
-            let waiting = recordingWaiters
-            recordingWaiters = []
-            for continuation in waiting { continuation.resume(with: result) }
-        } else {
-            recordingResult = result
-        }
+        // The result is kept until the next recording starts, so a stop that
+        // arrives after the clip is finalized is answered too, not left waiting
+        // for a completion that already happened.
+        recordingResult = result
+        let waiting = recordingWaiters
+        recordingWaiters = []
+        for continuation in waiting { continuation.resume(with: result) }
     }
 
     func stopRecording() async throws -> URL {
         let core = core
         return try await withCheckedThrowingContinuation { continuation in
             if let ready = recordingResult {
-                recordingResult = nil
                 continuation.resume(with: ready)
                 return
             }
