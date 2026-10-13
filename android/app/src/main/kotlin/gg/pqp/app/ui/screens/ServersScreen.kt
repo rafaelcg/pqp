@@ -182,7 +182,7 @@ fun ServersScreen(
                             IconButton(onClick = onOpenProfile) {
                                 Icon(
                                     imageVector = PqpIcons.Person,
-                                    contentDescription = stringResource(R.string.you_title),
+                                    contentDescription = stringResource(R.string.you_open),
                                     modifier = Modifier.size(Sizes.iconAction),
                                 )
                             }
@@ -261,6 +261,18 @@ fun ServersScreen(
                             onDelete = { deleting = server },
                             onReport = { reporting = server },
                             onInvite = { inviting = server },
+                            // Null at the ends: an item that does nothing is
+                            // worse than no item.
+                            onMoveUp = if (servers.firstOrNull()?.id == server.id) {
+                                null
+                            } else {
+                                { session.moveServer(server.id, -1, refused) }
+                            },
+                            onMoveDown = if (servers.lastOrNull()?.id == server.id) {
+                                null
+                            } else {
+                                { session.moveServer(server.id, 1, refused) }
+                            },
                         )
                     }
                 }
@@ -345,6 +357,32 @@ object ServerActions {
 
     fun deleteConfirmationMatches(typed: String, name: String): Boolean =
         typed.trim().lowercase() == name.trim().lowercase()
+
+    /**
+     * The list with [id] moved [delta] places, or null when nothing would
+     * change (an unknown id, or already at that end). A pure function so the
+     * one rule with an edge, the ends, is testable without a screen.
+     */
+    /**
+     * [servers] in the order [ids] names. Ids the list does not hold are
+     * ignored; servers [ids] does not name keep their place after the named
+     * ones. Only the ORDER changes, so a rollback never touches other fields.
+     */
+    fun applyOrder(servers: List<ServerSummary>, ids: List<String>): List<ServerSummary> {
+        val byId = servers.associateBy { it.id }.toMutableMap()
+        val out = ArrayList<ServerSummary>(servers.size)
+        for (id in ids) byId.remove(id)?.let { out.add(it) }
+        servers.filterTo(out) { byId.containsKey(it.id) }
+        return out
+    }
+
+    fun reordered(servers: List<ServerSummary>, id: String, delta: Int): List<ServerSummary>? {
+        val from = servers.indexOfFirst { it.id == id }
+        if (from < 0) return null
+        val to = (from + delta).coerceIn(0, servers.lastIndex)
+        if (to == from) return null
+        return servers.toMutableList().apply { add(to, removeAt(from)) }
+    }
 }
 
 /**
@@ -364,6 +402,8 @@ private fun ServerRow(
     onDelete: () -> Unit,
     onReport: () -> Unit,
     onInvite: () -> Unit,
+    onMoveUp: (() -> Unit)?,
+    onMoveDown: (() -> Unit)?,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val interactions = remember { MutableInteractionSource() }
@@ -476,6 +516,26 @@ private fun ServerRow(
                         onInvite()
                     },
                 )
+                // Reorder this account's own list (a drag is not reachable by
+                // TalkBack, and a menu is what the phone channel list uses).
+                onMoveUp?.let { move ->
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.server_move_up)) },
+                        onClick = {
+                            menuOpen = false
+                            move()
+                        },
+                    )
+                }
+                onMoveDown?.let { move ->
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.server_move_down)) },
+                        onClick = {
+                            menuOpen = false
+                            move()
+                        },
+                    )
+                }
                 if (ServerActions.isOwner(server.role)) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.server_delete)) },

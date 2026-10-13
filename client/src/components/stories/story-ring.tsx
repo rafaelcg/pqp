@@ -76,7 +76,8 @@ export function StoryRing({
     "--story-gap-unseen": String((size - 2 * geometry.unseen) / size),
     "--story-gap-seen": String((size - 2 * geometry.seen) / size),
   } as CSSProperties;
-  const badgeSize = size === 64 ? 22 : 18;
+  // 24 px at the least (the web strip's ring is 48): a plus smaller than that is not a button anyone can hit.
+  const badgeSize = size === 64 ? 26 : 24;
   const failed = upload?.status === "failed";
 
   let badge: ReactNode = null;
@@ -90,10 +91,12 @@ export function StoryRing({
           event.stopPropagation();
           onPlus();
         }}
-        className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-accent text-on-accent shadow-[0_0_0_2.5px_var(--story-ring-bg,var(--color-surface-1))] transition-transform duration-[var(--duration-fast)] hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        // On a touch screen the hit area grows to 44 px (the before: pseudo-element), outward only (down and
+        // right of the 24 px dot) so it never takes a tap that belongs to the ring itself.
+        className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-accent text-on-accent shadow-[0_0_0_2.5px_var(--story-ring-bg,var(--color-surface-1))] transition-transform duration-[var(--duration-fast)] before:absolute before:inset-0 before:content-[''] hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [@media(pointer:coarse)]:before:-bottom-5 [@media(pointer:coarse)]:before:-right-5"
         style={{ width: badgeSize, height: badgeSize }}
       >
-        <Plus className="h-2.5 w-2.5" strokeWidth={3.5} aria-hidden />
+        <Plus className="h-3 w-3" strokeWidth={3.5} aria-hidden />
       </button>
     ) : (
       <span

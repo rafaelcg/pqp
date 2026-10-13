@@ -13,6 +13,7 @@ import {
   permissionsUpdateSchema,
   profileUpdateSchema,
   serverRemovedSchema,
+  serverOrderUpdateSchema,
   voiceNoteListenedSchema,
   type ChanceRequest,
   type ChannelFanoutFrame,
@@ -29,6 +30,7 @@ import {
   type NudgeRefusalReason,
   type PollRequest,
   type ProfileUpdate,
+  type ServerOrderUpdate,
   type ServerRemoved,
   type VoiceNoteListened,
 } from "@pqp/shared";
@@ -220,6 +222,7 @@ const COMMUNITY_HOME_TOPIC = "chat.community-home";
 const CHANNELS_TOPIC = "chat.channels";
 const MEMBERSHIP_TOPIC = "chat.membership";
 const VOICE_LISTENED_TOPIC = "chat.voice-listened";
+const SERVER_ORDER_TOPIC = "chat.server-order";
 
 interface PresenceUser {
   id: string;
@@ -1124,6 +1127,42 @@ export function deliverServerRemoved(
   const payload = encode(frame);
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && addressed.has(user.id)) {
+      socket.send(payload);
+    }
+  });
+}
+
+/**
+ * The rail was reordered: tell every socket this account holds, so its other
+ * tabs and its phone follow. `origin` is the saving tab's own id, echoed so it
+ * can skip the frame (it already shows this order, and re-applying it could
+ * undo a second drag made while the save was in the air).
+ *
+ * Fire-and-forget and NOT retried when the bus is down, unlike
+ * `server-removed`: the order is the account's own state, each tab re-reads
+ * the list when it reconnects, and the next save sends a newer frame.
+ */
+export function notifyServerOrder(
+  userId: string,
+  serverIds: readonly string[],
+  origin?: string,
+): void {
+  const frame: ServerOrderUpdate = {
+    type: "server-order-update",
+    serverIds: [...serverIds],
+    ...(origin ? { origin } : {}),
+  };
+  deliverServerOrder(frame, userId);
+  if (isBusEnabled()) {
+    publishToCluster(SERVER_ORDER_TOPIC, { frame, userId });
+  }
+}
+
+/** The local half, and the only thing a bus frame may call. */
+function deliverServerOrder(frame: ServerOrderUpdate, userId: string): void {
+  const payload = encode(frame);
+  forEachSocketOfUser(userId, (socket) => {
+    if (socket.readyState === 1) {
       socket.send(payload);
     }
   });
@@ -3402,6 +3441,21 @@ subscribeToCluster(MEMBERSHIP_TOPIC, (data) => {
     return;
   }
   deliverServerRemoved(parsed.data, userIds);
+});
+
+/**
+ * A rail reorder saved on another instance. The frame is parsed with the schema
+ * the clients parse it with and the account must survive as a string: without
+ * it there is nobody to tell.
+ */
+subscribeToCluster(SERVER_ORDER_TOPIC, (data) => {
+  const record = asRecord(data);
+  const parsed = serverOrderUpdateSchema.safeParse(record?.frame);
+  const userId = typeof record?.userId === "string" ? record.userId : undefined;
+  if (!parsed.success || !userId) {
+    return;
+  }
+  deliverServerOrder(parsed.data, userId);
 });
 
 subscribeToCluster(PERMISSIONS_TOPIC, (data) => {

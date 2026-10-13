@@ -128,6 +128,100 @@ export const STORY_LAYER_TYPES = ["text", "image", "call", "mention", "drawing"]
 export const STORY_LAYER_IMAGE_TYPES = ["image/jpeg", "image/webp", "image/png"] as const;
 export const STORY_LAYER_DRAWING_TYPES = ["image/png", "image/webp"] as const;
 
+/**
+ * HOW A LAYER LOOKS, one table for web, iOS and Android, so a story posted on
+ * one is the same story on the others. Every length is a fraction of the
+ * canvas WIDTH (the canvas is 9:16), so it follows the canvas at any size.
+ *
+ * - A layer's `x`, `y` are its CENTER, 0..1 of the canvas width and height.
+ *   It is laid out at its natural size, then scaled by `scale`, then rotated
+ *   by `rotation` (clockwise radians) about that center.
+ * - Text: font size `textSize x size` of the width, wrapped at `textMaxWidth`
+ *   of the width, line height `textLineHeight` x the font size. `solid` is a
+ *   pill in the text color holding `storyTextOnColorHex(color)` text; `soft` is
+ *   a black pill at `textSoftAlpha` holding text in the color; `neon` glows in
+ *   the color. Padding of a pill: 0.14 em above and below, 0.36 em either side,
+ *   corners 0.3 em.
+ * - A photo is `imageWidth` of the width at scale 1 (height by its aspect; a
+ *   circle crops to a square); `rounded` corners are `imageRoundedRadius`.
+ * - A mention chip is a white pill, dark text at `mentionFont`, "@name".
+ * - The call card is `callCardWidth` of the width.
+ * - A drawing is a transparent PNG of `drawingWidth` x `drawingHeight` that
+ *   covers the canvas (x .5, y .5, scale 1, rotation 0). LAYER ORDER IS
+ *   CREATION ORDER for every type, the drawing included: a new drawing goes on
+ *   TOP of the stack when it is created, later layers go above it, and "bring
+ *   to front" works on it. A second drawing session does not add a second
+ *   drawing (there is one): it moves the drawing layer back to the top, so new
+ *   strokes are never hidden under a photo or a call card placed since.
+ * - The BASE (the photo or clip) fills the CANVAS when it is within
+ *   `baseFillTolerance` of 9:16 (cropped to fit the canvas), and otherwise is
+ *   shown whole inside the canvas over a blurred copy of itself:
+ *   `storyBaseFit`.
+ * - A viewer NEVER crops the author's canvas. On a screen taller or wider than
+ *   9:16 the whole canvas (base and every layer) is fitted INSIDE the screen
+ *   (contain, centered), and the rest of the screen is filled with the blurred
+ *   base (a photo, or a video's poster) or, for a text card, its background
+ *   colour. The viewer's own chrome (progress bars, header, reply row, the
+ *   owner's views bar) is drawn over the screen, not over a cropped canvas, so
+ *   a layer placed at the edge of the canvas is at the edge of the canvas
+ *   everywhere.
+ */
+export const STORY_LAYOUT = {
+  canvasAspect: 9 / 16,
+  textSize: 0.08,
+  textMaxWidth: 0.84,
+  textLineHeight: 1.14,
+  textSoftAlpha: 0.5,
+  imageWidth: 0.4,
+  imageRoundedRadius: 0.05,
+  mentionFont: 0.05,
+  callCardWidth: 0.82,
+  drawingWidth: 810,
+  drawingHeight: 1440,
+  baseFillTolerance: 0.12,
+} as const;
+
+/**
+ * The SAFE AREA of the canvas, as shares of its width (x) and height (top,
+ * bottom): what a viewer's own chrome (progress bars and header at the top, the
+ * reply row and the owner's bar at the bottom) can cover. Nothing is blocked
+ * there; an editor shows a faint guide while a layer is dragged near the edge
+ * of the safe rectangle, so the author knows what may sit under the chrome.
+ */
+export const STORY_SAFE_AREA = { x: 0.05, top: 0.1, bottom: 0.13 } as const;
+
+export type StoryLayerColor = (typeof STORY_LAYER_COLORS)[number];
+
+/** The 12 text colors as hex (no #), the same on every platform. */
+export const STORY_TEXT_COLOR_HEX: Record<StoryLayerColor, string> = {
+  white: "FFFFFF",
+  black: "000000",
+  lime: "BBEC4C",
+  yellow: "FFD60A",
+  orange: "FF9500",
+  red: "FF3B30",
+  pink: "FF5FA2",
+  purple: "AF52DE",
+  blue: "0A84FF",
+  cyan: "64D2FF",
+  green: "30D158",
+  gray: "8E8E93",
+};
+
+/** The text on a `solid` pill: white on black, black on every other color. */
+export function storyTextOnColorHex(color: StoryLayerColor): string {
+  return color === "black" ? "FFFFFF" : "000000";
+}
+
+/** How a base photo or clip meets the 9:16 canvas. */
+export function storyBaseFit(width: number, height: number): "fill" | "contain" {
+  if (!(width > 0) || !(height > 0)) {
+    return "fill";
+  }
+  const ratio = width / height / STORY_LAYOUT.canvasAspect;
+  return Math.abs(ratio - 1) <= STORY_LAYOUT.baseFillTolerance ? "fill" : "contain";
+}
+
 /** How many servers one story may go to at once. */
 export const STORY_MAX_SERVER_AUDIENCES = 10;
 /** Authors per strip. The viewer's "Ver todos" walks the rest. */

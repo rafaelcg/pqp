@@ -156,6 +156,16 @@ class ApiClientTest {
         assertEquals("attempt-1", request.idempotencyKey)
     }
 
+    /** The order a person drew for their own server list: a PUT to the order route. */
+    @Test
+    fun `saveServerOrder puts to the order route`() = runTest {
+        answers += Answer(200, """{"serverIds":["s2","s1"]}""")
+        client().saveServerOrder(listOf("s2", "s1"))
+        val request = received.take()
+        assertEquals("PUT", request.method)
+        assertEquals("/api/servers/order", request.path)
+    }
+
     @Test
     fun `createServer sends no idempotency key header when none is given`() = runTest {
         answers += Answer(

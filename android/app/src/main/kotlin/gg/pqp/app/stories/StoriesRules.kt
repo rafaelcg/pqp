@@ -18,6 +18,12 @@ object StoriesRules {
     const val TEXT_MAX = 280
     const val REPLY_MAX = 2000
 
+    /** The longest wait between two reads of the audience list while the API is unreachable. */
+    const val RETRY_MAX_MS = 15_000L
+
+    /** The wait after [previous] in an exponential backoff that never exceeds [RETRY_MAX_MS]. */
+    fun nextRetryDelay(previous: Long): Long = (previous * 2).coerceIn(1L, RETRY_MAX_MS)
+
     /** How long after a story is on screen it counts as seen. */
     const val SEEN_AFTER_MS = 1_000L
 
@@ -43,15 +49,29 @@ object StoriesRules {
         minOf(10_000L, 5_000L + 50L * text.codePointCount(0, text.length))
 
     /**
-     * How long a story stays on screen before the next one. A video runs its
-     * own length; a call sticker gets 8 s so somebody can read who is in the
-     * room; a text card scales with what there is to read.
+     * Every word on a story, in order: its text layers; else a card's own `text`;
+     * else a photo's caption (a story from before layers, which a screen reader
+     * also hears as the picture's description). Never both a layer's words and
+     * the caption: `altText` already says the layers.
      */
-    fun displayMs(story: Story): Long = when {
-        story.kind == "video" -> story.media?.durationMs?.takeIf { it > 0 } ?: PHOTO_DISPLAY_MS
-        story.sticker?.type == "call" -> CALL_DISPLAY_MS
-        story.kind == "text" -> textDisplayMs(story.text.orEmpty())
-        else -> PHOTO_DISPLAY_MS
+    fun wordsOf(story: Story): String {
+        val layers = story.layers.filterIsInstance<TextStoryLayer>().joinToString("\n") { it.text }
+        return layers.ifBlank { if (story.kind == "text") story.text.orEmpty() else story.caption.orEmpty() }
+    }
+
+    /**
+     * How long a story stays on screen before the next one. A video runs its
+     * own length; a call card gets 8 s so somebody can read who is in the room;
+     * anything with words scales with what there is to read (5 s plus 50 ms a
+     * character, at most 10 s), so a long caption on a photo is not gone before
+     * it is read; and a photo is 5 s.
+     */
+    fun displayMs(story: Story): Long {
+        if (story.kind == "video") return story.media?.durationMs?.takeIf { it > 0 } ?: PHOTO_DISPLAY_MS
+        val words = wordsOf(story)
+        val reading = if (words.isBlank()) PHOTO_DISPLAY_MS else textDisplayMs(words)
+        val hasCall = story.sticker?.type == "call" || story.call != null || story.layers.any { it is CallStoryLayer }
+        return if (hasCall) maxOf(CALL_DISPLAY_MS, reading) else reading
     }
 
     private fun parse(iso: String?): Long? =
@@ -131,6 +151,26 @@ object StoriesRules {
         else -> 0
     }
 
+    /** An EXIF orientation as the two things that undo it: flip left to right first, then turn. */
+    data class ExifTurn(val degrees: Int, val mirrored: Boolean)
+
+    /**
+     * All eight EXIF orientations, the mirrored four included. The story camera
+     * writes a front-camera shot as a mirrored orientation (so the file matches
+     * the preview), and the pre-P decode path has to honour it by hand;
+     * `ImageDecoder` does it on its own.
+     */
+    fun exifTurn(exifOrientation: Int): ExifTurn = when (exifOrientation) {
+        2 -> ExifTurn(0, true)
+        3 -> ExifTurn(180, false)
+        4 -> ExifTurn(180, true)
+        5 -> ExifTurn(270, true)
+        6 -> ExifTurn(90, false)
+        7 -> ExifTurn(90, true)
+        8 -> ExifTurn(270, false)
+        else -> ExifTurn(0, false)
+    }
+
     /** Why a picked file cannot be a story, said before anything is uploaded. */
     enum class MediaRefusal { WrongType, TooBig, TooLong }
 
@@ -176,6 +216,19 @@ object StoriesRules {
 
     /** Whether a server's row in "Quem vê" may be unticked. Not the call's own server. */
     fun canUntick(serverId: String, stickerServerId: String?): Boolean = serverId != stickerServerId
+
+    /** Who a story goes to, as the words an author reads under it: server names, and whether friends are in. */
+    data class AudienceParts(val serverNames: List<String>, val friends: Boolean)
+
+    /**
+     * The audience as names. Servers the story is going to that the options
+     * no longer list (a server left meanwhile) are not named, and a count of
+     * them is left to the caller to say.
+     */
+    fun audienceParts(options: StoryAudienceOptions?, targets: StoryAudienceTargets): AudienceParts {
+        val names = targets.serverIds.mapNotNull { id -> options?.servers?.firstOrNull { it.serverId == id }?.serverName }
+        return AudienceParts(names.filter { it.isNotBlank() }, targets.friends)
+    }
 
     /** At least one audience, and at most ten servers (`STORY_MAX_SERVER_AUDIENCES`). */
     fun canPost(targets: StoryAudienceTargets): Boolean =

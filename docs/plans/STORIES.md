@@ -1105,6 +1105,13 @@ gains `layers: StoryLayer[]`, at most `STORY_LAYERS_MAX` (20), ordered back to
 front. Nothing is burned into the base: a viewer draws the base, then each
 layer in order, scaled to its own 9:16 canvas, clipped at the edge.
 
+**Layer order is creation order for every type, the drawing included** (decision
+2026-10-13; the earlier rule "the drawing is index 0, lowest" hid a drawing under
+a photo layer): a new drawing goes on top of the stack, later layers go above it,
+and "bring to front" works on it. A second drawing session does not add a second
+drawing (there is one): it moves the drawing back to the top, in the same undo
+step as the stroke, so new strokes are never hidden.
+
 Every layer has `id` (a client uuid, unique in the story), `x` and `y` (the
 CENTER, 0..1 of the canvas), `scale` (0.2 to 5) and `rotation` (radians, clockwise,
 within `STORY_LAYER_ROTATION_MAX`, 3.1416, a hair above pi because a 32-bit float pi is
@@ -1226,15 +1233,38 @@ as today.
   background and align, size slider), photo tool (gallery, files or camera as
   layers), draw tool (pen, marker, highlighter, eraser, colors, size, undo),
   stickers tray (call, mention, room for more). Every layer drags anywhere;
-  pinch to scale and rotate on touch; on desktop drag plus a corner handle for
-  scale and rotate and the scroll wheel to scale; snap to the center lines with
+  pinch to scale and rotate on touch; on desktop drag plus a corner handle and the
+  scroll wheel to scale (the handle scales, and turns the layer only once swung past about
+  10 degrees; with Shift it only turns); a layer never scales past the canvas it is on (the
+  shared bounds, and its own natural size turned as it is); a faint dashed safe-area guide
+  (`STORY_SAFE_AREA`: what the viewer's bars can cover) shows while a layer is dragged near
+  its edge and turns bright when the layer reaches past it; snap to the center lines with
   a light haptic on phones; a trash zone at the bottom while dragging; tap a text
   layer to edit; long press or right click to bring forward or delete; arrows,
   plus and minus, and Delete on web for keyboard users. Undo the last few
   actions. Video: trim to 30 s, mute toggle. Reduced motion respected. Copy in
   en and pt-BR (and es on web), pt-BR uses tu, no em dashes, icons from the
   platform set and never emoji as UI.
-- Viewer: base, then layers in order, scaled to the viewer's canvas and clipped.
+- While a text layer is being edited, only the text controls are on screen (cancel,
+  font, background, align, Done, the size slider and the palette), as on Instagram.
+  The toolbar (close, back, text, photo, draw, stickers, undo, redo), the selection
+  chip bar, the camera / text tabs and the audience and Post row are hidden (and
+  inert) until Done. The camera step and the text editor never share the stage:
+  the text tab releases the camera, and leaving a text card for the camera closes
+  the editor. Layers belong to their base, so going Back to the camera or
+  switching tab with layers placed asks "Descartar story?" first, and so does X
+  (or Escape) with any picture or layer. Undo has a redo beside it (Shift+Cmd/Ctrl+Z,
+  Ctrl+Y); any new edit clears the redo line.
+- Viewer: base, then layers in order, scaled to the viewer's canvas. **The viewer never
+  crops the author's canvas** (decision, 2026-10-13): on a screen taller or wider than 9:16
+  the whole 9:16 canvas (base and layers) is fitted INSIDE it (contain, centered) and the
+  remaining space is filled with the blurred base (the photo, or a video's poster) or the
+  text card's background colour. The chrome (bars, header, reply row, the owner's "Visto
+  por" bar) is drawn over the screen, so a layer placed at the edge of the canvas is at
+  the edge everywhere, and a text layer is never cut off. `storyBaseFit` (fill or whole) is
+  about the base INSIDE the canvas and is unchanged. Web, iOS and Android all follow this.
+  The call card is the wide compact row (0.82 of the canvas width, about 12% of its height):
+  the server's tile, the status and room, up to three faces, and "Entrar".
   Mentions and the call are tappable; text and photos are not. The desktop
   viewer uses the height of the window (about 92dvh, 9:16), not a small card.
 

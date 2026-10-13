@@ -4055,6 +4055,50 @@ describe("voice roster deltas", () => {
     expect(idsIn(voice)).toEqual(["b", "c"]);
   });
 
+  it("drops a room the new socket's catch-up never mentions, and keeps the ones it does", async () => {
+    // The ghost: a room emptied while this socket was down, or whose `left`
+    // never arrived. The catch-up on the next socket names occupied rooms
+    // only, an empty room never changes again, and so nothing would ever
+    // correct the sidebar. Rooms the catch-up does mention are the server's
+    // word and stay; the one it does not is gone after the grace.
+    vi.useFakeTimers();
+    try {
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      const OTHER_ROOM = "00000000-0000-4000-8000-0000000000a2";
+      const EMPTIED_ROOM = "00000000-0000-4000-8000-0000000000a3";
+
+      voice.handleSignaling(snapshot(1, [person("a")]));
+      voice.handleSignaling(snapshot(1, [person("b")], OTHER_ROOM));
+      voice.handleSignaling(snapshot(1, [person("ghost")], EMPTIED_ROOM));
+
+      await voice.notifyReconnected();
+      // Right after the reconnect nothing blinks: the old picture stands in.
+      expect(Object.keys(voice.getState().occupancy).sort()).toEqual(
+        [CHANNEL, OTHER_ROOM, EMPTIED_ROOM].sort(),
+      );
+
+      // The catch-up: the two occupied rooms, in full. The emptied one is
+      // simply absent from it.
+      voice.handleSignaling(snapshot(3, [person("a"), person("c")]));
+      voice.handleSignaling(snapshot(2, [person("b")], OTHER_ROOM));
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      const occupancy = voice.getState().occupancy;
+      expect(Object.keys(occupancy).sort()).toEqual([CHANNEL, OTHER_ROOM].sort());
+      expect(idsIn(voice)).toEqual(["a", "c"]);
+
+      // And the dropped room starts clean: its next call's first delta is
+      // seq 1, which a client holding the old number would read as a gap.
+      voice.handleSignaling(delta(1, 1, { joined: [person("d")] }, EMPTIED_ROOM));
+      expect(
+        (voice.getState().occupancy[EMPTIED_ROOM] ?? []).map((p) => p.peerId),
+      ).toEqual(["d"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("applies the first delta of a room it has never seen", () => {
     const { transport } = createTransport();
     const voice = createVoiceController(transport);
