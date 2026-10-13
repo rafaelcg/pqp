@@ -60,6 +60,13 @@ describe("readForumPublishError", () => {
     expect(readForumPublishError(rejected({ error: "forum_channels_off" }, 403))).toEqual({
       kind: "paused",
     });
+    // A staff-only tag is a 403 and an unknown one a 400: neither is "cannot post".
+    expect(readForumPublishError(rejected({ error: "forum_tag_moderated" }, 403))).toEqual({
+      kind: "tag-moderated",
+    });
+    expect(readForumPublishError(rejected({ error: "forum_tag_unknown" }, 400))).toEqual({
+      kind: "tag-unknown",
+    });
   });
 
   it("falls back to a generic failure, keeping the draft", () => {

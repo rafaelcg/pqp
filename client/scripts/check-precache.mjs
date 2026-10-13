@@ -12,13 +12,26 @@
  * answered `/x` with a 404. Only the real origin has Pages' pretty URLs and the
  * middleware together, so this runs after the deploy (`deploy-web.yml`).
  *
- * A deploy can take a few seconds to answer for every file, so failures are
- * checked again in a few rounds before they count.
+ * A fresh deployment does not answer for every file at once (2026-10-12: two
+ * runs failed on 404s that were all 200 a minute later, every file being in
+ * dist). Entries that fail are re-checked every 10 s for up to 120 s before
+ * they count (`PRECACHE_RETRY_WINDOW_S`, `PRECACHE_RETRY_INTERVAL_S`; a window
+ * of 0 means no retry). What still fails after that fails the gate, and the
+ * output says whether the file is in dist. See `precache-retry.mjs`.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  DEFAULT_INTERVAL_MS,
+  DEFAULT_WINDOW_MS,
+  checkWithRetry,
+} from "./precache-retry.mjs";
 
 const origin = process.argv[2]?.replace(/\/+$/, "");
-const swPath = process.argv[3] ?? new URL("../dist/sw.js", import.meta.url);
+const swPath = process.argv[3]
+  ? resolve(process.argv[3])
+  : fileURLToPath(new URL("../dist/sw.js", import.meta.url));
 if (!origin) {
   console.error("usage: check-precache.mjs <origin> [path/to/sw.js]");
   process.exit(2);
@@ -31,53 +44,52 @@ if (urls.length === 0) {
   process.exit(1);
 }
 
-const CONCURRENCY = 8;
-const ROUNDS = 5;
-const ROUND_PAUSE_MS = 3000;
+function envMs(name, fallbackMs) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallbackMs;
+  const seconds = Number(raw);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : fallbackMs;
+}
 
-async function status(url) {
+async function status(path) {
   try {
-    return (await fetch(url, { redirect: "follow", cache: "no-store" })).status;
+    return (
+      await fetch(`${origin}/${path}`, { redirect: "follow", cache: "no-store" })
+    ).status;
   } catch (error) {
     return String(error?.cause?.code ?? error);
   }
 }
 
-/** Every path's status, at most `CONCURRENCY` requests at once. */
-async function check(paths) {
-  const results = new Map();
-  let next = 0;
-  async function lane() {
-    while (next < paths.length) {
-      const path = paths[next++];
-      results.set(path, await status(`${origin}/${path}`));
-    }
-  }
-  await Promise.all(Array.from({ length: CONCURRENCY }, lane));
-  return results;
-}
+const { failed, recovered, attempts, elapsedMs, firstFailures } =
+  await checkWithRetry({
+    paths: urls,
+    statusOf: status,
+    windowMs: envMs("PRECACHE_RETRY_WINDOW_S", DEFAULT_WINDOW_MS),
+    intervalMs: envMs("PRECACHE_RETRY_INTERVAL_S", DEFAULT_INTERVAL_MS),
+    log: (line) => console.log(line),
+  });
+const seconds = Math.round(elapsedMs / 1000);
 
-// Rounds, not per-URL retries: a deploy that is still propagating makes many
-// files fail at once, and one shared pause covers them all.
-let pending = urls;
-let results = new Map();
-for (let round = 0; round < ROUNDS && pending.length > 0; round += 1) {
-  if (round > 0) {
-    await new Promise((resolve) => setTimeout(resolve, ROUND_PAUSE_MS));
-  }
-  results = await check(pending);
-  pending = pending.filter((path) => results.get(path) !== 200);
-}
-const failed = pending.map((path) => `${path} ${results.get(path)}`);
-
-if (failed.length > 0) {
+if (failed.size > 0) {
   console.error(
-    `${failed.length} of ${urls.length} precache entries do not answer 200 on ${origin}.` +
+    `${failed.size} of ${urls.length} precache entries still do not answer 200 on ${origin}` +
+      ` after ${seconds}s and ${attempts} checks (${recovered} of ${firstFailures} first failures recovered).` +
       " The service worker cannot install until they do:",
   );
-  for (const line of failed) {
-    console.error(`  ${line}`);
+  for (const [path, code] of failed) {
+    // Tells "not propagated" from "not built": a file missing from dist is a
+    // build defect, a file in dist that the origin will not serve is the edge.
+    const built = existsSync(resolve(swPath, "..", path.split("?")[0]))
+      ? "in dist"
+      : "NOT in dist";
+    console.error(`  ${path} ${code} (${built})`);
   }
   process.exit(1);
+}
+if (recovered > 0) {
+  console.log(
+    `${recovered} of ${urls.length} entries were not 200 on the first check and answered 200 after ${seconds}s (deploy propagation).`,
+  );
 }
 console.log(`All ${urls.length} precache entries answer 200 on ${origin}.`);

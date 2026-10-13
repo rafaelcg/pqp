@@ -51,9 +51,12 @@ import { ApiError, fetchMessages } from "@/lib/api";
 import {
   deleteForumPost,
   fetchForumPost,
+  readForumPublishError,
   setForumPostFollow,
   updateForumPost,
+  type ForumTagsStatus,
 } from "@/lib/forum-api";
+import { useForumTagLabel } from "@/lib/forum-tag-icons";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { backfillForLanding } from "@/lib/forum-landing";
@@ -62,6 +65,7 @@ import { findFirstUnreadMessageId } from "@/lib/unread-divider";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { ForumTagList } from "./forum-post-card";
+import { ForumTagIcon } from "./forum-tag-icon";
 
 /**
  * One post, read and replied to (UX §2.4). The transcript, the composer and
@@ -82,6 +86,16 @@ export interface ForumPostViewProps {
   forumName: string;
   serverId: string;
   tags: readonly ForumTag[];
+  /** The forum asks for at least one tag: Edit tags cannot save none. */
+  requireTag?: boolean;
+  /** Whether `tags` is an answered read: a failed one is not "no tags". */
+  tagsStatus?: ForumTagsStatus;
+  /** The tags are read again as the editor opens (a saved list is not replayed). */
+  onRefreshTags?: () => void;
+  onRetryTags?: () => void;
+  /** MANAGE_CHANNELS: an empty editor links to the Tags settings. */
+  canManageTags?: boolean;
+  onOpenTagSettings?: () => void;
   tagsById: ReadonlyMap<string, ForumTag>;
   viewerId: string | null;
   /** MANAGE_MESSAGES or MANAGE_CHANNELS on the forum. */
@@ -163,31 +177,54 @@ function PostIconButton({
 }
 
 /** Edit tags: the same toggle chips as the composer, staff tags for staff. */
-function EditTagsDialog({
+export function EditTagsDialog({
   open,
   tags,
+  tagsStatus = "ready",
+  requireTag = false,
   current,
   isStaff,
+  canManageTags = false,
+  onRefresh,
+  onRetry,
+  onOpenSettings,
   onClose,
   onSave,
 }: {
   open: boolean;
   tags: readonly ForumTag[];
+  tagsStatus?: ForumTagsStatus;
+  requireTag?: boolean;
   current: readonly string[];
   isStaff: boolean;
+  canManageTags?: boolean;
+  onRefresh?: () => void;
+  onRetry?: () => void;
+  onOpenSettings?: () => void;
   onClose: () => void;
   onSave: (tagIds: string[]) => void;
 }) {
   const { t } = useTranslation();
+  const tagLabel = useForumTagLabel();
   const [picked, setPicked] = useState<string[]>([...current]);
+  const refreshRef = useRef(onRefresh);
+  refreshRef.current = onRefresh;
   useEffect(() => {
     if (open) {
       setPicked([...current]);
+      refreshRef.current?.();
     }
     // Reseed per opening only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   const atMax = picked.length >= FORUM_MAX_TAGS_PER_POST;
+  // A member never puts on or takes off a staff tag; one already on the post
+  // still shows, unchangeable. With none of those the dialog would be a title
+  // and two buttons around nothing, so it says why instead.
+  const shown = tags.filter((tag) => !(tag.moderated && !isStaff) || picked.includes(tag.id));
+  // The forum asks for a tag: unticking the last one would be refused, so
+  // Save waits and the reason is written under the chips.
+  const noneLeft = requireTag && shown.length > 0 && picked.length === 0;
   return (
     <Dialog
       open={open}
@@ -199,19 +236,49 @@ function EditTagsDialog({
           <Button variant="ghost" onClick={onClose}>
             {t("forum.edit.cancel")}
           </Button>
-          <Button onClick={() => onSave(picked)}>{t("forum.edit.save")}</Button>
+          {shown.length > 0 && (
+            <Button disabled={noneLeft} onClick={() => onSave(picked)}>
+              {t("forum.edit.save")}
+            </Button>
+          )}
         </div>
       }
     >
-      <div className="flex flex-wrap gap-1.5 px-5 py-4">
-        {tags.map((tag) => {
+      {shown.length === 0 && (
+        <div
+          data-forum-edit-tags-empty={tagsStatus === "ready" ? "none" : tagsStatus}
+          className="flex flex-col items-start gap-2 px-5 py-4 text-sm text-text-secondary"
+        >
+          <p role={tagsStatus === "error" ? "alert" : "status"}>
+            {tagsStatus === "loading"
+              ? t("common.loading")
+              : tagsStatus === "error"
+                ? t("forum.editTags.loadError")
+                : t("forum.editTags.none")}
+          </p>
+          {tagsStatus === "error" && onRetry && (
+            <Button size="sm" variant="secondary" onClick={onRetry}>
+              {t("forum.retry")}
+            </Button>
+          )}
+          {tagsStatus === "ready" && canManageTags && onOpenSettings && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                onClose();
+                onOpenSettings();
+              }}
+            >
+              {t("forum.empty.setupTags")}
+            </Button>
+          )}
+        </div>
+      )}
+      <div className={cn("flex flex-wrap gap-1.5 px-5 py-4", shown.length === 0 && "hidden")}>
+        {shown.map((tag) => {
           const on = picked.includes(tag.id);
-          // A member never puts on or takes off a staff tag; one already on
-          // the post still shows, unchangeable.
           const locked = tag.moderated && !isStaff;
-          if (locked && !on) {
-            return null;
-          }
           const disabled = locked || (!on && atMax);
           return (
             <button
@@ -234,13 +301,22 @@ function EditTagsDialog({
                   : "border-border text-text-secondary hover:bg-surface-2",
               )}
             >
-              {tag.emoji && <span aria-hidden>{tag.emoji}</span>}
-              {tag.name}
+              <ForumTagIcon tag={tag} className="h-3.5 w-3.5" />
+              {tagLabel(tag)}
               {on && <Check className="h-3.5 w-3.5" aria-hidden />}
             </button>
           );
         })}
       </div>
+      {noneLeft && (
+        <p
+          role="status"
+          data-forum-edit-tags-required=""
+          className="-mt-2 px-5 pb-4 text-xs text-text-secondary"
+        >
+          {t("forum.composer.tagsRequiredError")}
+        </p>
+      )}
     </Dialog>
   );
 }
@@ -332,6 +408,12 @@ export function ForumPostView({
   forumName,
   serverId,
   tags,
+  requireTag = false,
+  tagsStatus = "ready",
+  onRefreshTags,
+  onRetryTags,
+  canManageTags = false,
+  onOpenTagSettings,
   tagsById,
   viewerId,
   isStaff,
@@ -541,10 +623,20 @@ export function ForumPostView({
           });
           return;
         }
-        notify(t("forum.saveFailed"));
+        const refusal = readForumPublishError(error);
+        if (refusal.kind === "tag-required") {
+          notify(t("forum.composer.tagsRequiredError"));
+        } else if (refusal.kind === "tag-moderated") {
+          notify(t("forum.composer.tagModerated"));
+        } else if (refusal.kind === "tag-unknown") {
+          notify(t("forum.composer.tagUnknown"));
+          onRefreshTags?.();
+        } else {
+          notify(t("forum.saveFailed"));
+        }
       }
     },
-    [post, postId, onPostChange, notify, onShowPinned, t],
+    [post, postId, onPostChange, notify, onShowPinned, onRefreshTags, t],
   );
 
   const nowIso = () => new Date().toISOString();
@@ -633,6 +725,22 @@ export function ForumPostView({
   // Inline title edit.
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(post.title);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  // From the More menu the menu hands focus back to its button as it closes,
+  // after the input has autofocused: take it again once that has settled, so
+  // typing and Enter reach the field.
+  useEffect(() => {
+    if (!editingTitle) {
+      return;
+    }
+    const id = window.setTimeout(() => {
+      const input = titleInputRef.current;
+      if (input && document.activeElement !== input) {
+        input.focus();
+      }
+    }, 80);
+    return () => window.clearTimeout(id);
+  }, [editingTitle]);
   function saveTitle() {
     const next = titleDraft.replace(/\s+/g, " ").trim();
     setEditingTitle(false);
@@ -643,6 +751,12 @@ export function ForumPostView({
   }
 
   const [editTagsOpen, setEditTagsOpen] = useState(false);
+  // The action opens a dialog of toggle chips: with no chip this person could
+  // toggle it would open an empty box, so it is not offered. Managers find the
+  // way to the Tags settings in the forum's empty state and in the composer.
+  const canEditTags =
+    tagsStatus !== "ready" ||
+    tags.some((tag) => !tag.moderated || isStaff || post.tagIds.includes(tag.id));
   const [deleteOpen, setDeleteOpen] = useState(false);
   async function confirmDelete() {
     setDeleteOpen(false);
@@ -658,12 +772,16 @@ export function ForumPostView({
     { id: "heading-post", label: t("forum.menu.post"), heading: true },
     ...(canEdit
       ? [
-          {
-            id: "edit-tags",
-            label: t("forum.editTags"),
-            icon: Tags,
-            onSelect: () => setEditTagsOpen(true),
-          },
+          ...(canEditTags
+            ? [
+                {
+                  id: "edit-tags",
+                  label: t("forum.editTags"),
+                  icon: Tags,
+                  onSelect: () => setEditTagsOpen(true),
+                },
+              ]
+            : []),
           {
             id: "edit-title",
             label: t("forum.editTitle"),
@@ -858,6 +976,7 @@ export function ForumPostView({
       >
         {editingTitle ? (
           <input
+            ref={titleInputRef}
             autoFocus
             value={titleDraft}
             maxLength={FORUM_TITLE_MAX}
@@ -1097,8 +1216,14 @@ export function ForumPostView({
       <EditTagsDialog
         open={editTagsOpen}
         tags={tags}
+        tagsStatus={tagsStatus}
+        requireTag={requireTag}
         current={post.tagIds}
         isStaff={isStaff}
+        canManageTags={canManageTags}
+        onRefresh={onRefreshTags}
+        onRetry={onRetryTags}
+        onOpenSettings={onOpenTagSettings}
         onClose={() => setEditTagsOpen(false)}
         onSave={(tagIds) => {
           setEditTagsOpen(false);
