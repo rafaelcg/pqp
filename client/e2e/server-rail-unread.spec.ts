@@ -93,9 +93,11 @@ async function say(
       socket.addEventListener("open", () => resolve());
       socket.addEventListener("error", () => reject(new Error("ws error")));
     });
-    const ready = new Promise<void>((resolve) => {
+    const ready = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("no ready frame")), 15_000);
       socket.addEventListener("message", (event) => {
         if ((JSON.parse(String(event.data)) as { type: string }).type === "ready") {
+          clearTimeout(timer);
           resolve();
         }
       });

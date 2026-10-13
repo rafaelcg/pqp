@@ -3607,7 +3607,24 @@ function MainAppContent({
   // Conversas: the Ctrl/Cmd+K "ir pra" switcher.
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
+  /**
+   * When each channel's unread was last changed by something newer than any
+   * fetch in flight: a live frame, or the reader clearing it. A `loadUnread`
+   * response was computed before those, so it must not overwrite them.
+   */
+  const unreadTouchRef = useRef({
+    seq: 0,
+    at: new Map<string, number>(),
+    fetchByServer: new Map<string, number>(),
+  });
+  const touchUnread = useCallback((channelId: string) => {
+    const touch = unreadTouchRef.current;
+    touch.seq += 1;
+    touch.at.set(channelId, touch.seq);
+  }, []);
+
   const clearUnread = useCallback(async (channelId: string): Promise<string | null> => {
+    touchUnread(channelId);
     unreadHoldRef.current.delete(channelId);
     setUnreadHeldIds(new Set(unreadHoldRef.current));
     setUnread((prev) => {
@@ -3629,11 +3646,25 @@ function MainAppContent({
       // A missed read receipt only means a stale badge; not worth surfacing.
       return null;
     }
-  }, [readCursorQueue]);
+  }, [readCursorQueue, touchUnread]);
 
-  const loadUnread = useCallback(async (serverId: string) => {
+  const loadUnread = useCallback(async (serverId: string): Promise<boolean> => {
+    const touch = unreadTouchRef.current;
+    touch.seq += 1;
+    const startedAt = touch.seq;
+    touch.fetchByServer.set(serverId, startedAt);
     try {
-      const { unread: rows } = await fetchUnread(serverId);
+      const { unread: allRows } = await fetchUnread(serverId);
+      // A newer read of this same server started while this one was in
+      // flight: its answer is the fresher one.
+      if (touch.fetchByServer.get(serverId) !== startedAt) {
+        return true;
+      }
+      // Rows whose channel changed after this read began (a live frame, or the
+      // reader clearing it) are newer than what the server answered.
+      const rows = allRows.filter(
+        (row) => (touch.at.get(row.channelId) ?? 0) <= startedAt,
+      );
       // Say which server each row belongs to. The directory only knows the
       // SELECTED server's channel list, so for any other server this is what
       // lets the rail place the row on that server's icon (a channel the
@@ -3664,8 +3695,11 @@ function MainAppContent({
         }
         return next;
       });
+      return true;
     } catch {
-      // Badges are cosmetic — never block the app on them.
+      // Badges are cosmetic — never block the app on them. The caller is told,
+      // so a hydration pass can try that server once more.
+      return false;
     }
   }, []);
 
@@ -3698,7 +3732,8 @@ function MainAppContent({
   // phone browser) may have lost its socket without being told, and the
   // frames it missed are not replayed. Re-read the badges when it returns.
   useEffect(() => {
-    let hiddenAt: number | null = null;
+    let hiddenAt: number | null =
+      document.visibilityState === "hidden" ? Date.now() : null;
     const onVisibility = () => {
       if (document.visibilityState === "hidden") {
         hiddenAt = Date.now();
@@ -4697,6 +4732,7 @@ function MainAppContent({
       }
       const channelId = message.channelId;
       const lastReadAt = new Date(created - 1).toISOString();
+      touchUnread(channelId);
       unreadHoldRef.current.add(channelId);
       unreadCursorByChannelRef.current[channelId] = lastReadAt;
       setUnreadHeldIds(new Set(unreadHoldRef.current));
@@ -4725,7 +4761,7 @@ function MainAppContent({
           // Badge is best-effort.
         });
     },
-    [loadUnread, readCursorQueue, selectedServerId],
+    [loadUnread, readCursorQueue, selectedServerId, touchUnread],
   );
 
   const handleMarkRead = useCallback(() => {
@@ -5229,6 +5265,7 @@ function MainAppContent({
             if (activity.channelId === selectedChannelIdRef.current) {
               return;
             }
+            touchUnread(activity.channelId);
             setUnread((prev) => {
               const current = prev[activity.channelId] ?? {
                 count: 0,

@@ -17,8 +17,15 @@
  * gap is long enough to be worth asking again) are testable without a socket.
  */
 
-/** Servers hydrated per pass at most. A person in more than this is an outlier. */
-export const UNREAD_HYDRATION_MAX_SERVERS = 30;
+/**
+ * Servers hydrated per pass at most, in rail order. Each is one request, so the
+ * cap is what bounds the cost for an account in many servers; the ones past it
+ * light up from live frames and when opened, as every server did before.
+ */
+export const UNREAD_HYDRATION_MAX_SERVERS = 15;
+
+/** The pause before the one retry of a server whose read failed. */
+export const UNREAD_HYDRATION_RETRY_MS = 4_000;
 
 /** Requests in flight at once: the rail fills in over a second or two, quietly. */
 export const UNREAD_HYDRATION_CONCURRENCY = 2;
@@ -89,24 +96,45 @@ export function serversToHydrate(
  */
 export async function hydrateInBatches(
   ids: readonly string[],
-  load: (serverId: string) => Promise<void>,
+  load: (serverId: string) => Promise<boolean | void>,
   {
     concurrency = UNREAD_HYDRATION_CONCURRENCY,
     shouldStop = () => false,
-  }: { concurrency?: number; shouldStop?: () => boolean } = {},
+    retryDelayMs = UNREAD_HYDRATION_RETRY_MS,
+  }: {
+    concurrency?: number;
+    shouldStop?: () => boolean;
+    retryDelayMs?: number;
+  } = {},
 ): Promise<void> {
-  let next = 0;
-  const worker = async () => {
-    while (!shouldStop()) {
-      const index = next;
-      next += 1;
-      if (index >= ids.length) {
-        return;
+  const failed: string[] = [];
+  const run = async (list: readonly string[]) => {
+    let next = 0;
+    const worker = async () => {
+      while (!shouldStop()) {
+        const index = next;
+        next += 1;
+        if (index >= list.length) {
+          return;
+        }
+        // `false` is a failed read; `void`/`true` is fine.
+        if ((await load(list[index]!)) === false) {
+          failed.push(list[index]!);
+        }
       }
-      await load(ids[index]!);
-    }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(concurrency, list.length) }, worker),
+    );
   };
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, ids.length) }, worker),
-  );
+  await run(ids);
+  // One more try for the servers that failed, after a pause: a transient error
+  // would otherwise leave that icon dark until the next reconnect.
+  if (failed.length > 0 && !shouldStop()) {
+    const again = failed.splice(0);
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    if (!shouldStop()) {
+      await run(again);
+    }
+  }
 }

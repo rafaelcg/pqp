@@ -98,6 +98,34 @@ describe("hydrateInBatches", () => {
     expect(seen).toEqual(["a"]);
   });
 
+  it("tries a server whose read failed one more time, and only once", async () => {
+    const calls: string[] = [];
+    await hydrateInBatches(
+      ["a", "b"],
+      async (id) => {
+        calls.push(id);
+        return id !== "b"; // b always fails
+      },
+      { concurrency: 1, retryDelayMs: 1 },
+    );
+    expect(calls).toEqual(["a", "b", "b"]);
+  });
+
+  it("does not retry once a newer pass has started", async () => {
+    let stop = false;
+    const calls: string[] = [];
+    await hydrateInBatches(
+      ["a"],
+      async (id) => {
+        calls.push(id);
+        stop = true;
+        return false;
+      },
+      { concurrency: 1, shouldStop: () => stop, retryDelayMs: 1 },
+    );
+    expect(calls).toEqual(["a"]);
+  });
+
   it("is fine with nothing to do", async () => {
     await expect(hydrateInBatches([], async () => {})).resolves.toBeUndefined();
   });
