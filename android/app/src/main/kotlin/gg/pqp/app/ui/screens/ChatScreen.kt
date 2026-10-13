@@ -559,6 +559,8 @@ fun ChatScreen(
                     onExpired = model::clearNudgeRefusal,
                 )
                 TypingStrip(state.typing)
+                gg.pqp.app.bots.ui.BotActivityStrip(state.botWork.values)
+                gg.pqp.app.bots.ui.BotNoticeStrip(state.botNotice, onDismiss = model::dismissBotNotice)
                 // A locked post, for somebody who may not reply: the reason in
                 // place of the box, never a box that refuses on send.
                 val replacement = extras?.composerReplacement
@@ -749,6 +751,13 @@ fun ChatScreen(
                                         api = session.api,
                                         badge = extras?.authorBadge?.invoke(message),
                                         highlighted = message.id == extras?.highlightedMessageId,
+                                        serverBot = gg.pqp.app.bots.ServerBots.isServerBot(message),
+                                        // "removido" only once the member list has
+                                        // actually loaded: an empty list is not a
+                                        // roster, and would mark every bot gone.
+                                        botGone = state.membersLoaded &&
+                                            gg.pqp.app.bots.ServerBots.isServerBot(message) &&
+                                            state.members.none { it.id == message.authorId },
                                     )
                                     if (message.id == extras?.belowMessageId) {
                                         extras.belowMessage?.invoke()
@@ -1109,6 +1118,10 @@ private fun MessageRow(
     badge: String? = null,
     /** The success edge: the reply a forum post marked as its answer. */
     highlighted: Boolean = false,
+    /** Written by a server bot: BOT and BETA ride beside the name. */
+    serverBot: Boolean = false,
+    /** A server bot that is no longer a member: "removido" in place of BETA. */
+    botGone: Boolean = false,
 ) {
     if (message.blocked) return
 
@@ -1166,6 +1179,10 @@ private fun MessageRow(
                         text = message.authorName,
                         style = MaterialTheme.typography.titleSmall,
                     )
+                    if (serverBot) {
+                        Spacer(Modifier.width(Spacing.xs + 2.dp))
+                        gg.pqp.app.bots.ui.ServerBotTags(gone = botGone)
+                    }
                     if (badge != null) {
                         Spacer(Modifier.width(Spacing.xs + 2.dp))
                         Text(

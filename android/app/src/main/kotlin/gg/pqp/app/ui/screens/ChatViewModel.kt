@@ -12,6 +12,10 @@ import gg.pqp.app.attachments.CreateVoiceNote
 import gg.pqp.app.attachments.PendingAttachment
 import gg.pqp.app.attachments.attachmentIdsFor
 import gg.pqp.app.attachments.refuseAttachment
+import gg.pqp.app.bots.BotActivity
+import gg.pqp.app.bots.BotNotice
+import gg.pqp.app.bots.BotWork
+import gg.pqp.app.bots.ServerBots
 import gg.pqp.app.core.Attachment
 import gg.pqp.app.core.CreateGifAttachmentRequest
 import gg.pqp.app.core.Gif
@@ -127,6 +131,19 @@ data class ChatState(
     val hasMore: Boolean = false,
     val loadingOlder: Boolean = false,
     val typing: Set<String> = emptySet(),
+    /**
+     * Server bots at work in this channel, by user id. Their typing frames
+     * carry `activity`, so they show what they are doing instead of "is
+     * typing". Empty, and never touched, where no bot exists.
+     */
+    val botWork: Map<String, BotWork> = emptyMap(),
+    /**
+     * A bot's "I did not answer you", sent to this member only. Shown above the
+     * composer until dismissed, until that bot speaks, or until its retry time.
+     */
+    val botNotice: BotNotice? = null,
+    /** True once the server's member list has been read, so "removido" is not guessed from an empty list. */
+    val membersLoaded: Boolean = false,
     val error: String? = null,
     /**
      * The channel's slow mode in seconds, 0 when off. Carried in from the
@@ -409,6 +426,7 @@ class ChatViewModel(
                             avatarUrl = it.avatarUrl,
                         )
                     },
+                    membersLoaded = true,
                 )
             }
     }
@@ -1029,6 +1047,7 @@ class ChatViewModel(
                 "message-bulk-delete" -> onBulkDelete(frame)
                 "reaction-broadcast" -> onReaction(frame)
                 "typing-broadcast" -> onTyping(frame)
+                "bot-notice" -> onBotNotice(frame)
                 "message-rejected" -> onRejected(frame)
                 "sanction-notice" -> onSanctioned(frame)
                 "nudge-refused" -> onNudgeRefused(frame)
@@ -1090,6 +1109,7 @@ class ChatViewModel(
             current
         }
         if (withoutOptimistic.any { it.id == message.id }) return
+        botSpoke(message.authorId)
         _state.value = _state.value.copy(messages = withoutOptimistic + message)
         if (gg.pqp.app.nudge.Nudge.isFresh(message, currentUserId, System.currentTimeMillis())) {
             _nudged.tryEmit(message.authorName)
@@ -1359,9 +1379,53 @@ class ChatViewModel(
         if (userId != null) currentUserId = userId
     }
 
+    /** One expiry per bot, restarted by each frame, so a long run is not cut off by an old timer. */
+    private val botWorkExpiry = HashMap<String, Job>()
+
+    private fun onBotNotice(frame: JsonObject) {
+        val notice = BotNotice.parse(frame) ?: return
+        if (notice.channelId != channelId || notice.isExpired(System.currentTimeMillis())) return
+        _state.value = _state.value.copy(botNotice = notice)
+    }
+
+    fun dismissBotNotice() {
+        if (_state.value.botNotice != null) _state.value = _state.value.copy(botNotice = null)
+    }
+
+    private fun onBotActivity(userId: String, name: String, activity: BotActivity) {
+        if (userId == currentUserId) return
+        _state.value = _state.value.copy(
+            botWork = _state.value.botWork + (userId to BotWork(userId, name, activity.tool)),
+        )
+        botWorkExpiry.remove(userId)?.cancel()
+        botWorkExpiry[userId] = viewModelScope.launch {
+            kotlinx.coroutines.delay(ServerBots.WORK_LIFETIME_MS)
+            botWorkExpiry.remove(userId)
+            _state.value = _state.value.copy(botWork = _state.value.botWork - userId)
+        }
+    }
+
+    /** A bot's row ends with its message, and so does a notice about that bot. */
+    private fun botSpoke(authorId: String) {
+        if (_state.value.botWork.containsKey(authorId)) {
+            botWorkExpiry.remove(authorId)?.cancel()
+            _state.value = _state.value.copy(botWork = _state.value.botWork - authorId)
+        }
+        if (_state.value.botNotice?.botUserId == authorId) {
+            _state.value = _state.value.copy(botNotice = null)
+        }
+    }
+
     private fun onTyping(frame: JsonObject) {
         if (frame.string("channelId") != channelId) return
         val name = frame.string("displayName") ?: return
+        // A bot at work carries `activity`; it is not "typing", it is working.
+        val activity = ServerBots.activityOf(frame)
+        if (activity != null) {
+            val userId = frame.string("userId") ?: return
+            onBotActivity(userId, name, activity)
+            return
+        }
         _state.value = _state.value.copy(typing = _state.value.typing + name)
         viewModelScope.launch {
             kotlinx.coroutines.delay(TYPING_TTL_MS)
