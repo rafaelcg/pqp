@@ -77,6 +77,8 @@ fun TextEditorOverlay(
     canvasWidthPx: Float,
     /** How much of the canvas is dimmed: a text card is the background, so it stays visible. */
     dim: Float,
+    /** The bar above and below the canvas on a tall screen: the buttons sit inside the canvas, not across its edge. */
+    canvasGap: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp.Hairline,
     onDone: (text: String, style: TextStyleChoice) -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -105,7 +107,7 @@ fun TextEditorOverlay(
         Column(
             Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
+                .toolsTop(canvasGap)
                 .navigationBarsPadding()
                 .imePadding(),
         ) {
@@ -128,9 +130,18 @@ fun TextEditorOverlay(
             Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = Spacing.lg), contentAlignment = Alignment.Center) {
                 Box(look.boxModifier) {
                     if (value.text.isEmpty()) {
+                        // Where the first letter will land: the field is as wide as the box, so a
+                        // hint at its start would sit left of the caret on a centred layer.
                         androidx.compose.material3.Text(
                             hint,
                             style = look.style.copy(color = look.style.color.copy(alpha = 0.45f), shadow = null),
+                            modifier = Modifier.align(
+                                when (style.align) {
+                                    "left" -> Alignment.TopStart
+                                    "right" -> Alignment.TopEnd
+                                    else -> Alignment.TopCenter
+                                },
+                            ),
                         )
                     }
                     BasicTextField(

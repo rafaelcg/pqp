@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import gg.pqp.app.R
 import gg.pqp.app.stories.StoryLayers
 import gg.pqp.app.ui.components.Avatar
@@ -171,6 +172,8 @@ fun StoryCallCard(
                     fontFamily = InstrumentSans,
                     fontWeight = FontWeight.Bold,
                     fontSize = with(LocalDensity.current) { (u * 0.027f).toSp() },
+                    // Capitals set tight run their words together at this size.
+                    letterSpacing = 0.04.em,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

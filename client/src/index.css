@@ -4284,6 +4284,25 @@ html[data-immersive-stage] [data-immersive-hide] {
   background: var(--story-accent);
   opacity: 0.9;
 }
+/* The safe area guide: what a viewer's own bars can cover lies outside this rectangle. Faint while a
+   layer is near its edge, bright once the layer reaches past it. Opacity only. */
+.story-safe {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: 12px;
+  border: 1px dashed color-mix(in oklab, var(--story-on-media) 40%, transparent);
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+.story-safe[data-story-safe="outside"] {
+  border-color: var(--story-accent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--story-card) 30%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-safe {
+    transition: none;
+  }
+}
 .story-trash {
   pointer-events: none;
   z-index: 4;

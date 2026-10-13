@@ -18,6 +18,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -672,7 +673,9 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
 
   function commitStroke(stroke: Stroke) {
     if (drawingLayer) {
-      dispatch({ type: "patch", id: drawingLayer.id, patch: { strokes: [...drawingLayer.strokes, stroke] } });
+      // Layer order is creation order, so a layer placed since would hide these strokes: drawing again
+      // brings the (single) drawing back to the top, in the same undo step as the stroke.
+      dispatch({ type: "patch", id: drawingLayer.id, patch: { strokes: [...drawingLayer.strokes, stroke] }, toTop: true });
     } else {
       if (!canAddLayer(layersRef.current, "drawing")) {
         setProblem(t("stories.editor.limit.layers"));
@@ -796,6 +799,22 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const numberFormat = new Intl.NumberFormat(locale);
   const selected = layers.find((layer) => layer.id === selectedId) ?? null;
   const overlayOpen = Boolean(editing) || drawing || panel !== null;
+
+  // The selection bar stays where it always is, centered at the top of the canvas, so it never
+  // lands on a neighbouring layer; it only steps to the foot of the canvas when the selected layer
+  // reaches up into the top strip, so it is never ON the words placed there.
+  const [barAtFoot, setBarAtFoot] = useState(false);
+  useLayoutEffect(() => {
+    const canvas = previewRef.current;
+    const layer = selected && canvas ? canvas.querySelector<HTMLElement>(`[data-story-layer="${CSS.escape(selected.id)}"]`) : null;
+    if (!canvas || !layer) {
+      setBarAtFoot(false);
+      return;
+    }
+    const box = layer.getBoundingClientRect();
+    // The bar is 40 px tall and sits 12 px down; a layer whose top is above 68 px is in its way.
+    setBarAtFoot(box.top - canvas.getBoundingClientRect().top < 12 + 40 + 16);
+  }, [selected, gestureActive, overlayOpen]);
   const canUndo = editor.past.length > 0;
   const taken = useMemo(
     () => new Set(layers.flatMap((layer) => (layer.type === "mention" ? [layer.userId] : []))),
@@ -978,7 +997,11 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               role="toolbar"
               aria-label={describe(selected)}
               data-story-layer-bar=""
-              className="absolute inset-x-0 top-3 z-10 flex justify-center gap-1.5"
+              className={cn(
+                "absolute inset-x-0 z-10 flex justify-center gap-1.5",
+                // In the text card the background picker holds the foot row.
+                barAtFoot ? (mode === "text" ? "bottom-[60px]" : "bottom-3") : "top-3",
+              )}
             >
               {selected.type === "text" && (
                 <button type="button" className="story-cbtn" aria-label={t("stories.editor.layer.edit")} onClick={() => openText(selected.id)}>

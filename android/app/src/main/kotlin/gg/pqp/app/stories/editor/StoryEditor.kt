@@ -110,6 +110,10 @@ data class EditorEnv(
     /** "You're not in that room": shown while a call card is placed and its author is not in the room. */
     val callWarning: String?,
     val occupancy: Map<String, List<VoiceParticipant>>,
+    /** False for a clip with no audio track (shot without the microphone): there is nothing to mute. */
+    val hasAudio: Boolean = true,
+    /** The list of who may see the story could not be read: the pill says so and offers a retry. */
+    val audienceError: Boolean = false,
 )
 
 private enum class Sheet { None, Tray, Photo, Call, Mention }
@@ -145,6 +149,7 @@ fun StoryEditor(
     onPickGalleryPhoto: () -> Unit,
     onTakePhoto: () -> Unit,
     onAudience: () -> Unit,
+    onRetryAudience: () -> Unit = {},
     onPost: () -> Unit,
     callSheet: @Composable (onPick: (CallLayer) -> Unit, onDismiss: () -> Unit) -> Unit,
     mentionSheet: @Composable (onPick: (MentionLayer) -> Unit, onDismiss: () -> Unit) -> Unit,
@@ -197,12 +202,14 @@ fun StoryEditor(
         if (drawing) drawing = false else close()
     }
 
-    Box(
+    BoxWithConstraints(
         modifier
             .fillMaxSize()
             .background(Color.Black)
             .testTag("stories.editor"),
     ) {
+        // The bar above and below a 9:16 canvas on a taller screen: the tools sit inside the canvas, not across its edge.
+        val gap = CanvasInsets.gap(maxWidth, maxHeight)
         BoxWithConstraints(Modifier.fillMaxSize()) {
             // The canvas is 9:16, as wide as it can be; the bars above and below carry the tools.
             val width = minOf(maxWidth, maxHeight * 9f / 16f)
@@ -238,9 +245,12 @@ fun StoryEditor(
                                 session.selectedId = layer.id
                                 if (layer is TextLayer) textTarget = TextTarget(layer.id)
                             },
+                            // A tap on nothing writes, like every story app: the text tool opens (and
+                            // says so when the story is full).
                             onTapEmpty = {
                                 session.selectedId = null
                                 menu = null
+                                if (session.layers.size >= StoryLayers.MAX && env.layersEnabled) refuse(LayerOps.Refusal.TooMany) else textTarget = TextTarget(null)
                             },
                             onLongPress = { layer, at ->
                                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -260,23 +270,38 @@ fun StoryEditor(
                     base(canvas)
                 }
 
-                // Ink first (it is the lowest layer), then everything else in order.
+                // Everything in the order it was made, the drawing included. The stroke being
+                // drawn is on top, which is where the drawing goes the moment it has one.
                 val live = session.liveStroke
-                val ink = session.layers.firstOrNull { it is InkLayer } as? InkLayer
-                if (ink != null || live != null) InkLayerContent(ink?.strokes.orEmpty(), live = live)
+                val hasInk = session.layers.any { it is InkLayer }
                 session.layers.forEach { layer ->
-                    if (layer is InkLayer) return@forEach
                     key(layer.id) {
-                        LayerHost(
-                            layer = layer,
-                            canvas = canvas,
-                            session = session,
-                            env = env,
-                            shrink = trashArmed && session.activeId == layer.id,
-                            hidden = textTarget?.id == layer.id,
-                            onEdit = { textTarget = TextTarget(layer.id) },
-                        )
+                        if (layer is InkLayer) {
+                            InkLayerContent(layer.strokes, live = live)
+                        } else {
+                            LayerHost(
+                                layer = layer,
+                                canvas = canvas,
+                                session = session,
+                                env = env,
+                                shrink = trashArmed && session.activeId == layer.id,
+                                hidden = textTarget?.id == layer.id,
+                                onEdit = { textTarget = TextTarget(layer.id) },
+                            )
+                        }
                     }
+                }
+                if (live != null && !hasInk) InkLayerContent(emptyList(), live = live)
+
+                // A card nobody has written on yet: a hint where the words will go.
+                if (env.cardBackground != null && session.layers.isEmpty() && textTarget == null) {
+                    Text(
+                        stringResource(R.string.stories_editor_card_hint),
+                        color = Color.White.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.titleMedium,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.align(Alignment.Center).padding(horizontal = Spacing.xl).testTag("stories.editor.cardHint"),
+                    )
                 }
 
                 // Guide lines while a layer sits on the middle.
@@ -319,6 +344,7 @@ fun StoryEditor(
                             LayerMenuPopup(
                                 layer = layer,
                                 onDismiss = { menu = null },
+                                canFront = LayerOps.canBringForward(session.layers, layer.id),
                                 onFront = {
                                     session.bringToFront(layer.id)
                                     menu = null
@@ -350,7 +376,7 @@ fun StoryEditor(
             exit = fadeOut(tween(100)),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
-            Column(Modifier.fillMaxWidth().statusBarsPadding()) {
+            Column(Modifier.fillMaxWidth().toolsTop(gap)) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(Spacing.sm)) {
                     ToolButton(PqpIcons.Close, stringResource(R.string.stories_viewer_close), "stories.editor.close", onClick = close)
                     Box(Modifier.weight(1f))
@@ -361,7 +387,7 @@ fun StoryEditor(
                         }
                         Spacer(Modifier.width(Spacing.sm))
                     }
-                    if (env.isVideo) {
+                    if (env.isVideo && env.hasAudio) {
                         ToolButton(
                             if (env.muted) PqpIcons.ServerMuted else PqpIcons.Speakerphone,
                             stringResource(if (env.muted) R.string.stories_editor_unmute else R.string.stories_editor_mute),
@@ -370,21 +396,35 @@ fun StoryEditor(
                         )
                         Spacer(Modifier.width(Spacing.sm))
                     }
-                    ToolButton(PqpIcons.AddText, stringResource(R.string.stories_editor_tool_text), "stories.editor.tool.text") {
-                        textTarget = TextTarget(null)
+                    // At the limit a tool says so instead of opening and doing nothing: dimmed, and a tap
+                    // gets the reason.
+                    val full = session.layers.size >= StoryLayers.MAX
+                    val photosFull = session.layers.count { it is PhotoLayer } >= StoryLayers.MAX_IMAGES
+                    val hasInkNow = session.layers.any { it is InkLayer }
+                    ToolButton(PqpIcons.AddText, stringResource(R.string.stories_editor_tool_text), "stories.editor.tool.text", dimmed = full && env.layersEnabled) {
+                        if (full && env.layersEnabled) refuse(LayerOps.Refusal.TooMany) else textTarget = TextTarget(null)
                     }
                     if (env.layersEnabled) {
                         Spacer(Modifier.width(Spacing.sm))
-                        ToolButton(PqpIcons.AddPhoto, stringResource(R.string.stories_editor_tool_photo), "stories.editor.tool.photo") {
-                            sheet = Sheet.Photo
+                        ToolButton(PqpIcons.AddPhoto, stringResource(R.string.stories_editor_tool_photo), "stories.editor.tool.photo", dimmed = full || photosFull) {
+                            when {
+                                full -> refuse(LayerOps.Refusal.TooMany)
+                                photosFull -> refuse(LayerOps.Refusal.TooManyPhotos)
+                                else -> sheet = Sheet.Photo
+                            }
                         }
                         Spacer(Modifier.width(Spacing.sm))
-                        ToolButton(PqpIcons.Stickers, stringResource(R.string.stories_editor_tool_stickers), "stories.editor.tool.stickers") {
-                            sheet = Sheet.Tray
+                        ToolButton(PqpIcons.Stickers, stringResource(R.string.stories_editor_tool_stickers), "stories.editor.tool.stickers", dimmed = full) {
+                            if (full) refuse(LayerOps.Refusal.TooMany) else sheet = Sheet.Tray
                         }
                         Spacer(Modifier.width(Spacing.sm))
-                        ToolButton(PqpIcons.Draw, stringResource(R.string.stories_editor_tool_draw), "stories.editor.tool.draw") {
-                            drawing = true
+                        ToolButton(PqpIcons.Draw, stringResource(R.string.stories_editor_tool_draw), "stories.editor.tool.draw", dimmed = full && !hasInkNow) {
+                            if (full && !hasInkNow) {
+                                refuse(LayerOps.Refusal.TooMany)
+                            } else {
+                                session.beginDrawing()
+                                drawing = true
+                            }
                         }
                     }
                 }
@@ -413,7 +453,7 @@ fun StoryEditor(
             exit = fadeOut(tween(100)),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = Spacing.sm)) {
+            Column(Modifier.fillMaxWidth().toolsBottom(gap).padding(bottom = Spacing.sm)) {
                 if (env.cardBackground != null) {
                     BackgroundSwatches(selected = env.cardBackground, onPick = onCardBackground)
                 }
@@ -422,7 +462,26 @@ fun StoryEditor(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = Spacing.xs),
                 ) {
                     Box(Modifier.weight(1f).padding(end = Spacing.md), contentAlignment = Alignment.CenterStart) {
-                        Text(
+                        if (env.audienceError) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .background(Color.Black.copy(alpha = 0.5f))
+                                    .padding(start = Spacing.lg)
+                                    .testTag("stories.editor.audienceError"),
+                            ) {
+                                Text(
+                                    env.audienceLabel,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                TextButton(onClick = onRetryAudience, modifier = Modifier.testTag("stories.editor.audienceRetry")) {
+                                    Text(stringResource(R.string.connection_retry), color = Palette.Signal)
+                                }
+                            }
+                        } else Text(
                             env.audienceLabel,
                             color = Color.White,
                             style = MaterialTheme.typography.labelLarge,
@@ -455,7 +514,7 @@ fun StoryEditor(
             }
         }
 
-        if (drawing) DrawControls(session, onDone = { drawing = false })
+        if (drawing) DrawControls(session, onDone = { drawing = false }, canvasGap = gap)
 
         // --- the text tool ---
         textTarget?.let { target ->
@@ -466,6 +525,7 @@ fun StoryEditor(
                     TextStyleChoice(it.font, it.color, it.background, it.align, it.size)
                 } ?: session.textStyle,
                 canvasWidthPx = canvasPx.width,
+                canvasGap = gap,
                 dim = if (env.cardBackground != null) 0.3f else 0.78f,
                 onCancel = { textTarget = null },
                 onDone = { text, style ->
@@ -593,7 +653,7 @@ private fun LayerHost(
         add(CustomAccessibilityAction(bigger) { session.update(latest.placed(scale = LayerMath.clampScale(latest.scale * 1.2f))); true })
         add(CustomAccessibilityAction(smaller) { session.update(latest.placed(scale = LayerMath.clampScale(latest.scale / 1.2f))); true })
         add(CustomAccessibilityAction(turn) { session.update(latest.placed(rotation = LayerMath.normalizeRotation(latest.rotation + (PI / 12).toFloat()))); true })
-        add(CustomAccessibilityAction(front) { session.bringToFront(latest.id); true })
+        if (LayerOps.canBringForward(session.layers, layer.id)) add(CustomAccessibilityAction(front) { session.bringToFront(latest.id); true })
         if (layer is TextLayer) add(CustomAccessibilityAction(edit) { onEdit(); true })
         add(CustomAccessibilityAction(delete) { session.remove(latest.id); true })
     }
@@ -636,6 +696,8 @@ private fun LayerHost(
 private fun LayerMenuPopup(
     layer: EditorLayer,
     onDismiss: () -> Unit,
+    /** Whether "bring forward" would change anything: not offered for the topmost layer. */
+    canFront: Boolean,
     onFront: () -> Unit,
     onShape: (String) -> Unit,
     onEdit: () -> Unit,
@@ -661,11 +723,13 @@ private fun LayerMenuPopup(
                 )
             }
         }
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.stories_editor_layer_front)) },
-            leadingIcon = { Icon(PqpIcons.BringToFront, contentDescription = null) },
-            onClick = onFront,
-        )
+        if (canFront) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.stories_editor_layer_front)) },
+                leadingIcon = { Icon(PqpIcons.BringToFront, contentDescription = null) },
+                onClick = onFront,
+            )
+        }
         DropdownMenuItem(
             text = { Text(stringResource(R.string.stories_editor_layer_delete), color = Palette.Danger) },
             leadingIcon = { Icon(PqpIcons.Delete, contentDescription = null, tint = Palette.Danger) },

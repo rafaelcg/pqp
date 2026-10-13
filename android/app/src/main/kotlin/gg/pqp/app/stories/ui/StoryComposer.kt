@@ -1,6 +1,7 @@
 package gg.pqp.app.stories.ui
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -54,6 +55,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
+import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.social.friends
@@ -97,6 +99,7 @@ import gg.pqp.app.ui.theme.Spacing
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -105,6 +108,9 @@ private enum class ComposeMode { Text, Camera, Call }
 
 /** Layer files and the base are PUT this many at once. */
 private const val UPLOADS_AT_ONCE = 3
+
+/** The first wait before the audience list is read again after a failure; it doubles up to [StoriesRules.RETRY_MAX_MS]. */
+private const val AUDIENCE_RETRY_FIRST_MS = 1_000L
 
 private sealed interface PostState {
     data object Idle : PostState
@@ -156,6 +162,7 @@ fun StoryComposer(
     val occupancy by (voice?.rooms?.rooms ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap()) })
         .collectAsStateWithLifecycle()
     var choosingAudience by remember { mutableStateOf(false) }
+    var confirmCallNotIn by remember { mutableStateOf(false) }
 
     var options by remember { mutableStateOf<StoryAudienceOptions?>(null) }
     var targets by remember { mutableStateOf(StoryAudienceTargets()) }
@@ -176,15 +183,27 @@ fun StoryComposer(
     // that never wakes up.
     var audienceAttempt by remember { mutableStateOf(0) }
     var audienceFailed by remember { mutableStateOf(false) }
-    LaunchedEffect(audienceAttempt) {
-        if (audienceAttempt == 0) store.refreshConfig()
-        audienceFailed = false
-        runCatching { session.api.storyAudiences() }
-            .onSuccess {
-                options = it
-                targets = StoriesRules.defaultAudience(it, contextServerId, fromFriends = contextServerId == null)
+    // A composer opened with the API unreachable must not stay dead: the read is retried with
+    // backoff, straight away when the live connection comes back, and by hand ("Tentar de novo").
+    // The photo and the words the person already made are untouched meanwhile.
+    val realtimeState by session.realtime.state.collectAsStateWithLifecycle()
+    val connected = realtimeState == RealtimeState.Ready
+    LaunchedEffect(audienceAttempt, connected) {
+        if (options != null) return@LaunchedEffect
+        store.refreshConfig()
+        var wait = AUDIENCE_RETRY_FIRST_MS
+        while (true) {
+            val loaded = runCatching { session.api.storyAudiences() }.getOrNull()
+            if (loaded != null) {
+                audienceFailed = false
+                options = loaded
+                targets = StoriesRules.defaultAudience(loaded, contextServerId, fromFriends = contextServerId == null)
+                break
             }
-            .onFailure { audienceFailed = true }
+            audienceFailed = true
+            delay(wait)
+            wait = StoriesRules.nextRetryDelay(wait)
+        }
     }
 
     val tooLong = { seconds: Long -> context.getString(R.string.stories_compose_too_long, (seconds / 1000).toInt()) }
@@ -247,7 +266,13 @@ fun StoryComposer(
             }
         }
     }
-    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), accept)
+    // The picker is asked for one item, but a long press on a thumbnail selects several in recent versions
+    // of it, whatever the request said. A story has one picture, so the first is used, and the person is told.
+    val onePerStory = stringResource(R.string.stories_picker_one_only)
+    val pick = rememberLauncherForActivityResult(PickVisualMediaList()) { uris ->
+        accept(uris.firstOrNull())
+        if (uris.size > 1) Toast.makeText(context, onePerStory, Toast.LENGTH_SHORT).show()
+    }
     val openGallery: () -> Unit = {
         pick.launch(
             PickVisualMediaRequest(
@@ -262,35 +287,60 @@ fun StoryComposer(
 
     // A photo placed on the story: prepared (1440 px, EXIF gone) and kept for the PUT.
     val photoFailed = stringResource(R.string.stories_editor_photo_failed)
-    val addPhotoLayer: (Uri?) -> Unit = { uri ->
-        if (uri != null) {
+    val photosDidNotFit = stringResource(R.string.stories_picker_some_did_not_fit)
+    val limitPhotosText = stringResource(R.string.stories_editor_limit_photos)
+    val limitLayersText = stringResource(R.string.stories_editor_limit_layers)
+    // Each photo picked becomes a layer, one after the other, up to the limits; what does not fit is said, not dropped.
+    val addPhotoLayers: (List<Uri>) -> Unit = { uris ->
+        if (uris.isNotEmpty()) {
             scope.launch {
-                val result = try {
-                    StoryMediaPrep.prepare(context, uri, gg.pqp.app.stories.StoriesRules.MAX_BYTES)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    PrepResult.Unreadable
-                }
-                if (result is PrepResult.Ready && !result.media.isVideo) {
-                    val id = editor.newId()
-                    val at = gg.pqp.app.stories.editor.LayerMath.startPosition(editor.layers.size)
-                    val refused = editor.add(
-                        PhotoLayer(
-                            id = id, x = at.x, y = at.y, source = result.media.previewUri.toString(),
-                            width = result.media.width, height = result.media.height,
-                        ),
-                    )
-                    if (refused == null) {
-                        layerFiles[id] = LayerFile(id, result.media.contentType, result.media.bytes, result.media.width, result.media.height)
+                var failed = false
+                var refusedWith: LayerOps.Refusal? = null
+                uris.forEach { uri ->
+                    // Check before the work: a photo that cannot be placed is not prepared for nothing.
+                    val probe = PhotoLayer(id = "probe", source = "", width = 1, height = 1)
+                    val full = LayerOps.canAdd(editor.layers, probe)
+                    if (full != null) {
+                        refusedWith = full
+                        return@forEach
                     }
-                } else {
-                    refusal = photoFailed
+                    val result = try {
+                        StoryMediaPrep.prepare(context, uri, gg.pqp.app.stories.StoriesRules.MAX_BYTES)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        PrepResult.Unreadable
+                    }
+                    if (result is PrepResult.Ready && !result.media.isVideo) {
+                        val id = editor.newId()
+                        val at = gg.pqp.app.stories.editor.LayerMath.startPosition(editor.layers.size)
+                        val refused = editor.add(
+                            PhotoLayer(
+                                id = id, x = at.x, y = at.y, source = result.media.previewUri.toString(),
+                                width = result.media.width, height = result.media.height,
+                            ),
+                        )
+                        if (refused == null) {
+                            layerFiles[id] = LayerFile(id, result.media.contentType, result.media.bytes, result.media.width, result.media.height)
+                        } else {
+                            refusedWith = refused
+                        }
+                    } else {
+                        failed = true
+                    }
                 }
+                val message = when {
+                    failed -> photoFailed
+                    refusedWith == LayerOps.Refusal.TooMany -> if (uris.size > 1) photosDidNotFit else limitLayersText
+                    refusedWith != null -> if (uris.size > 1) photosDidNotFit else limitPhotosText
+                    else -> null
+                }
+                if (message != null) Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             }
         }
     }
-    val pickPhotoLayer = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), addPhotoLayer)
+    val addPhotoLayer: (Uri?) -> Unit = { uri -> if (uri != null) addPhotoLayers(listOf(uri)) }
+    val pickPhotoLayer = rememberLauncherForActivityResult(PickVisualMediaList(), addPhotoLayers)
 
     // A call card has to go to the server its room is in (the contract refuses
     // anything else). That server is ticked the moment the room is placed,
@@ -354,7 +404,11 @@ fun StoryComposer(
     val showingCamera = !editing
     val suspendCamera = showingCamera && (trimming != null || working != null)
 
-    val audienceLabel = audienceLabel(options, targets)
+    val audienceLabel = when {
+        options != null -> audienceLabel(options, targets)
+        audienceFailed -> stringResource(R.string.stories_audience_load_failed)
+        else -> stringResource(R.string.stories_audience_loading)
+    }
 
     Dialog(
         // Not while posting: closing mid-post would cancel the upload or the
@@ -405,6 +459,8 @@ fun StoryComposer(
                             muted = muted,
                             cardBackground = if (current == null) cardBackground else null,
                             audienceLabel = audienceLabel,
+                            audienceError = options == null && audienceFailed,
+                            hasAudio = current?.hasAudio != false,
                             canPost = ready && options != null,
                             posting = post == PostState.Posting,
                             callWarning = callLayer?.takeIf { !StoryCallRoom.authorIn(it.channelId, meId, occupancy) }
@@ -434,9 +490,16 @@ fun StoryComposer(
                             pickPhotoLayer.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         },
                         onTakePhoto = { layerCamera = true },
-                        onAudience = { choosingAudience = true },
+                        // Nothing to choose from until the list is there: tapping the pill reads it again.
+                        onAudience = { if (options == null) audienceAttempt += 1 else choosingAudience = true },
+                        onRetryAudience = { audienceAttempt += 1 },
                         onPost = {
-                            if (StoriesRules.canPost(targets)) doPost() else choosingAudience = true
+                            when {
+                                // A call card for a room its author is not in reads "A call acabou" to everybody until they join.
+                                callLayer != null && !StoryCallRoom.authorIn(callLayer.channelId, meId, occupancy) -> confirmCallNotIn = true
+                                StoriesRules.canPost(targets) -> doPost()
+                                else -> choosingAudience = true
+                            }
                         },
                         callSheet = { onPick, onDismissSheet ->
                             val rooms = rememberCallRooms(session, options)
@@ -533,6 +596,29 @@ fun StoryComposer(
             StoryVideoWorking(progress = progress, onCancel = { workJob?.cancel() })
         }
 
+        if (confirmCallNotIn) {
+            val room = callLayer?.roomName.orEmpty()
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { confirmCallNotIn = false },
+                title = { Text(stringResource(R.string.stories_call_confirm_title)) },
+                text = { Text(stringResource(R.string.stories_call_confirm_body, room)) },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            confirmCallNotIn = false
+                            if (StoriesRules.canPost(targets)) doPost() else choosingAudience = true
+                        },
+                        modifier = Modifier.testTag("stories.composer.callConfirm"),
+                    ) { Text(stringResource(R.string.stories_call_confirm_yes)) }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { confirmCallNotIn = false }) {
+                        Text(stringResource(R.string.stories_call_confirm_no))
+                    }
+                },
+            )
+        }
+
         if (choosingAudience) {
             AudienceSheet(
                 options = options ?: StoryAudienceOptions(),
@@ -542,7 +628,8 @@ fun StoryComposer(
                 replies = replies,
                 onReplies = { replies = it },
                 post = post,
-                onPost = doPost,
+                // The same question as the editor's Postar: a call card for a room its author is not in.
+                onPost = { if (callLayer != null && !StoryCallRoom.authorIn(callLayer.channelId, meId, occupancy)) confirmCallNotIn = true else doPost() },
                 onDismiss = { if (post != PostState.Posting) choosingAudience = false },
             )
         }
