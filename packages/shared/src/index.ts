@@ -61,3 +61,4 @@ export * from "./age.js";
 export * from "./live-preview.js";
 export * from "./bots.js";
 export * from "./nudge.js";
+export * from "./bot-face.js";

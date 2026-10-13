@@ -3768,6 +3768,7 @@ import {
   botAskAnswerSchema,
   createServerBotSchema,
   SERVER_BOTS_MAX,
+  serializePermissions as serializeBotPermissions,
   updateServerBotSchema,
   type ServerBotsConfig,
 } from "@pqp/shared";
@@ -3783,6 +3784,7 @@ import {
 import { botModelChoices, botProviderConfigured } from "../services/bot-llm.js";
 import { answerBotAsk } from "../services/bot-runner.js";
 import { deleteBotRole, syncBotRole } from "../services/bot-role.js";
+import { readBotFacePng } from "../services/bot-faces.js";
 
 function botsEnabled(serverId: string): boolean {
   return isEnabled("custom_bots", { serverId }) && botProviderConfigured();
@@ -3880,6 +3882,9 @@ router.post("/api/servers/:serverId/bots", async ({ req, user }, { serverId }) =
       answerToName: body.answerToName,
       model: body.model ?? null,
       ...(body.tools ? { tools: body.tools } : {}),
+      ...(body.color ? { color: body.color } : {}),
+      ...(body.face ? { face: body.face } : {}),
+      tagline: body.tagline ?? null,
     });
     await logAudit({
       serverId: serverId!,
@@ -3900,7 +3905,11 @@ router.post("/api/servers/:serverId/bots", async ({ req, user }, { serverId }) =
     if (role?.changed) {
       pingPermissions(serverId!);
     }
-    return { bot: role ? { ...bot, roleId: role.roleId } : bot };
+    return {
+      bot: role ? { ...bot, roleId: role.roleId } : bot,
+      // What its tools still lack because the creator could not grant it.
+      missingPermissions: serializeBotPermissions(role?.missing ?? 0n),
+    };
   } catch (error) {
     if (error instanceof BotError) {
       throw botHttpError(error);
@@ -3929,13 +3938,15 @@ router.patch(
         throw new NotFound("Bot not found");
       }
       let { bot } = updated;
-      const { before, renamed } = updated;
+      let missing = 0n;
+      const { before, renamed, restyled } = updated;
       // New tool switches move the role with them; so does a bot whose role
       // somebody deleted, the next time its settings are saved.
       if (body.tools !== undefined || bot.roleId === null) {
         const role = await syncBotRole({ serverId: serverId!, botId: bot.id, actorId: user.id });
         if (role) {
           bot = { ...bot, roleId: role.roleId };
+          missing = role.missing;
           if (role.changed) {
             pingPermissions(serverId!);
           }
@@ -3943,7 +3954,7 @@ router.patch(
       }
       // A new name (and handle) repaints chat and the member list everywhere,
       // the same frame a person's own rename sends.
-      if (renamed) {
+      if (renamed || restyled) {
         const account = await getUserById(bot.userId);
         if (account) {
           await announceProfile(account);
@@ -3957,6 +3968,11 @@ router.patch(
         ...(bot.persona !== before.persona ? [{ key: "persona", old: null, new: null }] : []),
         ...(bot.knowledge !== before.knowledge ? [{ key: "knowledge", old: null, new: null }] : []),
         ...(bot.model !== before.model ? [{ key: "model", old: before.model, new: bot.model }] : []),
+        ...(bot.color !== before.color ? [{ key: "color", old: before.color, new: bot.color }] : []),
+        ...(bot.face !== before.face ? [{ key: "face", old: before.face, new: bot.face }] : []),
+        ...(bot.tagline !== before.tagline
+          ? [{ key: "tagline", old: before.tagline, new: bot.tagline }]
+          : []),
         ...(bot.tools.join() !== before.tools.join()
           ? [{ key: "tools", old: before.tools.join(", "), new: bot.tools.join(", ") }]
           : []),
@@ -3974,7 +3990,7 @@ router.patch(
           changes: [{ key: "bot", old: null, new: bot.name }, ...changes],
         });
       }
-      return { bot };
+      return { bot, missingPermissions: serializeBotPermissions(missing) };
     } catch (error) {
       if (error instanceof BotError) {
         throw botHttpError(error);
@@ -12755,6 +12771,36 @@ async function serveEmbedImage(
   }
 }
 
+const BOT_FACE_PATH = /^\/api\/bot-faces\/([a-z]+)\/([a-z]+)\.png$/;
+
+/**
+ * A server bot's face as a PNG (`users.avatar_url` for every bot), for the
+ * clients that only draw images: the phone apps, and anything else that is
+ * handed an avatar URL. Unauthenticated for the same reason as the avatar
+ * route below (an `<img>` cannot send a token), and it discloses nothing: the
+ * thirty pictures are the same for every server. The path names a colour and
+ * a face from fixed lists, never a file. Cached for a year because the URL
+ * carries `?v=`, bumped whenever the drawings change.
+ */
+async function serveBotFace(
+  req: IncomingMessage,
+  res: ServerResponse,
+  color: string,
+  face: string,
+): Promise<void> {
+  const png = await readBotFacePng(color, face);
+  if (!png) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": "image/png",
+    "content-length": png.length,
+    "cache-control": "public, max-age=31536000, immutable",
+  });
+  res.end(png);
+}
+
 const AVATAR_OBJECT_PATH =
   /^\/api\/avatars\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
@@ -13458,6 +13504,12 @@ export async function handleApi(
     req.method === "GET" ? EMBED_IMAGE_PATH.exec(pathname) : null;
   if (imageMatch) {
     await serveEmbedImage(req, res, imageMatch[1]!);
+    return;
+  }
+
+  const botFaceMatch = req.method === "GET" ? BOT_FACE_PATH.exec(pathname) : null;
+  if (botFaceMatch) {
+    await serveBotFace(req, res, botFaceMatch[1]!, botFaceMatch[2]!);
     return;
   }
 

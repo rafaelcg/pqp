@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 import {
+  BOT_BASE_FACES,
+  BOT_COLORS,
+  BOT_DEFAULT_COLOR,
+  BOT_DEFAULT_FACE,
+  botFaceAvatarPath,
+  type BotBaseFace,
+  type BotColor,
   extractMentionUsernames,
   hasPermission,
   Permission,
@@ -65,15 +72,19 @@ interface BotRow {
   model: string | null;
   tools: string[] | null;
   role_id: string | null;
+  color: string;
+  face: string;
   created_at: Date;
   display_name: string;
   username: string;
   avatar_url: string | null;
+  custom_status: string | null;
 }
 
 const BOT_SELECT = `
   SELECT b.id, b.server_id, b.user_id, b.persona, b.knowledge, b.channel_ids,
-         b.enabled, b.answer_to_name, b.model, b.tools, b.role_id, b.created_at, u.display_name, u.username, u.avatar_url
+         b.enabled, b.answer_to_name, b.model, b.tools, b.role_id, b.color, b.face, b.created_at,
+         u.display_name, u.username, u.avatar_url, u.custom_status
     FROM server_bots b
     JOIN users u ON u.id = b.user_id`;
 
@@ -85,6 +96,9 @@ function toDto(row: BotRow, repliesToday: number): ServerBotDto {
     name: row.display_name,
     username: row.username,
     avatarUrl: row.avatar_url,
+    color: asColor(row.color),
+    face: asFace(row.face),
+    tagline: row.custom_status,
     persona: row.persona,
     knowledge: row.knowledge,
     channelIds: row.channel_ids,
@@ -97,6 +111,14 @@ function toDto(row: BotRow, repliesToday: number): ServerBotDto {
     repliesToday,
     repliesPerDay: botRepliesPerDay(),
   };
+}
+
+function asColor(value: string): BotColor {
+  return (BOT_COLORS as readonly string[]).includes(value) ? (value as BotColor) : BOT_DEFAULT_COLOR;
+}
+
+function asFace(value: string): BotBaseFace {
+  return (BOT_BASE_FACES as readonly string[]).includes(value) ? (value as BotBaseFace) : BOT_DEFAULT_FACE;
 }
 
 async function repliesToday(serverId: string): Promise<number> {
@@ -219,7 +241,12 @@ export async function createServerBot(input: {
   answerToName?: boolean;
   model?: string | null;
   tools?: string[];
+  color?: BotColor;
+  face?: BotBaseFace;
+  tagline?: string | null;
 }): Promise<ServerBotDto> {
+  const color = input.color ?? BOT_DEFAULT_COLOR;
+  const face = input.face ?? BOT_DEFAULT_FACE;
   const channelIds = await requireServerChannels(input.serverId, input.channelIds);
   const { username, discriminator } = await allocateBotHandle(input.serverId, input.name);
   const client = await getPool().connect();
@@ -241,11 +268,19 @@ export async function createServerBot(input: {
     const user = await client.query<{ id: string }>(
       `INSERT INTO users (
          clerk_id, display_name, username, discriminator,
-         is_character, dm_privacy, age_checked_at, age_check_passed
+         is_character, dm_privacy, age_checked_at, age_check_passed,
+         avatar_url, custom_status
        )
-       VALUES ($1, $2, $3, $4, TRUE, 'nobody', NOW(), TRUE)
+       VALUES ($1, $2, $3, $4, TRUE, 'nobody', NOW(), TRUE, $5, $6)
        RETURNING id`,
-      [`bot:${randomUUID()}`, input.name, username, discriminator],
+      [
+        `bot:${randomUUID()}`,
+        input.name,
+        username,
+        discriminator,
+        botFaceAvatarPath(color, face),
+        input.tagline ?? null,
+      ],
     );
     const userId = user.rows[0]!.id;
     await client.query(
@@ -261,8 +296,9 @@ export async function createServerBot(input: {
     );
     const bot = await client.query<{ id: string }>(
       `INSERT INTO server_bots
-         (server_id, user_id, persona, knowledge, channel_ids, answer_to_name, model, tools, created_by)
-       VALUES ($1, $2, $3, $4, $5::uuid[], $6, $7, $8::text[], $9)
+         (server_id, user_id, persona, knowledge, channel_ids, answer_to_name, model, tools, created_by,
+          color, face)
+       VALUES ($1, $2, $3, $4, $5::uuid[], $6, $7, $8::text[], $9, $10, $11)
        RETURNING id`,
       [
         input.serverId,
@@ -274,6 +310,8 @@ export async function createServerBot(input: {
         input.model ?? null,
         input.tools ?? null,
         input.createdBy,
+        color,
+        face,
       ],
     );
     botId = bot.rows[0]!.id;
@@ -301,7 +339,11 @@ export async function updateServerBot(input: {
   /** `null` clears the pick; absent leaves it. */
   model?: string | null;
   tools?: string[];
-}): Promise<{ bot: ServerBotDto; before: ServerBotDto; renamed: boolean } | null> {
+  color?: BotColor;
+  face?: BotBaseFace;
+  /** `null` clears it; absent leaves it. */
+  tagline?: string | null;
+}): Promise<{ bot: ServerBotDto; before: ServerBotDto; renamed: boolean; restyled: boolean } | null> {
   const before = await getServerBot(input.serverId, input.botId);
   if (!before) {
     return null;
@@ -319,6 +361,8 @@ export async function updateServerBot(input: {
             answer_to_name = COALESCE($7, answer_to_name),
             model = CASE WHEN $8::boolean THEN $9 ELSE model END,
             tools = COALESCE($10::text[], tools),
+            color = COALESCE($11, color),
+            face = COALESCE($12, face),
             updated_at = NOW()
       WHERE server_id = $1 AND id = $2`,
     [
@@ -332,8 +376,27 @@ export async function updateServerBot(input: {
       input.model !== undefined,
       input.model ?? null,
       input.tools ?? null,
+      input.color ?? null,
+      input.face ?? null,
     ],
   );
+  // A new colour or face is a new picture, and a new line under its name:
+  // the caller sends the profile frame that repaints them.
+  const color = input.color ?? before.color;
+  const face = input.face ?? before.face;
+  const restyled =
+    color !== before.color ||
+    face !== before.face ||
+    (input.tagline !== undefined && input.tagline !== before.tagline);
+  if (restyled) {
+    await getPool().query(
+      `UPDATE users
+          SET avatar_url = $2,
+              custom_status = CASE WHEN $3::boolean THEN $4 ELSE custom_status END
+        WHERE id = $1`,
+      [before.userId, botFaceAvatarPath(color, face), input.tagline !== undefined, input.tagline ?? null],
+    );
+  }
   // A rename moves the handle too: people call the bot by the name they see,
   // so "Julius" answers to @julius_bot. The old handle stops working, which
   // for a bot is the expected outcome of renaming it.
@@ -353,7 +416,7 @@ export async function updateServerBot(input: {
   }
   forgetTriggerBot(input.serverId);
   const bot = await getServerBot(input.serverId, input.botId);
-  return bot ? { bot, before, renamed } : null;
+  return bot ? { bot, before, renamed, restyled } : null;
 }
 
 /**

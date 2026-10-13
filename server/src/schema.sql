@@ -6601,3 +6601,9 @@ CREATE TABLE IF NOT EXISTS server_bot_tools_daily (
   failed    INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (day, server_id, tool)
 );
+
+-- A bot's face (packages/shared/src/bot-face.ts): one of six colours and one
+-- of five base faces. `users.avatar_url` follows them as the PNG the phone
+-- apps draw; the web client draws the same face inline, and alive.
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS color TEXT NOT NULL DEFAULT 'lime';
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS face TEXT NOT NULL DEFAULT 'oi';

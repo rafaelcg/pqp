@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { BOT_BASE_FACES, BOT_COLORS, type BotBaseFace, type BotColor } from "./bot-face.js";
+import { customStatusSchema } from "./status.js";
 
 /**
  * Server bots: an AI member a server's staff create, name and brief, which
@@ -71,6 +73,10 @@ export const createServerBotSchema = z.object({
   answerToName: z.boolean().default(false),
   model: z.string().max(200).nullable().optional(),
   tools: botToolsSchema.optional(),
+  color: z.enum(BOT_COLORS).optional(),
+  face: z.enum(BOT_BASE_FACES).optional(),
+  /** The line under its name in the member list (its recado). */
+  tagline: customStatusSchema.nullable().optional(),
 });
 export type CreateServerBotRequest = z.input<typeof createServerBotSchema>;
 
@@ -84,6 +90,10 @@ export const updateServerBotSchema = z.object({
   /** `null` goes back to the default model. */
   model: z.string().max(200).nullable().optional(),
   tools: botToolsSchema.optional(),
+  color: z.enum(BOT_COLORS).optional(),
+  face: z.enum(BOT_BASE_FACES).optional(),
+  /** `null` clears it. */
+  tagline: customStatusSchema.nullable().optional(),
 });
 export type UpdateServerBotRequest = z.input<typeof updateServerBotSchema>;
 
@@ -95,7 +105,11 @@ export interface ServerBotDto {
   name: string;
   /** What people type after `@` to call it. Follows the name on a rename. */
   username: string;
+  /** Its Breu PNG (`/api/bot-faces/...`): the phone apps draw this, the web client draws `color` and `face`. */
   avatarUrl: string | null;
+  color: BotColor;
+  face: BotBaseFace;
+  tagline: string | null;
   persona: string;
   knowledge: string;
   channelIds: string[];

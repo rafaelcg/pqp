@@ -26,6 +26,8 @@ const { botDay, nextBotDayStart } = await import("./bot-stats.js");
 const { runBotRunsTick } = await import("./bot-runner.js");
 const { setBotProviderForTests } = await import("./bot-llm.js");
 const { postChannelMessage, resetChatRateLimits } = await import("../ws/chat.js");
+const { readBotFacePng } = await import("./bot-faces.js");
+const { botFaceAvatarPath } = await import("@pqp/shared");
 
 describe("the bot day", () => {
   it("is São Paulo's date, and turns at its midnight", () => {
@@ -242,6 +244,47 @@ describeDb("server bot foundations", () => {
       await deleteBotRole({ serverId: server.id, roleId: synced!.roleId!, actorId: owner.id }),
     ).toBe(true);
     expect(await getRole(synced!.roleId!)).toBeNull();
+  });
+
+  it("draws the bot as its Breu: colour, face and the line under its name", async () => {
+    const { server, bot } = await setup();
+    expect(bot.color).toBe("lime");
+    expect(bot.face).toBe("oi");
+    expect(bot.avatarUrl).toBe(botFaceAvatarPath("lime", "oi"));
+
+    const updated = await updateServerBot({
+      serverId: server.id,
+      botId: bot.id,
+      color: "grape",
+      face: "kkkk",
+      tagline: "Pergunte qualquer coisa",
+    });
+    expect(updated!.restyled).toBe(true);
+    expect(updated!.bot).toMatchObject({
+      color: "grape",
+      face: "kkkk",
+      tagline: "Pergunte qualquer coisa",
+      avatarUrl: botFaceAvatarPath("grape", "kkkk"),
+    });
+    const account = await getPool().query<{ avatar_url: string; custom_status: string }>(
+      `SELECT avatar_url, custom_status FROM users WHERE id = $1`,
+      [bot.userId],
+    );
+    expect(account.rows[0]).toEqual({
+      avatar_url: botFaceAvatarPath("grape", "kkkk"),
+      custom_status: "Pergunte qualquer coisa",
+    });
+
+    const untouched = await updateServerBot({ serverId: server.id, botId: bot.id, persona: "Zoeiro" });
+    expect(untouched!.restyled).toBe(false);
+    expect(untouched!.bot.tagline).toBe("Pergunte qualquer coisa");
+  });
+
+  it("serves the face PNGs and nothing else", async () => {
+    const png = await readBotFacePng("lime", "oi");
+    expect(png?.subarray(1, 4).toString()).toBe("PNG");
+    expect(await readBotFacePng("lime", "dormindo")).toBeNull();
+    expect(await readBotFacePng("..", "oi")).toBeNull();
   });
 
   it("records what started a run and what it cost, and keeps the history after the bot goes", async () => {
