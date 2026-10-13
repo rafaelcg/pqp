@@ -1,5 +1,5 @@
 import type { ServerEmoji } from "@pqp/shared";
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import { serverEmojiImageUrl, useServerEmoji } from "@/lib/server-emoji";
 import { cn } from "@/lib/utils";
 
@@ -39,16 +39,23 @@ export function useCustomEmojiScope(): CustomEmojiScope {
   return useContext(CustomEmojiContext);
 }
 
-/** One custom emoji, sized to the line it sits in unless told otherwise. */
+/**
+ * One custom emoji, sized to the line it sits in unless told otherwise. When
+ * the picture fails to load (the emoji was deleted since the list was read) it
+ * reads as `:name:` text and calls `onBroken` once.
+ */
 export function CustomEmojiImage({
   emoji,
   className,
+  onBroken,
 }: {
   emoji: Pick<ServerEmoji, "name" | "url">;
   className?: string;
+  onBroken?: () => void;
 }) {
   const src = serverEmojiImageUrl(emoji);
-  if (!src) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  if (!src || failedSrc === src) {
     return <>{`:${emoji.name}:`}</>;
   }
   return (
@@ -59,6 +66,10 @@ export function CustomEmojiImage({
       draggable={false}
       loading="lazy"
       decoding="async"
+      onError={() => {
+        setFailedSrc(src);
+        onBroken?.();
+      }}
       referrerPolicy="no-referrer"
       className={cn(
         "inline-block h-[1.375em] w-[1.375em] object-contain align-[-0.3em]",

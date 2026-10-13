@@ -132,6 +132,21 @@ export function noteUnknownServerEmoji(serverId: string): void {
   void loadServerEmoji(serverId, true);
 }
 
+/**
+ * An emoji's picture failed to load: somebody deleted it since this tab read
+ * the list. Drop the id so every render falls back to `:name:`. If a message
+ * still names it, the unknown-id path above reads the list again (at most
+ * every 30 s) and brings it back if it still exists.
+ */
+export function forgetServerEmoji(serverId: string, emojiId: string): void {
+  const entry = entries.get(serverId);
+  if (!entry?.list || !entry.list.emoji.some((e) => e.id === emojiId)) {
+    return;
+  }
+  entry.list = { ...entry.list, emoji: entry.list.emoji.filter((e) => e.id !== emojiId) };
+  emit();
+}
+
 function subscribe(listener: () => void) {
   listeners.add(listener);
   return () => listeners.delete(listener);

@@ -7,6 +7,7 @@ import {
   customEmojiTokensIn,
   expandCustomEmoji,
   filterCustomEmoji,
+  forgetServerEmoji,
   getCachedServerEmoji,
   loadServerEmoji,
   serverEmojiLoadFailed,
@@ -210,6 +211,31 @@ describe("the emoji cache", () => {
     expect(fetchMock).toHaveBeenCalled();
     expect(getCachedServerEmoji(server)).toBeNull();
     expect(serverEmojiLoadFailed(server)).toBe(true);
+  });
+});
+
+describe("forgetServerEmoji", () => {
+  const SERVER = "33333333-3333-4333-8333-333333333333";
+  const listOf = (entries: ServerEmoji[]) => ({
+    emoji: entries,
+    limit: 50,
+    uploadEnabled: true,
+    maxBytes: 262144,
+    size: 128,
+  });
+
+  it("drops one id and keeps the rest", () => {
+    setServerEmojiList(SERVER, listOf([emoji("pog", POG), emoji("fire", FIRE)]));
+    forgetServerEmoji(SERVER, POG);
+    expect(getCachedServerEmoji(SERVER)?.emoji.map((e) => e.name)).toEqual(["fire"]);
+  });
+
+  it("does nothing for an id it does not hold or a server it never read", () => {
+    setServerEmojiList(SERVER, listOf([emoji("fire", FIRE)]));
+    const before = getCachedServerEmoji(SERVER);
+    forgetServerEmoji(SERVER, POG);
+    expect(getCachedServerEmoji(SERVER)).toBe(before);
+    expect(() => forgetServerEmoji("44444444-4444-4444-8444-444444444444", POG)).not.toThrow();
   });
 });
 

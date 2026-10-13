@@ -9,7 +9,7 @@ import {
 } from "@/lib/chat-markdown";
 import { remarkMentions } from "@/lib/remark-mentions";
 import { remarkCustomEmoji } from "@/lib/remark-custom-emoji";
-import { noteUnknownServerEmoji } from "@/lib/server-emoji";
+import { forgetServerEmoji, noteUnknownServerEmoji } from "@/lib/server-emoji";
 import {
   CustomEmojiImage,
   useCustomEmojiScope,
@@ -52,11 +52,20 @@ function MarkdownSpan({
   children?: ReactNode;
   className?: string;
 }) {
-  const { byId } = useCustomEmojiScope();
+  const { serverId, byId } = useCustomEmojiScope();
   const id = node?.properties?.dataEmojiId;
   const emoji = typeof id === "string" ? byId.get(id) : undefined;
   if (emoji) {
-    return <CustomEmojiImage emoji={emoji} />;
+    return (
+      <CustomEmojiImage
+        emoji={emoji}
+        onBroken={() => {
+          if (serverId) {
+            forgetServerEmoji(serverId, emoji.id);
+          }
+        }}
+      />
+    );
   }
   return <span className={props.className}>{children}</span>;
 }
