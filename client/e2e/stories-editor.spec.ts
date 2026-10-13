@@ -67,15 +67,24 @@ async function openTextComposer(page: Page, ctx: Awaited<ReturnType<typeof setup
   await page.locator("[data-server-menu-trigger]").first().click();
   await page.getByRole("menuitem", { name: "Post a story" }).click();
   const composer = page.getByRole("dialog", { name: "New story" });
-  await composer.getByRole("radio", { name: "Text" }).click();
+  // With no object storage the composer opens straight on the text card, its editor already up (and the
+  // tabs out of the way); with storage it opens on the camera and the Text tab is the way in.
+  const textTab = composer.getByRole("radio", { name: "Text" });
+  await expect(textTab.or(composer.locator("[data-story-text]"))).toBeVisible();
+  // (If the editor came up by itself in the meantime the tab is gone and there is nothing to click.)
+  await textTab.click({ timeout: 3000 }).catch(() => undefined);
   return composer;
 }
 
 async function addText(composer: Locator, text: string) {
-  // The first text opens on its own; later ones from the text tool.
-  if (!(await composer.locator("[data-story-text]").isVisible())) {
+  // The first text of an empty text card opens its editor on its own; later ones come from the
+  // text tool. (While the editor is open the tools are out of the way, so never reach for one
+  // then: the card with no layers is the one that opens by itself, however slowly.)
+  const opensItself = (await composer.locator("[data-layer-type]").count()) === 0;
+  if (!opensItself) {
     await composer.locator("[data-story-tool-text]").click();
   }
+  await composer.locator("[data-story-text]").waitFor({ state: "visible", timeout: 15_000 });
   await composer.locator("[data-story-text]").fill(text);
   await composer.locator("[data-story-text-done]").click();
   await expect(composer.locator("[data-story-text]")).toHaveCount(0);
@@ -293,6 +302,22 @@ for (const size of [
         { timeout: 10_000 },
       )
       .toEqual({ x: 0.527, y: 0.777 });
+    // The viewer never crops the author's canvas: it is the whole 9:16, fitted INSIDE the card (a
+    // phone is taller than 9:16, so there are bars above and below), never wider or taller than it.
+    const fit = await page.evaluate(() => {
+      const card = document.querySelector("[data-story-card]")!.getBoundingClientRect();
+      const canvas = document.querySelector("[data-story-viewer] [data-story-layer-canvas]")!.getBoundingClientRect();
+      return {
+        ratio: canvas.width / canvas.height,
+        inside:
+          canvas.left >= card.left - 1 &&
+          canvas.right <= card.right + 1 &&
+          canvas.top >= card.top - 1 &&
+          canvas.bottom <= card.bottom + 1,
+      };
+    });
+    expect(fit.inside).toBe(true);
+    expect(fit.ratio).toBeCloseTo(9 / 16, 2);
     // Its type is the same fraction of the canvas width at any size: 8% x size x scale of the width.
     // (Both in layout pixels: the viewer scales in while it opens, which scales a bounding box.)
     const fraction = await layer.locator(".story-tl").evaluate((element) => {
