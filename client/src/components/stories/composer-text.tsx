@@ -1,5 +1,5 @@
 import { AlignCenter, AlignLeft, AlignRight, Check, PaintBucket, X } from "lucide-react";
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import {
   STORY_LAYER_ALIGNS,
   STORY_LAYER_COLORS,
@@ -10,6 +10,7 @@ import {
   STORY_TEXT_MAX,
 } from "@pqp/shared";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { maxScaleToFit } from "@/lib/stories/layer-gestures";
 import { layerStyle, type TextLayerFields } from "@/lib/stories/layers";
 
 /**
@@ -138,7 +139,29 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: Text
   const [scale, setScale] = useState(geometry.scale);
   const area = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
   const patch = (change: Partial<TextLayerFields>) => setFields((current) => ({ ...current, ...change }));
+
+  // The biggest the words may be made: the whole layer, turned as it is, still inside the canvas.
+  // (A layer that was already bigger keeps what it had; it just cannot grow.) Measured from the
+  // field's own size at scale 1, so it follows the words, the font and the size as they change.
+  const [maxScale, setMaxScale] = useState(STORY_LAYER_SCALE_MAX);
+  useLayoutEffect(() => {
+    const element = box.current;
+    const canvas = root.current;
+    if (!element || !canvas) {
+      return;
+    }
+    const limit = maxScaleToFit(
+      { width: element.offsetWidth, height: element.offsetHeight },
+      geometry.rotation,
+      { width: canvas.clientWidth, height: canvas.clientHeight },
+    );
+    setMaxScale(Math.min(STORY_LAYER_SCALE_MAX, Math.max(limit, geometry.scale)));
+    // Everything that changes the words' natural size.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fields.text, fields.font, fields.size, fields.align, fields.background, geometry.rotation]);
+  const shownScale = Math.min(scale, maxScale);
 
   useEffect(() => {
     const element = area.current;
@@ -194,7 +217,7 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: Text
       onCancel();
     } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
-      onDone(fields, scale);
+      onDone(fields, shownScale);
     }
   }
 
@@ -204,6 +227,7 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: Text
   return (
     <div
       role="group"
+      ref={root}
       aria-label={t("stories.editor.textTool")}
       data-story-text-editor=""
       onKeyDown={onKeyDown}
@@ -216,11 +240,11 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: Text
         aria-label={t("stories.compose.done")}
         data-story-text-backdrop=""
         className="story-dim absolute inset-0 cursor-default"
-        onClick={() => onDone(fields, scale)}
+        onClick={() => onDone(fields, shownScale)}
       />
 
       {/* The layer, where it is: same center, same scale, same tilt as on the canvas. */}
-      <div ref={box} data-story-text-box="" style={{ ...layerStyle({ id: "editing", ...geometry, scale }), ...style }}>
+      <div ref={box} data-story-text-box="" style={{ ...layerStyle({ id: "editing", ...geometry, scale: shownScale }), ...style }}>
         <div className="grid max-w-full">
           {/* The mirror sizes the box to the words; the field is laid over it. */}
           <div
@@ -292,7 +316,7 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: Text
           className="story-cbtn pointer-events-auto !px-3.5"
           data-story-text-done=""
           style={{ background: "var(--story-accent)", color: "var(--story-on-accent)" }}
-          onClick={() => onDone(fields, scale)}
+          onClick={() => onDone(fields, shownScale)}
         >
           <Check className="h-4 w-4" aria-hidden />
           {t("stories.compose.done")}
@@ -307,9 +331,9 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: Text
           <input
             type="range"
             min={STORY_LAYER_SCALE_MIN}
-            max={STORY_LAYER_SCALE_MAX}
+            max={maxScale}
             step={0.02}
-            value={scale}
+            value={shownScale}
             aria-label={t("stories.editor.size")}
             data-story-size=""
             onChange={(event) => setScale(Number(event.target.value))}
