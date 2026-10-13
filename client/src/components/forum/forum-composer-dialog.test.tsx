@@ -2,7 +2,7 @@
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ForumPostSummary, ForumPostViewer } from "@pqp/shared";
+import type { ForumPostSummary, ForumPostViewer, ForumTag } from "@pqp/shared";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   readDraft,
@@ -53,6 +53,7 @@ vi.mock("@/lib/attachments", async (importOriginal) => {
   };
 });
 
+import { createForumPost } from "@/lib/forum-api";
 import { ForumComposerDialog, highlightTitleParts } from "./forum-composer-dialog";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -61,6 +62,7 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 
 beforeEach(() => {
+  vi.mocked(createForumPost).mockClear();
   localStorage.clear();
   resetComposerDraftsForTests();
   setDraftsAccount("00000000-0000-4000-8000-0000000000aa");
@@ -208,6 +210,109 @@ describe("forum composer validation focus", () => {
     const body = document.querySelector("[data-forum-composer-body] textarea");
     expect(body).not.toBeNull();
     expect(document.activeElement).toBe(body);
+  });
+});
+
+const STARTER_TAGS: ForumTag[] = [
+  { id: "00000000-0000-4000-8000-000000000001", name: "Release", emoji: "🚀", moderated: false, position: 0, postCount: 0 },
+  { id: "00000000-0000-4000-8000-000000000002", name: "WIP", emoji: "🛠️", moderated: false, position: 1, postCount: 0 },
+];
+const STAFF_TAG: ForumTag = {
+  id: "00000000-0000-4000-8000-000000000003",
+  name: "Oficial",
+  emoji: null,
+  moderated: true,
+  position: 2,
+  postCount: 0,
+};
+
+async function mountTags(props: Partial<Parameters<typeof ForumComposerDialog>[0]>) {
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => {
+    root!.render(
+      <TooltipProvider>
+        <ForumComposerDialog
+          open
+          forumId={FORUM_ID}
+          forumName="ajuda"
+          serverId={null}
+          tags={[]}
+          requireTag
+          isStaff={false}
+          mentionCandidates={[]}
+          onClose={() => {}}
+          onPublished={() => {}}
+          onOpenPost={() => {}}
+          {...props}
+        />
+      </TooltipProvider>,
+    );
+  });
+}
+
+describe("forum composer tags", () => {
+  it("offers the picker, and holds Publicar until one is picked, when the forum requires a tag", async () => {
+    writeDraft(FORUM_ID, "Corpo");
+    await mountTags({ tags: STARTER_TAGS });
+    expect(document.querySelector("[data-forum-tags-notice]")).toBeNull();
+    expect(button("Release")).toBeTruthy();
+    await act(async () => setTitle("Microfone some"));
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[data-publish-placement="footer"]')!.click(),
+    );
+    expect(document.body.textContent).toContain("Pick at least one tag.");
+    expect(createForumPost).not.toHaveBeenCalled();
+    await act(async () => button("Release").click());
+    expect(button("Release").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("does not dead-end a required tag when the forum has none to pick", async () => {
+    const onOpenTagSettings = vi.fn();
+    writeDraft(FORUM_ID, "Corpo");
+    await mountTags({ tags: [], canManageTags: true, onOpenTagSettings });
+    const notice = document.querySelector("[data-forum-tags-notice]");
+    expect(notice?.getAttribute("data-forum-tags-notice")).toBe("none");
+    expect(notice?.textContent).toContain("You can post without it");
+
+    // Publicar is not held back by a tag nobody could pick.
+    await act(async () => setTitle("Microfone some"));
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[data-publish-placement="footer"]')!.click(),
+    );
+    await settle(60);
+    expect(document.body.textContent).not.toContain("Pick at least one tag.");
+    expect(createForumPost).toHaveBeenCalledTimes(1);
+
+    // Staff get the way to fix it.
+    await act(async () => button("Set up tags").click());
+    expect(onOpenTagSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives a member no settings link, and treats staff-only tags as none to pick", async () => {
+    await mountTags({ tags: [STAFF_TAG], canManageTags: false, onOpenTagSettings: () => {} });
+    expect(document.querySelector("[data-forum-tags-notice='none']")).not.toBeNull();
+    expect(
+      [...document.querySelectorAll("button")].some((one) => one.textContent?.includes("Set up tags")),
+    ).toBe(false);
+    expect(
+      [...document.querySelectorAll("button")].some((one) => one.textContent?.includes("Oficial")),
+    ).toBe(false);
+  });
+
+  it("says the tags did not load, with Try again, instead of showing no picker", async () => {
+    const onRetryTags = vi.fn();
+    await mountTags({ tags: [], tagsStatus: "error", onRetryTags });
+    const notice = document.querySelector("[data-forum-tags-notice]");
+    expect(notice?.getAttribute("data-forum-tags-notice")).toBe("error");
+    await act(async () => button("Try again").click());
+    expect(onRetryTags).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows nothing about tags while they are still loading", async () => {
+    await mountTags({ tags: [], tagsStatus: "loading" });
+    expect(document.querySelector("[data-forum-tags-notice]")).toBeNull();
   });
 });
 
