@@ -72,15 +72,14 @@ async function openTextComposer(page: Page, ctx: Awaited<ReturnType<typeof setup
 }
 
 async function addText(composer: Locator, text: string) {
-  // The first text opens on its own; later ones from the text tool.
-  // (While the editor is open the tools are out of the way, so wait for it before reaching for one.)
-  const opened = await composer
-    .locator("[data-story-text]")
-    .waitFor({ state: "visible", timeout: 1500 })
-    .then(() => true, () => false);
-  if (!opened) {
+  // The first text of an empty text card opens its editor on its own; later ones come from the
+  // text tool. (While the editor is open the tools are out of the way, so never reach for one
+  // then: the card with no layers is the one that opens by itself, however slowly.)
+  const opensItself = (await composer.locator("[data-layer-type]").count()) === 0;
+  if (!opensItself) {
     await composer.locator("[data-story-tool-text]").click();
   }
+  await composer.locator("[data-story-text]").waitFor({ state: "visible", timeout: 15_000 });
   await composer.locator("[data-story-text]").fill(text);
   await composer.locator("[data-story-text-done]").click();
   await expect(composer.locator("[data-story-text]")).toHaveCount(0);
