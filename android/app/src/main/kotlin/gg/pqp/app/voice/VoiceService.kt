@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -107,21 +106,7 @@ class VoiceService : Service() {
         super.onDestroy()
     }
 
-    private fun foregroundTypes(): Int {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return 0
-        // `phoneCall` alongside `microphone`: every join now also places or
-        // answers a Telecom self-managed call (see `voice.telecom`), and
-        // declaring the type is what the CallStyle notification below is
-        // meant to sit under. Safe to declare unconditionally — it only
-        // requires the (normal, always-granted) MANAGE_OWN_CALLS permission,
-        // not that Telecom actually accepted this particular call.
-        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
-        if (projecting) {
-            types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-        }
-        return types
-    }
+    private fun foregroundTypes(): Int = voiceForegroundTypes(Build.VERSION.SDK_INT, projecting)
 
     @Suppress("DEPRECATION")
     private fun intentExtra(intent: Intent): Intent? =
