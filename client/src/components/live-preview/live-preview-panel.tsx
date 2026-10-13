@@ -4,7 +4,7 @@ import {
   type LivePreviewListedChannel,
   type LivePreviewUpcoming,
 } from "@pqp/shared";
-import { Check, Clock, Lock, Play, RotateCcw, Share2 } from "lucide-react";
+import { ArrowLeft, Check, Clock, Lock, Play, RotateCcw, Share2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
@@ -80,6 +80,10 @@ const LG_UP_QUERY = "(min-width: 1024px)";
 const LISTING_REFRESH_MS = 30_000;
 
 type Tab = "chat" | "about" | "upcoming";
+
+/** Marks the history entry the open live page pushed, so Back can close it. */
+const HISTORY_MARK = "pqpLivePreview";
+let historyEntries = 0;
 
 /**
  * THE SIGNED-OUT LIVE PREVIEW, drawn.
@@ -298,6 +302,40 @@ function LivePreviewPanelForSource({
     };
   }, [pageShown]);
 
+  // Leaving the live page, from the control or from the browser's Back. Only
+  // state and refs, so it is safe to call from the effect below.
+  const leave = useCallback(() => {
+    generation.current += 1;
+    setParts(EMPTY_DATE_PARTS);
+    setAgeError(false);
+    setPhase({ kind: "idle" });
+  }, []);
+
+  // The live page is a fixed overlay, so without a history entry the browser's
+  // Back would leave the site instead of closing it. Opening pushes one entry
+  // (keeping the router's own state in it); Back that lands before it closes
+  // the page. A Back that lands on this open's own entry (a sign-up form step
+  // inside the page) does not. Each open has its own id, so an entry left by
+  // an earlier open is never mistaken for this one.
+  const pushedEntry = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pageShown) {
+      return;
+    }
+    const entryId = `${Date.now()}-${(historyEntries += 1)}`;
+    window.history.pushState({ ...(window.history.state ?? {}), [HISTORY_MARK]: entryId }, "");
+    pushedEntry.current = entryId;
+    const onPop = () => {
+      if (pushedEntry.current === null || window.history.state?.[HISTORY_MARK] === pushedEntry.current) {
+        return;
+      }
+      pushedEntry.current = null;
+      leave();
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [pageShown, leave]);
+
   if (!shown) {
     return null;
   }
@@ -313,10 +351,17 @@ function LivePreviewPanelForSource({
   };
 
   const exit = () => {
-    generation.current += 1;
-    setParts(EMPTY_DATE_PARTS);
-    setAgeError(false);
-    setPhase({ kind: "idle" });
+    // Take the entry this page pushed back off the stack, so closing with the
+    // control leaves no dangling entry behind. Only when it is still the
+    // current one.
+    if (pushedEntry.current !== null) {
+      const entryId = pushedEntry.current;
+      pushedEntry.current = null;
+      if (window.history.state?.[HISTORY_MARK] === entryId) {
+        window.history.back();
+      }
+    }
+    leave();
   };
 
   const submitAge = () => {
@@ -421,6 +466,14 @@ function LivePreviewPanelForSource({
     >
       <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-border bg-rail px-4 py-2 lg:px-6 lg:py-3">
         <div className="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={exit}
+            aria-label={t("livePreview.header.back", { name: community.name })}
+            className="inline-flex size-11 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-sm text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          >
+            <ArrowLeft aria-hidden className="size-5" />
+          </button>
           <Link to="/" className="font-brand text-2xl leading-none tracking-tight text-accent">
             pqp
           </Link>
@@ -428,15 +481,10 @@ function LivePreviewPanelForSource({
           {community.slug && (
             <>
               <span aria-hidden className="hidden h-5 w-px bg-border sm:block" />
-              <button
-                type="button"
-                onClick={exit}
-                aria-label={t("livePreview.header.back", { name: community.name })}
-                className="hidden min-h-11 min-w-0 items-center truncate rounded-[var(--radius-control)] text-sm text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring sm:inline-flex"
-              >
+              <span className="hidden min-w-0 truncate text-sm text-text-secondary sm:inline">
                 pqp.gg/c/
                 <span className="font-handle font-semibold text-text">{community.slug}</span>
-              </button>
+              </span>
             </>
           )}
         </div>

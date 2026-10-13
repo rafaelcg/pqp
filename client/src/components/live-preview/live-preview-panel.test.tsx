@@ -116,11 +116,26 @@ function render(slug: string) {
   );
 }
 
-async function mount() {
+/** The invite gate: no community slug, the source is the invite code. */
+function renderInvite() {
+  root!.render(
+    <MemoryRouter>
+      <LivePreviewPanel
+        source={{ kind: "invite", code: "abc123" }}
+        landing="/invite/abc123"
+        surface="invite"
+        community={{ ...COMMUNITY, slug: null }}
+        auth={devLivePreviewAuth(() => {})}
+      />
+    </MemoryRouter>,
+  );
+}
+
+async function mount(draw: () => void = () => render(COMMUNITY.slug!)) {
   host = document.createElement("div");
   siteRoot!.append(host);
   root = createRoot(host);
-  await act(async () => render(COMMUNITY.slug!));
+  await act(async () => draw());
 }
 
 /** The full-screen live page, portalled to <body>; null while only the entry card shows. */
@@ -132,6 +147,18 @@ async function watchNow() {
   const button = host!.querySelector<HTMLButtonElement>("button[aria-label]");
   expect(button).not.toBeNull();
   await act(async () => button!.click());
+}
+
+function exitControl(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>("[data-live-preview] header button[aria-label]");
+}
+
+/** jsdom runs a history traversal on a timer, then fires popstate. */
+async function goBack() {
+  await act(async () => {
+    window.history.back();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
 }
 
 async function answerStart(index: number, result: LivePreviewStartResult) {
@@ -202,5 +229,54 @@ describe("LivePreviewPanel", () => {
     await act(async () => render("outra-sala"));
     expect(page()).toBeNull();
     expect(siteRoot!.inert).toBe(false);
+  });
+
+  it("offers a way out on the invite gate, where there is no community slug", async () => {
+    await mount(renderInvite);
+    await watchNow();
+    await answerStart(0, okResult());
+    expect(page()?.dataset.livePreview).toBe("watching");
+    const control = exitControl();
+    expect(control).not.toBeNull();
+    await act(async () => control!.click());
+    expect(page()).toBeNull();
+    expect(siteRoot!.inert).toBe(false);
+  });
+
+  it("keeps the way out visible at a narrow width", async () => {
+    await mount();
+    await watchNow();
+    await answerStart(0, okResult());
+    const control = exitControl();
+    expect(control).not.toBeNull();
+    // Nothing on or above the control hides it below `sm`.
+    expect(control!.closest(".hidden")).toBeNull();
+    expect(control!.querySelector("svg")).not.toBeNull();
+  });
+
+  it("closes the page on the browser's Back and leaves no extra entry on the control", async () => {
+    await mount();
+    const before = window.history.length;
+    await watchNow();
+    await answerStart(0, okResult());
+    expect(page()).not.toBeNull();
+    expect(window.history.length).toBe(before + 1);
+
+    await goBack();
+    expect(page()).toBeNull();
+    expect(siteRoot!.inert).toBe(false);
+
+    // Opened again and closed with the control: the pushed entry is popped.
+    const resting = window.history.state;
+    await watchNow();
+    await answerStart(1, okResult());
+    expect(window.history.state?.pqpLivePreview).not.toEqual(resting?.pqpLivePreview);
+    await act(async () => {
+      exitControl()!.click();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    expect(page()).toBeNull();
+    // Back on the entry the visitor started from, not on the one the page pushed.
+    expect(window.history.state).toEqual(resting);
   });
 });
