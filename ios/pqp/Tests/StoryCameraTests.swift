@@ -49,6 +49,18 @@ final class StoryCameraTests: XCTestCase {
         XCTAssertEqual(press.up(at: t0.addingTimeInterval(2)), .nothing)
     }
 
+    /// With video off on the server, the shutter takes photos however long it
+    /// is held, and never starts a recording.
+    func testWithVideoOffAHoldIsStillAPhoto() {
+        var press = StoryShutterPress()
+        press.allowsVideo = false
+        let t0 = Date()
+        press.down(at: t0)
+        XCTAssertFalse(press.holdElapsed(at: t0.addingTimeInterval(0.5)))
+        XCTAssertFalse(press.isRecording)
+        XCTAssertEqual(press.up(at: t0.addingTimeInterval(2)), .photo)
+    }
+
     // MARK: - Zoom
 
     func testZoomLabelDropsAWholeDecimal() {
@@ -228,5 +240,39 @@ final class StoryCameraTests: XCTestCase {
         let short = try await StoryTestVideo.write(duration: 4, size: CGSize(width: 90, height: 160), fps: 5)
         let draft = try await StoryMediaPrep.video(at: short, maxVideoMs: StoryLimits.maxVideoMs)
         XCTAssertEqual(Double(draft.durationMs ?? 0), 4_000, accuracy: 300)
+    }
+
+    // MARK: - Importing
+
+    func testAPictureIsDownsampledFromBytesNeverDecodedAtFullSize() async throws {
+        let big = UIGraphicsImageRenderer(size: CGSize(width: 4000, height: 3000)).image { context in
+            UIColor.orange.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 4000, height: 3000))
+        }
+        let data = try XCTUnwrap(big.jpegData(compressionQuality: 0.8))
+        let sampled = await StoryImport.downsampledImage(data: data, maxEdge: 1440)
+        let small = try XCTUnwrap(sampled)
+        XCTAssertLessThanOrEqual(max(small.size.width, small.size.height) * small.scale, 1440.5)
+        XCTAssertGreaterThan(small.size.width, small.size.height, "Orientation and aspect kept")
+        let junk = await StoryImport.downsampledImage(data: Data([1, 2, 3]), maxEdge: 1440)
+        XCTAssertNil(junk, "Not a picture")
+    }
+
+    func testAMovieIsCopiedAndTheCopyCanBeRemoved() async throws {
+        let source = try await StoryTestVideo.write(duration: 1, size: CGSize(width: 90, height: 160), fps: 5)
+        let copy = try await StoryImport.copyMovie(source)
+        XCTAssertNotEqual(copy, source)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copy.path))
+        StoryImport.remove(copy)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path))
+        StoryImport.remove(nil)
+        StoryImport.remove(source)
+    }
+
+    func testTheTrimmerCarriesTheServersLimit() {
+        let request = StoryTrimRequest(url: URL(fileURLWithPath: "/tmp/x.mp4"), durationMs: 20_000, maxMs: 15_000)
+        XCTAssertEqual(request.maxMs, 15_000)
+        XCTAssertEqual(StoryTrim.maxStartMs(durationMs: request.durationMs, maxMs: request.maxMs), 5_000)
+        XCTAssertEqual(StoryTrimRequest(url: request.url, durationMs: 40_000).maxMs, StoryLimits.maxVideoMs)
     }
 }

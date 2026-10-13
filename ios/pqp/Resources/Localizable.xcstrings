@@ -8051,6 +8051,16 @@
         }
       }
     },
+    "Videos are off here. Take a photo instead." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vídeo tá desligado aqui. Tira uma foto."
+          }
+        }
+      }
+    },
     "VIP" : {
       "localizations" : {
         "pt-BR" : {

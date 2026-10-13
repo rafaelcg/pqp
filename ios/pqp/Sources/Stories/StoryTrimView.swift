@@ -9,6 +9,8 @@ struct StoryTrimRequest: Identifiable {
     let id = UUID()
     let url: URL
     let durationMs: Int
+    /// The server's limit for this story, which is what the export keeps.
+    var maxMs: Int = StoryLimits.maxVideoMs
 }
 
 struct StoryTrimView: View {
@@ -24,7 +26,8 @@ struct StoryTrimView: View {
     @State private var observer: Any?
     @State private var edgeTick = 0
 
-    private let maxMs = StoryLimits.maxVideoMs
+    private var maxMs: Int { request.maxMs }
+    @State private var seekTask: Task<Void, Never>?
     private let stripHeight: CGFloat = 64
 
     private var kept: (startMs: Int, lengthMs: Int) {
@@ -91,7 +94,16 @@ struct StoryTrimView: View {
         .preferredColorScheme(.dark)
         .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: edgeTick)
         .task { await load() }
-        .onChange(of: startMs) { _, _ in rewindWindow() }
+        .onChange(of: startMs) { _, _ in
+            // Dragging fires this many times a second, and an exact seek
+            // decodes a frame each: follow loosely while the finger moves.
+            seekTask?.cancel()
+            seekTask = Task {
+                try? await Task.sleep(for: .milliseconds(90))
+                guard !Task.isCancelled else { return }
+                rewindWindow(exact: false)
+            }
+        }
         .onDisappear {
             player.pause()
             if let observer { player.removeTimeObserver(observer) }
@@ -145,7 +157,12 @@ struct StoryTrimView: View {
                         if (next == 0 || next == maxStart) && next != startMs { edgeTick += 1 }
                         startMs = next
                     }
-                    .onEnded { _ in dragOrigin = nil }
+                    .onEnded { _ in
+                        dragOrigin = nil
+                        // Exactly once the finger lifts.
+                        seekTask?.cancel()
+                        rewindWindow(exact: true)
+                    }
             )
             .accessibilityElement()
             .accessibilityLabel(Text("Part of the video"))
@@ -189,9 +206,10 @@ struct StoryTrimView: View {
         thumbnails = frames
     }
 
-    private func rewindWindow() {
+    private func rewindWindow(exact: Bool = true) {
         let target = CMTime(seconds: Double(kept.startMs) / 1000, preferredTimescale: 600)
-        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        let slack = exact ? CMTime.zero : CMTime(seconds: 0.4, preferredTimescale: 600)
+        player.seek(to: target, toleranceBefore: slack, toleranceAfter: slack)
         if player.timeControlStatus != .playing { player.play() }
     }
 }

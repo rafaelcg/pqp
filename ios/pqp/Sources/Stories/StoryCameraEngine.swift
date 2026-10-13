@@ -116,8 +116,14 @@ final class StoryCaptureCore: @unchecked Sendable {
         session.beginConfiguration()
         defer { session.commitConfiguration() }
         if session.sessionPreset != .high, session.canSetSessionPreset(.high) { session.sessionPreset = .high }
-        if let videoInput { session.removeInput(videoInput) }
-        guard session.canAddInput(input) else { throw StoryCameraFailure.captureFailed }
+        let previous = videoInput
+        if let previous { session.removeInput(previous) }
+        guard session.canAddInput(input) else {
+            // A flip that cannot happen must not leave the session with no
+            // camera at all: the one that was running goes back.
+            if let previous, session.canAddInput(previous) { session.addInput(previous) }
+            throw StoryCameraFailure.captureFailed
+        }
         session.addInput(input)
         videoInput = input
         self.device = device
@@ -130,6 +136,12 @@ final class StoryCaptureCore: @unchecked Sendable {
             guard session.canAddOutput(movieOutput) else { throw StoryCameraFailure.captureFailed }
             session.addOutput(movieOutput)
             movieOutput.maxRecordedDuration = CMTime(seconds: Double(StoryLimits.maxVideoMs) / 1000, preferredTimescale: 600)
+        }
+        // The microphone belongs to a call while one is up: take the input out
+        // rather than keep recording over it.
+        if !wantsAudio, let audioInput {
+            session.removeInput(audioInput)
+            self.audioInput = nil
         }
         if wantsAudio, audioInput == nil,
            AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
@@ -162,6 +174,12 @@ final class StoryCaptureCore: @unchecked Sendable {
 
     private func resetZoom() {
         guard let device else { return }
+        // `virtualDeviceSwitchOverVideoZoomFactors` lists the factors where the
+        // device hands over from one constituent lens to the next, in lens
+        // order. On a phone whose first lens is the ultra-wide, the first
+        // entry is the ultra-wide to wide hand-over: factor 1 is the ultra-wide
+        // and that entry is what the pill calls 1x. The wide to telephoto entry
+        // is the SECOND one and is not used here.
         var base = 1.0
         if let first = device.virtualDeviceSwitchOverVideoZoomFactors.first?.doubleValue,
            device.constituentDevices.first?.deviceType == .builtInUltraWideCamera {
@@ -302,7 +320,13 @@ final class StoryCaptureCore: @unchecked Sendable {
                 // The duration cap and an interruption both end a recording
                 // "with an error" and still leave a complete file.
                 let finished = (error as NSError).userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool ?? false
-                if finished { done(.success(outputFileURL)) } else { done(.failure(error)) }
+                if finished {
+                    done(.success(outputFileURL))
+                } else {
+                    // A failed recording leaves a stub: do not keep it.
+                    try? FileManager.default.removeItem(at: outputFileURL)
+                    done(.failure(error))
+                }
             } else {
                 done(.success(outputFileURL))
             }

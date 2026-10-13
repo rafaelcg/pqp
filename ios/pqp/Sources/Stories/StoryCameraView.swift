@@ -19,6 +19,8 @@ struct StoryCameraView: View {
     let recordsAudio: Bool
     /// The call has the camera on: a device has one owner at a time.
     var blockedByCall = false
+    /// False when the server has video off: the shutter only takes photos.
+    var allowsVideo = true
     let onCapture: (StoryCameraResult) -> Void
     let onGallery: () -> Void
     let onFiles: () -> Void
@@ -38,6 +40,12 @@ struct StoryCameraView: View {
     @State private var hasFlash = false
     @State private var hasTwoCameras = false
     @State private var silent = false
+    /// Whether the running engine was built with a microphone, to notice a
+    /// call starting or ending under it.
+    @State private var engineWantsAudio = true
+    /// Bumped by every start and every release, so a start that was waiting on
+    /// a permission sheet can tell it has been overtaken.
+    @State private var generation = 0
 
     @State private var press = StoryShutterPress()
     @State private var holdTask: Task<Void, Never>?
@@ -76,7 +84,7 @@ struct StoryCameraView: View {
             }
         }
         .ignoresSafeArea()
-        .task(id: isActive && !blockedByCall) { await sync() }
+        .task(id: LifecycleKey(active: isActive && !blockedByCall, audio: recordsAudio)) { await sync() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await sync() } } else { releaseCamera() }
         }
@@ -254,7 +262,7 @@ struct StoryCameraView: View {
             if isRecording { Task { await finishRecording() } } else { Task { await takePhoto() } }
         }
         .accessibilityAction(named: Text("Record video")) {
-            if !isRecording { Task { await beginRecording() } }
+            if allowsVideo, !isRecording { Task { await beginRecording() } }
         }
     }
 
@@ -345,10 +353,31 @@ struct StoryCameraView: View {
 
     // MARK: - Lifecycle
 
+    private struct LifecycleKey: Equatable {
+        let active: Bool
+        let audio: Bool
+    }
+
     private func sync() async {
+        generation += 1
+        let mine = generation
+        // Still the latest start, still meant to run: checked after every
+        // suspension, because a permission sheet can sit open while the call
+        // starts, the composer closes or the app goes to the background.
+        func current() -> Bool {
+            !Task.isCancelled && mine == generation && isActive && !blockedByCall && scenePhase == .active
+        }
         guard isActive, !blockedByCall, scenePhase == .active else {
             releaseCamera()
             return
+        }
+        // A call took the microphone (or gave it back) under a running camera:
+        // the session is rebuilt, because an input cannot be taken off one that
+        // is recording for somebody else.
+        if running, engineWantsAudio != recordsAudio {
+            engine?.stop()
+            engine = nil
+            running = false
         }
         guard !running else { return }
         access = StoryCameraAccess.resolve(
@@ -357,6 +386,7 @@ struct StoryCameraView: View {
         )
         if access == .needsPrompt {
             let granted = await StoryCameraEngineFactory.requestAccess()
+            guard current() else { return }
             access = granted ? .ready : .denied
         }
         guard access == .ready else { return }
@@ -364,8 +394,10 @@ struct StoryCameraView: View {
         // the camera still works and the video is silent.
         if recordsAudio, AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
             _ = await AVCaptureDevice.requestAccess(for: .audio)
+            guard current() else { return }
         }
         let next = engine ?? StoryCameraEngineFactory.make(recordsAudio: recordsAudio)
+        engineWantsAudio = recordsAudio
         next.onInterruption = { failure in
             Task { @MainActor in handleInterruption(failure) }
         }
@@ -374,6 +406,11 @@ struct StoryCameraView: View {
         } catch {
             access = .noDevice
             engine = nil
+            return
+        }
+        guard current() else {
+            // Overtaken while the device was opening: give it straight back.
+            next.stop()
             return
         }
         engine = next
@@ -387,6 +424,7 @@ struct StoryCameraView: View {
     }
 
     private func releaseCamera() {
+        generation += 1
         holdTask?.cancel()
         limitTask?.cancel()
         if isRecording { Task { await finishRecording() } }
@@ -452,6 +490,7 @@ struct StoryCameraView: View {
     private func shutterChanged(_ value: DragGesture.Value) {
         if !press.isDown {
             guard !busy else { return }
+            press.allowsVideo = allowsVideo
             press.down(at: Date())
             pressed = true
             holdTask?.cancel()
@@ -505,13 +544,17 @@ struct StoryCameraView: View {
     }
 
     private func beginRecording() async {
-        guard let engine, !isRecording, !busy else { return }
+        guard let engine, allowsVideo, !isRecording, !busy else { return }
         busy = true
         holdTick += 1
+        // Recording is declared BEFORE the device confirms it: a finger that
+        // lifts while it is still starting must find a recording to stop. The
+        // stop is queued behind the start on the capture queue, so it lands
+        // after it, not instead of it.
+        recordingStartedAt = Date()
+        isRecording = true
         do {
             try await engine.startRecording(torch: flash.torchesVideo && position == .back)
-            recordingStartedAt = Date()
-            isRecording = true
             limitTask?.cancel()
             limitTask = Task {
                 try? await Task.sleep(for: .milliseconds(StoryLimits.maxVideoMs))
@@ -523,6 +566,8 @@ struct StoryCameraView: View {
             }
         } catch {
             press.recordingEnded()
+            isRecording = false
+            recordingStartedAt = nil
             toast(String(localized: "Couldn't start recording. Try again."))
         }
         busy = false

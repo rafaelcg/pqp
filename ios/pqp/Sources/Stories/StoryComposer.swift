@@ -85,8 +85,10 @@ struct StoryComposer: View {
             Task { await load(item) }
         }
         .fileImporter(isPresented: $showingFiles, allowedContentTypes: config.videoEnabled ? [.image, .movie] : [.image]) { result in
-            guard case .success(let url) = result else { return }
-            Task { await load(fileAt: url) }
+            switch result {
+            case .success(let url): Task { await load(fileAt: url) }
+            case .failure: error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
+            }
         }
         .fullScreenCover(item: $trimRequest) { request in
             StoryTrimView(request: request) { startMs in
@@ -94,6 +96,7 @@ struct StoryComposer: View {
                 Task { await accept(videoAt: request.url, trimStartMs: startMs) }
             } onCancel: {
                 trimRequest = nil
+                StoryImport.remove(request.url)
             }
         }
         .sheet(isPresented: $showingAudience) {
@@ -177,6 +180,9 @@ struct StoryComposer: View {
                         isActive: cameraActive,
                         recordsAudio: !callActive,
                         blockedByCall: callCameraOn,
+                        // Until the server answers, assume yes: the result is
+                        // checked again in `accept(cameraResult:)`.
+                        allowsVideo: !configLoaded || config.videoEnabled,
                         onCapture: { result in Task { await accept(cameraResult: result) } },
                         onGallery: { showingPicker = true },
                         onFiles: { showingFiles = true }
@@ -379,7 +385,8 @@ struct StoryComposer: View {
                 return
             }
             await accept(videoAt: movie.url)
-        } else if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
+        } else if let data = try? await item.loadTransferable(type: Data.self),
+                  let image = await StoryImport.downsampledImage(data: data, maxEdge: StoryLimits.imageMaxEdge) {
             accept(image: image)
         } else {
             error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
@@ -389,7 +396,13 @@ struct StoryComposer: View {
     private func accept(cameraResult: StoryCameraResult?) async {
         switch cameraResult {
         case .image(let image): accept(image: image)
-        case .video(let url): await accept(videoAt: url)
+        case .video(let url):
+            guard config.videoEnabled || !configLoaded else {
+                StoryImport.remove(url)
+                error = String(localized: "Videos are off here. Take a photo instead.")
+                return
+            }
+            await accept(videoAt: url)
         case nil: break
         }
     }
@@ -405,35 +418,36 @@ struct StoryComposer: View {
         }
     }
 
-    /// A file from the Files app: copied somewhere this app owns first, because
-    /// the picked URL is security scoped and only valid while it is open.
+    /// A file from the Files app. The copy of a movie and the decode of a
+    /// picture both run off the main actor: either can be gigabytes.
     private func load(fileAt url: URL) async {
         preparing = true
         error = nil
         defer { preparing = false }
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let type = UTType(filenameExtension: url.pathExtension)
         if type?.conforms(to: .movie) == true {
-            let copy = FileManager.default.temporaryDirectory
-                .appendingPathComponent("story-\(UUID().uuidString).\(url.pathExtension)")
-            do {
-                try FileManager.default.copyItem(at: url, to: copy)
-            } catch {
-                self.error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
+            guard let copy = try? await StoryImport.copyMovie(url) else {
+                error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
                 return
             }
             await accept(videoAt: copy)
-        } else if let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
+        } else if let image = await StoryImport.downsampledImage(at: url, maxEdge: StoryLimits.imageMaxEdge) {
             accept(image: image)
         } else {
             error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
         }
     }
 
+    /// `url` is a temporary file this composer owns (a shot, a picked movie, a
+    /// copy from Files): it is deleted once the export has made its own, or the
+    /// trimmer is cancelled.
     private func accept(videoAt url: URL, trimStartMs: Int? = nil) async {
         preparing = true
-        defer { preparing = false }
+        var keepSource = false
+        defer {
+            preparing = false
+            if !keepSource { StoryImport.remove(url) }
+        }
         do {
             if trimStartMs == nil {
                 let duration = try await AVURLAsset(url: url).load(.duration)
@@ -441,7 +455,8 @@ struct StoryComposer: View {
                 // Past the limit the person chooses which 30 s; they are not
                 // sent away with a refusal.
                 if StoryTrim.needsTrim(durationMs: ms, maxMs: config.maxVideoMs) {
-                    trimRequest = StoryTrimRequest(url: url, durationMs: ms)
+                    keepSource = true
+                    trimRequest = StoryTrimRequest(url: url, durationMs: ms, maxMs: config.maxVideoMs)
                     return
                 }
             }

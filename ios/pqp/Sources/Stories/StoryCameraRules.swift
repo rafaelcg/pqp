@@ -37,6 +37,9 @@ struct StoryShutterPress: Equatable {
 
     private(set) var startedAt: Date?
     private(set) var isRecording = false
+    /// False when this server has video off: a hold is then just a slow tap,
+    /// and the shutter only ever takes photos.
+    var allowsVideo = true
 
     var isDown: Bool { startedAt != nil }
 
@@ -47,7 +50,7 @@ struct StoryShutterPress: Equatable {
 
     /// Called when the hold timer fires. True when recording should begin now.
     mutating func holdElapsed(at date: Date) -> Bool {
-        guard let startedAt, !isRecording,
+        guard allowsVideo, let startedAt, !isRecording,
               date.timeIntervalSince(startedAt) >= Self.holdThreshold - 0.001
         else { return false }
         isRecording = true
@@ -61,6 +64,7 @@ struct StoryShutterPress: Equatable {
         }
         guard let startedAt else { return .nothing }
         if isRecording { return .recordingStopped }
+        if !allowsVideo { return .photo }
         return date.timeIntervalSince(startedAt) < Self.holdThreshold ? .photo : .nothing
     }
 
