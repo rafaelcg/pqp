@@ -143,7 +143,7 @@ export const StoryContent = forwardRef(function StoryContent(
       )}
       {isMedia && story.caption && (
         <p
-          className="absolute bottom-[6%] left-[5%] right-[5%] whitespace-pre-wrap break-words text-[4.4cqw] font-semibold leading-snug [text-shadow:0_1px_8px_var(--story-dim)]"
+          className="absolute bottom-[calc(6%+var(--story-caption-lift,0px))] left-[5%] right-[5%] whitespace-pre-wrap break-words text-[4.4cqw] font-semibold leading-snug [text-shadow:0_1px_8px_var(--story-dim)]"
           style={{ color: "var(--story-on-media)" }}
         >
           {story.caption}

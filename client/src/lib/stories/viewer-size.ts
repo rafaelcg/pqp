@@ -2,60 +2,59 @@ import { useEffect, useState } from "react";
 
 /**
  * The desktop viewer's card, sized from the window rather than a fixed
- * 366x650. The canvas is 9:16 (the composer draws on the same one), the reply
- * bar sits under it at the same width, and the pair is about 92% of the
- * window's height. Phone width never comes through here.
+ * 366x650. The card is the 9:16 canvas and nothing else (the composer draws on
+ * the same one): the header and the reply row are drawn over it, at one
+ * compact size, so a big window gets a bigger picture and not bigger buttons.
+ * The card is about 92% of the window's height. Phone width never comes
+ * through here.
  *
- * `zoom` is how much the header and the reply bar are scaled with the card, so
- * a 2560x1440 window does not wear a 366 px card's 14 px type. It is 1 at and
- * below the old size and capped, because the controls only need to stay
- * proportionate, not grow forever.
+ * The neighbours (the previous and next person, dimmed and shorter, centred on
+ * the card) are sized from the card too, so the row of three reads as one
+ * piece at every window size.
  */
 
-export const STORY_FOOTER_PX = 64;
-const BASE_WIDTH = 366;
 const HEIGHT_SHARE = 0.92;
-const MAX_ZOOM = 1.6;
-/** Side room: two arrows and the gaps; at xl also the two neighbours. */
+/** The arrows are 28 px; two of them, the four gaps and the window's margin. */
+const ARROWS_AND_GAPS = 56 + 48 + 48;
 const SIDE_ROOM = 144;
-const SIDE_ROOM_XL = 456;
 const XL = 1280;
 /** Least room kept for the card beside the arrows on a very narrow window. */
 const MIN_WIDTH = 240;
 const TINY_WIDTH = 1;
+/** A neighbour is this much of the card's width, within these bounds. */
+const NEIGHBOUR_SHARE = 0.38;
+const NEIGHBOUR_MIN = 112;
+const NEIGHBOUR_MAX = 240;
 
 export interface StoryCardSize {
-  /** Canvas width, which is also the card's and the reply bar's. */
+  /** The card's width: the canvas. */
   width: number;
-  /** Canvas plus reply bar. */
+  /** The card's height: the canvas, 9:16. */
   height: number;
-  zoom: number;
+  /** A neighbour card, 9:16 too. Shown only at xl and up (`showNeighbours`). */
+  neighbourWidth: number;
+  neighbourHeight: number;
+  showNeighbours: boolean;
 }
 
 export function storyCardSize(windowWidth: number, windowHeight: number): StoryCardSize {
-  const availableHeight = windowHeight * HEIGHT_SHARE;
-  const availableWidth = Math.max(
-    MIN_WIDTH,
-    windowWidth - (windowWidth >= XL ? SIDE_ROOM_XL : SIDE_ROOM),
+  const byHeight = Math.max(TINY_WIDTH, (windowHeight * HEIGHT_SHARE * 9) / 16);
+  const neighbourWidth = Math.round(
+    Math.min(NEIGHBOUR_MAX, Math.max(NEIGHBOUR_MIN, byHeight * NEIGHBOUR_SHARE)),
   );
-  // The reply bar scales with the card and the card depends on what the bar
-  // leaves, so settle it in a few passes.
-  let zoom = 1;
-  let width = TINY_WIDTH;
-  for (let pass = 0; pass < 4; pass += 1) {
-    // Height wins on a short window: only a sliver is kept so the arithmetic
-    // never goes negative, never a width that would push the card off-screen.
-    width = Math.max(
-      TINY_WIDTH,
-      Math.min(availableWidth, ((availableHeight - STORY_FOOTER_PX * zoom) * 9) / 16),
-    );
-    zoom = Math.min(MAX_ZOOM, Math.max(1, width / BASE_WIDTH));
-  }
-  width = Math.floor(width);
+  const showNeighbours = windowWidth >= XL;
+  const sideRoom = showNeighbours ? 2 * neighbourWidth + ARROWS_AND_GAPS : SIDE_ROOM;
+  // Height wins on a short window: only a sliver is kept so the arithmetic
+  // never goes negative, never a width that would push the card off-screen.
+  const width = Math.floor(
+    Math.max(TINY_WIDTH, Math.min(byHeight, Math.max(MIN_WIDTH, windowWidth - sideRoom))),
+  );
   return {
     width,
-    height: Math.round((width * 16) / 9 + STORY_FOOTER_PX * zoom),
-    zoom: Math.round(zoom * 1000) / 1000,
+    height: Math.round((width * 16) / 9),
+    neighbourWidth,
+    neighbourHeight: Math.round((neighbourWidth * 16) / 9),
+    showNeighbours,
   };
 }
 
@@ -72,7 +71,11 @@ export function useStoryCardSize(): StoryCardSize {
     function onResize() {
       setSize((current) => {
         const next = read();
-        return next.width === current.width && next.height === current.height ? current : next;
+        return next.width === current.width &&
+          next.neighbourWidth === current.neighbourWidth &&
+          next.showNeighbours === current.showNeighbours
+          ? current
+          : next;
       });
     }
     onResize();
