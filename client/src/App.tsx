@@ -10244,6 +10244,7 @@ function MainAppContent({
     ? {
         serverId: selectedServer.id,
         serverName: selectedServer.name,
+        serverIconUrl: resolveUploadedImageUrl(selectedServer.iconUrl),
         rooms: channels
           .filter((channel) => channel.type === "voice")
           .map((channel) => ({
@@ -13653,6 +13654,10 @@ function MainAppContent({
         me={storiesSelf}
         bauEnabled={communityHomeEnabled}
         voiceRooms={storiesVoiceRooms}
+        serverBrand={(serverId) => {
+          const server = servers.find((one) => one.id === serverId);
+          return server ? { name: server.name, iconUrl: resolveUploadedImageUrl(server.iconUrl) } : null;
+        }}
         onJoinCall={handleStoryJoinCall}
         onOpenRoles={(serverId) => {
           if (serverId !== selectedServerIdRef.current) {

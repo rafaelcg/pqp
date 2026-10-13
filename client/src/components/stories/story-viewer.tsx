@@ -41,6 +41,7 @@ import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { useMediaQuery } from "@/components/ui/use-media-query";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { useProfilePopover } from "@/components/user/user-profile-popover";
 import { ApiError } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -74,7 +75,9 @@ import {
   viewerReducer,
 } from "@/lib/stories/viewer-state";
 import { cn } from "@/lib/utils";
+import type { CallCardServer } from "./story-call-card";
 import { StoryContent, type StoryDisplay } from "./story-content";
+import { displayLayerFrom, type MentionTarget } from "./story-layers";
 import { StoryReportDialog } from "./story-report-dialog";
 import type { StoryViewerSelf } from "./story-strip";
 import { StoryViewersSheet } from "./story-viewers-sheet";
@@ -94,7 +97,22 @@ import { StoryViewersSheet } from "./story-viewers-sheet";
  * there; this file is the DOM around them.
  */
 
-export function storyToDisplay(story: Story): StoryDisplay {
+export function storyToDisplay(
+  story: Story,
+  brand?: (serverId: string) => CallCardServer | null,
+): StoryDisplay {
+  const call = story.call;
+  // The card names the server: the app's own record of it (with its icon), else the
+  // name the story came with.
+  const callServer = call
+    ? (brand?.(call.serverId) ??
+      story.audiences.flatMap((audience) =>
+        audience.kind === "server" && audience.serverId === call.serverId
+          ? [{ name: audience.serverName, iconUrl: null }]
+          : [],
+      )[0] ??
+      null)
+    : null;
   return {
     id: story.id,
     kind: story.kind,
@@ -103,7 +121,12 @@ export function storyToDisplay(story: Story): StoryDisplay {
     caption: story.caption,
     mediaUrl: story.media?.url ?? null,
     posterUrl: story.media?.posterUrl ?? null,
+    mediaWidth: story.media?.width ?? null,
+    mediaHeight: story.media?.height ?? null,
     call: story.call,
+    layers: (story.layers ?? []).map(displayLayerFrom),
+    altText: story.altText ?? null,
+    callServer,
   };
 }
 
@@ -137,6 +160,8 @@ interface StoryViewerProps {
   onClosed: () => void;
   onJoinCall: (call: StoryCallLive) => void;
   onOpenRoles: (serverId: string) => void;
+  /** A server's name and icon, for the call card. */
+  serverBrand?: (serverId: string) => CallCardServer | null;
 }
 
 type Fx =
@@ -150,8 +175,10 @@ export function StoryViewer({
   onClosed,
   onJoinCall,
   onOpenRoles,
+  serverBrand,
 }: StoryViewerProps) {
   const { t } = useTranslation();
+  const openProfile = useProfilePopover();
   const wide = useMediaQuery("(min-width: 640px)", true);
   const cardSize = useStoryCardSize();
   // The header and the reply bar grow with a desktop card (phones: untouched).
@@ -552,8 +579,33 @@ export function StoryViewer({
     }
   }, [state.closed, close]);
 
+  // A tap on a mention opens that person's card over the story, and holds the story while it is read.
+  const mentionResume = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (mentionResume.current !== null) {
+        window.clearTimeout(mentionResume.current);
+      }
+    },
+    [],
+  );
+  function openMention(person: MentionTarget, anchor: HTMLElement) {
+    openProfile(
+      { id: person.userId, displayName: person.name, tag: null, avatarUrl: person.avatarUrl },
+      anchor,
+    );
+    dispatch({ type: "pause", reason: "dialog" });
+    if (mentionResume.current !== null) {
+      window.clearTimeout(mentionResume.current);
+    }
+    mentionResume.current = window.setTimeout(() => {
+      mentionResume.current = null;
+      dispatch({ type: "resume", reason: "dialog" });
+    }, 12_000);
+  }
+
   // ---------------------------------------------------------------- deck
-  const display = story ? storyToDisplay(story) : null;
+  const display = story ? storyToDisplay(story, serverBrand) : null;
   useLayoutEffect(() => {
     if (state.generation === lastGeneration.current) {
       return;
@@ -1152,6 +1204,8 @@ export function StoryViewer({
                   onJoinCall(call);
                   dispatch({ type: "close" });
                 }}
+                onOpenMention={openMention}
+                reserveBottom={64}
                 onVideoDuration={(ms) => dispatch({ type: "duration", durationMs: ms })}
                 onVideoTime={(ms) => dispatch({ type: "progress", elapsedMs: ms })}
                 onVideoEnded={() => dispatch({ type: "next" })}

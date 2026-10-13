@@ -25,7 +25,9 @@ import { StoryViewer } from "./story-viewer";
 interface StoriesHostProps {
   me: StoryViewerSelf | null;
   bauEnabled: boolean;
-  voiceRooms: { serverId: string; serverName: string; rooms: ComposerVoiceRoom[] } | null;
+  voiceRooms: { serverId: string; serverName: string; serverIconUrl?: string | null; rooms: ComposerVoiceRoom[] } | null;
+  /** A server's name and icon, for the call card in the viewer. Null for one this person is not in. */
+  serverBrand?: (serverId: string) => { name: string; iconUrl: string | null } | null;
   onJoinCall: (call: StoryCallLive) => void;
   onOpenRoles: (serverId: string) => void;
 }
@@ -37,7 +39,7 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-export function StoriesHost({ me, bauEnabled, voiceRooms, onJoinCall, onOpenRoles }: StoriesHostProps) {
+export function StoriesHost({ me, bauEnabled, voiceRooms, serverBrand, onJoinCall, onOpenRoles }: StoriesHostProps) {
   const { t } = useTranslation();
   const ui = useStoriesUi();
   const [viewerKey, setViewerKey] = useState(0);
@@ -166,6 +168,7 @@ export function StoriesHost({ me, bauEnabled, voiceRooms, onJoinCall, onOpenRole
           onClosed={closeStoryViewer}
           onJoinCall={onJoinCall}
           onOpenRoles={onOpenRoles}
+          serverBrand={serverBrand}
         />
       )}
       {ui.composer && (

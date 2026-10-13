@@ -2,6 +2,7 @@ import { forwardRef, useLayoutEffect, useRef, type CSSProperties, type HTMLAttri
 import type { StoryLayer } from "@pqp/shared";
 import { colorFromTokens, paintStrokes, type Stroke } from "@/lib/stories/drawing";
 import {
+  CALL_CARD_CQW,
   IMAGE_BASE_CQW,
   IMAGE_ROUNDED_CQW,
   MENTION_BASE_CQW,
@@ -21,12 +22,19 @@ import { cn } from "@/lib/utils";
  * `StoryContent`).
  */
 
+/** Who a tap on a mention opens. */
+export interface MentionTarget {
+  userId: string;
+  name: string;
+  avatarUrl: string | null;
+}
+
 export type DisplayLayer =
   | (LayerGeometry & { type: "text" } & TextLayerFields)
   | (LayerGeometry & { type: "image"; src: string; width: number; height: number; shape: ImageShape })
   | (LayerGeometry & { type: "drawing"; src?: string; strokes?: readonly Stroke[] })
   | (LayerGeometry & { type: "call" })
-  | (LayerGeometry & { type: "mention"; userId: string; name: string });
+  | (LayerGeometry & { type: "mention"; userId: string; name: string; avatarUrl?: string | null });
 
 /** A layer read from the server, as the viewer draws it. */
 export function displayLayerFrom(layer: StoryLayer): DisplayLayer {
@@ -50,7 +58,7 @@ export function displayLayerFrom(layer: StoryLayer): DisplayLayer {
     case "call":
       return { ...geometry, type: "call" };
     case "mention":
-      return { ...geometry, type: "mention", userId: layer.userId, name: layer.user.displayName };
+      return { ...geometry, type: "mention", userId: layer.userId, name: layer.user.displayName, avatarUrl: layer.user.avatarUrl };
   }
 }
 
@@ -118,11 +126,37 @@ export function DrawingCanvas({ strokes, className }: { strokes: readonly Stroke
   return <canvas ref={ref} aria-hidden className={cn("block h-full w-full", className)} />;
 }
 
-function MentionChip({ name }: { name: string }) {
+function MentionChip({
+  name,
+  userId,
+  avatarUrl,
+  onOpen,
+}: {
+  name: string;
+  userId: string;
+  avatarUrl: string | null;
+  /** In the viewer a mention is a button that opens the person; on the canvas it is just a chip. */
+  onOpen?: (person: MentionTarget, anchor: HTMLElement) => void;
+}) {
+  const Tag = onOpen ? "button" : "span";
   return (
-    <span
+    <Tag
       data-story-mention=""
-      className="inline-flex max-w-[80cqw] items-center whitespace-nowrap rounded-full font-extrabold"
+      {...(onOpen
+        ? {
+            type: "button" as const,
+            "aria-label": name,
+            onPointerDown: (event: React.PointerEvent) => event.stopPropagation(),
+            onClick: (event: React.MouseEvent<HTMLElement>) => {
+              event.stopPropagation();
+              onOpen({ userId, name, avatarUrl }, event.currentTarget);
+            },
+          }
+        : {})}
+      className={cn(
+        "inline-flex max-w-[80cqw] items-center whitespace-nowrap rounded-full font-extrabold",
+        onOpen && "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+      )}
       style={{
         fontFamily: '"Gabarito", "Instrument Sans", system-ui, sans-serif',
         fontSize: `${MENTION_BASE_CQW}cqw`,
@@ -133,7 +167,7 @@ function MentionChip({ name }: { name: string }) {
       }}
     >
       <span className="truncate">@{name}</span>
-    </span>
+    </Tag>
   );
 }
 
@@ -141,9 +175,11 @@ function MentionChip({ name }: { name: string }) {
 export function LayerContent({
   layer,
   renderCall,
+  onOpenMention,
 }: {
   layer: DisplayLayer;
   renderCall?: (layer: Extract<DisplayLayer, { type: "call" }>) => ReactNode;
+  onOpenMention?: (person: MentionTarget, anchor: HTMLElement) => void;
 }) {
   switch (layer.type) {
     case "text":
@@ -157,9 +193,9 @@ export function LayerContent({
         <img src={layer.src} alt="" draggable={false} className="block h-full w-full select-none" />
       );
     case "call":
-      return <>{renderCall?.(layer) ?? null}</>;
+      return <div style={{ width: `${CALL_CARD_CQW}cqw` }}>{renderCall?.(layer) ?? null}</div>;
     case "mention":
-      return <MentionChip name={layer.name} />;
+      return <MentionChip name={layer.name} userId={layer.userId} avatarUrl={layer.avatarUrl ?? null} onOpen={onOpenMention} />;
   }
 }
 
