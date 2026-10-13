@@ -57,16 +57,26 @@ enum ForumStatusFilter: String, Codable, Hashable, Sendable {
 struct ForumTag: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let name: String
+    /// Legacy glyph: drawn only when the tag has no (known) `icon`.
     let emoji: String?
+    /// A key from the shared icon set (`FORUM_TAG_ICONS`), drawn as an SF
+    /// Symbol. Kept as a string so a key a newer server added decodes fine and
+    /// simply falls back to the emoji. Absent on an older API.
+    let icon: String?
+    /// Set on a starter tag until staff rename it: the phone then shows its
+    /// own language's name for the key instead of the stored one.
+    let preset: String?
     /// "Só staff": only staff put it on or take it off a post.
     let moderated: Bool
     let position: Int
     let postCount: Int
 
-    init(id: String, name: String, emoji: String? = nil, moderated: Bool = false, position: Int = 0, postCount: Int = 0) {
+    init(id: String, name: String, emoji: String? = nil, icon: String? = nil, preset: String? = nil, moderated: Bool = false, position: Int = 0, postCount: Int = 0) {
         self.id = id
         self.name = name
         self.emoji = emoji
+        self.icon = icon
+        self.preset = preset
         self.moderated = moderated
         self.position = position
         self.postCount = postCount
@@ -77,13 +87,15 @@ struct ForumTag: Codable, Identifiable, Hashable, Sendable {
         id = try c.decode(String.self, forKey: .id)
         name = try c.decode(String.self, forKey: .name)
         emoji = try c.decodeIfPresent(String.self, forKey: .emoji)
+        icon = (try? c.decodeIfPresent(String.self, forKey: .icon)) ?? nil
+        preset = (try? c.decodeIfPresent(String.self, forKey: .preset)) ?? nil
         moderated = try c.decodeIfPresent(Bool.self, forKey: .moderated) ?? false
         position = try c.decodeIfPresent(Int.self, forKey: .position) ?? 0
         postCount = try c.decodeIfPresent(Int.self, forKey: .postCount) ?? 0
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, emoji, moderated, position, postCount
+        case id, name, emoji, icon, preset, moderated, position, postCount
     }
 }
 

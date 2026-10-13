@@ -479,6 +479,35 @@ describeDb("forum posts", () => {
     expect((await post(alice, "Anúncio", { tagIds: [oficial!.id] })).status).toBe(201);
   });
 
+  it("does not make a tag required of somebody who has no tag they could pick", async () => {
+    const on = await call(alice, "PATCH", `/api/channels/${forumId}/forum-settings`, {
+      requireTag: true,
+    });
+    expect(on.status).toBe(200);
+
+    // No tags at all: the composer has nothing to offer, so the rule cannot bind.
+    const none = await post(bob, "Sem tags no fórum");
+    expect(none.status).toBe(201);
+
+    // Only a staff-only tag: binds staff (who can pick it), not a member.
+    const [oficial] = await putTags([{ name: "Oficial", moderated: true }]);
+    const member = await post(bob, "Só tem tag de staff");
+    expect(member.status).toBe(201);
+    const staff = await post(alice, "Staff precisa de tag");
+    expect(staff.status).toBe(422);
+    expect(staff.body.error).toBe("forum_tag_required");
+    expect((await post(alice, "Staff com tag", { tagIds: [oficial!.id] })).status).toBe(201);
+
+    // The moment a tag a member can use exists, the rule binds them again.
+    await putTags([
+      { id: oficial!.id, name: "Oficial", moderated: true },
+      { name: "Bug", moderated: false },
+    ]);
+    const bound = await post(bob, "Agora precisa");
+    expect(bound.status).toBe(422);
+    expect(bound.body.error).toBe("forum_tag_required");
+  });
+
   // --------------------------------------------------------------- list
 
   it("lists both orders, pages stably through equal timestamps, and keeps pins on page 1", async () => {
@@ -1042,6 +1071,111 @@ describeDb("forum posts", () => {
       [forumId],
     );
     expect(audit.rowCount).toBe(2);
+  });
+
+  it("tags: icons and presets. A starter keeps its preset until renamed; an older client still works", async () => {
+    const put = async (tags: Array<Record<string, unknown>>) => {
+      const reply = await call<{ tags: unknown[] }>(
+        alice,
+        "PUT",
+        `/api/channels/${forumId}/forum-tags`,
+        { tags },
+      );
+      expect(reply.status).toBe(200);
+      return reply.body.tags.map((tag) => forumTagSchema.parse(tag));
+    };
+
+    // A client that knows presets: the preset counts only when the name fits it.
+    const created = await put([
+      { name: "Question", preset: "question", icon: "question", emoji: "❓", moderated: false },
+      { name: "Whatever", preset: "bug", icon: "bug", emoji: null, moderated: false },
+      { name: "Custom", preset: null, icon: null, emoji: null, moderated: false },
+    ]);
+    expect(created.map((tag) => [tag.name, tag.preset, tag.icon])).toEqual([
+      ["Question", "question", "question"],
+      ["Whatever", null, "bug"],
+      ["Custom", null, null],
+    ]);
+    const [question, whatever, custom] = created;
+
+    // An unchanged name keeps the preset whatever else was edited; the icon
+    // follows the request, and the request cannot move the preset by itself.
+    const kept = await put([
+      { id: question!.id, name: "Question", icon: "help", preset: "bug", moderated: true },
+      { id: whatever!.id, name: "Whatever", moderated: false },
+      { id: custom!.id, name: "Custom", moderated: false },
+    ]);
+    expect(kept[0]).toMatchObject({ preset: "question", icon: "help", moderated: true });
+    // No `icon` in the request: an older client leaves the stored one alone.
+    expect(kept[1]).toMatchObject({ preset: null, icon: "bug" });
+
+    // A rename ends the localization.
+    const renamed = await put([
+      { id: question!.id, name: "Pergunte", icon: "help", moderated: true },
+      { id: whatever!.id, name: "Whatever", moderated: false },
+      { id: custom!.id, name: "Custom", moderated: false },
+    ]);
+    expect(renamed[0]).toMatchObject({ name: "Pergunte", preset: null });
+
+    // An older client (no icon, no preset) creating the starter chips: the
+    // name is recognised and the emoji becomes the nearest icon.
+    await put([]);
+    const legacy = await put([
+      { name: "Dúvida", emoji: "❓", moderated: false },
+      { name: "Lançamento", emoji: "🚀", moderated: false },
+      { name: "Receitas", emoji: "🍲", moderated: false },
+    ]);
+    expect(legacy.map((tag) => [tag.preset, tag.icon, tag.emoji])).toEqual([
+      ["question", "question", "❓"],
+      ["release", "release", "🚀"],
+      [null, null, "🍲"],
+    ]);
+    // ... and a changed emoji from such a client re-derives the icon, never
+    // leaving an icon that disagrees with the glyph beside it.
+    const swapped = await put([
+      { id: legacy[0]!.id, name: "Dúvida", emoji: "💡", moderated: false },
+      { id: legacy[1]!.id, name: "Lançamento", emoji: "🚀", moderated: false },
+      { id: legacy[2]!.id, name: "Receitas", emoji: null, moderated: false },
+    ]);
+    expect(swapped.map((tag) => [tag.preset, tag.icon])).toEqual([
+      ["question", "idea"],
+      ["release", "release"],
+      [null, null],
+    ]);
+
+    // The stored name typed over a translated starter changes no name, so only
+    // an explicit null can end the localization; a key on an existing tag is
+    // never taken from the request.
+    await put([]);
+    const [starter] = await put([
+      { name: "Question", preset: "question", icon: "question", moderated: false },
+    ]);
+    expect(starter).toMatchObject({ preset: "question" });
+    const [stays] = await put([
+      { id: starter!.id, name: "Question", preset: "bug", icon: "question", moderated: false },
+    ]);
+    expect(stays).toMatchObject({ name: "Question", preset: "question" });
+    const [freed] = await put([
+      { id: starter!.id, name: "Question", preset: null, icon: "question", moderated: false },
+    ]);
+    expect(freed).toMatchObject({ name: "Question", preset: null });
+    // A tag id that is not this forum's is refused, never recreated.
+    const stale = await call(alice, "PUT", `/api/channels/${forumId}/forum-tags`, {
+      tags: [{ id: "99999999-9999-4999-8999-999999999999", name: "Gone", moderated: false }],
+    });
+    expect(stale.status).toBe(400);
+
+    // An unknown icon key is refused; the GET carries the new fields.
+    const bad = await call(alice, "PUT", `/api/channels/${forumId}/forum-tags`, {
+      tags: [{ name: "X", icon: "not-an-icon", moderated: false }],
+    });
+    expect(bad.status).toBe(400);
+    const read = await call<{ tags: Array<Record<string, unknown>> }>(
+      bob,
+      "GET",
+      `/api/channels/${forumId}/forum-tags`,
+    );
+    expect(read.body.tags[0]).toMatchObject({ preset: null, icon: "question" });
   });
 
   it("two first saves of a forum's settings, queued on its lock, each audit what they changed", async () => {
