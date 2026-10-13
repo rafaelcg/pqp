@@ -203,6 +203,8 @@ import {
   rememberWhatsNewFeed,
 } from "@/lib/whats-new-feed";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
+import { BotWizard } from "@/components/bots/bot-wizard";
+import { useBotInvite } from "@/lib/use-bot-invite";
 import { CreateServerDialog } from "@/components/layout/create-server-dialog";
 import {
   applyRemotePreferences,
@@ -1732,8 +1734,16 @@ function MainAppContent({
   }, []);
   const [membersOpen, setMembersOpen] = useState(false);
   const [serverSettingsSection, setServerSettingsSection] = useState<
-    "roles" | undefined
+    "roles" | "bots" | undefined
   >(undefined);
+  // Creating a server bot is its own full-size flow, opened from the Bots
+  // pane or the member list, never on top of settings.
+  const [botWizardOpen, setBotWizardOpen] = useState(false);
+  const openBotWizard = useCallback(() => {
+    setServerSettingsOpen(false);
+    setServerSettingsSection(undefined);
+    setBotWizardOpen(true);
+  }, []);
   // The always-there roster down the right. Its own hook because the state is a
   // per-device preference plus a media query, and the button that flips it lives
   // in the channel header rather than in the panel.
@@ -2977,6 +2987,13 @@ function MainAppContent({
     [startScreenShareGated],
   );
   const perms = usePermissions(selectedServerId);
+  // Before any early return: the member list's "create a bot" row.
+  const botInviteOffered = useBotInvite(
+    selection.kind === "server" ? selectedServerId : null,
+    perms.can(Permission.MANAGE_SERVER),
+    // Asked again whenever either place a bot is made or deleted closes.
+    `${botWizardOpen}:${serverSettingsOpen}`,
+  );
   const permsRef = useRef(perms);
   permsRef.current = perms;
   /**
@@ -13412,6 +13429,7 @@ function MainAppContent({
           open={memberSidebar.open}
           wide={memberSidebar.wide}
           onClose={memberSidebar.close}
+          onCreateBot={botInviteOffered ? openBotWizard : null}
           serverId={
             selection.kind === "server" ? selectedServerId : null
           }
@@ -13492,6 +13510,18 @@ function MainAppContent({
         }}
       />
 
+      {selectedServer && (
+        <BotWizard
+          open={botWizardOpen}
+          serverId={selectedServer.id}
+          serverName={selectedServer.name}
+          onClose={() => setBotWizardOpen(false)}
+          onAdjust={() => {
+            setServerSettingsSection("bots");
+            setServerSettingsOpen(true);
+          }}
+        />
+      )}
       <ServerSettingsDialog
         open={serverSettingsOpen}
         server={selectedServer ?? null}
@@ -13508,6 +13538,7 @@ function MainAppContent({
         }
         canManageMessages={canManageMessages}
         requestedSection={serverSettingsSection}
+        onCreateBot={openBotWizard}
         onClose={() => {
           setServerSettingsOpen(false);
           setServerSettingsSection(undefined);

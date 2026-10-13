@@ -2659,13 +2659,17 @@ export const fetchServerBots = (serverId: string) =>
   apiFetch<{ bots: ServerBotDto[]; maxBots: number }>(`/api/servers/${serverId}/bots`);
 
 export const createServerBot = (serverId: string, body: CreateServerBotRequest) =>
-  post<{ bot: ServerBotDto }>(`/api/servers/${serverId}/bots`, body);
+  post<{ bot: ServerBotDto; missingPermissions?: string }>(`/api/servers/${serverId}/bots`, body);
 
 export const updateServerBot = (
   serverId: string,
   botId: string,
   body: UpdateServerBotRequest,
-) => patch<{ bot: ServerBotDto }>(`/api/servers/${serverId}/bots/${botId}`, body);
+) =>
+  patch<{ bot: ServerBotDto; missingPermissions?: string }>(
+    `/api/servers/${serverId}/bots/${botId}`,
+    body,
+  );
 
 export const deleteServerBot = (serverId: string, botId: string) =>
   apiFetch<{ ok: true }>(`/api/servers/${serverId}/bots/${botId}`, { method: "DELETE" });

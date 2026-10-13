@@ -36,6 +36,8 @@ import {
   MemberModerationDialog,
   type ModerationSubject,
 } from "@/components/user/member-moderation-dialog";
+import { BotFace } from "@/components/bots/bot-face";
+import { BetaTag } from "@/components/ui/beta-tag";
 import {
   moderationActions,
   moderationNeedsConfirmation,
@@ -138,6 +140,11 @@ interface MemberSidebarProps {
   onMemberNickname?: (userId: string, nickname: string | null) => void;
   onMention?: (username: string) => void;
   /**
+   * Set for staff on a server with bots on and none yet: a "create a bot"
+   * row where the Bots group will be.
+   */
+  onCreateBot?: (() => void) | null;
+  /**
    * Conversas (`conversations_home`): "Mensagem" on every row but your own and
    * a blocked one, as a hover action and in the row's menu. The shell opens or
    * reuses the conversation; a refusal comes back in the server's words.
@@ -229,6 +236,7 @@ export const MemberSidebar = memo(function MemberSidebar({
   members = EMPTY_MEMBERS,
   onMemberNickname,
   onMention,
+  onCreateBot,
   onMessageMember,
   onReportUser,
   onBlockUser,
@@ -785,7 +793,21 @@ export const MemberSidebar = memo(function MemberSidebar({
                 : t("memberList.empty")}
             </p>
           )}
-          {sections.map(renderSection)}
+          {(() => {
+            if (!onCreateBot || searching || sections.some((s) => s.kind === "bots")) {
+              return sections.map(renderSection);
+            }
+            // Where the Bots group would sit: after the hoisted roles.
+            const at = sections.findIndex((s) => s.kind !== "role");
+            const split = at === -1 ? sections.length : at;
+            return (
+              <>
+                {sections.slice(0, split).map(renderSection)}
+                <BotInviteRow onCreate={onCreateBot} />
+                {sections.slice(split).map(renderSection)}
+              </>
+            );
+          })()}
         </div>
       </aside>
       {moderation && (
@@ -959,5 +981,31 @@ function MemberRow({
         )}
       </div>
     </ContextMenu>
+  );
+}
+
+/** No bot yet: the member list's own invitation to make one, for staff. */
+function BotInviteRow({ onCreate }: { onCreate: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <section data-member-section="bot-invite" className="mb-4">
+      <p className="px-1 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+        {t("bots.memberList.heading")}
+      </p>
+      <button
+        type="button"
+        onClick={onCreate}
+        className="group flex w-full items-center gap-2.5 rounded-[var(--radius-control)] border border-dashed border-border-strong px-2 py-2 text-left transition-colors duration-[var(--duration-fast)] hover:border-accent hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]"
+      >
+        <BotFace color="lime" face="curioso" className="h-8 w-8" />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-text">
+            {t("bots.memberList.create")}
+            <BetaTag />
+          </span>
+          <span className="block truncate text-xs text-text-tertiary">{t("bots.memberList.hint")}</span>
+        </span>
+      </button>
+    </section>
   );
 }

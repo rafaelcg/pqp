@@ -46,6 +46,7 @@ export function botInk(color: BotColor): string {
 
 const FULL_BODY = "oklch(0.2 0.014 250)";
 const MOUTH_HOLE = "oklch(0.13 0.012 250)";
+const BACKDROP = "oklch(0.17 0.012 250)";
 
 function avatarBody(color: BotColor): string {
   return `oklch(0.29 0.035 ${HUES[color].hue})`;
@@ -72,6 +73,7 @@ function bodyPath(face: BotFace): string {
 interface Pen {
   ink: string;
   body: string;
+  hole: string;
   stroke: number;
 }
 
@@ -98,7 +100,7 @@ function fullFeatures(face: BotFace, pen: Pen): Features {
       return {
         eyes: ellipse(pen, 84, 92, 8, 13) + ellipse(pen, 118, 92, 8, 13),
         rest:
-          `<ellipse cx="101" cy="126" rx="10" ry="11" fill="${MOUTH_HOLE}" stroke="${pen.ink}" stroke-width="${pen.stroke}"/>` +
+          `<ellipse cx="101" cy="126" rx="10" ry="11" fill="${pen.hole}" stroke="${pen.ink}" stroke-width="${pen.stroke}"/>` +
           line(pen, "M170 98 Q178 112 170 126 M182 88 Q196 112 182 136"),
       };
     case "curioso":
@@ -119,7 +121,7 @@ function fullFeatures(face: BotFace, pen: Pen): Features {
         eyes: line(pen, "M74 98 Q84 84 94 98 M108 98 Q118 84 128 98", pen.stroke + 1),
         rest:
           `<path d="M80 114 Q101 150 122 114 Z" fill="${pen.ink}" stroke="${pen.ink}" stroke-width="3" stroke-linejoin="round"/>` +
-          `<path d="M92 126 Q101 136 110 126" fill="${MOUTH_HOLE}"/>`,
+          `<path d="M92 126 Q101 136 110 126" fill="${pen.hole}"/>`,
       };
     case "triste":
       return {
@@ -222,6 +224,12 @@ export interface BotFaceSvgOptions {
   backdrop?: boolean;
   /** Accessible name; without it the SVG is decorative. */
   title?: string;
+  /**
+   * `literal` (the default) writes the colours, for a PNG. `tokens` writes the
+   * web client's `--color-bot-*` custom properties, so no colour literal sits
+   * in the client and the drawing follows `index.css`.
+   */
+  paint?: "literal" | "tokens";
 }
 
 /**
@@ -231,11 +239,20 @@ export interface BotFaceSvgOptions {
  */
 export function botFaceSvg(options: BotFaceSvgOptions): string {
   const full = options.variant === "full";
-  const pen: Pen = {
-    ink: botInk(options.color),
-    body: full ? FULL_BODY : avatarBody(options.color),
-    stroke: full ? 3.5 : 8,
-  };
+  const tokens = options.paint === "tokens";
+  const pen: Pen = tokens
+    ? {
+        ink: `var(--color-bot-${options.color})`,
+        body: full ? "var(--color-bot-body)" : `var(--color-bot-${options.color}-body)`,
+        hole: "var(--color-bot-hole)",
+        stroke: full ? 3.5 : 8,
+      }
+    : {
+        ink: botInk(options.color),
+        body: full ? FULL_BODY : avatarBody(options.color),
+        hole: MOUTH_HOLE,
+        stroke: full ? 3.5 : 8,
+      };
   const { eyes, rest, outside = "" } = full
     ? fullFeatures(options.face, pen)
     : avatarFeatures(options.face, pen);
@@ -246,7 +263,7 @@ export function botFaceSvg(options: BotFaceSvgOptions): string {
     ? ` role="img" aria-label="${options.title.replace(/[<>&"]/g, "")}"`
     : ` aria-hidden="true"`;
   const backdrop = options.backdrop
-    ? `<circle cx="${full ? 100 : 102}" cy="${full ? 100 : 106}" r="${full ? 100 : 80}" fill="oklch(0.17 0.012 250)"/>`
+    ? `<circle cx="${full ? 100 : 102}" cy="${full ? 100 : 106}" r="${full ? 100 : 80}" fill="${tokens ? "var(--color-bot-backdrop)" : BACKDROP}"/>`
     : "";
   const body = `<path d="${bodyPath(options.face)}" fill="${pen.body}" stroke="${pen.ink}" stroke-width="${pen.stroke}" stroke-linejoin="round"/>`;
   return (

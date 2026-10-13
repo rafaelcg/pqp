@@ -589,7 +589,9 @@ interface ServerSettingsDialogProps {
   /** Manage Messages: sees AutoMod read-only, with the test box. */
   canManageMessages?: boolean;
   /** Land on this pane when the dialog opens, if the viewer can see it. */
-  requestedSection?: "roles" | "community";
+  requestedSection?: "roles" | "community" | "bots";
+  /** The Bots pane's "create": the app closes settings and opens the bot wizard. */
+  onCreateBot?: () => void;
   onClose: () => void;
   onRenamed: (server: Server) => void;
   /** `COMMUNITY_HOME_ENABLED` on this instance, from the config probe. */
@@ -617,6 +619,7 @@ export function ServerSettingsDialog({
   canModerateQueue = false,
   canManageMessages = false,
   requestedSection,
+  onCreateBot,
   onClose,
   onRenamed,
   communityHomeFeatureOn = false,
@@ -760,7 +763,9 @@ export function ServerSettingsDialog({
       ? "roles"
       : requestedSection === "community" && canSeeCommunity
         ? "community"
-        : firstSection;
+        : requestedSection === "bots" && canSeeBots
+          ? "bots"
+          : firstSection;
   // Apply on the closed→open render so the first paint is the requested pane,
   // not a frame of Overview. The effect still catches reopen / role changes.
   if (open && !wasOpenRef.current && section !== openingSection) {
@@ -1171,7 +1176,7 @@ export function ServerSettingsDialog({
           )}
 
           {active.id === "bots" && serverId && (
-            <BotsSettingsSection key={serverId} serverId={serverId} />
+            <BotsSettingsSection key={serverId} serverId={serverId} onCreate={onCreateBot ?? (() => {})} />
           )}
 
           {active.id === "integrations" && serverId && (

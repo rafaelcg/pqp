@@ -440,7 +440,10 @@ and a layer sized to `visualViewport` rather than to `vh`, because no browser
 shrinks `vh` for an on-screen keyboard.
 
 - **Props.** `title`, `eyebrow`, `description`, `footer`, `size`
-  (`sm` | `md` | `lg` | `xl`), `fill`, `closeOnBackdrop`, `dismissible`.
+  (`sm` | `md` | `lg` | `xl` | `full`), `fill`, `closeOnBackdrop`, `dismissible`.
+- **`full`** is for a flow that is its own place rather than a question, such
+  as creating a server bot: the widest panel, used with `fill`. It is never
+  opened on top of another dialog.
 - **`fill`** gives the panel the layer's height and stops the body scrolling as
   one column, for a dialog whose content is its own layout.
 - **`dismissible={false}`** removes the close button, Escape and the backdrop

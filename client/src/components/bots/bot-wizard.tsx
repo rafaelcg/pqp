@@ -1,0 +1,658 @@
+import {
+  BOT_BASE_FACES,
+  BOT_COLORS,
+  BOT_DEFAULT_COLOR,
+  BOT_DEFAULT_FACE,
+  SERVER_BOT_DEFAULT_TOOLS,
+  SERVER_BOT_KNOWLEDGE_MAX,
+  SERVER_BOT_NAME_MAX,
+  SERVER_BOT_PERSONA_MAX,
+  SERVER_BOT_TOOL_GROUPS,
+  parsePermissions,
+  type BotBaseFace,
+  type BotColor,
+  type Channel,
+  type ServerBotDto,
+  type ServerBotTool,
+  type ServerBotToolGroup,
+} from "@pqp/shared";
+import { useEffect, useId, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, Hash, MessagesSquare, Shuffle, Volume2 } from "lucide-react";
+import { BotFace } from "@/components/bots/bot-face";
+import { Confetti } from "@/components/onboarding/confetti";
+import { BetaTag } from "@/components/ui/beta-tag";
+import { Button } from "@/components/ui/button";
+import { CheckRow } from "@/components/ui/check-row";
+import { Dialog } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { ApiError, createServerBot, fetchChannels } from "@/lib/api";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
+
+/**
+ * Creating a server bot, one question at a time, with the bot on stage the
+ * whole way: it takes its name, colour and face first, so every later answer
+ * is given to somebody. The card under it fills in as the steps do. The last
+ * step is the bot arriving, and saying how to call it.
+ */
+
+const STEPS = ["face", "voice", "knows", "lives", "powers"] as const;
+type Step = (typeof STEPS)[number] | "born";
+
+export const PERSONA_PRESETS = ["friendly", "playful", "support", "moderator", "gamer", "narrator"] as const;
+const NAME_IDEAS = ["Tico", "Bolota", "Pixel", "Faísca", "Madruga"] as const;
+
+const TOOL_GROUPS = Object.entries(SERVER_BOT_TOOL_GROUPS) as Array<
+  [ServerBotToolGroup, readonly ServerBotTool[]]
+>;
+
+export interface BotDraft {
+  name: string;
+  color: BotColor;
+  face: BotBaseFace;
+  tagline: string;
+  persona: string;
+  knowledge: string;
+  channelIds: string[];
+  answerToName: boolean;
+  tools: ServerBotTool[];
+}
+
+export const EMPTY_BOT_DRAFT: BotDraft = {
+  name: "",
+  color: BOT_DEFAULT_COLOR,
+  face: BOT_DEFAULT_FACE,
+  tagline: "",
+  persona: "",
+  knowledge: "",
+  channelIds: [],
+  answerToName: false,
+  tools: [...SERVER_BOT_DEFAULT_TOOLS],
+};
+
+export function channelIcon(channel: Channel) {
+  if (channel.type === "text") return <Hash className="h-4 w-4" aria-hidden />;
+  if (channel.type === "forum") return <MessagesSquare className="h-4 w-4" aria-hidden />;
+  return <Volume2 className="h-4 w-4" aria-hidden />;
+}
+
+interface BotWizardProps {
+  open: boolean;
+  serverId: string;
+  serverName: string;
+  onClose: () => void;
+  /** "Ajustar": back to the bot's page in server settings. */
+  onAdjust: () => void;
+}
+
+/** The channels a bot can live in: the ones people chat in. A forum covers its posts. */
+function chatChannels(channels: Channel[]): Channel[] {
+  return channels.filter(
+    (c) => c.type === "text" || c.type === "voice" || c.type === "watch_party" || c.type === "forum",
+  );
+}
+
+export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: BotWizardProps) {
+  const { t } = useTranslation();
+  const ids = { name: useId(), tagline: useId(), persona: useId(), knowledge: useId() };
+  const [step, setStep] = useState<Step>("face");
+  const [draft, setDraft] = useState<BotDraft>(EMPTY_BOT_DRAFT);
+  const [pop, setPop] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<MessageKey | null>(null);
+  const [created, setCreated] = useState<ServerBotDto | null>(null);
+  const [missing, setMissing] = useState(0n);
+  const scroller = useRef<HTMLDivElement>(null);
+  const [channels, setChannels] = useState<Channel[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    void fetchChannels(serverId)
+      .then((list) => {
+        if (live) setChannels(chatChannels(list.channels));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [open, serverId]);
+
+  // Each step starts at its top, not where the last one was scrolled to.
+  useEffect(() => {
+    scroller.current?.scrollTo({ top: 0 });
+  }, [step]);
+
+  const index = step === "born" ? STEPS.length : STEPS.indexOf(step);
+  const name = draft.name.trim();
+  const shownName = name || t("bots.wizard.unnamed");
+  const nameOk = name.length >= 2;
+
+  function update(patch: Partial<BotDraft>, bounce = false) {
+    setDraft((d) => ({ ...d, ...patch }));
+    if (bounce) setPop((n) => n + 1);
+  }
+
+  function close() {
+    onClose();
+    // Next time it opens from the start.
+    setStep("face");
+    setDraft(EMPTY_BOT_DRAFT);
+    setCreated(null);
+    setError(null);
+  }
+
+  async function create() {
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await createServerBot(serverId, {
+        name,
+        color: draft.color,
+        face: draft.face,
+        tagline: draft.tagline.trim() || null,
+        persona: draft.persona,
+        knowledge: draft.knowledge,
+        channelIds: draft.channelIds,
+        answerToName: draft.answerToName,
+        tools: draft.tools,
+      });
+      const lacking = parsePermissions(result.missingPermissions ?? "0");
+      setCreated(result.bot);
+      setMissing(lacking);
+      setStep("born");
+    } catch (err) {
+      setError(
+        err instanceof ApiError && err.status === 409
+          ? err.message.includes("name")
+            ? "serverSettings.bots.error.name"
+            : "serverSettings.bots.error.limit"
+          : err instanceof ApiError && err.status === 403
+            ? "serverSettings.bots.error.disabled"
+            : "serverSettings.bots.error.generic",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const next = () => {
+    if (step === "powers") {
+      void create();
+      return;
+    }
+    const at = STEPS.indexOf(step as (typeof STEPS)[number]);
+    setStep(STEPS[at + 1]!);
+  };
+  const back = () => {
+    const at = STEPS.indexOf(step as (typeof STEPS)[number]);
+    if (at > 0) setStep(STEPS[at - 1]!);
+  };
+  const canContinue = step === "face" ? nameOk : true;
+  const stageFace: BotBaseFace | "kkkk" = step === "born" ? "kkkk" : draft.face;
+
+  return (
+    <Dialog
+      open={open}
+      onClose={close}
+      size="full"
+      fill
+      closeOnBackdrop={false}
+      title={
+        <span className="flex items-center gap-2">
+          {step === "born" ? shownName : t("bots.wizard.title")}
+          <BetaTag />
+        </span>
+      }
+      description={t("bots.wizard.subtitle", { server: serverName })}
+      footer={
+        step === "born" ? (
+          <div className="flex w-full flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                close();
+                onAdjust();
+              }}
+            >
+              {t("bots.wizard.adjust", { name: shownName })}
+            </Button>
+            <Button type="button" onClick={close}>
+              {t("bots.wizard.done")}
+            </Button>
+          </div>
+        ) : (
+          <div className="flex w-full items-center gap-2">
+            {index > 0 ? (
+              <Button type="button" variant="ghost" onClick={back}>
+                <ArrowLeft className="mr-1.5 h-4 w-4" aria-hidden />
+                {t("bots.wizard.back")}
+              </Button>
+            ) : null}
+            <span className="ml-auto hidden text-sm text-text-tertiary sm:inline">
+              {t("bots.wizard.changeLater")}
+            </span>
+            <Button
+              type="button"
+              disabled={!canContinue || saving}
+              onClick={next}
+              className="max-sm:ml-auto"
+            >
+              {step === "powers" ? t("bots.wizard.create", { name: shownName }) : t("bots.wizard.next")}
+              {step !== "powers" && <ArrowRight className="ml-1.5 h-4 w-4" aria-hidden />}
+            </Button>
+          </div>
+        )
+      }
+    >
+      <div className="flex h-full min-h-0 flex-col md:flex-row">
+        <div ref={scroller} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-5 sm:px-6">
+          {step !== "born" && (
+            <ol className="mb-6 grid grid-cols-5 gap-1.5" aria-label={t("bots.wizard.progress")}>
+              {STEPS.map((s, i) => (
+                <li key={s} aria-current={s === step ? "step" : undefined}>
+                  <span
+                    className={cn(
+                      "block h-1 rounded-full transition-colors duration-[var(--duration-base)]",
+                      i <= index ? "bg-accent" : "bg-surface-3",
+                    )}
+                  />
+                  <span
+                    className={cn(
+                      "mt-1.5 block truncate text-xs",
+                      s === step ? "font-semibold text-text" : "text-text-tertiary",
+                    )}
+                  >
+                    {t(`bots.wizard.step.${s}`)}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+
+          <div key={step} className="bot-step-in space-y-5">
+            {step === "face" && (
+              <>
+                <StepTitle
+                  eyebrow={t("bots.wizard.stepOf", { n: 1, total: STEPS.length })}
+                  title={t("bots.wizard.face.title")}
+                  description={t("bots.wizard.face.description")}
+                />
+                <div className="space-y-2">
+                  <label htmlFor={ids.name} className="text-sm font-medium text-text">
+                    {t("serverSettings.bots.name")}
+                  </label>
+                  <Input
+                    id={ids.name}
+                    autoFocus
+                    value={draft.name}
+                    maxLength={SERVER_BOT_NAME_MAX}
+                    placeholder={t("serverSettings.bots.namePlaceholder")}
+                    onChange={(e) => update({ name: e.target.value })}
+                  />
+                  <p className="text-xs text-text-tertiary">
+                    {nameOk
+                      ? t("bots.wizard.face.handle", { handle: `@${handlePreview(name)}` })
+                      : t("bots.wizard.face.nameHint")}
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {NAME_IDEAS.map((idea) => (
+                      <Button
+                        key={idea}
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => update({ name: idea }, true)}
+                      >
+                        {idea}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                <fieldset className="space-y-2">
+                  <legend className="text-sm font-medium text-text">{t("bots.wizard.face.color")}</legend>
+                  <div className="flex flex-wrap gap-2" role="radiogroup">
+                    {BOT_COLORS.map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        role="radio"
+                        aria-checked={draft.color === color}
+                        aria-label={t(`bots.color.${color}`)}
+                        onClick={() => update({ color }, true)}
+                        className={cn(
+                          "grid h-11 w-11 place-items-center rounded-full border-2 transition-transform duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)] active:scale-95",
+                          draft.color === color ? "border-text" : "border-transparent",
+                        )}
+                      >
+                        <BotFace color={color} face="oi" live={false} className="h-8 w-8" />
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <fieldset className="space-y-2">
+                  <legend className="text-sm font-medium text-text">{t("bots.wizard.face.face")}</legend>
+                  <div className="flex flex-wrap gap-2" role="radiogroup">
+                    {BOT_BASE_FACES.map((face) => (
+                      <button
+                        key={face}
+                        type="button"
+                        role="radio"
+                        aria-checked={draft.face === face}
+                        onClick={() => update({ face }, true)}
+                        className={cn(
+                          "flex w-[4.5rem] flex-col items-center gap-1 rounded-[var(--radius-card)] border px-2 py-2 text-xs font-semibold transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]",
+                          draft.face === face
+                            ? "border-accent bg-accent-soft text-on-accent-soft"
+                            : "border-border bg-surface-2 text-text-secondary hover:text-text",
+                        )}
+                      >
+                        <BotFace color={draft.color} face={face} live={false} className="h-9 w-9" />
+                        {t(`bots.face.${face}`)}
+                      </button>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="h-auto self-stretch"
+                      onClick={() => {
+                        const color = BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)]!;
+                        const face = BOT_BASE_FACES[Math.floor(Math.random() * BOT_BASE_FACES.length)]!;
+                        update({ color, face }, true);
+                      }}
+                    >
+                      <Shuffle className="mr-1.5 h-4 w-4" aria-hidden />
+                      {t("bots.wizard.face.surprise")}
+                    </Button>
+                  </div>
+                </fieldset>
+
+                <div className="space-y-2">
+                  <label htmlFor={ids.tagline} className="text-sm font-medium text-text">
+                    {t("bots.wizard.face.tagline")}
+                  </label>
+                  <Input
+                    id={ids.tagline}
+                    value={draft.tagline}
+                    maxLength={80}
+                    placeholder={t("bots.wizard.face.taglinePlaceholder")}
+                    onChange={(e) => update({ tagline: e.target.value })}
+                  />
+                </div>
+              </>
+            )}
+
+            {step === "voice" && (
+              <>
+                <StepTitle
+                  eyebrow={t("bots.wizard.stepOf", { n: 2, total: STEPS.length })}
+                  title={t("bots.wizard.voice.title", { name: shownName })}
+                  description={t("bots.wizard.voice.description")}
+                />
+                <div className="grid gap-2 sm:grid-cols-2" role="group" aria-label={t("serverSettings.bots.presets")}>
+                  {PERSONA_PRESETS.map((preset) => {
+                    const text = t(`serverSettings.bots.preset.${preset}.text`);
+                    const active = draft.persona === text;
+                    return (
+                      <button
+                        key={preset}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => update({ persona: text }, true)}
+                        className={cn(
+                          "rounded-[var(--radius-card)] border p-3 text-left transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]",
+                          active
+                            ? "border-accent bg-accent-soft text-on-accent-soft"
+                            : "border-border bg-surface-2 hover:border-border-strong",
+                        )}
+                      >
+                        <span className="block text-sm font-semibold">
+                          {t(`serverSettings.bots.preset.${preset}.name`)}
+                        </span>
+                        <span className={cn("mt-0.5 line-clamp-2 text-xs", !active && "text-text-tertiary")}>
+                          {text}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor={ids.persona} className="text-sm font-medium text-text">
+                    {t("bots.wizard.voice.own")}
+                  </label>
+                  <Textarea
+                    id={ids.persona}
+                    value={draft.persona}
+                    maxLength={SERVER_BOT_PERSONA_MAX}
+                    placeholder={t("serverSettings.bots.personaPlaceholder")}
+                    onChange={(e) => update({ persona: e.target.value })}
+                  />
+                </div>
+              </>
+            )}
+
+            {step === "knows" && (
+              <>
+                <StepTitle
+                  eyebrow={t("bots.wizard.stepOf", { n: 3, total: STEPS.length })}
+                  title={t("bots.wizard.knows.title", { name: shownName })}
+                  description={t("bots.wizard.knows.description")}
+                />
+                <Textarea
+                  id={ids.knowledge}
+                  aria-label={t("serverSettings.bots.knowledge")}
+                  className="min-h-48"
+                  value={draft.knowledge}
+                  maxLength={SERVER_BOT_KNOWLEDGE_MAX}
+                  placeholder={t("serverSettings.bots.knowledgePlaceholder")}
+                  onChange={(e) => update({ knowledge: e.target.value })}
+                />
+                <p className="text-xs text-text-tertiary">{t("bots.wizard.knows.hint")}</p>
+              </>
+            )}
+
+            {step === "lives" && (
+              <>
+                <StepTitle
+                  eyebrow={t("bots.wizard.stepOf", { n: 4, total: STEPS.length })}
+                  title={t("bots.wizard.lives.title", { name: shownName })}
+                  description={t("bots.wizard.lives.description")}
+                />
+                <div className="max-h-72 overflow-y-auto rounded-[var(--radius-card)] border border-border bg-surface-card p-1">
+                  {channels.map((channel) => (
+                    <CheckRow
+                      key={channel.id}
+                      checked={draft.channelIds.includes(channel.id)}
+                      onCheckedChange={(on) =>
+                        update({
+                          channelIds: on
+                            ? [...draft.channelIds, channel.id]
+                            : draft.channelIds.filter((id) => id !== channel.id),
+                        })
+                      }
+                      label={channel.name}
+                      icon={channelIcon(channel)}
+                    />
+                  ))}
+                </div>
+                <Switch
+                  checked={draft.answerToName}
+                  onCheckedChange={(on) => update({ answerToName: on })}
+                  label={t("serverSettings.bots.answerToName")}
+                  description={t("serverSettings.bots.answerToNameHint", { name: shownName })}
+                />
+              </>
+            )}
+
+            {step === "powers" && (
+              <>
+                <StepTitle
+                  eyebrow={t("bots.wizard.stepOf", { n: 5, total: STEPS.length })}
+                  title={t("bots.wizard.powers.title", { name: shownName })}
+                  description={t("bots.wizard.powers.description", { name: shownName })}
+                />
+                <ToolPicker
+                  tools={draft.tools}
+                  onChange={(tools) => update({ tools })}
+                />
+                {error && (
+                  <p role="alert" className="text-sm text-danger">
+                    {t(error)}
+                  </p>
+                )}
+              </>
+            )}
+
+            {step === "born" && created && (
+              <div className="space-y-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary">
+                  {t("bots.wizard.born.eyebrow")}
+                </p>
+                <h2 className="font-display text-3xl font-extrabold text-text">
+                  {t("bots.wizard.born.title", { name: created.name })}
+                </h2>
+                <p className="text-text-secondary">{t("bots.wizard.born.description")}</p>
+                <ul className="space-y-2">
+                  <HowTo title={t("bots.wizard.born.mention")} body={t("bots.wizard.born.mentionBody", { handle: `@${created.username}` })} />
+                  <HowTo title={t("bots.wizard.born.reply")} body={t("bots.wizard.born.replyBody", { name: created.name })} />
+                  <HowTo title={t("bots.wizard.born.work")} body={t("bots.wizard.born.workBody")} />
+                </ul>
+                {missing !== 0n && (
+                  <p className="rounded-[var(--radius-card)] bg-warning-soft p-3 text-sm text-on-warning-soft">
+                    {t("bots.wizard.born.missing", { name: created.name })}
+                  </p>
+                )}
+                <p className="text-sm text-warning">{t("bots.beta.note")}</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <aside className="relative hidden w-[22rem] shrink-0 flex-col items-center gap-5 overflow-hidden border-l border-border bg-surface-0 px-6 py-8 md:flex">
+          {step === "born" && <Confetti />}
+          <p className="max-w-[16rem] rounded-[var(--radius-card)] bg-surface-2 px-3 py-2 text-center text-sm font-medium text-text">
+            {step === "born"
+              ? t("bots.wizard.stage.born")
+              : nameOk
+                ? t("bots.wizard.stage.hello", { name })
+                : t("bots.wizard.stage.waiting")}
+          </p>
+          <BotFace
+            key={pop}
+            color={draft.color}
+            face={stageFace}
+            variant="full"
+            title={shownName}
+            className="bot-face-pop h-48 w-48"
+          />
+          <IdCard draft={draft} name={shownName} />
+        </aside>
+      </div>
+    </Dialog>
+  );
+}
+
+function StepTitle({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary">{eyebrow}</p>
+      <h2 className="font-display text-2xl font-extrabold text-text">{title}</h2>
+      <p className="text-sm text-text-secondary">{description}</p>
+    </div>
+  );
+}
+
+function HowTo({ title, body }: { title: string; body: string }) {
+  return (
+    <li className="rounded-[var(--radius-card)] border border-border bg-surface-card p-3">
+      <p className="text-sm font-semibold text-text">{title}</p>
+      <p className="text-sm text-text-secondary">{body}</p>
+    </li>
+  );
+}
+
+/** The bot's "carteirinha": what it is so far, filling in as the steps go. */
+function IdCard({ draft, name }: { draft: BotDraft; name: string }) {
+  const { t } = useTranslation();
+  const rows: Array<[string, string | null]> = [
+    [t("bots.card.name"), draft.name.trim() ? name : null],
+    [t("bots.card.voice"), draft.persona.trim() ? draft.persona.trim() : null],
+    [t("bots.card.knows"), draft.knowledge.trim() ? t("bots.card.knowsValue", { count: draft.knowledge.trim().length }) : null],
+    [t("bots.card.lives"), draft.channelIds.length ? t("bots.card.livesValue", { count: draft.channelIds.length }) : null],
+    [t("bots.card.powers"), t("bots.card.powersValue", { count: draft.tools.length })],
+  ];
+  return (
+    <div className="w-full rounded-[var(--radius-card)] border border-border bg-surface-card p-4">
+      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary">{t("bots.card.title")}</p>
+      <dl className="space-y-1.5 text-sm">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex gap-3">
+            <dt className="w-20 shrink-0 text-text-tertiary">{label}</dt>
+            <dd className="min-w-0 flex-1 truncate text-text">
+              {value ?? <span className="inline-block h-4 w-24 rounded-full border border-dashed border-border-strong align-middle" />}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+/** The tool switches by group, saying which ones always wait for a "sim". */
+export function ToolPicker({
+  tools,
+  onChange,
+}: {
+  tools: readonly ServerBotTool[];
+  onChange: (tools: ServerBotTool[]) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-3">
+      {TOOL_GROUPS.map(([group, groupTools]) => {
+        const on = groupTools.filter((tool) => tools.includes(tool)).length;
+        return (
+          <div key={group} className="rounded-[var(--radius-card)] border border-border bg-surface-card p-2">
+            <div className="flex items-center gap-2 px-2 pb-1 pt-1">
+              <p className="text-sm font-semibold text-text">{t(`serverSettings.bots.toolGroup.${group}`)}</p>
+              <span className="text-xs text-text-tertiary">
+                {t("bots.tools.count", { on, total: groupTools.length })}
+              </span>
+              {group === "moderation" && (
+                <span className="ml-auto text-xs text-warning">{t("bots.tools.asksFirst")}</span>
+              )}
+            </div>
+            {groupTools.map((tool) => (
+              <CheckRow
+                key={tool}
+                checked={tools.includes(tool)}
+                onCheckedChange={(checked) =>
+                  onChange(checked ? [...tools, tool] : tools.filter((name) => name !== tool))
+                }
+                label={t(`serverSettings.bots.tool.${tool}`)}
+              />
+            ))}
+          </div>
+        );
+      })}
+      <p className="text-xs text-text-tertiary">{t("bots.tools.role")}</p>
+    </div>
+  );
+}
+
+/** What the server will make the handle: the name folded, with `_bot`. A preview only. */
+function handlePreview(name: string): string {
+  const stem = name
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 24);
+  return `${stem || "bot"}_bot`;
+}

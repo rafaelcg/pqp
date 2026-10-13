@@ -147,6 +147,30 @@
   --color-flag-es-yellow: #f1bf00;
 
   /*
+   * Breu, the face of a server bot (`packages/shared/src/bot-face.ts`). An
+   * identifier like the marks above: a bot is lime or coral in every theme,
+   * and its dark body is the character, so it stays dark in light mode too.
+   * `-body` is the avatar's body, a step lighter and tinted so a 24 px face
+   * does not vanish on a dark panel. Mirrored as literals in bot-face.ts for
+   * the PNGs the phone apps draw.
+   */
+  --color-bot-lime: oklch(0.88 0.19 125);
+  --color-bot-lime-body: oklch(0.29 0.035 125);
+  --color-bot-coral: oklch(0.76 0.14 35);
+  --color-bot-coral-body: oklch(0.29 0.035 35);
+  --color-bot-sky: oklch(0.8 0.11 230);
+  --color-bot-sky-body: oklch(0.29 0.035 230);
+  --color-bot-grape: oklch(0.74 0.13 300);
+  --color-bot-grape-body: oklch(0.29 0.035 300);
+  --color-bot-sun: oklch(0.86 0.14 85);
+  --color-bot-sun-body: oklch(0.29 0.035 85);
+  --color-bot-mint: oklch(0.84 0.11 170);
+  --color-bot-mint-body: oklch(0.29 0.035 170);
+  --color-bot-body: oklch(0.2 0.014 250);
+  --color-bot-hole: oklch(0.13 0.012 250);
+  --color-bot-backdrop: oklch(0.17 0.012 250);
+
+  /*
    * Text and icons drawn ON a video: the watch party player's bar, its live
    * chip and its viewer count. A film is dark whatever the app's theme, so
    * these do not retint. Light on the black stage in every theme, the way
@@ -4337,5 +4361,91 @@ html[data-immersive-stage] [data-immersive-hide] {
 
   .bot-step-pop {
     animation: badge-pop 0.32s var(--ease-emphasized) both;
+  }
+}
+
+/* Breu, a server bot's face (`components/bots/bot-face.tsx`). The SVG fills
+   its box; `.bot-face-live` is set only on the faces allowed to move. */
+.bot-face > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.bot-face .bf-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.bot-face .bf-body {
+  transform-box: view-box;
+  transform-origin: 50% 88%;
+}
+
+.bot-face .bf-hand {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes bot-blink {
+  0%,
+  91%,
+  100% {
+    transform: scaleY(1);
+  }
+  94% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes bot-breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  50% {
+    transform: translateY(-2.5%) scale(1.025, 0.975);
+  }
+}
+
+@keyframes bot-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0);
+  }
+  50% {
+    transform: translateY(-6%) rotate(-8deg);
+  }
+}
+
+@keyframes bot-pop {
+  0% {
+    transform: scale(0.92, 1.06);
+  }
+  45% {
+    transform: scale(1.06, 0.94);
+  }
+  100% {
+    transform: scale(1, 1);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bot-face-live .bf-eyes {
+    animation: bot-blink 4.6s var(--ease-standard) infinite;
+  }
+
+  .bot-face-live[data-variant="full"] .bf-body {
+    animation: bot-breathe 3.2s ease-in-out infinite;
+  }
+
+  .bot-face-live .bf-hand {
+    animation: bot-float 2.6s ease-in-out infinite;
+  }
+
+  /* A new colour or face lands with a squash, keyed by remounting the face. */
+  .bot-face-pop > svg {
+    animation: bot-pop 0.52s var(--ease-emphasized) both;
   }
 }
