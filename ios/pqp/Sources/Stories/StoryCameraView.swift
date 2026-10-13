@@ -416,6 +416,9 @@ struct StoryCameraView: View {
         do {
             try await next.start()
         } catch {
+            // Whatever opened is closed: a failed start must not leave the
+            // device held by an engine nothing refers to any more.
+            next.stop()
             // An older start failing must not wipe a newer one's state.
             guard current() else { return }
             access = .noDevice
