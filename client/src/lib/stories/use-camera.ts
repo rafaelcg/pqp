@@ -286,12 +286,24 @@ export function useRecorder(
         return false;
       }
     }
+    // The camera may have gone while the prompt was open: a clip needs live video.
+    const video = stream.getVideoTracks();
+    if (!video.length || video.some((track) => track.readyState !== "live")) {
+      releaseMic();
+      return false;
+    }
     chunks.current = [];
-    const next = new MediaRecorder(new MediaStream(tracks), {
-      mimeType,
-      videoBitsPerSecond: RECORDER_VIDEO_BITS_PER_SECOND,
-      audioBitsPerSecond: RECORDER_AUDIO_BITS_PER_SECOND,
-    });
+    let next: MediaRecorder;
+    try {
+      next = new MediaRecorder(new MediaStream(tracks), {
+        mimeType,
+        videoBitsPerSecond: RECORDER_VIDEO_BITS_PER_SECOND,
+        audioBitsPerSecond: RECORDER_AUDIO_BITS_PER_SECOND,
+      });
+    } catch {
+      releaseMic();
+      return false;
+    }
     next.ondataavailable = (event) => {
       if (event.data.size > 0) {
         chunks.current.push(event.data);
@@ -301,7 +313,8 @@ export function useRecorder(
       clearTimer();
       releaseMic();
       const durationMs = Math.min(maxMs, Date.now() - startedAt.current);
-      const blob = new Blob(chunks.current, { type: "video/mp4" });
+      // Labelled with what the recorder really wrote; the composer checks the bytes.
+      const blob = new Blob(chunks.current, { type: next.mimeType || mimeType });
       chunks.current = [];
       recorder.current = null;
       setRecording(false);
@@ -317,7 +330,13 @@ export function useRecorder(
     };
     recorder.current = next;
     startedAt.current = Date.now();
-    next.start();
+    try {
+      next.start();
+    } catch {
+      recorder.current = null;
+      releaseMic();
+      return false;
+    }
     setRecording(true);
     setElapsedMs(0);
     timer.current = window.setInterval(() => {
@@ -330,8 +349,10 @@ export function useRecorder(
     return true;
   }, [stream, mimeType, maxMs, clearTimer, releaseMic]);
 
-  // The stream going away (tab hidden, camera lost) ends the clip.
+  // The stream going away or changing (tab hidden, camera lost or flipped) ends the clip, and
+  // cancels a start that is still waiting on the microphone prompt.
   useEffect(() => {
+    startTicket.current += 1;
     if (!stream && recorder.current && recorder.current.state !== "inactive") {
       recorder.current.stop();
     }

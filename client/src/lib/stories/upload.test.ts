@@ -105,6 +105,14 @@ describe("prepareRecordedClip", () => {
     });
   });
 
+  it("does not take a WebM for an MP4 because of the label on it", async () => {
+    const lying = new Blob([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0, 0, 0, 0, 0])], { type: "video/mp4" });
+    expect(await prepareRecordedClip({ blob: lying, durationMs: 5000 }, limits, null)).toEqual({
+      ok: false,
+      problem: { kind: "wrong-type" },
+    });
+  });
+
   it("refuses a recording over the byte cap before probing anything", async () => {
     const big = new Blob([mp4, new Uint8Array(2000)], { type: "video/mp4;codecs=avc1" });
     expect(await prepareRecordedClip({ blob: big, durationMs: 5000 }, limits, null)).toEqual({

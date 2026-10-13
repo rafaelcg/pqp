@@ -163,12 +163,14 @@ export function ModeTabs<T extends string>({
       return;
     }
     event.preventDefault();
+    // React clears `currentTarget` once the handler returns: keep the group now.
+    const group = event.currentTarget;
     const index = enabled.findIndex((option) => option.value === value);
     const next = enabled[(index + step + enabled.length) % enabled.length];
     if (next) {
       onChange(next.value);
       requestAnimationFrame(() => {
-        event.currentTarget.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus();
+        group.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus();
       });
     }
   }

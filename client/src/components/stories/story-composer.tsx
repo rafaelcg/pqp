@@ -29,6 +29,7 @@ import {
   preparedFromStill,
   prepareRecordedClip,
   prepareStoryFile,
+  type PrepareResult,
   type PreparedStoryMedia,
   type StoryFileProblem,
 } from "@/lib/stories/upload";
@@ -174,7 +175,20 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const cameraActive = mode === "camera" && !media && config.mediaEnabled && !tabHidden && !submitting;
   const camera = useCamera(cameraActive);
 
+  const alive = useRef(true);
+  useEffect(
+    () => () => {
+      alive.current = false;
+    },
+    [],
+  );
+
   const acceptMedia = useCallback((next: PreparedStoryMedia) => {
+    // A photo that finished after the composer closed has nowhere to go: let its URL go.
+    if (!alive.current) {
+      URL.revokeObjectURL(next.previewUrl);
+      return;
+    }
     setProblem(null);
     setMedia(next);
     setMode("camera");
@@ -199,20 +213,22 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
         clip,
         { maxBytes: config.maxBytes, maxVideoMs: config.maxVideoMs, videoEnabled: config.videoEnabled },
         camera.size,
-      ).then((result) => {
-        if (ticket !== fileTicket.current) {
-          if (result.ok) {
-            URL.revokeObjectURL(result.media.previewUrl);
+      )
+        .catch((): PrepareResult => ({ ok: false, problem: { kind: "unreadable" } }))
+        .then((result) => {
+          if (ticket !== fileTicket.current) {
+            if (result.ok) {
+              URL.revokeObjectURL(result.media.previewUrl);
+            }
+            return;
           }
-          return;
-        }
-        setPreparing(false);
-        if (result.ok) {
-          acceptMedia(result.media);
-        } else {
-          showProblem(result.problem);
-        }
-      });
+          setPreparing(false);
+          if (result.ok) {
+            acceptMedia(result.media);
+          } else {
+            showProblem(result.problem);
+          }
+        });
     },
     [acceptMedia, camera.size, config.maxBytes, config.maxVideoMs, config.videoEnabled, showProblem],
   );
@@ -223,12 +239,16 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     if (!element || camera.status !== "live") {
       return;
     }
+    // Newest wins: a file chosen while this frame is still encoding replaces it, not the other way round.
+    const ticket = ++fileTicket.current;
     const still = await captureStill(element);
+    if (ticket !== fileTicket.current) {
+      return;
+    }
     if (!still) {
       setProblem(t("stories.compose.unreadable"));
       return;
     }
-    fileTicket.current += 1;
     setFlash((value) => value + 1);
     acceptMedia(preparedFromStill(still));
   }
@@ -376,7 +396,10 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   // ---------------------------------------------------------------- focus + keys
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    rootRef.current?.focus({ preventScroll: true });
+    // A field that took focus on its own (the text card's) keeps it.
+    if (rootRef.current && !rootRef.current.contains(document.activeElement)) {
+      rootRef.current.focus({ preventScroll: true });
+    }
     return () => {
       if (opener && document.contains(opener)) {
         opener.focus({ preventScroll: true });

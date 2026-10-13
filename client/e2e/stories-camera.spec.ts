@@ -70,9 +70,10 @@ async function setup(): Promise<{ suffix: string; serverId: string; channelId: s
 }
 
 async function skipWithoutMedia(suffix: string): Promise<void> {
-  const config = (await (
-    await fetch(`${API}/api/stories/config`, { headers: headersFor(suffix) })
-  ).json()) as { mediaEnabled?: boolean };
+  const response = await fetch(`${API}/api/stories/config`, { headers: headersFor(suffix) });
+  // An API that fails is a failure, not a reason to skip the coverage.
+  expect(response.ok, `GET /api/stories/config answered ${response.status}`).toBe(true);
+  const config = (await response.json()) as { mediaEnabled?: boolean };
   test.skip(!config.mediaEnabled, "object storage is off: the composer has no camera tab");
 }
 

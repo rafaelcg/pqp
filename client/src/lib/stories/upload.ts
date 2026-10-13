@@ -274,13 +274,15 @@ export async function prepareRecordedClip(
   limits: { maxBytes: number; maxVideoMs: number; videoEnabled: boolean },
   fallbackSize: { width: number; height: number } | null,
 ): Promise<PrepareResult> {
-  const blob =
-    clip.blob.type === "video/mp4" ? clip.blob : new Blob([clip.blob], { type: "video/mp4" });
-  const sniffed = await sniffFile(blob);
-  const early = checkStoryFile(sniffed, blob.size, limits);
+  // The bytes decide, not the label a recorder put on them: a WebM never becomes an MP4 here.
+  const sniffed = await sniffFile(clip.blob);
+  const early = checkStoryFile(sniffed, clip.blob.size, limits);
   if (early) {
     return { ok: false, problem: early };
   }
+  // A recorder labels its MP4 with its codecs ("video/mp4;codecs=..."); the wire type is plain.
+  const blob =
+    clip.blob.type === "video/mp4" ? clip.blob : new Blob([clip.blob], { type: "video/mp4" });
   if (blob.size > limits.maxBytes) {
     return { ok: false, problem: { kind: "too-big" } };
   }
