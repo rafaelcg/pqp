@@ -380,6 +380,9 @@ struct StoryCameraView: View {
             if isRecording {
                 press.recordingEnded()
                 await finishRecording()
+                // finishing suspended: the composer may have closed or a newer
+                // start may have taken over in the meantime.
+                guard current() else { return }
             }
             engine?.stop()
             engine = nil
