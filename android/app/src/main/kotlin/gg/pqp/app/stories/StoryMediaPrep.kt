@@ -164,7 +164,12 @@ object StoryMediaPrep {
         var readAhead: ByteArray? = null
         val size = runCatching {
             context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
-        }.getOrNull()?.takeIf { it >= 0 } ?: readUpTo(context, uri, limit = maxBytes + 1).also { readAhead = it }.size.toLong()
+        }.getOrNull()?.takeIf { it >= 0 } ?: run {
+            // A read that failed, or found nothing, is a file that cannot be read: not an empty clip.
+            val read = readUpTo(context, uri, limit = maxBytes + 1)?.takeIf { it.isNotEmpty() } ?: return PrepResult.Unreadable
+            readAhead = read
+            read.size.toLong()
+        }
         val work = TrimRules.work(durationMs, size.coerceAtLeast(0), width, height, maxBytes)
         if (work != null) return PrepResult.NeedsWork(uri, durationMs, width, height, tooLong = work == TrimRules.Work.Trim)
         StoriesRules.checkMedia(type, size.coerceAtLeast(0), durationMs, maxBytes)?.let {
@@ -178,7 +183,7 @@ object StoryMediaPrep {
     }
 
     /** The stream's bytes, reading no further than [limit]: enough to know whether it is over a cap, and to keep if it is not. */
-    private fun readUpTo(context: Context, uri: Uri, limit: Long): ByteArray = runCatching {
+    private fun readUpTo(context: Context, uri: Uri, limit: Long): ByteArray? = runCatching {
         context.contentResolver.openInputStream(uri)?.use { stream ->
             val out = ByteArrayOutputStream()
             val buffer = ByteArray(64 * 1024)
@@ -189,7 +194,7 @@ object StoryMediaPrep {
             }
             out.toByteArray()
         }
-    }.getOrNull() ?: ByteArray(0)
+    }.getOrNull()
 
     private const val JPEG_QUALITY = 85
 }
