@@ -152,9 +152,9 @@ export async function sweepStories(): Promise<StorySweepResult> {
         // Layer objects (composer v2): a photo placed on the story, or the
         // drawing. Each is deleted whatever the story's kind, and a text card
         // may hold nothing else.
-        for (const key of row.layer_keys) {
-          await deleteObject(key);
-        }
+        // At most a handful per story, so all at once; the row is marked done
+        // only after every one has gone.
+        await Promise.all(row.layer_keys.map((key) => deleteObject(key)));
         if (row.kind === "video" && row.media_storage_key) {
           // The video job's sampled frames live only long enough to be
           // scanned and are deleted right after; a delete that failed then

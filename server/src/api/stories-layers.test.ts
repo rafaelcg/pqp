@@ -595,6 +595,41 @@ describeDb("stories composer v2: layers", () => {
       expect((await getPool().query(`SELECT 1 FROM stories`)).rowCount).toBe(1);
     });
 
+    it("never hands out an upload URL for a layer publish already pinned", async () => {
+      as(alice);
+      const requestId = uuid();
+      const body = {
+        kind: "text",
+        background: "night",
+        audiences: { serverIds: [serverId] },
+        layers: [imageLayer(), drawingLayer()],
+        requestId,
+      };
+      const first = await call("POST", "/api/stories", body);
+      expect(first.body.layerUploads).toHaveLength(2);
+      const keys = (await rowOf(first.body.story.id)).layer_keys;
+      // Only the photo is up: publish pins it and then finds the drawing missing.
+      putLayerObjects([keys[0]!], JPEG, "image/jpeg");
+      expect((await call("POST", `/api/stories/${first.body.story.id}/publish`)).status).toBe(409);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect((await rowOf(first.body.story.id)).layer_keys[0]).toContain("/pinned-");
+
+      const retried = await call("POST", "/api/stories", body);
+      expect(retried.body.layerUploads.map((upload: { layerId: string }) => upload.layerId)).toEqual([
+        body.layers[1]!.id,
+      ]);
+    });
+
+    it("runs AutoMod over layer text past the first 280 characters", async () => {
+      await getPool().query(
+        `INSERT INTO automod_rules (server_id, kind, keywords) VALUES ($1, 'keywords', ARRAY['golpe*'])`,
+        [serverId],
+      );
+      as(bob);
+      const filler = "x".repeat(280);
+      expect((await post([textLayer(filler), textLayer("um golpe aqui")])).status).toBe(422);
+    });
+
     it("refuses a layer that is not the image it said it was, and takes the story down", async () => {
       const { story } = await postWithPhoto();
       const row = await rowOf(story.id);

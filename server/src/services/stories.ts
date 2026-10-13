@@ -206,6 +206,11 @@ export function isStoryKey(authorId: string, storyId: string, key: string): bool
   return key.startsWith(prefix) && !key.includes("..") && key.length > prefix.length;
 }
 
+/** A key `pinStoryUpload` minted: the verified copy, which no upload URL may be issued for. */
+function isPinnedKey(key: string): boolean {
+  return /\/pinned-[^/]+$/.test(key);
+}
+
 function readUrlTtlSeconds(expiresAt: Date | null): number {
   if (!expiresAt) {
     return STORY_READ_URL_MAX_TTL_SECONDS;
@@ -1382,12 +1387,19 @@ function callOf(input: CreateStoryParsed): StorySticker | undefined {
     : input.sticker;
 }
 
-/** The words of the text layers, in layer order, joined by a newline (at most `STORY_TEXT_MAX` characters). */
-function layerWords(layers: ReadonlyArray<{ type: string; text?: string }>): string {
-  return [...layers.flatMap((layer) => (layer.type === "text" && layer.text ? [layer.text] : [])).join("\n")]
-    .slice(0, STORY_TEXT_MAX)
-    .join("")
-    .trim();
+/**
+ * The words of the text layers, in layer order, joined by a newline. Cut to
+ * `STORY_TEXT_MAX` characters by default, which is what a text card's body
+ * column holds; AutoMod passes `Infinity` so nothing a person typed is skipped.
+ */
+function layerWords(
+  layers: ReadonlyArray<{ type: string; text?: string }>,
+  limit = STORY_TEXT_MAX,
+): string {
+  const all = layers
+    .flatMap((layer) => (layer.type === "text" && layer.text ? [layer.text] : []))
+    .join("\n");
+  return (Number.isFinite(limit) ? [...all].slice(0, limit).join("") : all).trim();
 }
 
 /**
@@ -1440,7 +1452,7 @@ async function assertSticker(userId: string, sticker: StorySticker | undefined):
  * server. A staff member exempt from AutoMod in chat is exempt here too.
  */
 async function assertAutomod(userId: string, input: CreateStoryParsed): Promise<void> {
-  const body = [input.text, input.caption, layerWords(input.layers), input.altText]
+  const body = [input.text, input.caption, layerWords(input.layers, Infinity), input.altText]
     .filter(Boolean)
     .join("\n");
   if (!body) {
@@ -1523,6 +1535,7 @@ async function replayCreate(userId: string, requestId: string): Promise<CreatedS
     upload:
       row.status === "pending" &&
       row.media_storage_key &&
+      !isPinnedKey(row.media_storage_key) &&
       row.media_content_type &&
       row.media_byte_size
         ? uploadFor(row.media_storage_key, row.media_content_type, row.media_byte_size)
@@ -1535,7 +1548,12 @@ async function replayCreate(userId: string, requestId: string): Promise<CreatedS
 
 /** A fresh upload URL for every image and drawing layer of a story still waiting for its bytes. */
 function layerUploadsOf(layers: StoredLayer[]): StoryLayerUpload[] {
-  return layers.filter(isObjectLayer).map((layer) => ({
+  // Never a PUT URL for an object publish already pinned: that key is the
+  // verified and scanned copy, and nothing may be able to write to it.
+  return layers
+    .filter(isObjectLayer)
+    .filter((layer) => !isPinnedKey(layer.mediaKey))
+    .map((layer) => ({
     layerId: layer.id,
     ...uploadFor(layer.mediaKey, layer.contentType, layer.byteSize),
   }));
@@ -2110,16 +2128,20 @@ export async function publishStory(user: DbUser, storyId: string): Promise<Publi
     }
   }
 
-  // Layer objects, one at a time (each pin rewrites the `layers` array, and
-  // two of them racing would only wait on each other's row lock anyway).
-  for (const layer of layerObjects) {
-    const verified = await verifyStoredUpload(
+  // Layer objects: the storage round trips (HEAD, copy, prefix read) run a few
+  // at a time. Each pin then rewrites the `layers` array in one UPDATE that
+  // re-reads the row under its lock, so the pins queue on the row, never clobber.
+  const checked = await mapLimit(layerObjects, PER_REQUEST_CONCURRENCY, async (layer) => ({
+    layer,
+    verified: await verifyStoredUpload(
       storyId,
       layer.mediaKey,
       layer.byteSize,
       STORY_LAYER_MAX_BYTES,
       { layerId: layer.id },
-    );
+    ),
+  }));
+  for (const { layer, verified } of checked) {
     const allowedTypes: readonly string[] =
       layer.type === "drawing" ? STORY_LAYER_DRAWING_TYPES : ["image/jpeg", "image/webp", "image/png"];
     if (
