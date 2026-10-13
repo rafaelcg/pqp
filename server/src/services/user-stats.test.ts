@@ -394,6 +394,35 @@ describeDb("user stats", () => {
     expect(await stats()).toEqual({ [ana]: { voice: 0, share: 0, music: 1 } });
   });
 
+  it("runs overlapping ticks one at a time, oldest first", async () => {
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    const r = createUserStatsRecorder({
+      enabled: () => true,
+      readSeats: async () => {
+        calls += 1;
+        const tick = calls;
+        order.push(`start ${tick}`);
+        if (tick === 1) {
+          await firstHeld;
+        }
+        order.push(`end ${tick}`);
+        return { source: "local", seats: [] };
+      },
+    });
+    const first = r.sample(new Date("2026-10-10T12:00:00Z"));
+    const second = r.sample(new Date("2026-10-10T12:01:00Z"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(order).toEqual(["start 1"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(order).toEqual(["start 1", "end 1", "start 2", "end 2"]);
+  });
+
   it("counts one add once, however many writes report it", async () => {
     const ana = await person("ana");
     const r = createUserStatsRecorder({

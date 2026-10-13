@@ -285,8 +285,24 @@ export function createUserStatsRecorder(
     };
   }
 
-  async function sample(
+  /**
+   * Ticks run one at a time, in order. `every()` does not wait for the last
+   * tick, so a slow write could let a newer minute land first, and the
+   * forward-only `voice_sampled_at` guard would then refuse the older retry.
+   * Each tick keeps the time it was called with.
+   */
+  let sampling: Promise<unknown> = Promise.resolve();
+
+  function sample(
     at: Date = new Date(now()),
+  ): Promise<{ source: UserStatsSource; written: number }> {
+    const run = sampling.then(() => sampleOnce(at));
+    sampling = run.catch(() => undefined);
+    return run;
+  }
+
+  async function sampleOnce(
+    at: Date,
   ): Promise<{ source: UserStatsSource; written: number }> {
     if (!enabled()) {
       m.lastSource = "off";
@@ -614,6 +630,7 @@ export function createUserStatsRecorder(
       creditSeq = 0;
       attemptedSeq = 0;
       failedSamples = [];
+      sampling = Promise.resolve();
       lastBlindWarningAt = 0;
       m = emptyMetrics();
     },
