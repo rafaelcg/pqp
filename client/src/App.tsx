@@ -3641,6 +3641,9 @@ function MainAppContent({
       const result = await readCursorQueue.run(channelId, () =>
         markChannelRead(channelId),
       );
+      // Touched again now that the server has the read: an unread read that
+      // began while this was in flight may have seen the old cursor.
+      touchUnread(channelId);
       return result.previousLastReadAt ?? null;
     } catch {
       // A missed read receipt only means a stale badge; not worth surfacing.
@@ -3652,14 +3655,16 @@ function MainAppContent({
     const touch = unreadTouchRef.current;
     touch.seq += 1;
     const startedAt = touch.seq;
-    touch.fetchByServer.set(serverId, startedAt);
     try {
       const { unread: allRows } = await fetchUnread(serverId);
-      // A newer read of this same server started while this one was in
-      // flight: its answer is the fresher one.
-      if (touch.fetchByServer.get(serverId) !== startedAt) {
+      // Answers are applied in the order the reads STARTED: a read that
+      // finishes after a newer one has already been applied is stale, but an
+      // older answer that arrives first stands (it is the fallback if the
+      // newer read fails).
+      if ((touch.fetchByServer.get(serverId) ?? 0) > startedAt) {
         return true;
       }
+      touch.fetchByServer.set(serverId, startedAt);
       // Rows whose channel changed after this read began (a live frame, or the
       // reader clearing it) are newer than what the server answered.
       const rows = allRows.filter(
