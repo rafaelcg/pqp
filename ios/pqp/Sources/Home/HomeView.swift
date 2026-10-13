@@ -718,6 +718,24 @@ final class HomeModel {
         }
     }
 
+    /// Move one server a place up or down in this person's own list, and save
+    /// it. Optimistic, like the profile switch below: the list moves on the
+    /// tap, and a refused save puts it back (unless something newer replaced
+    /// the list meanwhile) and shows the server's sentence.
+    func moveServer(serverId: String, by delta: Int) async {
+        guard let session,
+              let moved = ServerOrder.moved(servers, id: serverId, by: delta)
+        else { return }
+        let previous = servers
+        servers = moved
+        do {
+            try await session.api.saveServerOrder(moved.map(\.id))
+        } catch {
+            if servers.map(\.id) == moved.map(\.id) { servers = previous }
+            if let shown = error.userFacingMessage { self.error = shown }
+        }
+    }
+
     /// One membership's badge opt-out, flipped from the rail's own menu.
     ///
     /// Optimistic, because the switch is a preference about a chip on a card
@@ -1228,6 +1246,7 @@ struct HubView: View {
                             // that private servers are shown by default, which is
                             // the exact misreading this must not create.
                             .contextMenu {
+                                serverMoveButtons(server)
                                 if server.isCommunity {
                                     Button {
                                         Task {
@@ -1367,6 +1386,30 @@ struct HubView: View {
         }
     }
 
+    /// Move up / Move down for a server, in the menu of its tile or row. Hidden
+    /// at the ends, so there is no item that does nothing. A drag is not
+    /// reachable by VoiceOver, and the phone channel list reorders through a
+    /// menu for the same reason.
+    @ViewBuilder
+    private func serverMoveButtons(_ server: Server) -> some View {
+        if model.servers.first?.id != server.id {
+            Button {
+                Task { await model.moveServer(serverId: server.id, by: -1) }
+            } label: {
+                Label("Move up", systemImage: "arrow.up")
+            }
+            .accessibilityIdentifier("server.moveUp.\(server.id)")
+        }
+        if model.servers.last?.id != server.id {
+            Button {
+                Task { await model.moveServer(serverId: server.id, by: 1) }
+            } label: {
+                Label("Move down", systemImage: "arrow.down")
+            }
+            .accessibilityIdentifier("server.moveDown.\(server.id)")
+        }
+    }
+
     // MARK: - Servidores (the tab)
 
     /// Servers as rows, the way the Servidores tab draws them: the mark, the
@@ -1388,6 +1431,7 @@ struct HubView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("servers.server.\(server.id)")
+                .contextMenu { serverMoveButtons(server) }
             }
 
             Menu {
