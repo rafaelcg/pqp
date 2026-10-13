@@ -443,7 +443,7 @@ shrinks `vh` for an on-screen keyboard.
   (`sm` | `md` | `lg` | `xl` | `2xl` | `full`), `fill`, `closeOnBackdrop`, `dismissible`.
 - **`2xl`** is the settings width (yours, the server's and a channel's): a
   section rail beside a pane of forms needs more room than any other dialog.
-  With `fill` it is at most 48rem tall, so it does not run the height of a
+  With `fill` it is at most 56rem tall, so it does not run the height of a
   tall monitor; each pane scrolls inside it.
 - **`full`** is for a flow that is its own place rather than a question, such
   as creating a server bot: the widest panel, used with `fill`. It is never
