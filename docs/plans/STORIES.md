@@ -127,7 +127,7 @@ Smaller ones adopted:
 | 23 | Compose entry points: "Teu story" bubble, the server name menu, the chat "+" menu, the Conversas header | Always one tap away without a permanent slot |
 | 24 | Ring: `conic-gradient(accent, warning, accent)`. Seen: `border-strong`, thinner | Both are real tokens. Solid lime already means "speaking" and "in call" |
 | 25 | A call story shows a headphones badge on the ring | You can tell it is joinable before opening it |
-| 26 | The call sticker is live: it reads the room roster and turns into "A call acabou" when the room empties or the author leaves it | A stale "join" button is worse than none |
+| 26 | The call sticker is live: it reads the room roster. An empty room reads "Ninguém na call agora" and still offers "Entrar"; it turns into "A call acabou" only when the channel is gone or the author can no longer connect to it (revised 2026-10-13, see §17.6) | A stale "join" button is worse than none, but an empty room is not an ended call: joining an empty room is fine |
 | 27 | Moderation reuses chat. Reports go to the server queue; "minor in sexual content" goes to the instance queue. Staff with `MANAGE_MESSAGES` can remove a story **from their server only** | A story can also be in friends and other servers. One server's staff only owns their slice |
 | 28 | A reported story does not expire until resolved; its bytes are held | Evidence must not evaporate under the moderator (the Fleets critique) |
 | 29 | The author is told once, in-app, with the reason, when staff remove their story | No silent disappearance, and no push |
@@ -977,8 +977,9 @@ Setup:
       from MinIO and confirm no GPS tags.
 - [ ] Call sticker in `broderagi` while A is in it.
   - [ ] B taps "Entrar na call" and is in the room.
-  - [ ] When the room empties, the sticker reads "A call acabou" and the button
-        is gone.
+  - [ ] When the room empties, the sticker reads "Ninguém na call agora" and the
+        button stays (joining an empty room is fine). "A call acabou" only when
+        the channel is deleted or A loses access to it.
 - [ ] C without `POST_STORIES` (remove the bit from @everyone, give it to a
       role A has): C's composer shows Sandbox greyed with the reason; the API
       refuses a forged request with 403.
@@ -1214,10 +1215,21 @@ is there now; nothing is preselected on phones when the author is in no room,
 and the web matches; a clear warning when the author is not in the room. Result:
 a card with the room's name, the server icon, up to 3 live faces and "+n", the
 count, an "Entrar" button, a pulsing live dot while people are in, "Ninguem na
-call agora" (via i18n) when empty, and a quiet ended state after the room
-empties. Tapping joins through the existing join path. The same look on web,
-iOS and Android. The live data is the story's existing `call` object
-(participants, count, `state`, `joinable`), unchanged.
+call agora" (via i18n) when empty (with "Entrar" still offered), and a quiet
+ended state only when the channel is gone or the author lost access to it.
+Tapping joins through the existing join path. The same look on web, iOS and
+Android. The live data is the story's existing `call` object (participants,
+count, `state`, `joinable`).
+
+**State rule (2026-10-13).** `state` is `live` for any room its author can still
+use, with `count` 0 when empty (an empty room is NOT an ended call, and it does
+not matter whether the author is in it); `full` for a mesh room at its limit;
+`ended` only when the channel is gone (`channelName` ""), or the author can no
+longer connect to it. A viewer without CONNECT gets `live`, count 0, no faces and
+`joinable: false`; one who cannot see the channel gets no `call`. The strip
+item's `hasCall` (the ring's "em call" badge) is true only while somebody is IN
+the room, as that viewer may see it. The editor therefore no longer warns that
+the author is not in the room.
 
 ### 17.7 Composer and viewer UX (spec)
 

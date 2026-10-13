@@ -387,9 +387,21 @@ export type StorySticker = z.infer<typeof storyStickerSchema>;
 
 /**
  * The call sticker as it is RIGHT NOW, read from the voice roster when the
- * story is served. `state` is `ended` once the room is empty or the author has
- * left it; `full` when a peer-to-peer room has no seat left. `joinable` is
- * `state === "live"` and the viewer may connect to the channel.
+ * story is served.
+ *
+ * - `live`: the room exists and its author can still use it. `count` is the
+ *   head count and may be 0: an EMPTY room is not an ended call. Clients show
+ *   "nobody in the call right now" for `live` with `count === 0`, and still
+ *   offer the way in (joining an empty room is fine). Whether the author is in
+ *   the room does not matter.
+ * - `full`: a peer-to-peer room at its seat limit. Faces, no way in.
+ * - `ended`: ONLY when the channel is gone (`channelName` is "" then) or the
+ *   author can no longer connect to it. No faces, no count, no button.
+ * - A viewer without CONNECT to the room gets `live`, `count` 0, no faces and
+ *   `joinable: false` (the roster is not theirs to see); a viewer who cannot
+ *   even see the channel gets no `call` at all.
+ *
+ * `joinable` is `state === "live"` and the viewer may connect to the channel.
  */
 export const storyCallLiveSchema = z.object({
   serverId: z.string().uuid(),
@@ -679,6 +691,7 @@ export const storyStripItemSchema = z.object({
   latestAt: z.string(),
   expiresAt: z.string(),
   unseen: z.boolean(),
+  /** True only while somebody is IN the room of a call sticker in this author's stories (as this viewer may see it). */
   hasCall: z.boolean(),
 });
 export type StoryStripItem = z.infer<typeof storyStripItemSchema>;

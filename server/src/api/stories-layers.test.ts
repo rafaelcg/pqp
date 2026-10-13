@@ -327,7 +327,8 @@ describeDb("stories composer v2: layers", () => {
         user: { id: bob.id, displayName: "Bob" },
       });
       expect(story.layers[3]).toMatchObject({ x: 0.4, y: 0.7, channelId: lobbyId });
-      expect(story.call).toMatchObject({ channelName: "Lobby", state: "ended" });
+      // Nobody is in the Lobby: an empty room, not an ended call.
+      expect(story.call).toMatchObject({ channelName: "Lobby", state: "live", count: 0, joinable: true });
 
       // Parsed the way a client does, the story is the story that was sent.
       expect(storySchema.parse(story).layers).toHaveLength(4);
