@@ -158,35 +158,38 @@ object StoryMediaPrep {
         // A container Android can read but a story cannot carry (a .mov, a .webm) is
         // refused by its type, before anything is read to find out how big it is.
         if (type != "video/mp4") return PrepResult.Refused(StoriesRules.MediaRefusal.WrongType, durationMs)
-        // A provider that cannot say how long the file is answers -1: count it by
-        // reading, but only as far as the decision needs (past the cap it is
-        // already "too big to send as it is"), so a huge clip is not read to its end twice.
+        // A provider that cannot say how long the file is answers -1. Then the file
+        // is read once, up to one byte past the cap (past it the clip is already "too
+        // big to send as it is"), and those bytes are kept for the story if it fits.
+        var readAhead: ByteArray? = null
         val size = runCatching {
             context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
-        }.getOrNull()?.takeIf { it >= 0 } ?: countBytes(context, uri, limit = maxBytes + 1)
+        }.getOrNull()?.takeIf { it >= 0 } ?: readUpTo(context, uri, limit = maxBytes + 1).also { readAhead = it }.size.toLong()
         val work = TrimRules.work(durationMs, size.coerceAtLeast(0), width, height, maxBytes)
         if (work != null) return PrepResult.NeedsWork(uri, durationMs, width, height, tooLong = work == TrimRules.Work.Trim)
         StoriesRules.checkMedia(type, size.coerceAtLeast(0), durationMs, maxBytes)?.let {
             return PrepResult.Refused(it, durationMs)
         }
-        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return PrepResult.Unreadable
+        val bytes = readAhead?.takeIf { it.size <= maxBytes }
+            ?: context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            ?: return PrepResult.Unreadable
         if (bytes.size > maxBytes) return PrepResult.Refused(StoriesRules.MediaRefusal.TooBig)
         return PrepResult.Ready(PreparedMedia(bytes, "video/mp4", width, height, durationMs, uri))
     }
 
-    /** Bytes in the stream, counting no further than [limit]: enough to know whether it is over a cap. */
-    private fun countBytes(context: Context, uri: Uri, limit: Long): Long = runCatching {
+    /** The stream's bytes, reading no further than [limit]: enough to know whether it is over a cap, and to keep if it is not. */
+    private fun readUpTo(context: Context, uri: Uri, limit: Long): ByteArray = runCatching {
         context.contentResolver.openInputStream(uri)?.use { stream ->
+            val out = ByteArrayOutputStream()
             val buffer = ByteArray(64 * 1024)
-            var total = 0L
-            while (total < limit) {
-                val read = stream.read(buffer)
+            while (out.size() < limit) {
+                val read = stream.read(buffer, 0, minOf(buffer.size.toLong(), limit - out.size()).toInt())
                 if (read < 0) break
-                total += read
+                out.write(buffer, 0, read)
             }
-            total
+            out.toByteArray()
         }
-    }.getOrNull() ?: 0L
+    }.getOrNull() ?: ByteArray(0)
 
     private const val JPEG_QUALITY = 85
 }
