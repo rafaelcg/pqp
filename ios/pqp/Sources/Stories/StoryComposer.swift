@@ -22,6 +22,9 @@ struct StoryComposer: View {
     let preselectsFriends: Bool
     let onPosted: () -> Void
 
+    /// The tab the camera screen shows at the bottom. "Text" and "Call" skip
+    /// straight to the editor on a card background; "Camera" is the source
+    /// step, and a shot or a picked file moves it on to the editor.
     enum Mode: String, CaseIterable { case text, media, call }
 
     /// Opens on the camera, like the phone's own: the common story is a photo
@@ -29,38 +32,45 @@ struct StoryComposer: View {
     @State private var mode: Mode = .media
     @State private var config = StoriesConfig.off
     @State private var configLoaded = false
-    @State private var text = ""
     @State private var background = "night"
-    @State private var caption = ""
     @State private var draft: StoryDraftMedia?
+    @State private var muted = false
+    @State private var editor = StoryEditorModel()
     @State private var pickerItem: PhotosPickerItem?
     @State private var showingPicker = false
     @State private var showingFiles = false
     @State private var trimRequest: StoryTrimRequest?
     @State private var preparing = false
-    @State private var call: StoryCallChoice?
     @State private var showingAudience = false
+    @State private var finalMedia: StoryDraftMedia?
+    @State private var builtRequest = StoryDraftRequest(kind: "text", text: nil, background: nil, caption: nil, sticker: nil)
     @State private var error: String?
-    @FocusState private var editingText: Bool
 
     var body: some View {
         ZStack {
-            canvas.ignoresSafeArea()
-
-            VStack(spacing: 0) {
-                topBar
-                Spacer(minLength: 0)
+            Color.black.ignoresSafeArea()
+            if isEditing {
+                StoryEditorView(
+                    model: editor, base: editorBase, muted: $muted, background: $background,
+                    preselectedServerId: preselectedServerId,
+                    opensText: mode == .text, opensCall: mode == .call,
+                    onClose: leaveEditor,
+                    onNext: { Task { await advance() } },
+                    canAdvance: canAdvance && !preparing
+                )
+                .id(editorIdentity)
                 if let error {
-                    Text(verbatim: error)
-                        .font(Typography.callout)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Capsule().fill(Palette.danger.opacity(0.85)))
-                        .padding(.bottom, 10)
-                        .accessibilityIdentifier("composer.error")
+                    VStack {
+                        Spacer()
+                        errorPill(error).padding(.bottom, 80)
+                    }
                 }
-                bottomBar
+                if preparing {
+                    Color.black.opacity(0.4).ignoresSafeArea()
+                    ProgressView().tint(.white)
+                }
+            } else {
+                cameraStep
             }
         }
         .task {
@@ -100,9 +110,9 @@ struct StoryComposer: View {
             StoryAudienceSheet(
                 preselectedServerId: preselectedServerId,
                 preselectsFriends: preselectsFriends,
-                callServerId: call?.serverId,
-                request: request,
-                media: draft
+                callServerId: builtRequest.callServerId,
+                request: builtRequest,
+                media: finalMedia
             ) {
                 showingAudience = false
                 onPosted()
@@ -113,81 +123,69 @@ struct StoryComposer: View {
         }
     }
 
-    // MARK: - Canvas
+    // MARK: - Steps
 
-    @ViewBuilder
-    private var canvas: some View {
-        switch mode {
-        case .text, .call:
-            ZStack {
-                LinearGradient(colors: StoryRules.backgroundColors(background), startPoint: .top, endPoint: .bottom)
-                VStack(spacing: 18) {
-                    TextField("", text: $text,
-                              prompt: Text(mode == .call ? "Who's coming to the call?" : "Say something").foregroundStyle(.white.opacity(0.5)),
-                              axis: .vertical)
-                        .font(.system(size: 32, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .focused($editingText)
-                        .lineLimit(1...6)
-                        .padding(.horizontal, 28)
-                        .onChange(of: text) { _, value in
-                            if value.count > StoryLimits.textMax { text = String(value.prefix(StoryLimits.textMax)) }
-                        }
-                        .accessibilityIdentifier("composer.text")
-                    if mode == .call {
-                        callPicker
-                    }
-                }
+    /// The edit step: a shot or picked file, or a card (text and call).
+    private var isEditing: Bool {
+        (mode == .media && draft != nil) || mode == .text || mode == .call
+    }
+
+    private var editorBase: StoryEditorBase {
+        if mode == .media, let draft { return .media(draft) }
+        return .card(background: background)
+    }
+
+    /// A new editor each time a different base is opened, so a draft discarded
+    /// and a new one shot never inherit each other's layers.
+    @State private var editorSerial = 0
+    private var editorIdentity: String { "\(mode.rawValue)-\(editorSerial)" }
+
+    /// The source step.
+    private var cameraStep: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            StoryCameraView(
+                isActive: cameraActive,
+                recordsAudio: !callActive,
+                blockedByCall: callCameraOn,
+                onCapture: { result in Task { await accept(cameraResult: result) } },
+                onGallery: { showingPicker = true },
+                onFiles: { showingFiles = true }
+            )
+            if preparing {
+                Color.black.opacity(0.5).ignoresSafeArea()
+                ProgressView().tint(.white)
             }
-        case .media:
-            ZStack {
-                Color.black
-                if let draft {
-                    // A shot that is already tall fills the screen; anything
-                    // wider (a landscape photo, a screenshot) is shown whole.
-                    let aspect = draft.preview.size.width / max(1, draft.preview.size.height)
-                    Color.clear
-                        .overlay {
-                            Image(uiImage: draft.preview)
-                                .resizable()
-                                .aspectRatio(contentMode: (0.45...0.7).contains(aspect) ? .fill : .fit)
-                        }
-                        .clipped()
-                    if draft.isVideo {
-                        Image(systemName: "play.circle.fill")
-                            .font(.system(size: 54))
-                            .foregroundStyle(.white.opacity(0.85))
-                    }
-                    VStack {
-                        Spacer()
-                        TextField("", text: $caption, prompt: Text("Add a caption").foregroundStyle(.white.opacity(0.6)), axis: .vertical)
+            VStack(spacing: 0) {
+                HStack {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(.white)
-                            .lineLimit(1...3)
-                            .padding(12)
-                            .background(RoundedRectangle(cornerRadius: 12).fill(.black.opacity(0.5)))
-                            .padding(.horizontal, 20)
-                            .padding(.bottom, 180)
-                            .onChange(of: caption) { _, value in
-                                if value.count > StoryLimits.captionMax { caption = String(value.prefix(StoryLimits.captionMax)) }
-                            }
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(.black.opacity(0.35)))
                     }
-                } else {
-                    StoryCameraView(
-                        isActive: cameraActive,
-                        recordsAudio: !callActive,
-                        blockedByCall: callCameraOn,
-                        onCapture: { result in Task { await accept(cameraResult: result) } },
-                        onGallery: { showingPicker = true },
-                        onFiles: { showingFiles = true }
-                    )
-                    if preparing {
-                        Color.black.opacity(0.5).ignoresSafeArea()
-                        ProgressView().tint(.white)
-                    }
+                    .accessibilityLabel(Text("Close"))
+                    .accessibilityIdentifier("composer.close")
+                    Spacer()
                 }
+                .padding(.horizontal, 14)
+                .padding(.top, 6)
+                Spacer(minLength: 0)
+                if let error { errorPill(error).padding(.bottom, 10) }
+                modeBar
             }
         }
+    }
+
+    private func errorPill(_ text: String) -> some View {
+        Text(verbatim: text)
+            .font(Typography.callout)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(Palette.danger.opacity(0.85)))
+            .accessibilityIdentifier("composer.error")
     }
 
     /// The camera runs only while it is what is on screen: a draft, a sheet,
@@ -200,89 +198,13 @@ struct StoryComposer: View {
     private var callActive: Bool { voice.holdsSeat || callModel.phase.isInRoom }
     private var callCameraOn: Bool { voice.isCameraOn || callModel.isCameraOn }
 
-    private var showsCamera: Bool { mode == .media && draft == nil }
-
-    private var topBar: some View {
-        HStack {
-            Button {
-                // Over a shot or a picked file the X throws it away and goes
-                // back to the camera, like Instagram; over the camera it closes.
-                if mode == .media, draft != nil {
-                    withAnimation(Motion.standard) { draft = nil }
-                    error = nil
-                } else {
-                    dismiss()
-                }
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(Circle().fill(.black.opacity(0.35)))
+    private var modeBar: some View {
+        HStack(spacing: 22) {
+            modeButton(.text, title: "Text")
+            if !configLoaded || config.mediaEnabled {
+                modeButton(.media, title: "Camera")
             }
-            .accessibilityLabel(mode == .media && draft != nil ? "Discard" : "Close")
-            .accessibilityIdentifier("composer.close")
-            Spacer()
-            if !showsCamera {
-                Text("New story")
-                    .font(Typography.bodyMedium)
-                    .foregroundStyle(.white)
-            }
-            Spacer()
-            if mode != .media {
-                Menu {
-                    ForEach(StoryRules.backgrounds, id: \.self) { key in
-                        Button { background = key } label: {
-                            Label(backgroundName(key), systemImage: background == key ? "checkmark.circle.fill" : "circle.fill")
-                        }
-                    }
-                } label: {
-                    Circle()
-                        .fill(LinearGradient(colors: StoryRules.backgroundColors(background), startPoint: .top, endPoint: .bottom))
-                        .frame(width: 30, height: 30)
-                        .overlay(Circle().strokeBorder(.white, lineWidth: 2))
-                        .frame(width: 40, height: 40)
-                }
-                .accessibilityLabel("Background")
-                .accessibilityIdentifier("composer.background")
-            } else {
-                Color.clear.frame(width: 40, height: 40)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 6)
-    }
-
-    private var bottomBar: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 22) {
-                modeButton(.text, title: "Text")
-                if !configLoaded || config.mediaEnabled {
-                    modeButton(.media, title: "Camera")
-                }
-                modeButton(.call, title: "Call")
-            }
-            if !showsCamera {
-            Button {
-                editingText = false
-                error = nil
-                guard validate() else { return }
-                showingAudience = true
-            } label: {
-                HStack(spacing: 8) {
-                    Text("Next")
-                    Image(systemName: "arrow.right")
-                }
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(Palette.inkDeep)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(Capsule().fill(canAdvance ? Palette.signal : Palette.signal.opacity(0.4)))
-            }
-            .disabled(!canAdvance)
-            .padding(.horizontal, 20)
-            .accessibilityIdentifier("composer.next")
-            }
+            modeButton(.call, title: "Call")
         }
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity)
@@ -291,8 +213,10 @@ struct StoryComposer: View {
 
     private func modeButton(_ value: Mode, title: LocalizedStringKey) -> some View {
         Button {
-            withAnimation(Motion.standard) { mode = value }
             error = nil
+            guard value != mode else { return }
+            if value != .media { editor.clear(); editorSerial += 1 }
+            withAnimation(Motion.standard) { mode = value }
         } label: {
             VStack(spacing: 4) {
                 Text(title)
@@ -305,63 +229,90 @@ struct StoryComposer: View {
         .accessibilityIdentifier("composer.mode.\(value.rawValue)")
     }
 
-    // MARK: - Call
-
-    @ViewBuilder
-    private var callPicker: some View {
-        StoryCallPicker(selection: $call)
-            .padding(.horizontal, 20)
+    /// The X in the editor: a draft goes back to the camera, a card goes back
+    /// to the camera tab.
+    private func leaveEditor() {
+        error = nil
+        editor.clear()
+        editorSerial += 1
+        withAnimation(Motion.standard) {
+            draft = nil
+            muted = false
+            mode = config.mediaEnabled || !configLoaded ? .media : mode
+        }
+        if !config.mediaEnabled, configLoaded { dismiss() }
     }
 
     // MARK: - Rules
 
-    private var trimmedText: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
-
     private var canAdvance: Bool {
         switch mode {
-        case .text: !trimmedText.isEmpty
-        case .media: draft != nil
-        case .call: call != nil && !trimmedText.isEmpty
-        }
-    }
-
-    private func validate() -> Bool {
-        if mode == .media, let draft, draft.isVideo,
-           let problem = StoryRules.videoProblem(durationMs: draft.durationMs ?? 0, byteSize: draft.data.count, maxVideoMs: config.maxVideoMs) {
-            error = problem
-            return false
-        }
-        return canAdvance
-    }
-
-    /// What `POST /api/stories` gets, minus the audience (the sheet adds it).
-    private var request: StoryDraftRequest {
-        switch mode {
-        case .text:
-            StoryDraftRequest(kind: "text", text: trimmedText, background: background, caption: nil, sticker: nil)
-        case .call:
-            StoryDraftRequest(
-                kind: "text", text: trimmedText, background: background, caption: nil,
-                sticker: call.map { StoryCallSticker(type: "call", serverId: $0.serverId, channelId: $0.channelId) }
-            )
         case .media:
-            StoryDraftRequest(
-                kind: draft?.isVideo == true ? "video" : "image", text: nil, background: nil,
-                caption: caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : caption.trimmingCharacters(in: .whitespacesAndNewlines),
-                sticker: nil
+            guard let draft else { return false }
+            if draft.isVideo,
+               StoryRules.videoProblem(durationMs: draft.durationMs ?? 0, byteSize: draft.data.count, maxVideoMs: config.maxVideoMs) != nil {
+                return false
+            }
+            return true
+        case .text, .call:
+            return editor.hasContent
+        }
+    }
+
+    /// Everything the create request needs, from what is on the canvas.
+    private func buildRequest(media: StoryDraftMedia?) -> StoryDraftRequest {
+        let layers = editor.layers.map { layer -> StoryLayerInput in
+            guard let file = editor.files[layer.id] else { return StoryLayerInput(layer: layer, upload: nil) }
+            return StoryLayerInput(layer: layer, upload: StoryLayerUploadDeclaration(
+                contentType: file.contentType, byteSize: file.data.count, width: file.width, height: file.height
+            ))
+        }
+        let altText = StoryAltText.make(layers: editor.layers, callRoomName: editor.callInfo?.roomName, caption: nil)
+        // Old builds show the caption and nothing else: the text the author
+        // typed travels there too.
+        let spoken = editor.layers.sorted { $0.y < $1.y }.compactMap { layer -> String? in
+            if case .text(let data) = layer.content { return data.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            return nil
+        }.filter { !$0.isEmpty }.joined(separator: " ")
+        var callServer: String?
+        for layer in editor.layers {
+            if case .call(let serverId, _) = layer.content { callServer = serverId }
+        }
+        switch mode {
+        case .media:
+            return StoryDraftRequest(
+                kind: media?.isVideo == true ? "video" : "image", text: nil, background: nil,
+                caption: spoken.isEmpty ? nil : String(spoken.prefix(StoryLimits.captionMax)),
+                sticker: nil, layers: layers, altText: altText,
+                layerFiles: editor.files, callServerId: callServer
+            )
+        case .text, .call:
+            return StoryDraftRequest(
+                kind: "text", text: nil, background: background, caption: nil, sticker: nil,
+                layers: layers, altText: altText, layerFiles: editor.files, callServerId: callServer
             )
         }
     }
 
-    private func backgroundName(_ key: String) -> String {
-        switch key {
-        case "lime": String(localized: "Lime")
-        case "night": String(localized: "Night")
-        case "ember": String(localized: "Ember")
-        case "grape": String(localized: "Grape")
-        case "sand": String(localized: "Sand")
-        default: String(localized: "Ink")
+    /// Next: a video muted in the editor is re-exported without its sound
+    /// first, then the audience sheet opens.
+    private func advance() async {
+        error = nil
+        guard canAdvance else { return }
+        var media = draft
+        if mode == .media, muted, let current = draft, current.isVideo {
+            preparing = true
+            defer { preparing = false }
+            do {
+                media = try await StoryMediaPrep.silenced(current, maxVideoMs: config.maxVideoMs)
+            } catch {
+                self.error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
+                return
+            }
         }
+        finalMedia = mode == .media ? media : nil
+        builtRequest = buildRequest(media: finalMedia)
+        showingAudience = true
     }
 
     // MARK: - Media
@@ -399,6 +350,13 @@ struct StoryComposer: View {
             error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
             return
         }
+        open(draft)
+    }
+
+    private func open(_ draft: StoryDraftMedia) {
+        editor.clear()
+        editorSerial += 1
+        muted = false
         withAnimation(Motion.standard) {
             mode = .media
             self.draft = draft
@@ -446,10 +404,7 @@ struct StoryComposer: View {
                 }
             }
             let draft = try await StoryMediaPrep.video(at: url, trimStartMs: trimStartMs, maxVideoMs: config.maxVideoMs)
-            withAnimation(Motion.standard) {
-                mode = .media
-                self.draft = draft
-            }
+            open(draft)
         } catch let failure as StoryMediaPrep.Failure {
             error = failure.message
         } catch {
@@ -465,6 +420,12 @@ struct StoryDraftRequest: Sendable {
     let background: String?
     let caption: String?
     let sticker: StoryCallSticker?
+    var layers: [StoryLayerInput] = []
+    var altText: String? = nil
+    /// The bytes behind each picture layer, by layer id.
+    var layerFiles: [String: StoryLayerFile] = [:]
+    /// The server a call layer belongs to: it has to be one of the audiences.
+    var callServerId: String? = nil
 }
 
 /// A picked or shot file, already prepared for upload.
@@ -475,6 +436,8 @@ struct StoryDraftMedia: Sendable {
     let height: Int
     let durationMs: Int?
     let preview: UIImage
+    /// Where a video lives on disk, for playing it back in the editor.
+    var fileURL: URL? = nil
 
     var isVideo: Bool { contentType.hasPrefix("video/") }
 }
@@ -485,6 +448,7 @@ struct StoryCallChoice: Identifiable, Hashable, Sendable {
     let serverName: String
     let channelId: String
     let channelName: String
+    var serverIconUrl: String? = nil
     var id: String { channelId }
 }
 
@@ -556,6 +520,12 @@ enum StoryMediaPrep {
         return CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
     }
 
+    /// A video as it is now, without its sound: the editor's mute toggle.
+    static func silenced(_ draft: StoryDraftMedia, maxVideoMs: Int) async throws -> StoryDraftMedia {
+        guard let url = draft.fileURL else { return draft }
+        return try await video(at: url, trimStartMs: 0, stripAudio: true, maxVideoMs: maxVideoMs)
+    }
+
     /// 720p H.264 MP4, metadata dropped, refused past the limit before any
     /// byte is uploaded.
     ///
@@ -563,9 +533,21 @@ enum StoryMediaPrep {
     /// than the limit (the trimmer chooses it). Without one, a clip past the
     /// limit plus a second of slack is refused, and up to a second over is
     /// cut to the limit: a recording stops a frame or two late.
-    static func video(at url: URL, trimStartMs: Int? = nil, maxVideoMs: Int) async throws -> StoryDraftMedia {
-        let asset = AVURLAsset(url: url)
-        let duration = try await asset.load(.duration)
+    static func video(at url: URL, trimStartMs: Int? = nil, stripAudio: Bool = false, maxVideoMs: Int) async throws -> StoryDraftMedia {
+        let source = AVURLAsset(url: url)
+        let duration = try await source.load(.duration)
+        var asset: AVAsset = source
+        if stripAudio {
+            // Only the picture track goes into the composition, so what is
+            // exported has no sound at all.
+            let composition = AVMutableComposition()
+            if let video = try await source.loadTracks(withMediaType: .video).first,
+               let track = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) {
+                try track.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: video, at: .zero)
+                track.preferredTransform = try await video.load(.preferredTransform)
+            }
+            asset = composition
+        }
         let totalMs = Int((duration.seconds * 1000).rounded())
         if trimStartMs == nil, StoryTrim.needsTrim(durationMs: totalMs, maxMs: maxVideoMs) {
             throw Failure(message: StoryRules.videoProblem(durationMs: totalMs, byteSize: 0, maxVideoMs: maxVideoMs) ?? "")
@@ -609,7 +591,7 @@ enum StoryMediaPrep {
             .map { UIImage(cgImage: $0) } ?? UIImage()
         return StoryDraftMedia(
             data: data, contentType: "video/mp4", width: width, height: height,
-            durationMs: max(1, durationMs), preview: poster
+            durationMs: max(1, durationMs), preview: poster, fileURL: out
         )
     }
 }
@@ -656,21 +638,40 @@ struct StoryCallPicker: View {
                     ForEach(rooms) { room in
                         let inside = session.voiceOccupancy.participants(in: room.channelId)
                         Button { selection = room } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "speaker.wave.2")
-                                    .foregroundStyle(.white.opacity(0.8))
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(verbatim: room.channelName)
-                                        .font(Typography.bodyMedium)
-                                        .foregroundStyle(.white)
-                                    Text(verbatim: inside.isEmpty
-                                         ? String(localized: "\(room.serverName) · empty")
-                                         : "\(room.serverName) · \(inside.prefix(3).map(\.displayName).joined(separator: ", "))")
+                            HStack(spacing: 12) {
+                                Avatar(name: room.serverName, seed: room.serverId, size: 38, url: room.serverIconUrl)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "speaker.wave.2.fill")
+                                            .font(.system(size: 11, weight: .bold))
+                                        Text(verbatim: room.channelName)
+                                            .font(Typography.bodyMedium)
+                                            .lineLimit(1)
+                                    }
+                                    .foregroundStyle(.white)
+                                    Text(verbatim: room.serverName)
                                         .font(Typography.caption)
                                         .foregroundStyle(.white.opacity(0.7))
                                         .lineLimit(1)
+                                    if inside.isEmpty {
+                                        Text("Nobody in the call right now")
+                                            .font(Typography.caption)
+                                            .foregroundStyle(.white.opacity(0.55))
+                                    }
                                 }
                                 Spacer()
+                                if !inside.isEmpty {
+                                    HStack(spacing: -8) {
+                                        ForEach(inside.prefix(3), id: \.userId) { person in
+                                            Avatar(name: person.displayName, seed: person.userId, size: 24)
+                                                .overlay(Circle().strokeBorder(Palette.ink, lineWidth: 2))
+                                        }
+                                    }
+                                    Text(verbatim: "\(inside.count)")
+                                        .font(Typography.caption)
+                                        .monospacedDigit()
+                                        .foregroundStyle(Palette.signal)
+                                }
                                 Image(systemName: selection == room ? "largecircle.fill.circle" : "circle")
                                     .foregroundStyle(selection == room ? Palette.signal : .white.opacity(0.6))
                             }
@@ -683,7 +684,6 @@ struct StoryCallPicker: View {
                     }
                 }
             }
-            .frame(maxHeight: 240)
         }
         .task { await load() }
     }
@@ -697,7 +697,8 @@ struct StoryCallPicker: View {
             for channel in channels where channel.isVoice {
                 found.append(StoryCallChoice(
                     serverId: server.serverId, serverName: server.serverName,
-                    channelId: channel.id, channelName: channel.name
+                    channelId: channel.id, channelName: channel.name,
+                    serverIconUrl: server.iconUrl
                 ))
             }
         }
@@ -889,12 +890,22 @@ struct StoryAudienceSheet: View {
             media: media.map {
                 StoryMediaInput(contentType: $0.contentType, byteSize: $0.data.count,
                                 width: $0.width, height: $0.height, durationMs: $0.durationMs)
-            }
+            },
+            layers: request.layers.isEmpty ? nil : request.layers,
+            altText: request.altText
         )
         do {
             let created = try await session.api.createStory(body)
+            // Every file goes up before the story is published: the base
+            // photo or video, then each placed photo and the drawing.
             if let upload = created.upload, let media {
                 try await StoryUploader.put(media.data, to: upload)
+            }
+            for target in created.layerUploads {
+                guard let file = request.layerFiles[target.layerId] else { continue }
+                try await StoryUploader.put(file.data, to: StoryUpload(url: target.url, method: target.method, headers: target.headers))
+            }
+            if created.upload != nil || !created.layerUploads.isEmpty {
                 _ = try await session.api.publishStory(id: created.story.id)
             }
             onPosted()
