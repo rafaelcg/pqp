@@ -199,6 +199,67 @@ describe("a hidden tab", () => {
     expect(pub.calls).toEqual([false]);
   });
 
+  it("keeps a share in Picture-in-Picture arriving while the tab is hidden", () => {
+    const delivery = createRemoteVideoDelivery();
+    const share = publication();
+    const camera = publication();
+    delivery.register(share);
+    delivery.register(camera);
+    delivery.attached(share);
+    delivery.attached(camera);
+    delivery.enteredPictureInPicture(share);
+
+    // The viewer switches tabs to keep working: the PiP window is the
+    // picture they are watching now, and the camera behind it is not.
+    delivery.setTabHidden(true);
+    vi.advanceTimersByTime(HIDDEN_GRACE_MS * 3);
+    expect(share.calls).toEqual([]);
+    expect(camera.calls).toEqual([false]);
+  });
+
+  it("pauses at once when PiP closes in a tab that is already paused", () => {
+    const delivery = createRemoteVideoDelivery();
+    const share = publication();
+    delivery.register(share);
+    delivery.attached(share);
+    delivery.enteredPictureInPicture(share);
+    delivery.setTabHidden(true);
+    vi.advanceTimersByTime(HIDDEN_GRACE_MS);
+
+    delivery.leftPictureInPicture(share);
+    vi.advanceTimersByTime(OFFSCREEN_GRACE_MS);
+    expect(share.calls).toEqual([false]);
+    delivery.setTabHidden(false);
+    expect(share.calls).toEqual([false, true]);
+  });
+
+  it("resumes a share the hidden tab paused the moment it enters PiP", () => {
+    const delivery = createRemoteVideoDelivery();
+    const share = publication();
+    delivery.register(share);
+    delivery.attached(share);
+    delivery.setTabHidden(true);
+    vi.advanceTimersByTime(HIDDEN_GRACE_MS);
+    expect(share.calls).toEqual([false]);
+
+    // Safari and Android can open PiP from a background tab.
+    delivery.enteredPictureInPicture(share);
+    expect(share.calls).toEqual([false, true]);
+  });
+
+  it("does not keep a PiP flag alive for an element that is gone", () => {
+    const delivery = createRemoteVideoDelivery();
+    const share = publication();
+    delivery.register(share);
+    delivery.attached(share);
+    delivery.enteredPictureInPicture(share);
+    delivery.leftPictureInPicture(share);
+    delivery.leftPictureInPicture(share);
+    delivery.setTabHidden(true);
+    vi.advanceTimersByTime(HIDDEN_GRACE_MS);
+    expect(share.calls).toEqual([false]);
+  });
+
   it("drops its timers on dispose and resumes nothing", () => {
     const delivery = createRemoteVideoDelivery();
     const pub = publication();
