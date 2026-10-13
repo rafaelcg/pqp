@@ -103,7 +103,7 @@ test("opens on the camera, takes a photo, goes back, and posts", async ({ page }
   await expect(composer.locator("[data-story-post]")).toHaveCount(0);
 
   await composer.locator("[data-story-shutter]").click();
-  await expect(composer.locator("[data-story-caption]")).toBeVisible();
+  await expect(composer.locator("[data-story-audience]")).toBeVisible();
   // Pre-ticked where the person was.
   await expect(composer.locator("[data-story-audience]")).toContainText(ctx.serverName);
 
@@ -116,7 +116,9 @@ test("opens on the camera, takes a photo, goes back, and posts", async ({ page }
   });
 
   await composer.locator("[data-story-shutter]").click();
-  await composer.locator("[data-story-caption]").fill("fake camera");
+  await composer.locator("[data-story-tool-text]").click();
+  await composer.locator("[data-story-text]").fill("fake camera");
+  await composer.locator("[data-story-text-done]").click();
   await composer.locator("[data-story-post]").click();
   await expect(composer).toBeHidden();
   await expect(page.getByRole("button", { name: "Your story, view" })).toBeVisible({ timeout: 30_000 });
@@ -141,7 +143,7 @@ test("records a clip with the record button and previews it", async ({ page }) =
   await page.waitForTimeout(1500);
   await composer.locator("[data-story-record]").click();
   // The recorded clip comes back as a video the person can caption and post.
-  await expect(composer.locator("[data-story-caption]")).toBeVisible({ timeout: 15_000 });
+  await expect(composer.locator("[data-story-audience]")).toBeVisible({ timeout: 15_000 });
   await expect(composer.locator("video").first()).toBeVisible();
 });
 
@@ -165,5 +167,43 @@ test("a file dropped on the composer becomes the story", async ({ page }) => {
       target.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
     }
   });
-  await expect(composer.locator("[data-story-caption]")).toBeVisible({ timeout: 15_000 });
+  await expect(composer.locator("[data-story-audience]")).toBeVisible({ timeout: 15_000 });
+});
+
+test("places a photo on the picture, changes its shape, and the server keeps it as a layer", async ({ page }) => {
+  const ctx = await setup();
+  await skipWithoutMedia(ctx.suffix);
+  const composer = await openComposer(page, ctx);
+  await page.waitForFunction(() => {
+    const element = document.querySelector<HTMLVideoElement>("[data-story-camera]");
+    return Boolean(element && element.videoWidth > 0);
+  });
+  await composer.locator("[data-story-shutter]").click();
+  await expect(composer.locator("[data-story-audience]")).toBeVisible();
+
+  // A 1x1 PNG chosen through the photo tool lands as a placed layer.
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  await composer
+    .locator("[data-story-photo-file]")
+    .setInputFiles({ name: "dot.png", mimeType: "image/png", buffer: png });
+  const placed = composer.locator('[data-layer-type="image"]');
+  await expect(placed).toHaveCount(1, { timeout: 15_000 });
+  await placed.focus();
+  await composer.locator("[data-story-shape]").click();
+  await composer.locator("[data-story-shape]").click();
+
+  await composer.locator("[data-story-post]").click();
+  await expect(composer).toBeHidden();
+  await expect(page.getByRole("button", { name: "Your story, view" })).toBeVisible({ timeout: 30_000 });
+
+  const strip = (await (
+    await fetch(`${API}/api/servers/${ctx.serverId}/stories`, { headers: headersFor(ctx.suffix) })
+  ).json()) as { own: { storyIds: string[] } };
+  const read = (await (
+    await fetch(`${API}/api/stories?ids=${strip.own.storyIds[0]}`, { headers: headersFor(ctx.suffix) })
+  ).json()) as { stories: { layers: { type: string; shape?: string }[] }[] };
+  expect(read.stories[0]!.layers).toMatchObject([{ type: "image", shape: "circle" }]);
 });

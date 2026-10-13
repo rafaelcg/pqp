@@ -1,4 +1,4 @@
-import { STORY_POSTS_PER_DAY, type CreateStoryRequest } from "@pqp/shared";
+import { STORY_POSTS_PER_DAY, type CreateStoryRequest, type StoryUpload } from "@pqp/shared";
 import { ApiError } from "@/lib/api";
 import type { MessageKey, MessageVars } from "@/lib/i18n";
 import { createStory, fetchStories, publishStory } from "./api";
@@ -20,6 +20,8 @@ import { getStoriesUi, patchPosting, setPosting } from "./ui-store";
 export interface StoryDraft {
   request: Omit<CreateStoryRequest, "media" | "requestId">;
   media: PreparedStoryMedia | null;
+  /** The pixels of every image and drawing layer, by layer id, to PUT where `layerUploads` says. */
+  layerFiles?: ReadonlyMap<string, Blob>;
   /**
    * The create's idempotency key, minted once per draft and kept across
    * retries: a retry after a dropped answer gets the story that was already
@@ -106,10 +108,11 @@ export async function postStory(draft: StoryDraft): Promise<PostOutcome> {
   const id = `post-${Date.now()}-${++counter}`;
   draft.requestId ??= crypto.randomUUID();
   const audienceKeys = audienceKeysFor(draft.request);
+  const hasFiles = Boolean(draft.media) || (draft.layerFiles?.size ?? 0) > 0;
   setPosting({
     id,
     audienceKeys,
-    progress: draft.media ? 0 : null,
+    progress: hasFiles ? 0 : null,
     status: "uploading",
     failure: null,
     retry: null,
@@ -121,10 +124,21 @@ export async function postStory(draft: StoryDraft): Promise<PostOutcome> {
     const created = await createStory(body);
     let storyId = created.story.id;
     let status = created.story.own?.status ?? "live";
+    const uploads: { upload: StoryUpload; blob: Blob }[] = [];
     if (created.upload && draft.media) {
-      await putStoryMedia(created.upload, draft.media.blob, (fraction) =>
-        patchPosting(id, { progress: fraction }),
-      );
+      uploads.push({ upload: created.upload, blob: draft.media.blob });
+    }
+    for (const layerUpload of created.layerUploads ?? []) {
+      const blob = draft.layerFiles?.get(layerUpload.layerId);
+      if (!blob) {
+        // The server minted an upload for a file this draft does not have: posting on would
+        // publish a story with a layer missing, or none at all and call it live.
+        throw new Error(`No file for layer ${layerUpload.layerId}`);
+      }
+      uploads.push({ upload: layerUpload, blob });
+    }
+    if (uploads.length > 0) {
+      await putAll(uploads, (fraction) => patchPosting(id, { progress: fraction }));
       patchPosting(id, { progress: null });
       const published = await publishStory(storyId);
       storyId = published.story.id;
@@ -156,6 +170,41 @@ export async function postStory(draft: StoryDraft): Promise<PostOutcome> {
         : null,
     });
     return failure === "busy" || failure === "daily" ? "busy" : "failed";
+  }
+}
+
+/**
+ * Every file of a story, together: the arc on the ring is bytes sent over bytes
+ * to send across ALL of them, so a story with a photo and a drawing does not
+ * fill the ring twice. They go up in parallel (a handful of small files).
+ */
+async function putAll(
+  uploads: readonly { upload: StoryUpload; blob: Blob }[],
+  onProgress: (fraction: number) => void,
+): Promise<void> {
+  const total = uploads.reduce((sum, entry) => sum + entry.blob.size, 0) || 1;
+  const sent = uploads.map(() => 0);
+  // One file failing stops the others: they would only upload bytes for a story that is not going up.
+  const stop = new AbortController();
+  try {
+    await Promise.all(
+      uploads.map((entry, index) =>
+        putStoryMedia(
+          entry.upload,
+          entry.blob,
+          (fraction) => {
+            sent[index] = fraction * entry.blob.size;
+            onProgress(Math.min(1, sent.reduce((sum, value) => sum + value, 0) / total));
+          },
+          stop.signal,
+        ).catch((error: unknown) => {
+          stop.abort();
+          throw error;
+        }),
+      ),
+    );
+  } finally {
+    stop.abort();
   }
 }
 

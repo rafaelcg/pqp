@@ -226,16 +226,19 @@ function StoryVideo({
  * "Chama pra call": live, read off the roster when the story was served. It
  * says the room has ended or filled up instead of offering a dead button.
  */
-function CallSticker({
+export function CallSticker({
   call,
   preview,
   onJoin,
   className,
+  layered = false,
 }: {
   call: StoryCallLive | null;
   preview: { channelName: string; names: string[] } | null;
   onJoin?: (call: StoryCallLive) => void;
   className?: string;
+  /** Sits inside a placed layer: sized by the canvas width, not pinned to the card. */
+  layered?: boolean;
 }) {
   const { t, locale } = useTranslation();
   const people = call?.participants ?? [];
@@ -263,12 +266,14 @@ function CallSticker({
     <div
       data-story-call=""
       className={cn(
-        "absolute left-[9%] right-[9%] rounded-[18px] border p-[14px] shadow-[var(--story-shadow)]",
+        layered ? "w-[82cqw]" : "absolute left-[9%] right-[9%]",
+        "rounded-[18px] border p-[14px] shadow-[var(--story-shadow)]",
         className,
       )}
       style={{ background: "var(--story-sticker)", borderColor: "var(--story-sticker-edge)" }}
-      onPointerDown={(event) => event.stopPropagation()}
-      onClick={(event) => event.stopPropagation()}
+      // In the viewer a tap on the card is its own (it must not turn the page); on the editor's canvas the card is a layer and the gesture belongs to the canvas.
+      onPointerDown={layered ? undefined : (event) => event.stopPropagation()}
+      onClick={layered ? undefined : (event) => event.stopPropagation()}
     >
       <p
         className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.08em]"

@@ -4083,3 +4083,183 @@ html[data-immersive-stage] [data-immersive-hide] {
     animation: story-fade-in var(--duration-fast) linear both;
   }
 }
+
+/* ------------------------------------------------------------------
+   Story layers: the palette a text layer and a drawing take their color
+   from (a token on the wire, never free hex), and how a text layer is set.
+   A layer is laid out in units of the canvas WIDTH (cqw), so it is the same
+   story on a 390 px phone and a 1440 px window. The sizes are the contract
+   in `lib/stories/layers.ts`: 8cqw x size for type, 84cqw at most wide.
+   ------------------------------------------------------------------ */
+:root {
+  /* One table for web, iOS and Android: STORY_TEXT_COLOR_HEX in @pqp/shared (a test keeps them equal).
+     The -on color is what a solid pill holds: black on all but black. */
+  --story-c-white: #FFFFFF;
+  --story-c-white-on: #000000;
+  --story-c-black: #000000;
+  --story-c-black-on: #FFFFFF;
+  --story-c-lime: #BBEC4C;
+  --story-c-lime-on: #000000;
+  --story-c-yellow: #FFD60A;
+  --story-c-yellow-on: #000000;
+  --story-c-orange: #FF9500;
+  --story-c-orange-on: #000000;
+  --story-c-red: #FF3B30;
+  --story-c-red-on: #000000;
+  --story-c-pink: #FF5FA2;
+  --story-c-pink-on: #000000;
+  --story-c-purple: #AF52DE;
+  --story-c-purple-on: #000000;
+  --story-c-blue: #0A84FF;
+  --story-c-blue-on: #000000;
+  --story-c-cyan: #64D2FF;
+  --story-c-cyan-on: #000000;
+  --story-c-green: #30D158;
+  --story-c-green-on: #000000;
+  --story-c-gray: #8E8E93;
+  --story-c-gray-on: #000000;
+  --story-text-soft: oklch(0 0 0 / 0.5);
+  --story-layer-shadow: 0 4px 18px oklch(0 0 0 / 0.35);
+  --story-text-shadow: 0 1px 10px oklch(0 0 0 / 0.28);
+}
+.story-tl {
+  --tl-fg: var(--story-c-white);
+  --tl-on: var(--story-c-white-on);
+  width: max-content;
+  max-width: 84cqw;
+  font-size: calc(var(--tl-size, 1) * 8cqw);
+  line-height: 1.14;
+  color: var(--tl-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: var(--tl-align, center);
+  font-family: "Instrument Sans", system-ui, sans-serif;
+  font-weight: 700;
+  text-shadow: var(--story-text-shadow);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.story-tl[data-color="white"] { --tl-fg: var(--story-c-white); --tl-on: var(--story-c-white-on); }
+.story-tl[data-color="black"] { --tl-fg: var(--story-c-black); --tl-on: var(--story-c-black-on); }
+.story-tl[data-color="lime"] { --tl-fg: var(--story-c-lime); --tl-on: var(--story-c-lime-on); }
+.story-tl[data-color="yellow"] { --tl-fg: var(--story-c-yellow); --tl-on: var(--story-c-yellow-on); }
+.story-tl[data-color="orange"] { --tl-fg: var(--story-c-orange); --tl-on: var(--story-c-orange-on); }
+.story-tl[data-color="red"] { --tl-fg: var(--story-c-red); --tl-on: var(--story-c-red-on); }
+.story-tl[data-color="pink"] { --tl-fg: var(--story-c-pink); --tl-on: var(--story-c-pink-on); }
+.story-tl[data-color="purple"] { --tl-fg: var(--story-c-purple); --tl-on: var(--story-c-purple-on); }
+.story-tl[data-color="blue"] { --tl-fg: var(--story-c-blue); --tl-on: var(--story-c-blue-on); }
+.story-tl[data-color="cyan"] { --tl-fg: var(--story-c-cyan); --tl-on: var(--story-c-cyan-on); }
+.story-tl[data-color="green"] { --tl-fg: var(--story-c-green); --tl-on: var(--story-c-green-on); }
+.story-tl[data-color="gray"] { --tl-fg: var(--story-c-gray); --tl-on: var(--story-c-gray-on); }
+.story-tl[data-font="bold"] {
+  font-family: "Gabarito", "Instrument Sans", system-ui, sans-serif;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  line-height: 1.04;
+}
+.story-tl[data-font="typewriter"] {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.story-tl[data-font="serif"] {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  font-style: italic;
+}
+.story-tl[data-font="neon"] {
+  font-family: "Gabarito", "Instrument Sans", system-ui, sans-serif;
+  font-weight: 800;
+  text-shadow:
+    0 0 0.1em var(--tl-fg),
+    0 0 0.4em var(--tl-fg),
+    0 0 0.9em var(--tl-fg);
+}
+.story-tl[data-bg="solid"] {
+  background: var(--tl-fg);
+  color: var(--tl-on);
+  text-shadow: none;
+  padding: 0.14em 0.36em;
+  border-radius: 0.3em;
+}
+.story-tl[data-bg="soft"] {
+  background: var(--story-text-soft);
+  padding: 0.14em 0.36em;
+  border-radius: 0.3em;
+}
+.story-tl[data-font="neon"][data-bg="solid"] {
+  text-shadow: none;
+}
+
+/* The editor's selection frame, drawn at a constant size however much the
+   layer is scaled (--inv is 1 / scale). */
+.story-layer {
+  touch-action: none;
+  cursor: grab;
+  outline: none;
+}
+.story-layer:active {
+  cursor: grabbing;
+}
+.story-layer-frame {
+  pointer-events: none;
+  position: absolute;
+  inset: -6px;
+  border: calc(1.5px * var(--inv, 1)) solid var(--story-on-media);
+  border-radius: calc(6px * var(--inv, 1));
+  box-shadow: 0 0 0 calc(1px * var(--inv, 1)) var(--story-dim);
+}
+.story-layer:focus-visible .story-layer-frame {
+  border-color: var(--story-accent);
+}
+.story-layer-handle {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  height: 22px;
+  width: 22px;
+  transform: translate(50%, 50%) scale(var(--inv, 1));
+  border-radius: 9999px;
+  border: 2px solid var(--story-card);
+  background: var(--story-on-media);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.story-guide {
+  pointer-events: none;
+  z-index: 4;
+  position: absolute;
+  background: var(--story-accent);
+  opacity: 0.9;
+}
+.story-trash {
+  pointer-events: none;
+  z-index: 4;
+  position: absolute;
+  left: 50%;
+  bottom: 4%;
+  display: flex;
+  height: 14cqw;
+  width: 14cqw;
+  transform: translateX(-50%);
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: var(--story-dim);
+  color: var(--story-on-media);
+  transition:
+    transform var(--duration-fast) var(--ease-emphasized),
+    background var(--duration-fast) var(--ease-standard);
+}
+.story-trash[data-hot="true"] {
+  transform: translateX(-50%) scale(1.22);
+  background: var(--color-danger);
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-trash {
+    transition: none;
+  }
+  .story-trash[data-hot="true"] {
+    transform: translateX(-50%);
+  }
+}
