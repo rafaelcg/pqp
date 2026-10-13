@@ -246,7 +246,7 @@ struct StoryPlacedLayer: View {
         }
         .scaleEffect(layer.scale)
         .rotationEffect(.radians(layer.rotation))
-        .position(x: layer.x * context.canvas.width, y: layer.y * context.canvas.height)
+        .position(x: CGFloat(layer.x) * context.canvas.width, y: CGFloat(layer.y) * context.canvas.height)
         .accessibilityElement(children: layer.isDrawing ? .ignore : .contain)
         .accessibilityLabel(layer.isDrawing ? "" : layer.spokenLabel)
         .accessibilityHidden(layer.isDrawing)
