@@ -64,7 +64,7 @@ afterEach(() => {
   host = null;
 });
 
-function mount(onReorderServers?: (ids: string[]) => void) {
+function mount(onReorderServers?: (ids: string[]) => void, list: Server[] = servers) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -72,7 +72,7 @@ function mount(onReorderServers?: (ids: string[]) => void) {
     root!.render(
       <TooltipProvider>
         <ServerRail
-          servers={servers}
+          servers={list}
           selectedServerId={null}
           serverUnread={{}}
           homeSelected={false}
@@ -148,6 +148,17 @@ describe("the server rail, reordered from the keyboard", () => {
     const describedBy = tile("Beta").getAttribute("aria-describedby")!;
     expect(host!.querySelector(`[id="${CSS.escape(describedBy)}"]`)!.textContent).toMatch(/Alt/);
     expect(tile("Beta").getAttribute("aria-keyshortcuts")).toBe("Alt+ArrowUp Alt+ArrowDown");
+  });
+
+  it("only takes the Alt+arrow channel shortcut over while there is something to reorder", () => {
+    mount(vi.fn());
+    expect(host!.querySelector("[data-rail-reorderable]")).not.toBeNull();
+    act(() => root?.unmount());
+    host?.remove();
+    // One server: nothing to reorder, so Alt+Up / Down stay channel navigation.
+    mount(vi.fn(), [servers[0]!]);
+    expect(host!.querySelector("[data-rail-item]")).not.toBeNull();
+    expect(host!.querySelector("[data-rail-reorderable]")).toBeNull();
   });
 
   it("keeps Chats and the add / discover buttons out of the list", () => {

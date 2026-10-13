@@ -531,16 +531,13 @@ export function ServerRail({
             <span
               ref={reorder.itemRef(server.id)}
               data-rail-item={server.id}
+              data-rail-reorderable={
+                onReorderServers && servers.length > 1 ? "" : undefined
+              }
               data-rail-lifted={lifted ? "" : undefined}
               {...(onReorderServers ? reorder.itemProps(server.id) : {})}
-              style={
-                lifted
-                  ? {
-                      transform: `translateY(${lifted.offset}px) scale(1.06)`,
-                      zIndex: 20,
-                    }
-                  : undefined
-              }
+              // Its transform is set by the hook, frame by frame, outside React.
+              style={lifted ? { zIndex: 20 } : undefined}
               className={cn(
                 "relative inline-flex select-none [-webkit-touch-callout:none]",
                 lifted && "rounded-xl opacity-90 shadow-lg shadow-black/40",

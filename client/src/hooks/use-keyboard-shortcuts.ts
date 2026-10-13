@@ -85,14 +85,16 @@ export function useKeyboardShortcuts({
       // Alt+Up / Alt+Down move the focused server on the rail (see
       // `use-server-rail-reorder.ts`). They are also "previous / next channel",
       // which would otherwise win here (this listener is in the capture phase),
-      // so a focused server tile keeps them. Alt+Shift+arrow, "next unread",
+      // so a focused server tile keeps them, but only while the rail can
+      // actually be reordered (two or more servers): with one, Alt+Up / Down
+      // is still channel navigation. Alt+Shift+arrow, "next unread",
       // is not the rail's and still works from anywhere.
       if (
         event.altKey &&
         !event.shiftKey &&
         (event.key === "ArrowUp" || event.key === "ArrowDown") &&
         event.target instanceof Element &&
-        event.target.closest("[data-rail-item]")
+        event.target.closest("[data-rail-reorderable]")
       ) {
         return;
       }

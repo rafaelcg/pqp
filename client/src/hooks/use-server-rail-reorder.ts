@@ -82,8 +82,6 @@ interface Gesture {
 
 export interface RailDrag {
   id: string;
-  /** Pixels the dragged tile is translated from its own slot. */
-  offset: number;
   /** The drop line's top in the list's own coordinates, or null for "no change". */
   lineY: number | null;
 }
@@ -183,6 +181,8 @@ export function useServerRailReorder({
       window.cancelAnimationFrame(g.frame);
     }
     gesture.current = null;
+    // The lifted tile is moved by hand (see `frame`); hand it back.
+    items.current.get(g.id)?.style.removeProperty("transform");
     document.body.style.removeProperty("user-select");
     document.body.style.removeProperty("-webkit-user-select");
     window.removeEventListener("pointermove", onMoveRef.current);
@@ -215,13 +215,22 @@ export function useServerRailReorder({
     const top = clampTop(g.slots, raw);
     const target = targetSlot(g.slots, top + slot.height / 2);
     const offset = top - slot.top;
-    if (target !== g.target || offset !== g.offset) {
-      g.target = target;
+    if (offset !== g.offset) {
       g.offset = offset;
+      // Straight onto the element, not through React state: this runs every
+      // frame, and a state change would re-render the whole rail (every tile,
+      // every menu) sixty times a second. React only hears about the drop
+      // target, which changes a handful of times per drag.
+      const el = items.current.get(g.id);
+      if (el) {
+        el.style.transform = `translateY(${offset}px) scale(1.06)`;
+      }
+    }
+    if (target !== g.target) {
+      g.target = target;
       const line = dropLineY(g.slots, g.from, target, g.gap);
       setDrag({
         id: g.id,
-        offset,
         lineY: line === null ? null : line - g.listTop,
       });
     }
@@ -286,7 +295,11 @@ export function useServerRailReorder({
           // No haptics here; the lift is visible anyway.
         }
       }
-      setDrag({ id: g.id, offset: 0, lineY: null });
+      const lifted = items.current.get(g.id);
+      if (lifted) {
+        lifted.style.transform = "translateY(0px) scale(1.06)";
+      }
+      setDrag({ id: g.id, lineY: null });
       g.frame = window.requestAnimationFrame(frame);
     },
     [frame, stopGesture],

@@ -658,6 +658,10 @@ import { useAttentionReport } from "@/hooks/use-attention";
 import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { newRailOrigin } from "@/lib/server-rail-reorder";
+import {
+  createServerOrderSaver,
+  type ServerOrderSaver,
+} from "@/lib/server-order-saver";
 import { adoptAccentHuePreference } from "@/lib/accent";
 import { getAppearance } from "@/lib/appearance";
 import { adoptLook } from "@/lib/choose-look";
@@ -2710,15 +2714,44 @@ function MainAppContent({
   serversRef.current = servers;
   // The server rail's order (`PUT /api/servers/order`). `railOriginRef` is this
   // tab's own id, sent with a save and echoed on the frame the account's OTHER
-  // tabs get, so this one can skip its own echo. `railSavesInFlightRef` and
-  // `railSaveSeqRef` keep two quick drags from fighting: only the newest save's
-  // answer (or failure) is allowed to touch the list.
+  // tabs get, so this one can skip its own echo. The saver sends one request at
+  // a time, coalesces a burst of moves and rolls back to the last order the
+  // server confirmed: see `lib/server-order-saver.ts` for why.
   const railOriginRef = useRef<string>("");
   if (railOriginRef.current === "") {
     railOriginRef.current = newRailOrigin();
   }
-  const railSavesInFlightRef = useRef(0);
-  const railSaveSeqRef = useRef(0);
+  const railSaverRef = useRef<ServerOrderSaver | null>(null);
+  if (railSaverRef.current === null) {
+    railSaverRef.current = createServerOrderSaver({
+      save: async (ids) => (await saveServerOrder(ids, railOriginRef.current)).serverIds,
+      current: () => serversRef.current.map((row) => row.id),
+      onConfirmed: (stored, latest) => {
+        if (latest) {
+          setServers((rows) => applyServerOrder(rows, stored));
+        }
+      },
+      onFailed: (confirmed) => {
+        setServers((rows) => applyServerOrder(rows, confirmed));
+        setAppNotice(null);
+        setAppError(translateMessage("chrome.railReorderFailed"));
+      },
+      onResync: () => {
+        fetchServers()
+          .then(({ servers: list }) =>
+            setServers((rows) =>
+              applyServerOrder(
+                rows,
+                list.map((row) => row.id),
+              ),
+            ),
+          )
+          .catch(() => {
+            // The next load reads it anyway.
+          });
+      },
+    });
+  }
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
   /**
@@ -5348,10 +5381,10 @@ function MainAppContent({
           // the truth, and applying an older frame first would flick the rail
           // back for a moment, mid-drag.
           if (message.type === "server-order-update") {
-            if (
-              (message.origin && message.origin === railOriginRef.current) ||
-              railSavesInFlightRef.current > 0
-            ) {
+            if (message.origin && message.origin === railOriginRef.current) {
+              return;
+            }
+            if (railSaverRef.current?.noteRemote()) {
               return;
             }
             setServers((rows) => applyServerOrder(rows, message.serverIds));
@@ -6768,32 +6801,13 @@ function MainAppContent({
 
   /**
    * The rail was reordered (drag, Alt+arrows, or the menu). Optimistic: the
-   * list moves now, the save follows, and if it fails the list goes back to
-   * where it was with a line saying so. Only the newest save may roll back or
-   * adopt the stored answer, so a quick second drag is never undone by the
-   * first one finishing late.
+   * list moves now and the newest wanted order is saved by the saver, one
+   * request at a time. If a save fails the list goes back to the last order
+   * the server confirmed, with a line saying so.
    */
   function handleReorderServers(ids: string[]) {
-    const before = serversRef.current.map((row) => row.id);
-    const seq = ++railSaveSeqRef.current;
+    railSaverRef.current?.request(ids);
     setServers((rows) => applyServerOrder(rows, ids));
-    railSavesInFlightRef.current += 1;
-    saveServerOrder(ids, railOriginRef.current)
-      .then(({ serverIds }) => {
-        if (seq === railSaveSeqRef.current) {
-          setServers((rows) => applyServerOrder(rows, serverIds));
-        }
-      })
-      .catch(() => {
-        if (seq === railSaveSeqRef.current) {
-          setServers((rows) => applyServerOrder(rows, before));
-          setAppNotice(null);
-          setAppError(translateMessage("chrome.railReorderFailed"));
-        }
-      })
-      .finally(() => {
-        railSavesInFlightRef.current -= 1;
-      });
   }
 
   function handleFavoriteChannelIdsChange(ids: string[]) {
