@@ -6093,5 +6093,7 @@
   "qaBots.ask.mine": "For the one asked",
   "qaBots.ask.other": "For everybody",
   "qaBots.ask.answered": "Answered",
-  "qaBots.ask.expired": "Expired"
+  "qaBots.ask.expired": "Expired",
+  "chat.authorGone": "salió",
+  "chat.authorGoneHint": "{name} ya no está en el servidor."
 }
