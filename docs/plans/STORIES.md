@@ -1245,6 +1245,16 @@ as today.
   actions. Video: trim to 30 s, mute toggle. Reduced motion respected. Copy in
   en and pt-BR (and es on web), pt-BR uses tu, no em dashes, icons from the
   platform set and never emoji as UI.
+- While a text layer is being edited, only the text controls are on screen (cancel,
+  font, background, align, Done, the size slider and the palette), as on Instagram.
+  The toolbar (close, back, text, photo, draw, stickers, undo, redo), the selection
+  chip bar, the camera / text tabs and the audience and Post row are hidden (and
+  inert) until Done. The camera step and the text editor never share the stage:
+  the text tab releases the camera, and leaving a text card for the camera closes
+  the editor. Layers belong to their base, so going Back to the camera or
+  switching tab with layers placed asks "Descartar story?" first, and so does X
+  (or Escape) with any picture or layer. Undo has a redo beside it (Shift+Cmd/Ctrl+Z,
+  Ctrl+Y); any new edit clears the redo line.
 - Viewer: base, then layers in order, scaled to the viewer's canvas and clipped.
   Mentions and the call are tappable; text and photos are not. The desktop
   viewer uses the height of the window (about 92dvh, 9:16), not a small card.

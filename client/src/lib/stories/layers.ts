@@ -186,11 +186,13 @@ export interface EditorState {
   layers: EditorLayer[];
   selectedId: string | null;
   past: EditorLayer[][];
+  /** What undo stepped back over, newest first to redo. Any new edit clears it. */
+  future: EditorLayer[][];
 }
 
 export const HISTORY_LIMIT = 40;
 
-export const initialEditorState: EditorState = { layers: [], selectedId: null, past: [] };
+export const initialEditorState: EditorState = { layers: [], selectedId: null, past: [], future: [] };
 
 export type EditorAction =
   | { type: "add"; layer: EditorLayer }
@@ -203,6 +205,7 @@ export type EditorAction =
   | { type: "backward"; id: string }
   | { type: "select"; id: string | null }
   | { type: "undo" }
+  | { type: "redo" }
   | { type: "reset" };
 
 /**
@@ -252,10 +255,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         layers: [...state.layers, added],
         selectedId: action.layer.type === "drawing" ? state.selectedId : action.layer.id,
         past: push(state.past, state.layers),
+        future: [],
       };
     }
     case "checkpoint":
-      return { ...state, past: push(state.past, state.layers) };
+      return { ...state, past: push(state.past, state.layers), future: [] };
     case "patch": {
       const index = state.layers.findIndex((layer) => layer.id === action.id);
       if (index < 0) {
@@ -271,6 +275,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         ...state,
         layers,
         past: action.transient ? state.past : push(state.past, state.layers),
+        future: action.transient ? state.future : [],
       };
     }
     case "remove": {
@@ -281,6 +286,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         layers: state.layers.filter((layer) => layer.id !== action.id),
         selectedId: state.selectedId === action.id ? null : state.selectedId,
         past: push(state.past, state.layers),
+        future: [],
       };
     }
     case "forward":
@@ -293,7 +299,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const layers = state.layers.slice();
       const [moved] = layers.splice(index, 1);
       layers.splice(target, 0, moved!);
-      return { ...state, layers, past: push(state.past, state.layers) };
+      return { ...state, layers, past: push(state.past, state.layers), future: [] };
     }
     case "select":
       return state.selectedId === action.id ? state : { ...state, selectedId: action.id };
@@ -303,7 +309,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         return state;
       }
       const selectedId = previous.some((layer) => layer.id === state.selectedId) ? state.selectedId : null;
-      return { layers: previous, selectedId, past: state.past.slice(0, -1) };
+      return { layers: previous, selectedId, past: state.past.slice(0, -1), future: push(state.future, state.layers) };
+    }
+    case "redo": {
+      const following = state.future[state.future.length - 1];
+      if (!following) {
+        return state;
+      }
+      const selectedId = following.some((layer) => layer.id === state.selectedId) ? state.selectedId : null;
+      return { layers: following, selectedId, past: push(state.past, state.layers), future: state.future.slice(0, -1) };
     }
     case "reset":
       return initialEditorState;
