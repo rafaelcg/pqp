@@ -5721,5 +5721,7 @@
   "serverEmoji.error.storage": "O armazenamento recusou o envio. Tenta de novo.",
   "serverEmoji.error.name": "O nome precisa ter de 2 a 32 letras minúsculas, números ou _.",
   "serverEmoji.error.generic": "Não deu certo. Tenta de novo.",
-  "emojiPicker.serverCategory": "Do servidor"
+  "emojiPicker.serverCategory": "Do servidor",
+  "chat.authorGone": "saiu",
+  "chat.authorGoneHint": "{name} não está mais no servidor."
 }

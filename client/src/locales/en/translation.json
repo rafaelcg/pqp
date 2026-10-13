@@ -5721,5 +5721,7 @@
   "serverEmoji.error.storage": "Storage refused the upload. Try again.",
   "serverEmoji.error.name": "The name needs 2 to 32 lowercase letters, digits or _.",
   "serverEmoji.error.generic": "Something went wrong. Try again.",
-  "emojiPicker.serverCategory": "This server"
+  "emojiPicker.serverCategory": "This server",
+  "chat.authorGone": "left",
+  "chat.authorGoneHint": "{name} is no longer in this server."
 }

@@ -145,6 +145,8 @@ export interface ForumPaneProps {
   mentionCandidates: MentionCandidate[];
   blockedAuthorIds: ReadonlySet<string>;
   authors?: ReadonlyMap<string, MessageAuthorInfo>;
+  /** `authors` is the server's whole roster: see MessageList. */
+  authorsComplete?: boolean;
   roles?: readonly MessageRoleColor[];
   showLinkEmbeds: boolean;
   slashContext?: Omit<
@@ -247,6 +249,7 @@ export function ForumPane({
   mentionCandidates,
   blockedAuthorIds,
   authors,
+  authorsComplete,
   roles,
   showLinkEmbeds,
   slashContext,
@@ -1631,6 +1634,7 @@ export function ForumPane({
           mentionCandidates={mentionCandidates}
           blockedAuthorIds={blockedAuthorIds}
           authors={authors}
+          authorsComplete={authorsComplete}
           roles={roles}
           showLinkEmbeds={showLinkEmbeds}
           slashContext={slashContext}

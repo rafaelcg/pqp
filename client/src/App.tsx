@@ -2316,6 +2316,8 @@ function MainAppContent({
     Array<Pick<ServerRole, "id" | "name" | "mentionable" | "isEveryone">>
   >([]);
   const [serverMembers, setServerMembers] = useState<ServerMember[]>([]);
+  /** The server whose whole roster `serverMembers` holds, once loaded. */
+  const [rosterServerId, setRosterServerId] = useState<string | null>(null);
   const [serverRoles, setServerRoles] = useState<ServerRole[]>([]);
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
   const unreadHoldRef = useRef(new Set<string>());
@@ -3734,6 +3736,7 @@ function MainAppContent({
   // The composer completes `@` against this server's members, which is also the
   // only place a handle can be learned from without asking for it.
   useEffect(() => {
+    setRosterServerId(null);
     if (conversationParticipants) {
       setMentionableRoles([]);
       setServerMembers([]);
@@ -3755,6 +3758,7 @@ function MainAppContent({
       .then(([{ members }, { roles }]) => {
         if (!cancelled) {
           setServerMembers(members);
+          setRosterServerId(selectedServerId);
           setServerRoles(roles);
           setMemberRoles(
             new Map(members.map((member) => [member.id, member.role])),
@@ -3843,6 +3847,11 @@ function MainAppContent({
     perms,
     t,
   ]);
+
+  // The roster above is the whole server once it has loaded, so a message
+  // author missing from it is somebody who is no longer a member.
+  const messageAuthorsComplete =
+    !conversationParticipants && !!selectedServerId && rosterServerId === selectedServerId;
 
   const messageAuthors = useMemo(() => {
     const map = new Map<string, MessageAuthorInfo>();
@@ -12132,6 +12141,7 @@ function MainAppContent({
         unreadThreadIds={unreadThreadIds}
         activeThreadId={openThread?.thread.channelId ?? null}
         authors={messageAuthors}
+        authorsComplete={messageAuthorsComplete}
         roles={serverRoles}
         unreadHeld={unreadHeldIds.has(selectedChannel.id)}
         unreadSince={unreadSince}
@@ -13266,6 +13276,7 @@ function MainAppContent({
               mentionCandidates={mentionCandidates}
               blockedAuthorIds={blockedUserIds}
               authors={messageAuthors}
+        authorsComplete={messageAuthorsComplete}
               roles={serverRoles}
               showLinkEmbeds={localSettings.showLinkEmbeds}
               slashContext={{
@@ -13363,6 +13374,7 @@ function MainAppContent({
             })
           }
           authors={messageAuthors}
+        authorsComplete={messageAuthorsComplete}
           roles={serverRoles}
           unreadHeld={unreadHeldIds.has(openThread.thread.channelId)}
           unreadSince={threadUnreadSince}

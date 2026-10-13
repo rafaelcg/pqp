@@ -5790,5 +5790,7 @@
   "serverEmoji.error.storage": "El almacenamiento rechazó la subida. Inténtalo de nuevo.",
   "serverEmoji.error.name": "El nombre necesita de 2 a 32 letras minúsculas, números o _.",
   "serverEmoji.error.generic": "Algo salió mal. Inténtalo de nuevo.",
-  "emojiPicker.serverCategory": "Del servidor"
+  "emojiPicker.serverCategory": "Del servidor",
+  "chat.authorGone": "salió",
+  "chat.authorGoneHint": "{name} ya no está en el servidor."
 }
