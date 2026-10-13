@@ -42,7 +42,7 @@ export function useCustomEmojiScope(): CustomEmojiScope {
 /**
  * One custom emoji, sized to the line it sits in unless told otherwise. When
  * the picture fails to load (the emoji was deleted since the list was read) it
- * reads as `:name:` text and calls `onBroken` once.
+ * reads as `:name:` text, for this image only, and calls `onBroken` once.
  */
 export function CustomEmojiImage({
   emoji,

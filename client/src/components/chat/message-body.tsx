@@ -9,7 +9,7 @@ import {
 } from "@/lib/chat-markdown";
 import { remarkMentions } from "@/lib/remark-mentions";
 import { remarkCustomEmoji } from "@/lib/remark-custom-emoji";
-import { forgetServerEmoji, noteUnknownServerEmoji } from "@/lib/server-emoji";
+import { noteUnknownServerEmoji } from "@/lib/server-emoji";
 import {
   CustomEmojiImage,
   useCustomEmojiScope,
@@ -61,7 +61,7 @@ function MarkdownSpan({
         emoji={emoji}
         onBroken={() => {
           if (serverId) {
-            forgetServerEmoji(serverId, emoji.id);
+            noteUnknownServerEmoji(serverId);
           }
         }}
       />
