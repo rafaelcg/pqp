@@ -118,7 +118,7 @@ interface DialogProps {
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
-  size?: "sm" | "md" | "lg" | "xl";
+  size?: "sm" | "md" | "lg" | "xl" | "2xl";
   /**
    * Give the panel the whole layer's height and stop the body scrolling itself.
    *
@@ -413,7 +413,9 @@ export function Dialog({
         ? "sm:max-w-2xl"
         : size === "xl"
           ? "sm:max-w-4xl"
-          : "sm:max-w-lg";
+          : size === "2xl"
+            ? "sm:max-w-5xl"
+            : "sm:max-w-lg";
 
   // `right`/`bottom` are cleared because Tailwind's `inset-0` — the fallback
   // when there is no `visualViewport` — would otherwise over-constrain the box.

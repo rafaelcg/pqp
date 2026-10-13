@@ -1262,7 +1262,7 @@ export function SettingsModal({
       <Dialog
         open={settingsOpen}
         title={t("settings.title")}
-        size="xl"
+        size="2xl"
         fill
         // 56px: the band only names the dialog, the pane title names the page.
         headerClassName="h-14 shrink-0 items-center py-0 [&_h2]:text-lg"
