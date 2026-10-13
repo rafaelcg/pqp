@@ -268,7 +268,7 @@ export function ServerRail({
       data-immersive-hide=""
       data-rail-phone-hidden={phoneHidden ? "" : undefined}
       className={cn(
-        "flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3",
+        "relative flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3",
         reorder.drag && "cursor-grabbing",
         phoneHidden &&
           (mobileNavOpen
