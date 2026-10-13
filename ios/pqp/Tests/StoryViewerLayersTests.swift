@@ -121,6 +121,34 @@ final class StoryViewerLayersTests: XCTestCase {
         XCTAssertEqual(empty.count, 0, "A live room nobody is in says so, it does not pulse")
     }
 
+    /// Live whenever the room exists and the author can still use it, with
+    /// nobody in it too: "Ninguem na call agora" and the door.
+    func testAnEmptyLiveRoomKeepsItsDoor() {
+        let data = StoryCallStickerData(live: live(state: "live", count: 0, joinable: true, people: []), serverName: "QG", serverIconUrl: nil)
+        XCTAssertEqual(data.state, .live)
+        XCTAssertEqual(data.count, 0)
+        XCTAssertTrue(data.joinable)
+        let card = StoryCallStickerCard(data: data, canvasWidth: 360)
+        XCTAssertTrue(card.spokenDescription.contains(String(localized: "Nobody in the call right now")))
+        XCTAssertFalse(card.spokenDescription.contains(String(localized: "The call ended")))
+    }
+
+    /// A viewer without CONNECT sees the room live, with no door.
+    func testAViewerWithoutConnectSeesItLiveWithNoDoor() {
+        let data = StoryCallStickerData(live: live(state: "live", count: 2, joinable: false), serverName: "QG", serverIconUrl: nil)
+        XCTAssertEqual(data.state, .live)
+        XCTAssertFalse(data.joinable)
+    }
+
+    /// A deleted channel arrives with no name: the card still says what it is.
+    func testAnEndedCallWithNoNameStillSaysCall() {
+        let data = StoryCallStickerData(live: StoryCallLive(
+            serverId: server, channelId: room, channelName: "", participants: [], count: 0, state: "ended", joinable: false
+        ), serverName: "QG", serverIconUrl: nil)
+        XCTAssertEqual(data.state, .ended)
+        XCTAssertEqual(data.roomName, String(localized: "Call"))
+    }
+
     func testAnUnknownCallStateIsTreatedAsEnded() {
         XCTAssertEqual(StoryCallStickerData(live: live(state: "melted", count: 0, people: []), serverName: "QG", serverIconUrl: nil).state, .ended)
     }

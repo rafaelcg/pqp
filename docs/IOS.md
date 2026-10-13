@@ -880,9 +880,14 @@ on the same 9:16 canvas the editor used.
   and the mention is a button.
 - **The call sticker** (`StoryCallStickerCard`): the room's name, the server's
   icon, up to three faces and a "+n", the count, a pulsing live dot (still under
-  Reduce Motion) and "Entrar", which joins through the existing path. Empty says
-  "Ninguém na call agora", a full room says so, and an ended call goes quiet
-  ("A call acabou") with no door. The same view is the editor's preview, so what
+  Reduce Motion) and "Entrar", which joins through the existing path. A call is
+  `live` whenever the room exists and its author can still use it, so an empty
+  room says "Ninguém na call agora" and keeps its door (there is no warning in
+  the editor about the author being outside the room); a viewer without CONNECT
+  sees it live with no door; a full room says so; `ended` ("A call acabou", no
+  door) is only a deleted channel (it arrives with no name, and the card says
+  "Call") or an author who lost CONNECT. No `call` from the server means the
+  viewer cannot see the channel, and nothing is drawn. The same view is the editor's preview, so what
   you place is what is seen. Its live data is the story's own `call` (the server
   answers it at read time); the server's icon is read once from `GET
   /api/servers` when a story on screen has a call layer.

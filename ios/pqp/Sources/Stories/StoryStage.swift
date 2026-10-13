@@ -178,7 +178,8 @@ extension StoryCallStickerData {
         default: state = .ended
         }
         self.init(
-            roomName: live.channelName, serverName: serverName, serverId: live.serverId,
+            roomName: live.channelName.isEmpty ? String(localized: "Call") : live.channelName,
+            serverName: serverName, serverId: live.serverId,
             serverIconUrl: serverIconUrl, participants: live.participants, count: live.count,
             state: state, joinable: live.joinable
         )
