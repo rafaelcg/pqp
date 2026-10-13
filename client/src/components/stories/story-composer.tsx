@@ -176,12 +176,13 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const camera = useCamera(cameraActive);
 
   const alive = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // Set again on mount: StrictMode runs the cleanup once before the real mount.
+    alive.current = true;
+    return () => {
       alive.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const acceptMedia = useCallback((next: PreparedStoryMedia) => {
     // A photo that finished after the composer closed has nowhere to go: let its URL go.
