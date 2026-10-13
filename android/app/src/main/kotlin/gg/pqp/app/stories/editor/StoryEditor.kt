@@ -178,6 +178,10 @@ fun StoryEditor(
         }
         haptics.performHapticFeedback(HapticFeedbackType.Reject)
     }
+    // A text card has nothing on it until somebody writes: open the keyboard on it.
+    LaunchedEffect(Unit) {
+        if (env.cardBackground != null && session.layers.isEmpty() && !openCallSheetAtStart) textTarget = TextTarget(null)
+    }
     LaunchedEffect(message) {
         if (message != null) {
             delay(2_800)
@@ -272,16 +276,17 @@ fun StoryEditor(
                             session = session,
                             env = env,
                             shrink = trashArmed && session.activeId == layer.id,
+                            hidden = textTarget?.id == layer.id,
                             onEdit = { textTarget = TextTarget(layer.id) },
                         )
                     }
                 }
 
                 // Guide lines while a layer sits on the middle.
-                AnimatedVisibility(guideV, enter = fadeIn(tween(80)), exit = fadeOut(tween(120)), modifier = Modifier.align(Alignment.Center)) {
+                AnimatedVisibility(guideV && !trashArmed, enter = fadeIn(tween(80)), exit = fadeOut(tween(120)), modifier = Modifier.align(Alignment.Center)) {
                     Box(Modifier.width(1.5.dp).height(height).background(Palette.Signal.copy(alpha = 0.85f)))
                 }
-                AnimatedVisibility(guideH, enter = fadeIn(tween(80)), exit = fadeOut(tween(120)), modifier = Modifier.align(Alignment.Center)) {
+                AnimatedVisibility(guideH && !trashArmed, enter = fadeIn(tween(80)), exit = fadeOut(tween(120)), modifier = Modifier.align(Alignment.Center)) {
                     Box(Modifier.height(1.5.dp).width(width).background(Palette.Signal.copy(alpha = 0.85f)))
                 }
 
@@ -341,7 +346,7 @@ fun StoryEditor(
         }
 
         // --- chrome ---
-        val chrome = !dragging && !drawing
+        val chrome = !dragging && !drawing && textTarget == null
         AnimatedVisibility(
             visible = chrome,
             enter = fadeIn(tween(120)),
@@ -419,21 +424,21 @@ fun StoryEditor(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = Spacing.xs),
                 ) {
-                    Text(
-                        env.audienceLabel,
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelLarge,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .weight(1f, fill = false)
-                            .clip(RoundedCornerShape(50))
-                            .background(Color.Black.copy(alpha = 0.5f))
-                            .clickable(onClick = onAudience)
-                            .padding(horizontal = Spacing.lg, vertical = Spacing.md)
-                            .testTag("stories.editor.audience"),
-                    )
-                    Box(Modifier.weight(1f))
+                    Box(Modifier.weight(1f).padding(end = Spacing.md), contentAlignment = Alignment.CenterStart) {
+                        Text(
+                            env.audienceLabel,
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(Color.Black.copy(alpha = 0.5f))
+                                .clickable(onClick = onAudience)
+                                .padding(horizontal = Spacing.lg, vertical = Spacing.md)
+                                .testTag("stories.editor.audience"),
+                        )
+                    }
                     Button(
                         onClick = onPost,
                         enabled = env.canPost && !env.posting,
@@ -464,6 +469,7 @@ fun StoryEditor(
                     TextStyleChoice(it.font, it.color, it.background, it.align, it.size)
                 } ?: session.textStyle,
                 canvasWidthPx = canvasPx.width,
+                dim = if (env.cardBackground != null) 0.3f else 0.78f,
                 onCancel = { textTarget = null },
                 onDone = { text, style ->
                     session.textStyle = style
@@ -551,11 +557,13 @@ private fun LayerHost(
     session: EditorSession,
     env: EditorEnv,
     shrink: Boolean,
+    /** Being edited in the text tool: it is typed over there, so it is not drawn here as well. */
+    hidden: Boolean,
     onEdit: () -> Unit,
 ) {
     val shrinkScale by animateFloatAsState(if (shrink) 0.45f else 1f, tween(140), label = "layerShrink")
     val active = session.activeId == layer.id
-    val alpha by animateFloatAsState(if (shrink) 0.7f else 1f, tween(140), label = "layerFade")
+    val alpha by animateFloatAsState(if (shrink) 0.7f else if (hidden) 0f else 1f, tween(100), label = "layerFade")
 
     val textLabel = (layer as? TextLayer)?.let { stringResource(R.string.stories_editor_layer_text, it.text) }
     val photoLabel = stringResource(R.string.stories_editor_layer_photo)

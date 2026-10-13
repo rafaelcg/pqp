@@ -74,6 +74,8 @@ fun TextEditorOverlay(
     initialText: String,
     initialStyle: TextStyleChoice,
     canvasWidthPx: Float,
+    /** How much of the canvas is dimmed: a text card is the background, so it stays visible. */
+    dim: Float,
     onDone: (text: String, style: TextStyleChoice) -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -94,7 +96,7 @@ fun TextEditorOverlay(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.7f))
+            .background(Color.Black.copy(alpha = dim))
             // Nothing under the dim is touchable.
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
             .testTag("stories.editor.text"),

@@ -1,6 +1,7 @@
 package gg.pqp.app.stories
 
 import gg.pqp.app.protocol.RepoSources
+import gg.pqp.app.stories.editor.BaseFit
 import gg.pqp.app.stories.editor.Brushes
 import gg.pqp.app.stories.editor.CallLayer
 import gg.pqp.app.stories.editor.EditorLayer
@@ -18,6 +19,9 @@ import gg.pqp.app.stories.editor.PhotoLayer
 import gg.pqp.app.stories.editor.Stroke
 import gg.pqp.app.stories.editor.TextLayer
 import gg.pqp.app.stories.editor.UndoStack
+import gg.pqp.app.stories.editor.storyFont
+import gg.pqp.app.stories.editor.textPaint
+import gg.pqp.app.stories.editor.tokenColor
 import kotlin.math.PI
 import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.JsonObject
@@ -445,5 +449,69 @@ class EditorTest {
         val ink = InkLayer("i")
         assertEquals(ink, ink.placed(0.1f, 0.1f, 3f, 1f))
         assertNotNull(JsonPrimitive("kept"))
+    }
+
+    // --- the base and the audience ---
+
+    @Test
+    fun `a picture near 9_16 fills the canvas, any other shape is shown whole`() {
+        assertTrue(BaseFit.fills(1080, 1920))
+        assertTrue(BaseFit.fills(810, 1440))
+        // A 3:4 portrait from the camera app: 12% off 9:16 is the edge.
+        assertFalse(BaseFit.fills(3000, 4000))
+        assertFalse(BaseFit.fills(1920, 1080))
+        assertFalse(BaseFit.fills(1000, 1000))
+        // 9:20, a tall phone screenshot, is 20% off 9:16: shown whole.
+        assertFalse(BaseFit.fills(1080, 2400))
+        // Unknown size: fill, the safe default.
+        assertTrue(BaseFit.fills(0, 0))
+    }
+
+    private val options = StoryAudienceOptions(
+        servers = listOf(
+            StoryAudienceServer("s1", "QG do pqp", canPost = true),
+            StoryAudienceServer("s2", "Sandbox", canPost = true),
+        ),
+        friends = StoryAudienceFriends(enabled = true, canPost = true),
+    )
+
+    @Test
+    fun `the audience reads as names, and a server that is gone is not named`() {
+        val both = StoriesRules.audienceParts(options, StoryAudienceTargets(serverIds = listOf("s1", "s2"), friends = true))
+        assertEquals(listOf("QG do pqp", "Sandbox"), both.serverNames)
+        assertTrue(both.friends)
+        val gone = StoriesRules.audienceParts(options, StoryAudienceTargets(serverIds = listOf("s1", "left")))
+        assertEquals(listOf("QG do pqp"), gone.serverNames)
+        assertFalse(gone.friends)
+        val none = StoriesRules.audienceParts(null, StoryAudienceTargets())
+        assertTrue(none.serverNames.isEmpty())
+    }
+
+    @Test
+    fun `text paints by background mode, and a solid chip always has readable ink`() {
+        val plain = textPaint("lime", "none", "classic")
+        assertEquals(tokenColor("lime"), plain.text)
+        assertNull(plain.box)
+        // Solid: the chip is the color, the words are dark on a light chip and white on a dark one.
+        val onYellow = textPaint("yellow", "solid", "classic")
+        assertEquals(tokenColor("yellow"), onYellow.box)
+        assertEquals(androidx.compose.ui.graphics.Color.Black, onYellow.text)
+        val onBlue = textPaint("blue", "solid", "classic")
+        assertEquals(androidx.compose.ui.graphics.Color.White, onBlue.text)
+        // Soft: a dark veil, the words keep their color.
+        val soft = textPaint("pink", "soft", "classic")
+        assertEquals(tokenColor("pink"), soft.text)
+        assertNotNull(soft.box)
+        assertTrue(soft.box!!.alpha < 1f)
+        // Neon glows in its own color, with whiter letters.
+        val neon = textPaint("cyan", "none", "neon")
+        assertEquals(tokenColor("cyan"), neon.glow)
+        assertTrue(neon.text.red >= tokenColor("cyan").red)
+    }
+
+    @Test
+    fun `the five fonts are all distinct faces`() {
+        val faces = StoryLayers.FONTS.map { storyFont(it) }
+        assertEquals(StoryLayers.FONTS.size, faces.toSet().size)
     }
 }

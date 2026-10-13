@@ -146,7 +146,7 @@ fun DrawControls(session: EditorSession, onDone: () -> Unit, modifier: Modifier 
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.55f))
+                .background(Color.Black.copy(alpha = 0.82f))
                 .navigationBarsPadding()
                 .padding(vertical = Spacing.sm),
         ) {
@@ -214,9 +214,13 @@ private fun BrushChip(brush: String, color: String, selected: Boolean, onClick: 
         if (brush == Brushes.ERASER) {
             Icon(PqpIcons.Eraser, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
         } else {
-            // The brush as it paints: a short stroke of its own width and opacity.
+            // The brush as it paints: a short stroke of its own weight and opacity.
             Canvas(Modifier.size(width = 44.dp, height = 28.dp)) {
-                val w = (Brushes.widthFor(brush, 0.5f) * 8 * density.coerceAtLeast(1f)).coerceIn(2f, size.height)
+                val w = when (brush) {
+                    Brushes.MARKER -> 10.dp.toPx()
+                    Brushes.HIGHLIGHTER -> 18.dp.toPx()
+                    else -> 3.dp.toPx()
+                }
                 drawLine(
                     color = tokenColor(color).copy(alpha = Brushes.alpha(brush)),
                     start = Offset(w / 2f, size.height / 2f),
