@@ -4660,7 +4660,7 @@ router.delete("/api/servers/:serverId/featured", async ({ user }, { serverId }) 
 // The server-icon dance with a row per picture: mint (POST .../uploads), PUT
 // straight to storage, claim (POST .../emoji). Reading the list needs only
 // membership, because every member renders these in messages; every write
-// needs Manage Server, the bit the icon and banner already sit on.
+// needs Manage Emoji (bit 28), which owner and Administrator hold by default.
 
 function serverEmojiHttpError(error: unknown): never {
   if (error instanceof ServerEmojiError) {
