@@ -101,6 +101,13 @@ object StoryLayerParser {
 
     private fun JsonObject.string(key: String): String? = this[key]?.takeIf { it is JsonPrimitive && it.isString }?.jsonPrimitive?.contentOrNull
 
+    /**
+     * A media address a layer may load: one the API handed out (a path on it) or an http(s) one (the
+     * presigned storage link). Anything else (`file:`, `content:`, `data:`, a bare name) is no layer's to ask for.
+     */
+    fun safeMediaUrl(url: String): Boolean =
+        url.startsWith("/") && !url.startsWith("//") || url.startsWith("https://") || url.startsWith("http://")
+
     private fun JsonObject.number(key: String): Double? = this[key]?.jsonPrimitive?.doubleOrNull
 
     private fun JsonObject.integer(key: String): Int? = this[key]?.jsonPrimitive?.intOrNull
@@ -128,13 +135,13 @@ object StoryLayerParser {
             "image" -> ImageStoryLayer(
                 id, x, y, scale, rotation,
                 shape = o.string("shape")?.takeIf { it in StoryLayers.SHAPES } ?: "rect",
-                url = o.string("url")?.takeIf { it.isNotBlank() } ?: return null,
+                url = o.string("url")?.takeIf(::safeMediaUrl) ?: return null,
                 width = (o.integer("width") ?: return null).takeIf { it > 0 } ?: return null,
                 height = (o.integer("height") ?: return null).takeIf { it > 0 } ?: return null,
             )
             "drawing" -> DrawingStoryLayer(
                 id, x, y, scale, rotation,
-                url = o.string("url")?.takeIf { it.isNotBlank() } ?: return null,
+                url = o.string("url")?.takeIf(::safeMediaUrl) ?: return null,
                 width = (o.integer("width") ?: return null).takeIf { it > 0 } ?: return null,
                 height = (o.integer("height") ?: return null).takeIf { it > 0 } ?: return null,
             )

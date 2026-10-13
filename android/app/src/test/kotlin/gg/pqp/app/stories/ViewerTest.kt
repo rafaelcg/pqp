@@ -197,7 +197,28 @@ class ViewerTest {
         assertEquals("", StoriesRules.wordsOf(clockStory("image")))
         assertEquals("um\ndois", StoriesRules.wordsOf(clockStory("image", layers = "[${textLayer("um")},${textLayer("dois")}]")))
         assertEquals("velho", StoriesRules.wordsOf(clockStory("text", text = "velho")))
-        // A photo's old `text` is not words on it.
+        // A photo's old `text` is not words on it, but its caption is (and it is what a screen reader hears).
         assertEquals("", StoriesRules.wordsOf(clockStory("image", text = "ignorado")))
+        val captioned = story("[]", ""","caption":"${"c".repeat(60)}"""")
+        assertEquals("c".repeat(60), StoriesRules.wordsOf(captioned))
+        assertEquals(8_000L, StoriesRules.displayMs(captioned))
+        // With text layers, the layers are the words and the caption is not added twice.
+        val both = story("[${textLayer("so isso")}]", ""","caption":"${"c".repeat(60)}"""")
+        assertEquals("so isso", StoriesRules.wordsOf(both))
+    }
+
+    @Test
+    fun `a layer only asks for an address the API or storage could have given`() {
+        fun image(url: String) = StoryLayerParser.parse(
+            Json.parseToJsonElement("""{${geometry("image")},"url":"$url","width":10,"height":10}"""),
+        )
+        assertNotNull(image("/api/stories/x/layer.jpg"))
+        assertNotNull(image("https://files.pqp.gg/stories/x.jpg?sig=1"))
+        assertNotNull(image("http://localhost:59341/pqp-attachments/x.jpg"))
+        listOf("file:///data/x.jpg", "content://media/1", "data:image/png;base64,AAAA", "//evil.example/x.png", "x.jpg", "javascript:1").forEach {
+            assertNull("$it must not load", image(it))
+        }
+        // A drawing follows the same rule.
+        assertNull(StoryLayerParser.parse(Json.parseToJsonElement("""{${geometry("drawing")},"url":"file:///x.png","width":10,"height":10}""")))
     }
 }

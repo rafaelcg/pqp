@@ -42,10 +42,15 @@ object StoriesRules {
     fun textDisplayMs(text: String): Long =
         minOf(10_000L, 5_000L + 50L * text.codePointCount(0, text.length))
 
-    /** Every word on a story, in order: its text layers, or a card's own `text` when it has none. */
+    /**
+     * Every word on a story, in order: its text layers; else a card's own `text`;
+     * else a photo's caption (a story from before layers, which a screen reader
+     * also hears as the picture's description). Never both a layer's words and
+     * the caption: `altText` already says the layers.
+     */
     fun wordsOf(story: Story): String {
         val layers = story.layers.filterIsInstance<TextStoryLayer>().joinToString("\n") { it.text }
-        return layers.ifBlank { if (story.kind == "text") story.text.orEmpty() else "" }
+        return layers.ifBlank { if (story.kind == "text") story.text.orEmpty() else story.caption.orEmpty() }
     }
 
     /**
