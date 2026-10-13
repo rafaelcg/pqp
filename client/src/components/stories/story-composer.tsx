@@ -126,6 +126,7 @@ const PROBLEM_KEY: Record<StoryFileProblem["kind"], MessageKey> = {
   "wrong-type": "stories.compose.wrongType",
   "too-big": "stories.compose.tooBig",
   "too-long": "stories.compose.tooLong",
+  "wrong-codec": "stories.compose.wrongCodec",
   unreadable: "stories.compose.unreadable",
 };
 

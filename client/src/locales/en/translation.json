@@ -5496,6 +5496,7 @@
   "stories.compose.wrongType": "That format won't work. Use JPG, PNG, WebP, MP4 or MOV.",
   "stories.compose.wrongTypeNoVideo": "That format won't work. Use JPG, PNG or WebP.",
   "stories.compose.unreadable": "Couldn't read that file.",
+  "stories.compose.wrongCodec": "That video is HEVC (H.265), which won't play for everyone. Export it as H.264 (on iPhone, Most Compatible) and try again.",
   "stories.compose.mediaOff": "Photos and videos aren't on here yet. Post a text.",
   "stories.compose.caption": "Caption",
   "stories.compose.captionPlaceholder": "Write a caption (optional)",
