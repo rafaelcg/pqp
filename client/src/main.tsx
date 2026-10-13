@@ -141,6 +141,9 @@ const DesktopLoginPage = lazy(() =>
 const UiTokensPage = lazy(() =>
   import("./pages/ui-tokens-page").then((m) => ({ default: m.UiTokensPage })),
 );
+const BotsQaPage = lazy(() =>
+  import("./pages/bots-qa-page").then((m) => ({ default: m.BotsQaPage })),
+);
 
 /**
  * `.env.example` ships a placeholder that is truthy, so a copied env would
@@ -333,6 +336,8 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
             is for. `UiTokensPage` gates itself on the dev auth bypass and
             otherwise redirects the way the catch-all below does. */}
         <Route path="/qa/ui" element={<UiTokensPage />} />
+        {/* Every server-bot state on one sheet; gated like `/qa/ui`. */}
+        <Route path="/qa/bots" element={<BotsQaPage />} />
         <Route
           path="*"
           element={<Navigate to={isDesktopApp() ? "/app" : "/"} replace />}

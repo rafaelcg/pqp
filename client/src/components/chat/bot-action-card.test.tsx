@@ -60,7 +60,8 @@ describe("BotActionCard", () => {
 
   it("gives the member who asked Confirm and Cancel", () => {
     const html = render(waitingPlan, { viewer: ASKER });
-    expect(html).toContain("Waiting for confirmation");
+    expect(html).toContain("Waiting for you");
+    expect(html).toContain('role="timer"');
     expect(html).toContain(">Confirm<");
     expect(html).toContain(">Cancel<");
   });
@@ -72,13 +73,13 @@ describe("BotActionCard", () => {
   });
 
   it("drops the buttons once the plan is decided or runs out", () => {
-    expect(render({ ...waitingPlan, state: "confirmed" }, { viewer: ASKER })).toContain("Confirmed");
+    expect(render({ ...waitingPlan, state: "confirmed" }, { viewer: ASKER })).toContain("Confirmed by @rafa");
     expect(render({ ...waitingPlan, state: "confirmed" }, { viewer: ASKER })).not.toContain(">Confirm<");
     const expired = render(
       { ...waitingPlan, expiresAt: new Date(Date.now() - 1000).toISOString() },
       { viewer: ASKER },
     );
-    expect(expired).toContain("Expired");
+    expect(expired).toContain("Plan expired");
     expect(expired).not.toContain(">Confirm<");
   });
 
@@ -95,7 +96,7 @@ describe("BotActionCard", () => {
   it("gives the member who was asked one button per answer", () => {
     const html = render(question, { viewer: ASKER });
     expect(html).toContain('data-bot-card="ask"');
-    expect(html).toContain("Waiting for an answer");
+    expect(html).toContain("Pick one");
     expect(html).toContain("<button");
     expect(html).toContain("Memes");
   });
@@ -108,14 +109,14 @@ describe("BotActionCard", () => {
 
   it("marks the chosen answer once it is answered, and drops the buttons when it runs out", () => {
     const answered = render({ ...question, state: "answered", answer: 1 }, { viewer: ASKER });
-    expect(answered).toContain("Answered");
+    expect(answered).toContain("@rafa chose");
     expect(answered).toContain('aria-label="Chosen"');
     expect(answered).not.toContain("<button");
     const expired = render(
       { ...question, expiresAt: new Date(Date.now() - 1000).toISOString() },
       { viewer: ASKER },
     );
-    expect(expired).toContain("Expired");
+    expect(expired).toContain("Question expired");
     expect(expired).not.toContain("<button");
   });
 

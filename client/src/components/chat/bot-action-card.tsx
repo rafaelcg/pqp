@@ -1,68 +1,21 @@
 import type { BotActionCard as BotActionCardData, BotActionItem, BotNotice } from "@pqp/shared";
 import {
-  ArrowRightLeft,
-  Ban,
-  BarChart3,
-  CheckSquare,
   Check,
-  CircleDashed,
   CircleHelp,
   Clock,
   EyeOff,
-  Hash,
-  History,
-  Link2,
   ListChecks,
   Loader2,
-  MessageCircleQuestion,
-  MessageSquarePlus,
-  MessagesSquare,
-  Newspaper,
-  Pencil,
-  Pin,
-  Send,
-  Timer,
-  Trash2,
-  Undo2,
-  UserCheck,
-  UserMinus,
-  Wrench,
+  TriangleAlert,
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { answerBotAsk, ApiError, decideBotPlan } from "@/lib/api";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale, type Locale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
-
-/** The icon for what a step does. An unknown tool (a newer server) gets a wrench. */
-const TOOL_ICON: Record<string, LucideIcon> = {
-  create_channel: Hash,
-  edit_channel: Pencil,
-  move_channel: ArrowRightLeft,
-  delete_channel: Trash2,
-  post_message: Send,
-  pin_message: Pin,
-  create_thread: MessagesSquare,
-  create_forum_post: MessageSquarePlus,
-  create_bau_post: Newspaper,
-  delete_message: Trash2,
-  timeout_member: Timer,
-  kick_member: UserMinus,
-  ban_member: Ban,
-  read_channel: History,
-  create_invite: Link2,
-  remove_timeout: Undo2,
-  list_bans: Ban,
-  unban_member: UserCheck,
-  list_forum_posts: MessagesSquare,
-  reply_forum_post: MessageSquarePlus,
-  create_poll: BarChart3,
-  read_poll: BarChart3,
-  vote_poll: CheckSquare,
-};
 
 /** A card younger than this animates in; older ones are drawn still. */
 const FRESH_MS = 30_000;
@@ -70,16 +23,116 @@ const FRESH_MS = 30_000;
 /** How long each row waits after the one above it, so a result reads top down. */
 const STAGGER_MS = 70;
 
-function StatusMark({ item, index, fresh }: { item: BotActionItem; index: number; fresh: boolean }) {
+/** A plan's window to answer, `BOT_PLAN_TTL_MS` on the server: the countdown's full ring. */
+const PLAN_WINDOW_MS = 5 * 60_000;
+
+/** Steps that cannot be undone: marked "Apaga" while they wait for a "sim". */
+const DESTRUCTIVE_TOOLS = new Set(["delete_channel", "delete_message", "kick_member", "ban_member"]);
+
+type Tone = "warning" | "accent" | "success" | "danger" | "neutral";
+
+const TILE: Record<Tone, string> = {
+  warning: "bg-warning-soft text-on-warning-soft",
+  accent: "bg-accent-soft text-on-accent-soft",
+  success: "bg-success-soft text-on-success-soft",
+  danger: "bg-danger-soft text-on-danger-soft",
+  neutral: "bg-surface-3 text-text-secondary",
+};
+
+/** The card's frame; a plan waiting on the viewer is outlined, so it is not missed. */
+function CardFrame({
+  kind,
+  fresh,
+  calling,
+  children,
+}: {
+  kind: string;
+  fresh: boolean;
+  calling: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      data-bot-card={kind}
+      className={cn(
+        "mt-1.5 max-w-md overflow-hidden rounded-[var(--radius-card)] border bg-surface-card",
+        calling ? "border-warning" : "border-border",
+        fresh && "bot-step-in",
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+function CardHeader({
+  icon: Icon,
+  tone,
+  spin,
+  title,
+  subtitle,
+  trailing,
+}: {
+  icon: LucideIcon;
+  tone: Tone;
+  spin?: boolean;
+  title: string;
+  subtitle?: string | null;
+  trailing?: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2.5 px-3 pb-2 pt-3">
+      <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-[var(--radius-control)]", TILE[tone])}>
+        <Icon className={cn("h-4 w-4", spin && "motion-safe:animate-spin")} aria-hidden />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[13px] font-semibold leading-tight text-text">{title}</p>
+        {subtitle && <p className="truncate text-xs text-text-tertiary">{subtitle}</p>}
+      </div>
+      {trailing}
+    </div>
+  );
+}
+
+/** A step's label with `#channel` names drawn as chips, the way chat draws them. */
+function StepLabel({ label, struck }: { label: string; struck: boolean }) {
+  const parts = label.split(/(#[\p{L}\p{N}_-]+)/u);
+  return (
+    <span className={cn("min-w-0 break-words", struck && "text-text-tertiary line-through")}>
+      {parts.map((part, index) =>
+        part.startsWith("#") && !struck ? (
+          <span key={index} className="rounded-[var(--radius-tick)] bg-surface-2 px-1 font-semibold text-text">
+            {part}
+          </span>
+        ) : (
+          <span key={index}>{part}</span>
+        ),
+      )}
+    </span>
+  );
+}
+
+function StatusMark({
+  item,
+  index,
+  fresh,
+  running,
+}: {
+  item: BotActionItem;
+  index: number;
+  fresh: boolean;
+  running: boolean;
+}) {
   const { t } = useTranslation();
+  const delay = { animationDelay: `${index * STAGGER_MS + 120}ms` };
   if (item.status === "ok") {
     return (
       <span
         className={cn(
-          "flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-signal/15 text-signal",
+          "grid h-5 w-5 shrink-0 place-items-center rounded-full bg-success-soft text-on-success-soft",
           fresh && "bot-step-pop",
         )}
-        style={{ animationDelay: `${index * STAGGER_MS + 120}ms` }}
+        style={delay}
         aria-label={t("chat.botCard.status.ok")}
         role="img"
       >
@@ -91,10 +144,10 @@ function StatusMark({ item, index, fresh }: { item: BotActionItem; index: number
     return (
       <span
         className={cn(
-          "flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-danger/15 text-danger",
+          "grid h-5 w-5 shrink-0 place-items-center rounded-full bg-danger-soft text-on-danger-soft",
           fresh && "bot-step-pop",
         )}
-        style={{ animationDelay: `${index * STAGGER_MS + 120}ms` }}
+        style={delay}
         aria-label={t("chat.botCard.status.failed")}
         role="img"
       >
@@ -104,16 +157,29 @@ function StatusMark({ item, index, fresh }: { item: BotActionItem; index: number
   }
   if (item.status === "unknown") {
     return (
-      <CircleHelp
-        className="h-5 w-5 shrink-0 text-paper-muted"
+      <span
+        className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-warning-soft text-on-warning-soft"
         aria-label={t("chat.botCard.status.unknown")}
+        role="img"
+      >
+        <span className="text-[11px] font-bold leading-none" aria-hidden>
+          !
+        </span>
+      </span>
+    );
+  }
+  if (running) {
+    return (
+      <Loader2
+        className="h-5 w-5 shrink-0 text-accent motion-safe:animate-spin"
+        aria-label={t("chat.botCard.status.running")}
         role="img"
       />
     );
   }
   // A plan's step, waiting: its number, in the order it will run.
   return (
-    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border font-mono text-[10px] text-paper-muted">
+    <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-border-strong text-[10px] font-semibold text-text-secondary">
       {index + 1}
     </span>
   );
@@ -130,6 +196,7 @@ export function BotActionCard({
   messageId,
   createdAt,
   currentUserId,
+  botName,
 }: {
   card: BotActionCardData;
   /** The message that carries the card; a question's answer names it. */
@@ -138,14 +205,13 @@ export function BotActionCard({
   createdAt: string;
   /** Only the member who asked gets a plan's buttons. */
   currentUserId: string | null;
+  /** The bot's name, for "ainda dá pra responder escrevendo pro Tico". */
+  botName?: string;
 }) {
   // Read once per mount: a list that remounts an old row on scroll must not
   // replay the entrance.
   const [fresh] = useState(() => Date.now() - new Date(createdAt).getTime() < FRESH_MS);
   const { t, locale } = useTranslation();
-  const failed = card.items.filter((item) => item.status === "failed").length;
-  const isPlan = card.kind === "plan";
-  const HeaderIcon = isPlan ? ListChecks : Wrench;
   const expired = useExpired(card.expiresAt, card.kind !== "result" && !card.state);
 
   if (card.kind === "ask") {
@@ -156,69 +222,114 @@ export function BotActionCard({
         fresh={fresh}
         expired={expired}
         currentUserId={currentUserId}
+        botName={botName ?? ""}
       />
     );
   }
 
+  const total = card.items.length;
+  const ok = card.items.filter((item) => item.status === "ok").length;
+  const failed = card.items.filter((item) => item.status === "failed").length;
+  const unknown = card.items.filter((item) => item.status === "unknown").length;
+  const pending = card.items.filter((item) => item.status === "pending").length;
+  const deadline = deadlineOf(card.expiresAt, locale);
+  const isPlan = card.kind === "plan";
   const planState = isPlan ? (card.state ?? (expired ? "expired" : "waiting")) : null;
+  const mine = !!card.confirmById && card.confirmById === currentUserId;
+  const running = planState === "confirmed" && pending > 0;
+  const struck = planState === "cancelled" || planState === "expired";
+  const who = card.confirmBy ?? "";
 
-  const status = isPlan
-    ? planState === "confirmed"
-      ? { text: t("chat.botCard.confirmed"), tone: "text-signal", icon: Check }
-      : planState === "cancelled"
-        ? { text: t("chat.botCard.cancelled"), tone: "text-paper-muted", icon: X }
-        : planState === "expired"
-          ? { text: t("chat.botCard.expired"), tone: "text-paper-muted", icon: Clock }
-          : { text: t("chat.botCard.waiting"), tone: "text-paper-muted", icon: Clock }
-    : failed === 0
-      ? { text: t("chat.botCard.done"), tone: "text-signal", icon: Check }
-      : {
-          text: t("chat.botCard.failed", { count: failed }),
-          tone: "text-danger",
-          icon: X,
-        };
-  const StatusIcon = status.icon;
+  let header: { icon: LucideIcon; tone: Tone; spin?: boolean; title: string; subtitle: string | null };
+  if (planState === "waiting") {
+    header = {
+      icon: ListChecks,
+      tone: "warning",
+      title: t("chat.botCard.planSteps", { count: total }),
+      subtitle: mine ? t("chat.botCard.waitingYou") : t("chat.botCard.waitingWho", { who }),
+    };
+  } else if (planState === "cancelled") {
+    header = { icon: X, tone: "neutral", title: t("chat.botCard.cancelledTitle"), subtitle: t("chat.botCard.cancelledBy", { who }) };
+  } else if (planState === "expired") {
+    header = {
+      icon: Clock,
+      tone: "neutral",
+      title: t("chat.botCard.expiredTitle"),
+      subtitle: deadline ? t("chat.botCard.expiredUntil", { time: deadline }) : t("chat.botCard.expiredNothing"),
+    };
+  } else if (running) {
+    header = {
+      icon: Loader2,
+      tone: "accent",
+      spin: true,
+      title: t("chat.botCard.doing", { done: total - pending, total }),
+      subtitle: t("chat.botCard.confirmedBy", { who }),
+    };
+  } else if (failed > 0) {
+    header = {
+      icon: TriangleAlert,
+      tone: "danger",
+      title: t("chat.botCard.partly", { done: ok, total }),
+      subtitle: t("chat.botCard.failed", { count: failed }),
+    };
+  } else if (unknown > 0) {
+    header = {
+      icon: CircleHelp,
+      tone: "warning",
+      title: t("chat.botCard.unknownTitle", { count: unknown }),
+      subtitle: t("chat.botCard.unknownHint"),
+    };
+  } else {
+    header = {
+      icon: Check,
+      tone: "success",
+      title: t("chat.botCard.doneTitle", { count: total }),
+      subtitle: who
+        ? isPlan
+          ? t("chat.botCard.confirmedBy", { who })
+          : t("chat.botCard.askedBy", { who })
+        : null,
+    };
+  }
 
-  const deadline = isPlan ? deadlineOf(card.expiresAt, locale) : null;
+  const trailing =
+    planState === "waiting" ? (
+      mine && card.expiresAt ? (
+        <Countdown expiresAt={card.expiresAt} />
+      ) : deadline ? (
+        <span className="shrink-0 text-xs text-text-tertiary">{t("chat.botCard.until", { time: deadline })}</span>
+      ) : null
+    ) : null;
 
   return (
-    <div
-      data-bot-card={card.kind}
-      className={cn(
-        "mt-1.5 max-w-md overflow-hidden rounded-lg border border-border bg-surface-2/60",
-        fresh && "bot-step-in",
-      )}
-    >
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <HeaderIcon className="h-3.5 w-3.5 shrink-0 text-paper-muted" aria-hidden />
-        <span className="text-xs font-semibold text-paper">
-          {isPlan ? t("chat.botCard.planTitle") : t("chat.botCard.resultTitle")}
-        </span>
-        <span className={cn("ml-auto inline-flex items-center gap-1 text-[11px]", status.tone)}>
-          <StatusIcon className="h-3 w-3" aria-hidden />
-          {status.text}
-        </span>
-      </div>
-      <ol className="space-y-1.5 px-3 py-2.5">
+    <CardFrame kind={card.kind} fresh={fresh} calling={planState === "waiting" && mine}>
+      <CardHeader {...header} trailing={trailing} />
+      <ol className="space-y-1.5 px-3 pb-3 pt-1">
         {card.items.map((item, index) => {
-          const ToolIcon = TOOL_ICON[item.tool] ?? Wrench;
+          const firstPending = running && item.status === "pending" && index === total - pending;
+          const destructive = planState === "waiting" && DESTRUCTIVE_TOOLS.has(item.tool);
           return (
             <li
               key={index}
               className={cn("flex items-start gap-2.5", fresh && "bot-step-in")}
               style={{ animationDelay: `${index * STAGGER_MS}ms` }}
             >
-              <StatusMark item={item} index={index} fresh={fresh} />
+              <StatusMark item={item} index={index} fresh={fresh} running={firstPending} />
               <div className="min-w-0 flex-1 pt-px">
-                <p className="flex items-center gap-1.5 text-[13px] leading-snug text-paper/90">
-                  <ToolIcon className="h-3.5 w-3.5 shrink-0 text-paper-muted" aria-hidden />
-                  <span className="min-w-0 break-words">{item.label}</span>
+                <p className="flex items-start gap-2 text-[13px] leading-snug text-text">
+                  <StepLabel label={item.label} struck={struck} />
+                  {destructive && (
+                    <span className="ml-auto shrink-0 rounded-[var(--radius-tick)] bg-danger-soft px-1.5 py-px text-[10px] font-semibold text-on-danger-soft">
+                      {t("chat.botCard.deletes")}
+                    </span>
+                  )}
                 </p>
+                {destructive && <p className="mt-0.5 text-xs text-text-tertiary">{t("chat.botCard.noUndo")}</p>}
                 {item.detail && (
                   <p
                     className={cn(
                       "mt-0.5 break-words text-xs",
-                      item.status === "failed" ? "text-danger/90" : "text-paper-muted",
+                      item.status === "failed" ? "text-danger" : "text-text-tertiary",
                     )}
                   >
                     {item.detail}
@@ -230,19 +341,52 @@ export function BotActionCard({
         })}
       </ol>
       {planState === "waiting" &&
-        (card.planId && card.confirmById && card.confirmById === currentUserId ? (
-          <PlanButtons planId={card.planId} deadline={deadline} />
+        (card.planId && mine ? (
+          <PlanButtons planId={card.planId} />
         ) : (
-          <p className="flex items-start gap-1.5 border-t border-border px-3 py-2 text-xs text-paper-muted">
-            <CircleDashed className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
-            <span>
-              {deadline
-                ? t("chat.botCard.onlyRequesterUntil", { who: card.confirmBy ?? "", time: deadline })
-                : t("chat.botCard.onlyRequester", { who: card.confirmBy ?? "" })}
-            </span>
+          <p className="border-t border-border px-3 py-2 text-xs text-text-tertiary">
+            {t("chat.botCard.onlyRequester", { who })}
           </p>
         ))}
-    </div>
+    </CardFrame>
+  );
+}
+
+/** The time left to answer, as a ring that empties; amber in the last minute. */
+function Countdown({ expiresAt }: { expiresAt: string }) {
+  const end = new Date(expiresAt).getTime();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (now >= end) return;
+    const timer = setTimeout(() => setNow(Date.now()), 1000);
+    return () => clearTimeout(timer);
+  }, [now, end]);
+  const left = Math.max(0, Math.ceil((end - now) / 1000));
+  const fraction = Math.min(1, left / (PLAN_WINDOW_MS / 1000));
+  const lastMinute = left <= 60;
+  const circumference = 2 * Math.PI * 7;
+  return (
+    <span
+      className={cn("flex shrink-0 items-center gap-1.5 text-xs tabular-nums", lastMinute ? "text-warning" : "text-text-secondary")}
+      role="timer"
+    >
+      <svg viewBox="0 0 18 18" className="h-[18px] w-[18px] -rotate-90" aria-hidden>
+        <circle cx="9" cy="9" r="7" fill="none" stroke="var(--color-surface-3)" strokeWidth="2.5" />
+        <circle
+          cx="9"
+          cy="9"
+          r="7"
+          fill="none"
+          stroke={lastMinute ? "var(--color-warning)" : "var(--color-accent)"}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - fraction)}
+          className="transition-[stroke-dashoffset] duration-[1000ms] ease-linear motion-reduce:transition-none"
+        />
+      </svg>
+      {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}
+    </span>
   );
 }
 
@@ -280,12 +424,14 @@ function AskCard({
   fresh,
   expired,
   currentUserId,
+  botName,
 }: {
   card: BotActionCardData;
   messageId: string;
   fresh: boolean;
   expired: boolean;
   currentUserId: string | null;
+  botName: string;
 }) {
   const { t, locale } = useTranslation();
   const [sending, setSending] = useState<number | null>(null);
@@ -294,14 +440,8 @@ function AskCard({
   const waiting = !card.state && !expired;
   const mine = waiting && !!card.confirmById && card.confirmById === currentUserId;
   const deadline = deadlineOf(card.expiresAt, locale);
-
-  const status =
-    card.state === "answered"
-      ? { text: t("chat.botCard.answered"), tone: "text-signal", icon: Check }
-      : waiting
-        ? { text: t("chat.botCard.askWaiting"), tone: "text-paper-muted", icon: Clock }
-        : { text: t("chat.botCard.expired"), tone: "text-paper-muted", icon: Clock };
-  const StatusIcon = status.icon;
+  const who = card.confirmBy ?? "";
+  const answered = card.state === "answered";
 
   async function answer(option: number) {
     setSending(option);
@@ -318,72 +458,90 @@ function AskCard({
     }
   }
 
+  const header = answered
+    ? { icon: Check, tone: "success" as Tone, title: t("chat.botCard.chose", { who }), subtitle: null }
+    : !waiting
+      ? {
+          icon: Clock,
+          tone: "neutral" as Tone,
+          title: t("chat.botCard.askExpired"),
+          subtitle: botName ? t("chat.botCard.askExpiredHint", { name: botName }) : null,
+        }
+      : mine
+        ? { icon: CircleHelp, tone: "warning" as Tone, title: t("chat.botCard.pickOne"), subtitle: t("chat.botCard.orOwnWords") }
+        : {
+            icon: CircleHelp,
+            tone: "neutral" as Tone,
+            title: t("chat.botCard.askFor", { who }),
+            subtitle: deadline ? t("chat.botCard.onlyAskedUntil", { who, time: deadline }) : t("chat.botCard.onlyAsked", { who }),
+          };
+
   return (
-    <div
-      data-bot-card="ask"
-      className={cn(
-        "mt-1.5 max-w-md overflow-hidden rounded-lg border border-border bg-surface-2/60",
-        fresh && "bot-step-in",
-      )}
-    >
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <MessageCircleQuestion className="h-3.5 w-3.5 shrink-0 text-paper-muted" aria-hidden />
-        <span className="text-xs font-semibold text-paper">{t("chat.botCard.askTitle")}</span>
-        <span className={cn("ml-auto inline-flex items-center gap-1 text-[11px]", status.tone)}>
-          <StatusIcon className="h-3 w-3" aria-hidden />
-          {status.text}
-        </span>
-      </div>
+    <CardFrame kind="ask" fresh={fresh} calling={mine}>
+      <CardHeader
+        {...header}
+        trailing={
+          mine && deadline ? (
+            <span className="shrink-0 text-xs text-text-tertiary">{t("chat.botCard.until", { time: deadline })}</span>
+          ) : null
+        }
+      />
       {mine ? (
-        <div className="flex flex-col gap-1.5 px-3 py-2.5">
+        <div className="flex flex-col gap-1.5 px-3 pb-3 pt-1">
           {options.map((option, index) => (
-            <Button
+            <button
               key={index}
               type="button"
-              size="sm"
-              variant="secondary"
-              className={cn("h-auto justify-start whitespace-normal py-1.5 text-left", fresh && "bot-step-in")}
-              style={{ animationDelay: `${index * STAGGER_MS}ms` }}
               disabled={sending !== null}
               onClick={() => void answer(index)}
+              className={cn(
+                "flex items-center gap-2.5 rounded-[var(--radius-control)] border px-2.5 py-2 text-left text-[13px] text-text transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)] disabled:cursor-default",
+                sending === index
+                  ? "border-accent bg-accent-soft text-on-accent-soft"
+                  : "border-border bg-surface-2 hover:border-border-strong",
+                sending !== null && sending !== index && "text-text-tertiary",
+                fresh && "bot-step-in",
+              )}
+              style={{ animationDelay: `${index * STAGGER_MS}ms` }}
             >
               {sending === index ? (
-                <Loader2 className="mr-2 h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" aria-hidden />
+                <Loader2 className="h-5 w-5 shrink-0 motion-safe:animate-spin" aria-hidden />
               ) : (
-                <span className="mr-2 font-mono text-[11px] text-paper-muted">{index + 1}</span>
+                <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-border-strong text-[10px] font-semibold text-text-secondary">
+                  {index + 1}
+                </span>
               )}
-              {option}
-            </Button>
+              <span className="min-w-0 break-words">{option}</span>
+            </button>
           ))}
           {error && (
-            <span role="alert" className="text-[11px] text-danger">
+            <span role="alert" className="text-xs text-danger">
               {t(error)}
             </span>
           )}
         </div>
       ) : (
-        <ol className="space-y-1.5 px-3 py-2.5">
+        <ol className="space-y-1.5 px-3 pb-3 pt-1">
           {options.map((option, index) => {
-            const chosen = card.state === "answered" && card.answer === index;
+            const chosen = answered && card.answer === index;
             return (
               <li
                 key={index}
                 className={cn(
                   "flex items-start gap-2.5 text-[13px] leading-snug",
-                  chosen ? "text-paper" : "text-paper/80",
-                  card.state === "answered" && !chosen && "opacity-60",
+                  chosen ? "font-semibold text-text" : answered || !waiting ? "text-text-tertiary" : "text-text",
                 )}
               >
                 {chosen ? (
                   <span
-                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-signal/15 text-signal"
+                    className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-success-soft text-on-success-soft"
                     aria-label={t("chat.botCard.chosen")}
                     role="img"
                   >
                     <Check className="h-3 w-3" strokeWidth={3} aria-hidden />
                   </span>
                 ) : (
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border font-mono text-[10px] text-paper-muted">
+                  <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-border-strong text-[10px] font-semibold text-text-secondary">
                     {index + 1}
                   </span>
                 )}
@@ -393,17 +551,7 @@ function AskCard({
           })}
         </ol>
       )}
-      {waiting && !mine && (
-        <p className="flex items-start gap-1.5 border-t border-border px-3 py-2 text-xs text-paper-muted">
-          <CircleDashed className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
-          <span>
-            {deadline
-              ? t("chat.botCard.onlyAskedUntil", { who: card.confirmBy ?? "", time: deadline })
-              : t("chat.botCard.onlyAsked", { who: card.confirmBy ?? "" })}
-          </span>
-        </p>
-      )}
-    </div>
+    </CardFrame>
   );
 }
 
@@ -412,7 +560,7 @@ function AskCard({
  * works; this is the same answer without typing. The card repaints for
  * everybody once the server has it.
  */
-function PlanButtons({ planId, deadline }: { planId: string; deadline: string | null }) {
+function PlanButtons({ planId }: { planId: string }) {
   const { t } = useTranslation();
   const [sending, setSending] = useState<"yes" | "no" | null>(null);
   const [error, setError] = useState<MessageKey | null>(null);
@@ -433,39 +581,24 @@ function PlanButtons({ planId, deadline }: { planId: string; deadline: string | 
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
-      <Button
-        type="button"
-        size="sm"
-        disabled={sending !== null}
-        onClick={() => void decide("yes")}
-      >
+    <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2.5">
+      <Button type="button" size="sm" disabled={sending !== null} onClick={() => void decide("yes")}>
         {sending === "yes" ? (
           <Loader2 className="mr-1.5 h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden />
         ) : (
           <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />
         )}
-        {t("chat.botCard.confirmButton")}
+        {sending === "yes" ? t("chat.botCard.confirming") : t("chat.botCard.confirmButton")}
       </Button>
-      <Button
-        type="button"
-        size="sm"
-        variant="secondary"
-        disabled={sending !== null}
-        onClick={() => void decide("no")}
-      >
-        <X className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+      <Button type="button" size="sm" variant="secondary" disabled={sending !== null} onClick={() => void decide("no")}>
         {t("chat.botCard.cancelButton")}
       </Button>
-      {deadline && !error && (
-        <span className="ml-auto text-[11px] text-paper-muted">
-          {t("chat.botCard.until", { time: deadline })}
-        </span>
-      )}
-      {error && (
-        <span role="alert" className="ml-auto text-[11px] text-danger">
+      {error ? (
+        <span role="alert" className="ml-auto text-xs text-danger">
           {t(error)}
         </span>
+      ) : (
+        <span className="ml-auto text-xs text-text-tertiary">{t("chat.botCard.orSayYes")}</span>
       )}
     </div>
   );

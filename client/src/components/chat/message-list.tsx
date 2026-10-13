@@ -3698,7 +3698,7 @@ const MessageRow = memo(function MessageRow({
                           <MessageBody body={botCard.lead} currentUsername={currentUsername} />
                         </div>
                       )}
-                      <BotActionCard card={botCard} messageId={message.id} createdAt={message.createdAt} currentUserId={currentUserId} />
+                      <BotActionCard card={botCard} messageId={message.id} createdAt={message.createdAt} currentUserId={currentUserId} botName={message.authorName} />
                     </>
                   ) : message.chance ? (
                     <ChanceCard result={message.chance} />
