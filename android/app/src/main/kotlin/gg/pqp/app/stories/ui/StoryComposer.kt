@@ -595,10 +595,11 @@ private fun rememberMentionPeople(
     var attempt by remember { mutableStateOf(0) }
     LaunchedEffect(targets.serverIds, targets.friends, attempt) {
         failed = false
-        // Every roster at once: the picker is as slow as the slowest server, not the sum of them.
+        // Rosters in parallel but four at a time: not the sum of the round trips, and not a burst of one request per server either.
         val (found, lost) = kotlinx.coroutines.coroutineScope {
             val friends = if (targets.friends) async { runCatching { session.api.friends().friends } } else null
-            val servers = targets.serverIds.map { id -> async { runCatching { session.api.serverMembers(id) } } }
+            val gate = kotlinx.coroutines.sync.Semaphore(4)
+            val servers = targets.serverIds.map { id -> async { gate.withPermit { runCatching { session.api.serverMembers(id) } } } }
             val people = linkedMapOf<String, MentionPerson>()
             var lost = false
             friends?.await()?.let { result ->
