@@ -1,4 +1,3 @@
-import { Headphones } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { StoryCallLive } from "@pqp/shared";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -61,7 +60,7 @@ function ServerTile({ server, fallback }: { server: CallCardServer | null; fallb
       style={{
         height: "11cqw",
         width: "11cqw",
-        borderRadius: "3cqw",
+        borderRadius: "2.8cqw",
         fontSize: "5cqw",
         background: "var(--story-field-fill)",
         color: "var(--story-on-media)",
@@ -143,95 +142,115 @@ export function StoryCallCard({
   // The author's preview has no join handler, but still shows the button the card will have.
   const previewButton = !call && Boolean(preview) && state !== "ended";
 
+  const live = state === "live";
+  const ended = state === "ended";
+  const joinPill = {
+    height: "auto",
+    gap: "1.4cqw",
+    borderRadius: "9999px",
+    padding: "1.7cqw 3cqw",
+    fontSize: "3.6cqw",
+    background: "var(--story-accent)",
+    color: "var(--story-on-accent)",
+  } as const;
+
+  // One wide, compact row, the same card the phones draw: the server's tile, the status and the
+  // room, up to three faces, and the lime "Entrar". It is a share of the canvas width (0.82) and
+  // about 12% of its height, so it hides little of the story.
   return (
     <div
       data-story-call=""
       data-story-call-state={state}
-      className={cn("w-full text-left", className)}
+      className={cn("flex w-full items-center text-left", className)}
       style={{
-        padding: "4cqw",
+        padding: "3cqw",
         borderRadius: "5cqw",
-        border: "1px solid var(--story-sticker-edge)",
-        background: "var(--story-sticker)",
+        border: `0.4cqw solid ${ended ? "rgb(255 255 255 / 0.25)" : "color-mix(in oklab, var(--story-accent) 75%, transparent)"}`,
+        background: ended ? "rgb(0 0 0 / 0.5)" : "rgb(0 0 0 / 0.66)",
         boxShadow: "var(--story-shadow)",
-        opacity: state === "ended" ? 0.78 : 1,
+        opacity: ended ? 0.72 : 1,
       }}
       // In the viewer a tap on the card is its own (it must not turn the page). On the editor's canvas
       // the card is a layer, and the drag belongs to the canvas.
       onPointerDown={passThrough ? undefined : (event) => event.stopPropagation()}
       onClick={passThrough ? undefined : (event) => event.stopPropagation()}
     >
-      <p
-        className="flex items-center font-bold uppercase"
-        style={{
-          gap: "2cqw",
-          fontSize: "3cqw",
-          letterSpacing: "0.08em",
-          color: state === "live" ? "var(--story-accent-soft)" : "var(--story-on-media-2)",
-        }}
-      >
-        <span
-          aria-hidden
-          className={cn("shrink-0 rounded-full", state === "live" && "story-live-dot")}
+      <ServerTile server={server} fallback={channelName} />
+      <div className="min-w-0 flex-1" style={{ padding: "0 2.8cqw" }}>
+        <p
+          className="flex items-center font-bold uppercase leading-tight"
           style={{
-            height: "2.2cqw",
-            width: "2.2cqw",
-            background: state === "live" ? "var(--story-accent)" : "var(--story-on-media-2)",
+            gap: "1.2cqw",
+            fontSize: "2.7cqw",
+            letterSpacing: "0.06em",
+            color: live ? "var(--story-accent-soft)" : "var(--story-on-media-2)",
           }}
-        />
-        {label}
-      </p>
-
-      <div className="flex items-center" style={{ marginTop: "3cqw", gap: "3cqw" }}>
-        <ServerTile server={server} fallback={channelName} />
-        <div className="min-w-0 flex-1">
-          <p
-            className="flex items-center truncate font-display font-extrabold leading-tight"
-            style={{ gap: "1.6cqw", fontSize: "5.6cqw", color: "var(--story-on-media)" }}
-          >
-            <Headphones aria-hidden className="shrink-0" style={{ height: "4.6cqw", width: "4.6cqw", color: "var(--story-accent)" }} />
-            <span className="truncate">{channelName}</span>
+        >
+          <span
+            aria-hidden
+            className={cn("shrink-0 rounded-full", live && "story-live-dot")}
+            style={{
+              height: "1.8cqw",
+              width: "1.8cqw",
+              background: live ? "var(--story-accent)" : "var(--story-on-media-2)",
+            }}
+          />
+          <span className="truncate">{label}</span>
+        </p>
+        <p
+          className="truncate font-display font-extrabold leading-tight"
+          style={{ fontSize: "5cqw", color: "var(--story-on-media)" }}
+        >
+          {channelName}
+        </p>
+        {server && (
+          <p className="truncate leading-tight" style={{ fontSize: "2.9cqw", color: "var(--story-on-media-2)" }}>
+            {server.name}
           </p>
-          {server && (
-            <p className="truncate" style={{ fontSize: "3.4cqw", color: "var(--story-on-media-2)" }}>
-              {server.name}
-            </p>
-          )}
-        </div>
+        )}
       </div>
 
-      {state !== "ended" && count > 0 && (
-        <div className="flex items-center" style={{ marginTop: "3cqw", gap: "2.4cqw", color: "var(--story-on-media-2)" }}>
-          {people.length > 0 && (
-            <span className="flex shrink-0" data-story-call-faces="">
-              {people.slice(0, 3).map((person, index) => (
-                <span
-                  key={person.id}
-                  className={cn("rounded-full", fresh.has(person.id) && "animate-badge-pop")}
-                  style={{ marginLeft: index > 0 ? "-1.6cqw" : 0, boxShadow: "0 0 0 0.6cqw var(--story-sticker-solid)" }}
-                >
-                  <UserAvatar
-                    name={person.displayName}
-                    avatarUrl={person.avatarUrl}
-                    rounded="full"
-                    className="!h-[7cqw] !w-[7cqw]"
-                    fallbackClassName="bg-surface-3 !text-[3cqw] text-text"
-                  />
-                </span>
-              ))}
+      {!ended && people.length > 0 && (
+        <span
+          className="flex shrink-0 items-center"
+          data-story-call-faces=""
+          role="img"
+          aria-label={`${t("stories.call.count", { count })}: ${extra > 0 ? t("stories.call.people", { count: extra, names: list }) : list}`}
+          style={{ marginRight: "1.4cqw" }}
+        >
+          {people.slice(0, 3).map((person, index) => (
+            <span
+              key={person.id}
+              className={cn("rounded-full", fresh.has(person.id) && "animate-badge-pop")}
+              style={{ marginLeft: index > 0 ? "-1.4cqw" : 0, boxShadow: "0 0 0 0.4cqw rgb(0 0 0)" }}
+            >
+              <UserAvatar
+                name={person.displayName}
+                avatarUrl={person.avatarUrl}
+                rounded="full"
+                className="!h-[7cqw] !w-[7cqw]"
+                fallbackClassName="bg-surface-3 !text-[2.8cqw] text-text"
+              />
+            </span>
+          ))}
+          {extra > 0 && (
+            <span
+              data-story-call-count=""
+              className="flex items-center justify-center rounded-full font-display font-extrabold tabular-nums"
+              style={{
+                marginLeft: "-1.4cqw",
+                height: "7cqw",
+                width: "7cqw",
+                fontSize: "2.8cqw",
+                background: "rgb(255 255 255 / 0.22)",
+                color: "var(--story-on-media)",
+                boxShadow: "0 0 0 0.4cqw rgb(0 0 0)",
+              }}
+            >
+              +{extra}
             </span>
           )}
-          <span className="min-w-0 truncate" style={{ fontSize: "3.6cqw" }}>
-            {extra > 0 ? t("stories.call.people", { count: extra, names: list }) : list}
-          </span>
-          <span
-            className="ml-auto shrink-0 font-bold tabular-nums"
-            style={{ fontSize: "3.4cqw", color: "var(--story-on-media)" }}
-            data-story-call-count=""
-          >
-            {t("stories.call.count", { count })}
-          </span>
-        </div>
+        </span>
       )}
 
       {(canJoin || previewButton) &&
@@ -241,35 +260,13 @@ export function StoryCallCard({
             data-story-join=""
             aria-label={`${t("stories.call.join")}: ${channelName}`}
             onClick={() => onJoin?.(call)}
-            className="flex w-full items-center justify-center font-bold transition-[transform,filter] hover:brightness-105 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none motion-reduce:active:scale-100"
-            style={{
-              marginTop: "3.4cqw",
-              height: "11.5cqw",
-              gap: "2cqw",
-              borderRadius: "9999px",
-              fontSize: "4.2cqw",
-              background: "var(--story-accent)",
-              color: "var(--story-on-accent)",
-            }}
+            className="inline-flex shrink-0 items-center whitespace-nowrap font-display font-extrabold transition-[transform,filter] hover:brightness-105 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none motion-reduce:active:scale-100"
+            style={joinPill}
           >
-            <Headphones aria-hidden style={{ height: "4.8cqw", width: "4.8cqw" }} />
             {t("stories.call.enter")}
           </button>
         ) : (
-          <span
-            aria-hidden
-            className="flex w-full items-center justify-center font-bold"
-            style={{
-              marginTop: "3.4cqw",
-              height: "11.5cqw",
-              gap: "2cqw",
-              borderRadius: "9999px",
-              fontSize: "4.2cqw",
-              background: "var(--story-accent)",
-              color: "var(--story-on-accent)",
-            }}
-          >
-            <Headphones style={{ height: "4.8cqw", width: "4.8cqw" }} />
+          <span aria-hidden className="inline-flex shrink-0 items-center whitespace-nowrap font-display font-extrabold" style={joinPill}>
             {t("stories.call.enter")}
           </span>
         ))}

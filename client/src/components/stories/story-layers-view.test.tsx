@@ -145,11 +145,12 @@ describe("StoryContent layers", () => {
     expect(html).toContain("bora de cs?");
   });
 
-  it("puts the layers on a 9:16 canvas that covers the card, so a tall phone crops them with the picture", () => {
+  it("fits the 9:16 canvas INSIDE the card, so a tall phone never crops what the author placed", () => {
     const html = render({ layers: [text] });
     expect(html).toContain("data-story-layer-canvas");
     expect(html).toContain("aspect-ratio:9 / 16");
-    expect(html).toContain("max(100cqw, calc(100cqh * 9 / 16))");
+    expect(html).toContain("min(100cqw, calc(100cqh * 9 / 16))");
+    expect(html).not.toContain("max(100cqw");
   });
 
   it("sets text in the layer's own font, color, background, alignment and size", () => {
@@ -225,27 +226,47 @@ describe("StoryContent base fit", () => {
   it("fills the canvas with a picture that is 9:16, or within 12% of it", () => {
     for (const [w, h] of [[1080, 1920], [1080, 2160], [1000, 1700]] as const) {
       const html = render({ mediaWidth: w, mediaHeight: h });
-      expect(html).not.toContain("data-story-base-blur");
+      // The picture fills the canvas; its blurred copy only shows on a card that is not 9:16
+      // (a container query), so it is not marked as always on.
+      expect(html).not.toContain("data-always");
       expect(html).toContain("object-cover");
       expect(html).not.toContain("object-contain");
     }
   });
 
-  it("shows a landscape photo whole over a blurred copy of itself, inside the layers' own canvas", () => {
+  it("shows a landscape photo whole, inside the canvas, over a blurred copy of itself", () => {
     const html = render({ mediaWidth: 1920, mediaHeight: 1080 });
     expect(html).toContain("data-story-base-blur");
+    expect(html).toContain("data-always");
     expect(html).toContain("blur-[28px]");
     expect(html).toContain("object-contain");
-    expect(html).toContain("max(100cqw, calc(100cqh * 9 / 16))");
+    expect(html).toContain("min(100cqw, calc(100cqh * 9 / 16))");
+  });
+
+  it("fills a card that is not 9:16 with the blurred picture even when the picture fills the canvas", () => {
+    const html = render({ mediaWidth: 1080, mediaHeight: 1920 });
+    expect(html).toContain("data-story-base-blur");
+    expect(html).toContain("story-backdrop");
+  });
+
+  it("fills around a text card's canvas with its own background, not the camera of anything", () => {
+    const html = render({ kind: "text", mediaUrl: null, background: "grape", text: "salve" });
+    expect(html).toContain('class="story-text-card absolute inset-0" data-bg="grape"');
+    expect(html).not.toContain("data-story-base-blur");
   });
 
   it("an unknown size fills, as every story from before this did", () => {
-    expect(render({})).not.toContain("data-story-base-blur");
+    expect(render({})).not.toContain("data-always");
   });
 
-  it("shows a landscape poster whole, with no blur behind a video", () => {
+  it("shows a landscape poster whole, over the poster blurred (a video's blurred copy is its poster)", () => {
     const html = render({ kind: "video", posterUrl: "https://example.test/p.jpg", mediaWidth: 1920, mediaHeight: 1080 });
     expect(html).toContain("object-contain");
+    expect(html).toContain("data-always");
+  });
+
+  it("a video with no poster has nothing to blur: the card's own dark shows around it", () => {
+    const html = render({ kind: "video", posterUrl: null, mediaUrl: null, mediaWidth: 1920, mediaHeight: 1080 });
     expect(html).not.toContain("data-story-base-blur");
   });
 });

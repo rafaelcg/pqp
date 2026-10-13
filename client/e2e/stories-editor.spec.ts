@@ -293,6 +293,22 @@ for (const size of [
         { timeout: 10_000 },
       )
       .toEqual({ x: 0.527, y: 0.777 });
+    // The viewer never crops the author's canvas: it is the whole 9:16, fitted INSIDE the card (a
+    // phone is taller than 9:16, so there are bars above and below), never wider or taller than it.
+    const fit = await page.evaluate(() => {
+      const card = document.querySelector("[data-story-card]")!.getBoundingClientRect();
+      const canvas = document.querySelector("[data-story-viewer] [data-story-layer-canvas]")!.getBoundingClientRect();
+      return {
+        ratio: canvas.width / canvas.height,
+        inside:
+          canvas.left >= card.left - 1 &&
+          canvas.right <= card.right + 1 &&
+          canvas.top >= card.top - 1 &&
+          canvas.bottom <= card.bottom + 1,
+      };
+    });
+    expect(fit.inside).toBe(true);
+    expect(fit.ratio).toBeCloseTo(9 / 16, 2);
     // Its type is the same fraction of the canvas width at any size: 8% x size x scale of the width.
     // (Both in layout pixels: the viewer scales in while it opens, which scales a bounding box.)
     const fraction = await layer.locator(".story-tl").evaluate((element) => {

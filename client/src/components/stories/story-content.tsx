@@ -11,12 +11,13 @@ import { LayerBox, LayerContent, type DisplayLayer, type MentionTarget } from ".
  * outgoing card and the composer's preview all draw through this, so a story
  * looks the same before and after it is posted.
  *
- * The card is a size container, so a text card's type scales with the card
- * rather than with the window. LAYERS live on a 9:16 canvas of their own that
- * covers the card the way the picture does: on a screen that is not 9:16 (a
- * phone is taller) the base and the layers are cropped by the same amount, so
- * a layer stays on the part of the picture it was put on, and whatever falls
- * outside the card is clipped.
+ * The card is a size container. The author's canvas is 9:16 and is NEVER
+ * cropped: on a screen taller or wider than that (most phones are taller) the
+ * canvas is fitted INSIDE the card (contain), the base and every layer on it,
+ * and the rest of the card is filled with the blurred base (a photo, or a
+ * video's poster) or the text card's own background. So a layer is exactly where
+ * the author put it, on every screen, and nothing the author placed is cut off.
+ * The viewer's own chrome (bars, header, reply row) is drawn over the card.
  */
 
 export interface StoryDisplay {
@@ -85,37 +86,17 @@ export function textCardSizeClass(text: string): string {
 }
 
 /**
- * The 9:16 box the layers are placed in: as wide as the card, or as tall as
- * it, whichever covers it (the `object-fit: cover` rule), centered. It is a
- * size container itself so every layer's `cqw` is a fraction of THIS canvas.
+ * The author's canvas: a 9:16 box as large as fits inside the card (contain), centered. It is a
+ * size container itself, so every layer's `cqw` is a fraction of THIS canvas, and it clips what
+ * a layer does past its edge. The base picture, the scrim and the layers live in it.
  */
-/**
- * The same 9:16 box, for a base picture shown whole: it sits inside the canvas
- * the layers are placed on, so a layer stays on the part of the picture it was
- * put on however the base meets the card.
- */
-function CoverBox({ children }: { children: ReactNode }) {
-  return (
-    <div
-      className="pointer-events-none absolute left-1/2 top-1/2"
-      style={{
-        width: "max(100cqw, calc(100cqh * 9 / 16))",
-        aspectRatio: "9 / 16",
-        transform: "translate(-50%, -50%)",
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
 export function LayerCanvas({ children }: { children: ReactNode }) {
   return (
     <div
       data-story-layer-canvas=""
-      className="pointer-events-none absolute left-1/2 top-1/2 [container-type:size]"
+      className="pointer-events-none absolute left-1/2 top-1/2 overflow-hidden [container-type:size]"
       style={{
-        width: "max(100cqw, calc(100cqh * 9 / 16))",
+        width: "min(100cqw, calc(100cqh * 9 / 16))",
         aspectRatio: "9 / 16",
         transform: "translate(-50%, -50%)",
       }}
@@ -230,6 +211,11 @@ export const StoryContent = forwardRef(function StoryContent(
     />
   );
 
+  // What fills the card around the canvas: the base blurred (a photo, or a video's poster), or the
+  // text card's own background. The blurred copy is only drawn where it can show: always for a base
+  // shown whole, otherwise only when the card is not 9:16 (a container query, `.story-backdrop`).
+  const backdropUrl = story.kind === "image" ? story.mediaUrl : story.kind === "video" ? story.posterUrl : null;
+
   return (
     <div
       ref={setRoot}
@@ -241,58 +227,36 @@ export const StoryContent = forwardRef(function StoryContent(
       className={cn("absolute inset-0 overflow-hidden [container-type:size]", className)}
       style={{ background: "var(--story-card)" }}
     >
-      {story.kind === "image" && story.mediaUrl && (
-        <>
-          {contain && (
-            // A photo that is not 9:16 is shown whole over a blurred copy of itself.
-            <img
-              src={story.mediaUrl}
-              alt=""
-              aria-hidden
-              draggable={false}
-              decoding="async"
-              data-story-base-blur=""
-              className="absolute inset-0 h-full w-full scale-110 select-none object-cover blur-[28px]"
-            />
-          )}
-          {contain ? (
-            <CoverBox>
-              <img
-                src={story.mediaUrl}
-                alt={altText ?? ""}
-                draggable={false}
-                decoding="async"
-                className="h-full w-full select-none object-contain"
-              />
-            </CoverBox>
-          ) : (
-            <img
-              src={story.mediaUrl}
-              alt={altText ?? ""}
-              draggable={false}
-              decoding="async"
-              className="absolute inset-0 h-full w-full select-none object-cover"
-            />
-          )}
-        </>
+      {backdropUrl && (
+        <img
+          src={backdropUrl}
+          alt=""
+          aria-hidden
+          draggable={false}
+          decoding="async"
+          data-story-base-blur=""
+          data-always={contain ? "" : undefined}
+          className="story-backdrop pointer-events-none absolute inset-0 h-full w-full scale-110 select-none object-cover blur-[28px]"
+        />
       )}
-      {story.kind === "video" &&
-        (playVideo && !still && story.mediaUrl ? (
-          contain ? (
-            <CoverBox>
-              <StoryVideo
-                src={story.mediaUrl}
-                poster={story.posterUrl}
-                muted={muted}
-                paused={paused}
-                onDuration={onVideoDuration}
-                onTime={onVideoTime}
-                onEnded={onVideoEnded}
-                loop={loop}
-                contain
-              />
-            </CoverBox>
-          ) : (
+      {story.kind === "text" && (
+        <div className="story-text-card absolute inset-0" data-bg={story.background ?? "night"} />
+      )}
+      <LayerCanvas>
+        {story.kind === "image" && story.mediaUrl && (
+          <img
+            src={story.mediaUrl}
+            alt={altText ?? ""}
+            draggable={false}
+            decoding="async"
+            className={cn(
+              "absolute inset-0 h-full w-full select-none",
+              contain ? "object-contain" : "object-cover",
+            )}
+          />
+        )}
+        {story.kind === "video" &&
+          (playVideo && !still && story.mediaUrl ? (
             <StoryVideo
               src={story.mediaUrl}
               poster={story.posterUrl}
@@ -302,47 +266,36 @@ export const StoryContent = forwardRef(function StoryContent(
               onTime={onVideoTime}
               onEnded={onVideoEnded}
               loop={loop}
+              contain={contain}
             />
-          )
-        ) : story.posterUrl ? (
-          contain ? (
-            <CoverBox>
-              <img src={story.posterUrl} alt="" draggable={false} className="h-full w-full select-none object-contain" />
-            </CoverBox>
-          ) : (
+          ) : story.posterUrl ? (
             <img
               src={story.posterUrl}
               alt=""
               draggable={false}
-              className="absolute inset-0 h-full w-full select-none object-cover"
+              className={cn(
+                "absolute inset-0 h-full w-full select-none",
+                contain ? "object-contain" : "object-cover",
+              )}
             />
-          )
-        ) : null)}
-      {story.kind === "text" && (
-        <div
-          className="story-text-card absolute inset-0"
-          data-bg={story.background ?? "night"}
-        >
-          {showLegacyText && story.text && (
-            <p
-              className={cn(TEXT_CARD_BOX_CLASS, textCardSizeClass(story.text))}
-              style={{ color: "var(--story-on-media)" }}
-            >
-              {story.text}
-            </p>
-          )}
-        </div>
-      )}
-      {isMedia && (
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0"
-          style={{ background: "var(--story-scrim)" }}
-        />
-      )}
-      {hasLayers && (
-        <LayerCanvas>
-          {layers.map((layer) => (
+          ) : null)}
+        {isMedia && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
+            style={{ background: "var(--story-scrim)" }}
+          />
+        )}
+        {story.kind === "text" && showLegacyText && story.text && (
+          <p
+            className={cn(TEXT_CARD_BOX_CLASS, textCardSizeClass(story.text))}
+            style={{ color: "var(--story-on-media)" }}
+          >
+            {story.text}
+          </p>
+        )}
+        {hasLayers &&
+          layers.map((layer) => (
             <LiftedBox
               key={layer.id}
               layer={layer}
@@ -356,27 +309,26 @@ export const StoryContent = forwardRef(function StoryContent(
               />
             </LiftedBox>
           ))}
-        </LayerCanvas>
-      )}
-      {/* An older build's sticker, or the composer's preview before any layer exists. */}
-      {!hasCallLayer && (story.call || story.callPreview) && (
-        <div
-          className={cn(
-            "absolute left-[9%] right-[9%]",
-            story.kind === "text" ? "top-[52%]" : "bottom-[22%]",
-          )}
-        >
-          {card}
-        </div>
-      )}
-      {isMedia && story.caption && showLegacyText && (
-        <p
-          className="absolute bottom-[calc(6%+var(--story-caption-lift,0px))] left-[5%] right-[5%] whitespace-pre-wrap break-words text-[4.4cqw] font-semibold leading-snug [text-shadow:0_1px_8px_var(--story-dim)]"
-          style={{ color: "var(--story-on-media)" }}
-        >
-          {story.caption}
-        </p>
-      )}
+        {/* An older build's sticker, or the composer's preview before any layer exists. */}
+        {!hasCallLayer && (story.call || story.callPreview) && (
+          <div
+            className={cn(
+              "absolute left-[9%] right-[9%]",
+              story.kind === "text" ? "top-[52%]" : "bottom-[22%]",
+            )}
+          >
+            {card}
+          </div>
+        )}
+        {isMedia && story.caption && showLegacyText && (
+          <p
+            className="absolute bottom-[calc(6%+var(--story-caption-lift,0px))] left-[5%] right-[5%] whitespace-pre-wrap break-words text-[4.4cqw] font-semibold leading-snug [text-shadow:0_1px_8px_var(--story-dim)]"
+            style={{ color: "var(--story-on-media)" }}
+          >
+            {story.caption}
+          </p>
+        )}
+      </LayerCanvas>
     </div>
   );
 });
@@ -440,7 +392,7 @@ function StoryVideo({
       loop={loop}
       playsInline
       preload="auto"
-      className={cn("h-full w-full", contain ? "object-contain" : "absolute inset-0 object-cover")}
+      className={cn("absolute inset-0 h-full w-full", contain ? "object-contain" : "object-cover")}
       onLoadedMetadata={(event) => {
         const seconds = event.currentTarget.duration;
         if (Number.isFinite(seconds) && seconds > 0) {
