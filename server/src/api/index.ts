@@ -8316,7 +8316,7 @@ router.patch(
       Permission.MANAGE_WEBHOOKS,
     );
     const body = updateOutgoingWebhookSchema.parse(await readJsonBody(req));
-    const webhook = await updateOutgoingWebhook(id!, body);
+    const webhook = await updateOutgoingWebhook(id!, body, user.id);
     if (!webhook) {
       throw new NotFound("Webhook not found");
     }

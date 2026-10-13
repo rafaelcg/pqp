@@ -1181,6 +1181,182 @@ describeDb("outgoing webhooks", () => {
       });
     });
 
+    it("refuses a private forum the manager cannot view, and allows one they can", async () => {
+      await forums(true);
+      const forum = await createChannel(serverId, "staff", "forum");
+      const everyone = await getPool().query<{ id: string }>(
+        `SELECT id FROM roles WHERE server_id = $1 AND is_everyone`,
+        [serverId],
+      );
+      // VIEW_CHANNEL is bit 64: denied to @everyone makes the forum private.
+      await getPool().query(
+        `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+         VALUES ($1, 'role', $2, 0, 64)`,
+        [forum.id, everyone.rows[0]!.id],
+      );
+
+      const refused = await call<{
+        code: string;
+        error: string;
+        channels: Array<{ id: string; name: string; reason: string }>;
+      }>(manager, "POST", `/api/servers/${serverId}/outgoing-webhooks`, createBody({
+        channelIds: [forum.id],
+      }));
+      expect(refused.status).toBe(400);
+      expect(refused.body.code).toBe("outgoing_webhook_channels");
+      expect(refused.body.channels).toEqual([
+        expect.objectContaining({ id: forum.id, reason: "forum_not_visible" }),
+      ]);
+      // The private name is not echoed back.
+      expect(refused.body.error).not.toContain("staff");
+
+      // Adding it to an existing hook is refused the same way.
+      const own = await call<{ webhook: OutgoingWebhook }>(
+        manager,
+        "POST",
+        `/api/servers/${serverId}/outgoing-webhooks`,
+        createBody(),
+      );
+      expect(own.status).toBe(201);
+      const patched = await call<{ channels: Array<{ reason: string }> }>(
+        manager,
+        "PATCH",
+        `/api/outgoing-webhooks/${own.body.webhook.id}`,
+        { channelIds: [channelId, forum.id] },
+      );
+      expect(patched.status).toBe(400);
+      expect(patched.body.channels[0]?.reason).toBe("forum_not_visible");
+
+      // The owner can view it, so the owner can add it.
+      const byOwner = await call<{ webhook: OutgoingWebhook }>(
+        owner,
+        "PATCH",
+        `/api/outgoing-webhooks/${own.body.webhook.id}`,
+        { channelIds: [channelId, forum.id] },
+      );
+      expect(byOwner.status).toBe(200);
+
+      // Once on the hook, a manager who still cannot view it may keep it.
+      const kept = await call<{ webhook: OutgoingWebhook }>(
+        manager,
+        "PATCH",
+        `/api/outgoing-webhooks/${own.body.webhook.id}`,
+        { name: "renamed" },
+      );
+      expect(kept.status).toBe(200);
+      expect(kept.body.webhook.channelIds).toContain(forum.id);
+
+      // A manager granted a view overwrite may add a private forum.
+      await getPool().query(
+        `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+         VALUES ($1, 'member', $2, 64, 0)`,
+        [forum.id, manager.id],
+      );
+      const allowed = await call<{ webhook: OutgoingWebhook }>(
+        manager,
+        "POST",
+        `/api/servers/${serverId}/outgoing-webhooks`,
+        createBody({ channelIds: [forum.id] }),
+      );
+      expect(allowed.status).toBe(201);
+    });
+
+    it("still enqueues a post message when the forum lookup fails", async () => {
+      await forums(true);
+      const forum = await createChannel(serverId, "ajuda", "forum");
+      expect(
+        (
+          await call(
+            owner,
+            "POST",
+            `/api/servers/${serverId}/outgoing-webhooks`,
+            createBody({ channelIds: [forum.id] }),
+          )
+        ).status,
+      ).toBe(201);
+      const postId = await insertPost(forum.id, "Notebook não liga", null);
+      const messageId = await insertMessage(postId, "o que eu tentei");
+
+      const pool = getPool();
+      const realQuery = pool.query.bind(pool) as (...args: unknown[]) => unknown;
+      const spy = vi
+        .spyOn(pool, "query")
+        .mockImplementation(((...args: unknown[]) => {
+          const text = typeof args[0] === "string" ? args[0] : "";
+          if (text.includes("ORDER BY created_at ASC, id ASC")) {
+            return Promise.reject(new Error("forum lookup down"));
+          }
+          return realQuery(...args);
+        }) as never);
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(
+          await enqueueOutgoingMessageCreated({
+            channelId: postId,
+            messageId,
+            authorId: owner.id,
+            body: "o que eu tentei",
+            createdAt: new Date(),
+            replyToId: null,
+          }),
+        ).toBe(1);
+        expect(logged).toHaveBeenCalledWith(
+          expect.stringContaining("forum metadata lookup failed"),
+          expect.any(Error),
+        );
+      } finally {
+        spy.mockRestore();
+        logged.mockRestore();
+      }
+      const rows = await storedPayloads();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ messageId, body: "o que eu tentei" });
+      expect(rows[0]).not.toHaveProperty("forumId");
+    });
+
+    it("answers isPostStart from the channel lookup when the opening id is set", async () => {
+      await forums(true);
+      const forum = await createChannel(serverId, "ajuda", "forum");
+      await call(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/outgoing-webhooks`,
+        createBody({ channelIds: [forum.id] }),
+      );
+      const postId = await insertPost(forum.id, "Notebook não liga", null);
+      const openingId = await insertMessage(postId, "primeira");
+      await getPool().query(
+        `UPDATE forum_posts SET opening_message_id = $2, published_at = NOW()
+          WHERE channel_id = $1`,
+        [postId, openingId],
+      );
+      const replyId = await insertMessage(postId, "resposta");
+      const pool = getPool();
+      const realQuery = pool.query.bind(pool) as (...args: unknown[]) => unknown;
+      const seen: string[] = [];
+      const spy = vi.spyOn(pool, "query").mockImplementation(((...args: unknown[]) => {
+        seen.push(typeof args[0] === "string" ? args[0] : "");
+        return realQuery(...args);
+      }) as never);
+      try {
+        expect(
+          await enqueueOutgoingMessageCreated({
+            channelId: postId,
+            messageId: replyId,
+            authorId: owner.id,
+            body: "resposta",
+            createdAt: new Date(),
+            replyToId: null,
+          }),
+        ).toBe(1);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(seen.some((text) => /FROM forum_posts WHERE/.test(text))).toBe(false);
+      expect(seen.some((text) => text.includes("ORDER BY created_at ASC"))).toBe(false);
+      expect((await storedPayloads())[0]).toMatchObject({ isPostStart: false });
+    });
+
     it("stays quiet while the flag is off, and a saved forum can be kept", async () => {
       await forums(true);
       const forum = await createChannel(serverId, "ajuda", "forum");

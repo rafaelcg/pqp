@@ -97,6 +97,8 @@ A message in a forum post adds three fields, after `replyToId`. They are omitted
 
 `forum_channels` has to be on for that server. While it is off, a forum cannot be newly selected, and messages in its posts are not enqueued. A forum already saved on the hook stays selected.
 
+You can only add a forum you can view. A private forum you cannot see is refused with `forum_not_visible`.
+
 ## Skip rules
 
 No row is enqueued when:

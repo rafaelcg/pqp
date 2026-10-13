@@ -17,6 +17,7 @@ import { getPool } from "../db.js";
 import { forumChannelsEnabled } from "../lib/forum-config.js";
 import { HttpError } from "../lib/http.js";
 import { processRole, runsColdJobs } from "../lib/process-role.js";
+import { channelVisibleSql } from "./users.js";
 import { notifyOutgoingWebhookEnqueued } from "./outgoing-webhook-poller.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import {
@@ -262,8 +263,11 @@ export type OutgoingWebhookChannelProblem = {
    * `server`: a text channel that is not a server channel.
    * `forums_off`: a forum, and `forum_channels` is off. A forum already on
    * the hook is not this: it stays selected so a later flip can deliver again.
+   * `forum_not_visible`: a forum the acting user cannot view (a private one),
+   * newly added in this save. `name` is the id then, so a crafted request
+   * learns nothing about a channel it cannot see.
    */
-  reason: "type" | "server" | "forums_off";
+  reason: "type" | "server" | "forums_off" | "forum_not_visible";
 };
 
 type Sql = Pick<PoolClient, "query">;
@@ -310,6 +314,9 @@ function describeChannelProblem(problem: OutgoingWebhookChannelProblem): string 
   if (problem.reason === "forums_off") {
     return `#${name} is a forum, and forum channels are off on this server.`;
   }
+  if (problem.reason === "forum_not_visible") {
+    return `You cannot view the forum ${name}, so it cannot be a target.`;
+  }
   if (problem.reason === "server") {
     return `#${name} is not a text or forum channel in this server.`;
   }
@@ -332,6 +339,10 @@ function describeChannelProblem(problem: OutgoingWebhookChannelProblem): string 
  * server. A forum already stored on this hook is kept while the flag is off
  * (`alreadySelected`), so editing the hook does not drop it. Threads, posts,
  * voice, categories and watch parties are rejected.
+ *
+ * A forum added in this save (not in `alreadySelected`) must be one `actorId`
+ * can view: deliveries carry message bodies, so a Manage Webhooks holder
+ * without VIEW_CHANNEL on a private forum must not subscribe to it.
  */
 async function validateTextChannelIds(
   serverId: string,
@@ -339,6 +350,7 @@ async function validateTextChannelIds(
   db: Sql = getPool(),
   share = false,
   alreadySelected: ReadonlySet<string> = new Set(),
+  actorId?: string,
 ): Promise<string[]> {
   const seen = new Set<string>();
   const unique: string[] = [];
@@ -375,6 +387,29 @@ async function validateTextChannelIds(
   const byId = new Map(
     result.rows.map((row) => [row.id.toLowerCase(), row]),
   );
+  // Forums this save newly adds, checked in one statement with the same
+  // predicate the channel list uses (owner, Administrator, overwrites).
+  let viewableForums: Set<string> | null = null;
+  if (actorId && forumChannelsEnabled(serverId)) {
+    const added = result.rows
+      .filter(
+        (row) =>
+          row.kind === "server" &&
+          row.type === "forum" &&
+          !alreadySelected.has(row.id.toLowerCase()),
+      )
+      .map((row) => row.id);
+    if (added.length > 0) {
+      const visible = await db.query<{ id: string }>(
+        `SELECT c.id FROM channels c
+           LEFT JOIN server_members sm
+             ON sm.server_id = c.server_id AND sm.user_id = $2
+          WHERE c.id = ANY($1::uuid[]) AND ${channelVisibleSql("$2")}`,
+        [added, actorId],
+      );
+      viewableForums = new Set(visible.rows.map((row) => row.id.toLowerCase()));
+    }
+  }
   const kept: string[] = [];
   const problems: OutgoingWebhookChannelProblem[] = [];
   for (const id of unique) {
@@ -388,7 +423,20 @@ async function validateTextChannelIds(
     }
     if (row.kind === "server" && row.type === "forum") {
       const forumsOn = forumChannelsEnabled(serverId);
-      if (forumsOn || alreadySelected.has(id.toLowerCase())) {
+      if (alreadySelected.has(id.toLowerCase())) {
+        kept.push(row.id);
+        continue;
+      }
+      if (forumsOn) {
+        if (viewableForums && !viewableForums.has(row.id.toLowerCase())) {
+          problems.push({
+            id,
+            name: row.id,
+            type: row.type,
+            reason: "forum_not_visible",
+          });
+          continue;
+        }
         kept.push(row.id);
         continue;
       }
@@ -634,6 +682,8 @@ export async function createOutgoingWebhook(
       body.channelIds,
       client,
       true,
+      new Set(),
+      createdBy,
     );
     const result = await client.query<OutgoingWebhookRow>(
       `INSERT INTO outgoing_webhooks (
@@ -670,6 +720,7 @@ export async function createOutgoingWebhook(
 export async function updateOutgoingWebhook(
   id: string,
   body: UpdateOutgoingWebhookBody,
+  actorId?: string,
 ): Promise<OutgoingWebhook | null> {
   if (body.url !== undefined) {
     await assertOutgoingWebhookUrl(body.url.trim());
@@ -702,6 +753,7 @@ export async function updateOutgoingWebhook(
             client,
             false,
             new Set(existing.channel_ids.map((channelId) => channelId.toLowerCase())),
+            actorId,
           )
         : existing.channel_ids;
     const skipUserIds =
@@ -862,21 +914,17 @@ function sameId(left: string | null, right: string): boolean {
 }
 
 /**
- * Forum fields for a message in a post. The opening message is enqueued
- * before `opening_message_id` is written, so a null id falls back to the
- * earliest message in the post.
+ * Forum fields for a message in a post. `openingId` comes from the channel
+ * lookup. The opening message is enqueued before `opening_message_id` is
+ * written, so a null id falls back to the earliest message in the post.
  */
 async function forumPostEvent(
   postId: string,
   forumId: string,
   postTitle: string,
   messageId: string,
+  openingId: string | null,
 ): Promise<Pick<OutgoingMessageCreatedPayload, "forumId" | "postTitle" | "isPostStart">> {
-  const post = await getPool().query<{ opening_message_id: string | null }>(
-    `SELECT opening_message_id FROM forum_posts WHERE channel_id = $1`,
-    [postId],
-  );
-  const openingId = post.rows[0]?.opening_message_id ?? null;
   if (openingId) {
     return { forumId, postTitle, isPostStart: sameId(openingId, messageId) };
   }
@@ -921,11 +969,13 @@ export async function enqueueOutgoingMessageCreated(input: {
     kind: string;
     parent_id: string | null;
     parent_type: string | null;
+    opening_message_id: string | null;
   }>(
     `SELECT c.id, c.server_id, c.name, c.type, c.kind, c.parent_id,
-            p.type AS parent_type
+            p.type AS parent_type, fp.opening_message_id
        FROM channels c
        LEFT JOIN channels p ON p.id = c.parent_id
+       LEFT JOIN forum_posts fp ON fp.channel_id = c.id
       WHERE c.id = $1`,
     [input.channelId],
   );
@@ -989,9 +1039,24 @@ export async function enqueueOutgoingMessageCreated(input: {
   );
   const serverName = server.rows[0]?.name ?? "";
   const createdAt = input.createdAt.toISOString();
-  const forumEvent = forumHook
-    ? await forumPostEvent(row.id, row.parent_id!, row.name, input.messageId)
-    : undefined;
+  // Enrichment only. The message is already committed, so a failed lookup
+  // must not stop the delivery rows: they go out without the forum fields.
+  let forumEvent:
+    | Awaited<ReturnType<typeof forumPostEvent>>
+    | undefined;
+  if (forumHook) {
+    try {
+      forumEvent = await forumPostEvent(
+        row.id,
+        row.parent_id!,
+        row.name,
+        input.messageId,
+        row.opening_message_id,
+      );
+    } catch (error) {
+      console.error("[outgoing-webhooks] forum metadata lookup failed:", error);
+    }
+  }
 
   let inserted = 0;
   for (const hook of hooks.rows) {
