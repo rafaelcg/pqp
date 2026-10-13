@@ -199,6 +199,29 @@ async function serverImageKeys(serverId: string): Promise<string[]> {
 }
 
 /**
+ * The server's custom emoji objects. Their rows cascade with the server, and
+ * nothing else names the bytes. Refused uploads are not here: their
+ * quarantine row outlives the server and its own sweep owns them.
+ *
+ * Read inside the delete, after the server row is locked: an emoji claim
+ * locks the same row before it inserts, so it either lands before this read
+ * or fails on the missing server.
+ */
+async function serverEmojiKeys(
+  db: Pick<PoolClient, "query">,
+  serverId: string,
+): Promise<string[]> {
+  if (!isStorageConfigured()) {
+    return [];
+  }
+  const result = await db.query<{ storage_key: string }>(
+    `SELECT storage_key FROM server_emoji WHERE server_id = $1`,
+    [serverId],
+  );
+  return result.rows.map((row) => row.storage_key);
+}
+
+/**
  * Drop the objects a completed delete just orphaned, best effort.
  *
  * Neither awaited nor allowed to fail, matching `deleteMessage`: the row that
@@ -1038,6 +1061,7 @@ export async function deleteServer(
         `SELECT user_id FROM server_members WHERE server_id = $1`,
         [serverId],
       );
+      keys.push(...(await serverEmojiKeys(client, serverId)));
       await client.query(`DELETE FROM servers WHERE id = $1`, [serverId]);
       memberIds = members.rows.map((row) => row.user_id);
     }

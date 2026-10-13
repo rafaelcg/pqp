@@ -259,8 +259,15 @@ export function showsServerSettingsEntry(access: {
   canManage: boolean;
   canManageMessages: boolean;
   canManageSoundboard: boolean;
+  /** Manage Emoji has the Emoji pane and nothing else, like the soundboard. */
+  canManageEmoji?: boolean;
 }): boolean {
-  return access.canManage || access.canManageMessages || access.canManageSoundboard;
+  return (
+    access.canManage ||
+    access.canManageMessages ||
+    access.canManageSoundboard ||
+    access.canManageEmoji === true
+  );
 }
 
 interface ChannelListProps {
@@ -298,6 +305,8 @@ interface ChannelListProps {
    * settings can show, since the Soundboard tab is theirs.
    */
   canManageSoundboard?: boolean;
+  /** MANAGE_EMOJI: reaches the settings dialog for its Emoji pane alone. */
+  canManageEmoji?: boolean;
   isLoading?: boolean;
   voiceOccupancy?: Record<string, VoiceParticipant[]>;
   /**
@@ -545,6 +554,7 @@ export const ChannelList = memo(function ChannelList({
   canManageRoles = false,
   canManageMessages = false,
   canManageSoundboard = false,
+  canManageEmoji = false,
   isLoading = false,
   voiceOccupancy = {},
   channelLive = {},
@@ -2184,6 +2194,7 @@ export const ChannelList = memo(function ChannelList({
           canManage,
           canManageMessages,
           canManageSoundboard,
+          canManageEmoji,
         })
           ? [
               { id: "sep", label: "", separator: true },

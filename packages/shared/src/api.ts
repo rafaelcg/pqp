@@ -11,6 +11,7 @@ import { webhookEmbedSchema } from "./webhooks.js";
 import { chanceResultSchema } from "./chance.js";
 import { voiceRoomTransportSchema } from "./signaling.js";
 import { pollSchema } from "./polls.js";
+import { customEmojiTokensAsText } from "./server-emoji.js";
 import { messageSystemKindSchema } from "./nudge.js";
 
 /**
@@ -895,7 +896,7 @@ export type MessageReplyRef = z.infer<typeof messageReplyRefSchema>;
  * header is a hint rather than a rendering.
  */
 export function buildReplyExcerpt(body: string): string {
-  const flat = body.replace(/\s+/g, " ").trim();
+  const flat = customEmojiTokensAsText(body).replace(/\s+/g, " ").trim();
   if (flat.length <= REPLY_EXCERPT_MAX_LENGTH) {
     return flat;
   }

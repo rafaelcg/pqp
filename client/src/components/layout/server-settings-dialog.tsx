@@ -13,6 +13,7 @@ import {
   ScrollText,
   ShieldBan,
   ShieldCheck,
+  Smile,
   TriangleAlert,
   Users,
   Webhook,
@@ -25,6 +26,7 @@ import { SectionRail } from "@/components/ui/section-rail";
 import { ReportsSection } from "@/components/layout/reports-section";
 import { AutomodSettingsSection } from "@/components/layout/automod-settings-section";
 import { ServerIdentitySection } from "@/components/layout/server-identity-section";
+import { ServerEmojiSection } from "@/components/layout/server-emoji-section";
 import { CommunityHomeSettingsSection } from "@/components/community-home/community-home-settings-section";
 import { CommunitySettingsSection } from "@/components/communities/community-settings-section";
 import { RolesSettingsSection } from "@/components/layout/roles-settings-section";
@@ -72,6 +74,9 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
     "serverSettings.audit.action.server.retention_update",
   "server.icon_update": "serverSettings.audit.action.server.icon_update",
   "server.banner_update": "serverSettings.audit.action.server.banner_update",
+  "emoji.create": "serverSettings.audit.action.emoji.create",
+  "emoji.update": "serverSettings.audit.action.emoji.update",
+  "emoji.delete": "serverSettings.audit.action.emoji.delete",
   "server.ownership_transfer":
     "serverSettings.audit.action.server.ownership_transfer",
   "server.data_export": "serverSettings.audit.action.server.data_export",
@@ -269,6 +274,7 @@ export function soundboardAuditDetails(
  */
 export type SectionId =
   | "overview"
+  | "emoji"
   | "community"
   | "access"
   | "roles"
@@ -295,6 +301,14 @@ const SECTIONS: SectionDef[] = [
     description: "serverSettings.overview.description",
     icon: ImageIcon,
     ownerOnly: true,
+  },
+  {
+    // Manage Server, the bit the icon and banner sit on.
+    id: "emoji",
+    label: "serverSettings.section.emoji",
+    description: "serverSettings.emoji.description",
+    icon: Smile,
+    ownerOnly: false,
   },
   {
     // The public address and the directory, a door of their own since
@@ -554,6 +568,8 @@ interface ServerSettingsDialogProps {
   canManageRoles?: boolean;
   canManageServer?: boolean;
   canManageSoundboard?: boolean;
+  /** Manage Emoji: the Emoji pane. */
+  canManageEmoji?: boolean;
   canManageWebhooks?: boolean;
   canModerateQueue?: boolean;
   /** Manage Messages: sees AutoMod read-only, with the test box. */
@@ -582,6 +598,7 @@ export function ServerSettingsDialog({
   canManageRoles = false,
   canManageServer = false,
   canManageSoundboard = false,
+  canManageEmoji = false,
   canManageWebhooks = false,
   canModerateQueue = false,
   canManageMessages = false,
@@ -635,6 +652,7 @@ export function ServerSettingsDialog({
   const serverId = server?.id ?? null;
   const isOwner = server?.role === "owner";
   const canSeeOverview = isOwner || canManageServer;
+  const canSeeEmoji = (isOwner || canManageEmoji) && Boolean(serverId);
   const canSeeRoles = canManageRoles;
   const canSeeSoundboard = canManageSoundboard;
   const canSeeIntegrations = canManageWebhooks;
@@ -646,6 +664,7 @@ export function ServerSettingsDialog({
     isOwner ||
     canSeeAutomod ||
     canSeeOverview ||
+    canSeeEmoji ||
     canSeeRoles ||
     canSeeSoundboard ||
     canSeeIntegrations ||
@@ -691,6 +710,7 @@ export function ServerSettingsDialog({
     ? "overview"
     : firstVisibleSection({
         overview: canSeeOverview,
+        emoji: canSeeEmoji,
         roles: canSeeRoles,
         soundboard: canSeeSoundboard,
         integrations: canSeeIntegrations,
@@ -891,6 +911,8 @@ export function ServerSettingsDialog({
     switch (s.id) {
       case "overview":
         return canSeeOverview;
+      case "emoji":
+        return canSeeEmoji;
       case "community":
         return canSeeCommunity;
       case "access":
@@ -1097,6 +1119,10 @@ export function ServerSettingsDialog({
                 </p>
               )}
             </Block>
+          )}
+
+          {active.id === "emoji" && serverId && (
+            <ServerEmojiSection serverId={serverId} />
           )}
 
           {active.id === "roles" && serverId && (

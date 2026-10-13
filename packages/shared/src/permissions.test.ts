@@ -33,8 +33,46 @@ describe("permission bitfields", () => {
   it("round-trips as a decimal string, never a JS number", () => {
     expect(serializePermissions(PERMISSION_DEFAULT_EVERYONE)).toBe("103331521");
     expect(parsePermissions("103331521")).toBe(PERMISSION_DEFAULT_EVERYONE);
-    expect(serializePermissions(PERMISSION_ALL)).toBe("268435455");
+    expect(serializePermissions(PERMISSION_ALL)).toBe("536870911");
     expect(parsePermissions(PERMISSION_ALL)).toBe(PERMISSION_ALL);
+  });
+
+  it("gives Manage Emoji to owner and Administrator, never to Manager, @everyone or Moderator", () => {
+    expect(Permission.MANAGE_EMOJI).toBe(1n << 28n);
+    // Bits 26 and 27 are the call soundboard's, and still in ALL.
+    expect(PERMISSION_ALL & (3n << 26n)).toBe(
+      Permission.USE_SOUNDBOARD | Permission.MANAGE_SOUNDBOARD,
+    );
+    expect(hasPermission(PERMISSION_ALL, Permission.MANAGE_EMOJI)).toBe(true);
+    expect(
+      hasPermission(defaultRolePermissions("admin"), Permission.MANAGE_EMOJI),
+    ).toBe(true);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MANAGER, Permission.MANAGE_EMOJI),
+    ).toBe(false);
+    expect(
+      hasPermission(
+        defaultRolePermissions("manager"),
+        Permission.MANAGE_EMOJI,
+      ),
+    ).toBe(false);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_EVERYONE, Permission.MANAGE_EMOJI),
+    ).toBe(false);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MODERATOR, Permission.MANAGE_EMOJI),
+    ).toBe(false);
+    expect(
+      hasPermission(
+        computePermissions({
+          isOwner: true,
+          everyonePermissions: 0n,
+          rolePermissions: [],
+          roleOverwrites: [],
+        }),
+        Permission.MANAGE_EMOJI,
+      ),
+    ).toBe(true);
   });
 
   it("treats ADMINISTRATOR as a distinct bit before expansion", () => {
