@@ -52,7 +52,7 @@ describe("callCardState", () => {
 
 describe("StoryCallCard", () => {
   const server = { name: "QG do pqp", iconUrl: null };
-  const render = (call: StoryCallLive | null, preview = null as { channelName: string; names: string[] } | null) =>
+  const render = (call: StoryCallLive | null, preview = null as { channelName: string; names: string[]; authorAway?: boolean } | null) =>
     renderToStaticMarkup(<StoryCallCard call={call} preview={preview} server={server} onJoin={() => {}} />);
 
   it("a live room: the room and server, the faces, the count, a pulsing dot and Entrar", () => {
@@ -100,6 +100,13 @@ describe("StoryCallCard", () => {
     expect(html).toContain("Sala");
     expect(html).toContain("2 in the call");
     expect(html).toContain(en["stories.call.enter"]);
+  });
+
+  it("shows the author's preview as viewers will see it: over, when the author is not in the room", () => {
+    const html = render(null, { channelName: "Sala", names: ["Bia"], authorAway: true });
+    expect(html).toContain('data-story-call-state="ended"');
+    expect(html).toContain(en["stories.call.ended"]);
+    expect(html).not.toContain("story-live-dot");
   });
 
   it("sizes everything in canvas units, so it is the same card at any size", () => {

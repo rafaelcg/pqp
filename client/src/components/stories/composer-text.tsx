@@ -5,19 +5,16 @@ import {
   STORY_LAYER_COLORS,
   STORY_LAYER_FONTS,
   STORY_LAYER_TEXT_BACKGROUNDS,
-  STORY_LAYER_TEXT_SIZE_MAX,
-  STORY_LAYER_TEXT_SIZE_MIN,
+  STORY_LAYER_SCALE_MAX,
+  STORY_LAYER_SCALE_MIN,
   STORY_TEXT_MAX,
 } from "@pqp/shared";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
-import type { TextLayerFields } from "@/lib/stories/layers";
-import { cn } from "@/lib/utils";
+import { layerStyle, type TextLayerFields } from "@/lib/stories/layers";
 
 /**
- * The text tool. The canvas dims, the words are typed straight onto it in the
- * layer's own type (so what is typed is what is placed), and the strip above
- * and below cycles font, background, alignment, color and size. "Pronto"
- * places it, in the middle, to be dragged wherever it belongs.
+ * The text tool: editing the layer where it is (see `TextEditor`), and the
+ * palette it shares with the draw tool.
  */
 
 const FONT_KEY: Record<TextLayerFields["font"], MessageKey> = {
@@ -95,17 +92,52 @@ export function ColorSwatches({
   );
 }
 
-interface TextEditorProps {
-  initial: TextLayerFields;
-  /** `null` text means the layer should go (it was emptied). */
-  onDone: (fields: TextLayerFields) => void;
-  onCancel: () => void;
+export interface TextEditorGeometry {
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
 }
 
-export function TextEditor({ initial, onDone, onCancel }: TextEditorProps) {
+interface TextEditorProps {
+  initial: TextLayerFields;
+  /** Where the layer is, and how big and tilted: the words are edited right there. */
+  geometry: TextEditorGeometry;
+  /** The text, its style and its scale as they are now (the scale is the size slider's). */
+  onDone: (fields: TextLayerFields, scale: number) => void;
+  onCancel: () => void;
+  /**
+   * How far the whole stage has to rise to keep the layer (and the controls under it) above
+   * a soft keyboard, in CSS pixels. 0 when nothing is covered. Called as the keyboard comes and goes.
+   */
+  onLift?: (pixels: number) => void;
+}
+
+/** What a soft keyboard takes off the bottom of the window, from the visual viewport (0 without one). */
+function keyboardHeight(): number {
+  const viewport = typeof window === "undefined" ? null : window.visualViewport;
+  if (!viewport) {
+    return 0;
+  }
+  return Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+}
+
+/**
+ * The text tool, IN PLACE. The words are typed where the layer is, at its size and tilt,
+ * so nothing jumps when editing starts or ends. The canvas dims behind them; the strip
+ * above and the palette and slider below change the layer LIVE (font, background,
+ * alignment, color, and the slider is the layer's own scale). "Done" just stops
+ * editing: one history step for the whole edit, no move.
+ *
+ * On a phone the keyboard can cover the layer: the whole stage rises just enough to
+ * show it and settles back after (`onLift`), the layer's own position never changes.
+ */
+export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: TextEditorProps) {
   const { t } = useTranslation();
   const [fields, setFields] = useState<TextLayerFields>(initial);
+  const [scale, setScale] = useState(geometry.scale);
   const area = useRef<HTMLTextAreaElement>(null);
+  const box = useRef<HTMLDivElement>(null);
   const patch = (change: Partial<TextLayerFields>) => setFields((current) => ({ ...current, ...change }));
 
   useEffect(() => {
@@ -117,6 +149,44 @@ export function TextEditor({ initial, onDone, onCancel }: TextEditorProps) {
     }
   }, []);
 
+  // Keep the layer above the keyboard. Measured where the layer really is, after tilt and scale.
+  const lifted = useRef(0);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport || !onLift) {
+      return;
+    }
+    const settle = () => {
+      const element = box.current;
+      const keyboard = keyboardHeight();
+      if (!element || keyboard <= 0) {
+        lifted.current = 0;
+        onLift(0);
+        return;
+      }
+      const rect = element.getBoundingClientRect();
+      // Where the layer would be with the stage back down.
+      const bottom = rect.bottom + lifted.current;
+      const top = rect.top + lifted.current;
+      const visibleBottom = viewport.offsetTop + viewport.height;
+      const need = Math.max(0, bottom + 16 - visibleBottom);
+      // Never so far that the layer's top leaves the window.
+      const room = Math.max(0, top - 8);
+      lifted.current = Math.min(need, room);
+      onLift(lifted.current);
+    };
+    settle();
+    viewport.addEventListener("resize", settle);
+    viewport.addEventListener("scroll", settle);
+    return () => {
+      viewport.removeEventListener("resize", settle);
+      viewport.removeEventListener("scroll", settle);
+      onLift(0);
+    };
+    // The layer moves as the text grows and as the slider scales it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fields.text, fields.font, scale, geometry.x, geometry.y, geometry.rotation]);
+
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -124,7 +194,7 @@ export function TextEditor({ initial, onDone, onCancel }: TextEditorProps) {
       onCancel();
     } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
-      onDone(fields);
+      onDone(fields, scale);
     }
   }
 
@@ -137,56 +207,21 @@ export function TextEditor({ initial, onDone, onCancel }: TextEditorProps) {
       aria-label={t("stories.editor.textTool")}
       data-story-text-editor=""
       onKeyDown={onKeyDown}
-      className="story-dim absolute inset-0 z-30 flex flex-col"
+      className="absolute inset-0 z-30"
     >
-      <div className="flex items-center gap-2 px-3 pt-3">
-        <button type="button" className="story-cbtn" aria-label={t("common.cancel")} onClick={onCancel}>
-          <X className="h-[18px] w-[18px]" aria-hidden />
-        </button>
-        <div className="flex min-w-0 flex-1 items-center justify-center gap-2">
-          <button
-            type="button"
-            className="story-cbtn"
-            data-story-font={fields.font}
-            aria-label={`${t("stories.editor.font")}: ${t(FONT_KEY[fields.font])}`}
-            onClick={() => patch({ font: next(STORY_LAYER_FONTS, fields.font) })}
-          >
-            <span className="story-tl !text-[15px] !shadow-none" data-font={fields.font} data-bg="none" style={{ textShadow: "none" }}>
-              Aa
-            </span>
-          </button>
-          <button
-            type="button"
-            className="story-cbtn"
-            aria-pressed={fields.background !== "none"}
-            aria-label={`${t("stories.editor.textBg")}: ${t(BACKGROUND_KEY[fields.background])}`}
-            onClick={() => patch({ background: next(STORY_LAYER_TEXT_BACKGROUNDS, fields.background) })}
-          >
-            <PaintBucket className="h-[18px] w-[18px]" aria-hidden />
-          </button>
-          <button
-            type="button"
-            className="story-cbtn"
-            aria-label={`${t("stories.editor.align")}: ${t(ALIGN_KEY[fields.align])}`}
-            onClick={() => patch({ align: next(STORY_LAYER_ALIGNS, fields.align) })}
-          >
-            <AlignIcon className="h-[18px] w-[18px]" aria-hidden />
-          </button>
-        </div>
-        <button
-          type="button"
-          className="story-cbtn !px-3.5"
-          data-story-text-done=""
-          style={{ background: "var(--story-accent)", color: "var(--story-on-accent)" }}
-          onClick={() => onDone(fields)}
-        >
-          <Check className="h-4 w-4" aria-hidden />
-          {t("stories.compose.done")}
-        </button>
-      </div>
+      {/* Tapping outside the words ends the edit, as Done does. */}
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-label={t("stories.compose.done")}
+        data-story-text-backdrop=""
+        className="story-dim absolute inset-0 cursor-default"
+        onClick={() => onDone(fields, scale)}
+      />
 
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden px-[8%]">
-        <div className="grid max-h-full max-w-full overflow-hidden" style={style}>
+      {/* The layer, where it is: same center, same scale, same tilt as on the canvas. */}
+      <div ref={box} data-story-text-box="" style={{ ...layerStyle({ id: "editing", ...geometry, scale }), ...style }}>
+        <div className="grid max-w-full">
           {/* The mirror sizes the box to the words; the field is laid over it. */}
           <div
             aria-hidden
@@ -196,7 +231,7 @@ export function TextEditor({ initial, onDone, onCancel }: TextEditorProps) {
             data-bg={fields.background}
             style={style}
           >
-            {(fields.text || t("stories.editor.textPlaceholder")) + "​"}
+            {(fields.text || t("stories.editor.textPlaceholder")) + "\u200b"}
           </div>
           <textarea
             ref={area}
@@ -208,29 +243,76 @@ export function TextEditor({ initial, onDone, onCancel }: TextEditorProps) {
             aria-label={t("stories.compose.textLabel")}
             placeholder={t("stories.editor.textPlaceholder")}
             onChange={(event) => patch({ text: event.target.value })}
-            className={cn("story-tl story-field col-start-1 row-start-1 resize-none overflow-hidden border-0 outline-none")}
+            className="story-tl story-field col-start-1 row-start-1 resize-none overflow-hidden border-0 outline-none"
             data-font={fields.font}
             data-color={fields.color}
             data-bg={fields.background}
-            style={{ ...style, width: "100%", maxWidth: "none", height: "100%", caretColor: "var(--story-accent)" }}
+            // Width and height 0 with a 100% minimum: the field fills the cell the mirror sizes, and adds nothing to it.
+            style={{ ...style, width: 0, height: 0, minWidth: "100%", minHeight: "100%", maxWidth: "none", padding: 0, caretColor: "var(--story-accent)" }}
           />
         </div>
       </div>
 
-      <div className="space-y-2 pb-3">
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-2 px-3 pt-3">
+        <button type="button" className="story-cbtn pointer-events-auto" aria-label={t("common.cancel")} onClick={onCancel}>
+          <X className="h-[18px] w-[18px]" aria-hidden />
+        </button>
+        <div className="flex min-w-0 flex-1 items-center justify-center gap-2">
+          <button
+            type="button"
+            className="story-cbtn pointer-events-auto"
+            data-story-font={fields.font}
+            aria-label={`${t("stories.editor.font")}: ${t(FONT_KEY[fields.font])}`}
+            onClick={() => patch({ font: next(STORY_LAYER_FONTS, fields.font) })}
+          >
+            <span className="story-tl !text-[15px] !shadow-none" data-font={fields.font} data-bg="none" style={{ textShadow: "none" }}>
+              Aa
+            </span>
+          </button>
+          <button
+            type="button"
+            className="story-cbtn pointer-events-auto"
+            aria-pressed={fields.background !== "none"}
+            aria-label={`${t("stories.editor.textBg")}: ${t(BACKGROUND_KEY[fields.background])}`}
+            onClick={() => patch({ background: next(STORY_LAYER_TEXT_BACKGROUNDS, fields.background) })}
+          >
+            <PaintBucket className="h-[18px] w-[18px]" aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="story-cbtn pointer-events-auto"
+            aria-label={`${t("stories.editor.align")}: ${t(ALIGN_KEY[fields.align])}`}
+            onClick={() => patch({ align: next(STORY_LAYER_ALIGNS, fields.align) })}
+          >
+            <AlignIcon className="h-[18px] w-[18px]" aria-hidden />
+          </button>
+        </div>
+        <button
+          type="button"
+          className="story-cbtn pointer-events-auto !px-3.5"
+          data-story-text-done=""
+          style={{ background: "var(--story-accent)", color: "var(--story-on-accent)" }}
+          onClick={() => onDone(fields, scale)}
+        >
+          <Check className="h-4 w-4" aria-hidden />
+          {t("stories.compose.done")}
+        </button>
+      </div>
+
+      <div className="absolute inset-x-0 bottom-0 space-y-2 pb-3">
         <div className="flex items-center gap-3 px-5">
           <span className="story-tl !text-[12px] !shadow-none" aria-hidden style={{ textShadow: "none" }}>
             A
           </span>
           <input
             type="range"
-            min={STORY_LAYER_TEXT_SIZE_MIN}
-            max={STORY_LAYER_TEXT_SIZE_MAX}
-            step={0.05}
-            value={fields.size}
+            min={STORY_LAYER_SCALE_MIN}
+            max={STORY_LAYER_SCALE_MAX}
+            step={0.02}
+            value={scale}
             aria-label={t("stories.editor.size")}
             data-story-size=""
-            onChange={(event) => patch({ size: Number(event.target.value) })}
+            onChange={(event) => setScale(Number(event.target.value))}
             className="h-1 min-w-0 flex-1 cursor-pointer accent-[var(--story-accent)]"
           />
           <span className="story-tl !text-[22px] !shadow-none" aria-hidden style={{ textShadow: "none" }}>

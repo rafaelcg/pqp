@@ -22,6 +22,7 @@ import {
   useReducer,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { createPortal } from "react-dom";
@@ -73,7 +74,7 @@ import { CameraControlsRow, CameraStage } from "./composer-camera";
 import { ComposerCanvas } from "./composer-canvas";
 import { DEFAULT_DRAW, DrawBar, DrawOverlay, type DrawSettings } from "./composer-draw";
 import { CallPickerSheet, MentionSheet, StickerTray } from "./composer-stickers";
-import { TextEditor } from "./composer-text";
+import { TextEditor, type TextEditorGeometry } from "./composer-text";
 import { ModeTabs, StoryButton, type ModeOption } from "./composer-ui";
 import { StoryCallCard } from "./story-call-card";
 import { StoryContent, type StoryDisplay } from "./story-content";
@@ -158,7 +159,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const [background, setBackground] = useState<StoryBackground>("night");
   const [editor, dispatch] = useReducer(editorReducer, initialEditorState);
   const { layers, selectedId } = editor;
-  const [editing, setEditing] = useState<{ id: string | null } | null>(null);
+  const [editing, setEditing] = useState<{ id: string | null; geometry: TextEditorGeometry } | null>(null);
   const [textStyle, setTextStyle] = useState<Omit<TextLayerFields, "text">>(DEFAULT_TEXT);
   const [drawing, setDrawing] = useState(false);
   const [drawSettings, setDrawSettings] = useState<DrawSettings>(DEFAULT_DRAW);
@@ -326,7 +327,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     },
     [acceptMedia, camera.size, config.maxBytes, config.maxVideoMs, config.videoEnabled, showProblem],
   );
-  const recorder = useRecorder(camera.stream, onClip, config.maxVideoMs);
+  const recorder = useRecorder(camera.stream, onClip, config.maxVideoMs, () => videoRef.current);
 
   async function takePhoto() {
     const element = videoRef.current;
@@ -500,11 +501,16 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
           call={null}
           passThrough
           server={voiceRooms ? { name: voiceRooms.serverName, iconUrl: voiceRooms.serverIconUrl ?? null } : null}
-          preview={{ channelName, names: (room?.occupants ?? []).map((person) => person.displayName.split(/\s+/)[0] ?? "") }}
+          preview={{
+            channelName,
+            names: (room?.occupants ?? []).map((person) => person.displayName.split(/\s+/)[0] ?? ""),
+            // What viewers will see: the card only stays open while its author is in the room.
+            authorAway: !room || !room.occupants.some((person) => person.id === meId),
+          }}
         />
       );
     },
-    [voiceRooms],
+    [voiceRooms, meId],
   );
 
   const ready =
@@ -600,22 +606,31 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       : { text: "", ...textStyle }
     : null;
 
-  const openText = useCallback(
-    (id: string | null) => {
-      setPanel(null);
-      setDrawing(false);
-      setEditing({ id });
-    },
-    [],
-  );
+  /**
+   * Edit a text layer where it is, or start a new one at the default spot. The geometry is fixed
+   * when editing starts and handed to the editor, which draws the words with it: nothing moves.
+   */
+  const openText = useCallback((id: string | null) => {
+    setPanel(null);
+    setDrawing(false);
+    const existing = id ? layersRef.current.find((layer) => layer.id === id) : null;
+    const count = layersRef.current.filter((layer) => layer.type === "text").length;
+    setEditing({
+      id,
+      geometry: existing
+        ? { x: existing.x, y: existing.y, scale: existing.scale, rotation: existing.rotation }
+        : { x: 0.5, y: 0.4 + ((count * 0.07) % 0.3), scale: 1, rotation: 0 },
+    });
+  }, []);
 
-  function finishText(fields: TextLayerFields) {
+  function finishText(fields: TextLayerFields, scale: number) {
     const trimmed = fields.text.trim();
     const { text: _text, ...style } = fields;
     setTextStyle(style);
     if (editing?.id) {
       if (trimmed) {
-        dispatch({ type: "patch", id: editing.id, patch: { ...style, text: trimmed } });
+        // One history step for the whole edit: the words, their style and the scale together.
+        dispatch({ type: "patch", id: editing.id, patch: { ...style, text: trimmed, scale } });
       } else {
         dispatch({ type: "remove", id: editing.id });
       }
@@ -623,15 +638,18 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       if (!canAddLayer(layersRef.current, "text")) {
         setProblem(t("stories.editor.limit.layers"));
       } else {
-        const count = layersRef.current.filter((layer) => layer.type === "text").length;
+        const { x, y, rotation } = editing!.geometry;
         dispatch({
           type: "add",
-          layer: { id: newLayerId(), type: "text", x: 0.5, y: 0.4 + ((count * 0.07) % 0.3), scale: 1, rotation: 0, ...style, text: trimmed },
+          layer: { id: newLayerId(), type: "text", x, y, scale, rotation, ...style, text: trimmed },
         });
       }
     }
     setEditing(null);
   }
+
+  // How far a soft keyboard makes the whole stage rise while text is edited (0 almost always).
+  const [stageLift, setStageLift] = useState(0);
 
   // "Chama pra call" from a menu: start on a card with the room picker already open.
   useEffect(() => {
@@ -646,9 +664,9 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   useEffect(() => {
     if (mode === "text" && layers.length === 0 && !autoOpenedText.current && configReady && request.tab !== "call") {
       autoOpenedText.current = true;
-      setEditing({ id: null });
+      openText(null);
     }
-  }, [mode, layers.length, configReady, request.tab]);
+  }, [mode, layers.length, configReady, request.tab, openText]);
 
   // ---------------------------------------------------------------- draw
   const drawingLayer = layers.find((layer): layer is Extract<EditorLayer, { type: "drawing" }> => layer.type === "drawing");
@@ -823,7 +841,8 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
         acceptLabel={t("stories.compose.dropHere")}
         refuseLabel={t("stories.compose.mediaOff")}
         size="pane"
-        className="story-cmp"
+        className="story-cmp story-cmp-lift"
+        style={{ "--story-lift": `${stageLift}px` } as CSSProperties}
         onDrop={(items) => takeFiles(items.files)}
       >
         <div className="story-cmp-head">
@@ -1006,12 +1025,14 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
             </div>
           )}
 
-          {editingFields && (
+          {editingFields && editing && (
             <TextEditor
-              key={editing?.id ?? "new"}
+              key={editing.id ?? "new"}
               initial={editingFields}
+              geometry={editing.geometry}
               onDone={finishText}
               onCancel={() => setEditing(null)}
+              onLift={setStageLift}
             />
           )}
 

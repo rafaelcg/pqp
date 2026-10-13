@@ -229,3 +229,147 @@ test("posts a text card with layers and a mention; the server keeps them", async
   await mention.click();
   await expect(page.getByText("Bia Guest").first()).toBeVisible();
 });
+
+/**
+ * The layers of a real story Rafael posted on production (text "LOL", moved, scaled, tilted)
+ * must be drawn by the viewer where the editor put them, at every window size: the layer's
+ * centre is x .527, y .777 of the 9:16 canvas, whatever the card around the canvas is.
+ */
+for (const size of [
+  { name: "desktop 1440x900", width: 1440, height: 900 },
+  { name: "phone 390x844", width: 390, height: 844 },
+]) {
+  test(`the viewer draws a posted text layer where it was put (${size.name})`, async ({ page }) => {
+    const ctx = await setup();
+    const created = await fetch(`${API}/api/stories`, {
+      method: "POST",
+      headers: headersFor(ctx.owner),
+      body: JSON.stringify({
+        kind: "text",
+        background: "grape",
+        layers: [
+          {
+            id: "00000000-0000-4000-8000-0000000000a1",
+            type: "text",
+            text: "LOL",
+            font: "classic",
+            color: "purple",
+            background: "none",
+            align: "center",
+            size: 2.4,
+            x: 0.527,
+            y: 0.777,
+            scale: 3.42,
+            rotation: 0.198,
+          },
+        ],
+        audiences: { serverIds: [ctx.serverId], friends: false },
+      }),
+    });
+    expect(created.status).toBe(201);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.addInitScript((value) => localStorage.setItem("pqp:dev-user-suffix", value), ctx.owner);
+    await page.goto(`/app/server/${ctx.serverId}/channel/${ctx.channelId}?lang=en`);
+    await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+    await page.setViewportSize({ width: size.width, height: size.height });
+    // The strip is in the channel list (a drawer on a phone): open the viewer through it.
+    await page.locator("[data-story-ring]").first().evaluate((element) => (element as HTMLElement).click());
+    const viewer = page.locator("[data-story-viewer]");
+    const layer = viewer.locator('[data-layer-type="text"]');
+    await expect(layer).toContainText("LOL", { timeout: 15_000 });
+    // Measured in one frame, once the viewer has finished opening (it scales in, and a box read
+    // halfway through would be read against a canvas read a moment earlier).
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const canvas = document.querySelector("[data-story-viewer] [data-story-layer-canvas]")!.getBoundingClientRect();
+            const box = document.querySelector('[data-story-viewer] [data-layer-type="text"]')!.getBoundingClientRect();
+            return {
+              x: Math.round(((box.x + box.width / 2 - canvas.x) / canvas.width) * 1000) / 1000,
+              y: Math.round(((box.y + box.height / 2 - canvas.y) / canvas.height) * 1000) / 1000,
+            };
+          }),
+        { timeout: 10_000 },
+      )
+      .toEqual({ x: 0.527, y: 0.777 });
+    // Its type is the same fraction of the canvas width at any size: 8% x size x scale of the width.
+    // (Both in layout pixels: the viewer scales in while it opens, which scales a bounding box.)
+    const fraction = await layer.locator(".story-tl").evaluate((element) => {
+      const canvas = element.closest("[data-story-layer-canvas]") as HTMLElement;
+      return parseFloat(getComputedStyle(element).fontSize) / canvas.offsetWidth;
+    });
+    expect(fraction).toBeCloseTo(0.08 * 2.4, 2);
+  });
+}
+
+test("editing a text layer happens in place: it does not move, resize or untilt, and undo is one step", async ({ page }) => {
+  const ctx = await setup();
+  const composer = await openTextComposer(page, ctx);
+  await addText(composer, "no lugar");
+
+  const layer = composer.locator('[data-layer-type="text"]').first();
+  const box = async (locator: Locator) => (await locator.boundingBox())!;
+  const centre = (b: { x: number; y: number; width: number; height: number }) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
+
+  // Move it with the mouse, scale and turn it from the keyboard (the same transforms a pinch makes).
+  const start = await box(layer);
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(start.x + start.width / 2 + 40, start.y + start.height / 2 + 120, { steps: 6 });
+  await page.mouse.up();
+  await layer.focus();
+  for (let i = 0; i < 5; i += 1) {
+    await page.keyboard.press("+");
+  }
+  for (let i = 0; i < 3; i += 1) {
+    await page.keyboard.press("]");
+  }
+  const before = await geometry(layer);
+  expect(before.scale).toBeGreaterThan(1.4);
+  expect(before.rotation).toBeGreaterThan(0.1);
+  const placed = await box(layer);
+
+  // Tap to edit: the editor's box sits exactly where the layer was, at its size and tilt.
+  await page.mouse.click(placed.x + placed.width / 2, placed.y + placed.height / 2);
+  const editor = composer.locator("[data-story-text-box]");
+  await expect(editor).toBeVisible();
+  const editing = await box(editor);
+  expect(Math.abs(centre(editing).x - centre(placed).x)).toBeLessThan(2);
+  expect(Math.abs(centre(editing).y - centre(placed).y)).toBeLessThan(2);
+  expect(Math.abs(editing.width - placed.width)).toBeLessThan(3);
+  expect(Math.abs(editing.height - placed.height)).toBeLessThan(3);
+  const tilt = await editor.evaluate((element) => {
+    const match = /rotate\(([-\d.e]+)rad\) scale\(([-\d.e]+)\)/.exec((element as HTMLElement).style.transform);
+    return { rotation: Number(match![1]), scale: Number(match![2]) };
+  });
+  expect(tilt.rotation).toBeCloseTo(before.rotation, 5);
+  expect(tilt.scale).toBeCloseTo(before.scale, 5);
+
+  // Typing and the live controls keep the centre where it was.
+  await composer.locator("[data-story-text]").fill("no lugar, editado");
+  await composer.locator("[data-story-color=lime]").click();
+  await composer.locator("[data-story-font=classic]").click();
+  const live = await box(editor);
+  expect(Math.abs(centre(live).x - centre(placed).x)).toBeLessThan(2);
+  expect(Math.abs(centre(live).y - centre(placed).y)).toBeLessThan(2);
+
+  // Done ends editing without a jump: the layer is where it was, with its new words and colour.
+  await composer.locator("[data-story-text-done]").click();
+  await expect(composer.locator("[data-story-text-box]")).toHaveCount(0);
+  const after = await geometry(layer);
+  expect(after.left).toBeCloseTo(before.left, 5);
+  expect(after.top).toBeCloseTo(before.top, 5);
+  expect(after.scale).toBeCloseTo(before.scale, 5);
+  expect(after.rotation).toBeCloseTo(before.rotation, 5);
+  await expect(layer).toContainText("no lugar, editado");
+  const settled = await box(layer);
+  expect(Math.abs(centre(settled).x - centre(placed).x)).toBeLessThan(2);
+  expect(Math.abs(centre(settled).y - centre(placed).y)).toBeLessThan(2);
+
+  // The whole edit is one undo step: back to the words and colour before it, in place.
+  await composer.locator("[data-story-undo]").click();
+  await expect(layer).toContainText("no lugar");
+  await expect(layer).not.toContainText("editado");
+  expect((await geometry(layer)).scale).toBeCloseTo(before.scale, 5);
+});

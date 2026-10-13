@@ -3,6 +3,7 @@ import {
   cameraAvailability,
   classifyCameraError,
   coverCrop,
+  needsPortraitCrop,
   nextDeviceId,
   pickRecorderType,
   shouldMirror,
@@ -128,5 +129,15 @@ describe("stillSize", () => {
 
   it("never upscales", () => {
     expect(stillSize(500, 888)).toEqual({ width: 500, height: 888 });
+  });
+});
+
+describe("needsPortraitCrop", () => {
+  it("cuts a webcam's 16:9 to the preview's 9:16, and leaves a phone's portrait frame alone", () => {
+    expect(needsPortraitCrop(1280, 720)).toBe(true);
+    expect(needsPortraitCrop(640, 480)).toBe(true);
+    expect(needsPortraitCrop(720, 1280)).toBe(false);
+    expect(needsPortraitCrop(1080, 1920)).toBe(false);
+    expect(needsPortraitCrop(1080, 2160)).toBe(false);
   });
 });
