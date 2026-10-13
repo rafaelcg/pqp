@@ -170,6 +170,10 @@ final class StoriesUITests: XCTestCase {
         let newStory = app.buttons["Novo story"].exists ? app.buttons["Novo story"] : app.buttons["New story"]
         XCTAssertTrue(newStory.waitForExistence(timeout: 5), "The server menu opens the composer")
         newStory.tap()
+        // The composer opens on the camera; the text card is one tap away.
+        let textMode = app.buttons["composer.mode.text"]
+        XCTAssertTrue(textMode.waitForExistence(timeout: 10))
+        textMode.tap()
         let field = app.textFields["composer.text"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         field.tap()

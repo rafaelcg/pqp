@@ -14,6 +14,8 @@ import UniformTypeIdentifiers
 struct StoryComposer: View {
     @Environment(SessionStore.self) private var session
     @Environment(\.dismiss) private var dismiss
+    @Environment(VoiceModel.self) private var voice
+    @Environment(CallModel.self) private var callModel
 
     /// Pre-ticked in "Quem vê": where the composer was opened from.
     let preselectedServerId: String?
@@ -22,15 +24,19 @@ struct StoryComposer: View {
 
     enum Mode: String, CaseIterable { case text, media, call }
 
-    @State private var mode: Mode = .text
+    /// Opens on the camera, like the phone's own: the common story is a photo
+    /// taken right now. Falls back to text when media is off for this server.
+    @State private var mode: Mode = .media
     @State private var config = StoriesConfig.off
+    @State private var configLoaded = false
     @State private var text = ""
     @State private var background = "night"
     @State private var caption = ""
     @State private var draft: StoryDraftMedia?
     @State private var pickerItem: PhotosPickerItem?
     @State private var showingPicker = false
-    @State private var showingCamera = false
+    @State private var showingFiles = false
+    @State private var trimRequest: StoryTrimRequest?
     @State private var preparing = false
     @State private var call: StoryCallChoice?
     @State private var showingAudience = false
@@ -57,7 +63,20 @@ struct StoryComposer: View {
                 bottomBar
             }
         }
-        .task { config = await session.api.storiesConfig(serverId: preselectedServerId) }
+        .task {
+            config = await session.api.storiesConfig(serverId: preselectedServerId)
+            configLoaded = true
+            if !config.mediaEnabled, mode == .media { mode = .text }
+            #if DEBUG
+            // A picked video, for a simulator whose photo library has none and
+            // whose picker a UI test cannot drive: a synthetic clip of this
+            // many seconds goes down the same path a picked one does.
+            if let seconds = ProcessInfo.processInfo.environment["PQP_STORY_FIXTURE_VIDEO"].flatMap(Double.init),
+               let url = try? await StoryTestVideo.write(duration: seconds, size: CGSize(width: 180, height: 320), fps: 5) {
+                await accept(videoAt: url)
+            }
+            #endif
+        }
         .photosPicker(isPresented: $showingPicker, selection: $pickerItem,
                       matching: config.videoEnabled ? .any(of: [.images, .videos]) : .images,
                       preferredItemEncoding: .current)
@@ -65,12 +84,20 @@ struct StoryComposer: View {
             guard let item else { return }
             Task { await load(item) }
         }
-        .fullScreenCover(isPresented: $showingCamera) {
-            StoryCameraPicker(allowsVideo: config.videoEnabled) { result in
-                showingCamera = false
-                Task { await accept(cameraResult: result) }
+        .fileImporter(isPresented: $showingFiles, allowedContentTypes: config.videoEnabled ? [.image, .movie] : [.image]) { result in
+            switch result {
+            case .success(let url): Task { await load(fileAt: url) }
+            case .failure: error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
             }
-            .ignoresSafeArea()
+        }
+        .fullScreenCover(item: $trimRequest) { request in
+            StoryTrimView(request: request) { startMs in
+                trimRequest = nil
+                Task { await accept(videoAt: request.url, trimStartMs: startMs) }
+            } onCancel: {
+                trimRequest = nil
+                StoryImport.remove(request.url)
+            }
         }
         .sheet(isPresented: $showingAudience) {
             StoryAudienceSheet(
@@ -120,9 +147,16 @@ struct StoryComposer: View {
             ZStack {
                 Color.black
                 if let draft {
-                    Image(uiImage: draft.preview)
-                        .resizable()
-                        .scaledToFit()
+                    // A shot that is already tall fills the screen; anything
+                    // wider (a landscape photo, a screenshot) is shown whole.
+                    let aspect = draft.preview.size.width / max(1, draft.preview.size.height)
+                    Color.clear
+                        .overlay {
+                            Image(uiImage: draft.preview)
+                                .resizable()
+                                .aspectRatio(contentMode: (0.45...0.7).contains(aspect) ? .fill : .fit)
+                        }
+                        .clipped()
                     if draft.isVideo {
                         Image(systemName: "play.circle.fill")
                             .font(.system(size: 54))
@@ -141,52 +175,65 @@ struct StoryComposer: View {
                                 if value.count > StoryLimits.captionMax { caption = String(value.prefix(StoryLimits.captionMax)) }
                             }
                     }
-                } else if preparing {
-                    ProgressView().tint(.white)
                 } else {
-                    VStack(spacing: 14) {
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .font(.system(size: 40, weight: .light))
-                            .foregroundStyle(.white.opacity(0.8))
-                        Text(config.videoEnabled ? "A photo, or a video up to 30 s" : "A photo")
-                            .font(Typography.bodyMedium)
-                            .foregroundStyle(.white.opacity(0.85))
-                        HStack(spacing: 12) {
-                            Button { showingPicker = true } label: {
-                                Label("Gallery", systemImage: "photo")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Palette.signal)
-                            .foregroundStyle(Palette.inkDeep)
-                            .accessibilityIdentifier("composer.gallery")
-                            if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                                Button { showingCamera = true } label: {
-                                    Label("Camera", systemImage: "camera")
-                                }
-                                .buttonStyle(.bordered)
-                                .tint(.white)
-                            }
-                        }
+                    StoryCameraView(
+                        isActive: cameraActive,
+                        recordsAudio: !callActive,
+                        blockedByCall: callCameraOn,
+                        // Until the server answers, assume yes: the result is
+                        // checked again in `accept(cameraResult:)`.
+                        allowsVideo: !configLoaded || config.videoEnabled,
+                        onCapture: { result in Task { await accept(cameraResult: result) } },
+                        onGallery: { showingPicker = true },
+                        onFiles: { showingFiles = true }
+                    )
+                    if preparing {
+                        Color.black.opacity(0.5).ignoresSafeArea()
+                        ProgressView().tint(.white)
                     }
                 }
             }
         }
     }
 
+    /// The camera runs only while it is what is on screen: a draft, a sheet,
+    /// the picker or the trimmer all release it.
+    private var cameraActive: Bool {
+        mode == .media && draft == nil && !preparing && !showingPicker && !showingFiles
+            && !showingAudience && trimRequest == nil
+    }
+
+    private var callActive: Bool { voice.holdsSeat || callModel.phase.isInRoom }
+    private var callCameraOn: Bool { voice.isCameraOn || callModel.isCameraOn }
+
+    private var showsCamera: Bool { mode == .media && draft == nil }
+
     private var topBar: some View {
         HStack {
-            Button { dismiss() } label: {
+            Button {
+                // Over a shot or a picked file the X throws it away and goes
+                // back to the camera, like Instagram; over the camera it closes.
+                if mode == .media, draft != nil {
+                    withAnimation(Motion.standard) { draft = nil }
+                    error = nil
+                } else {
+                    dismiss()
+                }
+            } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
                     .background(Circle().fill(.black.opacity(0.35)))
             }
-            .accessibilityLabel("Close")
+            .accessibilityLabel(mode == .media && draft != nil ? "Discard" : "Close")
+            .accessibilityIdentifier("composer.close")
             Spacer()
-            Text("New story")
-                .font(Typography.bodyMedium)
-                .foregroundStyle(.white)
+            if !showsCamera {
+                Text("New story")
+                    .font(Typography.bodyMedium)
+                    .foregroundStyle(.white)
+            }
             Spacer()
             if mode != .media {
                 Menu {
@@ -216,11 +263,12 @@ struct StoryComposer: View {
         VStack(spacing: 14) {
             HStack(spacing: 22) {
                 modeButton(.text, title: "Text")
-                if config.mediaEnabled {
+                if !configLoaded || config.mediaEnabled {
                     modeButton(.media, title: "Camera")
                 }
                 modeButton(.call, title: "Call")
             }
+            if !showsCamera {
             Button {
                 editingText = false
                 error = nil
@@ -240,15 +288,17 @@ struct StoryComposer: View {
             .disabled(!canAdvance)
             .padding(.horizontal, 20)
             .accessibilityIdentifier("composer.next")
+            }
         }
         .padding(.bottom, 12)
+        .frame(maxWidth: .infinity)
         .background(LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .top, endPoint: .bottom).ignoresSafeArea())
     }
 
     private func modeButton(_ value: Mode, title: LocalizedStringKey) -> some View {
         Button {
             withAnimation(Motion.standard) { mode = value }
-            if value == .media, draft == nil { showingPicker = true }
+            error = nil
         } label: {
             VStack(spacing: 4) {
                 Text(title)
@@ -335,7 +385,8 @@ struct StoryComposer: View {
                 return
             }
             await accept(videoAt: movie.url)
-        } else if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
+        } else if let data = try? await item.loadTransferable(type: Data.self),
+                  let image = await StoryImport.downsampledImage(data: data, maxEdge: StoryLimits.imageMaxEdge) {
             accept(image: image)
         } else {
             error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
@@ -345,7 +396,13 @@ struct StoryComposer: View {
     private func accept(cameraResult: StoryCameraResult?) async {
         switch cameraResult {
         case .image(let image): accept(image: image)
-        case .video(let url): await accept(videoAt: url)
+        case .video(let url):
+            guard config.videoEnabled || !configLoaded else {
+                StoryImport.remove(url)
+                error = String(localized: "Videos are off here. Take a photo instead.")
+                return
+            }
+            await accept(videoAt: url)
         case nil: break
         }
     }
@@ -361,11 +418,49 @@ struct StoryComposer: View {
         }
     }
 
-    private func accept(videoAt url: URL) async {
+    /// A file from the Files app. The copy of a movie and the decode of a
+    /// picture both run off the main actor: either can be gigabytes.
+    private func load(fileAt url: URL) async {
         preparing = true
+        error = nil
         defer { preparing = false }
+        let type = UTType(filenameExtension: url.pathExtension)
+        if type?.conforms(to: .movie) == true {
+            guard let copy = try? await StoryImport.copyMovie(url) else {
+                error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
+                return
+            }
+            await accept(videoAt: copy)
+        } else if let image = await StoryImport.downsampledImage(at: url, maxEdge: StoryLimits.imageMaxEdge) {
+            accept(image: image)
+        } else {
+            error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
+        }
+    }
+
+    /// `url` is a temporary file this composer owns (a shot, a picked movie, a
+    /// copy from Files): it is deleted once the export has made its own, or the
+    /// trimmer is cancelled.
+    private func accept(videoAt url: URL, trimStartMs: Int? = nil) async {
+        preparing = true
+        var keepSource = false
+        defer {
+            preparing = false
+            if !keepSource { StoryImport.remove(url) }
+        }
         do {
-            let draft = try await StoryMediaPrep.video(at: url, maxVideoMs: config.maxVideoMs)
+            if trimStartMs == nil {
+                let duration = try await AVURLAsset(url: url).load(.duration)
+                let ms = Int((duration.seconds * 1000).rounded())
+                // Past the limit the person chooses which 30 s; they are not
+                // sent away with a refusal.
+                if StoryTrim.needsTrim(durationMs: ms, maxMs: config.maxVideoMs) {
+                    keepSource = true
+                    trimRequest = StoryTrimRequest(url: url, durationMs: ms, maxMs: config.maxVideoMs)
+                    return
+                }
+            }
+            let draft = try await StoryMediaPrep.video(at: url, trimStartMs: trimStartMs, maxVideoMs: config.maxVideoMs)
             withAnimation(Motion.standard) {
                 mode = .media
                 self.draft = draft
@@ -478,13 +573,20 @@ enum StoryMediaPrep {
 
     /// 720p H.264 MP4, metadata dropped, refused past the limit before any
     /// byte is uploaded.
-    static func video(at url: URL, maxVideoMs: Int) async throws -> StoryDraftMedia {
+    ///
+    /// `trimStartMs` is where the kept window starts when the clip is longer
+    /// than the limit (the trimmer chooses it). Without one, a clip past the
+    /// limit plus a second of slack is refused, and up to a second over is
+    /// cut to the limit: a recording stops a frame or two late.
+    static func video(at url: URL, trimStartMs: Int? = nil, maxVideoMs: Int) async throws -> StoryDraftMedia {
         let asset = AVURLAsset(url: url)
         let duration = try await asset.load(.duration)
-        let durationMs = Int((duration.seconds * 1000).rounded())
-        if durationMs > maxVideoMs {
-            throw Failure(message: StoryRules.videoProblem(durationMs: durationMs, byteSize: 0, maxVideoMs: maxVideoMs) ?? "")
+        let totalMs = Int((duration.seconds * 1000).rounded())
+        if trimStartMs == nil, StoryTrim.needsTrim(durationMs: totalMs, maxMs: maxVideoMs) {
+            throw Failure(message: StoryRules.videoProblem(durationMs: totalMs, byteSize: 0, maxVideoMs: maxVideoMs) ?? "")
         }
+        let range = StoryTrim.keptRange(startMs: trimStartMs ?? 0, durationMs: totalMs, maxMs: maxVideoMs)
+        let durationMs = range.lengthMs
         guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1280x720) else {
             throw Failure(message: String(localized: "That format won't work. Use JPG, PNG, WebP or MP4."))
         }
@@ -492,6 +594,10 @@ enum StoryMediaPrep {
         export.outputURL = out
         export.outputFileType = .mp4
         export.shouldOptimizeForNetworkUse = true
+        export.timeRange = CMTimeRange(
+            start: CMTime(value: CMTimeValue(range.startMs), timescale: 1000),
+            duration: CMTime(value: CMTimeValue(range.lengthMs), timescale: 1000)
+        )
         // No location, no device, no creation date: nothing but the picture.
         export.metadata = []
         export.metadataItemFilter = .forSharing()
@@ -523,49 +629,10 @@ enum StoryMediaPrep {
     }
 }
 
-/// Tap for a photo, hold for a video that stops at 30 s: the system camera,
-/// wrapped. Absent on a simulator, which has no camera.
+/// What the story camera hands back: a photo, or a video file it just wrote.
 enum StoryCameraResult {
     case image(UIImage)
     case video(URL)
-}
-
-struct StoryCameraPicker: UIViewControllerRepresentable {
-    let allowsVideo: Bool
-    let onDone: (StoryCameraResult?) -> Void
-
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController()
-        picker.sourceType = .camera
-        picker.mediaTypes = allowsVideo ? [UTType.image.identifier, UTType.movie.identifier] : [UTType.image.identifier]
-        picker.videoMaximumDuration = TimeInterval(StoryLimits.maxVideoMs / 1000)
-        picker.videoQuality = .typeIFrame1280x720
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(onDone: onDone) }
-
-    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-        let onDone: (StoryCameraResult?) -> Void
-        init(onDone: @escaping (StoryCameraResult?) -> Void) { self.onDone = onDone }
-
-        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            if let url = info[.mediaURL] as? URL {
-                onDone(.video(url))
-            } else if let image = info[.originalImage] as? UIImage {
-                onDone(.image(image))
-            } else {
-                onDone(nil)
-            }
-        }
-
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            onDone(nil)
-        }
-    }
 }
 
 /// "Chama pra call": the voice rooms of the servers this account can post
