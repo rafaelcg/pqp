@@ -252,6 +252,27 @@ class SessionStore(
     }
 
     /**
+     * Move a server up or down one place in this account's own list, and save
+     * it. Optimistic: the list moves now; if the save is refused the list goes
+     * back (unless something newer has replaced it meanwhile) and [onError]
+     * gets the server's own sentence. Nothing happens at the ends.
+     */
+    fun moveServer(serverId: String, delta: Int, onError: (String) -> Unit) {
+        val before = _servers.value
+        val moved = gg.pqp.app.ui.screens.ServerActions.reordered(before, serverId, delta) ?: return
+        _servers.value = moved
+        scope.launch {
+            runCatching { api.saveServerOrder(moved.map { it.id }) }
+                .onFailure {
+                    if (_servers.value === moved) {
+                        _servers.value = before
+                    }
+                    onError(it.message.orEmpty())
+                }
+        }
+    }
+
+    /**
      * `idempotencyKey`, when given, is forwarded to [ApiClient.createServer]
      * so a caller that retries this call for the same room (the person
      * reopening the create dialog and typing the same name again after a

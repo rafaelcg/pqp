@@ -114,6 +114,10 @@ data class ServersResponse(val servers: List<ServerSummary> = emptyList())
 @Serializable
 data class CreateServerRequest(val name: String, val locale: String? = null)
 
+/** `PUT /api/servers/order`: the whole order this account sees, top to bottom. */
+@Serializable
+data class ServerOrderRequest(val serverIds: List<String>)
+
 /** The app's language as the server's `locale` enum spells it: `pt-BR`, `en` or `es`. */
 fun serverLocale(language: String = java.util.Locale.getDefault().language): String = when (language.lowercase()) {
     "pt" -> "pt-BR"

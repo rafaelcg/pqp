@@ -75,6 +75,22 @@ class ApiClient(
     }
 
     /**
+     * `PUT /api/servers/order`: save the order this account drew for its own
+     * server list. Per person, nobody else's list moves. The server drops ids
+     * this account no longer holds rather than refusing, so a stale list is
+     * not an error. The answer (the order as stored) is not read: the caller
+     * already shows it, and a refusal still arrives as an [ApiException].
+     */
+    suspend fun saveServerOrder(serverIds: List<String>) {
+        val body = json.encodeToString(ServerOrderRequest.serializer(), ServerOrderRequest(serverIds))
+        execute(
+            Request.Builder()
+                .url(url("/api/servers/order"))
+                .put(body.toRequestBody(JSON_MEDIA_TYPE)),
+        ).close()
+    }
+
+    /**
      * `DELETE /api/servers/:serverId`. Owner only, and irreversible: the
      * channels, every message in them and every membership go with it.
      *
