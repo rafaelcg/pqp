@@ -10825,9 +10825,8 @@ function MainAppContent({
             liveAttachedHint === "bringFriends" && !viewingThisCall
           }
           onLeave={() => voice.leave()}
-          hideLeave={callDockOnScreen}
+          hideLeave={compact && callDockOnScreen}
           compact={compact}
-          hideActions={callDockOnScreen}
         />
       )}
       {/* Anchored above the user bar, never inside the icons-only rail:

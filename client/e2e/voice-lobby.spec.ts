@@ -62,11 +62,11 @@ test.describe("voice lobby", () => {
 
     const leave = page.getByRole("main").getByRole("button", { name: "Leave", exact: true });
     await expect(leave).toBeInViewport();
-    // The dock's Leave is the way out. The sidebar's red X stays hidden
-    // while that button is on screen, so the bar does not carry two hang-ups.
+    // The dock's Leave is one way out. The sidebar card keeps its own red
+    // hang-up, camera and share beside it, so both are on screen at once.
     await expect(
       page.getByRole("button", { name: "Disconnect from voice" }),
-    ).toHaveCount(0);
+    ).toBeVisible();
     // Mute is in two places on purpose: the user panel, and the bar, where a
     // phone (whose panel is behind the drawer) can reach it. Deafen stays in
     // the panel alone.

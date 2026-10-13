@@ -85,8 +85,8 @@ interface VoiceStatusBarProps {
   onOpen: () => void;
   onLeave: () => void;
   /**
-   * The dock is on screen, so hang-up lives there. This strip is the way
-   * out only when the person is looking at some other channel.
+   * Drop the hang-up button. The 72px rail uses it when the composer dock is
+   * on screen and already carries Leave; the full sidebar card always keeps it.
    */
   hideLeave?: boolean;
   /** One-shot share / Watch party coachmark when the stage is not on screen. */
@@ -99,11 +99,7 @@ interface VoiceStatusBarProps {
    * are on the stage, which is what the collapsed sidebar made room for.
    */
   compact?: boolean;
-  /**
-   * The call's own bar is on screen (docked in the composer, see
-   * `call-dock.tsx`), with these same camera and share buttons on it. This
-   * strip then keeps the sentence and the way out and drops the second copy.
-   */
+  /** Drop the camera and share row. Nothing in the app sets this today. */
   hideActions?: boolean;
 }
 
@@ -299,11 +295,11 @@ export function VoiceStatusBar({
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 shrink-0"
+            className="h-7 w-7 shrink-0 text-paper-muted hover:text-danger"
             aria-label={t("voice.bar.leave")}
             onClick={onLeave}
           >
-            <PhoneOff className="h-4 w-4 text-danger" />
+            <PhoneOff className="h-4 w-4" />
           </Button>
         </Tooltip>
         )}
