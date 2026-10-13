@@ -815,6 +815,13 @@
     <string name="forum_sort_created">Mais novos</string>
     <string name="forum_filter_open">Abertos</string>
     <string name="forum_filter_resolved">Resolvidos</string>
+    <string name="forum_tag_preset_question">Dúvida</string>
+    <string name="forum_tag_preset_bug">Bug</string>
+    <string name="forum_tag_preset_suggestion">Sugestão</string>
+    <string name="forum_tag_preset_tutorial">Tutorial</string>
+    <string name="forum_tag_preset_release">Lançamento</string>
+    <string name="forum_tag_preset_wip">WIP</string>
+    <string name="forum_tag_preset_discussion">Discussão</string>
     <string name="forum_filter_mine">Meus posts</string>
     <string name="forum_pinned">Fixados</string>
     <plurals name="forum_live">
@@ -846,8 +853,8 @@
     <string name="forum_deleted_author">Conta excluída</string>
     <string name="forum_preview_deleted">A mensagem original foi apagada</string>
     <string name="forum_preview_voice">Mensagem de voz</string>
-    <string name="forum_preview_image">📷 Imagem</string>
-    <string name="forum_preview_video">🎬 Vídeo</string>
+    <string name="forum_preview_image">Imagem</string>
+    <string name="forum_preview_video">Vídeo</string>
     <plurals name="forum_preview_files">
         <item quantity="one">%1$d arquivo</item>
         <item quantity="other">%1$d arquivos</item>
@@ -928,6 +935,8 @@
     <string name="forum_composer_tags_required">pelo menos 1</string>
     <string name="forum_composer_tags_required_error">Escolhe pelo menos uma tag.</string>
     <string name="forum_composer_tags_max">Máximo de %1$d tags.</string>
+    <string name="forum_composer_tags_none_to_pick">Esse fórum pede uma tag, mas ainda não tem nenhuma pra tu escolher. Pode postar sem.</string>
+    <string name="forum_edit_tags_none">Esse fórum ainda não tem tags pra escolher.</string>
     <string name="forum_composer_similar_title_short">Já perguntaram parecido</string>
     <string name="forum_composer_similar_footer">Nada disso resolve? Segue com o post, ninguém vai reclamar.</string>
     <string name="forum_composer_draft_saved">Rascunho salvo</string>
