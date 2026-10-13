@@ -5831,7 +5831,11 @@ router.post("/api/stories", async ({ req, res, user }) => {
         friends: result.liveFriends,
       });
     }
-    return created({ story: result.story, upload: result.upload });
+    return created({
+      story: result.story,
+      upload: result.upload,
+      layerUploads: result.layerUploads,
+    });
   } catch (error) {
     mapStoryError(error);
   }

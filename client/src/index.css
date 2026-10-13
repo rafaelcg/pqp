@@ -3665,6 +3665,12 @@ html[data-immersive-stage] [data-immersive-hide] {
 .story-ring[data-ring="none"] > [data-ring-layer="gap"] {
   transform: none;
 }
+/* Focus handed back by script after a mouse or touch (the viewer closing)
+   is not keyboard focus: no ring, so nothing looks selected. */
+[data-pointer-focus]:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
 .story-ring-label {
   transition: color var(--duration-slow) var(--ease-standard);
 }

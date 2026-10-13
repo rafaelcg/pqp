@@ -1089,6 +1089,194 @@ Setup:
 
 ---
 
+## 17. Composer v2: layers (2026-10-13)
+
+Rafael's ask: "greatly improve the poster tool". Take a photo with the camera,
+pick from photos or files, record a video, front and back camera on mobile,
+text you can drag anywhere, photos you can drag anywhere, more of what
+Instagram has, and a call option that is polished on the posting side and on
+the result. Stories are still behind flags Rafael flips himself, so an old
+phone build is only held to "must not crash".
+
+### 17.1 The model: a base plus layers, as data
+
+A story keeps its base (a photo, a video, or a background for a text card) and
+gains `layers: StoryLayer[]`, at most `STORY_LAYERS_MAX` (20), ordered back to
+front. Nothing is burned into the base: a viewer draws the base, then each
+layer in order, scaled to its own 9:16 canvas, clipped at the edge.
+
+Every layer has `id` (a client uuid, unique in the story), `x` and `y` (the
+CENTER, 0..1 of the canvas), `scale` (0.2 to 5) and `rotation` (radians, clockwise,
+within `STORY_LAYER_ROTATION_MAX`, 3.1416, a hair above pi because a 32-bit float pi is
+bigger than `Math.PI`).
+
+| `type` | Fields | Limit |
+|---|---|---|
+| `text` | `text` (1 to 280), `font` (`classic`, `bold`, `typewriter`, `serif`, `neon`), `color` (12 tokens, never free hex), `background` (`none`, `solid`, `soft`), `align`, `size` (0.5 to 3) | the 20 total |
+| `image` | `shape` (`rect`, `rounded`, `circle`); a photo placed on top, uploaded like story media | `STORY_LAYER_IMAGES_MAX` (6) |
+| `drawing` | a transparent PNG (or WebP) over the canvas | 1 |
+| `call` | `serverId`, `channelId`; today's call sticker, now positionable | 1 |
+| `mention` | `userId`; tapping opens their profile | 5, each person once |
+
+`caption`, `text`, `background` and `sticker` keep working. `altText` (at most
+500) is the spoken version: clients write the text layers into it.
+
+### 17.2 One schema, read leniently and written strictly
+
+`createStorySchema` is strict. A bad layer (unknown `type`, a number out of
+range, a color that is not in the palette, a duplicate id, a count over its
+limit) fails the whole request with 400, so an author never posts a story that
+quietly lost a layer.
+
+A read is lenient. `storySchema.layers` is `storyLayersSchema`: it parses the
+array one element at a time and DROPS what it cannot understand (a type a later
+server added, a field that does not decode), keeping the rest in order. A
+viewer never crashes on, and never refuses a story over, one layer it does not
+know. Native clients do the same by hand. A server that predates layers answers
+no `layers` at all, which reads as `[]`; `GET /api/stories/config` answers
+`layersMax` (0 when absent) so a composer hides the editor against such a server
+instead of having its layers stripped silently on create.
+
+The create layer and the read layer are two shapes. `storyLayerInputSchema`
+(sent): an `image` or `drawing` carries `upload: { contentType, byteSize, width,
+height }`. `storyLayerSchema` (read): the same layer carries `url` (a presigned
+GET that never outlives the story) and its pixel size; a `mention` also carries
+`user` (display name, avatar, handle); the storage key never leaves the server.
+
+### 17.3 Layer images: story uploads, not a new table
+
+Layer objects reuse the story machinery end to end. A client never sends or
+sees a key.
+
+1. `POST /api/stories` declares each layer image (`upload`). The server mints
+   `stories/<author>/<story>/layer-<uuid>.<ext>` per layer and stores the layer
+   in `stories.layers` (JSONB) with its `mediaKey`, plus the same keys in the
+   `stories.layer_keys` column.
+2. The answer carries `layerUploads: [{ layerId, url, method, headers, expiresAt }]`
+   beside `upload` (the base, null for a text card). Retried with the same
+   `requestId`, it answers fresh URLs for the same layers.
+3. After every file is up, `POST /api/stories/:id/publish` checks each object the
+   way it checks the base: HEAD (size must equal the declared one), a server-side
+   COPY to a pinned key nobody can overwrite (so a scanned image cannot be
+   swapped under its URL), a read of the first bytes to learn the real type
+   (a drawing must be PNG or WebP; an image JPEG, WebP or PNG). The base photo
+   and every layer image are scanned together and share ONE verdict, the
+   worst; a rejected layer takes the whole story down, bytes held per the usual
+   quarantine rules. A video's frames are still the video job's, its layers are
+   scanned at publish.
+4. A text card with only text, call and mention layers has no upload and is live on
+   the create answer. A text card (or any story) with a layer image waits for
+   publish like a photo does, and is deleted with its objects after an hour if
+   never published.
+
+### 17.4 Deleting layer objects
+
+`stories.layer_keys TEXT[]` exists so the media sweep can delete layer objects
+with no JSON parsing, and so a story whose only objects are layers (a text card
+with a photo on it) is swept like a photo story: the claim is `media_storage_key
+IS NOT NULL OR cardinality(layer_keys) > 0`, the row is deleted only when
+every object is gone, and the same hold rules apply (open report, scan hold,
+illegal-content match). Account deletion no longer drops a plain text card
+outright when it holds layer objects, because its row is what names the bytes;
+the card is marked deleted, its words and layers cleared, and the sweep takes
+the bytes and then the row. `GET /api/admin/metrics` `stories.sweepLagSeconds`
+counts layer-only stories too.
+
+### 17.5 Back compatibility the server does
+
+- A call layer is mirrored into `sticker`, so a build that knows only
+  `sticker` still shows the call. A story posted with only `sticker` (an old
+  build) is read back with a call layer synthesised at the bottom center (id =
+  the story id), so every viewer draws every call from `layers`.
+- A text card posted as `kind: "text"`, `background` and layers, with no
+  `text`, gets `text` filled with its text layers joined by a newline, so an old
+  build draws something. `text` reads as null when empty.
+- A call layer is returned only when the viewer sees the story through that
+  server; a mention is dropped for a viewer with a block either way between them
+  and the mentioned person, and refused on create for anybody who cannot see the
+  story (not in a target server, not a friend of the author when it goes to friends,
+  blocked), with one answer for every reason.
+- AutoMod reads text layers and `altText` like a caption. A report carries the
+  words of every text layer in its snapshot.
+- The WebSocket frame is unchanged: it is content free, clients refetch.
+
+### 17.6 The call sticker, polished (spec)
+
+Posting: the sticker is a layer you place; picking a room shows its name and who
+is there now; nothing is preselected on phones when the author is in no room,
+and the web matches; a clear warning when the author is not in the room. Result:
+a card with the room's name, the server icon, up to 3 live faces and "+n", the
+count, an "Entrar" button, a pulsing live dot while people are in, "Ninguem na
+call agora" (via i18n) when empty, and a quiet ended state after the room
+empties. Tapping joins through the existing join path. The same look on web,
+iOS and Android. The live data is the story's existing `call` object
+(participants, count, `state`, `joinable`), unchanged.
+
+### 17.7 Composer and viewer UX (spec)
+
+Full-screen 9:16 canvas, dark chrome, "Postar" bottom right, the audience picker
+as today.
+
+- Source step: camera (live preview; tap for a photo, hold for a video of up to 30 s
+  with a progress ring; front and back flip; torch on phones; the front
+  preview mirrored the way the platform camera mirrors it), gallery or files
+  (phones open the system photo picker for photos and videos; web and desktop
+  open a file picker and accept a dropped file), or text only with a background.
+- Edit step: text tool ("Aa", type over a dimmed canvas, cycle font, color,
+  background and align, size slider), photo tool (gallery, files or camera as
+  layers), draw tool (pen, marker, highlighter, eraser, colors, size, undo),
+  stickers tray (call, mention, room for more). Every layer drags anywhere;
+  pinch to scale and rotate on touch; on desktop drag plus a corner handle for
+  scale and rotate and the scroll wheel to scale; snap to the center lines with
+  a light haptic on phones; a trash zone at the bottom while dragging; tap a text
+  layer to edit; long press or right click to bring forward or delete; arrows,
+  plus and minus, and Delete on web for keyboard users. Undo the last few
+  actions. Video: trim to 30 s, mute toggle. Reduced motion respected. Copy in
+  en and pt-BR (and es on web), pt-BR uses tu, no em dashes, icons from the
+  platform set and never emoji as UI.
+- Viewer: base, then layers in order, scaled to the viewer's canvas and clipped.
+  Mentions and the call are tappable; text and photos are not. The desktop
+  viewer uses the height of the window (about 92dvh, 9:16), not a small card.
+
+### 17.8 Web video recording: WebM is not accepted (decision)
+
+The question: does the web composer need `video/webm`? What MediaRecorder can
+record (as of 2026-10): Chrome and Edge 126+ record `video/mp4` with H.264 and
+AAC (older builds only WebM); Safari records MP4 (and WebM since 18.4); Firefox
+records only WebM (VP8 or VP9 with Opus).
+
+Decision: the server stays `video/mp4` with H.264 only, and does NOT accept
+WebM. Reasons: the video job's whole safety story (an `ftyp` sniff, an
+ffprobe forced to the local mov demuxer, an H.264 check, a poster, three
+scanned frames) is built for MP4; WebM would add a second demuxer to the
+worker's attack surface and, because iOS and older Safari cannot play it, a
+server-side transcode (CPU the worker does not have today) or a viewer that
+cannot play half the stories. Chrome, Edge and Safari cover nearly all web
+users, and the one hole is Firefox.
+
+What the web composer does: pick a recorder type in this order,
+`video/mp4;codecs=avc1.42E01E,mp4a.40.2`, `video/mp4;codecs=avc1`, `video/mp4`,
+with `MediaRecorder.isTypeSupported`. When none is supported (Firefox), hide
+press-and-hold recording, keep photo capture, and offer "choose a video" through the
+file picker (MP4 only; a QuickTime `.mov` is refused by the sniffer). A later
+PR may add WebCodecs transcoding in the browser for Firefox without touching
+the server.
+
+What was checked on the server side, because Chrome's MP4 is fragmented
+(`ftyp` brand `isom` or `iso5`, an empty `moov` up front, no index at the end, and often no
+duration in the header): the sniffer accepts both brands, and the video job's
+probe now falls back from the container duration to the video stream's, then to the
+last packet timestamp, so a recording is never refused for having no header
+duration. Pinned by `story-media.test.ts`.
+
+### 17.9 Order of work
+
+1. Shared and server foundation (this section's schema, validation, storage,
+   layer claim and sweep, back compat, docs). Merges first.
+2. Web composer and viewer. 3. iOS. 4. Android. Each platform in separate PRs
+   (capture and sources, then editor and layers, then viewer and call sticker),
+   each with tests and a hands-on QA section.
+
 ## Research sources
 
 - **Instagram:**

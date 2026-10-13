@@ -127,7 +127,7 @@ export function StoryRing({
           data-story-ring={ringId}
           aria-label={ariaLabel}
           onClick={onOpen}
-          className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset"
+          className="rounded-full [-webkit-tap-highlight-color:transparent] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset"
         >
           <span
             className={cn("story-ring", arrive && "story-ring-in")}

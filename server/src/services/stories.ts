@@ -6,17 +6,21 @@ import {
   parsePermissions,
   STORY_COMMUNITY_MIN_ACCOUNT_AGE_HOURS,
   STORY_IDS_MAX,
+  STORY_LAYER_DRAWING_TYPES,
+  STORY_LAYER_MAX_BYTES,
+  STORY_LAYERS_MAX,
   STORY_MAX_BYTES,
   STORY_MAX_VIDEO_MS,
   STORY_POSTS_PER_DAY,
   STORY_SNIFF_BYTES,
   STORY_STRIP_MAX_AUTHORS,
+  STORY_TEXT_MAX,
   STORY_TTL_HOURS,
   STORY_VIEWERS_PAGE_SIZE,
   hasPermission,
   isStoryImageType,
   sniffStoryMediaType,
-  type CreateStoryRequest,
+  type CreateStoryParsed,
   type StoriesConfig,
   type Story,
   type StoryAudience,
@@ -28,6 +32,9 @@ import {
   type StoryCard,
   type StoryContentType,
   type StoryKind,
+  type StoryLayer,
+  type StoryLayerInputParsed,
+  type StoryLayerUpload,
   type StoryNotice,
   type StoryReaction,
   type StoryReplyBlockedReason,
@@ -53,6 +60,7 @@ import { isFfmpegAvailable } from "../speech/transcode.js";
 import { checkAutomod } from "./automod.js";
 import { noBlockBetweenSql } from "./blocks.js";
 import {
+  combineScans,
   isContentScanConfigured,
   quarantineDays,
   scanAllowsAttachment,
@@ -175,6 +183,15 @@ export function storyMediaKey(
   return `${storyPrefix(authorId, storyId)}${randomUUID()}${EXTENSION[contentType]}`;
 }
 
+/** An object behind an image or drawing layer: `layer-<uuid>.<ext>` under the story's prefix. */
+export function storyLayerKey(
+  authorId: string,
+  storyId: string,
+  contentType: StoryContentType,
+): string {
+  return `${storyPrefix(authorId, storyId)}layer-${randomUUID()}${EXTENSION[contentType]}`;
+}
+
 export function storyPosterKey(authorId: string, storyId: string): string {
   return `${storyPrefix(authorId, storyId)}poster.jpg`;
 }
@@ -187,6 +204,11 @@ export function storyPosterKey(authorId: string, storyId: string): string {
 export function isStoryKey(authorId: string, storyId: string, key: string): boolean {
   const prefix = storyPrefix(authorId, storyId);
   return key.startsWith(prefix) && !key.includes("..") && key.length > prefix.length;
+}
+
+/** A key `pinStoryUpload` minted: the verified copy, which no upload URL may be issued for. */
+function isPinnedKey(key: string): boolean {
+  return /\/pinned-[^/]+$/.test(key);
 }
 
 function readUrlTtlSeconds(expiresAt: Date | null): number {
@@ -253,6 +275,7 @@ export async function storiesConfig(serverId: string | null): Promise<StoriesCon
     maxVideoMs: STORY_MAX_VIDEO_MS,
     maxBytes: STORY_MAX_BYTES,
     ttlHours: STORY_TTL_HOURS,
+    layersMax: STORY_LAYERS_MAX,
   };
 }
 
@@ -402,6 +425,34 @@ export async function listStoryAudienceOptions(userId: string): Promise<StoryAud
 
 // ------------------------------------------------------------------ rows
 
+/**
+ * A layer as stored in `stories.layers`: what the client sent, validated, with
+ * one change. An image or drawing layer holds `mediaKey` (the server-minted
+ * object key) and what the client declared about the file instead of `upload`.
+ * Every other type is stored as sent.
+ */
+type StoredObjectLayer = {
+  type: "image" | "drawing";
+  id: string;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+  /** Image layers only. */
+  shape?: "rect" | "rounded" | "circle";
+  mediaKey: string;
+  contentType: StoryContentType;
+  byteSize: number;
+  width: number;
+  height: number;
+};
+
+type StoredLayer = Exclude<StoryLayerInputParsed, { type: "image" | "drawing" }> | StoredObjectLayer;
+
+function isObjectLayer(layer: StoredLayer): layer is StoredObjectLayer {
+  return layer.type === "image" || layer.type === "drawing";
+}
+
 interface StoryRow {
   id: string;
   author_id: string;
@@ -411,6 +462,9 @@ interface StoryRow {
   text_body: string | null;
   background: string | null;
   sticker: StorySticker | null;
+  layers: StoredLayer[];
+  alt_text: string | null;
+  layer_keys: string[];
   replies_enabled: boolean;
   media_storage_key: string | null;
   media_content_type: string | null;
@@ -430,7 +484,8 @@ interface StoryRow {
 
 const STORY_COLUMNS = `
   s.id, s.author_id, s.kind, s.status, s.caption, s.text_body, s.background,
-  s.sticker, s.replies_enabled, s.media_storage_key, s.media_content_type,
+  s.sticker, s.layers, s.alt_text, s.layer_keys, s.replies_enabled,
+  s.media_storage_key, s.media_content_type,
   s.media_byte_size, s.media_width, s.media_height, s.media_duration_ms,
   s.poster_storage_key, s.published_at, s.expires_at, s.created_at,
   u.display_name AS author_name, u.avatar_url AS author_avatar,
@@ -845,6 +900,136 @@ function mediaOf(row: StoryRow): Story["media"] {
 }
 
 /**
+ * The layers of each story as THIS viewer gets them. Image and drawing layers
+ * become presigned URLs (the stored key never leaves the server); a mention
+ * carries the person it names, and is dropped when that person is gone or a
+ * block stands between them and the viewer (the name must not be served across
+ * a block); a call layer is kept only while the story's call is resolved for
+ * this viewer (`calls`), which is also what keeps a call into a server the
+ * viewer does not share from naming its room. A story that has a call sticker
+ * and no call layer (posted by a build that predates layers) gets one
+ * synthesised at the bottom center, with the story's id as the layer id.
+ */
+async function resolveLayers(
+  viewerId: string,
+  rows: StoryRow[],
+  calls: Map<string, StoryCallLive>,
+  audiences: Map<string, StoryAudience[]>,
+): Promise<Map<string, StoryLayer[]>> {
+  const out = new Map<string, StoryLayer[]>();
+  const mentioned = [
+    ...new Set(
+      rows.flatMap((row) =>
+        (row.layers ?? []).flatMap((layer) => (layer.type === "mention" ? [layer.userId] : [])),
+      ),
+    ),
+  ];
+  const people = new Map<string, StoryAuthor>();
+  if (mentioned.length > 0) {
+    const found = await getPool().query<{
+      id: string;
+      display_name: string;
+      avatar_url: string | null;
+      handle: string | null;
+    }>(
+      `SELECT u.id, u.display_name, u.avatar_url, u.handle FROM users u
+        WHERE u.id = ANY($1::uuid[]) AND ${noBlockBetweenSql("u.id", "$2::uuid")}`,
+      [mentioned, viewerId],
+    );
+    for (const person of found.rows) {
+      people.set(person.id, {
+        id: person.id,
+        displayName: person.display_name,
+        avatarUrl: person.avatar_url,
+        handle: person.handle,
+      });
+    }
+  }
+  for (const row of rows) {
+    const ttlSeconds = readUrlTtlSeconds(row.expires_at);
+    const layers: StoryLayer[] = [];
+    let hasCall = false;
+    for (const layer of row.layers ?? []) {
+      switch (layer.type) {
+        case "image":
+          layers.push({
+            type: "image",
+            id: layer.id,
+            x: layer.x,
+            y: layer.y,
+            scale: layer.scale,
+            rotation: layer.rotation,
+            shape: layer.shape ?? "rect",
+            url: presignGet(layer.mediaKey, { ttlSeconds }),
+            width: layer.width,
+            height: layer.height,
+          });
+          break;
+        case "drawing":
+          layers.push({
+            type: "drawing",
+            id: layer.id,
+            x: layer.x,
+            y: layer.y,
+            scale: layer.scale,
+            rotation: layer.rotation,
+            url: presignGet(layer.mediaKey, { ttlSeconds }),
+            width: layer.width,
+            height: layer.height,
+          });
+          break;
+        case "mention": {
+          const user = people.get(layer.userId);
+          if (user) {
+            layers.push({ ...layer, user });
+          }
+          break;
+        }
+        case "call":
+          hasCall = true;
+          if (callIsShown(row, audiences, calls)) {
+            layers.push(layer);
+          }
+          break;
+        default:
+          layers.push(layer);
+      }
+    }
+    if (!hasCall && row.sticker?.type === "call" && callIsShown(row, audiences, calls)) {
+      layers.push({
+        type: "call",
+        id: row.id,
+        x: 0.5,
+        y: 0.8,
+        scale: 1,
+        rotation: 0,
+        serverId: row.sticker.serverId,
+        channelId: row.sticker.channelId,
+      });
+    }
+    out.set(row.id, layers);
+  }
+  return out;
+}
+
+/** The story's call is resolved for this viewer and its server is one they see the story through. */
+function callIsShown(
+  row: StoryRow,
+  audiences: Map<string, StoryAudience[]>,
+  calls: Map<string, StoryCallLive>,
+): boolean {
+  const call = row.sticker?.type === "call" ? row.sticker : null;
+  if (!call) {
+    return false;
+  }
+  const through = audiences.get(row.id) ?? [];
+  return (
+    through.some((audience) => audience.kind === "server" && audience.serverId === call.serverId) &&
+    calls.has(row.id)
+  );
+}
+
+/**
  * Rows to wire stories, for one viewer. `audiences` is what this viewer sees
  * each through (the author: all of them).
  */
@@ -880,6 +1065,7 @@ async function hydrate(
   const bauOn = own.length > 0 && isEnabled("community_home");
   // Call stickers resolved together rather than one after another.
   const calls = await resolveCalls(viewerId, rows);
+  const layersByStory = await resolveLayers(viewerId, rows, calls, audiences);
 
   const stories: Story[] = [];
   for (const row of rows) {
@@ -910,11 +1096,15 @@ async function hydrate(
       author: authorOf(row),
       kind: row.kind,
       caption: row.caption,
-      text: row.text_body,
+      // A text card made of layers alone has an empty body (the column is
+      // NOT NULL for the kind); the wire says null rather than "".
+      text: row.text_body || null,
       background: (row.background as StoryBackground | null) ?? null,
       media: mediaOf(row),
       sticker: row.sticker,
       call,
+      layers: layersByStory.get(row.id) ?? [],
+      altText: row.alt_text,
       publishedAt: row.published_at?.toISOString() ?? null,
       expiresAt: row.expires_at?.toISOString() ?? null,
       audiences: seenThrough,
@@ -1156,12 +1346,14 @@ export async function listFriendsStrip(viewer: DbUser): Promise<StoryStrip> {
 export interface CreatedStory {
   story: Story;
   upload: StoryUpload | null;
+  /** One per image or drawing layer; the client PUTs each, then publishes. */
+  layerUploads: StoryLayerUpload[];
   /** Server ids a live text story went to, for the WS nudge. */
   liveServerIds: string[];
   liveFriends: boolean;
 }
 
-async function assertCanPost(user: DbUser, input: CreateStoryRequest): Promise<PosterRow> {
+async function assertCanPost(user: DbUser, input: CreateStoryParsed): Promise<PosterRow> {
   const poster = await loadPoster(user.id);
   if (!poster) {
     throw new StoryError("not_found", "Not found");
@@ -1187,6 +1379,56 @@ async function assertCanPost(user: DbUser, input: CreateStoryRequest): Promise<P
   return poster;
 }
 
+/** The call this story points at, from the call layer or the legacy sticker. */
+function callOf(input: CreateStoryParsed): StorySticker | undefined {
+  const layer = input.layers.find((candidate) => candidate.type === "call");
+  return layer?.type === "call"
+    ? { type: "call", serverId: layer.serverId, channelId: layer.channelId }
+    : input.sticker;
+}
+
+/**
+ * The words of the text layers, in layer order, joined by a newline. Cut to
+ * `STORY_TEXT_MAX` characters by default, which is what a text card's body
+ * column holds; AutoMod passes `Infinity` so nothing a person typed is skipped.
+ */
+function layerWords(
+  layers: ReadonlyArray<{ type: string; text?: string }>,
+  limit = STORY_TEXT_MAX,
+): string {
+  const all = layers
+    .flatMap((layer) => (layer.type === "text" && layer.text ? [layer.text] : []))
+    .join("\n");
+  return (Number.isFinite(limit) ? [...all].slice(0, limit).join("") : all).trim();
+}
+
+/**
+ * Everybody a mention layer names must be able to see this story: a member of
+ * one of the servers it goes to, or an accepted friend of the author when it
+ * goes to friends, and not blocked either way. One answer for every refusal
+ * (nobody learns whether a person is blocked or just not there).
+ */
+async function assertMentions(authorId: string, input: CreateStoryParsed): Promise<void> {
+  const mentioned = input.layers.flatMap((layer) => (layer.type === "mention" ? [layer.userId] : []));
+  if (mentioned.length === 0) {
+    return;
+  }
+  const allowed = await getPool().query<{ id: string }>(
+    `SELECT u.id FROM users u
+      WHERE u.id = ANY($1::uuid[])
+        AND ${noBlockBetweenSql("u.id", "$2::uuid")}
+        AND (
+          EXISTS (SELECT 1 FROM server_members m
+                   WHERE m.user_id = u.id AND m.server_id = ANY($3::uuid[]))
+          OR ($4::boolean AND ${areFriendsSql("u.id", "$2::uuid")})
+        )`,
+    [mentioned, authorId, input.audiences.serverIds, input.audiences.friends],
+  );
+  if (allowed.rows.length !== new Set(mentioned).size) {
+    throw new StoryError("invalid", "You cannot mention that person here");
+  }
+}
+
 async function assertSticker(userId: string, sticker: StorySticker | undefined): Promise<void> {
   if (!sticker) {
     return;
@@ -1209,8 +1451,10 @@ async function assertSticker(userId: string, sticker: StorySticker | undefined):
  * AutoMod reads a story's words the way it reads a message's, per target
  * server. A staff member exempt from AutoMod in chat is exempt here too.
  */
-async function assertAutomod(userId: string, input: CreateStoryRequest): Promise<void> {
-  const body = [input.text, input.caption].filter(Boolean).join("\n");
+async function assertAutomod(userId: string, input: CreateStoryParsed): Promise<void> {
+  const body = [input.text, input.caption, layerWords(input.layers, Infinity), input.altText]
+    .filter(Boolean)
+    .join("\n");
   if (!body) {
     return;
   }
@@ -1273,8 +1517,9 @@ async function replayCreate(userId: string, requestId: string): Promise<CreatedS
     media_storage_key: string | null;
     media_content_type: string | null;
     media_byte_size: number | null;
+    layers: StoredLayer[];
   }>(
-    `SELECT id, status, media_storage_key, media_content_type, media_byte_size
+    `SELECT id, status, media_storage_key, media_content_type, media_byte_size, layers
        FROM stories WHERE author_id = $1 AND request_id = $2`,
     [userId, requestId],
   );
@@ -1290,16 +1535,68 @@ async function replayCreate(userId: string, requestId: string): Promise<CreatedS
     upload:
       row.status === "pending" &&
       row.media_storage_key &&
+      !isPinnedKey(row.media_storage_key) &&
       row.media_content_type &&
       row.media_byte_size
         ? uploadFor(row.media_storage_key, row.media_content_type, row.media_byte_size)
         : null,
+    layerUploads: row.status === "pending" ? layerUploadsOf(row.layers) : [],
     liveServerIds: [],
     liveFriends: false,
   };
 }
 
-export async function createStory(user: DbUser, input: CreateStoryRequest): Promise<CreatedStory> {
+/** A fresh upload URL for every image and drawing layer of a story still waiting for its bytes. */
+function layerUploadsOf(layers: StoredLayer[]): StoryLayerUpload[] {
+  // Never a PUT URL for an object publish already pinned: that key is the
+  // verified and scanned copy, and nothing may be able to write to it.
+  return layers
+    .filter(isObjectLayer)
+    .filter((layer) => !isPinnedKey(layer.mediaKey))
+    .map((layer) => ({
+    layerId: layer.id,
+    ...uploadFor(layer.mediaKey, layer.contentType, layer.byteSize),
+  }));
+}
+
+/**
+ * The layers as they are stored: image and drawing layers swap the client's
+ * `upload` declaration for a freshly minted object key, so a key is never
+ * something a client chose.
+ */
+function storedLayersOf(
+  authorId: string,
+  storyId: string,
+  layers: StoryLayerInputParsed[],
+): StoredLayer[] {
+  return layers.map((layer): StoredLayer => {
+    if (layer.type === "image") {
+      const { upload, ...rest } = layer;
+      return {
+        ...rest,
+        mediaKey: storyLayerKey(authorId, storyId, upload.contentType),
+        contentType: upload.contentType,
+        byteSize: upload.byteSize,
+        width: upload.width,
+        height: upload.height,
+      };
+    }
+    if (layer.type === "drawing") {
+      const { upload, ...rest } = layer;
+      return {
+        ...rest,
+        mediaKey: storyLayerKey(authorId, storyId, upload.contentType),
+        contentType: upload.contentType,
+        byteSize: upload.byteSize,
+        width: upload.width,
+        height: upload.height,
+      };
+    }
+    return layer;
+  });
+}
+
+export async function createStory(user: DbUser, input: CreateStoryParsed): Promise<CreatedStory> {
   if (input.requestId) {
     const replay = await replayCreate(user.id, input.requestId);
     if (replay) {
@@ -1307,22 +1604,34 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
     }
   }
   await assertCanPost(user, input);
-  if (input.kind !== "text") {
+  const hasLayerObjects = input.layers.some((layer) => layer.type === "image" || layer.type === "drawing");
+  if (input.kind !== "text" || hasLayerObjects) {
     if (!isStorageConfigured()) {
       throw new StoryError("storage_off", "Media uploads are not configured");
     }
-    if (input.kind === "video" && !(await videoEnabled())) {
-      throw new StoryError("video_off", "Video stories are off here");
-    }
   }
-  await assertSticker(user.id, input.sticker);
+  if (input.kind === "video" && !(await videoEnabled())) {
+    throw new StoryError("video_off", "Video stories are off here");
+  }
+  // The call layer and the legacy sticker are one thing: the layer wins, and
+  // the sticker column mirrors it for builds that only know `sticker`.
+  const sticker = callOf(input);
+  await assertSticker(user.id, sticker);
+  await assertMentions(user.id, input);
   await assertAutomod(user.id, input);
 
   const storyId = randomUUID();
   const media = input.kind === "text" ? null : input.media!;
   const contentType = media?.contentType ?? null;
   const key = contentType ? storyMediaKey(user.id, storyId, contentType) : null;
-  const live = input.kind === "text";
+  const layers = storedLayersOf(user.id, storyId, input.layers);
+  const layerKeys = layers.filter(isObjectLayer).map((layer) => layer.mediaKey);
+  // A text card with nothing to upload is live at once; any object still has
+  // to arrive, be checked and be scanned first.
+  const live = input.kind === "text" && layerKeys.length === 0;
+  // What an older build draws for a text card: `text`, or the words of the
+  // text layers when the author only used layers.
+  const textBody = input.kind === "text" ? (input.text ?? layerWords(input.layers)) : null;
 
   const client = await getPool().connect();
   try {
@@ -1333,13 +1642,13 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
          id, author_id, kind, status, caption, text_body, background, sticker,
          replies_enabled, media_storage_key, media_content_type, media_byte_size,
          media_width, media_height, media_duration_ms, scan_status,
-         published_at, expires_at, request_id
+         published_at, expires_at, request_id, layers, alt_text, layer_keys
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14, $15,
          $16,
          CASE WHEN $17 THEN now() END,
          CASE WHEN $17 THEN now() + make_interval(hours => $18) END,
-         $19
+         $19, $20::jsonb, $21, $22::text[]
        ) RETURNING expires_at`,
       [
         storyId,
@@ -1347,9 +1656,9 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
         input.kind,
         live ? "live" : "pending",
         input.kind === "text" ? null : input.caption || null,
-        input.kind === "text" ? input.text : null,
+        textBody,
         input.kind === "text" ? input.background : null,
-        input.sticker ? JSON.stringify(input.sticker) : null,
+        sticker ? JSON.stringify(sticker) : null,
         input.repliesEnabled,
         key,
         contentType,
@@ -1362,6 +1671,9 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
         live,
         STORY_TTL_HOURS,
         input.requestId ?? null,
+        JSON.stringify(layers),
+        input.altText || null,
+        layerKeys,
       ],
     );
     const expiresAt = inserted.rows[0]?.expires_at ?? null;
@@ -1408,6 +1720,7 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
   return {
     story,
     upload: key && media ? uploadFor(key, media.contentType, media.byteSize) : null,
+    layerUploads: layerUploadsOf(layers),
     liveServerIds: live ? input.audiences.serverIds : [],
     liveFriends: live && input.audiences.friends,
   };
@@ -1416,7 +1729,7 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
 async function insertAudiences(
   client: PoolClient,
   storyId: string,
-  input: CreateStoryRequest,
+  input: CreateStoryParsed,
   expiresAt: Date | null,
 ): Promise<void> {
   if (input.audiences.serverIds.length > 0) {
@@ -1635,8 +1948,16 @@ async function escalateStoryScan(
  * every read, points at. The same fix the Baú claim has (`pinCommunityHomeUpload`).
  * The original is deleted best effort; a PUT through the old URL can recreate
  * it as a stray object no row names, bounded by the signed length and the TTL.
+ *
+ * `target` says which pointer moves: the story's base media, or the object
+ * behind one layer (its `mediaKey` inside `layers`, and its entry in
+ * `layer_keys`, which is what the sweep deletes by).
  */
-async function pinStoryUpload(storyId: string, sourceKey: string): Promise<string> {
+async function pinStoryUpload(
+  storyId: string,
+  sourceKey: string,
+  target: { layerId: string | null } = { layerId: null },
+): Promise<string> {
   const extension = /\.[a-z0-9]+$/i.exec(sourceKey)?.[0] ?? "";
   const pinnedKey = `${sourceKey.slice(0, sourceKey.lastIndexOf("/") + 1)}pinned-${randomUUID()}${extension}`;
   try {
@@ -1649,11 +1970,26 @@ async function pinStoryUpload(storyId: string, sourceKey: string): Promise<strin
     void deleteObject(pinnedKey).catch(() => undefined);
     throw new StoryError("not_verified", "Upload could not be verified");
   }
-  const moved = await getPool().query(
-    `UPDATE stories SET media_storage_key = $3
-      WHERE id = $1 AND media_storage_key = $2 AND status = 'pending'`,
-    [storyId, sourceKey, pinnedKey],
-  );
+  const moved =
+    target.layerId === null
+      ? await getPool().query(
+          `UPDATE stories SET media_storage_key = $3
+            WHERE id = $1 AND media_storage_key = $2 AND status = 'pending'`,
+          [storyId, sourceKey, pinnedKey],
+        )
+      : await getPool().query(
+          `UPDATE stories
+              SET layers = (
+                    SELECT jsonb_agg(
+                             CASE WHEN e->>'id' = $4 AND e->>'mediaKey' = $2
+                                  THEN jsonb_set(e, '{mediaKey}', to_jsonb($3::text))
+                                  ELSE e END
+                             ORDER BY ord)
+                      FROM jsonb_array_elements(layers) WITH ORDINALITY AS t(e, ord)),
+                  layer_keys = array_replace(layer_keys, $2, $3)
+            WHERE id = $1 AND status = 'pending' AND $2 = ANY(layer_keys)`,
+          [storyId, sourceKey, pinnedKey, target.layerId],
+        );
   if ((moved.rowCount ?? 0) === 0) {
     void deleteObject(pinnedKey).catch(() => undefined);
     throw new StoryError("not_verified", "Upload could not be verified");
@@ -1667,6 +2003,50 @@ async function pinStoryUpload(storyId: string, sourceKey: string): Promise<strin
   return pinnedKey;
 }
 
+/**
+ * What `HEAD` and the first bytes of a stored upload say, after it has been
+ * pinned: the size must be the declared one, and the real file type (read off
+ * the bytes, never the declared one) is returned for the caller to judge.
+ * Throws `not_verified` for anything transient or missing, so the author can
+ * retry the publish; the caller decides what a wrong TYPE means.
+ */
+async function verifyStoredUpload(
+  storyId: string,
+  key: string,
+  declaredBytes: number | null,
+  maxBytes: number,
+  target: { layerId: string | null },
+): Promise<{ pinned: string; sniffed: StoryContentType | null; headType: string }> {
+  let head;
+  try {
+    head = await headObject(key);
+  } catch (error) {
+    console.error(
+      `[stories] HEAD failed for ${key}:`,
+      error instanceof Error ? error.message : error,
+    );
+    throw new StoryError("not_verified", "Upload could not be verified");
+  }
+  if (!head || head.contentLength <= 0) {
+    throw new StoryError("not_verified", "Upload missing");
+  }
+  if (head.contentLength > maxBytes || head.contentLength !== declaredBytes) {
+    throw new StoryError("not_verified", "Upload size does not match");
+  }
+  // Everything from here on judges the PINNED copy, which no URL can write.
+  const pinned = await pinStoryUpload(storyId, key, target);
+  let bytes: Uint8Array | null = null;
+  try {
+    bytes = await getObjectPrefix(pinned, STORY_SNIFF_BYTES);
+  } catch {
+    bytes = null;
+  }
+  if (!bytes) {
+    throw new StoryError("not_verified", "Upload could not be verified");
+  }
+  return { pinned, sniffed: sniffStoryMediaType(bytes), headType: head.contentType };
+}
+
 export interface PublishedStory {
   story: Story;
   /** True when the story went live in this call (and the audience is to be told). */
@@ -1678,8 +2058,12 @@ export interface PublishedStory {
  *
  * The HEAD and the prefix read run before anything is written, and outside
  * any transaction; the scan too. An image is scanned BEFORE it is live, so
- * the window in which an unsafe one is visible is zero. A video goes to
- * `processing` and the stories job takes it from there (`story-media.ts`).
+ * the window in which an unsafe one is visible is zero, and so is every image
+ * and drawing LAYER: they are checked, pinned and scanned together with the
+ * base, as one verdict (the worst of them). A video goes to `processing` and
+ * the stories job takes it from there (`story-media.ts`); its layers were
+ * already checked and scanned here. A text card whose only objects are layers
+ * goes live here like an image does.
  */
 export async function publishStory(user: DbUser, storyId: string): Promise<PublishedStory> {
   const result = await getPool().query<StoryRow>(
@@ -1697,72 +2081,102 @@ export async function publishStory(user: DbUser, storyId: string): Promise<Publi
     return { story: await getStoryForViewer(user.id, storyId), wentLive: false };
   }
   const key = row.media_storage_key;
-  if (!key || !row.media_content_type || !isStoryKey(user.id, storyId, key)) {
+  const layerObjects = (row.layers ?? []).filter(isObjectLayer);
+  if (row.kind !== "text") {
+    if (!key || !row.media_content_type || !isStoryKey(user.id, storyId, key)) {
+      throw new StoryError("invalid", "Nothing to publish");
+    }
+  } else if (layerObjects.length === 0) {
+    throw new StoryError("invalid", "Nothing to publish");
+  }
+  if (layerObjects.some((layer) => !isStoryKey(user.id, storyId, layer.mediaKey))) {
     throw new StoryError("invalid", "Nothing to publish");
   }
   if (!isStorageConfigured()) {
     throw new StoryError("storage_off", "Media uploads are not configured");
   }
 
-  let head;
-  try {
-    head = await headObject(key);
-  } catch (error) {
-    console.error(
-      `[stories] HEAD failed for ${key}:`,
-      error instanceof Error ? error.message : error,
-    );
-    throw new StoryError("not_verified", "Upload could not be verified");
-  }
-  if (!head || head.contentLength <= 0) {
-    throw new StoryError("not_verified", "Upload missing");
-  }
-  if (head.contentLength > STORY_MAX_BYTES || head.contentLength !== row.media_byte_size) {
-    throw new StoryError("not_verified", "Upload size does not match");
-  }
-  // Everything from here on judges the PINNED copy, which no URL can write.
-  const pinned = await pinStoryUpload(storyId, key);
-  let read: { ok: true; bytes: Uint8Array | null } | { ok: false };
-  try {
-    read = { ok: true, bytes: await getObjectPrefix(pinned, STORY_SNIFF_BYTES) };
-  } catch {
-    read = { ok: false };
-  }
-  if (!read.ok || !read.bytes) {
-    throw new StoryError("not_verified", "Upload could not be verified");
-  }
-  const sniffed = sniffStoryMediaType(read.bytes);
-  const isImage = row.kind === "image";
-  const typeOk = isImage
-    ? sniffed !== null && isStoryImageType(sniffed) && isStoryImageType(head.contentType)
-    : sniffed === "video/mp4" && head.contentType === "video/mp4";
-  if (!typeOk || !sniffed) {
-    await refuseStory(storyId, { until: "none" }, "not the type it said");
-    throw new StoryError("not_verified", "The file is not what it said it was");
-  }
-  if (sniffed !== row.media_content_type) {
-    // A real JPEG saved as `.png` is a fine picture: keep what the bytes are.
-    await getPool().query(`UPDATE stories SET media_content_type = $2 WHERE id = $1`, [
+  // Every image that must be scanned before anything goes live: the base photo
+  // and every layer object. (A video's frames are the job's.)
+  const toScan: Array<{ key: string; contentType: StoryContentType }> = [];
+
+  if (row.kind !== "text") {
+    const main = await verifyStoredUpload(
       storyId,
-      sniffed,
-    ]);
+      key!,
+      row.media_byte_size,
+      STORY_MAX_BYTES,
+      { layerId: null },
+    );
+    const isImage = row.kind === "image";
+    const typeOk = isImage
+      ? main.sniffed !== null && isStoryImageType(main.sniffed) && isStoryImageType(main.headType)
+      : main.sniffed === "video/mp4" && main.headType === "video/mp4";
+    if (!typeOk || !main.sniffed) {
+      await refuseStory(storyId, { until: "none" }, "not the type it said");
+      throw new StoryError("not_verified", "The file is not what it said it was");
+    }
+    if (main.sniffed !== row.media_content_type) {
+      // A real JPEG saved as `.png` is a fine picture: keep what the bytes are.
+      await getPool().query(`UPDATE stories SET media_content_type = $2 WHERE id = $1`, [
+        storyId,
+        main.sniffed,
+      ]);
+    }
+    if (isImage) {
+      toScan.push({ key: main.pinned, contentType: main.sniffed });
+    }
   }
 
-  if (isImage) {
-    const scan = isContentScanConfigured()
-      ? await scanImage({
-          imageUrl: presignGet(pinned, { ttlSeconds: SCAN_URL_TTL_SECONDS }),
-          contentType: sniffed,
-        })
-      : null;
-    if (scan) {
-      bumpStoryStat("imagesScanned");
-      const allowed = await applyStoryScan(row, scan, "image");
-      if (!allowed) {
-        // No reason leaks to the author: "Não subiu", like a failed upload.
-        throw new StoryError("refused", "This story could not be posted");
-      }
+  // Layer objects: the storage round trips (HEAD, copy, prefix read) run a few
+  // at a time. Each pin then rewrites the `layers` array in one UPDATE that
+  // re-reads the row under its lock, so the pins queue on the row, never clobber.
+  const checked = await mapLimit(layerObjects, PER_REQUEST_CONCURRENCY, async (layer) => ({
+    layer,
+    verified: await verifyStoredUpload(
+      storyId,
+      layer.mediaKey,
+      layer.byteSize,
+      STORY_LAYER_MAX_BYTES,
+      { layerId: layer.id },
+    ),
+  }));
+  for (const { layer, verified } of checked) {
+    const allowedTypes: readonly string[] =
+      layer.type === "drawing" ? STORY_LAYER_DRAWING_TYPES : ["image/jpeg", "image/webp", "image/png"];
+    if (
+      !verified.sniffed ||
+      !allowedTypes.includes(verified.sniffed) ||
+      !isStoryImageType(verified.headType)
+    ) {
+      await refuseStory(storyId, { until: "none" }, "a layer is not the type it said");
+      throw new StoryError("not_verified", "The file is not what it said it was");
     }
+    toScan.push({ key: verified.pinned, contentType: verified.sniffed });
+  }
+
+  if (toScan.length > 0 && isContentScanConfigured()) {
+    const results = await Promise.all(
+      toScan.map((target) =>
+        scanImage({
+          imageUrl: presignGet(target.key, { ttlSeconds: SCAN_URL_TTL_SECONDS }),
+          contentType: target.contentType,
+        }),
+      ),
+    );
+    bumpStoryStat("imagesScanned", results.length);
+    const allowed = await applyStoryScan(
+      row,
+      combineScans(results),
+      row.kind === "image" && layerObjects.length === 0 ? "image" : "image and layers",
+    );
+    if (!allowed) {
+      // No reason leaks to the author: "Não subiu", like a failed upload.
+      throw new StoryError("refused", "This story could not be posted");
+    }
+  }
+
+  if (row.kind !== "video") {
     const wentLive = await goLive(storyId);
     return { story: await getStoryForViewer(user.id, storyId), wentLive };
   }
@@ -2042,14 +2456,19 @@ export async function retireAuthorStories(authorId: string): Promise<void> {
   await getPool().query(
     `WITH dropped AS (
        DELETE FROM stories s
-        WHERE s.author_id = $1 AND s.kind = 'text' AND NOT ${held}
+        -- A text card that holds layer objects is NOT dropped here: its row is
+        -- what tells the media sweep which objects to delete.
+        WHERE s.author_id = $1 AND s.kind = 'text' AND cardinality(s.layer_keys) = 0
+          AND NOT ${held}
         RETURNING s.id
      )
      UPDATE stories s
         SET status = 'deleted', deleted_at = COALESCE(deleted_at, now()),
             processing_claimed_at = NULL,
             caption = CASE WHEN ${held} THEN caption ELSE NULL END,
-            sticker = CASE WHEN ${held} THEN sticker ELSE NULL END
+            sticker = CASE WHEN ${held} THEN sticker ELSE NULL END,
+            layers = CASE WHEN ${held} THEN layers ELSE '[]'::jsonb END,
+            alt_text = CASE WHEN ${held} THEN alt_text ELSE NULL END
       WHERE s.author_id = $1 AND s.id NOT IN (SELECT id FROM dropped)`,
     [authorId],
   );
@@ -2200,6 +2619,14 @@ export async function getStoryCard(viewerId: string, storyId: string): Promise<S
 
 // ------------------------------------------------------------------ reports
 
+function reportSnapshot(row: StoryRow): string | null {
+  const first = row.text_body || row.caption || "";
+  const extra = (row.layers ?? []).flatMap((layer) =>
+    layer.type === "text" && !first.includes(layer.text) ? [layer.text] : [],
+  );
+  return [first, ...extra].filter(Boolean).join("\n").slice(0, 2000) || null;
+}
+
 /**
  * What a story report needs, if the reporter can see the story through the
  * audience they name. Not visible is one answer, like every report subject.
@@ -2227,7 +2654,9 @@ export async function resolveStoryForReport(
   }
   return {
     authorId: row.author_id,
-    snapshot: row.text_body ?? row.caption ?? null,
+    // Everything a person typed onto it: the card's text or the caption, and
+    // the words of every text layer, so a report carries what was on screen.
+    snapshot: reportSnapshot(row),
     serverId: through.kind === "server" ? through.serverId : null,
   };
 }

@@ -1103,6 +1103,19 @@ second one, because a projection and the microphone narrating it are one
 session. `startForeground` is called again with the reduced type set when the
 share stops, which is how a type is dropped.
 
+**Android 10 to 13 needed the type too, and did not get it (fixed 2026-10-13).**
+The service declared no foreground type below Android 14, on the theory that
+older releases fall back to the manifest. They do not: `startForeground(id, n, 0)`
+means "no type" and only `-1` reads the manifest. `getMediaProjection` checks the
+*running* type from Android 10, so on every Android 10, 11, 12 and 13 phone a share
+died inside the capturer with "Media projections require a foreground service of
+type ... MEDIA_PROJECTION" and the call bar said "Android would not start the
+screen capture". Everything above was verified on an API 37 emulator only, which is
+why nobody saw it; a user on the app reported it. Reproduced and fixed on an API 33
+emulator (`voiceForegroundTypes`, pinned for every API level by
+`ForegroundTypesTest`). The same applies to anything else that needs a typed
+foreground service: test on an Android 13 image, not only on the newest one.
+
 ### A bitrate ceiling is not a resolution
 
 The web client shipped a quality menu whose lower rungs all still arrived at
