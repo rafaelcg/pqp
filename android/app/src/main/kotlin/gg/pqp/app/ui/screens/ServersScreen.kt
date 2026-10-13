@@ -363,6 +363,19 @@ object ServerActions {
      * change (an unknown id, or already at that end). A pure function so the
      * one rule with an edge, the ends, is testable without a screen.
      */
+    /**
+     * [servers] in the order [ids] names. Ids the list does not hold are
+     * ignored; servers [ids] does not name keep their place after the named
+     * ones. Only the ORDER changes, so a rollback never touches other fields.
+     */
+    fun applyOrder(servers: List<ServerSummary>, ids: List<String>): List<ServerSummary> {
+        val byId = servers.associateBy { it.id }.toMutableMap()
+        val out = ArrayList<ServerSummary>(servers.size)
+        for (id in ids) byId.remove(id)?.let { out.add(it) }
+        servers.filterTo(out) { byId.containsKey(it.id) }
+        return out
+    }
+
     fun reordered(servers: List<ServerSummary>, id: String, delta: Int): List<ServerSummary>? {
         val from = servers.indexOfFirst { it.id == id }
         if (from < 0) return null

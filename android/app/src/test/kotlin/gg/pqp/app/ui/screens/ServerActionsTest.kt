@@ -54,6 +54,15 @@ class ServerActionsTest {
     }
 
     @Test
+    fun `applying an order changes only the order`() {
+        val list = listOf(server("a"), server("b"), server("c"))
+        assertEquals(listOf("c", "a", "b"), ServerActions.applyOrder(list, listOf("c", "a", "b")).map { it.id })
+        // An id the list does not hold is ignored; one the order does not name
+        // keeps its place after the named ones.
+        assertEquals(listOf("b", "a", "c"), ServerActions.applyOrder(list, listOf("zzz", "b")).map { it.id })
+    }
+
+    @Test
     fun `moving past either end, or an unknown server, changes nothing`() {
         val list = listOf(server("a"), server("b"), server("c"))
         assertNull(ServerActions.reordered(list, "a", -1))

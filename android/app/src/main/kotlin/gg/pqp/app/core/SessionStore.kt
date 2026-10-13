@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import gg.pqp.app.onboarding.markOnboarded
 import okhttp3.OkHttpClient
@@ -253,24 +255,56 @@ class SessionStore(
 
     /**
      * Move a server up or down one place in this account's own list, and save
-     * it. Optimistic: the list moves now; if the save is refused the list goes
-     * back (unless something newer has replaced it meanwhile) and [onError]
-     * gets the server's own sentence. Nothing happens at the ends.
+     * it. Optimistic: the list moves now. Nothing happens at the ends.
+     *
+     * SAVES RUN ONE AT A TIME (the [orderSaves] mutex). Two requests in the air
+     * can be processed in either order and leave the stored order older than
+     * the one shown. Each queued save sends the order as it is when its turn
+     * comes, so several quick moves collapse into one request (a later turn
+     * that finds the stored order already current sends nothing). A refused
+     * save puts the order back to the last one the server confirmed, never to
+     * an intermediate one that was not saved, changing only the order, and
+     * [onError] gets the server's own sentence.
      */
     fun moveServer(serverId: String, delta: Int, onError: (String) -> Unit) {
-        val before = _servers.value
-        val moved = gg.pqp.app.ui.screens.ServerActions.reordered(before, serverId, delta) ?: return
-        _servers.value = moved
+        synchronized(orderLock) {
+            val moved = gg.pqp.app.ui.screens.ServerActions
+                .reordered(_servers.value, serverId, delta) ?: return
+            if (confirmedOrder == null) {
+                confirmedOrder = _servers.value.map { it.id }
+            }
+            orderSavesPending += 1
+            _servers.value = moved
+        }
         scope.launch {
-            runCatching { api.saveServerOrder(moved.map { it.id }) }
-                .onFailure {
-                    if (_servers.value === moved) {
-                        _servers.value = before
-                    }
-                    onError(it.message.orEmpty())
+            try {
+                orderSaves.withLock {
+                    val ids = _servers.value.map { it.id }
+                    if (ids == synchronized(orderLock) { confirmedOrder }) return@withLock
+                    runCatching { api.saveServerOrder(ids) }
+                        .onSuccess { synchronized(orderLock) { confirmedOrder = ids } }
+                        .onFailure {
+                            synchronized(orderLock) {
+                                val back = confirmedOrder.orEmpty()
+                                _servers.value = gg.pqp.app.ui.screens.ServerActions
+                                    .applyOrder(_servers.value, back)
+                            }
+                            onError(it.message.orEmpty())
+                        }
                 }
+            } finally {
+                synchronized(orderLock) {
+                    orderSavesPending -= 1
+                    if (orderSavesPending == 0) confirmedOrder = null
+                }
+            }
         }
     }
+
+    private val orderSaves = Mutex()
+    private val orderLock = Any()
+    private var orderSavesPending = 0
+    private var confirmedOrder: List<String>? = null
 
     /**
      * `idempotencyKey`, when given, is forwarded to [ApiClient.createServer]
