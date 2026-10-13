@@ -6179,6 +6179,25 @@ CREATE TABLE IF NOT EXISTS story_media_processors (
   seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- COMPOSER V2: layers placed on the story's 9:16 canvas (text, photos, the
+-- call, mentions, a drawing), validated by `createStorySchema`
+-- (packages/shared/src/stories.ts) before they get here. `layers` is the
+-- author's own array with one difference: an image or drawing layer holds the
+-- storage key of its object (`mediaKey`, server-minted, never client chosen)
+-- and the read path swaps it for a presigned URL. `layer_keys` is the same
+-- keys as a column, so the media sweep can find a story's layer objects
+-- without parsing JSON, and a story with only layer objects (a text card with
+-- a photo on it) is swept like any other. `alt_text` is the spoken version.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS layers JSONB NOT NULL DEFAULT '[]'::jsonb
+  CHECK (jsonb_typeof(layers) = 'array' AND jsonb_array_length(layers) <= 20);
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS alt_text TEXT
+  CHECK (char_length(alt_text) <= 500);
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS layer_keys TEXT[] NOT NULL DEFAULT '{}';
+-- The media sweep's claim for a story whose only bytes are layer objects.
+CREATE INDEX IF NOT EXISTS idx_stories_layer_sweep
+  ON stories (expires_at)
+  WHERE media_deleted_at IS NULL AND cardinality(layer_keys) > 0;
+
 -- A DM reply quotes the story it answers. SET NULL when the story row is
 -- finally deleted; the quote reads "Story expirou" long before that. Added
 -- without the constraint first, then the constraint NOT VALID: every existing

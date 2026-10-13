@@ -755,3 +755,36 @@ export function scanReportReason(
   }
   return labels.includes("gore") ? "violence" : "other";
 }
+
+/** Worst verdict first: rejected, error, flagged, then the passes. */
+const SEVERITY: Record<ScanResult["status"], number> = {
+  rejected: 5,
+  error: 4,
+  flagged: 3,
+  pass: 2,
+  skipped: 1,
+  unscanned: 0,
+};
+
+export function combineScans(results: ScanResult[]): ScanResult {
+  let worst: ScanResult = {
+    status: "unscanned",
+    provider: null,
+    score: null,
+    labels: [],
+    illegal: false,
+  };
+  const labels = new Set<string>();
+  let score: number | null = null;
+  let illegal = false;
+  for (const result of results) {
+    for (const label of result.labels) labels.add(label);
+    if (result.score !== null) score = Math.max(score ?? 0, result.score);
+    illegal ||= result.illegal;
+    if (SEVERITY[result.status] > SEVERITY[worst.status]) {
+      worst = result;
+    }
+  }
+  return { ...worst, labels: [...labels], score, illegal };
+}
+
