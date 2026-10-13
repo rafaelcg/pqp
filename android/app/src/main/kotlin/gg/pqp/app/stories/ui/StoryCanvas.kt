@@ -11,14 +11,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
-import android.os.Build
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -29,6 +27,8 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.size.Size
 import gg.pqp.app.R
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.stories.CallStoryLayer
@@ -183,11 +183,13 @@ fun visibleLayers(story: Story): List<StoryLayer> {
     return story.layers
 }
 
+/** The backdrop picture is decoded this wide (pixels) and stretched: a blur that costs nothing. */
+private const val BACKDROP_EDGE = 48
+
 /**
  * What fills the screen around a 9:16 canvas: a card's gradient, or the story's
  * own picture (a clip's poster) cropped to fill and blurred, dimmed a little so
- * the canvas stays the thing to look at. Below Android 12 there is no blur
- * modifier, so it is only dimmed, as for the base fit.
+ * the canvas stays the thing to look at.
  */
 @Composable
 private fun StoryBackdrop(story: Story, barShare: Float, modifier: Modifier = Modifier) {
@@ -209,13 +211,17 @@ private fun StoryBackdrop(story: Story, barShare: Float, modifier: Modifier = Mo
             val model = if (story.kind == "video") media.posterUrl?.let(::absolute) else absolute(media.url)
             Box(modifier.background(Color.Black)) {
                 if (model != null) {
+                    // Decoded at thumbnail size and stretched, which is a blur that costs nothing: no
+                    // full-screen render effect behind every story, and the same on every Android version.
+                    val request = ImageRequest.Builder(LocalContext.current)
+                        .data(model)
+                        .size(Size(BACKDROP_EDGE, BACKDROP_EDGE * 16 / 9))
+                        .build()
                     AsyncImage(
-                        model = model,
+                        model = request,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .then(if (Build.VERSION.SDK_INT >= 31) Modifier.blur(36.dp) else Modifier.alpha(0.35f)),
+                        modifier = Modifier.fillMaxSize(),
                     )
                     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)))
                 }

@@ -2303,8 +2303,8 @@ does with it.
     same `PlacedLayer` and layer drawings as the editor, so a story reads as it
     was made. The author's canvas is never cropped: on a screen taller or
     wider than 9:16 it is shown whole and the rest of the screen is the story's
-    own base, blurred (a clip's poster; a card's gradient end colours; below
-    Android 12 dimmed instead of blurred). The progress bars, the header and
+    own base, softened (a clip's poster, the photo, decoded at 48 px and stretched,
+    which costs no render effect; a card's gradient end colours). The progress bars, the header and
     the reply row sit inside the canvas (`CanvasInsets`), never across its edge. `Story.layers` is decoded one element at a time
     (`StoryLayersSerializer`): a layer this build cannot read (a type a later
     server added, a field that does not decode) is dropped, order kept, and the
