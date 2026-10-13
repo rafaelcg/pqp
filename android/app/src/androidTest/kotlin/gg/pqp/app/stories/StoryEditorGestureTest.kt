@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
@@ -193,5 +194,27 @@ class StoryEditorGestureTest {
         rule.waitForIdle()
         assertTrue(layer(session).scale <= StoryLayers.SCALE_MAX + 0.0001f)
         assertTrue(abs(layer(session).rotation) <= StoryLayers.ROTATION_MAX)
+    }
+
+    @Test
+    fun aStrokeBecomesOneUndoableInkLayerAndLeavesNoGhostBehind() {
+        val session = sessionWithText()
+        start(session)
+        rule.onNodeWithTag("stories.editor.tool.draw").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("stories.editor.drawSurface").performTouchInput {
+            swipe(Offset(width * 0.2f, height * 0.3f), Offset(width * 0.8f, height * 0.4f), 400)
+        }
+        rule.waitForIdle()
+        val ink = session.layers.filterIsInstance<gg.pqp.app.stories.editor.InkLayer>().single()
+        assertEquals(1, ink.strokes.size)
+        assertTrue("the stroke has a path", ink.strokes.single().points.size >= 4)
+        // The finished stroke is saved; nothing is left drawing.
+        assertEquals(null, session.liveStroke)
+        // The ink is the lowest layer, under the text.
+        assertEquals(ink, session.layers.first())
+        session.undo()
+        rule.waitForIdle()
+        assertTrue("undo took the whole drawing back", session.layers.none { it is gg.pqp.app.stories.editor.InkLayer })
     }
 }
