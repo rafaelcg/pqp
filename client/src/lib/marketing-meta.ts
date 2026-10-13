@@ -642,7 +642,7 @@ export const TELA_FAQ: Record<
     {
       question: "Precisa baixar alguma coisa?",
       answer:
-        "Não. O pqp roda no navegador, no desktop e no Android. Tem app de desktop se você quiser, e um beta de iOS pelo TestFlight, mas nenhum dos dois é obrigatório.",
+        "Não. O pqp roda no navegador, no computador e no celular. Se quiser app, tem pra desktop, pra Android na Google Play e um beta de iPhone pelo TestFlight. Nenhum é obrigatório.",
     },
     {
       question: "Precisa de VPN?",
@@ -680,7 +680,7 @@ export const TELA_FAQ: Record<
     {
       question: "Do I need to download anything?",
       answer:
-        "No. pqp runs in the browser on desktop and on Android. There is a desktop app if you want one, and an iOS beta via TestFlight, but neither is required.",
+        "No. pqp runs in the browser, on a computer and on a phone. If you want an app, there is one for desktop, Android on Google Play, and an iPhone beta on TestFlight. None of them is required.",
     },
     {
       question: "Do I need a VPN?",
@@ -717,7 +717,7 @@ export const TELA_FAQ: Record<
     {
       question: "¿Tengo que descargar algo?",
       answer:
-        "No. pqp corre en el navegador en computadora y en Android. Hay una app de escritorio si la quieres, y una beta de iOS en TestFlight, pero ninguna es obligatoria.",
+        "No. pqp corre en el navegador, en la computadora y en el celular. Si quieres una app, hay para escritorio, Android en Google Play y una beta de iPhone en TestFlight. Ninguna es obligatoria.",
     },
     {
       question: "¿Se escucha el sonido de lo que comparto?",

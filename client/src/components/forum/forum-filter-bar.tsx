@@ -1,9 +1,15 @@
 import type { ForumSort, ForumStatusFilter, ForumTag } from "@pqp/shared";
 import { ArrowDownUp, ChevronDown, Tag as TagIcon, X } from "lucide-react";
 import type { ReactNode } from "react";
+import { ForumTagIcon } from "@/components/forum/forum-tag-icon";
 import { Menu } from "@/components/ui/menu";
 import { RadioGroup } from "@/components/ui/radio-group";
 import type { ForumFilters } from "@/lib/forum-list";
+import {
+  forumTagIconComponent,
+  forumTagLabel,
+  useForumTagLabel,
+} from "@/lib/forum-tag-icons";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -64,10 +70,11 @@ export function FilterChip({
 }
 
 function TagChipContent({ tag }: { tag: ForumTag }) {
+  const tagLabel = useForumTagLabel();
   return (
     <>
-      {tag.emoji && <span aria-hidden>{tag.emoji}</span>}
-      <span className="max-w-[9rem] truncate">{tag.name}</span>
+      <ForumTagIcon tag={tag} />
+      <span className="max-w-[9rem] truncate">{tagLabel(tag)}</span>
     </>
   );
 }
@@ -79,6 +86,7 @@ export function ForumFilterBar({
   inlineTags,
 }: ForumFilterBarProps) {
   const { t } = useTranslation();
+  const tagLabel = useForumTagLabel();
   const selected = new Set(filters.tagIds);
 
   function toggleTag(tagId: string) {
@@ -197,7 +205,7 @@ export function ForumFilterBar({
           <FilterChip
             key={tag.id}
             pressed={selected.has(tag.id)}
-            removeLabel={t("forum.filter.removeTag", { name: tag.name })}
+            removeLabel={t("forum.filter.removeTag", { name: tagLabel(tag) })}
             onClick={() => toggleTag(tag.id)}
           >
             <TagChipContent tag={tag} />
@@ -208,7 +216,14 @@ export function ForumFilterBar({
             align="end"
             items={folded.map((tag) => ({
               id: `tag-${tag.id}`,
-              label: tag.emoji ? `${tag.emoji} ${tag.name}` : tag.name,
+              // A menu row draws its own icon; with none, the emoji an old
+              // row carries goes in front of the name as it always did.
+              label: forumTagIconComponent(tag)
+                ? tagLabel(tag)
+                : tag.emoji
+                  ? `${tag.emoji} ${tagLabel(tag)}`
+                  : tagLabel(tag),
+              icon: forumTagIconComponent(tag) ?? undefined,
               checked: selected.has(tag.id),
               onSelect: () => toggleTag(tag.id),
             }))}
@@ -248,7 +263,7 @@ export function ForumFilterBar({
           <FilterChip
             key={tag.id}
             pressed={selected.has(tag.id)}
-            removeLabel={t("forum.filter.removeTag", { name: tag.name })}
+            removeLabel={t("forum.filter.removeTag", { name: tagLabel(tag) })}
             onClick={() => toggleTag(tag.id)}
           >
             <TagChipContent tag={tag} />
@@ -269,7 +284,7 @@ export function describeActiveFilters(
     ...filters.tagIds
       .map((tagId) => tags.find((tag) => tag.id === tagId))
       .filter((tag): tag is ForumTag => Boolean(tag))
-      .map((tag) => (tag.emoji ? `${tag.emoji} ${tag.name}` : tag.name)),
+      .map((tag) => forumTagLabel(tag, t)),
     filters.status === "open"
       ? t("forum.filter.open")
       : filters.status === "resolved"

@@ -1,6 +1,7 @@
 import {
   HeadphoneOff,
   ListMusic,
+  MonitorPlay,
   Music,
   Pause,
   Play,
@@ -17,6 +18,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
+import { setMusicPlacement, useMusicPlacement } from "@/lib/music-prefs";
 import {
   expectedPositionMs,
   seekTo,
@@ -193,6 +195,7 @@ export function MusicNowPlaying({
   tone?: "rail" | "composer";
 }) {
   const { t } = useTranslation();
+  const onStage = useMusicPlacement() === "stage";
   const addedBy = lookupAddedBy(voiceState, current.addedByUserId, current.addedByName);
   const progress = usePlaybackProgress(music, current.durationMs);
   const scrub = useScrub((value) => seekTo(value));
@@ -494,6 +497,33 @@ export function MusicNowPlaying({
     </Tooltip>
   ) : null;
 
+  /*
+   * The video on the call's stage, beside the queue rather than inside it:
+   * it used to sit in the queue's header, two clicks away from the bar.
+   * A toggle, like Spotify's now-playing view, so the same button puts the
+   * video away again.
+   */
+  const stageLabel = onStage ? t("music.stage.hide") : t("music.stage.watch");
+  const stageButton = composer ? (
+    <Tooltip label={stageLabel}>
+      <button
+        type="button"
+        data-music-stage-watch=""
+        aria-pressed={onStage}
+        aria-label={stageLabel}
+        className={cn(
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors",
+          onStage
+            ? "bg-accent-soft text-on-accent-soft"
+            : "text-text-tertiary hover:bg-surface-2 hover:text-text",
+        )}
+        onClick={() => setMusicPlacement(onStage ? "hidden" : "stage")}
+      >
+        <MonitorPlay className="h-4 w-4" aria-hidden="true" />
+      </button>
+    </Tooltip>
+  ) : null;
+
   const seekBar = (
     <MusicSeekBar
       canManage={canManage}
@@ -568,6 +598,7 @@ export function MusicNowPlaying({
             {/* Spans both lines, so it centres against the pair rather than
                 sitting on the transport's line. */}
             <div className="flex items-center justify-end gap-1 @min-[48rem]:row-span-2">
+              {stageButton}
               {queueButton}
               {overflow}
               {extras}

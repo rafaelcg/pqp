@@ -22,6 +22,7 @@ import {
   Minimize2,
   PhoneOff,
   Pin,
+  PictureInPicture2,
   Scan,
   ScreenShare,
   ScreenShareOff,
@@ -109,6 +110,12 @@ import {
   useMusicStagePresence,
 } from "@/lib/music-prefs";
 import { useImmersiveStage } from "@/hooks/use-immersive-stage";
+import {
+  useAutoPictureInPicture,
+  usePictureInPicture,
+  usePictureInPictureKey,
+} from "@/hooks/use-picture-in-picture";
+import { stagePipTarget } from "@/components/voice/stage-pip-target";
 import {
   chooseFullscreenStrategy,
   enterNativeVideoFullscreen,
@@ -231,6 +238,10 @@ import { shouldShowMusicPip, useMusicPipSpent } from "@/lib/music-pip";
 import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
 import { VoiceNoticeBar } from "@/components/voice/voice-notice-bar";
+import {
+  DockedShareError,
+  showsDockedShareError,
+} from "@/components/voice/docked-share-error";
 import {
   callStartKey,
   callStartedAt,
@@ -1359,6 +1370,43 @@ function ActiveCall({
       ...(musicOnStage ? [MUSIC_STAGE_TILE_ID] : []),
     ],
   );
+  // The control bar's PiP button: one share, chosen by `stagePipTarget` from
+  // the tiles that registered a `<video>` that can go into PiP.
+  const [pipVideos, setPipVideos] = useState<
+    ReadonlyMap<string, HTMLVideoElement>
+  >(() => new Map());
+  const registerPipVideo = useCallback(
+    (peerId: string, video: HTMLVideoElement) => {
+      setPipVideos((current) => new Map(current).set(peerId, video));
+      return () =>
+        setPipVideos((current) => {
+          if (current.get(peerId) !== video) {
+            return current;
+          }
+          const next = new Map(current);
+          next.delete(peerId);
+          return next;
+        });
+    },
+    [],
+  );
+  const pipOpenPeerId = usePictureInPictureKey(pipVideos);
+  const pipTargetPeerId = stagePipTarget({
+    candidates: screenTiles
+      .map((tile) => tile.peerId)
+      .filter((peerId) => pipVideos.has(peerId)),
+    inPipPeerId: pipOpenPeerId,
+    soloPeerId: fullscreen.soloPeerId,
+    pinnedTileId,
+    focusedPeerId: voiceState.focusedScreenPeerId,
+  });
+  const pipTargetVideo = pipTargetPeerId
+    ? (pipVideos.get(pipTargetPeerId) ?? null)
+    : null;
+  const barPipRef = useRef<HTMLVideoElement | null>(null);
+  barPipRef.current = pipTargetVideo;
+  const barPip = usePictureInPicture(barPipRef, pipTargetVideo);
+  useAutoPictureInPicture(pipTargetVideo);
   // What the pane around us is looking at. Only an expanded stage has a size
   // worth dragging, and only the stage knows whether it is one: `collapsed`
   // folds in a collapse this person toggled in here. `CallSplit` reads it to
@@ -1772,6 +1820,22 @@ function ActiveCall({
   // because the strip is stacked above the bar and would otherwise cover the
   // pill's top line, which is where mute and raise hand go; so does the
   // self-preview's bottom corner, for the same reason.
+  // The notice or error strip over the stage wraps to two lines on a narrow
+  // stage, and the overlay below it has to move by its real height or the
+  // second line sits on top of the call's title. Zero while no strip shows,
+  // which includes a notice the person closed or that timed out.
+  const [topStripPx, setTopStripPx] = useState(0);
+  const topStripRef = useCallback((node: HTMLElement | null) => {
+    if (!node || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => setTopStripPx(node.offsetHeight));
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      setTopStripPx(0);
+    };
+  }, []);
   const [controlRowExtraPx, setControlRowExtraPx] = useState(0);
   const controlRowRef = useCallback((node: HTMLDivElement | null) => {
     if (!node || typeof ResizeObserver === "undefined") {
@@ -1803,6 +1867,7 @@ function ActiveCall({
       fullscreenAvailable={fullscreen.available && chromeExpanded}
       isFullscreen={fullscreen.isFullscreen}
       onToggleFullscreen={fullscreen.toggle}
+      pip={chromeExpanded && barPip.available ? barPip : null}
       onToggleMute={onToggleMute}
       onToggleCamera={onToggleCamera}
       videoQuality={videoQuality}
@@ -1892,6 +1957,13 @@ function ActiveCall({
       data-testid="call-stage-collapsed"
       className="@container flex flex-col gap-1.5"
     >
+      {showsDockedShareError(collapsed, voiceState) && voiceState.error && (
+        <DockedShareError
+          message={voiceState.error}
+          audioFailed={voiceState.screenShareAudioFailed}
+          onShareWithoutSound={onShareWithoutSound}
+        />
+      )}
       {controls}
       <PttFocusHint
         show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
@@ -2036,6 +2108,7 @@ function ActiveCall({
                  label on the picture is the same sentence twice. */
               showName={screenTiles.length > 1}
               onToggleFullscreen={() => fullscreen.toggleScreen(soloTile.peerId)}
+              registerPipVideo={registerPipVideo}
               audio={shareAudioControl(soloTile)}
               dismissed={shareDismissControl(soloTile)}
               className="h-full w-full bg-black"
@@ -2143,6 +2216,7 @@ function ActiveCall({
                             : undefined
                         }
                         pinned={pinned}
+                        registerPipVideo={registerPipVideo}
                         audio={shareAudioControl(screenTile)}
                         dismissed={shareDismissControl(screenTile)}
                         className="h-full w-full"
@@ -2339,6 +2413,7 @@ function ActiveCall({
       {/* --- overlays -------------------------------------------------------- */}
       {voiceState.error && (
         <div
+          ref={topStripRef}
           role="alert"
           data-voice-error
           className={cn("absolute inset-x-0 top-0 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-danger/15 px-3 py-1.5 text-center text-xs text-danger", STAGE_LAYER.state)}
@@ -2382,7 +2457,9 @@ function ActiveCall({
           )}
         </div>
       )}
-      {!voiceState.error && <VoiceNoticeBar notice={voiceState.notice} />}
+      {!voiceState.error && (
+        <VoiceNoticeBar notice={voiceState.notice} measureRef={topStripRef} />
+      )}
 
       {dockComposer ? (
         composerDock
@@ -2395,7 +2472,9 @@ function ActiveCall({
           STAGE_LAYER.chrome,
           "pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
           chromeClass,
-          (voiceState.error || voiceState.notice) && "mt-7",
+          typeof ResizeObserver === "undefined" &&
+            (voiceState.error || voiceState.notice) &&
+            "mt-7",
           // THE PRESENTER'S OWN SHARE IN A WATCH PARTY carries no overlay
           // (2026-09-13): the party header one row up already says the name,
           // the count and the uptime, and "watch-party · 1 na chamada" over
@@ -2404,6 +2483,7 @@ function ActiveCall({
           // overlay also holds is never wanted here.
           watchPartyChrome && focusedIsLocal && "hidden",
         )}
+        style={topStripPx > 0 ? { marginTop: topStripPx } : undefined}
         // The overlay itself passes the pointer through; its few buttons take
         // it back, and resting on one holds the whole group like the bar.
         onPointerEnter={(event) => {
@@ -2781,6 +2861,7 @@ export function CallControls({
   fullscreenAvailable,
   isFullscreen,
   onToggleFullscreen,
+  pip = null,
   onToggleMute,
   onToggleCamera,
   videoQuality,
@@ -2826,6 +2907,11 @@ export function CallControls({
   fullscreenAvailable: boolean;
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
+  /**
+   * Picture-in-picture for the main remote share (`stagePipTarget`). Null
+   * when there is none, or the platform has no PiP.
+   */
+  pip?: { active: boolean; toggle: () => void } | null;
   onToggleMute: () => void;
   onToggleCamera: () => void;
   videoQuality: VideoQuality;
@@ -3625,6 +3711,24 @@ export function CallControls({
             ) : (
               <Maximize2 className={iconSize} />
             )}
+          </button>
+        </Tooltip>
+      )}
+      {!collapsed && pip && (
+        <Tooltip label={t("voice.hls.pip")}>
+          <button
+            type="button"
+            data-testid="stage-pip"
+            aria-label={t("voice.hls.pip")}
+            aria-pressed={pip.active}
+            className={cn(
+              "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
+              size,
+              pip.active && "text-signal",
+            )}
+            onClick={pip.toggle}
+          >
+            <PictureInPicture2 className={iconSize} />
           </button>
         </Tooltip>
       )}
@@ -4511,10 +4615,20 @@ export function ScreenTileFrame({
   mediaTitle,
   communityName,
   coverUrl,
+  registerPipVideo,
 }: {
   tile: ScreenShareTile;
   videoRef?: RefObject<WebkitFullscreenVideo | null>;
   isFullscreen: boolean;
+  /**
+   * Hands the stage this share's `<video>` while it can go into PiP, so the
+   * control bar's button can pop it out. Returns the matching removal. Must
+   * be stable across renders.
+   */
+  registerPipVideo?: (
+    peerId: string,
+    video: HTMLVideoElement,
+  ) => () => void;
   showName?: boolean;
   /** A click anywhere on the picture blows it up. See `TileClickTarget`. */
   clickToFullscreen?: boolean;
@@ -4552,6 +4666,21 @@ export function ScreenTileFrame({
   const fit = useVideoFit("screen");
   const hidePreviewPref = useHideScreenPreview();
   const hideSelfPreview = tile.isSelf && hidePreviewPref;
+  const useHls = Boolean(tile.hlsUrl) && !tile.isSelf;
+  const ownVideoRef = useRef<WebkitFullscreenVideo | null>(null);
+  const shareVideoRef = videoRef ?? ownVideoRef;
+  // A peer's live share only. The HLS player carries its own PiP control, and
+  // popping out our own screen is a mirror of what we are already looking at.
+  const pipSource =
+    tile.isSelf || useHls || dismissed?.active ? null : tile.stream;
+  const pip = usePictureInPicture(shareVideoRef, pipSource);
+  useEffect(() => {
+    const video = shareVideoRef.current;
+    if (!registerPipVideo || pipSource == null || !video) {
+      return;
+    }
+    return registerPipVideo(tile.peerId, video);
+  }, [registerPipVideo, pipSource, shareVideoRef, tile.peerId]);
   const hasAudio = Boolean(audio?.voice || audio?.share);
   const label = isFullscreen
     ? t("voice.share.exitFullscreen")
@@ -4585,8 +4714,6 @@ export function ScreenTileFrame({
     );
   }
 
-  const useHls = Boolean(tile.hlsUrl) && !tile.isSelf;
-
   return (
     <div className={cn("group relative", className)}>
       {hideSelfPreview ? (
@@ -4614,7 +4741,7 @@ export function ScreenTileFrame({
       ) : (
         <StageVideo
           stream={tile.stream}
-          videoRef={videoRef}
+          videoRef={shareVideoRef}
           onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
           // Contain by default: a crop on a shared screen eats a toolbar or a
           // margin, which is very often the thing being presented. Fill is one
@@ -4713,6 +4840,23 @@ export function ScreenTileFrame({
               ) : (
                 <Maximize2 className="h-3.5 w-3.5" />
               )}
+            </button>
+          </Tooltip>
+        )}
+        {pip.available && (
+          <Tooltip label={t("voice.hls.pip")} side="bottom" align="start">
+            <button
+              type="button"
+              data-testid="share-pip"
+              aria-label={t("voice.hls.pip")}
+              aria-pressed={pip.active}
+              className={cn(
+                "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
+                pip.active && "text-signal",
+              )}
+              onClick={pip.toggle}
+            >
+              <PictureInPicture2 className="h-3.5 w-3.5" />
             </button>
           </Tooltip>
         )}
