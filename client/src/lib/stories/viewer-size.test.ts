@@ -27,6 +27,14 @@ describe("storyCardSize", () => {
     expect(storyCardSize(1440, 900).width).toBeGreaterThan(366);
   });
 
+  it("shrinks to fit a very short window instead of overflowing it", () => {
+    for (const h of [400, 500, 560]) {
+      const size = storyCardSize(1280, h);
+      expect(size.height).toBeLessThanOrEqual(h);
+      expect(size.width).toBeGreaterThan(0);
+    }
+  });
+
   it("keeps the old type size on a short window", () => {
     expect(storyCardSize(1280, 720).zoom).toBe(1);
   });

@@ -20,7 +20,9 @@ const MAX_ZOOM = 1.6;
 const SIDE_ROOM = 144;
 const SIDE_ROOM_XL = 456;
 const XL = 1280;
+/** Least room kept for the card beside the arrows on a very narrow window. */
 const MIN_WIDTH = 240;
+const TINY_WIDTH = 60;
 
 export interface StoryCardSize {
   /** Canvas width, which is also the card's and the reply bar's. */
@@ -39,10 +41,12 @@ export function storyCardSize(windowWidth: number, windowHeight: number): StoryC
   // The reply bar scales with the card and the card depends on what the bar
   // leaves, so settle it in a few passes.
   let zoom = 1;
-  let width = MIN_WIDTH;
+  let width = TINY_WIDTH;
   for (let pass = 0; pass < 4; pass += 1) {
+    // Height wins on a short window: only a sliver is kept so the arithmetic
+    // never goes negative, never a width that would push the card off-screen.
     width = Math.max(
-      MIN_WIDTH,
+      TINY_WIDTH,
       Math.min(availableWidth, ((availableHeight - STORY_FOOTER_PX * zoom) * 9) / 16),
     );
     zoom = Math.min(MAX_ZOOM, Math.max(1, width / BASE_WIDTH));
