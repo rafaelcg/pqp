@@ -39,10 +39,16 @@ interface StoryContentProps {
   onVideoDuration?: (ms: number) => void;
   onVideoTime?: (ms: number) => void;
   onVideoEnded?: () => void;
+  /** Play again from the start (the composer's preview of a clip). */
+  loop?: boolean;
   className?: string;
   /** Freeze: an outgoing deck card or a thumbnail. No controls, no playback. */
   still?: boolean;
 }
+
+/** Where a text card's words sit. The composer's own text field uses the same box so what is typed is what is posted. */
+export const TEXT_CARD_BOX_CLASS =
+  "absolute left-[7.5%] right-[7.5%] top-[17%] whitespace-pre-wrap break-words font-display font-black tracking-[-0.01em]";
 
 export function textCardSizeClass(text: string): string {
   const length = [...text].length;
@@ -65,6 +71,7 @@ export const StoryContent = forwardRef(function StoryContent(
     onVideoDuration,
     onVideoTime,
     onVideoEnded,
+    loop = false,
     className,
     still = false,
   }: StoryContentProps,
@@ -96,6 +103,7 @@ export const StoryContent = forwardRef(function StoryContent(
             onDuration={onVideoDuration}
             onTime={onVideoTime}
             onEnded={onVideoEnded}
+            loop={loop}
           />
         ) : story.posterUrl ? (
           <img
@@ -111,10 +119,7 @@ export const StoryContent = forwardRef(function StoryContent(
           data-bg={story.background ?? "night"}
         >
           <p
-            className={cn(
-              "absolute left-[7.5%] right-[7.5%] top-[17%] whitespace-pre-wrap break-words font-display font-black tracking-[-0.01em]",
-              textCardSizeClass(story.text ?? ""),
-            )}
+            className={cn(TEXT_CARD_BOX_CLASS, textCardSizeClass(story.text ?? ""))}
             style={{ color: "var(--story-on-media)" }}
           >
             {story.text}
@@ -156,6 +161,7 @@ function StoryVideo({
   onDuration,
   onTime,
   onEnded,
+  loop,
 }: {
   src: string;
   poster: string | null;
@@ -164,6 +170,7 @@ function StoryVideo({
   onDuration?: (ms: number) => void;
   onTime?: (ms: number) => void;
   onEnded?: () => void;
+  loop: boolean;
 }) {
   const video = useRef<HTMLVideoElement>(null);
   const callbacks = useRef({ onDuration, onTime, onEnded });
@@ -200,6 +207,7 @@ function StoryVideo({
       src={src}
       poster={poster ?? undefined}
       muted={muted}
+      loop={loop}
       playsInline
       preload="auto"
       className="absolute inset-0 h-full w-full object-cover"

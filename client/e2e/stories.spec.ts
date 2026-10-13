@@ -148,10 +148,13 @@ test("A posts a text story; B sees the ring, opens it, reacts and replies; A see
     await composer.getByRole("radio", { name: "Text" }).click();
     await composer.locator("[data-story-text]").fill("bora de cs hoje?");
     await composer.locator("[data-story-bg='grape']").click();
-    // Pre-ticked where A was: this server.
+    // Pre-ticked where A was: this server (the chip says so, the sheet ticks it).
+    await expect(composer.locator("[data-story-audience]")).toContainText("Stories ");
+    await composer.locator("[data-story-audience]").click();
     await expect(
       composer.getByRole("checkbox", { name: /^Stories / }),
     ).toHaveAttribute("aria-checked", "true");
+    await composer.getByRole("button", { name: "Done" }).click();
     await composer.locator("[data-story-post]").click();
     await expect(composer).toBeHidden();
     // A's own ring.
