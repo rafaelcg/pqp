@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { STORY_MAX_BYTES } from "@pqp/shared";
-import { checkStoryFile, checkVideoDuration, fitWithin, putStoryMedia } from "./upload";
+import {
+  checkStoryFile,
+  checkVideoDuration,
+  fitWithin,
+  prepareRecordedClip,
+  putStoryMedia,
+} from "./upload";
 
 describe("checkStoryFile", () => {
   it("refuses what the bytes say is not an allowed type", () => {
@@ -83,5 +89,33 @@ describe("putStoryMedia", () => {
     ]);
     expect(progress).toEqual([0.5, 1]);
     vi.unstubAllGlobals();
+  });
+});
+
+describe("prepareRecordedClip", () => {
+  const limits = { maxBytes: 1000, maxVideoMs: 30_000, videoEnabled: true };
+  // "ftyp" box with the "isom" brand: what a MediaRecorder writes for MP4.
+  const mp4 = new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 0, 0, 0, 0]);
+
+  it("refuses a recording that is not an MP4 on the bytes (a WebM from a browser that ignored the type)", async () => {
+    const webm = new Blob([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0, 0, 0, 0, 0])], { type: "video/webm" });
+    expect(await prepareRecordedClip({ blob: webm, durationMs: 5000 }, limits, null)).toEqual({
+      ok: false,
+      problem: { kind: "wrong-type" },
+    });
+  });
+
+  it("refuses a recording over the byte cap before probing anything", async () => {
+    const big = new Blob([mp4, new Uint8Array(2000)], { type: "video/mp4;codecs=avc1" });
+    expect(await prepareRecordedClip({ blob: big, durationMs: 5000 }, limits, null)).toEqual({
+      ok: false,
+      problem: { kind: "too-big" },
+    });
+  });
+
+  it("refuses video where the deployment has none", async () => {
+    const clip = new Blob([mp4], { type: "video/mp4" });
+    const result = await prepareRecordedClip({ blob: clip, durationMs: 5000 }, { ...limits, videoEnabled: false }, null);
+    expect(result).toEqual({ ok: false, problem: { kind: "wrong-type" } });
   });
 });

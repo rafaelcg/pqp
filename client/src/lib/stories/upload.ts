@@ -114,7 +114,8 @@ function readVideo(url: string): Promise<{ durationMs: number; width: number; he
     };
     video.onloadedmetadata = () => {
       const result = {
-        durationMs: Math.round(video.duration * 1000),
+        // A fragmented MP4 straight off a MediaRecorder can report Infinity.
+        durationMs: Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : 0,
         width: video.videoWidth,
         height: video.videoHeight,
       };
@@ -239,6 +240,77 @@ export function mediaInputFor(media: PreparedStoryMedia): StoryMediaInput {
     width: media.width,
     height: media.height,
     ...(media.durationMs !== null ? { durationMs: media.durationMs } : {}),
+  };
+}
+
+/**
+ * A frame taken from the camera, already cropped to 9:16 and encoded. It goes
+ * up as it is: re-encoding a second time would only cost it quality.
+ */
+export function preparedFromStill(still: {
+  blob: Blob;
+  width: number;
+  height: number;
+}): PreparedStoryMedia {
+  return {
+    kind: "image",
+    blob: still.blob,
+    contentType: "image/jpeg",
+    width: still.width,
+    height: still.height,
+    durationMs: null,
+    previewUrl: URL.createObjectURL(still.blob),
+  };
+}
+
+/**
+ * A clip off a MediaRecorder. Its length is the recorder's own clock, because
+ * a fragmented MP4 does not always carry one a `<video>` element can read; the
+ * element is only asked for the picture size, and `fallbackSize` (the camera
+ * track's) answers when it cannot.
+ */
+export async function prepareRecordedClip(
+  clip: { blob: Blob; durationMs: number },
+  limits: { maxBytes: number; maxVideoMs: number; videoEnabled: boolean },
+  fallbackSize: { width: number; height: number } | null,
+): Promise<PrepareResult> {
+  const blob =
+    clip.blob.type === "video/mp4" ? clip.blob : new Blob([clip.blob], { type: "video/mp4" });
+  const sniffed = await sniffFile(blob);
+  const early = checkStoryFile(sniffed, blob.size, limits);
+  if (early) {
+    return { ok: false, problem: early };
+  }
+  if (blob.size > limits.maxBytes) {
+    return { ok: false, problem: { kind: "too-big" } };
+  }
+  // The recorder stops at the limit; a few frames of slack is its clock, not a long clip.
+  const durationMs = Math.min(clip.durationMs, limits.maxVideoMs);
+  const previewUrl = URL.createObjectURL(blob);
+  let size = fallbackSize;
+  try {
+    const probed = await readVideo(previewUrl);
+    if (probed.width && probed.height) {
+      size = { width: probed.width, height: probed.height };
+    }
+  } catch {
+    // The camera's own size, above, is enough to post.
+  }
+  if (!size || durationMs <= 0) {
+    URL.revokeObjectURL(previewUrl);
+    return { ok: false, problem: { kind: "unreadable" } };
+  }
+  return {
+    ok: true,
+    media: {
+      kind: "video",
+      blob,
+      contentType: "video/mp4",
+      width: size.width,
+      height: size.height,
+      durationMs,
+      previewUrl,
+    },
   };
 }
 

@@ -3866,3 +3866,214 @@ html[data-immersive-stage] [data-immersive-hide] {
     opacity: 1;
   }
 }
+
+/* ------------------------------------------------------------------
+   Story composer v2: a phone-shaped column on every screen. The canvas is
+   always exactly 9:16 (layers are positioned in its own units), so on a tall
+   phone the chrome sits above and below it, and on a desktop the same column
+   is centred on the backdrop. Its width is whatever fits: the window height
+   minus the two chrome rows, times 9/16, never wider than the window.
+   ------------------------------------------------------------------ */
+.story-cmp {
+  --story-cmp-top: 56px;
+  --story-cmp-bottom: 176px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(100vw, calc((100dvh - var(--story-cmp-top) - var(--story-cmp-bottom)) * 9 / 16));
+  max-height: 100dvh;
+}
+@media (max-width: 640px) {
+  .story-cmp {
+    --story-cmp-top: 52px;
+    --story-cmp-bottom: 168px;
+  }
+}
+.story-cmp-head {
+  display: flex;
+  height: var(--story-cmp-top);
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding-inline: 8px;
+}
+.story-cmp-canvas {
+  position: relative;
+  aspect-ratio: 9 / 16;
+  width: 100%;
+  flex: none;
+  overflow: hidden;
+  border-radius: 18px;
+  background: var(--story-card);
+  container-type: size;
+  box-shadow: 0 0 0 1px var(--story-hairline);
+}
+@media (max-width: 640px) {
+  .story-cmp-canvas {
+    border-radius: 14px;
+  }
+}
+.story-cmp-foot {
+  display: flex;
+  min-height: var(--story-cmp-bottom);
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 4px 14px;
+}
+.story-field::placeholder {
+  color: var(--story-on-media-2);
+}
+
+/* A round button on the dark chrome or over the picture. */
+.story-cbtn {
+  display: inline-flex;
+  height: 40px;
+  min-width: 40px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 9999px;
+  padding-inline: 10px;
+  background: var(--story-dim);
+  color: var(--story-on-media);
+  font-size: 13px;
+  font-weight: 700;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+.story-cbtn:hover:not(:disabled) {
+  background: var(--story-field-fill);
+}
+.story-cbtn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.story-cbtn:disabled {
+  opacity: 0.4;
+}
+.story-cbtn[aria-pressed="true"] {
+  background: var(--story-on-media);
+  color: var(--story-card);
+}
+.story-cmp button:focus-visible,
+.story-cmp [role="radio"]:focus-visible,
+.story-cmp [data-story-layer]:focus-visible {
+  outline: 2px solid var(--story-accent);
+  outline-offset: 2px;
+}
+
+/* The shutter: a ring around a disc. Press scales the disc; a hold turns it
+   into a stop square and the ring into the progress of the 30 s. */
+.story-shutter {
+  position: relative;
+  display: flex;
+  height: 76px;
+  width: 76px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.story-shutter-ring {
+  position: absolute;
+  inset: 0;
+  transition: transform var(--duration-base) var(--ease-emphasized);
+}
+.story-shutter[data-recording="true"] .story-shutter-ring {
+  transform: scale(1.12);
+}
+.story-shutter-disc {
+  height: 58px;
+  width: 58px;
+  border-radius: 9999px;
+  background: var(--story-on-media);
+  transition:
+    transform var(--duration-fast) var(--ease-emphasized),
+    border-radius var(--duration-base) var(--ease-emphasized),
+    background var(--duration-base) var(--ease-standard);
+}
+.story-shutter:active .story-shutter-disc {
+  transform: scale(0.9);
+}
+.story-shutter[data-recording="true"] .story-shutter-disc {
+  height: 30px;
+  width: 30px;
+  border-radius: 8px;
+  background: var(--color-danger);
+}
+.story-rec-dot {
+  height: 8px;
+  width: 8px;
+  border-radius: 9999px;
+  background: var(--color-danger);
+  animation: story-rec-blink 1.1s var(--ease-standard) infinite;
+}
+@keyframes story-rec-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+.story-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--story-on-media);
+  animation: story-flash 220ms var(--ease-standard) both;
+}
+@keyframes story-flash {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.story-cmp-sheet {
+  animation: story-sheet-up var(--duration-slow) var(--ease-emphasized) both;
+}
+@keyframes story-sheet-up {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-rec-dot {
+    animation: none;
+  }
+  .story-flash {
+    animation: none;
+    opacity: 0;
+  }
+  .story-shutter-ring,
+  .story-shutter-disc,
+  .story-cbtn {
+    transition: none;
+  }
+  .story-shutter[data-recording="true"] .story-shutter-ring {
+    transform: none;
+  }
+  .story-shutter:active .story-shutter-disc,
+  .story-cbtn:active:not(:disabled) {
+    transform: none;
+  }
+  .story-cmp-sheet {
+    animation: story-fade-in var(--duration-fast) linear both;
+  }
+}

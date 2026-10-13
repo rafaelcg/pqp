@@ -126,7 +126,7 @@
           }
         ],
         "NSMicrophoneUsageDescription": "pqp needs microphone access for voice channels.",
-        "NSCameraUsageDescription": "pqp needs camera access for video in voice channels."
+        "NSCameraUsageDescription": "pqp needs camera access for video in voice channels and for taking photos and clips for stories."
       }
     },
     "dmg": {
