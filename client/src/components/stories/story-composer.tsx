@@ -156,6 +156,9 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   // Photos being prepared to place: several can be in flight, and each one holds a layer slot.
   const [photoJobs, setPhotoJobs] = useState(0);
   const pendingPhotos = useRef(0);
+  // Bumped when the stage is reset (Back, a tab switch): a photo still being prepared for the old
+  // stage is dropped when it finishes instead of landing on the new one.
+  const stageEpoch = useRef(0);
   const photoUrls = useRef(new Set<string>());
   const [background, setBackground] = useState<StoryBackground>("night");
   const [editor, dispatch] = useReducer(editorReducer, initialEditorState);
@@ -398,12 +401,20 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     pendingPhotos.current += 1;
     setPhotoJobs(pendingPhotos.current);
     setProblem(null);
+    const epoch = stageEpoch.current;
     let result: Awaited<ReturnType<typeof prepareLayerImage>>;
     try {
       result = await prepareLayerImage(file);
     } finally {
       pendingPhotos.current -= 1;
       setPhotoJobs(pendingPhotos.current);
+    }
+    if (epoch !== stageEpoch.current) {
+      // The stage was reset while this photo was being prepared: it belongs to work that is gone.
+      if (result.ok) {
+        URL.revokeObjectURL(result.layer.previewUrl);
+      }
+      return;
     }
     if (!result.ok) {
       showProblem(result.problem);
@@ -480,6 +491,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     setEditing(null);
     setPanel(null);
     // The layers were placed on that picture: the camera has none of them.
+    stageEpoch.current += 1;
     dispatch({ type: "reset" });
   }
 
@@ -743,6 +755,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     setDrawing(false);
     setPanel(null);
     // A text card's layers are not the camera's: each side starts clean.
+    stageEpoch.current += 1;
     dispatch({ type: "reset" });
     // The text card opens its editor every time the person lands on it with nothing written.
     autoOpenedText.current = false;
