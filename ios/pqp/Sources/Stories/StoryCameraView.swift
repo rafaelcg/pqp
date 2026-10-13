@@ -444,10 +444,13 @@ struct StoryCameraView: View {
         // The clip is finalized before the capture is torn down.
         let closing = engine
         let wasRecording = isRecording
+        let released = generation
         running = false
         Task {
             if wasRecording { await finishRecording() }
-            closing?.stop()
+            // If the camera was reopened while the clip was being finalized,
+            // the engine now belongs to that new start: it is not stopped.
+            if generation == released { closing?.stop() }
         }
     }
 
