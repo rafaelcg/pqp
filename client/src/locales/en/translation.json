@@ -3858,6 +3858,7 @@
   "integrations.channelNotText": "#{name} is {type}, not a text or forum channel.",
   "integrations.channelNotHere": "#{name} is not a text or forum channel in this server.",
   "integrations.channelForumsOff": "#{name} is a forum, and forums are off on this server.",
+  "integrations.channelNotVisible": "You cannot view one of the selected channels, so it cannot be a target.",
   "integrations.channelKind.voice": "a voice channel",
   "integrations.channelKind.thread": "a thread",
   "integrations.channelKind.category": "a category",

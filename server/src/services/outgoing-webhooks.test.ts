@@ -704,6 +704,129 @@ describeDb("outgoing webhooks", () => {
     expect(JSON.stringify(saved.body)).not.toContain("secret-room");
   });
 
+  it("refuses a private text channel the manager cannot view, and allows one they can", async () => {
+    const secret = await createChannel(serverId, "staff-only", "text");
+    const everyone = await getPool().query<{ id: string }>(
+      `SELECT id FROM roles WHERE server_id = $1 AND is_everyone`,
+      [serverId],
+    );
+    // VIEW_CHANNEL is bit 64: denied to @everyone makes the channel private.
+    await getPool().query(
+      `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+       VALUES ($1, 'role', $2, 0, 64)`,
+      [secret.id, everyone.rows[0]!.id],
+    );
+
+    const refused = await call<{
+      code: string;
+      error: string;
+      channels: Array<{ id: string; name: string; reason: string }>;
+    }>(
+      manager,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [secret.id] }),
+    );
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe("outgoing_webhook_channels");
+    expect(refused.body.channels).toEqual([
+      expect.objectContaining({ id: secret.id, reason: "channel_not_visible" }),
+    ]);
+    // The private name is not echoed back, in the sentence or the list.
+    expect(refused.body.error).not.toContain("staff-only");
+    expect(JSON.stringify(refused.body.channels)).not.toContain("staff-only");
+
+    // Adding it to an existing hook is refused the same way.
+    const own = await call<{ webhook: OutgoingWebhook }>(
+      manager,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody(),
+    );
+    expect(own.status).toBe(201);
+    const patched = await call<{ channels: Array<{ reason: string }> }>(
+      manager,
+      "PATCH",
+      `/api/outgoing-webhooks/${own.body.webhook.id}`,
+      { channelIds: [channelId, secret.id] },
+    );
+    expect(patched.status).toBe(400);
+    expect(patched.body.channels[0]?.reason).toBe("channel_not_visible");
+
+    // The owner can view it, so the owner can add it.
+    const byOwner = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "PATCH",
+      `/api/outgoing-webhooks/${own.body.webhook.id}`,
+      { channelIds: [channelId, secret.id] },
+    );
+    expect(byOwner.status).toBe(200);
+
+    // Once on the hook, a manager who still cannot view it keeps it on edit,
+    // on a channel list that repeats it, and on re-enable.
+    const renamed = await call<{ webhook: OutgoingWebhook }>(
+      manager,
+      "PATCH",
+      `/api/outgoing-webhooks/${own.body.webhook.id}`,
+      { name: "renamed" },
+    );
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.webhook.channelIds).toContain(secret.id);
+    const resent = await call<{ webhook: OutgoingWebhook }>(
+      manager,
+      "PATCH",
+      `/api/outgoing-webhooks/${own.body.webhook.id}`,
+      { channelIds: [channelId, secret.id, otherChannelId] },
+    );
+    expect(resent.status).toBe(200);
+    expect(resent.body.webhook.channelIds).toContain(secret.id);
+
+    // A manager granted a view overwrite may add the private channel.
+    await getPool().query(
+      `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+       VALUES ($1, 'member', $2, 64, 0)`,
+      [secret.id, manager.id],
+    );
+    const allowed = await call<{ webhook: OutgoingWebhook }>(
+      manager,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [secret.id] }),
+    );
+    expect(allowed.status).toBe(201);
+
+    // The server owner is not blocked by a deny on @everyone.
+    const ownerCreate = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [secret.id] }),
+    );
+    expect(ownerCreate.status).toBe(201);
+  });
+
+  it("refuses a channel flagged private that the manager is not a member of", async () => {
+    const secret = await createChannel(serverId, "board", "text", true);
+    const refused = await call<{ channels: Array<{ reason: string }> }>(
+      manager,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ channelIds: [channelId, secret.id] }),
+    );
+    expect(refused.status).toBe(400);
+    expect(refused.body.channels[0]?.reason).toBe("channel_not_visible");
+    expect(
+      (
+        await call(
+          owner,
+          "POST",
+          `/api/servers/${serverId}/outgoing-webhooks`,
+          createBody({ channelIds: [channelId, secret.id] }),
+        )
+      ).status,
+    ).toBe(201);
+  });
+
   it("stores one id when the same channel is sent in two cases", async () => {
     const created = await call<{ webhook: OutgoingWebhook }>(
       owner,

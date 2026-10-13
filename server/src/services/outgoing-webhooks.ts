@@ -266,8 +266,14 @@ export type OutgoingWebhookChannelProblem = {
    * `forum_not_visible`: a forum the acting user cannot view (a private one),
    * newly added in this save. `name` is the id then, so a crafted request
    * learns nothing about a channel it cannot see.
+   * `channel_not_visible`: the same rule for a text channel.
    */
-  reason: "type" | "server" | "forums_off" | "forum_not_visible";
+  reason:
+    | "type"
+    | "server"
+    | "forums_off"
+    | "forum_not_visible"
+    | "channel_not_visible";
 };
 
 type Sql = Pick<PoolClient, "query">;
@@ -317,6 +323,9 @@ function describeChannelProblem(problem: OutgoingWebhookChannelProblem): string 
   if (problem.reason === "forum_not_visible") {
     return `You cannot view the forum ${name}, so it cannot be a target.`;
   }
+  if (problem.reason === "channel_not_visible") {
+    return `You cannot view the channel ${name}, so it cannot be a target.`;
+  }
   if (problem.reason === "server") {
     return `#${name} is not a text or forum channel in this server.`;
   }
@@ -340,9 +349,10 @@ function describeChannelProblem(problem: OutgoingWebhookChannelProblem): string 
  * (`alreadySelected`), so editing the hook does not drop it. Threads, posts,
  * voice, categories and watch parties are rejected.
  *
- * A forum added in this save (not in `alreadySelected`) must be one `actorId`
- * can view: deliveries carry message bodies, so a Manage Webhooks holder
- * without VIEW_CHANNEL on a private forum must not subscribe to it.
+ * A text channel or forum added in this save (not in `alreadySelected`) must
+ * be one `actorId` can view: deliveries carry message bodies, so a Manage
+ * Webhooks holder without VIEW_CHANNEL on a private channel must not
+ * subscribe to it.
  */
 async function validateTextChannelIds(
   serverId: string,
@@ -387,15 +397,16 @@ async function validateTextChannelIds(
   const byId = new Map(
     result.rows.map((row) => [row.id.toLowerCase(), row]),
   );
-  // Forums this save newly adds, checked in one statement with the same
+  // Channels this save newly adds, checked in one statement with the same
   // predicate the channel list uses (owner, Administrator, overwrites).
-  let viewableForums: Set<string> | null = null;
-  if (actorId && forumChannelsEnabled(serverId)) {
+  let viewable: Set<string> | null = null;
+  if (actorId) {
+    const forumsOn = forumChannelsEnabled(serverId);
     const added = result.rows
       .filter(
         (row) =>
           row.kind === "server" &&
-          row.type === "forum" &&
+          (row.type === "text" || (row.type === "forum" && forumsOn)) &&
           !alreadySelected.has(row.id.toLowerCase()),
       )
       .map((row) => row.id);
@@ -407,7 +418,7 @@ async function validateTextChannelIds(
           WHERE c.id = ANY($1::uuid[]) AND ${channelVisibleSql("$2")}`,
         [added, actorId],
       );
-      viewableForums = new Set(visible.rows.map((row) => row.id.toLowerCase()));
+      viewable = new Set(visible.rows.map((row) => row.id.toLowerCase()));
     }
   }
   const kept: string[] = [];
@@ -418,6 +429,19 @@ async function validateTextChannelIds(
       continue;
     }
     if (row.kind === "server" && row.type === "text") {
+      if (
+        viewable &&
+        !alreadySelected.has(id.toLowerCase()) &&
+        !viewable.has(row.id.toLowerCase())
+      ) {
+        problems.push({
+          id,
+          name: row.id,
+          type: row.type,
+          reason: "channel_not_visible",
+        });
+        continue;
+      }
       kept.push(row.id);
       continue;
     }
@@ -428,7 +452,7 @@ async function validateTextChannelIds(
         continue;
       }
       if (forumsOn) {
-        if (viewableForums && !viewableForums.has(row.id.toLowerCase())) {
+        if (viewable && !viewable.has(row.id.toLowerCase())) {
           problems.push({
             id,
             name: row.id,

@@ -3858,6 +3858,7 @@
   "integrations.channelNotText": "#{name} é {type}, não canal de texto nem fórum.",
   "integrations.channelNotHere": "#{name} não é canal de texto nem fórum desse servidor.",
   "integrations.channelForumsOff": "#{name} é um fórum, e os fóruns estão desligados nesse servidor.",
+  "integrations.channelNotVisible": "Tu não vê um dos canais escolhidos, então ele não pode ser destino do webhook.",
   "integrations.channelKind.voice": "canal de voz",
   "integrations.channelKind.thread": "uma thread",
   "integrations.channelKind.category": "uma categoria",
