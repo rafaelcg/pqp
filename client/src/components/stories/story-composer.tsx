@@ -866,20 +866,23 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
                   <ImagePlus className="h-[18px] w-[18px]" aria-hidden />
                 </button>
               )}
-              <button
-                type="button"
-                className="story-cbtn"
-                data-story-tool-draw=""
-                aria-label={t("stories.editor.tool.draw")}
-                onClick={() => {
-                  setPanel(null);
-                  setEditing(null);
-                  dispatch({ type: "select", id: null });
-                  setDrawing(true);
-                }}
-              >
-                <Pen className="h-[18px] w-[18px]" aria-hidden />
-              </button>
+              {/* A drawing goes up as a picture: with no object storage there is nowhere to put it. */}
+              {config.mediaEnabled && (
+                <button
+                  type="button"
+                  className="story-cbtn"
+                  data-story-tool-draw=""
+                  aria-label={t("stories.editor.tool.draw")}
+                  onClick={() => {
+                    setPanel(null);
+                    setEditing(null);
+                    dispatch({ type: "select", id: null });
+                    setDrawing(true);
+                  }}
+                >
+                  <Pen className="h-[18px] w-[18px]" aria-hidden />
+                </button>
+              )}
               <button
                 type="button"
                 className="story-cbtn"
@@ -1113,6 +1116,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               setPanel(null);
               photoInput.current?.click();
             }}
+            photoAvailable={config.mediaEnabled}
             callAvailable={Boolean(voiceRooms)}
             callPlaced={Boolean(callLayer)}
             mentionFull={!canAddLayer(layers, "mention")}

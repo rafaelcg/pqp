@@ -76,6 +76,7 @@ export function StickerTray({
   onCall,
   onMention,
   onPhoto,
+  photoAvailable,
   callAvailable,
   callPlaced,
   mentionFull,
@@ -84,13 +85,15 @@ export function StickerTray({
   onCall: () => void;
   onMention: () => void;
   onPhoto: () => void;
+  /** Photos go up as files: with no object storage there is no photo tile. */
+  photoAvailable: boolean;
   /** Only inside a server: the call is a room of the server the composer was opened from. */
   callAvailable: boolean;
   callPlaced: boolean;
   mentionFull: boolean;
 }) {
   const { t } = useTranslation();
-  const tiles = [
+  const allTiles = [
     {
       key: "call",
       icon: <Headphones className="h-6 w-6" aria-hidden />,
@@ -116,6 +119,7 @@ export function StickerTray({
       onClick: onPhoto,
     },
   ];
+  const tiles = allTiles.filter((tile) => tile.key !== "photo" || photoAvailable);
   return (
     <ComposerSheet title={t("stories.editor.stickers")} onClose={onClose} testId="stickers">
       <div className="grid grid-cols-2 gap-2.5">
