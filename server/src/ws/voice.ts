@@ -5477,9 +5477,28 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
       (peer) => peer.userId,
       (peer) => peer.orphanedAt !== undefined,
     ).map(toParticipant);
+    // A NULL ROOM IS TWO DIFFERENT THINGS, and only one of them is "I do not
+    // know". `readClusterRoom` answers null when the rows were read and the
+    // room is EMPTY (no row, no local seat): that is the cluster's answer and
+    // it is the last word, so the room is this process's own seats and
+    // nothing else. Only a read that FAILED has no answer, and only then is
+    // the memory-and-events picture (`rosterWithoutRows`) the best there is.
+    //
+    // Until 2026-10-13 both took the second branch, and a room emptied by a
+    // person on the OTHER machine was therefore never described as empty to
+    // the sockets on this one. That run is driven by a bus hint, which queues
+    // no event, so `rosterWithoutRows` returned exactly what this process had
+    // last sent (the person who just left, still seated), the diff against
+    // that was empty, and no frame went out: no `left`, no sequence number,
+    // no keyframe either, because a keyframe only rides a change and an empty
+    // room never changes again. A sole occupant hopping between rooms left a
+    // ghost in each of them, in the sidebar of everybody on the other machine,
+    // until somebody next sat in the room.
     const participants =
       room?.participants ??
-      (registryOn() ? rosterWithoutRows(voiceChannelId, local, events) : local);
+      (registryOn() && !rowsRead
+        ? rosterWithoutRows(voiceChannelId, local, events)
+        : local);
     noteMusicListenerCount(voiceChannelId, participants);
     const transport = room?.transport ?? getRoomTransport(voiceChannelId);
 
