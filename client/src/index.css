@@ -3918,6 +3918,11 @@ html[data-immersive-stage] [data-immersive-hide] {
   flex: none;
   padding-inline: 8px;
 }
+/* Seven round buttons fit a narrow column (a short desktop window) by shrinking, never by spilling over the canvas. */
+.story-cmp-head .story-cbtn {
+  flex: 0 1 40px;
+  min-width: 30px;
+}
 .story-cmp-canvas {
   position: relative;
   aspect-ratio: 9 / 16;

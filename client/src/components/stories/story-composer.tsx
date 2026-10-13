@@ -6,6 +6,7 @@ import {
   Loader2,
   Pen,
   PenLine,
+  Redo2,
   RectangleHorizontal,
   Square,
   Sticker,
@@ -174,6 +175,8 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const [repliesEnabled, setRepliesEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [flash, setFlash] = useState(0);
+  // What the discard question is about: closing the composer, or leaving the picture / text card for the camera.
+  const [discardFor, setDiscardFor] = useState<null | { kind: "close" } | { kind: "retake" } | { kind: "mode"; mode: Mode }>(null);
   const [tabHidden, setTabHidden] = useState(() => document.visibilityState === "hidden");
   const fileInput = useRef<HTMLInputElement>(null);
   const photoInput = useRef<HTMLInputElement>(null);
@@ -231,7 +234,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   // undo step that would bring it back. Once none can (the step aged out), it is released.
   useEffect(() => {
     const live = new Set<string>();
-    for (const snapshot of [...editor.past, editor.layers]) {
+    for (const snapshot of [...editor.past, editor.layers, ...editor.future]) {
       for (const layer of snapshot) {
         if (layer.type === "image") {
           live.add(layer.previewUrl);
@@ -244,7 +247,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
         photoUrls.current.delete(url);
       }
     }
-  }, [editor.past, editor.layers]);
+  }, [editor.past, editor.layers, editor.future]);
   useEffect(
     () => () => {
       for (const url of photoUrls.current) {
@@ -287,6 +290,9 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     setProblem(null);
     setMedia(next);
     setMode("camera");
+    // Whatever was being typed or drawn on the way here is over: the picture is the base now.
+    setEditing(null);
+    setDrawing(false);
   }, []);
 
   const showProblem = useCallback(
@@ -472,6 +478,9 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     setProblem(null);
     setDrawing(false);
     setEditing(null);
+    setPanel(null);
+    // The layers were placed on that picture: the camera has none of them.
+    dispatch({ type: "reset" });
   }
 
   // ---------------------------------------------------------------- the call card
@@ -724,6 +733,74 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     setPanel(null);
   }
 
+  // ---------------------------------------------------------------- mode, discard
+  /** Anything the person would lose by closing: a picture or clip, or a layer. */
+  const hasContent = Boolean(media) || layers.length > 0;
+
+  function switchMode(next: Mode) {
+    setProblem(null);
+    setEditing(null);
+    setDrawing(false);
+    setPanel(null);
+    // A text card's layers are not the camera's: each side starts clean.
+    dispatch({ type: "reset" });
+    // The text card opens its editor every time the person lands on it with nothing written.
+    autoOpenedText.current = false;
+    setMode(next);
+  }
+
+  /** The camera / text tabs. Whatever was open in the other mode (the editor, a sheet) closes with it. */
+  function changeMode(next: Mode) {
+    if (recorder.recording || next === mode) {
+      return;
+    }
+    if (layers.length > 0) {
+      setDiscardFor({ kind: "mode", mode: next });
+    } else {
+      switchMode(next);
+    }
+  }
+
+  /** Back to the camera. Layers placed on the picture go with it, so a tap that cannot be undone asks first. */
+  function requestRetake() {
+    if (layers.length > 0) {
+      setDiscardFor({ kind: "retake" });
+    } else {
+      retake();
+    }
+  }
+
+  /** X and Escape: ask before throwing work away. */
+  function requestClose() {
+    if (hasContent && !submitting) {
+      setDiscardFor({ kind: "close" });
+    } else {
+      onClose();
+    }
+  }
+
+  function confirmDiscardAction() {
+    const what = discardFor;
+    setDiscardFor(null);
+    rootRef.current?.focus({ preventScroll: true });
+    if (what?.kind === "close") {
+      onClose();
+    } else if (what?.kind === "retake") {
+      retake();
+    } else if (what?.kind === "mode") {
+      switchMode(what.mode);
+    }
+  }
+
+  // The camera screen and the text editor never share the stage: if the camera is what is showing,
+  // nothing is being edited on top of it.
+  useEffect(() => {
+    if (showingCamera && (editing || drawing)) {
+      setEditing(null);
+      setDrawing(false);
+    }
+  }, [showingCamera, editing, drawing]);
+
   // ---------------------------------------------------------------- focus + keys
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -742,7 +819,10 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      if (panel) {
+      if (discardFor) {
+        setDiscardFor(null);
+        rootRef.current?.focus({ preventScroll: true });
+      } else if (panel) {
         setPanel(null);
       } else if (drawing) {
         setDrawing(false);
@@ -751,15 +831,23 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       } else if (selectedId) {
         dispatch({ type: "select", id: null });
       } else {
-        onClose();
+        requestClose();
       }
       return;
     }
     const typing = (event.target as HTMLElement).tagName === "TEXTAREA" || (event.target as HTMLElement).tagName === "INPUT";
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z" && !typing && !editing) {
-      event.preventDefault();
-      dispatch({ type: "undo" });
-      return;
+    if ((event.metaKey || event.ctrlKey) && !typing && !editing && !discardFor) {
+      const key = event.key.toLowerCase();
+      if (key === "z") {
+        event.preventDefault();
+        dispatch({ type: event.shiftKey ? "redo" : "undo" });
+        return;
+      }
+      if (key === "y") {
+        event.preventDefault();
+        dispatch({ type: "redo" });
+        return;
+      }
     }
     if (event.key !== "Tab" || !rootRef.current) {
       return;
@@ -768,7 +856,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       ...rootRef.current.querySelectorAll<HTMLElement>(
         "button:not([disabled]):not([tabindex='-1']), input:not([disabled]), textarea:not([disabled]), [tabindex='0']",
       ),
-    ].filter((element) => element.offsetParent !== null);
+    ].filter((element) => element.offsetParent !== null && !element.closest("[inert]"));
     if (focusable.length === 0) {
       return;
     }
@@ -799,6 +887,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const selected = layers.find((layer) => layer.id === selectedId) ?? null;
   const overlayOpen = Boolean(editing) || drawing || panel !== null;
   const canUndo = editor.past.length > 0;
+  const canRedo = editor.future.length > 0;
   const taken = useMemo(
     () => new Set(layers.flatMap((layer) => (layer.type === "mention" ? [layer.userId] : []))),
     [layers],
@@ -845,13 +934,14 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
         style={{ "--story-lift": `${stageLift}px` } as CSSProperties}
         onDrop={(items) => takeFiles(items.files)}
       >
-        <div className="story-cmp-head">
+        {/* While words are being typed only the text controls are on screen: the rest comes back on Done. */}
+        <div className={cn("story-cmp-head", editing && "invisible")} inert={Boolean(editing) || Boolean(discardFor)}>
           <button
             type="button"
             className="story-cbtn"
             data-story-close=""
             aria-label={t("stories.compose.close")}
-            onClick={onClose}
+            onClick={requestClose}
           >
             <X className="h-[18px] w-[18px]" aria-hidden />
           </button>
@@ -860,15 +950,15 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               type="button"
               className="story-cbtn"
               data-story-retake=""
+              title={t("stories.compose.retake")}
               aria-label={t("stories.compose.retake")}
-              onClick={retake}
+              onClick={requestRetake}
             >
               <ChevronLeft className="h-[18px] w-[18px]" aria-hidden />
-              <span className="hidden sm:inline">{t("stories.compose.retake")}</span>
             </button>
           )}
           {hasBase && !drawing && (
-            <div role="toolbar" aria-label={t("stories.editor.tools")} className="ml-auto flex items-center gap-1.5">
+            <div role="toolbar" aria-label={t("stories.editor.tools")} className="ml-auto flex min-w-0 shrink items-center gap-1.5">
               <button
                 type="button"
                 className="story-cbtn"
@@ -925,6 +1015,16 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               >
                 <Undo2 className="h-[18px] w-[18px]" aria-hidden />
               </button>
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-redo=""
+                aria-label={t("stories.editor.redo")}
+                disabled={!canRedo}
+                onClick={() => dispatch({ type: "redo" })}
+              >
+                <Redo2 className="h-[18px] w-[18px]" aria-hidden />
+              </button>
             </div>
           )}
         </div>
@@ -932,6 +1032,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
         <div
           ref={previewRef}
           className="story-cmp-canvas"
+          inert={Boolean(discardFor)}
           role="group"
           aria-label={t("stories.compose.preview")}
         >
@@ -975,7 +1076,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
             <DrawOverlay strokes={strokes} settings={drawSettings} onStroke={commitStroke} />
           )}
 
-          {selected && !gestureActive && !overlayOpen && selected.type !== "drawing" && (
+          {selected && hasBase && !gestureActive && !overlayOpen && selected.type !== "drawing" && (
             <div
               role="toolbar"
               aria-label={describe(selected)}
@@ -1062,7 +1163,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
           {flash > 0 && <span key={flash} className="story-flash" aria-hidden />}
         </div>
 
-        <div className="story-cmp-foot">
+        <div className={cn("story-cmp-foot", editing && "invisible")} inert={Boolean(editing) || Boolean(discardFor)}>
           {showingCamera && config.mediaEnabled && (
             <CameraControlsRow
               camera={camera}
@@ -1080,7 +1181,9 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               settings={drawSettings}
               onChange={setDrawSettings}
               canUndo={canUndo}
+              canRedo={canRedo}
               onUndo={() => dispatch({ type: "undo" })}
+              onRedo={() => dispatch({ type: "redo" })}
               onDone={() => setDrawing(false)}
             />
           )}
@@ -1099,17 +1202,21 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               label={t("stories.compose.title")}
               value={mode}
               options={modes}
-              onChange={(next) => {
-                if (recorder.recording) {
-                  return;
-                }
-                setProblem(null);
-                setMode(next);
-              }}
+              onChange={changeMode}
             />
           )}
         </div>
 
+        {discardFor && (
+          <DiscardDialog
+            onKeep={() => {
+              setDiscardFor(null);
+              // The dialog's button is gone: keep the keys (Escape) with the composer.
+              rootRef.current?.focus({ preventScroll: true });
+            }}
+            onDiscard={confirmDiscardAction}
+          />
+        )}
         {panel === "audience" && (
           <AudienceSheet
             state={{
@@ -1206,6 +1313,52 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       </FileDropZone>
     </div>,
     document.body,
+  );
+}
+
+/** "Descartar story?": asked when X or Escape would throw away a picture or a layer. */
+function DiscardDialog({ onKeep, onDiscard }: { onKeep: () => void; onDiscard: () => void }) {
+  const { t } = useTranslation();
+  const keep = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    keep.current?.focus({ preventScroll: true });
+  }, []);
+  return (
+    <div
+      className="absolute inset-0 z-[60] flex items-center justify-center px-6"
+      style={{ background: "var(--story-dim)" }}
+      data-story-discard=""
+    >
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="story-discard-title"
+        aria-describedby="story-discard-body"
+        className="w-full max-w-[300px] rounded-[18px] p-4 text-center"
+        style={{ background: "var(--story-tray)", color: "var(--story-on-media)", boxShadow: "var(--story-shadow)" }}
+      >
+        <h2 id="story-discard-title" className="text-base font-bold">
+          {t("stories.compose.discard.title")}
+        </h2>
+        <p id="story-discard-body" className="mt-1 text-sm" style={{ color: "var(--story-on-media-2)" }}>
+          {t("stories.compose.discard.body")}
+        </p>
+        <div className="mt-4 flex flex-col gap-2">
+          <button ref={keep} type="button" className="story-cbtn !h-11 w-full" data-story-discard-keep="" onClick={onKeep}>
+            {t("stories.compose.discard.keep")}
+          </button>
+          <button
+            type="button"
+            className="story-cbtn !h-11 w-full"
+            data-story-discard-confirm=""
+            style={{ background: "var(--color-danger)", color: "#fff" }}
+            onClick={onDiscard}
+          >
+            {t("stories.compose.discard.confirm")}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

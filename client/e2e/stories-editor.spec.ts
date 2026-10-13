@@ -73,7 +73,12 @@ async function openTextComposer(page: Page, ctx: Awaited<ReturnType<typeof setup
 
 async function addText(composer: Locator, text: string) {
   // The first text opens on its own; later ones from the text tool.
-  if (!(await composer.locator("[data-story-text]").isVisible())) {
+  // (While the editor is open the tools are out of the way, so wait for it before reaching for one.)
+  const opened = await composer
+    .locator("[data-story-text]")
+    .waitFor({ state: "visible", timeout: 1500 })
+    .then(() => true, () => false);
+  if (!opened) {
     await composer.locator("[data-story-tool-text]").click();
   }
   await composer.locator("[data-story-text]").fill(text);

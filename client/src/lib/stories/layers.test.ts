@@ -66,6 +66,28 @@ describe("editorReducer", () => {
     expect(run({ type: "undo" }).layers).toEqual([]);
   });
 
+  it("redo brings back what undo stepped over, and any new edit clears it", () => {
+    const undone = run({ type: "add", layer: text(1) }, { type: "add", layer: text(2) }, { type: "undo" });
+    expect(undone.future).toHaveLength(1);
+    const redone = editorReducer(undone, { type: "redo" });
+    expect(redone.layers.map((layer) => layer.id)).toEqual([uuid(1), uuid(2)]);
+    expect(redone.future).toEqual([]);
+    // Undo twice, redo once: one step still waiting.
+    const twice = editorReducer(editorReducer(redone, { type: "undo" }), { type: "undo" });
+    const once = editorReducer(twice, { type: "redo" });
+    expect(once.layers.map((layer) => layer.id)).toEqual([uuid(1)]);
+    expect(once.future).toHaveLength(1);
+    // A new edit ends the redo line, whatever kind it is.
+    expect(editorReducer(once, { type: "add", layer: text(3) }).future).toEqual([]);
+    expect(editorReducer(once, { type: "patch", id: uuid(1), patch: { rotation: 1 } }).future).toEqual([]);
+    expect(editorReducer(once, { type: "remove", id: uuid(1) }).future).toEqual([]);
+    expect(editorReducer(once, { type: "checkpoint" }).future).toEqual([]);
+    // A gesture in flight (transient) does not.
+    expect(editorReducer(once, { type: "patch", id: uuid(1), patch: { x: 0.6 }, transient: true }).future).toHaveLength(1);
+    // Nothing to redo is a no-op.
+    expect(editorReducer(redone, { type: "redo" })).toBe(redone);
+  });
+
   it("a gesture is one undo step: a checkpoint, then transient patches", () => {
     const state = run(
       { type: "add", layer: text(1) },
