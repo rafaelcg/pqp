@@ -172,6 +172,7 @@ import {
   streamQualityTelemetryBatchSchema,
   setVoiceAudienceSchema,
   setVoiceAudienceSpeakerSchema,
+  updateServerOrderSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -262,6 +263,7 @@ import {
   notifyChannelsUpdate,
   resolveChannelsUpdateAudience,
   notifyServerRemoved,
+  notifyServerOrder,
   applyAutomodEffects,
   postChannelMessage,
   resolveEmbedInBackground,
@@ -662,6 +664,7 @@ import {
   listChannels,
   listServerChannelIds,
   listServersForUser,
+  setServerOrder,
   mapChannel,
   mapServer,
   moveChannel,
@@ -4235,6 +4238,22 @@ router.get("/api/servers", async ({ user }) => {
     // A placement that fell over is not worth the sign-in it would cost.
   });
   return etagged({ servers: (await listServersForUser(user.id)).map(mapServer) });
+});
+
+/**
+ * Save the order of THIS account's server rail. Per person: it moves nothing
+ * for anybody else. Ids the caller does not hold are dropped rather than
+ * refused (a tab that has not heard it left a server must still be able to
+ * save), and servers it does not name keep their place after the named ones;
+ * see `setServerOrder`. Answers with the stored list in its new order, and
+ * tells the account's other sockets (`server-order-update`), minus the tab
+ * that saved (it sent its `origin`).
+ */
+router.put("/api/servers/order", async ({ req, user }) => {
+  const body = updateServerOrderSchema.parse(await readJsonBody(req));
+  const serverIds = await setServerOrder(user.id, body.serverIds);
+  notifyServerOrder(user.id, serverIds, body.origin);
+  return { serverIds };
 });
 
 router.post("/api/servers", async ({ req, user }) => {

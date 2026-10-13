@@ -38,6 +38,7 @@ import {
   SIDEBAR_THREADS_PER_CHANNEL,
   withProfileUpdate,
   applyLayoutToChannels,
+  applyServerOrder,
   layoutToPayload,
   CHANNEL_LAYOUT_OFF,
   CHANNEL_LAYOUT_STALE,
@@ -372,6 +373,7 @@ import {
   listTimeouts,
   fetchMessages,
   fetchServers,
+  saveServerOrder,
   fetchUnread,
   fetchVoiceBackend,
   hideConversation,
@@ -655,6 +657,7 @@ import { useUserStatus } from "@/hooks/use-status";
 import { useAttentionReport } from "@/hooks/use-attention";
 import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
+import { newRailOrigin } from "@/lib/server-rail-reorder";
 import { adoptAccentHuePreference } from "@/lib/accent";
 import { getAppearance } from "@/lib/appearance";
 import { adoptLook } from "@/lib/choose-look";
@@ -2705,6 +2708,17 @@ function MainAppContent({
   );
   const serversRef = useRef(servers);
   serversRef.current = servers;
+  // The server rail's order (`PUT /api/servers/order`). `railOriginRef` is this
+  // tab's own id, sent with a save and echoed on the frame the account's OTHER
+  // tabs get, so this one can skip its own echo. `railSavesInFlightRef` and
+  // `railSaveSeqRef` keep two quick drags from fighting: only the newest save's
+  // answer (or failure) is allowed to touch the list.
+  const railOriginRef = useRef<string>("");
+  if (railOriginRef.current === "") {
+    railOriginRef.current = newRailOrigin();
+  }
+  const railSavesInFlightRef = useRef(0);
+  const railSaveSeqRef = useRef(0);
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
   /**
@@ -5328,6 +5342,22 @@ function MainAppContent({
             return;
           }
 
+          // Another tab or device of this account dragged its server rail. This
+          // tab follows, unless the frame is the echo of its own save (same
+          // `origin`) or a save of its own is still in the air: that answer is
+          // the truth, and applying an older frame first would flick the rail
+          // back for a moment, mid-drag.
+          if (message.type === "server-order-update") {
+            if (
+              (message.origin && message.origin === railOriginRef.current) ||
+              railSavesInFlightRef.current > 0
+            ) {
+              return;
+            }
+            setServers((rows) => applyServerOrder(rows, message.serverIds));
+            return;
+          }
+
           // Another tab or device of this account changed its status. Without
           // this the user panel here read the old choice until a reload.
           if (message.type === "own-status") {
@@ -6734,6 +6764,36 @@ function MainAppContent({
         error instanceof Error ? error.message : "Failed to move channel",
       );
     }
+  }
+
+  /**
+   * The rail was reordered (drag, Alt+arrows, or the menu). Optimistic: the
+   * list moves now, the save follows, and if it fails the list goes back to
+   * where it was with a line saying so. Only the newest save may roll back or
+   * adopt the stored answer, so a quick second drag is never undone by the
+   * first one finishing late.
+   */
+  function handleReorderServers(ids: string[]) {
+    const before = serversRef.current.map((row) => row.id);
+    const seq = ++railSaveSeqRef.current;
+    setServers((rows) => applyServerOrder(rows, ids));
+    railSavesInFlightRef.current += 1;
+    saveServerOrder(ids, railOriginRef.current)
+      .then(({ serverIds }) => {
+        if (seq === railSaveSeqRef.current) {
+          setServers((rows) => applyServerOrder(rows, serverIds));
+        }
+      })
+      .catch(() => {
+        if (seq === railSaveSeqRef.current) {
+          setServers((rows) => applyServerOrder(rows, before));
+          setAppNotice(null);
+          setAppError(translateMessage("chrome.railReorderFailed"));
+        }
+      })
+      .finally(() => {
+        railSavesInFlightRef.current -= 1;
+      });
   }
 
   function handleFavoriteChannelIdsChange(ids: string[]) {
@@ -12585,6 +12645,7 @@ function MainAppContent({
           void loadChannels(id);
           setMobileNavOpen(true);
         }}
+        onReorderServers={handleReorderServers}
         onCreateServer={() => setShowCreateServer(true)}
         onJoinServer={() => setInviteMode("join")}
         onInvite={openInviteForServer}
