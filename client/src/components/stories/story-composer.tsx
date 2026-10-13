@@ -526,13 +526,11 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
           preview={{
             channelName,
             names: (room?.occupants ?? []).map((person) => person.displayName.split(/\s+/)[0] ?? ""),
-            // What viewers will see: the card only stays open while its author is in the room.
-            authorAway: !room || !room.occupants.some((person) => person.id === meId),
           }}
         />
       );
     },
-    [voiceRooms, meId],
+    [voiceRooms],
   );
 
   const ready =

@@ -153,11 +153,18 @@ export const STORY_LAYER_DRAWING_TYPES = ["image/png", "image/webp"] as const;
  *   to front" works on it. A second drawing session does not add a second
  *   drawing (there is one): it moves the drawing layer back to the top, so new
  *   strokes are never hidden under a photo or a call card placed since.
- * - The BASE (the photo or clip) fills the canvas when it is within
- *   `baseFillTolerance` of 9:16 (cropped to fit), and otherwise is shown whole
- *   over a blurred copy of itself (a video, on black): `storyBaseFit`.
- * - A viewer whose screen is not 9:16 covers it with the canvas, so the base
- *   and the layers are cropped by the same amount.
+ * - The BASE (the photo or clip) fills the CANVAS when it is within
+ *   `baseFillTolerance` of 9:16 (cropped to fit the canvas), and otherwise is
+ *   shown whole inside the canvas over a blurred copy of itself:
+ *   `storyBaseFit`.
+ * - A viewer NEVER crops the author's canvas. On a screen taller or wider than
+ *   9:16 the whole canvas (base and every layer) is fitted INSIDE the screen
+ *   (contain, centered), and the rest of the screen is filled with the blurred
+ *   base (a photo, or a video's poster) or, for a text card, its background
+ *   colour. The viewer's own chrome (progress bars, header, reply row, the
+ *   owner's views bar) is drawn over the screen, not over a cropped canvas, so
+ *   a layer placed at the edge of the canvas is at the edge of the canvas
+ *   everywhere.
  */
 export const STORY_LAYOUT = {
   canvasAspect: 9 / 16,

@@ -3828,10 +3828,45 @@ html[data-immersive-stage] [data-immersive-hide] {
 }
 .story-sheet {
   transform: translateY(100%);
-  transition: transform var(--duration-slow) var(--ease-emphasized);
+  /* Closed means gone: hidden once it has slid away, so no sliver of it can show under the owner bar. */
+  visibility: hidden;
+  transition:
+    transform var(--duration-slow) var(--ease-emphasized),
+    visibility 0s linear var(--duration-slow);
 }
 [data-story-sheet="open"] .story-sheet {
   transform: none;
+  visibility: visible;
+  transition:
+    transform var(--duration-slow) var(--ease-emphasized),
+    visibility 0s;
+}
+/* The owner bar ("Visto por N") gives way to the sheet that carries the same title. */
+[data-story-sheet="open"] [data-story-owner-bar] {
+  opacity: 0;
+  pointer-events: none;
+}
+[data-story-owner-bar] {
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* The blurred copy of the base behind the author's canvas. A base shown whole always has it; a
+   base that fills the canvas only needs it when the card is taller or wider than 9:16. */
+.story-backdrop {
+  display: none;
+}
+.story-backdrop[data-always] {
+  display: block;
+}
+@container (min-aspect-ratio: 0.568) {
+  .story-backdrop {
+    display: block;
+  }
+}
+@container (max-aspect-ratio: 0.557) {
+  .story-backdrop {
+    display: block;
+  }
 }
 
 /*

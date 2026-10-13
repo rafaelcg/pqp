@@ -1255,7 +1255,16 @@ as today.
   switching tab with layers placed asks "Descartar story?" first, and so does X
   (or Escape) with any picture or layer. Undo has a redo beside it (Shift+Cmd/Ctrl+Z,
   Ctrl+Y); any new edit clears the redo line.
-- Viewer: base, then layers in order, scaled to the viewer's canvas and clipped.
+- Viewer: base, then layers in order, scaled to the viewer's canvas. **The viewer never
+  crops the author's canvas** (decision, 2026-10-13): on a screen taller or wider than 9:16
+  the whole 9:16 canvas (base and layers) is fitted INSIDE it (contain, centered) and the
+  remaining space is filled with the blurred base (the photo, or a video's poster) or the
+  text card's background colour. The chrome (bars, header, reply row, the owner's "Visto
+  por" bar) is drawn over the screen, so a layer placed at the edge of the canvas is at
+  the edge everywhere, and a text layer is never cut off. `storyBaseFit` (fill or whole) is
+  about the base INSIDE the canvas and is unchanged. Web, iOS and Android all follow this.
+  The call card is the wide compact row (0.82 of the canvas width, about 12% of its height):
+  the server's tile, the status and room, up to three faces, and "Entrar".
   Mentions and the call are tappable; text and photos are not. The desktop
   viewer uses the height of the window (about 92dvh, 9:16), not a small card.
 
