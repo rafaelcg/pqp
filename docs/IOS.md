@@ -860,11 +860,13 @@ finger gestures only.
 `StoryViewer` draws the base and then every layer over it (`StoryStage.swift`),
 on the same 9:16 canvas the editor used.
 
-- **The canvas COVERS the card**: the smallest 9:16 box that covers the screen,
-  centered, so on a tall phone it is as tall as the screen and a little wider,
-  and the strip past each side is clipped, layers included, as on the web.
-  Everything a layer is, is a fraction of the canvas, so it sits where the author
-  put it (`StoryViewerLayersTests`).
+- **The author's canvas is never cropped**: it is the biggest 9:16 box that
+  FITS the card (contain), centered, and what the card has left over (a tall phone
+  has a little above and below) is filled by the base itself, blurred for a photo
+  or a video and the background color for a card. The chrome sits over the canvas
+  as it always has. Everything a layer is, is a fraction of the canvas, so it sits
+  where the author put it, and the viewer and the editor share the same canvas
+  rule (`StoryViewerLayersTests`).
 - **Base**: a picture within 12% of 9:16 fills the canvas; any other photo is
   shown whole over a blurred copy of itself and a video over black. A text card
   is its background plus its text layers; a card from before layers keeps its

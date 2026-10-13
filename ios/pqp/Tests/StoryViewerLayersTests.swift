@@ -23,23 +23,34 @@ final class StoryViewerLayersTests: XCTestCase {
 
     // MARK: - The canvas
 
-    /// The canvas is the smallest 9:16 box that COVERS the card, centered: on
-    /// a tall phone it is as tall as the screen and a little wider, so a strip
-    /// of canvas past each side is clipped.
-    func testTheCanvasCoversTheCardAndIsCentered() {
+    /// The author's canvas is never cropped: it is the biggest 9:16 box that
+    /// FITS the card, centered; the rest of the card is filled by the base.
+    func testTheCanvasFitsTheCardAndIsNeverCropped() {
         let phone = StoryStage.canvas(in: CGSize(width: 402, height: 781))
-        XCTAssertEqual(phone.height, 781, accuracy: 0.5)
-        XCTAssertEqual(phone.width, 781 * 9 / 16, accuracy: 0.5)
-        XCTAssertLessThan(phone.minX, 0, "Wider than the screen: the sides are clipped")
+        XCTAssertEqual(phone.width, 402, accuracy: 0.5, "As wide as the card")
+        XCTAssertEqual(phone.height, 402 * 16 / 9, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(phone.minX, 0)
+        XCTAssertGreaterThanOrEqual(phone.minY, 0)
+        XCTAssertLessThanOrEqual(phone.maxY, 781, "Inside the card on every side")
         XCTAssertEqual(phone.midX, 201, accuracy: 0.5)
         XCTAssertEqual(phone.midY, 390.5, accuracy: 0.5)
-        // A card already 9:16 is covered exactly.
-        let exact = StoryStage.canvas(in: CGSize(width: 360, height: 640))
-        XCTAssertEqual(exact, CGRect(x: 0, y: 0, width: 360, height: 640))
-        // A wide card: as wide as the card, much taller than it.
+        // A card already 9:16 is filled exactly.
+        XCTAssertEqual(StoryStage.canvas(in: CGSize(width: 360, height: 640)), CGRect(x: 0, y: 0, width: 360, height: 640))
+        // A wide card: as tall as the card, with room left and right.
         let window = StoryStage.canvas(in: CGSize(width: 900, height: 600))
-        XCTAssertEqual(window.width, 900, accuracy: 0.5)
-        XCTAssertGreaterThan(window.height, 600)
+        XCTAssertEqual(window.height, 600, accuracy: 0.5)
+        XCTAssertEqual(window.width, 337.5, accuracy: 0.5)
+        XCTAssertEqual(window.midX, 450, accuracy: 0.5)
+    }
+
+    /// The same canvas the editor uses, so a layer is where it was placed.
+    func testTheViewerAndTheEditorShareTheCanvasRule() {
+        for size in [CGSize(width: 402, height: 781), CGSize(width: 440, height: 900), CGSize(width: 320, height: 500)] {
+            let width = min(size.width, size.height * StoryCanvas.aspect)
+            let viewer = StoryStage.canvas(in: size)
+            XCTAssertEqual(viewer.width, width, accuracy: 0.001)
+            XCTAssertEqual(viewer.height, width / StoryCanvas.aspect, accuracy: 0.001)
+        }
     }
 
     func testOnlyAPictureShapedLikeTheCanvasFillsIt() {

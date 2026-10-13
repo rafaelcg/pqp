@@ -6,14 +6,16 @@ import UIKit
 /// background) and, over it, every layer the author placed, on the 9:16 canvas
 /// the editor drew them on.
 ///
-/// The canvas is a 9:16 box that COVERS the card, centered: on a tall phone it
-/// is as tall as the screen and a little wider than it, so the strip of canvas
-/// past each side is clipped, layers included, as on the web. Everything the
-/// author placed is a fraction of the canvas, so it sits where they put it.
+/// The author's canvas is NEVER cropped. It is the biggest 9:16 box that fits
+/// the card (contain), centered, and whatever the card has left over (a tall
+/// phone has a little above and below) is filled with the base itself, blurred
+/// for a photo or a video and the background color for a card; the chrome sits
+/// over the canvas as it always has. Everything an author placed is a fraction
+/// of the canvas, so it is where they put it.
 enum StoryStage {
-    /// The smallest 9:16 box that covers `size`, centered on it.
+    /// The biggest 9:16 box that fits `size`, centered.
     static func canvas(in size: CGSize) -> CGRect {
-        let width = max(size.width, size.height * StoryCanvas.aspect)
+        let width = min(size.width, max(1, size.height) * StoryCanvas.aspect)
         let height = width / StoryCanvas.aspect
         return CGRect(x: (size.width - width) / 2, y: (size.height - height) / 2, width: width, height: height)
     }
@@ -37,9 +39,8 @@ struct StoryStageBase: View {
     var body: some View {
         let canvas = StoryStage.canvas(in: size)
         ZStack {
-            Color.black
+            backdrop
             if story.isText {
-                LinearGradient(colors: StoryRules.backgroundColors(story.background), startPoint: .top, endPoint: .bottom)
                 if !StoryStage.usesLayers(story) {
                     // From before layers: the line in the middle, as it was.
                     Text(verbatim: story.text ?? "")
@@ -48,31 +49,48 @@ struct StoryStageBase: View {
                         .multilineTextAlignment(.center)
                         .minimumScaleFactor(0.5)
                         .padding(.horizontal, 28)
+                        .frame(width: canvas.width, height: canvas.height)
                 }
             } else if let media = story.media {
                 mediaView(media)
+                    .frame(width: canvas.width, height: canvas.height)
+                    .clipped()
             }
         }
-        .frame(width: canvas.width, height: canvas.height)
-        .position(x: size.width / 2, y: size.height / 2)
         .frame(width: size.width, height: size.height)
         .clipped()
+    }
+
+    /// Fills the whole card: the card's background color, or a blurred copy of
+    /// the picture (the poster, for a video).
+    @ViewBuilder
+    private var backdrop: some View {
+        if story.isText {
+            LinearGradient(colors: StoryRules.backgroundColors(story.background), startPoint: .top, endPoint: .bottom)
+        } else if let media = story.media {
+            let source = media.isVideo ? media.posterUrl : media.url
+            ZStack {
+                Color.black
+                if let url = source.flatMap({ Avatar.resolve($0) ?? URL(string: $0) }) {
+                    AsyncImage(url: url) { phase in
+                        if case .success(let image) = phase {
+                            image.resizable().scaledToFill().blur(radius: 32).scaleEffect(1.12).overlay(Color.black.opacity(0.28))
+                        }
+                    }
+                }
+            }
+        } else {
+            Color.black
+        }
     }
 
     @ViewBuilder
     private func mediaView(_ media: StoryMedia) -> some View {
         let fills = StoryStage.fillsCanvas(width: media.width, height: media.height)
         ZStack {
-            // A photo that does not fill the canvas sits over a blurred copy of
-            // itself; a video, over black.
-            if !fills, !media.isVideo, let url = Avatar.resolve(media.url) ?? URL(string: media.url) {
-                AsyncImage(url: url) { phase in
-                    if case .success(let image) = phase {
-                        image.resizable().scaledToFill().blur(radius: 28).scaleEffect(1.15).overlay(Color.black.opacity(0.25))
-                    }
-                }
-                .clipped()
-            }
+            // A video that does not fill the canvas sits on black, as it did
+            // in the editor.
+            if media.isVideo, !fills { Color.black }
             if media.isVideo, let player {
                 StoryVideoSurface(player: player, fills: fills)
                     .overlay(alignment: .topTrailing) {
@@ -131,10 +149,11 @@ struct StoryLayersOverlay: View {
             }
         }
         .frame(width: canvas.width, height: canvas.height)
+        // A layer dragged half off the canvas is clipped at the canvas edge,
+        // as it was in the editor.
+        .clipped()
         .position(x: size.width / 2, y: size.height / 2)
         .frame(width: size.width, height: size.height)
-        // Layers outside the card are clipped, as the author's canvas was.
-        .clipped()
     }
 }
 

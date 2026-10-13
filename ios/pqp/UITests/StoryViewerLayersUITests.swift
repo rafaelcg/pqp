@@ -110,6 +110,103 @@ final class StoryViewerLayersUITests: XCTestCase {
         snap(app, "viewer-mention-profile")
     }
 
+    // MARK: - The editor and the viewer agree
+
+    /// The smallest box around every pixel within `tolerance` of a color.
+    /// Looked for in the middle band of the screen only: the editor's Next
+    /// button is the same lime as a lime title, and the chrome is at the edges.
+    private func box(of color: (r: Int, g: Int, b: Int), in image: UIImage, tolerance: Int = 14) -> CGRect? {
+        guard let full = image.cgImage else { return nil }
+        let band = CGRect(x: 0, y: 130 * image.scale, width: CGFloat(full.width), height: 630 * image.scale)
+        guard let cg = full.cropping(to: band) else { return nil }
+        let width = cg.width
+        let height = cg.height
+        var data = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(
+            data: &data, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var minX = width, minY = height, maxX = -1, maxY = -1
+        for y in 0..<height {
+            for x in 0..<width {
+                let i = (y * width + x) * 4
+                if abs(Int(data[i]) - color.r) <= tolerance, abs(Int(data[i + 1]) - color.g) <= tolerance,
+                   abs(Int(data[i + 2]) - color.b) <= tolerance {
+                    minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+                }
+            }
+        }
+        guard maxX >= 0 else { return nil }
+        let scale = image.scale
+        return CGRect(x: CGFloat(minX) / scale, y: 130 + CGFloat(minY) / scale,
+                      width: CGFloat(maxX - minX + 1) / scale, height: CGFloat(maxY - minY + 1) / scale)
+    }
+
+    /// Text moved, scaled and turned, a solid-background line and a photo layer
+    /// are built in the editor, posted, and opened in the viewer: each of them
+    /// is at the same place, the same size and the same angle in both.
+    func testTheViewerDrawsEveryLayerWhereTheEditorPutIt() throws {
+        try XCTSkipUnless(request("GET", "/api/stories/config")?["enabled"] as? Bool == true, "STORIES is off on the dev server.")
+        let servers = request("GET", "/api/servers")?["servers"] as? [[String: Any]]
+        let serverId = try XCTUnwrap(servers?.first?["id"] as? String)
+        let app = XCUIApplication()
+        app.launchEnvironment.merge(TestSeed.launchEnvironment) { _, new in new }
+        app.launchEnvironment["PQP_STORY_FIXTURE_LAYERS"] = "1"
+        app.launchArguments += ["-pqp.hasCompletedOnboarding", "YES", "-pqp.lastVisited", ""]
+        if ProcessInfo.processInfo.environment["PQP_QA_SHOTS"] != nil {
+            let language = ProcessInfo.processInfo.environment["PQP_QA_LANG"] ?? "pt-BR"
+            app.launchArguments += ["-AppleLanguages", "(\(language))", "-AppleLocale", language.replacingOccurrences(of: "-", with: "_")]
+        }
+        app.launch()
+        TestSeed.passAgeGate(self)
+        app.buttons["hub.server.\(serverId)"].tap()
+        let more = app.navigationBars.buttons.matching(NSPredicate(format: "label == 'More' OR label == 'Mais'")).firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 15))
+        more.tap()
+        let newStory = app.buttons["Novo story"].exists ? app.buttons["Novo story"] : app.buttons["New story"]
+        XCTAssertTrue(newStory.waitForExistence(timeout: 5))
+        newStory.tap()
+        XCTAssertTrue(app.buttons["composer.next"].waitForExistence(timeout: 20), "The fixture built the composition")
+        sleep(1)
+        let editorShot = app.screenshot().image
+        snap(app, "compare-editor")
+
+        app.buttons["composer.next"].tap()
+        let post = app.buttons["audience.post"]
+        XCTAssertTrue(post.waitForExistence(timeout: 10))
+        post.tap()
+        let own = app.buttons["stories.own"]
+        XCTAssertTrue(own.waitForExistence(timeout: 30), "Posted")
+        own.tap()
+        XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
+        // The viewer opens on your oldest story; step to the one just posted.
+        var guardCount = 0
+        while app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'posicao' OR label CONTAINS 'caixa'")).count == 0,
+              guardCount < 12 {
+            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            sleep(1)
+            guardCount += 1
+        }
+        sleep(2)
+        let viewerShot = app.screenshot().image
+        snap(app, "compare-viewer")
+
+        let marks: [(name: String, color: (r: Int, g: Int, b: Int))] = [
+            ("the lime title", (0xBB, 0xEC, 0x4C)),
+            ("the pink box", (0xFF, 0x5F, 0xA2)),
+            ("the photo layer", (0xFF, 0x94, 0x00)),
+        ]
+        for mark in marks {
+            let inEditor = try XCTUnwrap(box(of: mark.color, in: editorShot), "\(mark.name) is in the editor")
+            let inViewer = try XCTUnwrap(box(of: mark.color, in: viewerShot), "\(mark.name) is in the viewer")
+            XCTAssertLessThan(abs(inEditor.midX - inViewer.midX), 3, "\(mark.name): same centre x \(inEditor) vs \(inViewer)")
+            XCTAssertLessThan(abs(inEditor.midY - inViewer.midY), 3, "\(mark.name): same centre y \(inEditor) vs \(inViewer)")
+            XCTAssertLessThan(abs(inEditor.width - inViewer.width), 4, "\(mark.name): same width \(inEditor) vs \(inViewer)")
+            XCTAssertLessThan(abs(inEditor.height - inViewer.height), 4, "\(mark.name): same height \(inEditor) vs \(inViewer)")
+        }
+    }
+
     private func snap(_ app: XCUIApplication, _ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
