@@ -513,10 +513,11 @@ struct StoryCallChoice: Identifiable, Hashable, Sendable {
     var id: String { channelId }
 }
 
-/// Which room "Chama pra call" starts on, and whether the sticker will be open
-/// once posted. The server keeps a call sticker live only while its AUTHOR is
-/// in the room, so a sticker for a room the author is not in is posted already
-/// closed ("A call acabou") for everyone. Pure so it is tested, not eyeballed.
+/// Which room "Chama pra call" starts on. A call sticker is live whenever the
+/// room exists and its author can still use it, with nobody in it too ("Ninguém
+/// na call agora" and the door), so there is no warning about the author being
+/// outside the room. Nothing is picked for them unless they are in one. Pure so
+/// it is tested, not eyeballed.
 enum StoryCallRoom {
     static func authorIn(_ channelId: String, userId: String?, occupants: (String) -> [VoiceParticipant]) -> Bool {
         guard let userId else { return false }
@@ -683,16 +684,6 @@ struct StoryCallPicker: View {
                 Text("No voice room you can post to.")
                     .font(Typography.caption)
                     .foregroundStyle(.white.opacity(0.75))
-            }
-            if let selection, !StoryCallRoom.authorIn(
-                selection.channelId, userId: session.currentUser?.id,
-                occupants: { session.voiceOccupancy.participants(in: $0) }
-            ) {
-                Text(verbatim: String(localized: "You're not in \(selection.channelName). The card only lets people in while you're in the call."))
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("composer.call.notInRoom")
             }
             ScrollView {
                 VStack(spacing: 6) {
