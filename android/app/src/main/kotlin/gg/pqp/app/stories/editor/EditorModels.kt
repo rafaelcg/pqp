@@ -57,7 +57,7 @@ data class PhotoLayer(
     override fun placed(x: Float, y: Float, scale: Float, rotation: Float) = copy(x = x, y = y, scale = scale, rotation = rotation)
 }
 
-/** Freehand ink over the whole canvas. There is at most one; it never moves. */
+/** Freehand ink over the whole canvas. There is at most one; it never moves, but it has a place in the stack like any layer. */
 data class InkLayer(
     override val id: String,
     val strokes: List<Stroke> = emptyList(),
@@ -214,13 +214,13 @@ object LayerOps {
     }
 
     /**
-     * Adds [layer] on top. A second call replaces the first (there is one call
-     * per story). The ink goes right above the picture, under everything else,
-     * so text and stickers placed after it stay readable over it.
+     * Adds [layer] on top: the order is the order things were made, for every
+     * type, the drawing included. A second call replaces the first (there is
+     * one call per story), and so does a second drawing (one per story).
      */
     fun add(layers: List<EditorLayer>, layer: EditorLayer): List<EditorLayer> = when (layer) {
         is CallLayer -> layers.filterNot { it is CallLayer } + layer
-        is InkLayer -> listOf(layer) + layers.filterNot { it is InkLayer }
+        is InkLayer -> layers.filterNot { it is InkLayer } + layer
         else -> layers + layer
     }
 
@@ -229,21 +229,36 @@ object LayerOps {
     fun replace(layers: List<EditorLayer>, layer: EditorLayer): List<EditorLayer> =
         layers.map { if (it.id == layer.id) layer else it }
 
-    /** To the top of the stack, except above nothing: the ink stays under. */
+    /** To the top of the stack. The drawing goes like any other layer. */
     fun bringToFront(layers: List<EditorLayer>, id: String): List<EditorLayer> {
         val layer = layers.firstOrNull { it.id == id } ?: return layers
-        if (layer is InkLayer) return layers
+        if (layers.last().id == id) return layers
         return layers.filterNot { it.id == id } + layer
     }
 
-    /** A layer in place of the ink's strokes, with one more stroke on it (or the ink created). */
+    /** Whether "bring forward" would change anything: not for the topmost layer, nor the only one. */
+    fun canBringForward(layers: List<EditorLayer>, id: String): Boolean =
+        layers.size > 1 && layers.any { it.id == id } && layers.last().id != id
+
+    /**
+     * The ink with one more stroke on it, or the ink created. A story has one
+     * drawing, so a new drawing session that starts with layers above it
+     * brings it back to the top: the new stroke is on top of what the finger
+     * sees, never hidden under a photo placed since.
+     */
     fun withStroke(layers: List<EditorLayer>, newId: () -> String, stroke: Stroke): List<EditorLayer> {
         val ink = layers.filterIsInstance<InkLayer>().firstOrNull()
         return if (ink == null) {
             add(layers, InkLayer(newId(), listOf(stroke)))
         } else {
-            replace(layers, ink.copy(strokes = ink.strokes + stroke))
+            layers.filterNot { it.id == ink.id } + ink.copy(strokes = ink.strokes + stroke)
         }
+    }
+
+    /** Opening the draw tool with a drawing already there: it goes to the top so what is drawn next is seen. */
+    fun inkToFront(layers: List<EditorLayer>): List<EditorLayer> {
+        val ink = layers.firstOrNull { it is InkLayer } ?: return layers
+        return bringToFront(layers, ink.id)
     }
 
     /** What a screen reader says for the story: its text layers, in order. */

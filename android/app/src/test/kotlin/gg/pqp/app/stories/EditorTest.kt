@@ -4,6 +4,7 @@ import gg.pqp.app.protocol.RepoSources
 import gg.pqp.app.stories.editor.BaseFit
 import gg.pqp.app.stories.editor.Brushes
 import gg.pqp.app.stories.editor.CallLayer
+import gg.pqp.app.stories.editor.CanvasInsets
 import gg.pqp.app.stories.editor.EditorLayer
 import gg.pqp.app.stories.editor.EditorPost
 import gg.pqp.app.stories.editor.InkLayer
@@ -23,6 +24,7 @@ import gg.pqp.app.stories.editor.UndoStack
 import gg.pqp.app.stories.editor.storyFont
 import gg.pqp.app.stories.editor.textPaint
 import gg.pqp.app.stories.editor.tokenColor
+import androidx.compose.ui.unit.dp
 import kotlin.math.PI
 import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.JsonObject
@@ -390,14 +392,75 @@ class EditorTest {
     }
 
     @Test
-    fun `a second call replaces the first, and the ink goes under everything`() {
+    fun `a second call replaces the first, and the ink is a layer like any other, in the order things were made`() {
         val withCall = LayerOps.add(listOf(text("a"), call("c1", "x"), text("b")), call("c2", "y"))
         assertEquals(listOf("a", "b", "c2"), withCall.map { it.id })
+        // Drawn over a photo and a text: the drawing is on top of both, not under them.
         val inked = LayerOps.add(listOf(text("a"), photo("p")), InkLayer("ink"))
-        assertEquals(listOf("ink", "a", "p"), inked.map { it.id })
-        // Bringing the ink forward does nothing: it stays under.
-        assertEquals(inked, LayerOps.bringToFront(inked, "ink"))
-        assertEquals(listOf("ink", "p", "a"), LayerOps.bringToFront(inked, "a").map { it.id })
+        assertEquals(listOf("a", "p", "ink"), inked.map { it.id })
+        // Whatever is made after it goes above it.
+        val later = LayerOps.add(inked, text("b"))
+        assertEquals(listOf("a", "p", "ink", "b"), later.map { it.id })
+        // And "bring forward" works on the drawing like on anything else.
+        assertEquals(listOf("a", "p", "b", "ink"), LayerOps.bringToFront(later, "ink").map { it.id })
+        assertEquals(listOf("p", "ink", "b", "a"), LayerOps.bringToFront(later, "a").map { it.id })
+        // A second drawing is the same drawing: it replaces, and lands on top.
+        assertEquals(listOf("a", "p", "b", "ink2"), LayerOps.add(later, InkLayer("ink2")).map { it.id })
+    }
+
+    @Test
+    fun `bring forward is only offered where it changes something`() {
+        val layers = listOf(text("a"), photo("p"), text("b"))
+        assertTrue(LayerOps.canBringForward(layers, "a"))
+        assertTrue(LayerOps.canBringForward(layers, "p"))
+        // The topmost, and the only one: nothing to do.
+        assertFalse(LayerOps.canBringForward(layers, "b"))
+        assertFalse(LayerOps.canBringForward(listOf(text("a")), "a"))
+        assertFalse(LayerOps.canBringForward(layers, "ghost"))
+        assertEquals(layers, LayerOps.bringToFront(layers, "b"))
+    }
+
+    @Test
+    fun `a new drawing session brings the drawing back to the top, so the stroke is seen`() {
+        var n = 0
+        val stroke = Stroke("pen", "red", 0.01f, listOf(0f, 0f, 1f, 1f))
+        // Draw, then place a photo above it, then draw again.
+        val first = LayerOps.withStroke(listOf(text("a")), { "ink${n++}" }, stroke)
+        val withPhoto = LayerOps.add(first, photo("p"))
+        assertEquals(listOf("a", "ink0", "p"), withPhoto.map { it.id })
+        val second = LayerOps.withStroke(withPhoto, { "ink${n++}" }, stroke.copy(color = "blue"))
+        // One drawing, two strokes, now above the photo.
+        assertEquals(listOf("a", "p", "ink0"), second.map { it.id })
+        assertEquals(2, second.filterIsInstance<InkLayer>().single().strokes.size)
+        assertEquals(1, n)
+        // Opening the tool brings it up before any stroke, and is a no-op when it is already on top.
+        assertEquals(listOf("a", "p", "ink0"), LayerOps.inkToFront(withPhoto).map { it.id })
+        assertEquals(second, LayerOps.inkToFront(second))
+        assertEquals(listOf(text("a")), LayerOps.inkToFront(listOf(text("a"))))
+    }
+
+    @Test
+    fun `the audience read backs off and never waits longer than the cap`() {
+        var wait = 1_000L
+        val waits = List(8) { wait.also { wait = StoriesRules.nextRetryDelay(wait) } }
+        assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L, 15_000L, 15_000L, 15_000L, 15_000L), waits)
+        assertEquals(1L, StoriesRules.nextRetryDelay(0L))
+    }
+
+    @Test
+    fun `tools sit inside the canvas when the screen leaves a bar, under the system bars when it does not`() {
+        // 1080 x 1920 is exactly 9:16: no bar.
+        assertEquals(0f, CanvasInsets.gap(360.dp, 640.dp).value, 0.01f)
+        // A taller phone (20:9): the canvas is 360 x 640 on 360 x 800, so 80 dp above and below.
+        assertEquals(80f, CanvasInsets.gap(360.dp, 800.dp).value, 0.01f)
+        // A wider screen than 9:16 has no bar above or below, the canvas is as tall as the screen.
+        assertEquals(0f, CanvasInsets.gap(800.dp, 360.dp).value, 0.01f)
+        // Inside the canvas only when the bar is deeper than the system bar.
+        assertEquals(CanvasInsets.INSET + 80.dp, CanvasInsets.top(80.dp, 24.dp))
+        assertEquals(24.dp, CanvasInsets.top(0.dp, 24.dp))
+        assertEquals(24.dp, CanvasInsets.top(10.dp, 24.dp))
+        assertEquals(CanvasInsets.INSET + 80.dp, CanvasInsets.bottom(80.dp, 24.dp))
+        assertEquals(24.dp, CanvasInsets.bottom(0.dp, 24.dp))
     }
 
     @Test

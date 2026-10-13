@@ -182,7 +182,7 @@ fun ServersScreen(
                             IconButton(onClick = onOpenProfile) {
                                 Icon(
                                     imageVector = PqpIcons.Person,
-                                    contentDescription = stringResource(R.string.you_title),
+                                    contentDescription = stringResource(R.string.you_open),
                                     modifier = Modifier.size(Sizes.iconAction),
                                 )
                             }
