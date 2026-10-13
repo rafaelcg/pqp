@@ -6085,5 +6085,17 @@
   "bots.introHint.title": "Meet {name}",
   "bots.introHint.body": "This server's bot. Call it with {handle} or reply to one of its messages. It's in beta, so it can still make mistakes. It reads the channels it answers in; Anthropic processes them, and none of it trains models.",
   "bots.introHint.later": "Not now",
-  "bots.introHint.sayHi": "Say hi"
+  "bots.introHint.sayHi": "Say hi",
+  "bots.wizard.step.test": "Test",
+  "bots.wizard.test.title": "Talk to {name}",
+  "bots.wizard.test.description": "A practice chat, just yours. It hasn't joined the server and can't do anything here.",
+  "bots.wizard.test.empty": "Say hi and see how {name} answers.",
+  "bots.wizard.test.ask1": "Hi! Who are you?",
+  "bots.wizard.test.ask2": "What are the rules?",
+  "bots.wizard.test.ask3": "Tell me a joke",
+  "bots.wizard.test.input": "Write to {name}",
+  "bots.wizard.test.send": "Send",
+  "bots.wizard.test.left_one": "{count} test left today",
+  "bots.wizard.test.left_other": "{count} tests left today",
+  "bots.wizard.test.limit": "No tests left today. You can create it and try it in a channel."
 }

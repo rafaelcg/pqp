@@ -46,7 +46,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { ApiError, createServerBot, fetchChannels, postBotIntro } from "@/lib/api";
+import { ApiError, createServerBot, fetchBotsConfig, fetchChannels, postBotIntro, testServerBot } from "@/lib/api";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
@@ -59,7 +59,9 @@ import { cn } from "@/lib/utils";
  */
 
 const STEPS = ["face", "voice", "knows", "lives", "powers"] as const;
-type Step = (typeof STEPS)[number] | "born";
+/** The practice chat, when the server has it (flag `bot_test_chat`). */
+type FlowStep = (typeof STEPS)[number] | "test";
+type Step = FlowStep | "born";
 
 export const PERSONA_PRESETS = ["friendly", "playful", "support", "moderator", "gamer", "narrator"] as const;
 const NAME_IDEAS = ["Tico", "Bolota", "Pixel", "Faísca", "Madruga"] as const;
@@ -127,6 +129,8 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
   const scroller = useRef<HTMLDivElement>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [testChat, setTestChat] = useState(false);
+  const [testTurnsPerDay, setTestTurnsPerDay] = useState(0);
   // A create that answers after the wizard was closed must not reopen it at "born".
   const openRef = useRef(open);
   openRef.current = open;
@@ -139,6 +143,13 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
         if (live) setChannels(chatChannels(list.channels));
       })
       .catch(() => {});
+    void fetchBotsConfig(serverId)
+      .then((config) => {
+        if (!live) return;
+        setTestChat(config.testChat);
+        setTestTurnsPerDay(config.testTurnsPerDay);
+      })
+      .catch(() => {});
     return () => {
       live = false;
     };
@@ -149,7 +160,9 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
     scroller.current?.scrollTo({ top: 0 });
   }, [step]);
 
-  const index = step === "born" ? STEPS.length : STEPS.indexOf(step);
+  const steps: readonly FlowStep[] = testChat ? [...STEPS, "test"] : STEPS;
+  const lastStep = steps[steps.length - 1]!;
+  const index = step === "born" ? steps.length : steps.indexOf(step);
   const name = draft.name.trim();
   const shownName = name || t("bots.wizard.unnamed");
   // Two letters or digits, so an emoji or a pair of spaces is not a name.
@@ -225,16 +238,16 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
   }
 
   const next = () => {
-    if (step === "powers") {
+    if (step === lastStep) {
       void create();
       return;
     }
-    const at = STEPS.indexOf(step as (typeof STEPS)[number]);
-    setStep(STEPS[at + 1]!);
+    const at = steps.indexOf(step as FlowStep);
+    setStep(steps[at + 1]!);
   };
   const back = () => {
-    const at = STEPS.indexOf(step as (typeof STEPS)[number]);
-    if (at > 0) setStep(STEPS[at - 1]!);
+    const at = steps.indexOf(step as FlowStep);
+    if (at > 0) setStep(steps[at - 1]!);
   };
   const canContinue = step === "face" ? nameOk : true;
   const stageFace: BotBaseFace | "kkkk" = step === "born" ? "kkkk" : draft.face;
@@ -292,8 +305,8 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
               onClick={next}
               className="max-sm:ml-auto"
             >
-              {step === "powers" ? t("bots.wizard.create", { name: shownName }) : t("bots.wizard.next")}
-              {step !== "powers" && <ArrowRight className="ml-1.5 h-4 w-4" aria-hidden />}
+              {step === lastStep ? t("bots.wizard.create", { name: shownName }) : t("bots.wizard.next")}
+              {step !== lastStep && <ArrowRight className="ml-1.5 h-4 w-4" aria-hidden />}
             </Button>
           </div>
         )
@@ -302,8 +315,9 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
       <div className="flex h-full min-h-0 flex-col md:flex-row">
         <div ref={scroller} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-5 sm:px-6">
           {step !== "born" && (
-            <ol className="mb-6 grid grid-cols-5 gap-1.5" aria-label={t("bots.wizard.progress")}>
-              {STEPS.map((s, i) => (
+            <ol
+              className={cn("mb-6 grid gap-1.5", steps.length === 6 ? "grid-cols-6" : "grid-cols-5")} aria-label={t("bots.wizard.progress")}>
+              {steps.map((s, i) => (
                 <li key={s} aria-current={s === step ? "step" : undefined}>
                   <span
                     className={cn(
@@ -328,7 +342,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
             {step === "face" && (
               <>
                 <StepTitle
-                  eyebrow={t("bots.wizard.stepOf", { n: 1, total: STEPS.length })}
+                  eyebrow={t("bots.wizard.stepOf", { n: 1, total: steps.length })}
                   title={t("bots.wizard.face.title")}
                   description={t("bots.wizard.face.description")}
                 />
@@ -443,7 +457,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
             {step === "voice" && (
               <>
                 <StepTitle
-                  eyebrow={t("bots.wizard.stepOf", { n: 2, total: STEPS.length })}
+                  eyebrow={t("bots.wizard.stepOf", { n: 2, total: steps.length })}
                   title={t("bots.wizard.voice.title", { name: shownName })}
                   description={t("bots.wizard.voice.description")}
                 />
@@ -493,7 +507,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
             {step === "knows" && (
               <>
                 <StepTitle
-                  eyebrow={t("bots.wizard.stepOf", { n: 3, total: STEPS.length })}
+                  eyebrow={t("bots.wizard.stepOf", { n: 3, total: steps.length })}
                   title={t("bots.wizard.knows.title", { name: shownName })}
                   description={t("bots.wizard.knows.description")}
                 />
@@ -516,7 +530,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
             {step === "lives" && (
               <>
                 <StepTitle
-                  eyebrow={t("bots.wizard.stepOf", { n: 4, total: STEPS.length })}
+                  eyebrow={t("bots.wizard.stepOf", { n: 4, total: steps.length })}
                   title={t("bots.wizard.lives.title", { name: shownName })}
                   description={t("bots.wizard.lives.description")}
                 />
@@ -554,7 +568,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
             {step === "powers" && (
               <>
                 <StepTitle
-                  eyebrow={t("bots.wizard.stepOf", { n: 5, total: STEPS.length })}
+                  eyebrow={t("bots.wizard.stepOf", { n: 5, total: steps.length })}
                   title={t("bots.wizard.powers.title", { name: shownName })}
                   description={t("bots.wizard.powers.description", { name: shownName })}
                 />
@@ -562,6 +576,17 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                   tools={draft.tools}
                   onChange={(tools) => update({ tools })}
                 />
+              </>
+            )}
+
+            {step === "test" && (
+              <>
+                <StepTitle
+                  eyebrow={t("bots.wizard.stepOf", { n: 6, total: steps.length })}
+                  title={t("bots.wizard.test.title", { name: shownName })}
+                  description={t("bots.wizard.test.description")}
+                />
+                <TestChat serverId={serverId} draft={draft} name={shownName} perDay={testTurnsPerDay} />
               </>
             )}
 
@@ -816,6 +841,115 @@ function IntroPreview({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The practice chat: real model, the draft's persona and knowledge, no tools. */
+function TestChat({
+  serverId,
+  draft,
+  name,
+  perDay,
+}: {
+  serverId: string;
+  draft: BotDraft;
+  name: string;
+  perDay: number;
+}) {
+  const { t } = useTranslation();
+  const [messages, setMessages] = useState<Array<{ from: "member" | "bot"; text: string }>>([]);
+  const [text, setText] = useState("");
+  const [waiting, setWaiting] = useState(false);
+  const [left, setLeft] = useState(perDay);
+  const [error, setError] = useState<MessageKey | null>(null);
+  const suggestions: MessageKey[] = ["bots.wizard.test.ask1", "bots.wizard.test.ask2", "bots.wizard.test.ask3"];
+
+  async function send(body: string) {
+    const trimmed = body.trim();
+    if (!trimmed || waiting || left <= 0) return;
+    const history = [...messages, { from: "member" as const, text: trimmed }].slice(-12);
+    setMessages(history);
+    setText("");
+    setWaiting(true);
+    setError(null);
+    try {
+      const result = await testServerBot(serverId, {
+        name: draft.name.trim(),
+        persona: draft.persona,
+        knowledge: draft.knowledge,
+        messages: history,
+      });
+      setMessages((now) => [...now, { from: "bot", text: result.reply || "…" }]);
+      setLeft(result.turnsLeft);
+    } catch (err) {
+      setError(err instanceof ApiError && err.status === 429 ? "bots.wizard.test.limit" : "serverSettings.bots.error.generic");
+      if (err instanceof ApiError && err.status === 429) setLeft(0);
+    } finally {
+      setWaiting(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col rounded-[var(--radius-card)] border border-border bg-surface-card">
+      <div className="max-h-72 min-h-40 space-y-3 overflow-y-auto p-3" aria-live="polite">
+        {messages.length === 0 && (
+          <p className="text-sm text-text-tertiary">{t("bots.wizard.test.empty", { name })}</p>
+        )}
+        {messages.map((message, index) =>
+          message.from === "bot" ? (
+            <div key={index} className="flex gap-2.5">
+              <BotFace color={draft.color} face={draft.face} className="h-7 w-7" />
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 text-xs font-bold text-text">
+                  {name}
+                  <ServerBotTags />
+                </p>
+                <p className="whitespace-pre-wrap text-sm text-text-secondary">{message.text}</p>
+              </div>
+            </div>
+          ) : (
+            <p key={index} className="ml-auto w-fit max-w-[80%] rounded-[var(--radius-card)] bg-surface-2 px-3 py-1.5 text-sm text-text">
+              {message.text}
+            </p>
+          ),
+        )}
+        {waiting && (
+          <p className="flex items-center gap-2 text-sm text-text-tertiary">
+            <BotFace color={draft.color} face="falando" className="h-7 w-7" />
+            <span className="bot-shimmer">{t("chat.botActivity.thinkingPill")}</span>
+          </p>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1.5 border-t border-border px-3 pt-2">
+        {suggestions.map((key) => (
+          <Button key={key} type="button" size="sm" variant="secondary" disabled={waiting || left <= 0} onClick={() => void send(t(key))}>
+            {t(key)}
+          </Button>
+        ))}
+      </div>
+      <form
+        className="flex items-center gap-2 p-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void send(text);
+        }}
+      >
+        <Input
+          aria-label={t("bots.wizard.test.input", { name })}
+          placeholder={t("bots.wizard.test.input", { name })}
+          value={text}
+          maxLength={500}
+          disabled={left <= 0}
+          onChange={(event) => setText(event.target.value)}
+        />
+        <Button type="submit" disabled={waiting || left <= 0 || !text.trim()}>
+          {t("bots.wizard.test.send")}
+        </Button>
+      </form>
+      <p className="px-3 pb-3 text-xs text-text-tertiary">
+        {error ? <span className="text-danger">{t(error)}</span> : t("bots.wizard.test.left", { count: left })}
+      </p>
     </div>
   );
 }

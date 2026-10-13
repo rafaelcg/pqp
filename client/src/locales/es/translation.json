@@ -6154,5 +6154,17 @@
   "bots.introHint.title": "Conoce a {name}",
   "bots.introHint.body": "El bot de este servidor. Llámalo con {handle} o responde a uno de sus mensajes. Está en beta, así que aún puede equivocarse. Lee los canales donde responde; los procesa Anthropic y nada de eso entrena modelos.",
   "bots.introHint.later": "Ahora no",
-  "bots.introHint.sayHi": "Saludar"
+  "bots.introHint.sayHi": "Saludar",
+  "bots.wizard.step.test": "Prueba",
+  "bots.wizard.test.title": "Habla con {name}",
+  "bots.wizard.test.description": "Una charla de prueba, solo tuya. Aún no entró al servidor y no hace nada aquí.",
+  "bots.wizard.test.empty": "Saluda y mira cómo responde {name}.",
+  "bots.wizard.test.ask1": "¡Hola! ¿Quién eres?",
+  "bots.wizard.test.ask2": "¿Cuáles son las reglas?",
+  "bots.wizard.test.ask3": "Cuéntame un chiste",
+  "bots.wizard.test.input": "Escríbele a {name}",
+  "bots.wizard.test.send": "Enviar",
+  "bots.wizard.test.left_one": "{count} prueba restante hoy",
+  "bots.wizard.test.left_other": "{count} pruebas restantes hoy",
+  "bots.wizard.test.limit": "Se acabaron las pruebas de hoy. Puedes crearlo y probarlo en un canal."
 }

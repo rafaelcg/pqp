@@ -3767,10 +3767,12 @@ import {
   botPlanDecisionSchema,
   botAskAnswerSchema,
   botIntroSchema,
+  botTestSchema,
   createServerBotSchema,
   SERVER_BOTS_MAX,
   serializePermissions as serializeBotPermissions,
   updateServerBotSchema,
+  type BotTestResponse,
   type ServerBotOverview,
   type ServerBotsConfig,
 } from "@pqp/shared";
@@ -3789,6 +3791,7 @@ import { answerBotAsk } from "../services/bot-runner.js";
 import { deleteBotRole, renameBotRole, syncBotRole } from "../services/bot-role.js";
 import { readBotFacePng } from "../services/bot-faces.js";
 import { readBotOverview } from "../services/bot-stats.js";
+import { botTestTurnsPerDay, runBotTestTurn } from "../services/bot-test.js";
 
 function botsEnabled(serverId: string): boolean {
   return isEnabled("custom_bots", { serverId }) && botProviderConfigured();
@@ -3820,7 +3823,34 @@ router.get("/api/bots/config", async ({ url }): Promise<ServerBotsConfig> => {
     enabled: !!serverId && isUuid(serverId) && botsEnabled(serverId),
     maxBots: SERVER_BOTS_MAX,
     models: botModelChoices().map((choice) => ({ id: choice.id, label: choice.label })),
+    testChat:
+      !!serverId && isUuid(serverId) && botsEnabled(serverId) && isEnabled("bot_test_chat", { serverId }),
+    testTurnsPerDay: botTestTurnsPerDay(),
   };
+});
+
+/** One turn of the wizard's practice chat. Staff only, like making the bot. */
+router.post("/api/servers/:serverId/bots/test", async ({ req, user }, { serverId }): Promise<BotTestResponse> => {
+  await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+  if (!botsEnabled(serverId!) || !isEnabled("bot_test_chat", { serverId: serverId! })) {
+    throw new HttpError(403, "bot_test_disabled");
+  }
+  const body = botTestSchema.parse(await readJsonBody(req));
+  requireOfferedModel(body.model);
+  const server = await getServer(serverId!);
+  const result = await runBotTestTurn({
+    userId: user.id,
+    serverName: server?.name ?? "",
+    name: body.name,
+    persona: body.persona,
+    knowledge: body.knowledge,
+    model: body.model ?? null,
+    messages: body.messages,
+  });
+  if (!result.ok) {
+    throw new HttpError(result.reason === "limit" || result.reason === "budget" ? 429 : 503, `bot_test_${result.reason}`);
+  }
+  return { reply: result.reply, turnsLeft: result.turnsLeft };
 });
 
 // Manage Server, for reading too: the persona and the knowledge are staff

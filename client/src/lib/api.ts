@@ -1,6 +1,8 @@
 import type {
   CreateServerBotRequest,
   ServerBotDto,
+  BotTestRequest,
+  BotTestResponse,
   ServerBotOverview,
   ServerBotsConfig,
   UpdateServerBotRequest,
@@ -2671,6 +2673,10 @@ export const updateServerBot = (
     `/api/servers/${serverId}/bots/${botId}`,
     body,
   );
+
+/** One turn of the wizard's practice chat with a bot that does not exist yet. */
+export const testServerBot = (serverId: string, body: BotTestRequest) =>
+  post<BotTestResponse>(`/api/servers/${serverId}/bots/test`, body);
 
 /** The wizard's last step: post the bot's hello, as the bot, in one of its channels. */
 export const postBotIntro = (serverId: string, botId: string, body: { channelId: string; body: string }) =>

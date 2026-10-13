@@ -315,7 +315,7 @@ async function recordCall(
  * reserved, so a call that runs across midnight does not move money between
  * two days.
  */
-async function reserveSpend(day: string, micros: number): Promise<boolean> {
+export async function reserveSpend(day: string, micros: number): Promise<boolean> {
   const ceiling = Math.floor(botDailyUsdCeiling() * 1_000_000);
   const reserved = await getPool().query(
     `INSERT INTO server_bot_spend_daily AS s (day, reserved_micros, calls)
@@ -339,7 +339,7 @@ async function reserveSpend(day: string, micros: number): Promise<boolean> {
 }
 
 /** Replace the worst case reserved with what the call really cost. */
-async function settleSpend(day: string, reservedMicros: number, actualMicros: number): Promise<void> {
+export async function settleSpend(day: string, reservedMicros: number, actualMicros: number): Promise<void> {
   await getPool().query(
     `UPDATE server_bot_spend_daily
         SET reserved_micros = GREATEST(reserved_micros - $1::bigint + $2::bigint, 0)

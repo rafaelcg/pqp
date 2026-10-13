@@ -475,6 +475,15 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/bots/config?serverId= (enabled)",
   },
+  bot_test_chat: {
+    description:
+      "Conversa de teste no assistente de bot: antes de criar, a staff troca umas mensagens com o bot pra ver o jeito dele (cada turno é uma chamada de modelo; limite diário por pessoa).",
+    env: "BOT_TEST_CHAT",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    perServer: true,
+    clientVia: "GET /api/bots/config?serverId= (testChat)",
+  },
   voice_audio_self_heal: {
     description:
       "Call que se conserta sozinha: percebe mic que parou de mandar som e call que parou de tocar, tenta arrumar sem ninguém notar e, se não der, mostra \"Arrumar\" com um toque (desligado: nada disso roda).",

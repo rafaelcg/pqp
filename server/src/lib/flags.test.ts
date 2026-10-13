@@ -114,6 +114,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   soundboard: (raw) => raw === "true",
   custom_bots: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
+  bot_test_chat: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
   voice_note_transcription: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   notify_open_channel: (raw) => raw === "true",

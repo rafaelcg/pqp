@@ -27,6 +27,7 @@ const { runBotRunsTick } = await import("./bot-runner.js");
 const { setBotProviderForTests } = await import("./bot-llm.js");
 const { postChannelMessage, resetChatRateLimits } = await import("../ws/chat.js");
 const { readBotFacePng } = await import("./bot-faces.js");
+const { runBotTestTurn } = await import("./bot-test.js");
 const { botFaceAvatarPath } = await import("@pqp/shared");
 
 describe("the bot day", () => {
@@ -80,7 +81,7 @@ describeDb("server bot foundations", () => {
     await getPool().query(
       `TRUNCATE users, user_preferences, servers, channels, messages, server_members,
                 server_bots, server_bot_runs, server_bot_usage_daily, server_bot_spend_daily,
-                server_bot_stats_daily, server_bot_people_daily, server_bot_tools_daily, audit_log
+                server_bot_stats_daily, server_bot_people_daily, server_bot_tools_daily, server_bot_test_usage, audit_log
        RESTART IDENTITY CASCADE`,
     );
   });
@@ -348,6 +349,28 @@ describeDb("server bot foundations", () => {
       status: "done",
       requesterName: "Rafa",
     });
+  });
+
+  it("answers a practice turn without tools, and stops at the daily cap", async () => {
+    process.env.BOTS_TEST_TURNS_PER_MEMBER_DAY = "2";
+    try {
+      const owner = await upsertUser({ clerkId: "tester", displayName: "Rafa", avatarUrl: null });
+      const turn = () =>
+        runBotTestTurn({
+          userId: owner.id,
+          serverName: "QG",
+          name: "Tico",
+          persona: "",
+          knowledge: "",
+          model: null,
+          messages: [{ from: "member", text: "oi" }],
+        });
+      expect(await turn()).toMatchObject({ ok: true, reply: "Oi!", turnsLeft: 1 });
+      expect(await turn()).toMatchObject({ ok: true, turnsLeft: 0 });
+      expect(await turn()).toEqual({ ok: false, reason: "limit" });
+    } finally {
+      delete process.env.BOTS_TEST_TURNS_PER_MEMBER_DAY;
+    }
   });
 
   it("names the role around a taken name", async () => {

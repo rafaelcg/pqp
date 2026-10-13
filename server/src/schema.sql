@@ -6622,3 +6622,12 @@ CREATE TABLE IF NOT EXISTS server_bot_tools_daily (
 -- apps draw; the web client draws the same face inline, and alive.
 ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS color TEXT NOT NULL DEFAULT 'lime';
 ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS face TEXT NOT NULL DEFAULT 'oi';
+
+-- The wizard's practice chat (services/bot-test.ts): turns per person per
+-- São Paulo day, reserved before the model is called.
+CREATE TABLE IF NOT EXISTS server_bot_test_usage (
+  day     DATE NOT NULL,
+  user_id UUID NOT NULL,
+  turns   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, user_id)
+);

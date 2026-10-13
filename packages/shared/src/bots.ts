@@ -275,4 +275,28 @@ export interface ServerBotsConfig {
   maxBots: number;
   /** The models a bot may be set to; the first is the default. */
   models: ServerBotModelChoice[];
+  /** The wizard's practice chat (flag `bot_test_chat`), and how many turns a person gets a day. */
+  testChat: boolean;
+  testTurnsPerDay: number;
+}
+
+/**
+ * `POST /api/servers/:id/bots/test`: one turn of the wizard's practice chat
+ * with a bot that does not exist yet. No tools, no channel, nothing stored
+ * but the count.
+ */
+export const botTestSchema = z.object({
+  name: botName,
+  persona: safeText(SERVER_BOT_PERSONA_MAX).default(""),
+  knowledge: safeText(SERVER_BOT_KNOWLEDGE_MAX).default(""),
+  model: botModel,
+  messages: z
+    .array(z.object({ from: z.enum(["member", "bot"]), text: safeText(500) }))
+    .min(1)
+    .max(12),
+});
+export type BotTestRequest = z.input<typeof botTestSchema>;
+export interface BotTestResponse {
+  reply: string;
+  turnsLeft: number;
 }
