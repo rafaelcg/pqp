@@ -263,10 +263,7 @@ fun StoryEditor(
                 // Ink first (it is the lowest layer), then everything else in order.
                 val live = session.liveStroke
                 val ink = session.layers.firstOrNull { it is InkLayer } as? InkLayer
-                when {
-                    ink != null -> InkLayerContent(ink.strokes + listOfNotNull(live))
-                    live != null -> InkLayerContent(listOf(live))
-                }
+                if (ink != null || live != null) InkLayerContent(ink?.strokes.orEmpty(), live = live)
                 session.layers.forEach { layer ->
                     if (layer is InkLayer) return@forEach
                     key(layer.id) {

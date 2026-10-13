@@ -71,6 +71,46 @@ object InkRenderer {
         canvas.drawPath(path, paint)
     }
 
+    /**
+     * Committed ink, drawn once into a bitmap and kept: while a stroke is being
+     * drawn the screen shows this plus the live stroke, instead of replaying
+     * every earlier point on every frame.
+     */
+    class Cache {
+        private var strokes: List<Stroke>? = null
+        private var width = 0
+        private var height = 0
+        private var bitmap: Bitmap? = null
+
+        fun bitmapFor(strokes: List<Stroke>, width: Int, height: Int): Bitmap? {
+            if (strokes.isEmpty() || width <= 0 || height <= 0) return null
+            if (bitmap == null || this.strokes !== strokes || this.width != width || this.height != height) {
+                bitmap?.recycle()
+                bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also {
+                    draw(Canvas(it), strokes, width.toFloat(), height.toFloat())
+                }
+                this.strokes = strokes
+                this.width = width
+                this.height = height
+            }
+            return bitmap
+        }
+
+        fun release() {
+            bitmap?.recycle()
+            bitmap = null
+            strokes = null
+        }
+    }
+
+    /** [base] (the committed ink) with [live] on top, in one layer so an eraser takes ink off [base] too. */
+    fun drawOver(canvas: Canvas, base: Bitmap?, live: Stroke?, width: Float, height: Float) {
+        val layer = canvas.saveLayer(0f, 0f, width, height, null)
+        base?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+        live?.let { drawStroke(canvas, it, width, height) }
+        canvas.restoreToCount(layer)
+    }
+
     /** The ink as a transparent PNG at the canvas aspect. */
     fun renderPng(strokes: List<Stroke>, width: Int, height: Int): ByteArray {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)

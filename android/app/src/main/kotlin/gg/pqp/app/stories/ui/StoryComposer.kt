@@ -66,6 +66,7 @@ import gg.pqp.app.stories.StoryAudienceOptions
 import gg.pqp.app.stories.StoryAudienceTargets
 import gg.pqp.app.stories.StoryCallRoom
 import gg.pqp.app.stories.StoryMediaInput
+import gg.pqp.app.stories.StorySticker
 import gg.pqp.app.stories.StoryMediaPrep
 import gg.pqp.app.stories.VideoPrep
 import gg.pqp.app.stories.camera.StoryCameraScreen
@@ -93,9 +94,17 @@ import gg.pqp.app.stories.storyAudiences
 import gg.pqp.app.stories.uploadStoryMedia
 import gg.pqp.app.ui.theme.Palette
 import gg.pqp.app.ui.theme.Spacing
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 private enum class ComposeMode { Text, Camera, Call }
+
+/** Layer files and the base are PUT this many at once. */
+private const val UPLOADS_AT_ONCE = 3
 
 private sealed interface PostState {
     data object Idle : PostState
@@ -256,7 +265,13 @@ fun StoryComposer(
     val addPhotoLayer: (Uri?) -> Unit = { uri ->
         if (uri != null) {
             scope.launch {
-                val result = StoryMediaPrep.prepare(context, uri, gg.pqp.app.stories.StoriesRules.MAX_BYTES)
+                val result = try {
+                    StoryMediaPrep.prepare(context, uri, gg.pqp.app.stories.StoriesRules.MAX_BYTES)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    PrepResult.Unreadable
+                }
                 if (result is PrepResult.Ready && !result.media.isVideo) {
                     val id = editor.newId()
                     val at = gg.pqp.app.stories.editor.LayerMath.startPosition(editor.layers.size)
@@ -449,9 +464,11 @@ fun StoryComposer(
                             )
                         },
                         mentionSheet = { onPick, onDismissSheet ->
-                            val people = rememberMentionPeople(session, options, targets, meId)
+                            val directory = rememberMentionPeople(session, targets, meId)
                             MentionSheet(
-                                people = people,
+                                people = directory.people,
+                                incomplete = directory.failed,
+                                onRetry = directory.retry,
                                 onPick = { person ->
                                     onPick(MentionLayer(id = editor.newId(), userId = person.userId, name = person.name, avatarUrl = person.avatarUrl))
                                 },
@@ -570,27 +587,42 @@ private fun rememberCallRooms(session: SessionStore, options: StoryAudienceOptio
 @Composable
 private fun rememberMentionPeople(
     session: SessionStore,
-    options: StoryAudienceOptions?,
     targets: StoryAudienceTargets,
     meId: String?,
-): List<MentionPerson>? {
+): MentionDirectory {
     var people by remember { mutableStateOf<List<MentionPerson>?>(null) }
-    LaunchedEffect(targets.serverIds, targets.friends) {
-        val found = linkedMapOf<String, MentionPerson>()
-        if (targets.friends) {
-            runCatching { session.api.friends() }.getOrNull()?.friends?.forEach {
-                found[it.id] = MentionPerson(it.id, it.displayName, it.username, it.avatarUrl)
+    var failed by remember { mutableStateOf(false) }
+    var attempt by remember { mutableStateOf(0) }
+    LaunchedEffect(targets.serverIds, targets.friends, attempt) {
+        failed = false
+        // Every roster at once: the picker is as slow as the slowest server, not the sum of them.
+        val (found, lost) = kotlinx.coroutines.coroutineScope {
+            val friends = if (targets.friends) async { runCatching { session.api.friends().friends } } else null
+            val servers = targets.serverIds.map { id -> async { runCatching { session.api.serverMembers(id) } } }
+            val people = linkedMapOf<String, MentionPerson>()
+            var lost = false
+            friends?.await()?.let { result ->
+                result.onFailure { lost = true }
+                result.getOrNull()?.forEach { people[it.id] = MentionPerson(it.id, it.displayName, it.username, it.avatarUrl) }
             }
-        }
-        targets.serverIds.forEach { serverId ->
-            runCatching { session.api.serverMembers(serverId) }.getOrDefault(emptyList()).forEach {
-                found.putIfAbsent(it.id, MentionPerson(it.id, it.nickname ?: it.displayName, it.username, it.avatarUrl))
+            servers.forEach { call ->
+                val result = call.await()
+                result.onFailure { lost = true }
+                result.getOrNull()?.forEach {
+                    people.putIfAbsent(it.id, MentionPerson(it.id, it.nickname ?: it.displayName, it.username, it.avatarUrl))
+                }
             }
+            people to lost
         }
         people = found.values.filter { it.userId != meId }.sortedBy { it.name.lowercase() }
+        // A list that is missing somebody says so, with a way to try again: not "nobody found".
+        failed = lost
     }
-    return people
+    return MentionDirectory(people, failed) { attempt += 1 }
 }
+
+/** The people a mention can name, and whether the list is known to be incomplete. */
+private class MentionDirectory(val people: List<MentionPerson>?, val failed: Boolean, val retry: () -> Unit)
 
 /**
  * Create, PUT every file, publish. A server that predates layers gets the old
@@ -642,6 +674,12 @@ private suspend fun postStory(
         caption = if (!layersEnabled && base != null) words.joinToString(" ").take(StoriesRules.CAPTION_MAX).ifBlank { null } else null,
         text = if (!layersEnabled && base == null) words.joinToString("\n").take(StoriesRules.TEXT_MAX) else null,
         background = if (base == null) cardBackground else null,
+        // A server with no layers knows the call card only as the old sticker on a text card.
+        sticker = if (!layersEnabled && base == null) {
+            layers.filterIsInstance<CallLayer>().firstOrNull()?.let { StorySticker("call", it.serverId, it.channelId) }
+        } else {
+            null
+        },
         repliesEnabled = replies,
         audiences = audience,
         requestId = requestId,
@@ -652,10 +690,24 @@ private suspend fun postStory(
         altText = if (layersEnabled) LayerOps.spokenText(layers) else null,
     )
     val created = session.api.createStory(request)
-    if (base != null) created.upload?.let { session.api.uploadStoryMedia(it, base.contentType, base.bytes) }
+    // A story with a picture and no slot to PUT it to is a broken answer, not a posted story: unless the
+    // server already has it live (a retry of a post whose answer was lost).
+    if (base != null && created.upload == null && created.story.own?.status != "live") {
+        error("The server made a story with media and no place to upload it")
+    }
     val pairs = EditorPost.pair(created.layerUploads, files)
         ?: error("The server and the phone disagree about which layer files to upload")
-    pairs.forEach { (slot, file) -> session.api.uploadStoryMedia(slot.asUpload(), file.contentType, file.bytes) }
+    // The files are independent signed PUTs: a few at a time, and publish only when every one is up.
+    val gate = Semaphore(UPLOADS_AT_ONCE)
+    coroutineScope {
+        val uploads = buildList {
+            if (base != null) created.upload?.let { slot -> add(async { gate.withPermit { session.api.uploadStoryMedia(slot, base.contentType, base.bytes) } }) }
+            pairs.forEach { (slot, file) ->
+                add(async { gate.withPermit { session.api.uploadStoryMedia(slot.asUpload(), file.contentType, file.bytes) } })
+            }
+        }
+        uploads.awaitAll()
+    }
     if (EditorPost.needsPublish(created.upload != null, created.layerUploads)) session.api.publishStory(created.story.id)
 }
 

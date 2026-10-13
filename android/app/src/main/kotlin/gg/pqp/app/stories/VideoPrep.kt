@@ -128,27 +128,28 @@ object VideoPrep {
     @OptIn(UnstableApi::class)
     suspend fun removeAudio(context: Context, source: Uri): Uri = withContext(Dispatchers.Main) {
         val target = StoryCaptureFiles.create(context, "mp4")
-        val edited = EditedMediaItem.Builder(MediaItem.fromUri(source)).setRemoveAudio(true).build()
-        val result = CompletableDeferred<Uri>()
-        val transformer = Transformer.Builder(context)
-            .addListener(
-                object : Transformer.Listener {
-                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                        result.complete(target.uri)
-                    }
-
-                    override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
-                        target.file.delete()
-                        result.completeExceptionally(exportException)
-                    }
-                },
-            )
-            .build()
+        var transformer: Transformer? = null
         try {
+            val edited = EditedMediaItem.Builder(MediaItem.fromUri(source)).setRemoveAudio(true).build()
+            val result = CompletableDeferred<Uri>()
+            transformer = Transformer.Builder(context)
+                .addListener(
+                    object : Transformer.Listener {
+                        override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                            result.complete(target.uri)
+                        }
+
+                        override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+                            result.completeExceptionally(exportException)
+                        }
+                    },
+                )
+                .build()
             transformer.start(edited, target.file.absolutePath)
             result.await()
         } catch (e: Exception) {
-            transformer.cancel()
+            // Whatever failed (the setup, the start, the export), the half-made file goes with it.
+            runCatching { transformer?.cancel() }
             target.file.delete()
             throw e
         }

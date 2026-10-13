@@ -1159,6 +1159,7 @@
     <string name="stories_editor_mention_title">Mention someone</string>
     <string name="stories_editor_mention_search">Search people</string>
     <string name="stories_editor_mention_none">Nobody found.</string>
+    <string name="stories_editor_mention_failed">Couldn\'t load everybody.</string>
     <string name="stories_editor_mention_hint">Tapping a mention opens that person\'s profile. Only people who can see the story can be mentioned.</string>
     <string name="stories_editor_old_server">The pqp you\'re on doesn\'t take layers yet. Your text goes on the story as a caption.</string>
     <string name="stories_sticker_call">Call people in</string>

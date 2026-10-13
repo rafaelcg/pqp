@@ -16,6 +16,11 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -173,15 +178,30 @@ fun PhotoLayerContent(
         "rounded" -> RoundedCornerShape(pxToDp(box.width * 0.1f))
         else -> RoundedCornerShape(0.dp)
     }
-    AsyncImage(
-        model = model,
-        contentDescription = description,
-        contentScale = ContentScale.Crop,
-        modifier = modifier
+    var failed by remember(model) { mutableStateOf(false) }
+    Box(
+        modifier
             .size(pxToDp(box.width), pxToDp(box.height))
             .clip(clip)
             .border(pxToDp(canvasWidthPx * 0.008f), Color.White, clip),
-    )
+        contentAlignment = Alignment.Center,
+    ) {
+        AsyncImage(
+            model = model,
+            contentDescription = description,
+            contentScale = ContentScale.Crop,
+            onError = { failed = true },
+            onSuccess = { failed = false },
+            modifier = Modifier.fillMaxSize(),
+        )
+        // A photo that would not load is a grey card with a picture on it, never an empty layer
+        // that looks fine and posts blank: it can still be moved, shaped and deleted.
+        if (failed) {
+            Box(Modifier.fillMaxSize().background(Color(0xFF2A2F36)), contentAlignment = Alignment.Center) {
+                Icon(PqpIcons.Image, contentDescription = null, tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(pxToDp(box.width * 0.25f)))
+            }
+        }
+    }
 }
 
 @Composable
@@ -298,10 +318,17 @@ fun CallLayerContent(
     }
 }
 
-/** The ink over the picture, drawn by the same renderer that exports it. */
+/**
+ * The ink over the picture, drawn by the same renderer that exports it. The
+ * committed strokes are rasterised once (they only change when a stroke is
+ * added or undone); [live] is the stroke under the finger, drawn over them.
+ */
 @Composable
-fun InkLayerContent(strokes: List<Stroke>, modifier: Modifier = Modifier) {
+fun InkLayerContent(strokes: List<Stroke>, modifier: Modifier = Modifier, live: Stroke? = null) {
+    val cache = remember { InkRenderer.Cache() }
+    DisposableEffect(cache) { onDispose { cache.release() } }
     Canvas(modifier.fillMaxSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }) {
-        drawIntoCanvas { InkRenderer.draw(it.nativeCanvas, strokes, size.width, size.height) }
+        val base = cache.bitmapFor(strokes, size.width.toInt(), size.height.toInt())
+        drawIntoCanvas { InkRenderer.drawOver(it.nativeCanvas, base, live, size.width, size.height) }
     }
 }

@@ -114,6 +114,37 @@ data class Stroke(
     val points: List<Float>,
 )
 
+/**
+ * An immutable view of the first [size] values of an array that only ever grows
+ * at its end. A stroke being drawn publishes one of these on every frame
+ * without copying what it has so far: the view cannot see what is appended
+ * after it, and nothing it can see is ever changed.
+ */
+class FloatPoints(private val data: FloatArray, override val size: Int) : AbstractList<Float>(), RandomAccess {
+    override fun get(index: Int): Float {
+        if (index < 0 || index >= size) throw IndexOutOfBoundsException("$index of $size")
+        return data[index]
+    }
+}
+
+/** The growing side of [FloatPoints]. */
+class PointsBuilder(initial: Int = 256) {
+    private var data = FloatArray(initial)
+    var size = 0
+        private set
+
+    fun add(x: Float, y: Float) {
+        if (size + 2 > data.size) data = data.copyOf(data.size * 2)
+        data[size++] = x
+        data[size++] = y
+    }
+
+    /** The value at [index], for the "is this a new point" check. */
+    operator fun get(index: Int): Float = data[index]
+
+    fun view(): List<Float> = FloatPoints(data, size)
+}
+
 object Brushes {
     const val PEN = "pen"
     const val MARKER = "marker"

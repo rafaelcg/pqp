@@ -233,7 +233,14 @@ data class MentionPerson(val userId: String, val name: String, val username: Str
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MentionSheet(people: List<MentionPerson>?, onPick: (MentionPerson) -> Unit, onDismiss: () -> Unit) {
+fun MentionSheet(
+    people: List<MentionPerson>?,
+    /** The list is known to be missing somebody (a roster did not load). */
+    incomplete: Boolean,
+    onRetry: () -> Unit,
+    onPick: (MentionPerson) -> Unit,
+    onDismiss: () -> Unit,
+) {
     var query by remember { mutableStateOf("") }
     val shown = people?.filter {
         query.isBlank() || it.name.contains(query, ignoreCase = true) || it.username?.contains(query, ignoreCase = true) == true
@@ -265,6 +272,20 @@ fun MentionSheet(people: List<MentionPerson>?, onPick: (MentionPerson) -> Unit, 
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth().testTag("stories.editor.mentionSheet.search"),
                 )
+            }
+            if (incomplete && shown != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter).testTag("stories.editor.mentionSheet.incomplete"),
+                ) {
+                    Text(
+                        stringResource(R.string.stories_editor_mention_failed),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Palette.Warning,
+                        modifier = Modifier.weight(1f),
+                    )
+                    androidx.compose.material3.TextButton(onClick = onRetry) { Text(stringResource(R.string.connection_retry)) }
+                }
             }
             when {
                 shown == null -> Box(Modifier.fillMaxWidth().padding(Spacing.xl), contentAlignment = Alignment.Center) {

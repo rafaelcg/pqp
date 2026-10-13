@@ -16,6 +16,7 @@ import gg.pqp.app.stories.editor.LayerMath.Size
 import gg.pqp.app.stories.editor.LayerOps
 import gg.pqp.app.stories.editor.MentionLayer
 import gg.pqp.app.stories.editor.PhotoLayer
+import gg.pqp.app.stories.editor.PointsBuilder
 import gg.pqp.app.stories.editor.Stroke
 import gg.pqp.app.stories.editor.TextLayer
 import gg.pqp.app.stories.editor.UndoStack
@@ -513,5 +514,27 @@ class EditorTest {
     fun `the five fonts are all distinct faces`() {
         val faces = StoryLayers.FONTS.map { storyFont(it) }
         assertEquals(StoryLayers.FONTS.size, faces.toSet().size)
+    }
+
+    @Test
+    fun `a stroke in progress publishes a view, not a copy, and a view never changes`() {
+        val points = PointsBuilder(initial = 2)
+        points.add(0.1f, 0.2f)
+        val first = points.view()
+        // Growing past the first array does not touch what the first view saw.
+        points.add(0.3f, 0.4f)
+        points.add(0.5f, 0.6f)
+        assertEquals(listOf(0.1f, 0.2f), first)
+        assertEquals(listOf(0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f), points.view())
+        assertEquals(0.5f, points[4], 0f)
+        var failed = false
+        try {
+            first[2]
+        } catch (_: IndexOutOfBoundsException) {
+            failed = true
+        }
+        assertTrue("a view cannot read past its own size", failed)
+        // The renderer reads these like any list.
+        assertEquals(Stroke("pen", "red", 0.01f, points.view()), Stroke("pen", "red", 0.01f, listOf(0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f)))
     }
 }

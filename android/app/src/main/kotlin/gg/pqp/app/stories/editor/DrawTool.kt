@@ -77,7 +77,7 @@ fun DrawSurface(session: EditorSession, canvas: LayerMath.Canvas, modifier: Modi
                     val down = awaitFirstDown(requireUnconsumed = false)
                     val pen = session.pen
                     val width = Brushes.widthFor(pen.brush, pen.slider)
-                    val points = ArrayList<Float>()
+                    val points = PointsBuilder()
                     fun add(at: Offset) {
                         if (points.size >= MAX_POINTS * 2) return
                         val x = canvas.fractionX(at.x).coerceIn(0f, 1f)
@@ -88,26 +88,33 @@ fun DrawSurface(session: EditorSession, canvas: LayerMath.Canvas, modifier: Modi
                         ) {
                             return
                         }
-                        points += x
-                        points += y
+                        points.add(x, y)
                     }
-                    add(down.position)
-                    session.liveStroke = Stroke(pen.brush, pen.color, width, points.toList())
-                    down.consume()
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) {
+                    // The live stroke is a view over the points so far: publishing it copies nothing.
+                    fun publish() {
+                        session.liveStroke = Stroke(pen.brush, pen.color, width, points.view())
+                    }
+                    try {
+                        add(down.position)
+                        publish()
+                        down.consume()
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) {
+                                change.consume()
+                                break
+                            }
+                            add(change.position)
+                            publish()
                             change.consume()
-                            break
                         }
-                        add(change.position)
-                        session.liveStroke = Stroke(pen.brush, pen.color, width, points.toList())
-                        change.consume()
+                        val done = Stroke(pen.brush, pen.color, width, points.view())
+                        if (done.points.size >= 2) session.addStroke(done)
+                    } finally {
+                        // A gesture cancelled mid-stroke (a system gesture, the tool closing) must not leave a ghost line.
+                        session.liveStroke = null
                     }
-                    val done = Stroke(pen.brush, pen.color, width, points.toList())
-                    session.liveStroke = null
-                    if (done.points.size >= 2) session.addStroke(done)
                 }
             },
     )

@@ -1152,6 +1152,7 @@
     <string name="stories_editor_mention_title">Marcar alguém</string>
     <string name="stories_editor_mention_search">Procurar gente</string>
     <string name="stories_editor_mention_none">Ninguém por aqui.</string>
+    <string name="stories_editor_mention_failed">Não deu pra carregar todo mundo.</string>
     <string name="stories_editor_mention_hint">Quem tu marca ganha um toque pra abrir o perfil. Só dá pra marcar quem pode ver o story.</string>
     <string name="stories_editor_old_server">Esse pqp ainda não aceita camadas. Teu texto vai no story como legenda.</string>
     <string name="stories_sticker_call">Chama pra call</string>
