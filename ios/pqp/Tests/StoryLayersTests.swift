@@ -412,11 +412,14 @@ final class StoryLayersTests: XCTestCase {
             PKStrokePoint(location: CGPoint(x: 20, y: 20), timeOffset: 0.1, size: CGSize(width: 4, height: 4), opacity: 1, force: 1, azimuth: 0, altitude: 0),
         ], creationDate: Date())))
         model.setDrawing(strokes, file: file, preview: UIImage())
-        XCTAssertEqual(model.layers.map(\.typeName), ["drawing", "text"], "The drawing is the lowest layer above the base")
+        XCTAssertEqual(model.layers.map(\.typeName), ["text", "drawing"], "A new drawing goes on top: layer order is creation order")
         model.setDrawing(strokes, file: file, preview: UIImage())
         XCTAssertEqual(model.layers.filter(\.isDrawing).count, 1)
+        model.addText(StoryTextData(text: "depois"))
+        model.setDrawing(strokes, file: file, preview: UIImage())
+        XCTAssertEqual(model.layers.map(\.typeName), ["text", "drawing", "text"], "Drawing again keeps the drawing's place in the order")
         model.setDrawing(PKDrawing(), file: nil, preview: nil)
-        XCTAssertEqual(model.layers.map(\.typeName), ["text"], "Clearing the strokes removes the layer")
+        XCTAssertEqual(model.layers.map(\.typeName), ["text", "text"], "Clearing the strokes removes the layer")
         XCTAssertTrue(model.files.isEmpty)
     }
 
@@ -491,6 +494,63 @@ final class StoryLayersTests: XCTestCase {
         let written = try Coding.encoder.encode(story)
         let again = try Coding.decoder.decode(Story.self, from: written)
         XCTAssertEqual(again.layers, story.layers, "Nothing is lost on the way through the cache")
+    }
+
+    // MARK: - Editing text in place
+
+    func testANewLineStartsWhereTheToolOpenedAndWithTheChosenScale() {
+        let model = editor()
+        let start = model.nextTextCenter()
+        let id = model.addText(StoryTextData(text: "oi"), x: start.x, y: start.y, scale: 2.5)!
+        XCTAssertEqual(model.layer(id)?.x, start.x)
+        XCTAssertEqual(model.layer(id)?.y, start.y)
+        XCTAssertEqual(model.layer(id)?.scale, 2.5)
+        let second = model.nextTextCenter()
+        XCTAssertGreaterThan(second.y, start.y, "The next line starts a little lower")
+    }
+
+    /// Done on an edited line is ONE undo step for the words, the style and
+    /// the scale together, and the place and the angle are never touched.
+    func testDoneOnAnEditedLineIsOneUndoStepAndMovesNothing() {
+        let model = editor()
+        let id = model.addText(StoryTextData(text: "um"), x: 0.3, y: 0.6, scale: 1)!
+        _ = model.beginGesture(at: CGPoint(x: 0.3 * canvas.width, y: 0.6 * canvas.height))
+        model.sizes[id] = CGSize(width: 100, height: 40)
+        model.endGesture()
+        guard var layer = model.layer(id) else { return XCTFail() }
+        var edited = StoryTextData(text: "um dois")
+        edited.color = .lime
+        model.commitText(id: id, edited, scale: 2)
+        layer = model.layer(id)!
+        XCTAssertEqual(layer.x, 0.3)
+        XCTAssertEqual(layer.y, 0.6)
+        XCTAssertEqual(layer.rotation, 0)
+        XCTAssertEqual(layer.scale, 2)
+        guard case .text(let data) = layer.content else { return XCTFail() }
+        XCTAssertEqual(data.text, "um dois")
+        XCTAssertEqual(data.color, .lime)
+        model.undo()
+        guard case .text(let back)? = model.layer(id)?.content else { return XCTFail() }
+        XCTAssertEqual(back.text, "um", "One undo reverts the words, the color and the scale")
+        XCTAssertEqual(model.layer(id)?.scale, 1)
+    }
+
+    func testDoneWithNothingChangedRecordsNothing() {
+        let model = editor()
+        let id = model.addText(StoryTextData(text: "um"))!
+        let layer = model.layer(id)!
+        if case .text(let data) = layer.content { model.commitText(id: id, data, scale: layer.scale) }
+        model.undo()
+        XCTAssertTrue(model.layers.isEmpty, "The only step on the stack is the add: Done with nothing changed is not an action")
+    }
+
+    func testTheScaleASliderChoosesStaysInsideTheContract() {
+        let model = editor()
+        let id = model.addText(StoryTextData(text: "um"))!
+        model.commitText(id: id, StoryTextData(text: "um"), scale: 99)
+        XCTAssertEqual(model.layer(id)?.scale, StoryLayerLimits.scaleMax)
+        model.commitText(id: id, StoryTextData(text: "um"), scale: 0.001)
+        XCTAssertEqual(model.layer(id)?.scale, StoryLayerLimits.scaleMin)
     }
 
     func testBringToFrontReorders() {

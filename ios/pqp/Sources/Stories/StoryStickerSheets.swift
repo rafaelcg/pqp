@@ -3,6 +3,8 @@ import SwiftUI
 /// The stickers tray: what can be placed on the story besides words and
 /// pictures. Two today, with room for the next ones.
 struct StoryStickerTray: View {
+    /// The story already holds the ceiling (20): say so on both tiles.
+    var isFull = false
     let canAddCall: Bool
     let canAddMention: Bool
     let onCall: () -> Void
@@ -15,10 +17,12 @@ struct StoryStickerTray: View {
                 .foregroundStyle(Palette.paper)
             HStack(spacing: 12) {
                 tile(symbol: "headphones", title: String(localized: "Call"),
-                     detail: canAddCall ? String(localized: "Bring people into a room") : String(localized: "One call per story"),
+                     detail: isFull ? String(localized: "That's the most things a story can hold.")
+                         : (canAddCall ? String(localized: "Bring people into a room") : String(localized: "One call per story")),
                      enabled: canAddCall, id: "tray.call", action: onCall)
                 tile(symbol: "at", title: String(localized: "Mention"),
-                     detail: canAddMention ? String(localized: "Tag someone") : String(localized: "Up to 5 people"),
+                     detail: isFull ? String(localized: "That's the most things a story can hold.")
+                         : (canAddMention ? String(localized: "Tag someone") : String(localized: "Up to 5 people")),
                      enabled: canAddMention, id: "tray.mention", action: onMention)
             }
             Spacer(minLength: 0)

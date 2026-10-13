@@ -10,6 +10,18 @@ extension APIClient {
         return (try? await get("/api/stories/config", query: query)) ?? .off
     }
 
+    /// Like `storiesConfig`, but a failure to ASK is thrown, so the composer
+    /// can say so and offer a retry instead of reading it as "stories off".
+    /// An API that has no such route (404) still reads as off.
+    func storiesConfigOrThrow(serverId: String? = nil) async throws -> StoriesConfig {
+        let query = serverId.map { [URLQueryItem(name: "serverId", value: $0)] } ?? []
+        do {
+            return try await get("/api/stories/config", query: query)
+        } catch APIError.notFound {
+            return .off
+        }
+    }
+
     /// A server's strip. With the flag off the server answers
     /// `{enabled:false}`, which draws nothing; nil means it could not ask.
     func serverStoryStrip(serverId: String) async -> StoryStrip? {

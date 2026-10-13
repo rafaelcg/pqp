@@ -137,15 +137,20 @@ final class StoryEditorModel {
 
     // MARK: Edits
 
+    /// Where a NEW line of text starts: the middle, a little below the last
+    /// one, so two are not stacked on the exact same spot. The editor opens the
+    /// text tool AT this point, so the line is typed where it will stay.
+    func nextTextCenter() -> (x: Double, y: Double) {
+        let textCount = count { $0.isText }
+        return (0.5, min(0.82, 0.5 + Double(textCount % 6) * 0.07))
+    }
+
     @discardableResult
-    func addText(_ data: StoryTextData) -> String? {
+    func addText(_ data: StoryTextData, x: Double? = nil, y: Double? = nil, scale: Double = 1) -> String? {
         guard !isFull else { return nil }
         let before = snapshot()
-        // A new line of text lands a little below the last one, so two are
-        // not stacked on the exact same spot.
-        let textCount = count { $0.isText }
-        let y = min(0.82, 0.5 + Double(textCount % 6) * 0.07)
-        let layer = StoryLayer(x: 0.5, y: y, content: .text(data))
+        let start = nextTextCenter()
+        let layer = StoryLayer(x: x ?? start.x, y: y ?? start.y, scale: StoryCanvas.clampScale(scale), content: .text(data))
         layers.append(layer)
         selectedId = layer.id
         record(before)
@@ -153,10 +158,28 @@ final class StoryEditorModel {
     }
 
     func updateText(id: String, _ data: StoryTextData) {
+        commitText(id: id, data, scale: nil)
+    }
+
+    /// Done on a line that was edited in place: the words, the style and the
+    /// scale the slider chose land together as ONE undo step. The place and
+    /// the angle are the layer's own and are not touched.
+    func commitText(id: String, _ data: StoryTextData, scale: Double?) {
         guard let index = layers.firstIndex(where: { $0.id == id }) else { return }
+        var changed = false
         let before = snapshot()
-        layers[index].content = .text(data)
-        record(before)
+        if layers[index].content != .text(data) {
+            layers[index].content = .text(data)
+            changed = true
+        }
+        if let scale {
+            let next = StoryCanvas.clampScale(scale)
+            if abs(layers[index].scale - next) > 1e-9 {
+                layers[index].scale = next
+                changed = true
+            }
+        }
+        if changed { record(before) }
     }
 
     @discardableResult
@@ -226,10 +249,11 @@ final class StoryEditorModel {
             files[existing.id] = file
             previews[existing.id] = preview
         } else if !isFull {
+            // Layer order is creation order for every type, the drawing
+            // included: a new drawing goes on TOP of what is already there (an
+            // existing one, redrawn above, keeps its place).
             let layer = StoryLayer(content: .drawing(picture))
-            // The drawing is the lowest layer, just above the base, so a
-            // doodle never covers a title, a photo or a sticker.
-            layers.insert(layer, at: 0)
+            layers.append(layer)
             files[layer.id] = file
             previews[layer.id] = preview
         } else {

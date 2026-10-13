@@ -170,6 +170,45 @@ final class StoryEditorUITests: XCTestCase {
         XCTAssertTrue(app.buttons["stories.own"].waitForExistence(timeout: 25), "Posted with a text layer and a call layer")
     }
 
+    /// Editing a line happens IN PLACE: the text view opens on top of the layer
+    /// (same centre), Done does not move it, only the text controls show while
+    /// typing, and the whole edit is one undo step.
+    func testEditingTextHappensInPlace() throws {
+        let (app, serverId) = try launch()
+        openComposer(app, serverId: serverId)
+        app.buttons["composer.mode.text"].tap()
+        addText(app, "ancora")
+        let element = layer(app, "ancora")
+        XCTAssertTrue(element.waitForExistence(timeout: 5))
+        // Somewhere off-centre, so "in place" means something.
+        let window = app.windows.firstMatch.frame
+        let target = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: window.width * 0.35, dy: window.height * 0.35))
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: target, withVelocity: .slow, thenHoldForDuration: 0.2)
+        let before = element.frame.center
+        XCTAssertLessThan(before.x, window.width * 0.45, "It was moved off-centre")
+
+        element.tap()
+        let input = app.textViews["text.input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        snap(app, "editor-text-in-place")
+        XCTAssertLessThan(abs(input.frame.center.x - before.x), 8, "The text view opens on the layer, same centre \(before) \(input.frame)")
+        XCTAssertLessThan(abs(input.frame.center.y - before.y), 8)
+        XCTAssertFalse(app.buttons["editor.draw"].isHittable, "While typing only the text controls show")
+        XCTAssertFalse(app.buttons["editor.stickers"].isHittable)
+        input.typeText(" mais")
+        app.buttons["text.done"].tap()
+        let after = layer(app, "ancora mais")
+        XCTAssertTrue(after.waitForExistence(timeout: 5))
+        XCTAssertLessThan(abs(after.frame.center.x - before.x), 8, "Done does not jump")
+        XCTAssertLessThan(abs(after.frame.center.y - before.y), 8)
+        snap(app, "editor-text-after-done")
+        // One undo step takes the whole edit back and leaves the line there.
+        app.buttons["editor.undo"].tap()
+        XCTAssertTrue(layer(app, "ancora").waitForExistence(timeout: 5), "One undo reverts the edit, not the line")
+    }
+
     /// A long press opens the layer's menu, and its buttons are tappable (they
     /// sit above the gesture surface, not under it).
     func testLongPressOpensTheMenuAndDeleteWorks() throws {

@@ -821,8 +821,9 @@ one of text / image / drawing / call / mention), never burned into the picture.
   its text so the box behind it hugs the words while typing. Tapping a text
   layer edits it. **Photos** come from `PhotosPicker` (re-encoded to 1440 px,
   no EXIF, at most 6), **drawing** is PencilKit (pen, marker, highlighter,
-  eraser) exported as ONE transparent 810x1440 PNG, the lowest layer above the
-  base. **Stickers**: the call (one per story, picked from the voice rooms of the
+  eraser) exported as ONE transparent 810x1440 PNG. Layer order is creation
+  order for every type, the drawing included: a new drawing goes on top, an
+  existing one redrawn keeps its place. **Stickers**: the call (one per story, picked from the voice rooms of the
   servers you can post to, with who is in them now) and mentions (friends and the
   members of the server the composer opened from, up to 5, each once).
 - **Posting**: `POST /api/stories` with `layers` (picture layers declare an

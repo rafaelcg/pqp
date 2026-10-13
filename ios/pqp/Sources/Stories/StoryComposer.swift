@@ -32,6 +32,10 @@ struct StoryComposer: View {
     @State private var mode: Mode = .media
     @State private var config = StoriesConfig.off
     @State private var configLoaded = false
+    /// The config could not be asked (the API is down, no network): said out
+    /// loud with a retry, never read as "stories are off".
+    @State private var configFailed = false
+    @State private var configAttempts = 0
     @State private var background = "night"
     @State private var draft: StoryDraftMedia?
     @State private var muted = false
@@ -74,9 +78,7 @@ struct StoryComposer: View {
             }
         }
         .task {
-            config = await session.api.storiesConfig(serverId: preselectedServerId)
-            configLoaded = true
-            if !config.mediaEnabled, mode == .media { mode = .text }
+            await loadConfig()
             #if DEBUG
             // A picked video, for a simulator whose photo library has none and
             // whose picker a UI test cannot drive: a synthetic clip of this
@@ -126,6 +128,24 @@ struct StoryComposer: View {
             }
             .presentationDetents([.medium, .large])
             .presentationBackground(Palette.ink)
+        }
+    }
+
+    private func loadConfig() async {
+        configAttempts += 1
+        do {
+            #if DEBUG
+            // A UI test's way to make the first ask fail once.
+            if ProcessInfo.processInfo.environment["PQP_STORY_CONFIG_FAIL"] == "once", configAttempts == 1 {
+                throw APIError.transport("simulated")
+            }
+            #endif
+            config = try await session.api.storiesConfigOrThrow(serverId: preselectedServerId)
+            configLoaded = true
+            configFailed = false
+            if !config.mediaEnabled, mode == .media { mode = .text }
+        } catch {
+            configFailed = true
         }
     }
 
@@ -182,9 +202,30 @@ struct StoryComposer: View {
                 .padding(.top, 6)
                 Spacer(minLength: 0)
                 if let error { errorPill(error).padding(.bottom, 10) }
+                if configFailed { configFailedBanner.padding(.bottom, 10) }
                 modeBar
             }
         }
+    }
+
+    /// "Could not reach pqp", with the way out: the camera still works while
+    /// it is shown, and posting asks again.
+    private var configFailedBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "wifi.exclamationmark")
+            Text("Couldn't reach pqp. Check your connection.")
+                .font(Typography.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Try again") { Task { await loadConfig() } }
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(Palette.signal)
+                .accessibilityIdentifier("composer.retry")
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Capsule().fill(.black.opacity(0.7)))
+        .accessibilityIdentifier("composer.configFailed")
     }
 
     private func errorPill(_ text: String) -> some View {
@@ -820,6 +861,12 @@ struct StoryAudienceSheet: View {
                     .font(Typography.callout)
                     .foregroundStyle(Palette.danger)
                     .accessibilityIdentifier("audience.error")
+                if options == nil {
+                    Button("Try again") { Task { await load() } }
+                        .font(Typography.bodyMedium)
+                        .foregroundStyle(Palette.signal)
+                        .accessibilityIdentifier("audience.retry")
+                }
             }
 
             Button {
@@ -874,6 +921,7 @@ struct StoryAudienceSheet: View {
     }
 
     private func load() async {
+        error = nil
         guard let loaded = try? await session.api.storyAudiences() else {
             error = String(localized: "Couldn't load where you can post.")
             return

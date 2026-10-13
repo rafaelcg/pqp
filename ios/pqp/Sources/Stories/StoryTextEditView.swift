@@ -1,47 +1,84 @@
 import SwiftUI
 import UIKit
 
-/// Typing a text layer: the canvas dims, the text sits in the middle in the
-/// style it will have, and everything that styles it is under the thumb:
-/// a size slider on the left, alignment and background in the corner, the five
-/// fonts and the twelve colors above the keyboard. Done places it.
+/// Typing a text layer, IN PLACE: the line is edited where it sits on the
+/// canvas, at the scale and the angle it has, so nothing moves when the
+/// keyboard comes up and nothing jumps when Done is tapped. The canvas dims
+/// behind it and only the text controls show: a size slider on the left (which
+/// is the layer's SCALE, the same number a pinch changes), alignment and
+/// background in the corner, the five fonts and the twelve colors above the
+/// keyboard. Cancel and Done are one undoable step between them.
 struct StoryTextEditView: View {
     @State var data: StoryTextData
-    /// A layer being edited keeps where it is; a new one lands in the middle.
-    let isNew: Bool
+    @State var scale: Double
+    /// Where the layer's center is, in the editor's own coordinates.
+    let center: CGPoint
+    /// Radians, as the layer has it.
+    let rotation: Double
     let canvasWidth: CGFloat
-    let onDone: (StoryTextData?) -> Void
+    /// The text and the scale it ended on; nil when it was cancelled or left
+    /// empty.
+    let onDone: ((StoryTextData, Double)?) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tick = 0
     @State private var colorTick = 0
+    @State private var keyboard: CGFloat = 0
+
+    private var fontSize: CGFloat { StoryCanvas.fontSize(for: data, canvasWidth: canvasWidth) }
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.74)
-                .ignoresSafeArea()
-                .onTapGesture { finish() }
-                .accessibilityHidden(true)
+        GeometryReader { proxy in
+            ZStack {
+                Color.black.opacity(0.74)
+                    .ignoresSafeArea()
+                    .onTapGesture { finish() }
+                    .accessibilityHidden(true)
 
-            VStack(spacing: 0) {
-                topBar
-                Spacer(minLength: 0)
-                ZStack(alignment: .leading) {
-                    editor.frame(maxWidth: .infinity)
-                    StoryVerticalSlider(
-                        value: $data.size,
-                        range: StoryLayerLimits.textSizeMin...StoryLayerLimits.textSizeMax
-                    )
-                    .padding(.leading, 12)
+                editor
+                    .scaleEffect(scale)
+                    .rotationEffect(.radians(rotation))
+                    .position(x: center.x, y: center.y - lift(in: proxy.size))
+
+                VStack(spacing: 0) {
+                    topBar
+                    Spacer(minLength: 0)
+                    controls
                 }
-                Spacer(minLength: 0)
-                controls
+                StoryVerticalSlider(value: scaleFraction, range: 0...1)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .padding(.leading, 12)
             }
         }
         .sensoryFeedback(.selection, trigger: tick)
         .sensoryFeedback(.selection, trigger: colorTick)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            keyboard = max(0, UIScreen.main.bounds.height - frame.minY)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
+    }
+
+    /// The line stays where it is. Only when the keyboard and the controls
+    /// above it would cover it is it lifted, by exactly as much as it takes,
+    /// and only on screen: the layer itself never moves.
+    private func lift(in size: CGSize) -> CGFloat {
+        let controlsHeight: CGFloat = 130
+        let bottom = center.y + fontSize * scale * 1.6
+        let free = size.height - keyboard - controlsHeight
+        return keyboard > 0 ? max(0, bottom - free) : 0
+    }
+
+    /// The slider's 0...1 is the layer's scale on a log scale, so the same
+    /// finger travel doubles the size anywhere along it.
+    private var scaleFraction: Binding<Double> {
+        let low = StoryLayerLimits.scaleMin
+        let high = StoryLayerLimits.scaleMax
+        return Binding(
+            get: { log(min(max(scale, low), high) / low) / log(high / low) },
+            set: { scale = low * pow(high / low, min(max($0, 0), 1)) }
+        )
     }
 
     // MARK: Top
@@ -103,8 +140,9 @@ struct StoryTextEditView: View {
 
     // MARK: Middle
 
+    /// The line, drawn exactly the way the placed layer is (same font, same
+    /// padding, same wrap width), so Done changes nothing but the caret.
     private var editor: some View {
-        let fontSize = StoryCanvas.fontSize(for: data, canvasWidth: canvasWidth)
         let inset = data.background == .none ? CGSize.zero : CGSize(width: fontSize * 0.55, height: fontSize * 0.28)
         return StoryTextInput(
             text: $data.text, font: data.font.uiFont(size: fontSize), color: foreground,
@@ -113,7 +151,7 @@ struct StoryTextEditView: View {
         )
         .padding(.horizontal, inset.width)
         .padding(.vertical, inset.height)
-        .background(fill(fontSize))
+        .background(fill)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: data.background)
         .accessibilityIdentifier("text.input")
         .onChange(of: data.text) { _, value in
@@ -122,12 +160,12 @@ struct StoryTextEditView: View {
     }
 
     private var foreground: Color {
-        if data.font == .neon { return .white }
+        if data.font == .neon { return .white.opacity(0.92) }
         return data.background == .solid ? (data.color.isLight ? .black : .white) : data.color.color
     }
 
     @ViewBuilder
-    private func fill(_ fontSize: CGFloat) -> some View {
+    private var fill: some View {
         let radius = fontSize * 0.42
         switch data.background {
         case .none: Color.clear
@@ -187,7 +225,7 @@ struct StoryTextEditView: View {
 
     private func finish() {
         let trimmed = data.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        onDone(trimmed.isEmpty ? nil : data)
+        onDone(trimmed.isEmpty ? nil : (data, scale))
     }
 }
 
@@ -247,7 +285,7 @@ struct StoryTextInput: UIViewRepresentable {
             options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font], context: nil
         )
         // A little slack, and room for the caret on an empty field.
-        let width = min(limit, max(36, ceil(rect.width) + 4))
+        let width = min(limit, max(36, ceil(rect.width) + 3))
         let height = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
         return CGSize(width: width, height: max(height, font.lineHeight))
     }
