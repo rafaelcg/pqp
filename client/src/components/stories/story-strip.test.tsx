@@ -67,4 +67,15 @@ describe("StoryStrip", () => {
     const expired = { ...item("Old", true), expiresAt: new Date(Date.now() - 1_000).toISOString() };
     expect(render({ ...base, items: [expired] })).toBe("");
   });
+
+  it("a ring paints focus only for the keyboard, in a neutral colour, with no tap flash", () => {
+    const html = render({ ...base, items: [item("Bia", true)] });
+    const button = /<button[^>]*data-story-ring="[^"]*Bia-id"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(button).toContain("focus-visible:ring-2");
+    expect(button).toContain("focus-visible:ring-text");
+    expect(button).not.toContain("focus-visible:ring-focus-ring");
+    expect(button).toContain("-webkit-tap-highlight-color:transparent");
+    // Nothing selects a ring on a plain focus or press.
+    expect(button).not.toMatch(/(?<!visible:)focus:|active:/);
+  });
 });

@@ -25,6 +25,12 @@ export interface ViewerRequest {
   originRect: DOMRect | null;
   /** `data-story-ring` of the opening ring, looked up again at close. */
   originRingId: string | null;
+  /**
+   * Opened with Enter or Space (a click with `detail === 0`). Only then does
+   * closing paint a focus ring on the ring it returns to; after a mouse or a
+   * touch the focus goes back quietly, so nothing stays highlighted.
+   */
+  originByKeyboard?: boolean;
 }
 
 export interface ComposerRequest {

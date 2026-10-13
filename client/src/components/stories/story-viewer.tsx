@@ -467,9 +467,19 @@ export function StoryViewer({
     window.setTimeout(commitSeenStories, 120);
     const ring = ringFor(person?.authorId ?? null) ?? restoreFocus.current;
     if (ring instanceof HTMLElement) {
+      // Focus goes back so a keyboard user keeps their place, but after a
+      // mouse or a touch it must not paint a ring: the script focus would
+      // match :focus-visible (Esc counts as a key) and leave the strip
+      // looking selected until the next click elsewhere.
+      if (!request.originByKeyboard) {
+        ring.setAttribute("data-pointer-focus", "");
+        ring.addEventListener("blur", () => ring.removeAttribute("data-pointer-focus"), {
+          once: true,
+        });
+      }
       ring.focus({ preventScroll: true });
     }
-  }, [flushViews, onClosed, ringFor, person?.authorId]);
+  }, [flushViews, onClosed, ringFor, person?.authorId, request.originByKeyboard]);
 
   const close = useCallback(() => {
     if (closingRef.current) {
