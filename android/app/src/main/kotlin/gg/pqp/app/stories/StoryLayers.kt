@@ -37,8 +37,16 @@ object StoryLayers {
     val ALIGNS = listOf("left", "center", "right")
     val SHAPES = listOf("rect", "rounded", "circle")
 
-    /** What a text layer's `size` 1 is, as a share of the canvas width. The viewer uses the same number. */
-    const val TEXT_BASE = 0.07f
+    /**
+     * What a text layer's `size` 1 is, as a share of the canvas width, and the
+     * line height as a multiple of the font size. The canonical layout every
+     * platform draws with (web is the reference): the viewer uses the same numbers.
+     */
+    const val TEXT_BASE = 0.08f
+    const val TEXT_LINE_HEIGHT = 1.14f
+
+    /** A mention pill's font, as a share of the canvas width. */
+    const val MENTION_FONT = 0.05f
 
     /** A photo layer at scale 1 is this share of the canvas width (the schema's own rule). */
     const val IMAGE_BASE_WIDTH = 0.4f

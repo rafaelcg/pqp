@@ -338,13 +338,22 @@ class EditorTest {
 
     @Test
     fun `layers have a natural size tied to the canvas width`() {
-        assertEquals(0.07f * 360f, LayerMath.textSizePx(1f, 360f), 1e-4f)
-        assertEquals(2f * 0.07f * 360f, LayerMath.textSizePx(2f, 360f), 1e-4f)
+        assertEquals(0.08f * 360f, LayerMath.textSizePx(1f, 360f), 1e-4f)
+        assertEquals(2f * 0.08f * 360f, LayerMath.textSizePx(2f, 360f), 1e-4f)
         val size = LayerMath.photoSize(1000, 500, 360f)
         assertEquals(144f, size.width, 1e-3f)
         assertEquals(72f, size.height, 1e-3f)
         // A photo with no size yet is square rather than flat.
         assertEquals(144f, LayerMath.photoSize(0, 0, 360f).height, 1e-3f)
+    }
+
+    @Test
+    fun `the layout numbers are the canonical ones every platform draws with`() {
+        assertEquals(0.08f, StoryLayers.TEXT_BASE, 0f)
+        assertEquals(1.14f, StoryLayers.TEXT_LINE_HEIGHT, 0f)
+        assertEquals(0.84f, StoryLayers.TEXT_WRAP_WIDTH, 0f)
+        assertEquals(0.40f, StoryLayers.IMAGE_BASE_WIDTH, 0f)
+        assertEquals(0.05f, StoryLayers.MENTION_FONT, 0f)
     }
 
     @Test

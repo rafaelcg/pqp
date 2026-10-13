@@ -67,10 +67,10 @@ private fun pxToSp(px: Float): TextUnit = with(LocalDensity.current) { px.toSp()
 /** The five fonts as the app has them: tokens the server stores, faces each platform maps itself. */
 fun storyFont(font: String): Pair<FontFamily, FontWeight> = when (font) {
     "bold" -> Gabarito to FontWeight.Black
-    "typewriter" -> FontFamily.Monospace to FontWeight.Medium
-    "serif" -> FontFamily.Serif to FontWeight.SemiBold
-    "neon" -> Gabarito to FontWeight.Bold
-    else -> InstrumentSans to FontWeight.SemiBold
+    "typewriter" -> FontFamily.Monospace to FontWeight.SemiBold
+    "serif" -> FontFamily.Serif to FontWeight.Bold
+    "neon" -> Gabarito to FontWeight.ExtraBold
+    else -> InstrumentSans to FontWeight.Bold
 }
 
 fun tokenColor(token: String): Color = Color(StoryLayers.colorArgb(token))
@@ -126,7 +126,9 @@ fun rememberTextLook(
             fontFamily = family,
             fontWeight = weight,
             fontSize = pxToSp(fontPx),
-            lineHeight = pxToSp(fontPx * 1.2f),
+            lineHeight = pxToSp(fontPx * StoryLayers.TEXT_LINE_HEIGHT),
+            // The serif face is italic, as web draws it.
+            fontStyle = if (font == "serif") androidx.compose.ui.text.font.FontStyle.Italic else null,
             textAlign = when (align) {
                 "left" -> TextAlign.Start
                 "right" -> TextAlign.End
@@ -221,7 +223,7 @@ fun MentionLayerContent(name: String, canvasWidthPx: Float, modifier: Modifier =
             color = Palette.Ink,
             fontFamily = Gabarito,
             fontWeight = FontWeight.ExtraBold,
-            fontSize = pxToSp(unit * 0.048f),
+            fontSize = pxToSp(unit * StoryLayers.MENTION_FONT),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.widthIn(max = pxToDp(unit * 0.6f)),
