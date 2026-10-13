@@ -14,11 +14,16 @@ import {
   setMusicSession,
   stopMusic,
 } from "@/lib/music-store";
-import { resetMusicPrefsForTests } from "@/lib/music-prefs";
+import { resetMusicPrefsForTests, setMusicPlacement } from "@/lib/music-prefs";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { resetChannelMusicCardRightsForTests } from "@/components/voice/channel-music-card-rights";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
-import { effectiveCanManageMusic, musicOverflowItems, nextMusicRepeat } from "@/components/voice/music-extras";
+import {
+  currentTrackYouTubeHref,
+  effectiveCanManageMusic,
+  musicOverflowItems,
+  nextMusicRepeat,
+} from "@/components/voice/music-extras";
 import { translateMessage } from "@/lib/i18n";
 import {
   formatMusicClockOrUnknown,
@@ -35,6 +40,7 @@ import { MusicFila } from "@/components/voice/music-fila";
 import { resetMusicLocalPlaybackForTests } from "@/components/voice/music-local-playback";
 import {
   applyYouTubeVolume,
+  captionsSyncKey,
   musicEmbedCommand,
   playerNeedsRoomSeek,
   shouldAdvanceOnEnded,
@@ -367,6 +373,29 @@ describe("shouldAdvanceOnEnded", () => {
   });
 });
 
+describe("captionsSyncKey", () => {
+  const room = { id: "track-1", videoId: "iG9CE55wbtY" };
+
+  it("syncs once per room track, on the room's video", () => {
+    const key = captionsSyncKey("iG9CE55wbtY", room, null);
+    expect(key).toBe("track-1:iG9CE55wbtY");
+    expect(captionsSyncKey("iG9CE55wbtY", room, key)).toBeNull();
+  });
+
+  it("ignores PLAYING from a video the room is not on", () => {
+    expect(captionsSyncKey("arj7oStGLkU", room, null)).toBeNull();
+    expect(captionsSyncKey(undefined, room, null)).toBeNull();
+    expect(captionsSyncKey("iG9CE55wbtY", null, null)).toBeNull();
+  });
+
+  it("syncs again on the next track, including a repeat of the same video", () => {
+    const first = captionsSyncKey("iG9CE55wbtY", room, null);
+    expect(
+      captionsSyncKey("iG9CE55wbtY", { id: "track-2", videoId: "iG9CE55wbtY" }, first),
+    ).toBe("track-2:iG9CE55wbtY");
+  });
+});
+
 describe("shouldReportPositionSample", () => {
   it("skips samples while the player is ended", () => {
     expect(shouldReportPositionSample(YT_STATE.ENDED)).toBe(false);
@@ -591,6 +620,33 @@ describe("musicOverflowItems", () => {
     });
     expect(items.map((item) => item.id)).toEqual(["duck", "stop-listening"]);
     expect(items[1]?.label).toBe(translateMessage("music.dismiss"));
+  });
+
+  /* The embed's title and logo link, which `controls: 0` hides. */
+  it("opens the track on screen on YouTube, for a member too", () => {
+    const items = musicOverflowItems({
+      t,
+      canManage: false,
+      canSetSwitches: false,
+      listening: true,
+      ducking: true,
+      openControls: false,
+      autoplay: false,
+      repeat: "off",
+      onOpenCurrent: () => {},
+    });
+    expect(items.map((item) => item.id)).toEqual([
+      "duck",
+      "stop-listening",
+      "open-current",
+    ]);
+    expect(items[2]?.label).toBe(translateMessage("music.openYoutube"));
+    expect(currentTrackYouTubeHref("iG9CE55wbtY", 63_900)).toBe(
+      "https://www.youtube.com/watch?v=iG9CE55wbtY&t=63s",
+    );
+    expect(currentTrackYouTubeHref("iG9CE55wbtY", 0)).toBe(
+      "https://www.youtube.com/watch?v=iG9CE55wbtY",
+    );
   });
 
   it("offers the way back in once this machine has stopped", () => {
@@ -1001,6 +1057,26 @@ describe("the composer bar's up-next line", () => {
     expect(html).toMatch(/data-music-queue-count=""[^>]*>3</);
     /* The full-width "A seguir <track>" line is gone with it. */
     expect(html).not.toContain("data-music-next");
+  });
+
+  it("puts the stage toggle on the bar, beside the queue", () => {
+    resetMusicPrefsForTests();
+    const off = bar({ queue: [] });
+    expect(off).toMatch(
+      new RegExp(
+        `data-music-stage-watch=""[^>]*aria-pressed="false"[^>]*aria-label="${translateMessage("music.stage.watch")}"`,
+      ),
+    );
+    expect(off.indexOf("data-music-stage-watch")).toBeLessThan(
+      off.indexOf("data-music-queue-toggle"),
+    );
+    setMusicPlacement("stage");
+    expect(bar({ queue: [] })).toMatch(
+      new RegExp(
+        `data-music-stage-watch=""[^>]*aria-pressed="true"[^>]*aria-label="${translateMessage("music.stage.hide")}"`,
+      ),
+    );
+    resetMusicPrefsForTests();
   });
 
   it("drops the count when there is nothing queued", () => {
@@ -1441,7 +1517,8 @@ describe("MusicFila", () => {
     expect(html).not.toContain("w-60");
     expect(html).toContain("data-music-fila-close");
     expect(html).not.toContain("data-music-overflow");
-    expect(html).toContain("data-music-stage-watch");
+    // The bar under the sheet carries the stage toggle.
+    expect(html).not.toContain("data-music-stage-watch");
     expect(html).not.toContain("data-music-fila-play");
     expect(html).not.toContain("h-12 w-12");
     expect(html).not.toContain("data-music-vote-skip");
@@ -1461,6 +1538,7 @@ describe("MusicFila", () => {
     expect(html).toContain("data-music-fila=\"drawer\"");
     expect(html).toContain("data-music-overflow");
     expect(html).toContain("data-music-fila-play");
+    expect(html).toContain("data-music-stage-watch");
     expect(html).toContain("h-12 w-12");
     expect(html).toContain("data-slider=\"scrub\"");
     expect(html).not.toContain("data-indeterminate");
@@ -1501,7 +1579,6 @@ describe("MusicFila", () => {
     );
     expect(html).not.toContain("data-music-vote-skip");
     expect(html).not.toContain("data-music-overflow");
-    expect(html).toContain("data-music-stage-watch");
     expect(html).not.toContain("data-music-fila-play");
   });
 
