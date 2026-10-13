@@ -64,7 +64,7 @@ object StoriesRules {
         if (story.kind == "video") return story.media?.durationMs?.takeIf { it > 0 } ?: PHOTO_DISPLAY_MS
         val words = wordsOf(story)
         val reading = if (words.isBlank()) PHOTO_DISPLAY_MS else textDisplayMs(words)
-        val hasCall = story.sticker?.type == "call" || story.layers.any { it is CallStoryLayer }
+        val hasCall = story.sticker?.type == "call" || story.call != null || story.layers.any { it is CallStoryLayer }
         return if (hasCall) maxOf(CALL_DISPLAY_MS, reading) else reading
     }
 

@@ -622,7 +622,8 @@ private fun LayerHost(
                 is MentionLayer -> MentionLayerContent(layer.name, canvas.width)
                 is CallLayer -> CallLayerPreview(
                     layer = layer,
-                    faces = env.occupancy[layer.channelId].orEmpty().map { CallFace(it.userId, it.displayName, it.avatarUrl) },
+                    faces = env.occupancy[layer.channelId].orEmpty().take(CallFaces.SHOWN).map { CallFace(it.userId, it.displayName, it.avatarUrl) },
+                    count = env.occupancy[layer.channelId].orEmpty().size,
                     canvasWidthPx = canvas.width,
                 )
                 is InkLayer -> Unit

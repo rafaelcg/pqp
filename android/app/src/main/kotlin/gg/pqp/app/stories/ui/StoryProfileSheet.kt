@@ -51,6 +51,7 @@ fun StoryProfileSheet(
     val scope = rememberCoroutineScope()
     val uri = LocalUriHandler.current
     var status by remember { mutableStateOf<String?>(null) }
+    var failed by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     val sent = stringResource(R.string.stories_profile_request_sent)
     val accepted = stringResource(R.string.stories_profile_now_friends)
@@ -74,14 +75,16 @@ fun StoryProfileSheet(
                 Text("@$it", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             status?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = Palette.Success, modifier = Modifier.testTag("stories.profile.status"))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = if (failed) MaterialTheme.colorScheme.error else Palette.Success, modifier = Modifier.testTag("stories.profile.status"))
             }
             if (person.id != meId) {
                 Button(
                     onClick = {
                         busy = true
                         scope.launch {
-                            status = when (val result = SocialRepository.of(session).addFriend(person.id)) {
+                            val result = SocialRepository.of(session).addFriend(person.id)
+                            failed = result is SocialRepository.Outcome.Failed
+                            status = when (result) {
                                 SocialRepository.Outcome.Accepted -> accepted
                                 SocialRepository.Outcome.RequestSent, SocialRepository.Outcome.Done -> sent
                                 is SocialRepository.Outcome.Failed -> result.message
@@ -89,7 +92,8 @@ fun StoryProfileSheet(
                             busy = false
                         }
                     },
-                    enabled = !busy && status == null,
+                    // A failure leaves the button live: try again without closing the sheet.
+                    enabled = !busy && (status == null || failed),
                     shape = MaterialTheme.shapes.small,
                     colors = ButtonDefaults.buttonColors(containerColor = Palette.Signal, contentColor = Palette.Ink),
                     modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm).testTag("stories.profile.add"),

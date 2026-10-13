@@ -226,4 +226,10 @@ class ViewerTest {
     fun `the call card is 82 percent of the canvas wide, as on every platform`() {
         assertEquals(0.82f, StoryLayers.CALL_CARD_WIDTH, 0f)
     }
+
+    @Test
+    fun `a call card the viewer synthesises from the live call keeps the story up as long as a real one`() {
+        val live = story("[]", ""","call":{"serverId":"s","channelId":"c","state":"live"}""", "text")
+        assertEquals(8_000L, StoriesRules.displayMs(live))
+    }
 }

@@ -272,15 +272,15 @@ private fun LiveDot(state: CallCardState, size: Dp) {
 
 /** The same card, in the editor: nothing live is known about a room that has not been posted, so its roster is the preview. */
 @Composable
-fun CallLayerPreview(layer: CallLayer, faces: List<CallFace>, canvasWidthPx: Float) {
+fun CallLayerPreview(layer: CallLayer, faces: List<CallFace>, count: Int, canvasWidthPx: Float) {
     StoryCallCard(
-        state = callCardState("live", faces.size),
+        state = callCardState("live", count),
         roomName = layer.roomName,
         serverName = layer.serverName,
         serverId = layer.serverId,
         serverIconUrl = layer.serverIconUrl,
         faces = faces,
-        count = faces.size,
+        count = count,
         canvasWidthPx = canvasWidthPx,
         showJoin = true,
     )
