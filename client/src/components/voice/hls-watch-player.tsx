@@ -20,6 +20,7 @@ import {
   MessageSquare,
   Minimize2,
   Monitor,
+  MoreHorizontal,
   Move,
   Pause,
   PictureInPicture,
@@ -119,6 +120,7 @@ import { drainJitterMs, uniformJitterMs } from "@/lib/reconnect-jitter";
 import { formatCallDuration } from "@/components/dm/call-stage-state";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Menu } from "@/components/ui/menu";
+import { watchPlayerMoreItems } from "@/components/voice/call-menu-items";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
 import {
@@ -2981,6 +2983,9 @@ export function HlsWatchPlayer({
   // nor focus inside it reaches the bar's own handlers: it holds the chrome
   // up itself while it is open, the way the quality menu does.
   const [cameraLayoutOpen, setCameraLayoutOpen] = useState(false);
+  // The bar's ⋯ (fill, picture-in-picture) holds the bar up while open, like
+  // the camera layout picker: on touch the pointer leaves on pointerup.
+  const [playerMoreOpen, setPlayerMoreOpen] = useState(false);
   // The QUICK cluster's own menu-open flag (below), read by nothing --
   // `Menu` wants a setter to report into, and this deliberately does NOT
   // feed `useIdleChrome`'s `pinned` the way `cameraLayoutOpen` above does.
@@ -2993,7 +2998,7 @@ export function HlsWatchPlayer({
   const [, setQuickCameraLayoutOpen] = useState(false);
   const chrome = useIdleChrome(
     layout === "cinema" && hasFrame,
-    qualityOpen || cameraLayoutOpen || barHovered || barFocused,
+    qualityOpen || cameraLayoutOpen || playerMoreOpen || barHovered || barFocused,
   );
   const chromeClass = idleChromeClassName({
     hidden: chrome.hidden,
@@ -3037,6 +3042,15 @@ export function HlsWatchPlayer({
   };
   const iconBtn =
     "flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal";
+  // The bar's "⋯": fill and picture-in-picture, the two things a viewer sets
+  // once per film rather than reaches for during it (`call-menu-items.ts`).
+  const playerMoreItems = watchPlayerMoreItems(t, {
+    fit: hasFrame ? fit : undefined,
+    pip:
+      pipAvailable && hasFrame
+        ? { active: isPip, onToggle: () => void togglePip() }
+        : undefined,
+  });
 
   const cinema = layout === "cinema";
   const mini = layout === "mini";
@@ -3207,7 +3221,9 @@ export function HlsWatchPlayer({
       className={cn(
         // `@container/watch`: side by side stacks by the PLAYER's width, not
         // the window's (`CAMERA_SIDE_*_CLASS`).
-        "@container/watch relative h-full w-full bg-black",
+        // Everything drawn here sits on the black stage, so the player's
+        // text is the on-video colour in every theme rather than the page's.
+        "@container/watch relative h-full w-full bg-black [--color-paper:var(--color-on-media)] [--color-paper-muted:var(--color-on-media-muted)]",
         cinema && fullscreen?.active && chrome.hidden && "cursor-none",
         !cinema && "group",
         className,
@@ -3677,7 +3693,10 @@ export function HlsWatchPlayer({
                 }
                 updateVolume(next);
               }}
-              className="h-1 w-20 cursor-pointer accent-signal sm:w-24"
+              // A narrow player (a phone held upright) has no room for the
+              // slider beside the rest of the bar, and a phone has volume
+              // buttons; mute stays.
+              className="hidden h-1 w-20 cursor-pointer accent-signal @min-[30rem]/watch:block sm:w-24"
             />
             </div>
             {isVod ? (
@@ -3713,19 +3732,22 @@ export function HlsWatchPlayer({
               <button
                 type="button"
                 data-testid="watch-stage-jump-live"
-                className="flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] px-2 text-[11px] font-semibold uppercase tracking-wide text-paper/80 hover:bg-paper/15 hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+                className="flex h-8 min-w-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-control)] px-2 text-[11px] font-semibold uppercase tracking-wide text-paper/80 hover:bg-paper/15 hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
                 onClick={paused ? togglePlay : jumpToLive}
               >
                 <span
                   aria-hidden="true"
-                  className="h-2 w-2 rounded-full bg-paper/50"
+                  className="h-2 w-2 shrink-0 rounded-full bg-paper/50"
                 />
-                {t("voice.hls.jumpToLive")}
+                <span className="truncate">{t("voice.hls.jumpToLive")}</span>
               </button>
             ) : (
+              // Not on a narrow player: there it wrapped onto two lines over
+              // the mute button. The page header and the player's top line
+              // already say the party is live.
               <span
                 data-testid="watch-stage-live"
-                className="flex h-8 items-center gap-1.5 px-2 text-[11px] font-semibold uppercase tracking-wide text-paper"
+                className="hidden h-8 items-center gap-1.5 whitespace-nowrap px-2 text-[11px] font-semibold uppercase tracking-wide text-paper @min-[36rem]/watch:flex"
               >
                 <span
                   aria-hidden="true"
@@ -3767,40 +3789,6 @@ export function HlsWatchPlayer({
                   <LayoutGlyph className="h-4 w-4" aria-hidden="true" />
                 </button>
               </Menu>
-            ) : null}
-            {hasFrame ? (
-              <Tooltip
-                label={whole ? t("call.fit.fill") : t("call.fit.whole")}
-                detail={t("voice.hls.fitHint")}
-                side="top"
-                align="end"
-              >
-                <button
-                  type="button"
-                  data-testid="hls-fit"
-                  data-hls-fit={fit.fit}
-                  aria-pressed={whole}
-                  className={cn(iconBtn, whole && "text-signal")}
-                  onClick={fit.toggle}
-                >
-                  {whole ? (
-                    <Crop className="h-4 w-4" aria-hidden="true" />
-                  ) : (
-                    <Scan className="h-4 w-4" aria-hidden="true" />
-                  )}
-                </button>
-              </Tooltip>
-            ) : null}
-            {pipAvailable && hasFrame ? (
-              <button
-                type="button"
-                aria-label={t("voice.hls.pip")}
-                aria-pressed={isPip}
-                className={iconBtn}
-                onClick={() => void togglePip()}
-              >
-                <PictureInPicture2 className="h-4 w-4" />
-              </button>
             ) : null}
             {offered.length > 1 ? (
               <div className="relative">
@@ -3899,6 +3887,29 @@ export function HlsWatchPlayer({
                 <MessageSquare className="h-4 w-4" aria-hidden="true" />
               </button>
             ) : null}
+            {/* THE SAME ROW AS A CALL (`ScreenTileFrame`, `TileOverlay`):
+                what the viewer does with the party, then "⋯" for what is
+                rarely wanted (fill, picture-in-picture), then fullscreen
+                last. */}
+            {bottomActions}
+            {playerMoreItems.length > 0 ? (
+              <Menu
+                align="end"
+                side="top"
+                items={playerMoreItems}
+                onOpenChange={setPlayerMoreOpen}
+              >
+                <button
+                  type="button"
+                  data-testid="hls-more"
+                  data-hls-fit={hasFrame ? fit.fit : undefined}
+                  aria-label={t("voice.hls.more")}
+                  className={iconBtn}
+                >
+                  <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </Menu>
+            ) : null}
             {fullscreen ? (
               <button
                 type="button"
@@ -3924,7 +3935,6 @@ export function HlsWatchPlayer({
                 )}
               </button>
             ) : null}
-            {bottomActions}
           </div>
         </div>
       </div>
@@ -4000,7 +4010,9 @@ export function HlsWatchPlayer({
           {hasFrame ? (
             <div
               data-testid="hls-volume"
-              className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full bg-black/70 px-1.5 py-1"
+              // Lifted with every picture's row over a floating call bar
+              // (`--tile-row-lift`, set by the call stage; 0 elsewhere).
+              className="absolute bottom-[min(calc(0.5rem+var(--tile-row-lift,0px)),calc(100%-2.25rem))] right-2 flex items-center gap-1.5 rounded-full bg-black/70 px-1.5 py-1"
             >
               <Tooltip
                 label={whole ? t("call.fit.fill") : t("call.fit.whole")}
@@ -4138,6 +4150,18 @@ export function HlsWatchPlayer({
                 }}
                 className="h-1 w-20 cursor-pointer accent-signal"
               />
+              {/* A call tile hands its "⋯" and fullscreen in here, so a share
+                  that arrives as HLS has one row like every other picture,
+                  not this cluster plus the tile's own on top of it. */}
+              {bottomActions}
+            </div>
+          ) : bottomActions ? (
+            // Before the first frame there is nothing to fit or turn up, but
+            // a viewer can still stop watching or go fullscreen.
+            // No pill of its own: the buttons carry theirs, and an empty dark
+            // capsule sat in the corner while they waited for a hover.
+            <div className="absolute bottom-[min(calc(0.5rem+var(--tile-row-lift,0px)),calc(100%-2.25rem))] right-2 flex items-center gap-1.5">
+              {bottomActions}
             </div>
           ) : null}
         </>

@@ -107,6 +107,7 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   desktop_notify_default_on: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   voice_notes: (raw) => raw === "true",
+  soundboard: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   voice_note_transcription: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.

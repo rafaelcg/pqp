@@ -545,7 +545,7 @@ describe("decideUnprompted: what reaches the channel", () => {
 
   test("says NOTHING when the model is not confident, and never the fallback", async () => {
     // The requirement in one test. On the mention path this same sentinel
-    // produces "essa eu não sei responder, @rafa consegue te dizer", which is
+    // produces "essa eu não sei responder. já chamei a equipe (@rafa)", which is
     // right for somebody who asked and pure noise for a room that did not.
     const rt = runtime("NAO_SEI");
     const result = await decideUnprompted(candidate(), rt);

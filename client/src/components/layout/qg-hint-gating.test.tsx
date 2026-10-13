@@ -17,9 +17,9 @@ import { QgHint } from "./qg-hint";
  * corner to somebody else, and it does not spend its once-ever impression
  * either, because a card nobody saw has to come back.
  *
- * The URL above is not localhost on purpose: `lib/hints.ts` deliberately never
- * persists on localhost so a developer sees every card on every reload, and on
- * localhost this test could not observe the impression at all.
+ * The URL above is not localhost on purpose: localhost keeps the cards off
+ * unless `pqp:hints-persist` is set, and this test has to observe the
+ * impression.
  */
 
 vi.mock("@/lib/api", () => ({

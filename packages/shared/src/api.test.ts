@@ -256,6 +256,16 @@ describe("userPreferencesSchema", () => {
     expect(userPreferencesSchema.safeParse({ theme: "neon" }).success).toBe(false);
   });
 
+  it("accepts the ported community looks", () => {
+    for (const appearance of [
+      "ocean",
+      "catppuccin",
+      "everforest",
+    ]) {
+      expect(userPreferencesSchema.safeParse({ appearance }).success).toBe(true);
+    }
+  });
+
   it("accepts the five appearance skins and rejects anything else", () => {
     expect(userPreferencesSchema.safeParse({ appearance: "signal" }).success).toBe(
       true,

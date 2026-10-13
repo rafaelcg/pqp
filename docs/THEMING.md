@@ -148,14 +148,17 @@ boot-script rule as theme and appearance.
 ## Stage 4 — named appearance presets
 
 A second axis, not a second `data-theme` value. Brightness stays
-`light | dark | system`. The skin is `signal | harmony | hearth | night`, stored as
+`light | dark | system`. The skin is `signal | harmony | hearth | night` plus the
+ported `ocean | catppuccin | everforest` (and the seasonal looks, stage 5.5), stored as
 `pqp-appearance` and `user_preferences.settings.appearance`.
 
 `signal` is the default pqp look (labelled Classic / Clássico in the picker). `harmony` and `hearth` retint role tokens only.
 `night` is a near-black look (true black page and rail, lifted panels). It is
 dark-only: picking it pins brightness to dark, and Light / System stay off
 until another look is chosen. They do not change layout. They do not use another product's
-name or brand hex values. Hearth tints the rail; it does not paint a two-tone
+name or brand hex values. The exception is the three ported looks, credited copies
+of MIT palettes (see `DECISIONS.md`); they follow light and dark like the others.
+Hearth tints the rail; it does not paint a two-tone
 sidebar, because that needs an `--color-on-sidebar` token the message pane does
 not share.
 
@@ -195,6 +198,26 @@ yellows still meet the accent-on-surface floor.
 
 Storage is `pqp-accent-hue` and `user_preferences.settings.accentHue`.
 
+## Stage 5.5: seasonal looks
+
+Two more skins on the appearance axis: `halloween` and `christmas`.
+
+Both are dark only, like Night.
+
+- Halloween: aubergine surfaces, pumpkin accent.
+- Christmas: pine surfaces, a cranberry rail, a gold accent. It is never red,
+  because a red primary button reads as the danger colour.
+
+The picker shows a seasonal look only in its season, or while it is the look
+on screen. A corner card invites people once per season
+(`docs/ONBOARDING.md`, Seasonal look). The windows live in
+`lib/seasonal-looks.ts`; Christmas turns itself on on 1 December with no
+deploy. The enum values are permanent: a stored pick keeps working all year.
+
+`chooseLook` in `lib/choose-look.ts` is the one way to pick a look. It notes
+the mode before a dark-only look and gives it back on the way out, also when
+the person moves between two dark-only looks first.
+
 ## Later stages (upside, not scoped here)
 
 - **User custom themes** as a constrained set of token values. A form, not a stylesheet.
@@ -220,7 +243,7 @@ inputs. Stage 5 is a hue only. A full token form is stage 6, and it is enough.
 | 2 | Light + System, Clerk bridge, anti-flash | 3–4 days | The actual feature |
 | 3 | `user_preferences`, settings sync | ~2 days | All settings follow the user |
 | 3.5 | High contrast (`default` / `more` / `system`) | ~half a day | Accessibility |
-| 4 | Named presets (`signal` / `harmony` / `hearth` / `night`) | ~1 day | Extra looks without layout clones |
+| 4 | Named presets (`signal` / `harmony` / `hearth` / `night` + three ported) | ~1 day | Extra looks without layout clones |
 | 5 | Accent hue picker | ~half a day | Colour without a new skin |
 | 6 | Custom themes, server branding | — | Upside |
 | 7 | Free-form CSS | — | Never |

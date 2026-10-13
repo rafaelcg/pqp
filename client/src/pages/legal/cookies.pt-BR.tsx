@@ -106,7 +106,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "16406152",
+      sourceRev: "a7ebc3fb",
       heading: "Armazenamento local",
       body: (
         <>
@@ -125,8 +125,9 @@ export const cookiesPtBr: LegalDocument = {
               <code>pqp-theme</code>: claro, escuro ou seguir o sistema.
             </li>
             <li>
-              <code>pqp-appearance</code>: Clássico, Harmonia, Lareira ou Noite.
-              O visual escolhido, separado do claro e do escuro.
+              <code>pqp-appearance</code>: Clássico, Harmonia, Lareira, Noite,
+              Halloween ou Natal. O visual escolhido, separado do claro e do
+              escuro.
             </li>
             <li>
               <code>pqp-accent-hue</code>: uma cor de destaque escolhida, ou a
@@ -289,7 +290,8 @@ export const cookiesPtBr: LegalDocument = {
               <code>pqp:voice-clean-settings-seen</code>,{" "}
               <code>pqp:obs-virtual-camera-hint-dismissed</code>,{" "}
               <code>pqp:linux-share-audio-hint-2026-09</code>, toda chave que começa
-              com <code>pqp:feature-hint-</code>, e{" "}
+              com <code>pqp:feature-hint-</code> ou{" "}
+              <code>pqp:seasonal-look-</code>, e{" "}
               <code>pqp:voice-capacity-</code> seguido do id de um canal de voz.
             </li>
           </ul>

@@ -820,6 +820,29 @@ whoever set up the tool can see why a chip is missing. When nothing resolves,
 knowing tag ids). Discord tag snowflakes copied from an old Discord setup never
 match an id here, which is why names match too.
 
+**Starter tags answer in every language.** A starter tag that staff have not
+renamed (`forum_tags.preset`) is shown as "Dúvida", "Question" or "Duda"
+depending on the reader, so `applied_tags` matches the stored name first and
+then any shipped-language name of the tag's preset (`FORUM_TAG_PRESET_NAMES` in
+`packages/shared/src/forums.ts`). Once staff rename the tag the preset is
+cleared and only the new name matches.
+
+### 7.3b Tag icons and presets
+
+A tag's picture is `forum_tags.icon`, a key from the curated set
+`FORUM_TAG_ICONS` (each client draws its own art: lucide on the web, SF Symbols
+on iOS, Material on Android). `emoji` stays readable for old rows, imports and
+phone builds that predate icons; the editor writes the icon's own emoji beside
+it, and a client that knows icons draws the icon and falls back to the emoji.
+`forum_tags.preset` (`question`, `bug`, `suggestion`, `tutorial`, `release`,
+`wip`, `discussion`) is set when a starter tag is created and shown in the
+reader's language (`forum.tags.preset.<key>`) until `replaceForumTags` sees a
+different name and clears it. Both columns are nullable and the schema
+tolerates an unknown key (`.catch(null)`), so old and new clients and servers
+interoperate. The one-shot boot migration `forum_tag_icons_presets_2026_10`
+backfills existing rows; `server/src/forum-tag-icons.test.ts` keeps its SQL
+lists equal to the TypeScript tables.
+
 ### 7.4 Dedupe: an RSS tool that re-sends does not double-post
 
 RSS tools keep their own "already sent" list and lose it on a reinstall, a

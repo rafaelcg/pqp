@@ -153,6 +153,20 @@ async function expectVideoPlaying(page: Page, tileName: string) {
     .toBe(true);
 }
 
+/** The composer, call controls included, is inside the window. */
+async function expectComposerOnScreen(page: Page): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const box = document
+          .querySelector("[data-chat-composer]")
+          ?.getBoundingClientRect();
+        return box ? box.top >= 0 && box.bottom <= window.innerHeight + 0.5 : false;
+      }),
+    )
+    .toBe(true);
+}
+
 async function measuredArea(page: Page, selector: string): Promise<number> {
   const box = await page.locator(selector).first().boundingBox();
   if (!box) {
@@ -186,7 +200,10 @@ test("desktop: a 1:1 video call gives the remote person at least half the viewpo
     await expect(page.getByTestId("call-stage")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.getByText("Calling…")).toBeVisible({ timeout: 20_000 });
+    // Said once, in the composer's strip under the stage.
+    await expect(
+      page.getByTestId("call-stage-collapsed").getByText("Calling…"),
+    ).toBeVisible({ timeout: 20_000 });
 
     // The callee is rung for real and answers from the overlay.
     await callee.page
@@ -204,15 +221,19 @@ test("desktop: a 1:1 video call gives the remote person at least half the viewpo
       .click();
     await expectVideoPlaying(page, pair.calleeName);
 
-    // THE measurement: the remote person occupies at least half the viewport.
+    // THE measurement: the remote person gets everything above the composer,
+    // which stays whole. Two fifths of a 1280x720 window once the composer
+    // carries the call's controls; it was half while the composer's bottom
+    // was cut off by the window.
     const viewport = page.viewportSize()!;
     const remoteArea = await measuredArea(
       page,
       `[data-call-tile="${pair.calleeName}"]`,
     );
     expect(remoteArea).toBeGreaterThanOrEqual(
-      viewport.width * viewport.height * 0.5,
+      viewport.width * viewport.height * 0.4,
     );
+    await expectComposerOnScreen(page);
 
     // Self is a corner preview, not a peer-sized tile.
     const selfArea = await measuredArea(
@@ -223,7 +244,9 @@ test("desktop: a 1:1 video call gives the remote person at least half the viewpo
 
     // Collapse → a slim banner, chat back in reach; expand → the stage again,
     // with the remote video still live.
-    await page.getByRole("button", { name: "Collapse call" }).click();
+    // Folding the call away lives in the stage bar's "Mais" menu.
+    await page.getByTestId("call-more").click();
+    await page.getByRole("menuitem", { name: "Collapse call" }).click();
     const collapsedBox = await page
       .getByTestId("call-stage-collapsed")
       .boundingBox();
@@ -231,7 +254,8 @@ test("desktop: a 1:1 video call gives the remote person at least half the viewpo
     expect(collapsedBox!.height).toBeLessThanOrEqual(80);
     await expect(page.getByTestId("call-stage")).not.toBeVisible();
 
-    await page.getByRole("button", { name: "Expand call" }).click();
+    await page.getByTestId("call-more").first().click();
+    await page.getByRole("menuitem", { name: "Expand call" }).click();
     await expect(page.getByTestId("call-stage")).toBeVisible();
     await expectVideoPlaying(page, pair.calleeName);
 
@@ -260,7 +284,13 @@ test("desktop: a voice-only DM stays a slim bar until a camera turns on", async 
     await expect(page.getByTestId("call-stage")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.getByText("Calling…")).toBeVisible({ timeout: 20_000 });
+    // Said once, by the ring view on the stage; the strip names the people.
+    await expect(
+      page.getByTestId("call-stage").getByText("Calling…"),
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(
+      page.getByTestId("call-stage-collapsed").getByText("Calling…"),
+    ).toHaveCount(0);
 
     await callee.page
       .getByRole("button", { name: "Accept" })
@@ -333,12 +363,13 @@ test.describe("mobile viewport", () => {
       expect(stageBox.x + stageBox.width).toBeGreaterThanOrEqual(389);
       expect(stageBox.width).toBeGreaterThanOrEqual(300);
 
-      // …and the remote person occupies at least half the viewport.
+      // …and the remote person gets everything above a whole composer.
       const remoteArea = await measuredArea(
         page,
         `[data-call-tile="${pair.calleeName}"]`,
       );
-      expect(remoteArea).toBeGreaterThanOrEqual(390 * 844 * 0.5);
+      expect(remoteArea).toBeGreaterThanOrEqual(390 * 844 * 0.4);
+      await expectComposerOnScreen(page);
 
       // Controls dock at the bottom of the stage — thumb territory.
       const leave = page.getByRole("button", { name: "Leave", exact: true });

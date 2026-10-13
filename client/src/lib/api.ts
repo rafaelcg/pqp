@@ -89,6 +89,10 @@ import type {
   ResolveReportRequest,
   Server,
   ServerImageConfig,
+  ServerEmoji,
+  ServerEmojiList,
+  CreateServerEmojiUploadRequest,
+  CreateServerEmojiUploadResponse,
   ServerImageKind,
   CreateServerImageUploadRequest,
   CreateServerImageUploadResponse,
@@ -600,6 +604,40 @@ export const deleteServerImage = (serverId: string, kind: ServerImageKind) =>
     method: "DELETE",
   });
 
+// ------------------------------------------------------- custom emoji
+//
+// The server-icon dance again: mint, PUT straight to storage, claim. Reading
+// needs membership; every write needs Manage Server.
+
+export const fetchServerEmoji = (serverId: string) =>
+  apiFetch<ServerEmojiList>(`/api/servers/${serverId}/emoji`);
+
+export const createServerEmojiUpload = (
+  serverId: string,
+  body: CreateServerEmojiUploadRequest,
+) =>
+  apiFetch<CreateServerEmojiUploadResponse>(
+    `/api/servers/${serverId}/emoji/uploads`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+
+export const claimServerEmoji = (serverId: string, key: string, name: string) =>
+  apiFetch<{ emoji: ServerEmoji }>(`/api/servers/${serverId}/emoji`, {
+    method: "POST",
+    body: JSON.stringify({ key, name }),
+  });
+
+export const renameServerEmoji = (serverId: string, emojiId: string, name: string) =>
+  apiFetch<{ emoji: ServerEmoji }>(`/api/servers/${serverId}/emoji/${emojiId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+
+export const deleteServerEmoji = (serverId: string, emojiId: string) =>
+  apiFetch<{ ok: true }>(`/api/servers/${serverId}/emoji/${emojiId}`, {
+    method: "DELETE",
+  });
+
 // ---------------------------------------------------------- your own data
 
 /**
@@ -779,6 +817,11 @@ export interface VoiceConfig {
    * (`lib/audio-health.ts`). Global, so it is read without a server.
    */
   audioSelfHeal?: boolean;
+  /**
+   * `soundboard`: this server's calls offer the soundboard and its settings
+   * tab. Per server, default off. The play gate on the server reads it too.
+   */
+  soundboard?: boolean;
 }
 
 export const fetchVoiceConfig = (serverId: string) =>
@@ -2419,3 +2462,59 @@ export const fetchAllReports = (
 /** Deletes the reported message. 400 when there is nothing live to remove. */
 export const removeReportedMessage = (reportId: string) =>
   post<{ ok: true }>(`/api/reports/${reportId}/remove-message`, undefined);
+
+export interface SoundboardSoundDto {
+  id: string;
+  name: string;
+  emoji: string;
+  contentType: "audio/mpeg" | "audio/ogg";
+  byteSize: number;
+  durationMs: number;
+  volume: number;
+  url: string | null;
+  /** Who added it. Only sent to people who manage the board. */
+  addedBy?: { id: string; name: string } | null;
+}
+
+export const fetchSoundboard = (serverId: string) =>
+  apiFetch<{
+    sounds: SoundboardSoundDto[];
+    maxSounds: number;
+    /** Stored sounds plus uploads in flight: what the mint counts. Older API: absent. */
+    slotsUsed?: number;
+  }>(
+    `/api/servers/${serverId}/soundboard`,
+  );
+
+export const createSoundboardUpload = (
+  serverId: string,
+  body: { contentType: "audio/mpeg" | "audio/ogg"; byteSize: number },
+) =>
+  post<{ key: string; uploadUrl: string; expiresAt: string }>(
+    `/api/servers/${serverId}/soundboard/uploads`,
+    body,
+  );
+
+export const claimSoundboardSound = (
+  serverId: string,
+  body: { key: string; name: string; emoji: string; volume?: number },
+) =>
+  post<{ sound: SoundboardSoundDto }>(
+    `/api/servers/${serverId}/soundboard`,
+    body,
+  );
+
+export const updateSoundboardSound = (
+  serverId: string,
+  soundId: string,
+  body: { name?: string; emoji?: string; volume?: number },
+) =>
+  patch<{ sound: SoundboardSoundDto }>(
+    `/api/servers/${serverId}/soundboard/${soundId}`,
+    body,
+  );
+
+export const deleteSoundboardSound = (serverId: string, soundId: string) =>
+  apiFetch<{ ok: true }>(`/api/servers/${serverId}/soundboard/${soundId}`, {
+    method: "DELETE",
+  });

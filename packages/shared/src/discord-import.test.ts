@@ -610,6 +610,13 @@ describe("mapDiscordPermissions", () => {
     expect(
       mapImportedEveryonePermissions(DiscordPermission.MANAGE_GUILD),
     ).toBe(Permission.POST_STORIES);
+    // Manage Expressions is Manage Emoji, on a role and never on @everyone.
+    expect(mapDiscordPermissions(DiscordPermission.MANAGE_GUILD_EXPRESSIONS)).toBe(
+      Permission.MANAGE_EMOJI,
+    );
+    expect(
+      mapImportedEveryonePermissions(DiscordPermission.MANAGE_GUILD_EXPRESSIONS),
+    ).toBe(Permission.POST_STORIES);
     expect(
       mapImportedOverwriteBits(
         DiscordPermission.VIEW_CHANNEL |

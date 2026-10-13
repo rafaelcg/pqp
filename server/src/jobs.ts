@@ -32,6 +32,7 @@ import {
 } from "./services/attachments.js";
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
 import { sweepQuarantinedCommunityHomeMedia } from "./services/community-home-scan.js";
+import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
 import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
 import { sweepCommunityHomeCaptions } from "./services/community-home-captions.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
@@ -42,6 +43,7 @@ import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { sweepForumPostShells } from "./services/forums.js";
+import { sweepSoundboardUploads } from "./services/soundboard.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import {
@@ -143,6 +145,13 @@ export const DAILY_MS = 24 * 60 * 60_000;
  * removes one within fifteen.
  */
 export const FORUM_SHELL_SWEEP_INTERVAL_MS = 5 * 60_000;
+
+/**
+ * Soundboard uploads signed and never claimed, and files a delete handed to
+ * the ledger. A minute: an abandoned upload holds one of a server's six
+ * slots until this runs.
+ */
+export const SOUNDBOARD_UPLOAD_SWEEP_INTERVAL_MS = 60_000;
 
 /**
  * Five minutes rather than daily, and unlike every other sweep in this file
@@ -366,6 +375,7 @@ export function startColdJobs(): ColdJobs {
     // interval. Rows, not disk pages, is the point.
     every(DAILY_MS, "slow-mode", sweepSlowModeClocks),
     every(FORUM_SHELL_SWEEP_INTERVAL_MS, "forum-shells", sweepForumPostShells),
+    every(SOUNDBOARD_UPLOAD_SWEEP_INTERVAL_MS, "soundboard-uploads", sweepSoundboardUploads),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),
     // Refilled cluster rate-limit buckets carry no information. Rows, not
     // disk pages: the table is bounded by "subjects who rang somebody in the
@@ -383,6 +393,8 @@ export function startColdJobs(): ColdJobs {
       "community-home",
       sweepCommunityHomeMedia,
     ),
+    // Never touches an illegal-content row at any age.
+    every(ATTACHMENT_SWEEP_INTERVAL_MS, "server-emoji-quarantine", sweepQuarantinedServerEmoji),
     every(
       COMMUNITY_HOME_TRANSLATION_SWEEP_INTERVAL_MS,
       "community-home-translation",

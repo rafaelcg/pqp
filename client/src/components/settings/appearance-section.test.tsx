@@ -13,6 +13,7 @@ import {
   takeModeBeforeNight,
 } from "@/components/settings/appearance-section";
 import { getAccentHue, setAccentHuePreference } from "@/lib/accent";
+import { OFFER_SEASONAL_LOOKS_ALL_YEAR } from "@/lib/seasonal-looks";
 import { getAppearance, setAppearancePreference } from "@/lib/appearance";
 import { getThemeState, setThemePreference } from "@/lib/theme";
 import { DEFAULT_CHAT_DISPLAY, getChatDisplay, setChatDisplay } from "@/lib/chat-display";
@@ -167,6 +168,48 @@ describe("Modo", () => {
     expect(getThemeState().preference).toBe("dark");
   });
 
+  it("keeps the mode before Night through the seasonal looks", () => {
+    localStorage.setItem("pqp:season", "halloween");
+    mount();
+    click(radio(group("Mode"), "Light"));
+    click(radio(host!, /^Night/));
+    click(radio(host!, /^Halloween/));
+    expect(getAppearance()).toBe("halloween");
+    expect(getThemeState().resolved).toBe("dark");
+    expect(rowText("brightness")).toContain("Halloween stays dark");
+
+    click(radio(host!, /^Classic/));
+    expect(getThemeState().preference).toBe("light");
+  });
+
+  it.runIf(OFFER_SEASONAL_LOOKS_ALL_YEAR)("offers every seasonal look while testing", () => {
+    localStorage.setItem("pqp:season", "none");
+    mount();
+    expect(radio(host!, /^Halloween/)).toBeTruthy();
+    expect(radio(host!, /^Christmas/)).toBeTruthy();
+  });
+
+  it.skipIf(OFFER_SEASONAL_LOOKS_ALL_YEAR)("offers a seasonal look only in its season, or while it is on", () => {
+    localStorage.setItem("pqp:season", "none");
+    mount();
+    expect(() => radio(host!, /^Halloween/)).toThrow();
+    expect(() => radio(host!, /^Christmas/)).toThrow();
+    act(() => root?.unmount());
+    host?.remove();
+
+    localStorage.setItem("pqp:season", "christmas");
+    mount();
+    click(radio(host!, /^Christmas/));
+    expect(getAppearance()).toBe("christmas");
+    expect(radio(group("Mode"), /Light/).getAttribute("aria-disabled")).toBe("true");
+    act(() => root?.unmount());
+    host?.remove();
+
+    localStorage.setItem("pqp:season", "none");
+    mount();
+    expect(radio(host!, /^Christmas/).getAttribute("aria-checked")).toBe("true");
+  });
+
   it("skips locked options with the arrow keys", () => {
     mount();
     click(radio(host!, /^Night/));
@@ -204,6 +247,47 @@ describe("Visual", () => {
     mount();
     expect(rowText("look")).toContain("Changes the background and colors of the interface.");
     expect(radio(host!, /^Classic/).textContent).toContain("Original");
+  });
+
+  it("splits the looks into pqp's own and the community palettes", () => {
+    // No seasonal look joins the split, whatever month the suite runs in.
+    localStorage.setItem("pqp:season", "none");
+    mount();
+    const names = (name: string) =>
+      [...group(name).querySelectorAll('[role="radio"]')].map((el) => el.textContent);
+    expect(names("Look: pqp").map((n) => n?.replace(/Original|Dark only/, ""))).toEqual([
+      "Classic",
+      "Harmony",
+      "Hearth",
+      "Night",
+    ]);
+    expect(names("Look: Community palettes")).toEqual([
+      "Ocean",
+      "Catppuccin",
+      "Everforest",
+    ]);
+  });
+
+  it("keeps one pick across both sets", () => {
+    mount();
+    click(radio(group("Look: Community palettes"), "Ocean"));
+    expect(getAppearance()).toBe("ocean");
+    expect(radio(group("Look: Community palettes"), "Ocean").getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(radio(group("Look: pqp"), /^Classic/).getAttribute("aria-checked")).toBe("false");
+    // The set without the pick still has one tab stop, on its first card.
+    expect(radio(group("Look: pqp"), /^Classic/).tabIndex).toBe(0);
+  });
+
+  it("brings the old mode back when leaving Night for a community look", () => {
+    mount();
+    click(radio(group("Mode"), "Light"));
+    click(radio(host!, /^Night/));
+    expect(getThemeState().resolved).toBe("dark");
+    click(radio(group("Look: Community palettes"), "Everforest"));
+    expect(getAppearance()).toBe("everforest");
+    expect(getThemeState().preference).toBe("light");
   });
 });
 
