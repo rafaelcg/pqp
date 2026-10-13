@@ -631,9 +631,16 @@ import {
   notifyStreamStarted,
   rememberActivityChannel,
   rememberServers,
+  resolveNotificationLevel,
   setNotificationBlockedAuthors,
   unreadByServer,
 } from "@/lib/notifications";
+import {
+  hydrateInBatches,
+  reconnectNeedsUnreadRefresh,
+  serversToHydrate,
+  visibleNeedsUnreadRefresh,
+} from "@/lib/unread-hydration";
 import {
   applyPttHeldChange,
   resetPttHeld,
@@ -3627,6 +3634,16 @@ function MainAppContent({
   const loadUnread = useCallback(async (serverId: string) => {
     try {
       const { unread: rows } = await fetchUnread(serverId);
+      // Say which server each row belongs to. The directory only knows the
+      // SELECTED server's channel list, so for any other server this is what
+      // lets the rail place the row on that server's icon (a channel the
+      // directory cannot place is skipped, by design). Never overwrites a
+      // named entry, so the open server's real list still wins.
+      for (const row of rows) {
+        if (row.count > 0 || row.mentions > 0) {
+          rememberActivityChannel(row.channelId, serverId, "server");
+        }
+      }
       setUnread((prev) => {
         const next = { ...prev };
         for (const row of rows) {
@@ -3650,6 +3667,50 @@ function MainAppContent({
     } catch {
       // Badges are cosmetic — never block the app on them.
     }
+  }, []);
+
+  /**
+   * Fill the unread map for the servers that are not on screen (and, with
+   * `includeSelected`, the one that is). See `lib/unread-hydration.ts` for why
+   * the live frame alone cannot be trusted with the rail. One pass at a time:
+   * a newer pass makes the older one stop at its next batch.
+   */
+  const unreadPassRef = useRef(0);
+  const hydrateAllUnread = useCallback(
+    async ({ includeSelected }: { includeSelected: boolean }) => {
+      const pass = (unreadPassRef.current += 1);
+      const ids = serversToHydrate(serversRef.current, {
+        skipServerId: includeSelected ? null : selectedServerIdRef.current,
+        isMuted: (serverId) =>
+          resolveNotificationLevel(getNotificationState(), serverId, null) ===
+          "none",
+      });
+      await hydrateInBatches(ids, loadUnread, {
+        shouldStop: () => unreadPassRef.current !== pass,
+      });
+    },
+    [loadUnread],
+  );
+  const hydrateAllUnreadRef = useRef(hydrateAllUnread);
+  hydrateAllUnreadRef.current = hydrateAllUnread;
+
+  // A tab that sat hidden for a while (a laptop that slept, a backgrounded
+  // phone browser) may have lost its socket without being told, and the
+  // frames it missed are not replayed. Re-read the badges when it returns.
+  useEffect(() => {
+    let hiddenAt: number | null = null;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now();
+        return;
+      }
+      if (visibleNeedsUnreadRefresh(hiddenAt, Date.now())) {
+        void hydrateAllUnreadRef.current({ includeSelected: true });
+      }
+      hiddenAt = null;
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
 
   /**
@@ -4723,6 +4784,30 @@ function MainAppContent({
     let communityHomeReconnectTimer: ReturnType<typeof setTimeout> | null =
       null;
 
+    // The rail's unread for every server (`lib/unread-hydration.ts`): asked
+    // once after the first load, and again when a socket that was down long
+    // enough to have missed frames comes back. One slot, like the Baú re-read.
+    let unreadRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let unreadSocketClosedAt: number | null = null;
+    const scheduleUnreadRefresh = (includeSelected: boolean) => {
+      if (unreadRefreshTimer !== null) {
+        clearTimeout(unreadRefreshTimer);
+      }
+      // Jittered for the same reason the message refetch is: a deploy
+      // reconnects every open tab in the same few seconds. The boot call has a
+      // second job, which is to run after React has rendered the server list
+      // the bootstrap just set (the hydration reads it through a ref).
+      unreadRefreshTimer = setTimeout(
+        () => {
+          unreadRefreshTimer = null;
+          if (!cancelled) {
+            void hydrateAllUnreadRef.current({ includeSelected });
+          }
+        },
+        uniformJitterMs(300, RECONNECT_MESSAGES_JITTER_MAX_MS),
+      );
+    };
+
     function getReconnectMessagesRefetchState(channelId: string) {
       let state = reconnectMessagesRefetchState.get(channelId);
       if (!state) {
@@ -4996,6 +5081,8 @@ function MainAppContent({
         }
 
         setBootstrapReady(true);
+        // The selected server was read above; every other one is read now.
+        scheduleUnreadRefresh(false);
 
         transport.onMessage((message) => {
           if (message.type === "watch-party-waitlist-approved") {
@@ -5767,6 +5854,7 @@ function MainAppContent({
           // Keep media. A Fly restart closes /ws with 1001; ICE and LiveKit do
           // not need that socket once they are up. Resume reattaches the peer.
           voice.notifyDisconnected();
+          unreadSocketClosedAt = Date.now();
         });
 
         transport.onAuthUnavailable(() => {
@@ -5829,6 +5917,12 @@ function MainAppContent({
               }
             }, uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS));
           }
+          // Unread badges are fed by live frames, which are not replayed: what
+          // arrived while the socket was down is only in the server's count.
+          if (reconnectNeedsUnreadRefresh(unreadSocketClosedAt, Date.now())) {
+            scheduleUnreadRefresh(true);
+          }
+          unreadSocketClosedAt = null;
           // --- forums --- the forum list refetches its first page: frames
           // sent while the socket was down are not replayed.
           dispatchForumReconnected();
@@ -5915,6 +6009,9 @@ function MainAppContent({
       }
       if (communityHomeReconnectTimer !== null) {
         clearTimeout(communityHomeReconnectTimer);
+      }
+      if (unreadRefreshTimer !== null) {
+        clearTimeout(unreadRefreshTimer);
       }
       voice.leave();
       transport.disconnect();
