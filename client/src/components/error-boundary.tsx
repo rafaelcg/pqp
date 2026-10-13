@@ -1,10 +1,11 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { translateMessage } from "@/lib/i18n";
 import {
   recoverFromChunkLoadError,
   type ChunkErrorAction,
 } from "@/lib/chunk-reload";
-import { isInCall } from "@/lib/in-call-state";
+import { isBusyNow } from "@/lib/in-call-state";
 import { setStaleChunkBannerVisible } from "@/lib/stale-chunk-state";
 
 interface Props {
@@ -47,7 +48,8 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("[pqp] render error:", error, info.componentStack);
     const action = recoverFromChunkLoadError(error, {
-      isInCall,
+      // A call or a watch party: a reload would take either away.
+      isInCall: isBusyNow,
       onDeferred: () => setStaleChunkBannerVisible(true),
     });
     if (action !== "ignored") {
@@ -114,4 +116,38 @@ export class ErrorBoundary extends Component<Props, State> {
       </div>
     );
   }
+}
+
+/**
+ * A boundary for ONE lazy panel (the emoji and GIF pickers), so a stale chunk
+ * costs that panel and nothing else.
+ *
+ * WHY THIS EXISTS. Every web deploy deletes the old hashed assets, and a page
+ * that has been open since before it 404s on the first chunk it has not
+ * fetched yet. `recoverFromChunkLoadError` never reloads a page in a call or a
+ * watch party, so it defers: and the only boundary above a lazy panel was the
+ * ROOT one, whose "pqp updated, you are in a call" fallback replaces the WHOLE
+ * app. The voice session lives outside React, so the audio carries on under a
+ * page with nothing on it: "para do nada as telas, e fica so a voz" (bug report 120,
+ * 2026-10-13, on a day with nineteen deploys). One tap on an emoji button in a
+ * call chat was enough. Contained here, the picker says it cannot open right
+ * now, the stage and the call stay exactly where they are, and the update waits
+ * for the hangup as it always promised.
+ */
+export function ContainedChunkBoundary({ children }: { children: ReactNode }) {
+  return (
+    <ErrorBoundary
+      fallback={() => (
+        <div
+          role="status"
+          data-contained-chunk-error=""
+          className="elevation-3 z-50 w-[21rem] max-w-[calc(100vw-1rem)] rounded-[var(--radius-card)] p-4 text-sm text-text-secondary"
+        >
+          {translateMessage("staleChunk.contained")}
+        </div>
+      )}
+    >
+      {children}
+    </ErrorBoundary>
+  );
 }

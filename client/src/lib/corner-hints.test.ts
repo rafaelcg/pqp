@@ -33,20 +33,13 @@ describe("winningCornerHint", () => {
     );
   });
 
-  it("puts the notification offer after a waiting build and a Baú post, before the QG", () => {
+  it("puts the notification offer after a Baú post, before the QG", () => {
     expect(winningCornerHint({ notifyOffer: true, qg: true, cargos: true })).toBe(
       "notifyOffer",
     );
-    expect(winningCornerHint({ update: true, notifyOffer: true })).toBe("update");
     expect(
       winningCornerHint({ communityHomePost: true, notifyOffer: true }),
     ).toBe("communityHomePost");
-  });
-
-  it("a waiting build beats every campaign", () => {
-    expect(winningCornerHint({ update: true, qg: true, whatsNew: true })).toBe(
-      "update",
-    );
   });
 
   it("puts the Voz limpa nudge after QG and before the phone beta", () => {
@@ -66,7 +59,7 @@ describe("winningCornerHint", () => {
     ).toBe("voiceClean");
   });
 
-  it("a live Baú post beats first-run cards and still yields to a waiting build", () => {
+  it("a live Baú post beats first-run cards", () => {
     expect(
       winningCornerHint({
         communityHomePost: true,
@@ -74,12 +67,5 @@ describe("winningCornerHint", () => {
         cargos: true,
       }),
     ).toBe("communityHomePost");
-    expect(
-      winningCornerHint({
-        update: true,
-        communityHomePost: true,
-        qg: true,
-      }),
-    ).toBe("update");
   });
 });

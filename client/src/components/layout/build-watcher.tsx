@@ -2,11 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { applyUpdate } from "@/lib/apply-update";
 import { fetchClientUpdateConfig } from "@/lib/api";
 import { RUNNING_BUILD } from "@/lib/build-info";
-import { parseForceConfig, type ForceConfig } from "@/lib/client-version";
-import { useInCall, useWatchingParty } from "@/lib/in-call-state";
+import {
+  isAnnounced,
+  parseForceConfig,
+  type ForceConfig,
+} from "@/lib/client-version";
+import { isBusyNow, useInCall, useWatchingParty } from "@/lib/in-call-state";
 import {
   autoReloadAllowed,
   decideUpdateAction,
+  forgetAutoReload,
   maxStaleMsFromEnv,
   recordAutoReload,
 } from "@/lib/update-policy";
@@ -53,10 +58,17 @@ async function askServerForForce(): Promise<ForceConfig | null> {
  * bundle matters on every route and a signed-out landing page is one too.
  */
 export function BuildWatcher({
-  apply = applyUpdate,
+  apply = (target, mayReload) => applyUpdate(target, undefined, mayReload),
 }: {
-  /** Test seam: a real apply reloads the page. */
-  apply?: (target?: string | null) => Promise<unknown>;
+  /**
+   * Test seam: a real apply reloads the page. `mayReload` is the last-moment
+   * check an automatic reload carries (`applyUpdate`); a result of `"aborted"`
+   * means it said no.
+   */
+  apply?: (
+    target: string | null,
+    mayReload: () => boolean,
+  ) => Promise<unknown>;
 } = {}) {
   const build = useBuildStaleness();
   const inCall = useInCall();
@@ -112,7 +124,9 @@ export function BuildWatcher({
     const target = build.latestBuild ?? "unknown";
     const action = decideUpdateAction({
       stale: true,
-      forced: build.forced,
+      // A build held back for the daily announcement is not reloaded into
+      // either: the page has not been told, so it has nothing to act on.
+      announced: isAnnounced(build.announceAt, now),
       critical: build.critical,
       hidden: document.visibilityState === "hidden",
       sinceCallEndedMs:
@@ -122,7 +136,7 @@ export function BuildWatcher({
       inCall,
       watching,
       typing: isTypingNow(now),
-      autoReloadAllowed: autoReloadAllowed(target, now),
+      autoReloadAllowed: autoReloadAllowed(target),
       maxStaleMs: maxStaleMsFromEnv(import.meta.env.VITE_UPDATE_MAX_STALE_HOURS),
     });
     if (action !== "auto-reload") {
@@ -132,9 +146,21 @@ export function BuildWatcher({
     if (!recordAutoReload(target, now)) {
       return;
     }
-    // A rejection here is not the person's problem: the card is still up, and
-    // the loop guard above means this will not be tried again for a while.
-    void Promise.resolve(apply(build.latestBuild)).catch(() => {});
+    // Asked again at the last moment, after the worker has been brought up (up
+    // to fifteen seconds): somebody may have joined a call or started a watch
+    // party since this was decided, and an automatic reload never takes either.
+    // Only the operator's critical update goes through.
+    const mayReload = () => Boolean(build.critical) || !isBusyNow();
+    // A rejection here is not the person's problem: the indicator is still up,
+    // and the loop guard above means this will not be tried again.
+    void Promise.resolve(apply(build.latestBuild, mayReload))
+      .then((result) => {
+        // It never happened, so it must not use up this build's one reload.
+        if (result === "aborted") {
+          forgetAutoReload(target);
+        }
+      })
+      .catch(() => {});
   }, [build, inCall, watching, tick, apply]);
 
   return null;

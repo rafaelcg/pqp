@@ -17,6 +17,10 @@ import { BuildWatcher } from "./build-watcher";
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 let applied = 0;
+/** The last-moment check the most recent automatic reload carried. */
+let lastMayReload: (() => boolean) | null = null;
+/** What `apply` answers: a real one resolves "aborted" when that check says no. */
+let applyAnswer: unknown = "activated";
 
 async function mount() {
   host = document.createElement("div");
@@ -25,8 +29,10 @@ async function mount() {
   await act(async () => {
     root!.render(
       <BuildWatcher
-        apply={async () => {
+        apply={async (_target, mayReload) => {
           applied += 1;
+          lastMayReload = mayReload;
+          return applyAnswer;
         }}
       />,
     );
@@ -35,6 +41,8 @@ async function mount() {
 
 beforeEach(() => {
   applied = 0;
+  lastMayReload = null;
+  applyAnswer = "activated";
   window.sessionStorage.clear();
 });
 
@@ -141,11 +149,59 @@ describe("BuildWatcher", () => {
     expect(applied).toBe(1);
   });
 
-  it("never reloads on its own for a forced update: that is the screen's job", async () => {
+  it("treats an update the operator pushed like any other: at a safe moment, never over somebody", async () => {
+    // `client_force_update` used to block everybody. Now it only announces at
+    // once, so what happens to the page is the ordinary rule.
     await mount();
-    nobodyHere();
+    markActivity();
     act(() => setBuildStaleness(stale({ forced: true })));
     expect(applied).toBe(0);
+    nobodyHere();
+    act(() => setBuildStaleness(stale({ forced: true, since: Date.now() - 30_000 })));
+    expect(applied).toBe(1);
+  });
+
+  it("does nothing, not even for an idle page, while the build is held for the daily announcement", async () => {
+    await mount();
+    nobodyHere();
+    const opens = Date.now() + 3_600_000;
+    act(() => setBuildStaleness(stale({ announceAt: opens })));
+    expect(applied).toBe(0);
+    // The same build, once its hour has come.
+    act(() => setBuildStaleness(stale({ announceAt: Date.now() - 1 })));
+    expect(applied).toBe(1);
+  });
+
+  it("asks once more at the last moment, and never takes a call or a watch party then", async () => {
+    await mount();
+    nobodyHere();
+    act(() => setBuildStaleness(stale()));
+    expect(applied).toBe(1);
+    expect(lastMayReload?.()).toBe(true);
+    // Bringing the worker up takes seconds; somebody joins a call in them.
+    act(() => setInCall(true));
+    expect(lastMayReload?.()).toBe(false);
+    act(() => setInCall(false));
+    act(() => setWatchingParty(true));
+    expect(lastMayReload?.()).toBe(false);
+  });
+
+  it("lets the critical update through the last-moment check: the operator chose that", async () => {
+    await mount();
+    act(() => setInCall(true));
+    act(() => setBuildStaleness(stale({ forced: true, critical: true })));
+    expect(lastMayReload?.()).toBe(true);
+  });
+
+  it("gives the reload back when it was refused at the last moment, so the hangup can still take it", async () => {
+    applyAnswer = "aborted";
+    await mount();
+    nobodyHere();
+    act(() => setBuildStaleness(stale()));
+    expect(applied).toBe(1);
+    await act(async () => {});
+    // The one reload this build is allowed is not spent by one that never happened.
+    expect(window.sessionStorage.getItem("pqp:update-auto-reload")).toBe("");
   });
 
   it("reloads right after a call ends, even with somebody at the page", async () => {

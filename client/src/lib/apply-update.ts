@@ -71,7 +71,12 @@ export interface ApplyUpdateDeps {
   now: () => number;
 }
 
-export type ApplyUpdateResult = "activated" | "purged" | "offline";
+export type ApplyUpdateResult =
+  | "activated"
+  | "purged"
+  | "offline"
+  /** `mayReload` said no at the last moment; nothing was reloaded. */
+  | "aborted";
 
 /**
  * Ask the worker that CONTROLS this page which build it belongs to. The
@@ -208,10 +213,17 @@ async function controllerReaches(
  * OFFLINE is the one case that never purges: with no network the caches are the
  * only copy of the app there is, and deleting them turns a stale page into no
  * page.
+ *
+ * `mayReload` is asked again at the last moment, after every wait above. Bringing
+ * the worker up can take fifteen seconds, and an automatic update that was safe
+ * when it started (a hidden tab, nobody in a call) is not safe when somebody has
+ * joined a call in the meantime. A person's own click passes none and is never
+ * second-guessed.
  */
 export async function applyUpdate(
   target: string | null = null,
   deps: ApplyUpdateDeps = browserDeps(),
+  mayReload: () => boolean = () => true,
 ): Promise<ApplyUpdateResult> {
   let activated = false;
   try {
@@ -233,6 +245,9 @@ export async function applyUpdate(
   } catch {
     activated = false;
   }
+  if (!mayReload()) {
+    return "aborted";
+  }
   if (activated) {
     deps.reload();
     return "activated";
@@ -245,6 +260,9 @@ export async function applyUpdate(
     await deps.deleteAllCaches();
   } catch {
     // Reload anyway: a failed purge is no worse than not having tried.
+  }
+  if (!mayReload()) {
+    return "aborted";
   }
   deps.reload();
   return "purged";
