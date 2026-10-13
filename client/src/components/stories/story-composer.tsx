@@ -1364,7 +1364,7 @@ function DiscardDialog({ onKeep, onDiscard }: { onKeep: () => void; onDiscard: (
             type="button"
             className="story-cbtn !h-11 w-full"
             data-story-discard-confirm=""
-            style={{ background: "var(--color-danger)", color: "#fff" }}
+            style={{ background: "var(--color-danger)", color: "var(--color-on-danger)" }}
             onClick={onDiscard}
           >
             {t("stories.compose.discard.confirm")}
