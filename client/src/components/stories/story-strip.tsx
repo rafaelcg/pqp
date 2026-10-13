@@ -130,7 +130,11 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
     authors[item.author.id] = item.author;
   }
 
-  function openItems(startIndex: number, event: MouseEvent<HTMLElement> | null) {
+  function openItems(
+    startIndex: number,
+    event: MouseEvent<HTMLElement> | null,
+    byKeyboard = event?.detail === 0,
+  ) {
     const ring = event?.currentTarget;
     openStoryViewer({
       audience,
@@ -139,6 +143,7 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
       startIndex,
       originRect: ring ? ring.getBoundingClientRect() : null,
       originRingId: ring?.getAttribute("data-story-ring") ?? null,
+      originByKeyboard: byKeyboard,
     });
   }
 
@@ -150,6 +155,7 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
       startIndex: 0,
       originRect: event.currentTarget.getBoundingClientRect(),
       originRingId: event.currentTarget.getAttribute("data-story-ring"),
+      originByKeyboard: event.detail === 0,
     });
   }
 
@@ -176,7 +182,7 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
           <button
             type="button"
             data-story-see-all=""
-            onClick={() => openItems(0, null)}
+            onClick={(event) => openItems(0, null, event.detail === 0)}
             className="flex items-center gap-0.5 rounded-[var(--radius-control)] px-1 text-xs font-semibold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             {t("stories.strip.seeAll")}
@@ -185,7 +191,7 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
         )}
       </div>
       <div
-        className="-mx-1 flex gap-[9px] overflow-x-auto px-1 pb-0.5 [scrollbar-width:none]"
+        className="-mx-1 -mt-1 flex gap-[9px] overflow-x-auto px-1 pb-0.5 pt-1 [scrollbar-width:none]"
         style={{ "--story-ring-bg": "var(--color-surface-1)" } as CSSProperties}
       >
         {showOwn && (
