@@ -181,18 +181,25 @@ fun StoryCameraScreen(
     val askAgainPossible = {
         context.activity()?.let { ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.CAMERA) } == true
     }
+    // The microphone is only ever asked for when this camera can film.
+    var micCanAskAgain by remember { mutableStateOf(true) }
+    val micAskAgainPossible = {
+        context.activity()?.let { ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.RECORD_AUDIO) } == true
+    }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         camGranted = context.has(Manifest.permission.CAMERA)
         micGranted = context.has(Manifest.permission.RECORD_AUDIO)
         canAskAgain = askAgainPossible()
+        micCanAskAgain = micAskAgainPossible()
     }
     LaunchedEffect(Unit) {
-        if (!asked && (!camGranted || !micGranted)) {
+        val wantMic = videoEnabled && !micGranted
+        if (!asked && (!camGranted || wantMic)) {
             asked = true
             permissions.launch(
                 listOfNotNull(
                     Manifest.permission.CAMERA.takeUnless { camGranted },
-                    Manifest.permission.RECORD_AUDIO.takeUnless { micGranted },
+                    Manifest.permission.RECORD_AUDIO.takeIf { wantMic },
                 ).toTypedArray(),
             )
         }
@@ -201,7 +208,10 @@ fun StoryCameraScreen(
     LifecycleResumeEffect(Unit) {
         camGranted = context.has(Manifest.permission.CAMERA)
         micGranted = context.has(Manifest.permission.RECORD_AUDIO)
-        if (asked) canAskAgain = askAgainPossible()
+        if (asked) {
+            canAskAgain = askAgainPossible()
+            micCanAskAgain = micAskAgainPossible()
+        }
         onPauseOrDispose { }
     }
 
@@ -346,6 +356,7 @@ fun StoryCameraScreen(
             lens = currentLens.other
         }
     }
+    val flipLatest by rememberUpdatedState(flip)
 
     // --- layout ---
 
@@ -376,7 +387,7 @@ fun StoryCameraScreen(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .pointerInput(canFlip, phase) {
+                        .pointerInput(Unit) {
                             detectTapGestures(
                                 onTap = { at ->
                                     if (phase == CameraPhase.Live) {
@@ -384,7 +395,8 @@ fun StoryCameraScreen(
                                         focusPoint = at
                                     }
                                 },
-                                onDoubleTap = { flip() },
+                                // The latest `flip`, not the one this block was started with: it reads the lens.
+                                onDoubleTap = { flipLatest() },
                             )
                         }
                         .pointerInput(phase, zoomRange) {
@@ -505,15 +517,40 @@ fun StoryCameraScreen(
                         .testTag("stories.camera.notice"),
                 )
             } else if (camGranted && !micGranted && videoEnabled && !recording && phase == CameraPhase.Live) {
-                Text(
-                    stringResource(R.string.stories_camera_mic_off),
-                    color = Color.White.copy(alpha = 0.85f),
-                    style = MaterialTheme.typography.bodySmall,
-                    textAlign = TextAlign.Center,
+                // Not a dead end: ask again while the system will, else send them to Settings.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
-                        .padding(horizontal = Spacing.xl, vertical = Spacing.xs)
+                        .padding(horizontal = Spacing.lg, vertical = Spacing.xs)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(Color.Black.copy(alpha = 0.45f))
+                        .padding(start = Spacing.md)
                         .testTag("stories.camera.micOff"),
-                )
+                ) {
+                    Text(
+                        stringResource(R.string.stories_camera_mic_off),
+                        color = Color.White.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            if (micCanAskAgain) {
+                                permissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+                            } else {
+                                openAppSettings(context)
+                            }
+                        },
+                        modifier = Modifier.testTag("stories.camera.micAllow"),
+                    ) {
+                        Text(
+                            stringResource(
+                                if (micCanAskAgain) R.string.stories_camera_mic_allow else R.string.stories_camera_perm_settings,
+                            ),
+                            color = Palette.Signal,
+                        )
+                    }
+                }
             } else if (videoEnabled && canRecord && !recording && phase == CameraPhase.Live && !hintSeen) {
                 HintLine(onShown = { hintSeen = true })
             }
@@ -747,6 +784,13 @@ private fun FocusRing(point: Offset?, onDone: () -> Unit) {
 private fun FrozenFrame(frame: ImageBitmap?) {
     var last by remember { mutableStateOf<ImageBitmap?>(null) }
     if (frame != null) last = frame
+    // Let go of the still once it has faded out: it is a whole preview frame.
+    LaunchedEffect(frame) {
+        if (frame == null) {
+            delay(400)
+            last = null
+        }
+    }
     AnimatedVisibility(visible = frame != null, enter = fadeIn(tween(60)), exit = fadeOut(tween(240))) {
         last?.let {
             Box(Modifier.fillMaxSize()) {

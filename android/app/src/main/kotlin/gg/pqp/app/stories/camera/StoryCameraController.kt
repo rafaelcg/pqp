@@ -81,6 +81,14 @@ class StoryCameraController(private val context: Context) {
     private var recordingUri: Uri? = null
     private var torchOnForClip = false
 
+    /**
+     * Which recording an asynchronous `Finalize` belongs to. `unbind()` stops one
+     * and clears the state at once; if the controller is bound again and starts
+     * the next before the first one's callback arrives, that late callback must
+     * not clear the new recording's state.
+     */
+    private var generation = 0
+
     private val _lens = MutableStateFlow(CaptureRules.Lens.Back)
     val lens: StateFlow<CaptureRules.Lens> = _lens.asStateFlow()
 
@@ -199,6 +207,7 @@ class StoryCameraController(private val context: Context) {
 
     fun unbind() {
         runCatching { recording?.stop() }
+        generation++
         recording = null
         _recording.value = false
         runCatching { provider?.unbindAll() }
@@ -271,14 +280,19 @@ class StoryCameraController(private val context: Context) {
         torchOnForClip = CaptureRules.torchDuringVideo(flash, _hasFlashUnit.value)
         if (torchOnForClip) camera?.cameraControl?.enableTorch(true)
         _recording.value = true
-        recording = pending.start(executor) { event ->
+        val mine = ++generation
+        val started = try {
+            pending.start(executor) { event ->
             when (event) {
-                is VideoRecordEvent.Start -> onEvent(ClipEvent.Started)
+                is VideoRecordEvent.Start -> if (mine == generation) onEvent(ClipEvent.Started)
                 is VideoRecordEvent.Finalize -> {
-                    if (torchOnForClip) camera?.cameraControl?.enableTorch(false)
-                    torchOnForClip = false
-                    recording = null
-                    _recording.value = false
+                    val current = mine == generation
+                    if (current) {
+                        if (torchOnForClip) camera?.cameraControl?.enableTorch(false)
+                        torchOnForClip = false
+                        recording = null
+                        _recording.value = false
+                    }
                     val durationMs = event.recordingStats.recordedDurationNanos / 1_000_000
                     when {
                         !event.hasError() -> onEvent(ClipEvent.Finished(target.uri, durationMs))
@@ -297,7 +311,17 @@ class StoryCameraController(private val context: Context) {
                 }
                 else -> Unit
             }
+            }
+        } catch (e: Exception) {
+            // CameraX can throw while setting the recording up (output, recorder state).
+            if (torchOnForClip) camera?.cameraControl?.enableTorch(false)
+            torchOnForClip = false
+            _recording.value = false
+            target.file.delete()
+            onEvent(ClipEvent.Failed(-1))
+            return false
         }
+        recording = started
         return true
     }
 

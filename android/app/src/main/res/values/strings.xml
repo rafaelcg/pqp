@@ -1052,6 +1052,7 @@
     <string name="stories_camera_perm_settings">Open settings</string>
     <string name="stories_camera_perm_settings_hint">The camera is blocked. Turn it on in the app settings.</string>
     <string name="stories_camera_mic_off">No microphone permission. Videos will have no sound.</string>
+    <string name="stories_camera_mic_allow">Allow</string>
     <string name="stories_camera_busy">The camera is busy. Close it in the other app or leave the call, then try again.</string>
     <string name="stories_camera_none">This device has no camera. You can still pick from the gallery.</string>
     <string name="stories_camera_photo_failed">Couldn\'t take the photo. Try again.</string>

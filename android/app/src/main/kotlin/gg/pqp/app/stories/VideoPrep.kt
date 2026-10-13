@@ -88,7 +88,12 @@ object VideoPrep {
                 },
             )
             .build()
-        transformer.start(edited, target.file.absolutePath)
+        try {
+            transformer.start(edited, target.file.absolutePath)
+        } catch (e: Exception) {
+            target.file.delete()
+            throw e
+        }
         try {
             coroutineScope {
                 // Progress has to be asked for; it is not pushed.

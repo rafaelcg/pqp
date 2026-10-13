@@ -299,11 +299,29 @@ private fun TrimStrip(
     }
 }
 
+private const val THUMB_EDGE = 160
+
 private fun frameAt(retriever: MediaMetadataRetriever, atMs: Long): Bitmap? =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-        retriever.getScaledFrameAtTime(atMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 160, 160)
+        retriever.getScaledFrameAtTime(atMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, THUMB_EDGE, THUMB_EDGE)
     } else {
-        retriever.getFrameAtTime(atMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        // API 26 has no scaled read: the frame comes back at the video's own size
+        // (a 4K clip is 33 MB a frame, and the strip holds eight), so shrink it
+        // here and let the full one go before the next is read.
+        retriever.getFrameAtTime(atMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { full ->
+            val long = maxOf(full.width, full.height)
+            if (long <= THUMB_EDGE) {
+                full
+            } else {
+                val ratio = THUMB_EDGE.toFloat() / long
+                Bitmap.createScaledBitmap(
+                    full,
+                    maxOf(1, (full.width * ratio).toInt()),
+                    maxOf(1, (full.height * ratio).toInt()),
+                    true,
+                ).also { if (it !== full) full.recycle() }
+            }
+        }
     }
 
 /** The "getting your video ready" card shown while Media3 cuts and shrinks. */

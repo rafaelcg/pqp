@@ -31,6 +31,8 @@ import kotlinx.coroutines.delay
  * loop is a poll on the player's position, not an animation, so it runs the
  * same with "Remove animations" on.
  */
+private const val SEEK_SETTLE_MS = 120L
+
 @OptIn(UnstableApi::class)
 @Composable
 fun StoryVideoSurface(
@@ -59,7 +61,13 @@ fun StoryVideoSurface(
 
     val start by rememberUpdatedState(startMs)
     val end by rememberUpdatedState(endMs)
-    LaunchedEffect(exo, startMs) { exo.seekTo(startMs) }
+    // Debounced: a drag moves `startMs` many times a second, and a decoder seek
+    // for each one churns the preview. The loop below catches the playhead when
+    // it leaves the window; this seek settles it once the finger has paused.
+    LaunchedEffect(exo, startMs) {
+        delay(SEEK_SETTLE_MS)
+        exo.seekTo(startMs)
+    }
     LaunchedEffect(exo, endMs) {
         if (endMs == null) return@LaunchedEffect
         while (true) {

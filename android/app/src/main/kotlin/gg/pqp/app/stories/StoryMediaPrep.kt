@@ -154,9 +154,12 @@ object StoryMediaPrep {
         } finally {
             runCatching { retriever.release() }
         }
+        // A provider that cannot say how long the file is answers -1: count it by
+        // reading, rather than treating "unknown" as "small" and letting an
+        // oversized clip through to a refusal when it could have been shrunk.
         val size = runCatching {
             context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
-        }.getOrNull() ?: -1L
+        }.getOrNull()?.takeIf { it >= 0 } ?: countBytes(context, uri)
         if (width <= 0 || height <= 0 || durationMs == null || durationMs <= 0) return PrepResult.Unreadable
         // A container Android can read but a story cannot carry (a .mov, a .webm) is
         // not worked on: the type is the refusal.
@@ -170,6 +173,19 @@ object StoryMediaPrep {
         if (bytes.size > maxBytes) return PrepResult.Refused(StoriesRules.MediaRefusal.TooBig)
         return PrepResult.Ready(PreparedMedia(bytes, "video/mp4", width, height, durationMs, uri))
     }
+
+    private fun countBytes(context: Context, uri: Uri): Long = runCatching {
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            val buffer = ByteArray(64 * 1024)
+            var total = 0L
+            while (true) {
+                val read = stream.read(buffer)
+                if (read < 0) break
+                total += read
+            }
+            total
+        }
+    }.getOrNull() ?: 0L
 
     private const val JPEG_QUALITY = 85
 }

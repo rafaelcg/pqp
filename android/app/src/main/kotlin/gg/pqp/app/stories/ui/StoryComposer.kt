@@ -322,6 +322,7 @@ fun StoryComposer(
 
     // The live camera owns the whole screen until there is something to edit.
     val showingCamera = mode == ComposeMode.Camera && media == null && config.mediaEnabled
+    val suspendCamera = showingCamera && (trimming != null || working != null)
 
     Dialog(
         // Not while posting: closing mid-post would cancel the upload or the
@@ -337,7 +338,11 @@ fun StoryComposer(
                 .background(Color.Black)
                 .testTag("stories.composer"),
         ) {
-            if (showingCamera) {
+            if (suspendCamera) {
+                // The trim card or the export owns the screen: nothing is drawn and the
+                // camera is released, so its privacy indicator is not lit for a video job.
+                Box(Modifier.fillMaxSize().background(Color.Black))
+            } else if (showingCamera) {
                 StoryCameraScreen(
                     videoEnabled = config.videoEnabled,
                     busy = preparing,

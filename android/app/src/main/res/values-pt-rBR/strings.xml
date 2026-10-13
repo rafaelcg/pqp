@@ -1045,6 +1045,7 @@
     <string name="stories_camera_perm_settings">Abrir configurações</string>
     <string name="stories_camera_perm_settings_hint">A câmera tá bloqueada. Liga ela nas configurações do app.</string>
     <string name="stories_camera_mic_off">Sem permissão do microfone. Os vídeos saem sem som.</string>
+    <string name="stories_camera_mic_allow">Liberar</string>
     <string name="stories_camera_busy">A câmera tá ocupada. Fecha ela no outro app ou sai da call e tenta de novo.</string>
     <string name="stories_camera_none">Esse aparelho não tem câmera. Dá pra escolher da galeria.</string>
     <string name="stories_camera_photo_failed">Não deu pra tirar a foto. Tenta de novo.</string>
