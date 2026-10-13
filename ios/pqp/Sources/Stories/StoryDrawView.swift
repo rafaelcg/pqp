@@ -97,15 +97,17 @@ struct StoryDrawView: View {
     var body: some View {
         ZStack {
             // The canvas underneath stays visible: this overlay only hosts
-            // the strokes and the tools, in the same frame as the canvas.
-            VStack(spacing: 0) {
-                topBar
-                Spacer(minLength: 0)
-            }
+            // the strokes and the tools, in the same frame as the canvas. The
+            // strokes are the BOTTOM of the stack, so the top bar and the tools
+            // always win a touch that lands where they overlap it.
             StoryPencilCanvas(drawing: $drawing, tool: tool, controller: controller)
                 .frame(width: canvas.width, height: canvas.height)
                 .accessibilityLabel(Text("Drawing canvas"))
                 .accessibilityIdentifier("draw.canvas")
+            VStack(spacing: 0) {
+                topBar
+                Spacer(minLength: 0)
+            }
             VStack(spacing: 12) {
                 Spacer()
                 sizeRow

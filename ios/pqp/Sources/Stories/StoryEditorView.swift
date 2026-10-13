@@ -173,13 +173,14 @@ struct StoryEditorView: View {
             }
             guides(canvas)
             trash(canvas)
-            menu(canvas)
             StoryGestureSurface(
                 model: model, isEnabled: textTarget == nil && !drawing,
                 onTap: { id in handleTap(id) },
                 onLongPress: { id in menuFor = id }
             )
             .frame(width: canvas.width, height: canvas.height)
+            // Above the surface, so its buttons are tapped and not swallowed.
+            menu(canvas)
         }
         .frame(width: canvas.width, height: canvas.height)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -187,7 +188,6 @@ struct StoryEditorView: View {
         .onPreferenceChange(StoryLayerSizesKey.self) { sizes in
             if model.sizes != sizes { model.sizes = sizes }
         }
-        .accessibilityIdentifier("editor.canvas")
     }
 
     @ViewBuilder
@@ -469,7 +469,9 @@ struct StoryEditorView: View {
 
     private func addPhoto(_ item: PhotosPickerItem) async {
         defer { photoItem = nil }
-        guard let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data),
+        // Downsampled from the bytes, so a full-size bitmap is never made.
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let image = await StoryImport.downsampledImage(data: data, maxEdge: StoryLimits.imageMaxEdge),
               let draft = StoryMediaPrep.image(image), draft.data.count <= StoryLayerLimits.maxBytes
         else {
             show(String(localized: "That format won't work. Use JPG, PNG, WebP or MP4."))

@@ -61,9 +61,16 @@ struct StoryGestureSurface: UIViewRepresentable {
 
         private func started() { live += 1 }
 
-        private func finished() {
+        private var anyCancelled = false
+
+        private func finished(cancelled: Bool = false) {
+            if cancelled { anyCancelled = true }
             live = max(0, live - 1)
-            if live == 0 { parent.model.endGesture() }
+            guard live == 0 else { return }
+            // A gesture the system interrupted is rolled back, never committed:
+            // lifting over the bin deletes, being cut off over it does not.
+            if anyCancelled { parent.model.cancelGesture() } else { parent.model.endGesture() }
+            anyCancelled = false
         }
 
         @objc func pan(_ g: UIPanGestureRecognizer) {
@@ -83,8 +90,10 @@ struct StoryGestureSurface: UIViewRepresentable {
             case .changed:
                 parent.model.drag(translation: CGSize(width: g.translation(in: view).x, height: g.translation(in: view).y),
                                   touch: g.location(in: view))
-            case .ended, .cancelled, .failed:
+            case .ended:
                 finished()
+            case .cancelled, .failed:
+                finished(cancelled: true)
             default: break
             }
         }
@@ -98,8 +107,10 @@ struct StoryGestureSurface: UIViewRepresentable {
                 parent.model.beginPinch()
             case .changed:
                 parent.model.pinch(scale: Double(g.scale))
-            case .ended, .cancelled, .failed:
+            case .ended:
                 finished()
+            case .cancelled, .failed:
+                finished(cancelled: true)
             default: break
             }
         }
@@ -113,8 +124,10 @@ struct StoryGestureSurface: UIViewRepresentable {
                 parent.model.beginRotation()
             case .changed:
                 parent.model.rotate(by: Double(g.rotation))
-            case .ended, .cancelled, .failed:
+            case .ended:
                 finished()
+            case .cancelled, .failed:
+                finished(cancelled: true)
             default: break
             }
         }

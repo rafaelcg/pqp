@@ -298,10 +298,15 @@ struct StoryLayerList: Decodable, Sendable {
         var container = try decoder.unkeyedContainer()
         var found: [StoryLayer] = []
         while !container.isAtEnd {
+            // A `null` is consumed on its own: neither a layer nor a `Skip` can
+            // be decoded from it, and a cursor that never moves would loop here
+            // for ever.
+            if (try? container.decodeNil()) == true { continue }
             if let layer = try? container.decode(StoryLayer.self) {
                 found.append(layer)
             } else {
-                // A failed decode does not advance the cursor.
+                // A failed decode does not advance the cursor: step over
+                // exactly that element.
                 _ = try? container.decode(Skip.self)
             }
         }
@@ -362,11 +367,48 @@ struct StoryLayerInput: Encodable, Sendable {
     }
 }
 
-/// Encodes a layer without its upload declaration, so `Story` stays `Codable`
-/// (the read cache writes stories back out).
+/// A layer in the READ shape, so `Story` stays `Codable` and what the cache
+/// writes is what `init(from:)` reads back (`url`, `width`, `height`, the
+/// mention's person). Creating a story uses `StoryLayerInput` instead.
 extension StoryLayer: Encodable {
+    private enum ReadKeys: String, CodingKey {
+        case id, type, x, y, scale, rotation
+        case text, font, color, background, align, size
+        case shape, url, width, height, serverId, channelId, userId, user
+    }
+
     func encode(to encoder: Encoder) throws {
-        try StoryLayerInput(layer: self, upload: nil).encode(to: encoder)
+        var c = encoder.container(keyedBy: ReadKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(typeName, forKey: .type)
+        try c.encode(x, forKey: .x)
+        try c.encode(y, forKey: .y)
+        try c.encode(scale, forKey: .scale)
+        try c.encode(rotation, forKey: .rotation)
+        switch content {
+        case .text(let data):
+            try c.encode(data.text, forKey: .text)
+            try c.encode(data.font, forKey: .font)
+            try c.encode(data.color, forKey: .color)
+            try c.encode(data.background, forKey: .background)
+            try c.encode(data.align, forKey: .align)
+            try c.encode(data.size, forKey: .size)
+        case .image(let picture):
+            try c.encode(picture.shape, forKey: .shape)
+            try c.encode(picture.url ?? "", forKey: .url)
+            try c.encode(picture.width, forKey: .width)
+            try c.encode(picture.height, forKey: .height)
+        case .drawing(let picture):
+            try c.encode(picture.url ?? "", forKey: .url)
+            try c.encode(picture.width, forKey: .width)
+            try c.encode(picture.height, forKey: .height)
+        case .call(let serverId, let channelId):
+            try c.encode(serverId, forKey: .serverId)
+            try c.encode(channelId, forKey: .channelId)
+        case .mention(let userId, let user):
+            try c.encode(userId, forKey: .userId)
+            try c.encodeIfPresent(user, forKey: .user)
+        }
     }
 }
 

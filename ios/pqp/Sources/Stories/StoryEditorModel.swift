@@ -31,9 +31,16 @@ final class StoryEditorModel {
         var rotation = false
     }
 
+    /// Everything an undo has to put back: the layers AND what stands behind
+    /// them. A deleted photo loses its bytes and preview with it, a deleted
+    /// call its card; undoing the delete without them would bring back a layer
+    /// that cannot be drawn or uploaded.
     private struct Snapshot {
         let layers: [StoryLayer]
         let drawing: PKDrawing?
+        let files: [String: StoryLayerFile]
+        let previews: [String: UIImage]
+        let callInfo: StoryCallLayerInfo?
     }
 
     // MARK: State
@@ -103,7 +110,17 @@ final class StoryEditorModel {
 
     // MARK: Undo
 
-    private func snapshot() -> Snapshot { Snapshot(layers: layers, drawing: drawing) }
+    private func snapshot() -> Snapshot {
+        Snapshot(layers: layers, drawing: drawing, files: files, previews: previews, callInfo: callInfo)
+    }
+
+    private func restore(_ snapshot: Snapshot) {
+        layers = snapshot.layers
+        drawing = snapshot.drawing ?? PKDrawing()
+        files = snapshot.files
+        previews = snapshot.previews
+        callInfo = snapshot.callInfo
+    }
 
     private func record(_ before: Snapshot) {
         undoStack.append(before)
@@ -113,11 +130,9 @@ final class StoryEditorModel {
 
     func undo() {
         guard let last = undoStack.popLast() else { return }
-        layers = last.layers
-        drawing = last.drawing ?? PKDrawing()
+        restore(last)
         canUndo = !undoStack.isEmpty
         if let selectedId, layer(selectedId) == nil { self.selectedId = nil }
-        pruneFiles()
     }
 
     // MARK: Edits
@@ -378,6 +393,21 @@ final class StoryEditorModel {
         guides.rotation = snapped.snapped
     }
 
+    /// The system took the touches away (an alert, a call, the app going to the
+    /// background): whatever the gesture did is undone, and nothing is deleted
+    /// even if the finger was over the bin.
+    func cancelGesture() {
+        defer {
+            activeId = nil
+            gestureBefore = nil
+            isDragging = false
+            overTrash = false
+            guides = Guides()
+        }
+        guard let before = gestureBefore else { return }
+        layers = before.layers
+    }
+
     /// All fingers are up. Over the trash it deletes; otherwise a move is one
     /// undoable action.
     func endGesture() {
@@ -390,6 +420,7 @@ final class StoryEditorModel {
         }
         guard let id = activeId, let before = gestureBefore else { return }
         if overTrash {
+            if layer(id)?.isDrawing == true { drawing = PKDrawing() }
             layers.removeAll { $0.id == id }
             if selectedId == id { selectedId = nil }
             record(before)

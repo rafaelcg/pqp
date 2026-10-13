@@ -131,6 +131,7 @@ struct StoryMentionSheet: View {
     @State private var friends: [StoryMentionCandidate] = []
     @State private var members: [StoryMentionCandidate] = []
     @State private var loaded = false
+    @State private var failed = false
 
     private var shown: [StoryMentionCandidate] {
         StoryMentionRules.candidates(friends: friends, members: members, me: session.currentUser?.id, taken: taken, query: query)
@@ -168,7 +169,19 @@ struct StoryMentionSheet: View {
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("mention.person.\(person.id)")
                     }
-                    if loaded && shown.isEmpty {
+                    if loaded && failed {
+                        VStack(spacing: 8) {
+                            Text("Couldn't load everyone.")
+                                .font(Typography.callout)
+                                .foregroundStyle(Palette.paperMuted)
+                            Button("Try again") { Task { loaded = false; await load() } }
+                                .font(Typography.bodyMedium)
+                                .foregroundStyle(Palette.signal)
+                                .accessibilityIdentifier("mention.retry")
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 20)
+                    } else if loaded && shown.isEmpty {
                         Text("Nobody to mention yet.")
                             .font(Typography.callout)
                             .foregroundStyle(Palette.paperMuted)
@@ -182,17 +195,30 @@ struct StoryMentionSheet: View {
         .task { await load() }
     }
 
+    /// Friends and the server's people are asked for at the same time. A
+    /// request that fails is said out loud, with a retry: an empty list that
+    /// really means "nobody" and one that means "could not ask" must not look
+    /// the same.
     private func load() async {
-        defer { loaded = true }
-        if let response = try? await session.api.friends() {
-            friends = response.friends.map {
+        failed = false
+        let id = serverId
+        async let friendsResult = try? session.api.friends()
+        async let membersResult: [ServerMember]? = {
+            guard let id else { return [] }
+            return try? await session.api.members(serverId: id)
+        }()
+        let (friendsResponse, memberList) = await (friendsResult, membersResult)
+        if let friendsResponse {
+            friends = friendsResponse.friends.map {
                 StoryMentionCandidate(id: $0.id, displayName: $0.displayName, handle: nil, avatarUrl: $0.avatarUrl)
             }
         }
-        if let serverId, let list = try? await session.api.members(serverId: serverId) {
-            members = list.map {
+        if let memberList {
+            members = memberList.map {
                 StoryMentionCandidate(id: $0.id, displayName: $0.displayName, handle: nil, avatarUrl: $0.avatarUrl)
             }
         }
+        failed = friendsResponse == nil || memberList == nil
+        loaded = true
     }
 }
