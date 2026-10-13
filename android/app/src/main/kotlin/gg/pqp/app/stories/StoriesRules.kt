@@ -197,6 +197,19 @@ object StoriesRules {
     /** Whether a server's row in "Quem vê" may be unticked. Not the call's own server. */
     fun canUntick(serverId: String, stickerServerId: String?): Boolean = serverId != stickerServerId
 
+    /** Who a story goes to, as the words an author reads under it: server names, and whether friends are in. */
+    data class AudienceParts(val serverNames: List<String>, val friends: Boolean)
+
+    /**
+     * The audience as names. Servers the story is going to that the options
+     * no longer list (a server left meanwhile) are not named, and a count of
+     * them is left to the caller to say.
+     */
+    fun audienceParts(options: StoryAudienceOptions?, targets: StoryAudienceTargets): AudienceParts {
+        val names = targets.serverIds.mapNotNull { id -> options?.servers?.firstOrNull { it.serverId == id }?.serverName }
+        return AudienceParts(names.filter { it.isNotBlank() }, targets.friends)
+    }
+
     /** At least one audience, and at most ten servers (`STORY_MAX_SERVER_AUDIENCES`). */
     fun canPost(targets: StoryAudienceTargets): Boolean =
         (targets.serverIds.isNotEmpty() || targets.friends) && targets.serverIds.size <= 10
