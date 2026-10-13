@@ -73,7 +73,19 @@ enum class ForumStatus(val wire: String) {
 data class ForumTag(
     val id: String,
     val name: String,
+    /** Legacy glyph: drawn only when the tag has no (known) [icon]. */
     val emoji: String? = null,
+    /**
+     * A key from the shared icon set (`FORUM_TAG_ICONS`), drawn as a Lucide
+     * icon. A String, not an enum, so a key a newer server added decodes fine
+     * and falls back to the emoji. Absent on an older API.
+     */
+    val icon: String? = null,
+    /**
+     * Set on a starter tag until staff rename it: the phone then shows its own
+     * language's name for the key instead of the stored one.
+     */
+    val preset: String? = null,
     /** Staff-only ("Só staff"). Members never see it in the composer. */
     val moderated: Boolean = false,
     val position: Int = 0,
