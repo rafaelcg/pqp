@@ -2721,6 +2721,7 @@ function MainAppContent({
   if (railOriginRef.current === "") {
     railOriginRef.current = newRailOrigin();
   }
+  const railMovesRef = useRef(0);
   const railSaverRef = useRef<ServerOrderSaver | null>(null);
   if (railSaverRef.current === null) {
     railSaverRef.current = createServerOrderSaver({
@@ -2737,15 +2738,23 @@ function MainAppContent({
         setAppError(translateMessage("chrome.railReorderFailed"));
       },
       onResync: () => {
+        // A read that started before the person moved something again is older
+        // than that move: `railMovesRef` says whether they did, and if so the
+        // read is dropped (the new move has its own save, and its own resync
+        // if another tab spoke meanwhile).
+        const moves = railMovesRef.current;
         fetchServers()
-          .then(({ servers: list }) =>
+          .then(({ servers: list }) => {
+            if (railMovesRef.current !== moves) {
+              return;
+            }
             setServers((rows) =>
               applyServerOrder(
                 rows,
                 list.map((row) => row.id),
               ),
-            ),
-          )
+            );
+          })
           .catch(() => {
             // The next load reads it anyway.
           });
@@ -6806,6 +6815,7 @@ function MainAppContent({
    * the server confirmed, with a line saying so.
    */
   function handleReorderServers(ids: string[]) {
+    railMovesRef.current += 1;
     railSaverRef.current?.request(ids);
     setServers((rows) => applyServerOrder(rows, ids));
   }
