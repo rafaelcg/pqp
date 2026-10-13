@@ -48,6 +48,7 @@ const idle: VoiceState = {
   isTransmitting: false,
   error: null,
   errorKind: null,
+  dismissedCameraPeerIds: [],
   notice: null,
   micFallback: null,
   audioHealthPrompt: null,

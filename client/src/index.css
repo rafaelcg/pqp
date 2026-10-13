@@ -146,6 +146,16 @@
   --color-flag-es-red: #aa151b;
   --color-flag-es-yellow: #f1bf00;
 
+  /*
+   * Text and icons drawn ON a video: the watch party player's bar, its live
+   * chip and its viewer count. A film is dark whatever the app's theme, so
+   * these do not retint. Light on the black stage in every theme, the way
+   * any video player draws its controls; in the light theme the player's
+   * controls used to inherit near-black text and vanish into the picture.
+   */
+  --color-on-media: oklch(0.97 0.005 95);
+  --color-on-media-muted: oklch(0.8 0.008 95);
+
   /* The `* Fallback` names are metric-adjusted local fonts declared in
      fonts.css, so the swap to the real face barely moves the text. */
   --font-sans:
@@ -585,6 +595,23 @@
   --rgb-picker-color: 40, 44, 52;
   --rgb-picker-accent: 90, 130, 40;
   --picker-border: oklch(0.86 0.01 95);
+}
+
+/*
+ * Text drawn on the call stage's dark pills (the top overlay's labels over a
+ * share or a camera). The pill is black whatever the theme, so the text roles
+ * take the on-media colours, and in a light theme the accent and the warning
+ * step back to their dark-theme values, which are the ones that read on black.
+ * Put it on the overlay that holds the pills, not on the controls that keep
+ * their own themed background.
+ */
+.on-media-scope {
+  --color-paper: var(--color-on-media);
+  --color-paper-muted: var(--color-on-media-muted);
+}
+:root[data-theme="light"] .on-media-scope {
+  --color-signal: oklch(0.88 0.19 125);
+  --color-warning: oklch(0.8 0.14 85);
 }
 
 /*

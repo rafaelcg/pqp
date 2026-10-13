@@ -326,21 +326,37 @@ export async function contrast(
 }
 
 /**
- * Every call control on the expanded stage that a press at its centre would
- * miss. The stage clips (`overflow-hidden`), so a tile outside
- * its box is not drawn, and a tile under the server rail or the strip is
- * drawn and cannot be pressed. Both are the same bug to a thumb.
+ * Every call control that a press at its centre would miss, wherever the
+ * controls are: in the composer's strip (the usual place, a share or a camera
+ * on the stage or not), or in the bar floating over the stage (fullscreen, a
+ * phone held sideways, the chat put away). A control outside its container
+ * is clipped, and one under the server rail or the strip is drawn and cannot
+ * be pressed. Both are the same bug to a thumb.
  */
 export async function unreachableStageControls(
   page: Page,
 ): Promise<string[]> {
   return page.evaluate(() => {
-    const stage = document.querySelector('[data-testid="call-stage"]');
-    const bar = document.querySelector('[data-testid="call-controls-bar"]');
-    if (!stage || !bar) {
-      return ["no stage"];
+    // The strip in the composer only counts while it is actually laid out:
+    // a docked strip still in the DOM but hidden (fullscreen, immersive) must
+    // not stand in for the floating bar the person is really using.
+    const shown = (el: Element | null) => {
+      if (!el) {
+        return null;
+      }
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 ? el : null;
+    };
+    const docked = shown(document.querySelector('[data-testid="call-stage-collapsed"]'));
+    const floating = shown(document.querySelector('[data-testid="call-controls-bar"]'));
+    const bar = docked ?? floating;
+    const container = docked
+      ? docked.closest("[data-call-dock]") ?? docked
+      : document.querySelector('[data-testid="call-stage"]');
+    if (!container || !bar) {
+      return ["no controls"];
     }
-    const box = stage.getBoundingClientRect();
+    const box = container.getBoundingClientRect();
     const out: string[] = [];
     for (const button of Array.from(bar.querySelectorAll("button"))) {
       const r = button.getBoundingClientRect();
@@ -354,7 +370,7 @@ export async function unreachableStageControls(
         r.top < box.top - 0.5 ||
         r.bottom > box.bottom + 0.5
       ) {
-        out.push(`${name}: outside the stage`);
+        out.push(`${name}: outside its bar`);
         continue;
       }
       const hit = document.elementFromPoint(
