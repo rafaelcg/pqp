@@ -18,6 +18,21 @@ enum ServerOrder {
         next.insert(next.remove(at: from), at: to)
         return next
     }
+
+    /// `servers` in the order `ids` names. Ids the list does not hold are
+    /// ignored; servers `ids` does not name keep their place after the named
+    /// ones. Only the ORDER changes: every other field on the rows stays as it
+    /// is now, which is what a rollback after a refused save needs.
+    static func applying<T: Identifiable>(_ ids: [T.ID], to items: [T]) -> [T] {
+        var byId: [T.ID: T] = [:]
+        for item in items { byId[item.id] = item }
+        var out: [T] = []
+        for id in ids {
+            if let item = byId.removeValue(forKey: id) { out.append(item) }
+        }
+        out.append(contentsOf: items.filter { byId[$0.id] != nil })
+        return out
+    }
 }
 
 extension APIClient {

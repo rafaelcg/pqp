@@ -720,21 +720,49 @@ final class HomeModel {
 
     /// Move one server a place up or down in this person's own list, and save
     /// it. Optimistic, like the profile switch below: the list moves on the
-    /// tap, and a refused save puts it back (unless something newer replaced
-    /// the list meanwhile) and shows the server's sentence.
+    /// tap.
+    ///
+    /// SAVES RUN ONE AT A TIME. Two requests in the air can be processed in
+    /// either order, which would leave the stored order older than the one on
+    /// screen. So the first move starts a loop that sends the CURRENT order,
+    /// and a move made while a save is in the air only changes `servers`: the
+    /// loop sends it next (several quick moves are one request), and stops when
+    /// the stored order is the one shown. A refused save puts the order back to
+    /// the last one the server confirmed (never an intermediate one that was
+    /// not saved), touching nothing else on the rows, and shows the server's
+    /// sentence.
     func moveServer(serverId: String, by delta: Int) async {
         guard let session,
               let moved = ServerOrder.moved(servers, id: serverId, by: delta)
         else { return }
-        let previous = servers
+        if confirmedServerOrder == nil {
+            confirmedServerOrder = servers.map(\.id)
+        }
         servers = moved
-        do {
-            try await session.api.saveServerOrder(moved.map(\.id))
-        } catch {
-            if servers.map(\.id) == moved.map(\.id) { servers = previous }
-            if let shown = error.userFacingMessage { self.error = shown }
+        guard !serverOrderSaving else { return }
+        serverOrderSaving = true
+        defer {
+            serverOrderSaving = false
+            confirmedServerOrder = nil
+        }
+        while true {
+            let ids = servers.map(\.id)
+            if ids == confirmedServerOrder { return }
+            do {
+                try await session.api.saveServerOrder(ids)
+                confirmedServerOrder = ids
+            } catch {
+                if let confirmed = confirmedServerOrder {
+                    servers = ServerOrder.applying(confirmed, to: servers)
+                }
+                if let shown = error.userFacingMessage { self.error = shown }
+                return
+            }
         }
     }
+
+    private var serverOrderSaving = false
+    private var confirmedServerOrder: [String]?
 
     /// One membership's badge opt-out, flipped from the rail's own menu.
     ///
@@ -753,7 +781,11 @@ final class HomeModel {
                 serverId: serverId, showOnProfile: showOnProfile
             )
         } catch {
-            servers[index].showOnProfile = previous
+            // By id, not by the index read before the await: the list can have
+            // been reordered while the request was in the air.
+            if let now = servers.firstIndex(where: { $0.id == serverId }) {
+                servers[now].showOnProfile = previous
+            }
             if let shown = error.userFacingMessage { self.error = shown }
         }
     }

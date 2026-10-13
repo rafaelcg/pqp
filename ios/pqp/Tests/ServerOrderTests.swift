@@ -14,6 +14,13 @@ final class ServerOrderTests: XCTestCase {
         XCTAssertEqual(ServerOrder.moved(list, id: "c", by: -1)?.map(\.id), ["a", "c", "b"])
     }
 
+    func testApplyingAnOrderChangesOnlyTheOrder() {
+        XCTAssertEqual(ServerOrder.applying(["c", "a", "b"], to: list).map(\.id), ["c", "a", "b"])
+        // An id the list does not hold is ignored; a server the order does not
+        // name keeps its place after the named ones.
+        XCTAssertEqual(ServerOrder.applying(["zzz", "b"], to: list).map(\.id), ["b", "a", "c"])
+    }
+
     func testMovingPastEitherEndOrAnUnknownServerChangesNothing() {
         XCTAssertNil(ServerOrder.moved(list, id: "a", by: -1))
         XCTAssertNil(ServerOrder.moved(list, id: "c", by: 1))
