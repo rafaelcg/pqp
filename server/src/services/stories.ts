@@ -835,19 +835,33 @@ async function resolveCalls(
       )
     : { rows: [] };
   const byId = new Map(people.rows.map((person) => [person.id, person]));
-  // Whether the AUTHOR can still use the room (one permission read per distinct author and room).
-  const authorAccess = new Map<string, Promise<boolean>>();
-  const authorCanUse = (authorId: string, room: CallRoom) => {
-    const key = `${authorId}:${room.channelId}`;
-    let known = authorAccess.get(key);
-    if (!known) {
-      known = computeMemberPermissions(room.serverId, authorId, room.channelId).then(
-        (perms) => hasPermission(perms, Permission.VIEW_CHANNEL) && hasPermission(perms, Permission.CONNECT),
-      );
-      authorAccess.set(key, known);
+  // Whether the AUTHOR can still use the room: one permission read per distinct author and room,
+  // run together (bounded) before the cards are built, and only for cards a viewer can get that far
+  // with. A read that fails is UNKNOWN: that card is left out of this read, never the whole read.
+  const authorKey = (authorId: string, channelId: string) => `${authorId}:${channelId}`;
+  const authorAccess = new Map<string, boolean | null>();
+  const wanted = new Map<string, { authorId: string; room: CallRoom }>();
+  for (const row of stickered) {
+    const room = rooms.get(row.sticker.channelId);
+    if (room && room.serverId === row.sticker.serverId && room.viewerCanJoin && room.rosterKnown) {
+      wanted.set(authorKey(row.author_id, room.channelId), { authorId: row.author_id, room });
     }
-    return known;
-  };
+  }
+  await mapLimit([...wanted.entries()], PER_REQUEST_CONCURRENCY, async ([key, { authorId, room }]) => {
+    try {
+      const perms = await computeMemberPermissions(room.serverId, authorId, room.channelId);
+      authorAccess.set(
+        key,
+        hasPermission(perms, Permission.VIEW_CHANNEL) && hasPermission(perms, Permission.CONNECT),
+      );
+    } catch (error) {
+      authorAccess.set(key, null);
+      console.error(
+        "[stories] call author permission read failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  });
   for (const row of stickered) {
     const room = rooms.get(row.sticker.channelId);
     if (!room) {
@@ -884,7 +898,11 @@ async function resolveCalls(
     if (!room.rosterKnown) {
       continue;
     }
-    if (!(await authorCanUse(row.author_id, room))) {
+    const authorCan = authorAccess.get(authorKey(row.author_id, room.channelId));
+    if (authorCan === null || authorCan === undefined) {
+      continue;
+    }
+    if (!authorCan) {
       // The author can no longer connect to the room (removed, or the role lost): the card is over.
       out.set(row.id, {
         serverId: room.serverId,
