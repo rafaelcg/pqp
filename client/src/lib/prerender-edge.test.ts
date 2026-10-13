@@ -52,11 +52,19 @@ describe("the prerendered hero at the edge", () => {
     }
   });
 
+  it("is replaced by the page's own no-JS body on the pages that have one", async () => {
+    for (const p of ["/tela", "/vs-discord", "/download", "/streamers", "/contact"]) {
+      const res = await onRequest(ctx(p));
+      const body = await res.text();
+      expect(body, p).not.toContain("pre-hero");
+      expect(body, p).toContain('<div id="root"><div id="pre-page"');
+      expect(body.match(/<h1/g), p).toHaveLength(1);
+    }
+  });
+
   it("is removed from every other page, so a no-JS reader gets an empty body", async () => {
     for (const p of [
-      "/vs-discord",
       "/privacy",
-      "/download",
       "/blog",
       "/@x",
       "/c/valorant",

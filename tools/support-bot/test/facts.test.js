@@ -136,8 +136,24 @@ describe("the real facts.md", () => {
   test("permits exactly the measurements the code actually implements", () => {
     assert.deepEqual(
       [...facts.measurements].sort(),
-      ["1080p", "2.5mbps", "5mbps", "600kbps"],
+      ["1080p", "30fps", "360p", "480p", "5mbps", "60fps", "720p"],
     );
+  });
+
+  test("does not promise Android share sound, which nobody has heard on a phone", () => {
+    // docs/ANDROID.md: "The sound half is unverified on a device." Until that
+    // changes, the bot may say it should work and must say it is unconfirmed.
+    assert.match(facts.text, /Android 10[^]*ainda não foi confirmado/);
+    assert.doesNotMatch(facts.text, /a tela compartilhada leva o som do celular/);
+  });
+
+  test("says the desktop app carries computer sound on Windows 10 from 0.2.0", () => {
+    // Native process loopback (client/src/lib/native-share-audio.ts) shipped in
+    // desktop v0.2.0 and works on Windows 10; only Chrome on Windows 10 still
+    // cannot keep the call out of the share.
+    assert.match(facts.text, /app de desktop\*\* vai no Windows 10 e no Windows 11, a partir da versão\s+0\.2\.0/);
+    assert.match(facts.text, /No Chrome do Windows 10 não vai/);
+    assert.doesNotMatch(facts.text, /No Windows 10 a gente não manda/);
   });
 
   test("does not assert end-to-end encryption anywhere", () => {

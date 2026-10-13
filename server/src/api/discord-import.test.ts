@@ -552,17 +552,21 @@ describeDb("discord layout import API", () => {
       const rows = await getPool().query<{
         name: string;
         emoji: string | null;
+        icon: string | null;
+        preset: string | null;
         moderated: boolean;
         position: number;
       }>(
-        `SELECT name, emoji, moderated, position FROM forum_tags
+        `SELECT name, emoji, icon, preset, moderated, position FROM forum_tags
           WHERE forum_id = $1 ORDER BY position`,
         [questions.id],
       );
       expect(rows.rows).toEqual([
-        { name: "Bug", emoji: "🐛", moderated: false, position: 0 },
-        { name: "Official", emoji: null, moderated: true, position: 1 },
-        { name: "Pog", emoji: null, moderated: false, position: 2 },
+        // The emoji is kept and gets its nearest icon; an import's names are
+        // the community's own, never a localized preset.
+        { name: "Bug", emoji: "🐛", icon: "bug", preset: null, moderated: false, position: 0 },
+        { name: "Official", emoji: null, icon: null, preset: null, moderated: true, position: 1 },
+        { name: "Pog", emoji: null, icon: null, preset: null, moderated: false, position: 2 },
       ]);
 
       const ideas = forums.find((c) => c.name === "ideas")!;

@@ -130,7 +130,7 @@ test.describe("push-to-talk", () => {
     // Joining push-to-talk is joining silent — without pressing the mute
     // button, which is a different switch and stays off.
     await expect(holdButton(page)).toHaveAttribute("aria-pressed", "false");
-    await expect(page.getByText("Hold to talk").first()).toBeVisible();
+    await expect(holdButton(page)).toHaveAccessibleName("Hold to talk");
 
     await focusThePage(page);
     await page.keyboard.down("Backquote");

@@ -89,7 +89,16 @@ data class ForumComposerState(
     val offeredTags: List<ForumTag> get() = if (isStaff) tags else tags.filterNot { it.moderated }
 
     val titleMissing: Boolean get() = title.isBlank()
-    val tagMissing: Boolean get() = requireTag && tagIds.isEmpty()
+    /**
+     * Only while there is a tag this person could pick: a rule nobody can meet
+     * (no tags yet, only staff-only ones for a member, a tags read that failed)
+     * must not hold Publicar. The server applies the same rule and refuses
+     * with `TagRequired` when it does bind.
+     */
+    val tagMissing: Boolean get() = requireTag && offeredTags.isNotEmpty() && tagIds.isEmpty()
+
+    /** "Exigir tag" is on and there is nothing to pick: the composer says it can go without. */
+    val tagsNoneToPick: Boolean get() = requireTag && offeredTags.isEmpty()
     val readiness: ComposerReadiness get() = composerReadiness(body, attachments)
 
     /** Publicar is enabled; the reason it is not is written under the field (UX §2.5 #37). */
@@ -466,6 +475,13 @@ class ForumComposerViewModel(
         viewModelScope.launch {
             runCatching { session.api.forumSettings(forumId) }.getOrNull()?.let { fresh ->
                 _state.value = _state.value.copy(requireTag = fresh.requireTag)
+            }
+        }
+        // The tags too: a read that failed on open left the picker empty, and
+        // the refusal is only fixable once the tags are on screen.
+        viewModelScope.launch {
+            runCatching { session.api.forumTags(forumId) }.getOrNull()?.let { fresh ->
+                _state.value = _state.value.copy(tags = fresh.sortedBy { it.position })
             }
         }
     }

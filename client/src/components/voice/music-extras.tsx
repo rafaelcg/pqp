@@ -29,6 +29,9 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { setMusicDucking } from "@/lib/music-prefs";
 import {
+  expectedPositionMs,
+  getMusicSnapshot,
+  useMusic,
   readdFromHistory,
   setAutoplay,
   setListening,
@@ -314,7 +317,18 @@ function musicPersonalItems(input: {
   t: (key: MessageKey) => string;
   listening: boolean;
   ducking: boolean;
+  onOpenCurrent?: () => void;
 }): ContextMenuItemDef[] {
+  const open: ContextMenuItemDef[] = input.onOpenCurrent
+    ? [
+        {
+          id: "open-current",
+          label: input.t("music.openYoutube"),
+          icon: ExternalLink,
+          onSelect: input.onOpenCurrent,
+        },
+      ]
+    : [];
   return [
     {
       id: "scope-you",
@@ -341,7 +355,35 @@ function musicPersonalItems(input: {
           icon: Headphones,
           onSelect: () => setListening(true),
         },
+    ...open,
   ];
+}
+
+/**
+ * The track on screen, on YouTube, where the room is. The embed's title and
+ * logo link did this before `controls: 0` hid them; a Spotify-sourced track
+ * is still a YouTube video on screen, so the link is the video's.
+ */
+export function currentTrackYouTubeHref(
+  videoId: string,
+  positionMs: number,
+): string {
+  const seconds = Math.max(0, Math.floor(positionMs / 1000));
+  const at = seconds > 0 ? `&t=${seconds}s` : "";
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}${at}`;
+}
+
+function openCurrentOnYouTube(): void {
+  const snap = getMusicSnapshot();
+  const videoId = snap.state?.current?.videoId;
+  if (!videoId) {
+    return;
+  }
+  window.open(
+    currentTrackYouTubeHref(videoId, expectedPositionMs(snap)),
+    "_blank",
+    "noopener,noreferrer",
+  );
 }
 
 /**
@@ -408,11 +450,14 @@ export function musicOverflowItems(input: {
   queueLength?: number;
   onStopAll?: () => void;
   modes?: "all" | "menu";
+  /** Set when there is a track on screen to open on YouTube. */
+  onOpenCurrent?: () => void;
 }): ContextMenuItemDef[] {
   const personal = musicPersonalItems({
     t: input.t,
     listening: input.listening,
     ducking: input.ducking,
+    onOpenCurrent: input.onOpenCurrent,
   });
   if (!input.canManage) {
     /* A member's menu is the personal rows alone, and a heading over the
@@ -479,6 +524,7 @@ export function MusicOverflowMenu({
 }) {
   const { t } = useTranslation();
   const [confirmStop, setConfirmStop] = useState(false);
+  const hasCurrent = Boolean(useMusic().state?.current?.videoId);
   const items = useMemo(
     () =>
       musicOverflowItems({
@@ -493,6 +539,7 @@ export function MusicOverflowMenu({
         queueLength,
         modes,
         onStopAll: canManage ? () => setConfirmStop(true) : undefined,
+        onOpenCurrent: hasCurrent ? openCurrentOnYouTube : undefined,
       }),
     [
       t,
@@ -505,6 +552,7 @@ export function MusicOverflowMenu({
       repeat,
       queueLength,
       modes,
+      hasCurrent,
     ],
   );
 

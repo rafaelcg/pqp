@@ -70,6 +70,30 @@ class ForumConfigUpdateTest {
     }
 
     @Test
+    fun `a required tag does not hold Publicar when there is no tag this person could pick`() {
+        val ready = ForumComposerState(title = "Titulo", body = "Corpo", requireTag = true)
+
+        // No tags at all: nothing to pick, so the rule cannot bind.
+        assertFalse(ready.tagMissing)
+        assertTrue(ready.tagsNoneToPick)
+        assertTrue(ready.canPublish)
+
+        // Only a staff-only tag, for a member.
+        val staffOnly = ready.copy(tags = listOf(ForumTag("t1", "Oficial", moderated = true, position = 0)))
+        assertFalse(staffOnly.tagMissing)
+        assertTrue(staffOnly.tagsNoneToPick)
+        // ...but staff can pick it, so it binds them.
+        assertTrue(staffOnly.copy(isStaff = true).tagMissing)
+
+        // A tag a member can use: the rule binds until one is picked.
+        val withTag = ready.copy(tags = listOf(ForumTag("t2", "Bug", position = 0)))
+        assertTrue(withTag.tagMissing)
+        assertFalse(withTag.tagsNoneToPick)
+        assertFalse(withTag.canPublish)
+        assertTrue(withTag.copy(tagIds = listOf("t2")).canPublish)
+    }
+
+    @Test
     fun `an automod refusal names the half it refused, when the server says`() {
         val title = ForumComposerViewModel.automodError(
             frame("""{"error":"forum_post_rejected","reason":"automod","automodMessage":"Sem links","field":"title"}"""),

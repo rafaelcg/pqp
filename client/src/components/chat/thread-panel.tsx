@@ -1,5 +1,6 @@
 import {
   THREAD_AUTO_ARCHIVE_DAYS,
+  customEmojiTokensAsText,
   type ThreadSummary,
 } from "@pqp/shared";
 import {
@@ -199,7 +200,7 @@ export function ThreadPanel({
     ? null
     : origin
     ? origin.body.trim().length > 0
-      ? origin.body
+      ? customEmojiTokensAsText(origin.body)
       : origin.poll
         ? origin.poll.question
         : origin.attachments.length > 0

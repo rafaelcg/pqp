@@ -17,6 +17,7 @@ import { openApp, openServerSettings } from "./fixtures";
 /** Every section, in rail order. The list IS the assertion. */
 const SECTIONS = [
   "Overview",
+  "Emoji",
   "Community",
   "Access",
   "Roles",
@@ -53,7 +54,7 @@ test.describe("server settings sections", () => {
     await page.getByRole("tab", { name: "Overview", exact: true }).focus();
     await page.keyboard.press("ArrowDown");
     await expect(
-      page.getByRole("tab", { name: "Community", exact: true }),
+      page.getByRole("tab", { name: "Emoji", exact: true }),
     ).toHaveAttribute("aria-selected", "true");
 
     await page.keyboard.press("End");

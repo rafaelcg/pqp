@@ -8,6 +8,12 @@ import {
   remarkStripNewlineFillers,
 } from "@/lib/chat-markdown";
 import { remarkMentions } from "@/lib/remark-mentions";
+import { remarkCustomEmoji } from "@/lib/remark-custom-emoji";
+import { noteUnknownServerEmoji } from "@/lib/server-emoji";
+import {
+  CustomEmojiImage,
+  useCustomEmojiScope,
+} from "@/components/chat/custom-emoji";
 import { remarkRetroEmoticons } from "@/lib/retro-emoticons";
 import { useRetroLook } from "@/hooks/use-appearance";
 
@@ -33,7 +39,30 @@ const MARKDOWN_ELEMENTS = [
   "blockquote",
 ];
 
+/**
+ * A span the custom-emoji plugin marked draws the picture from the server's
+ * list; every other span (mentions, blank-line spacers) passes through.
+ */
+function MarkdownSpan({
+  node,
+  children,
+  ...props
+}: {
+  node?: { properties?: Record<string, unknown> };
+  children?: ReactNode;
+  className?: string;
+}) {
+  const { byId } = useCustomEmojiScope();
+  const id = node?.properties?.dataEmojiId;
+  const emoji = typeof id === "string" ? byId.get(id) : undefined;
+  if (emoji) {
+    return <CustomEmojiImage emoji={emoji} />;
+  }
+  return <span className={props.className}>{children}</span>;
+}
+
 const MARKDOWN_COMPONENTS = {
+  span: MarkdownSpan,
   // Links in user content are untrusted: never hand the opener a window
   // reference, and never leak the app URL as a referrer.
   a: ({ children, href }: { children?: ReactNode; href?: string }) => (
@@ -57,6 +86,7 @@ export function MessageBody({
   const prepared = useMemo(() => prepareChatMarkdown(body), [body]);
   // Modo 2005 reads `(H)` as 😎 at render time, for this reader only.
   const retro = useRetroLook();
+  const { serverId, byId } = useCustomEmojiScope();
   const plugins = useMemo(
     // remark-breaks turns a single newline into a <br>. prepareChatMarkdown
     // keeps blank lines from collapsing into a paragraph gap first.
@@ -65,10 +95,18 @@ export function MessageBody({
       remarkGfm,
       remarkBreaks,
       remarkStripNewlineFillers,
+      remarkCustomEmoji(
+        (id) => byId.has(id),
+        () => {
+          if (serverId) {
+            noteUnknownServerEmoji(serverId);
+          }
+        },
+      ),
       remarkMentions(currentUsername),
       ...(retro ? [remarkRetroEmoticons] : []),
     ],
-    [currentUsername, retro],
+    [currentUsername, retro, serverId, byId],
   );
 
   return (

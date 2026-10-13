@@ -8,6 +8,7 @@ import { setOsCanExcludeCallAudioForTests } from "@/lib/screen-capture-audio";
 import { resetNativeShareAudioForTests } from "@/lib/native-share-audio";
 import { ADVANCED_SAMPLE_RATE } from "@/lib/noise-suppression";
 import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
+import { retryShareWithoutSound } from "@/lib/share-silent-fallback";
 
 /**
  * The client obeys the room's transport, or leaves and says so.
@@ -80,6 +81,23 @@ vi.mock("@/lib/sounds", () => ({
   stopAllSoundLoops: () => {},
   whenCueSettled: () => whenCueSettledMock(),
 }));
+
+// The soundboard's audio needs a real AudioContext. What this suite pins is
+// that the controller calls into it at the right moments.
+const silenceSoundboardClipsMock = vi.hoisted(() => vi.fn());
+const playSoundboardClipMock = vi.hoisted(() => vi.fn(async () => {}));
+const noteOwnSoundboardEchoMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/soundboard", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/soundboard")>();
+  return {
+    ...actual,
+    silenceSoundboardClips: () => silenceSoundboardClipsMock(),
+    noteOwnSoundboardEcho: (soundId: string) =>
+      noteOwnSoundboardEchoMock(soundId),
+    playSoundboardClip: (...args: unknown[]) =>
+      (playSoundboardClipMock as (...a: unknown[]) => Promise<void>)(...args),
+  };
+});
 
 const beaconVoiceLeaveMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/voice-leave-beacon", () => ({
@@ -814,6 +832,207 @@ describe("screen share audio", () => {
     });
   });
 
+  /**
+   * PQP-31. Windows 11 desktop, Chromium loopback (native sound off): the
+   * picker's sound box was ticked, the loopback device would not open, and
+   * Chromium rejected the whole capture. A shell with `silentRetry` gives the
+   * same surface back without sound; the share goes out and says so.
+   */
+  describe("a desktop share whose sound will not open", () => {
+    function loopbackShell(overrides: Record<string, unknown> = {}) {
+      return {
+        isElectron: true,
+        platform: "win32",
+        sharePickerOffersAudio: true,
+        capabilities: {
+          displayMedia: true,
+          systemAudio: "loopback",
+          restrictOwnAudio: true,
+          pickerOffersAudio: true,
+          silentRetry: true,
+          version: "0.2.7",
+        },
+        shareSilentRetryArm: vi.fn(async () => true),
+        ...overrides,
+      };
+    }
+
+    function installShell(shell: unknown) {
+      (globalThis as { window?: unknown }).window = {
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        pqpDesktop: shell,
+      };
+    }
+
+    function audioFailsOnce(surface = "monitor") {
+      let attempt = 0;
+      displayMedia = async () => {
+        attempt += 1;
+        if (attempt === 1) {
+          const err = new Error("Could not start audio source");
+          err.name = "NotReadableError";
+          throw err;
+        }
+        return fakeCapture("cap-silent", false, surface);
+      };
+    }
+
+    beforeEach(() => {
+      setOsCanExcludeCallAudioForTests(true);
+    });
+
+    afterEach(() => {
+      delete (globalThis as { window?: unknown }).window;
+    });
+
+    it("shares the same surface without sound and says so, instead of failing", async () => {
+      const shell = loopbackShell();
+      installShell(shell);
+      audioFailsOnce();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(displayMediaCalls).toHaveLength(2);
+      expect((displayMediaCalls[0] as { audio?: unknown }).audio).not.toBe(false);
+      expect(shell.shareSilentRetryArm).toHaveBeenCalledTimes(1);
+      const retry = displayMediaCalls[1] as { audio?: unknown; systemAudio?: unknown; video?: unknown };
+      expect(retry.audio).toBe(false);
+      expect(retry.systemAudio).toBe("exclude");
+      // The picture request is untouched: same frame rate, size and cursor.
+      expect(retry.video).toEqual((displayMediaCalls[0] as { video?: unknown }).video);
+
+      const state = voice.getState();
+      expect(state.isSharingScreen).toBe(true);
+      expect(state.isSharingScreenAudio).toBe(false);
+      expect(state.error).toBeNull();
+      expect(state.screenShareAudioFailed).toBe(false);
+      expect(state.notice ?? "").toMatch(/sem som|without sound|sin sonido/);
+      expect(state.notice ?? "").toMatch(/Chrome/);
+    });
+
+    it("keeps a watch party's warning up for as long as the party is silent", async () => {
+      installShell(loopbackShell());
+      audioFailsOnce();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, { preferBrowserTab: true, watchParty: true });
+
+      const state = voice.getState();
+      expect(state.isSharingScreen).toBe(true);
+      expect(state.watchPartyShareSilent).toBe(true);
+      // The persistent host warning replaces the 12 s notice.
+      expect(state.notice).toBeNull();
+
+      await voice.stopScreenShare();
+      expect(voice.getState().watchPartyShareSilent).toBe(false);
+    });
+
+    it("reads the silent fallback off a stream the watch party preview handed over", async () => {
+      const shell = loopbackShell();
+      installShell(shell);
+      const failed = new Error("Could not start audio source");
+      failed.name = "NotReadableError";
+      const preview = await retryShareWithoutSound({
+        err: failed,
+        options: { video: true, audio: true } as never,
+        env: { isDesktopShell: true },
+        desktop: shell as never,
+        getDisplayMedia: async () => fakeCapture("cap-preview", false, "monitor") as unknown as MediaStream,
+      });
+      expect(preview).not.toBeNull();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false, {
+        preferBrowserTab: true,
+        watchParty: true,
+        stream: preview!,
+      });
+
+      expect(voice.getState().isSharingScreen).toBe(true);
+      expect(voice.getState().watchPartyShareSilent).toBe(true);
+    });
+
+    it("never raises the watch party warning for an ordinary share", async () => {
+      installShell(loopbackShell());
+      audioFailsOnce();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(voice.getState().watchPartyShareSilent).toBe(false);
+    });
+
+    it("falls back to the old banner when the shell has nothing to retry", async () => {
+      // The failed request did not carry loopback (or the memory expired):
+      // the arm says no and nothing is asked a second time.
+      const shell = loopbackShell({ shareSilentRetryArm: vi.fn(async () => false) });
+      installShell(shell);
+      audioFailsOnce();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(displayMediaCalls).toHaveLength(1);
+      expect(voice.getState().isSharingScreen).toBe(false);
+      expect(voice.getState().screenShareAudioFailed).toBe(true);
+    });
+
+    it("keeps today's behaviour in a shell built before silentRetry", async () => {
+      // 0.2.6 and older: a second getDisplayMedia would open the picker again,
+      // so the page must not ask; the banner's one-click button stays.
+      const shell = loopbackShell({
+        capabilities: {
+          displayMedia: true,
+          systemAudio: "loopback",
+          restrictOwnAudio: true,
+          pickerOffersAudio: true,
+          version: "0.2.6",
+        },
+      });
+      installShell(shell);
+      audioFailsOnce();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(shell.shareSilentRetryArm).not.toHaveBeenCalled();
+      expect(displayMediaCalls).toHaveLength(1);
+      expect(voice.getState().error).not.toBeNull();
+      expect(voice.getState().screenShareAudioFailed).toBe(true);
+      // The docked call bar keys on this to show the error with no stage.
+      expect(voice.getState().screenShareError).toBe(voice.getState().error);
+    });
+
+    it("never retries a picker the person cancelled", async () => {
+      const shell = loopbackShell();
+      installShell(shell);
+      displayMedia = async () => {
+        const err = new Error("Permission denied");
+        err.name = "NotAllowedError";
+        throw err;
+      };
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(shell.shareSilentRetryArm).not.toHaveBeenCalled();
+      expect(displayMediaCalls).toHaveLength(1);
+      expect(voice.getState().screenShareAudioFailed).toBe(false);
+    });
+
+    it("shows the original error when the silent retry fails too", async () => {
+      const shell = loopbackShell();
+      installShell(shell);
+      displayMedia = async () => {
+        const err = new Error("Could not start audio source");
+        err.name = "NotReadableError";
+        throw err;
+      };
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(displayMediaCalls).toHaveLength(2);
+      expect(voice.getState().isSharingScreen).toBe(false);
+      expect(voice.getState().error).not.toBeNull();
+      expect(voice.getState().screenShareAudioFailed).toBe(true);
+    });
+  });
+
   it("strips mixer audio when restrictOwnAudio came back false", async () => {
     displayMedia = async () =>
       fakeCapture("cap-leak", true, "monitor", { restrictOwnAudio: false });
@@ -1086,6 +1305,68 @@ describe("screen share audio", () => {
 
     expect(voice.getState().isSharingScreen).toBe(true);
     expect(voice.getState().error).toBeNull();
+    expect(voice.getState().screenShareAudioFailed).toBe(false);
+    // The docked bar compares the two, so a cleared error hides the row.
+    expect(voice.getState().error).not.toBe(voice.getState().screenShareError);
+  });
+
+  it("clears the blocked banner once a later share succeeds", async () => {
+    // Cancel the picker, then share for real: "bloqueado ou cancelado" used to
+    // stay over the share that was running for the rest of the call.
+    displayMedia = async () => {
+      const err = new Error("Permission denied");
+      err.name = "NotAllowedError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+    expect(voice.getState().error).not.toBeNull();
+    expect(voice.getState().errorKind).toBe("share");
+
+    displayMedia = async () => fakeCapture("screen", false);
+    await voice.startScreenShare();
+
+    expect(voice.getState().isSharingScreen).toBe(true);
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().errorKind).toBeNull();
+  });
+
+  it("keeps an unrelated error when a share succeeds", async () => {
+    displayMedia = async () => {
+      const err = new Error("Permission denied");
+      err.name = "NotAllowedError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+    voice.handleSignaling({ type: "camera-denied", voiceChannelId: CHANNEL });
+    await settle();
+    const cameraError = voice.getState().error;
+    expect(cameraError).not.toBeNull();
+    expect(voice.getState().errorKind).toBeNull();
+
+    displayMedia = async () => fakeCapture("screen", false);
+    await voice.startScreenShare();
+
+    expect(voice.getState().isSharingScreen).toBe(true);
+    expect(voice.getState().error).toBe(cameraError);
+  });
+
+  it("closes the error strip on request", async () => {
+    displayMedia = async () => {
+      const err = new Error("Could not start audio source");
+      err.name = "NotReadableError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+    expect(voice.getState().screenShareAudioFailed).toBe(true);
+
+    voice.dismissError();
+
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().errorKind).toBeNull();
+    // The retry offer lives inside the strip; it goes with it.
     expect(voice.getState().screenShareAudioFailed).toBe(false);
   });
 
@@ -4329,6 +4610,97 @@ describe("telling the SFU what this listener wants to hear", () => {
     voice.toggleDeafen();
     await settle();
     expect(sfuAudioPlans.at(-1)?.deafened).toBe(false);
+  });
+
+  it("cuts the soundboard clips already sounding when the listener deafens", async () => {
+    const voice = await connectedSfu();
+    silenceSoundboardClipsMock.mockClear();
+
+    voice.toggleDeafen();
+    await settle();
+    expect(silenceSoundboardClipsMock).toHaveBeenCalledTimes(1);
+
+    // Undeafening cuts nothing, and a second deafen cuts again.
+    voice.toggleDeafen();
+    await settle();
+    expect(silenceSoundboardClipsMock).toHaveBeenCalledTimes(1);
+    voice.toggleDeafen();
+    await settle();
+    expect(silenceSoundboardClipsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands a played clip to the speaker with the player's id, for the per-person mute", async () => {
+    const voice = await connectedSfu();
+    playSoundboardClipMock.mockClear();
+    voice.handleSignaling({
+      type: "soundboard-play",
+      channelId: CHANNEL,
+      userId: "user-2",
+      displayName: "Rafa",
+      emoji: "x",
+      soundId: "builtin:buzina",
+    } as VoiceSignalingMessage);
+    expect(playSoundboardClipMock).toHaveBeenCalledWith(
+      "builtin:buzina",
+      expect.any(Function),
+      "user-2",
+    );
+  });
+
+  it("counts this person's own echo only when it comes from the room they sit in", async () => {
+    const voice = await connectedSfu();
+    noteOwnSoundboardEchoMock.mockClear();
+    const self = voice.getState().self!.userId;
+    // A late echo from a room this seat already left spends nothing here.
+    voice.handleSignaling({
+      type: "soundboard-play",
+      channelId: "00000000-0000-4000-8000-0000000000ff",
+      userId: self,
+      displayName: "Me",
+      emoji: "x",
+      soundId: "builtin:buzina",
+    } as VoiceSignalingMessage);
+    expect(noteOwnSoundboardEchoMock).not.toHaveBeenCalled();
+    voice.handleSignaling({
+      type: "soundboard-play",
+      channelId: CHANNEL,
+      userId: self,
+      displayName: "Me",
+      emoji: "x",
+      soundId: "builtin:buzina",
+    } as VoiceSignalingMessage);
+    expect(noteOwnSoundboardEchoMock).toHaveBeenCalledWith("builtin:buzina");
+  });
+
+  it("takes a moderator mute from the moderation frame even when no roster delta arrives", async () => {
+    // A seat of ours still held for its resume window can put this client's
+    // view of the room out of step, so the server's delta is refused. The
+    // mic and the soundboard lock must follow the moderator anyway.
+    const voice = await connectedSfu();
+    expect(voice.getState().self?.serverMuted).toBe(false);
+    voice.handleSignaling({
+      type: "voice-moderation",
+      action: "muted",
+      voiceChannelId: CHANNEL,
+      message: "A moderator muted you",
+    } as VoiceSignalingMessage);
+    expect(voice.getState().self?.serverMuted).toBe(true);
+    expect(voice.getState().isMuted).toBe(true);
+    voice.handleSignaling({
+      type: "voice-moderation",
+      action: "unmuted",
+      voiceChannelId: CHANNEL,
+      message: "A moderator unmuted you",
+    } as VoiceSignalingMessage);
+    expect(voice.getState().self?.serverMuted).toBe(false);
+    // Another room's frame changes nothing here.
+    voice.handleSignaling({
+      type: "voice-moderation",
+      action: "muted",
+      voiceChannelId: "00000000-0000-4000-8000-0000000000ff",
+      message: "x",
+    } as VoiceSignalingMessage);
+    expect(voice.getState().self?.serverMuted).toBe(false);
   });
 
   it("names the peer whose voice was turned all the way down", async () => {

@@ -127,6 +127,13 @@ const SHARE_CAPABILITIES = Object.freeze({
    * dead-share card (`share_game_capture_hint`) never shows without it.
    */
   fullscreenAppState: process.platform === "win32",
+  /**
+   * PQP-31: when a share fails because its loopback sound would not open, the
+   * page may call `shareSilentRetryArm()` and ask again with `audio: false`.
+   * This binary then reuses the surface just picked, with no second picker.
+   * Absent in older shells, where a retry would open the picker again.
+   */
+  silentRetry: true,
   version: shellVersion(),
 });
 
@@ -266,6 +273,16 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
    */
   nativeShareAudioArm() {
     return ipcRenderer.invoke("pqp:native-share-audio-arm");
+  },
+
+  /**
+   * The share just requested failed (`capabilities.silentRetry`). Resolves
+   * `true` when that request carried loopback sound; the next
+   * `getDisplayMedia({ audio: false })` then reuses its surface without a
+   * picker. `false` means there is nothing to retry silently.
+   */
+  shareSilentRetryArm() {
+    return ipcRenderer.invoke("pqp:share-silent-retry-arm");
   },
 
   /**

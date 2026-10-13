@@ -38,6 +38,12 @@ import {
   createAttachmentSchema,
   createAvatarUploadSchema,
   createServerImageUploadSchema,
+  createServerEmojiSchema,
+  createServerEmojiUploadSchema,
+  updateServerEmojiSchema,
+  MAX_SERVER_EMOJI_BYTES,
+  SERVER_EMOJI_SIZE,
+  type ServerEmojiList,
   createBlockSchema,
   createChannelMessageSchema,
   createChannelSchema,
@@ -400,6 +406,27 @@ import {
   setServerImage,
   verifyServerImageObject,
 } from "../services/server-images.js";
+import {
+  assertServerEmojiCanBeAdded,
+  createServerEmojiUpload,
+  deleteServerEmoji,
+  insertServerEmoji,
+  isServerEmojiUploadConfigured,
+  isServerEmojiUploadKey,
+  listServerEmoji,
+  pinServerEmojiUpload,
+  presignServerEmojiRead,
+  renameServerEmoji,
+  scheduleDiscardServerEmojiObject,
+  serverEmojiLimit,
+  ServerEmojiError,
+  verifyServerEmojiObject,
+} from "../services/server-emoji.js";
+import {
+  checkServerEmojiUpload,
+  escalateServerEmojiScan,
+} from "../services/server-emoji-scan.js";
+import { isContentScanConfigured } from "../services/content-scan.js";
 import {
   addCommunityHomeComment,
   claimCommunityHomeMediaUpload,
@@ -3642,6 +3669,209 @@ router.get("/api/music/related", async (ctx) => {
   }
 });
 
+// ------------------------------------------------------------ soundboard
+
+import {
+  claimSoundboardSoundSchema,
+  createSoundboardUploadSchema,
+  Permission as SoundboardPermission,
+  SOUNDBOARD_MAX_SOUNDS,
+  updateSoundboardSoundSchema,
+} from "@pqp/shared";
+import {
+  claimSoundboardSound,
+  countSoundboardSlotsUsed,
+  createSoundboardUpload,
+  deleteSoundboardSound,
+  listSoundboardSounds,
+  SoundboardError,
+  updateSoundboardSound,
+} from "../services/soundboard.js";
+
+function soundboardHttpError(error: SoundboardError): HttpError {
+  switch (error.code) {
+    case "storage":
+      return new HttpError(503, "storage");
+    case "slots":
+      return new HttpError(409, "slots");
+    case "missing":
+      return new HttpError(404, "missing");
+    case "too_big":
+      return new HttpError(400, "too_big");
+    case "too_long":
+      return new HttpError(400, "too_long");
+    case "type":
+      return new HttpError(400, "type");
+    case "unreadable":
+      return new HttpError(400, "unreadable");
+  }
+}
+
+/**
+ * Adding or editing a clip needs the `soundboard` flag on for the server.
+ * Listing and deleting do not: a moderator can still take a clip down on a
+ * server where the flag went off.
+ */
+function requireSoundboardEnabled(serverId: string): void {
+  if (!isEnabled("soundboard", { serverId })) {
+    throw new HttpError(403, "soundboard_disabled");
+  }
+}
+
+router.get("/api/servers/:serverId/soundboard", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId, user.id);
+  // Who added each clip, for the people who manage the board only.
+  const manages = await memberHasPermission(
+    serverId!,
+    user.id,
+    SoundboardPermission.MANAGE_SOUNDBOARD,
+  );
+  const [sounds, slotsUsed] = await Promise.all([
+    listSoundboardSounds(serverId!, { withUploader: manages }),
+    countSoundboardSlotsUsed(serverId!),
+  ]);
+  return { sounds, maxSounds: SOUNDBOARD_MAX_SOUNDS, slotsUsed };
+});
+
+router.post(
+  "/api/servers/:serverId/soundboard/uploads",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    requireSoundboardEnabled(serverId!);
+    const body = createSoundboardUploadSchema.parse(await readJsonBody(req));
+    try {
+      return await createSoundboardUpload({
+        serverId,
+        contentType: body.contentType,
+        byteSize: body.byteSize,
+      });
+    } catch (error) {
+      if (error instanceof SoundboardError) {
+        throw soundboardHttpError(error);
+      }
+      throw error;
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/soundboard",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    requireSoundboardEnabled(serverId!);
+    const body = claimSoundboardSoundSchema.parse(await readJsonBody(req));
+    try {
+      const { sound, created } = await claimSoundboardSound({
+        serverId,
+        userId: user.id,
+        key: body.key,
+        name: body.name,
+        emoji: body.emoji,
+        volume: body.volume,
+      });
+      // A retried or parallel claim of the same upload answers with the row
+      // the first one made. Only the claim that made it is on the record.
+      if (created) {
+        await logAudit({
+          serverId: serverId!,
+          actorId: user.id,
+          action: "soundboard.create",
+          targetType: "soundboard_sound",
+          targetId: sound.id,
+          changes: [{ key: "name", old: null, new: sound.name }],
+        });
+      }
+      return { sound };
+    } catch (error) {
+      if (error instanceof SoundboardError) {
+        throw soundboardHttpError(error);
+      }
+      throw error;
+    }
+  },
+);
+
+router.patch(
+  "/api/servers/:serverId/soundboard/:soundId",
+  async ({ req, user }, { serverId, soundId }) => {
+    await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    requireSoundboardEnabled(serverId!);
+    if (!isUuid(soundId!)) {
+      throw new NotFound("Sound not found");
+    }
+    const body = updateSoundboardSoundSchema.parse(await readJsonBody(req));
+    const updated = await updateSoundboardSound({
+      serverId,
+      soundId,
+      name: body.name,
+      emoji: body.emoji,
+      volume: body.volume,
+    });
+    if (!updated) {
+      throw new NotFound("Sound not found");
+    }
+    const { sound, before } = updated;
+    // Only what actually moved is on the record, with what it was before.
+    // The emoji is not audited (the app never edits it); a save that changes
+    // nothing writes no row.
+    const changes: Array<{ key: string; old: string | number | null; new: string | number }> = [
+      ...(sound.name !== before.name
+        ? [{ key: "name", old: before.name, new: sound.name }]
+        : []),
+      ...(Math.fround(sound.volume) !== Math.fround(before.volume)
+        ? [{ key: "volume", old: before.volume, new: sound.volume }]
+        : []),
+    ];
+    if (changes.length > 0) {
+      // A volume-only edit still names the clip, so the log never says
+      // "edited a sound" without saying which. `clip` is context, not a change.
+      if (!changes.some((change) => change.key === "name")) {
+        changes.unshift({ key: "clip", old: null, new: sound.name });
+      }
+      await logAudit({
+        serverId: serverId!,
+        actorId: user.id,
+        action: "soundboard.update",
+        targetType: "soundboard_sound",
+        targetId: sound.id,
+        changes,
+      });
+    }
+    return { sound };
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/soundboard/:soundId",
+  async ({ user }, { serverId, soundId }) => {
+    await requirePermission(serverId, user.id, SoundboardPermission.MANAGE_SOUNDBOARD);
+    if (!isUuid(soundId!)) {
+      throw new NotFound("Sound not found");
+    }
+    let removed: string | null;
+    try {
+      removed = await deleteSoundboardSound(serverId, soundId);
+    } catch (error) {
+      if (error instanceof SoundboardError) {
+        throw soundboardHttpError(error);
+      }
+      throw error;
+    }
+    if (removed === null) {
+      throw new NotFound("Sound not found");
+    }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "soundboard.delete",
+      targetType: "soundboard_sound",
+      targetId: soundId!,
+      changes: [{ key: "name", old: removed, new: null }],
+    });
+    return { ok: true };
+  },
+);
+
 // ------------------------------------------------------------ attachments
 
 /**
@@ -4423,6 +4653,201 @@ router.post("/api/servers/:serverId/featured/claim", async (ctx, { serverId }) =
 );
 router.delete("/api/servers/:serverId/featured", async ({ user }, { serverId }) =>
   clearServerImage("featured", user.id, serverId!),
+);
+
+// ---------------------------------------------------------- custom emoji
+//
+// The server-icon dance with a row per picture: mint (POST .../uploads), PUT
+// straight to storage, claim (POST .../emoji). Reading the list needs only
+// membership, because every member renders these in messages; every write
+// needs Manage Emoji (bit 28), which owner and Administrator hold by default.
+
+function serverEmojiHttpError(error: unknown): never {
+  if (error instanceof ServerEmojiError) {
+    switch (error.code) {
+      case "name_taken":
+        throw new HttpErrorWithDetail(409, error.message, { code: "emoji_name_taken" });
+      case "limit_reached":
+        throw new HttpErrorWithDetail(409, error.message, { code: "emoji_limit_reached" });
+      default:
+        throw new NotFound(error.message);
+    }
+  }
+  throw error;
+}
+
+function requireServerEmojiStorage(): void {
+  if (!isServerEmojiUploadConfigured()) {
+    throw new HttpErrorWithDetail(503, "Image uploads are not configured on this server", {
+      code: "emoji_storage_off",
+    });
+  }
+}
+
+router.get("/api/servers/:serverId/emoji", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId!, user.id);
+  return {
+    emoji: await listServerEmoji(serverId!),
+    limit: await serverEmojiLimit(serverId!),
+    uploadEnabled: isServerEmojiUploadConfigured(),
+    maxBytes: MAX_SERVER_EMOJI_BYTES,
+    size: SERVER_EMOJI_SIZE,
+  } satisfies ServerEmojiList;
+});
+
+router.post("/api/servers/:serverId/emoji/uploads", async (ctx, { serverId }) => {
+  requireServerEmojiStorage();
+  await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_EMOJI);
+
+  const key = `user:${ctx.user.id}`;
+  if (!uploadLimiter.take(key)) {
+    ctx.res.setHeader("Retry-After", String(uploadLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const body = createServerEmojiUploadSchema.parse(await readJsonBody(ctx.req));
+  if (body.byteSize > MAX_SERVER_EMOJI_BYTES) {
+    throw new HttpErrorWithDetail(413, "That image is too large.", { code: "emoji_too_large" });
+  }
+  try {
+    await assertServerEmojiCanBeAdded(serverId!, body.name);
+  } catch (error) {
+    serverEmojiHttpError(error);
+  }
+  return created(
+    createServerEmojiUpload({
+      serverId: serverId!,
+      contentType: body.contentType,
+      byteSize: body.byteSize,
+    }),
+  );
+});
+
+router.post("/api/servers/:serverId/emoji", async (ctx, { serverId }) => {
+  requireServerEmojiStorage();
+  await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_EMOJI);
+
+  const body = createServerEmojiSchema.parse(await readJsonBody(ctx.req));
+  const unverified = () =>
+    new HttpErrorWithDetail(400, "That upload could not be verified. Try again.", {
+      code: "emoji_upload_unverified",
+    });
+  if (!isServerEmojiUploadKey(serverId!, body.key)) {
+    throw unverified();
+  }
+
+  let key = body.key;
+  if (isContentScanConfigured()) {
+    const pinned = await pinServerEmojiUpload(serverId!, body.key);
+    scheduleDiscardServerEmojiObject(body.key);
+    if (!pinned) {
+      throw unverified();
+    }
+    key = pinned;
+  }
+
+  const verified = await verifyServerEmojiObject(serverId!, key);
+  if (!verified) {
+    if (key !== body.key) {
+      scheduleDiscardServerEmojiObject(key);
+    }
+    throw unverified();
+  }
+
+  const scanTarget = {
+    serverId: serverId!,
+    uploaderId: ctx.user.id,
+    name: body.name,
+    storageKey: key,
+    contentType: verified.contentType,
+  };
+  const scan = await checkServerEmojiUpload(scanTarget);
+  if (!scan.allowed) {
+    if (!scan.retained) {
+      scheduleDiscardServerEmojiObject(key);
+    }
+    throw unverified();
+  }
+
+  let emoji;
+  try {
+    emoji = await insertServerEmoji({
+      serverId: serverId!,
+      name: body.name,
+      key,
+      createdBy: ctx.user.id,
+      scan: scan.result,
+    });
+  } catch (error) {
+    scheduleDiscardServerEmojiObject(key);
+    serverEmojiHttpError(error);
+  }
+  await escalateServerEmojiScan(scanTarget, scan.result, emoji.id);
+  await logAudit({
+    serverId: serverId!,
+    actorId: ctx.user.id,
+    action: "emoji.create",
+    targetType: "emoji",
+    targetId: emoji.id,
+    changes: [{ key: "name", old: null, new: emoji.name }],
+  });
+  return created({ emoji });
+});
+
+router.patch(
+  "/api/servers/:serverId/emoji/:emojiId",
+  async (ctx, { serverId, emojiId }) => {
+    await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_EMOJI);
+    if (!isUuid(emojiId!)) {
+      throw new NotFound("Emoji not found");
+    }
+    const body = updateServerEmojiSchema.parse(await readJsonBody(ctx.req));
+    let renamed;
+    try {
+      renamed = await renameServerEmoji(serverId!, emojiId!, body.name);
+    } catch (error) {
+      serverEmojiHttpError(error);
+    }
+    if (renamed.previousName !== renamed.emoji.name) {
+      await logAudit({
+        serverId: serverId!,
+        actorId: ctx.user.id,
+        action: "emoji.update",
+        targetType: "emoji",
+        targetId: renamed.emoji.id,
+        changes: [{ key: "name", old: renamed.previousName, new: renamed.emoji.name }],
+      });
+    }
+    return { emoji: renamed.emoji };
+  },
+);
+
+// Not gated on storage, like clearing an icon: a server that lost its bucket
+// must still be able to remove an emoji.
+router.delete(
+  "/api/servers/:serverId/emoji/:emojiId",
+  async ({ user }, { serverId, emojiId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_EMOJI);
+    if (!isUuid(emojiId!)) {
+      throw new NotFound("Emoji not found");
+    }
+    let removed;
+    try {
+      removed = await deleteServerEmoji(serverId!, emojiId!);
+    } catch (error) {
+      serverEmojiHttpError(error);
+    }
+    scheduleDiscardServerEmojiObject(removed.key);
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "emoji.delete",
+      targetType: "emoji",
+      targetId: emojiId!,
+      changes: [{ key: "name", old: removed.name, new: null }],
+    });
+    return { ok: true };
+  },
 );
 
 // ---------------------------------------------------------- community home (Baú)
@@ -9011,6 +9436,7 @@ import {
   replaceForumTags,
   setForumPostFollow,
   similarForumPosts,
+  tagRequirementBinds,
   updateForumSettings,
   writeDedupeTombstone,
   type ForumPostPatch,
@@ -9193,7 +9619,10 @@ router.patch("/api/forum-posts/:postId", async ({ req, user }, { postId }) => {
       getForumSettings(post.forum_id),
     ]);
     checkTagChange(forumTags, body.tagIds, previous, isStaff);
-    if (settings.requireTag && body.tagIds.length === 0) {
+    if (
+      body.tagIds.length === 0 &&
+      tagRequirementBinds(settings.requireTag, forumTags, isStaff)
+    ) {
       throw new ForumError(422, FORUM_ERRORS.tagRequired);
     }
     const sameSet =
@@ -12114,6 +12543,43 @@ async function serveServerImageObject(
   res.end();
 }
 
+const SERVER_EMOJI_OBJECT_PATH =
+  /^\/api\/emoji\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+/**
+ * A custom emoji's bytes, as a redirect to the object store.
+ *
+ * Unauthenticated for the reason `serveServerImageObject` is: an `<img src>`
+ * cannot carry a Bearer token. What it discloses is one small picture whose
+ * uuid the caller already has, which a member only learns from the server's
+ * own list or from a message. Unknown id and no storage are the same 404.
+ */
+async function serveServerEmojiObject(
+  req: IncomingMessage,
+  res: ServerResponse,
+  emojiId: string,
+): Promise<void> {
+  let url: string | null;
+  try {
+    url = await presignServerEmojiRead(emojiId);
+  } catch (error) {
+    console.error(`[server-emoji] could not resolve ${emojiId}:`, error);
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  if (!url) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  // An emoji's key never changes, and the window stays under the presigned
+  // target's own hour so a cached redirect cannot outlive the URL.
+  res.writeHead(302, {
+    location: url,
+    "cache-control": "public, max-age=300",
+  });
+  res.end();
+}
+
 const PUBLIC_PROFILE_PATH = /^\/api\/public\/profiles\/([^/]{1,64})$/;
 
 /**
@@ -12645,6 +13111,13 @@ export async function handleApi(
       serverImageMatch[1]!,
       serverImageMatch[2] as ServerImageKind,
     );
+    return;
+  }
+
+  const emojiMatch =
+    req.method === "GET" ? SERVER_EMOJI_OBJECT_PATH.exec(pathname) : null;
+  if (emojiMatch) {
+    await serveServerEmojiObject(req, res, emojiMatch[1]!);
     return;
   }
 
