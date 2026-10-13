@@ -219,6 +219,15 @@ export type VoiceStatus = "idle" | "joining" | "connected";
 /** Aligned with the server orphan TTL (`VOICE_RESUME_TTL_MS`). */
 const VOICE_RESUME_GRACE_MS = 90_000;
 
+/**
+ * How long after a reconnect the occupancy this client already held may stand
+ * in for the new socket's catch-up before a room it never mentions is dropped.
+ * The catch-up is a handful of queries (and, after a deploy, a queue of them),
+ * so it is generous; the cost of too short is a badge that blinks, and of too
+ * long is a ghost that lasts this much longer.
+ */
+const OCCUPANCY_RESYNC_GRACE_MS = 15_000;
+
 /** WebSocket handshake to `welcome`. Signalling only, so 12s is generous. */
 const JOIN_TIMEOUT_MS = 12_000;
 /**
@@ -1737,6 +1746,56 @@ export function createVoiceController(transport: RealtimeTransport) {
    * `voiceRosterDeltaMessageSchema` in `@pqp/shared` for the whole rule.
    */
   const rosterSeq = new Map<string, number>();
+  /**
+   * Rooms whose occupancy this client held when its socket came back, and has
+   * not been told about since. A new socket's catch-up
+   * (`sendAllVoiceRosters`) names every OCCUPIED room it may see and says
+   * nothing at all about an empty one, so a room that emptied while the
+   * socket was down (or whose `left` never arrived for any other reason)
+   * would keep its last occupants in the sidebar for as long as the tab
+   * lives: an empty room never changes again, so no later frame repairs it.
+   * `notifyReconnected` fills this; any roster that names the room clears
+   * its entry; whatever is left after `OCCUPANCY_RESYNC_GRACE_MS` was not in
+   * the catch-up and is dropped. The grace is what keeps the badges from
+   * blinking on every reconnect.
+   */
+  const occupancyAwaitingResync = new Set<string>();
+  let occupancyResyncTimer: ReturnType<typeof setTimeout> | null = null;
+  function dropOccupancyNotResynced() {
+    occupancyResyncTimer = null;
+    let changed = false;
+    for (const channelId of occupancyAwaitingResync) {
+      // The room this client is in is rebuilt by its own `welcome`, and a
+      // roster for it may legitimately never come while the seat is held.
+      if (channelId === state.voiceChannelId || !(channelId in state.occupancy)) {
+        continue;
+      }
+      const next = { ...state.occupancy };
+      delete next[channelId];
+      state.occupancy = next;
+      rosterSeq.delete(channelId);
+      changed = true;
+    }
+    occupancyAwaitingResync.clear();
+    if (changed) {
+      emit();
+    }
+  }
+  function markOccupancyForResync() {
+    for (const channelId of Object.keys(state.occupancy)) {
+      occupancyAwaitingResync.add(channelId);
+    }
+    if (occupancyAwaitingResync.size === 0) {
+      return;
+    }
+    if (occupancyResyncTimer !== null) {
+      clearTimeout(occupancyResyncTimer);
+    }
+    occupancyResyncTimer = setTimeout(
+      dropOccupancyNotResynced,
+      OCCUPANCY_RESYNC_GRACE_MS,
+    );
+  }
   let joinGeneration = 0;
   // The room the user means to be in. Kept across a WS drop so we can auto-
   // rejoin on reconnect instead of ejecting them from the call.
@@ -5248,6 +5307,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     authoritative: boolean,
   ) {
     applyPreservedSelfVoice();
+    occupancyAwaitingResync.delete(voiceChannelId);
     state.occupancy = {
       ...state.occupancy,
       [voiceChannelId]: participants.map(overlayLocalSelfVoice),
@@ -6636,6 +6696,9 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     /** WS reconnected: resume the same peer id, or rejoin if we have no token. */
     async notifyReconnected() {
+      // What this client believes about every room was learned on a socket
+      // that is gone; the catch-up on this one says which of it still holds.
+      markOccupancyForResync();
       // The server counts watchers per socket, and this is a new socket.
       if (watchingChannelId) {
         transport.sendVoice({
