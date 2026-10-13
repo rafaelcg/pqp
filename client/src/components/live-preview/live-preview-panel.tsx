@@ -173,11 +173,15 @@ function LivePreviewPanelForSource({
         if (controller.signal.aborted) {
           return;
         }
-        setChannels(answer?.livePreview.channels ?? []);
-        setUpcoming(answer?.livePreview.upcoming ?? []);
-        if (answer) {
-          setWindowSeconds(answer.livePreview.seconds);
+        // A failed poll (network, 429, 503) says nothing about the party:
+        // keep what was last known, or the live card would vanish and the
+        // page around it would take its banner back while it is still live.
+        if (!answer) {
+          return;
         }
+        setChannels(answer.livePreview.channels);
+        setUpcoming(answer.livePreview.upcoming);
+        setWindowSeconds(answer.livePreview.seconds);
       });
     };
     load();
@@ -306,6 +310,8 @@ function LivePreviewPanelForSource({
   // state and refs, so it is safe to call from the effect below.
   const leave = useCallback(() => {
     generation.current += 1;
+    // The next watch starts with a fresh budget of player restarts.
+    restarts.current = 0;
     setParts(EMPTY_DATE_PARTS);
     setAgeError(false);
     setPhase({ kind: "idle" });
@@ -317,6 +323,12 @@ function LivePreviewPanelForSource({
   // the page. A Back that lands on this open's own entry (a sign-up form step
   // inside the page) does not. Each open has its own id, so an entry left by
   // an earlier open is never mistaken for this one.
+  //
+  // Every way the page closes ends in this effect's cleanup (the control, a
+  // remount, an unmount), and the cleanup takes the entry back off the stack
+  // when it is still the current one. The logo link replaces it instead
+  // (`replace` on the link), and an entry stranded under a later step (the
+  // sign-up form's hash steps) is skipped by the listener further down.
   const pushedEntry = useRef<string | null>(null);
   useEffect(() => {
     if (!pageShown) {
@@ -333,8 +345,36 @@ function LivePreviewPanelForSource({
       leave();
     };
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      pushedEntry.current = null;
+      if (window.history.state?.[HISTORY_MARK] === entryId) {
+        window.history.back();
+      }
+    };
   }, [pageShown, leave]);
+
+  // An entry an earlier open left behind (closed from under a sign-up hash
+  // step, so it was not the current one) is a page that looks the same as the
+  // one below it. Landing on it with Back would seem to do nothing, so step
+  // over it. One step at a time: the pending flag keeps a repeated event from
+  // stepping twice.
+  useEffect(() => {
+    let skipping = false;
+    const onStale = () => {
+      const mark = window.history.state?.[HISTORY_MARK];
+      if (!mark || mark === pushedEntry.current) {
+        skipping = false;
+        return;
+      }
+      if (!skipping) {
+        skipping = true;
+        window.history.back();
+      }
+    };
+    window.addEventListener("popstate", onStale);
+    return () => window.removeEventListener("popstate", onStale);
+  }, []);
 
   if (!shown) {
     return null;
@@ -342,6 +382,7 @@ function LivePreviewPanelForSource({
 
   const watch = (target: LivePreviewListedChannel) => {
     generation.current += 1;
+    restarts.current = 0;
     setChannelId(target.id);
     const next = phaseOnWatch(readPreviewAgeMemory(safeSession(), safeLocal()));
     setPhase(next);
@@ -350,19 +391,8 @@ function LivePreviewPanelForSource({
     }
   };
 
-  const exit = () => {
-    // Take the entry this page pushed back off the stack, so closing with the
-    // control leaves no dangling entry behind. Only when it is still the
-    // current one.
-    if (pushedEntry.current !== null) {
-      const entryId = pushedEntry.current;
-      pushedEntry.current = null;
-      if (window.history.state?.[HISTORY_MARK] === entryId) {
-        window.history.back();
-      }
-    }
-    leave();
-  };
+  // The effect above takes the pushed entry back off when the page closes.
+  const exit = leave;
 
   const submitAge = () => {
     const verdict = judgePreviewAge(toIsoDate(parts));
@@ -474,7 +504,7 @@ function LivePreviewPanelForSource({
           >
             <ArrowLeft aria-hidden className="size-5" />
           </button>
-          <Link to="/" className="font-brand text-2xl leading-none tracking-tight text-accent">
+          <Link to="/" replace className="font-brand text-2xl leading-none tracking-tight text-accent">
             pqp
           </Link>
           <BetaTag />
