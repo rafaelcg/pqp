@@ -212,10 +212,9 @@ final class StoryEditorModel {
             previews[existing.id] = preview
         } else if !isFull {
             let layer = StoryLayer(content: .drawing(picture))
-            // The drawing sits above the photo and below the text, so a
-            // doodle never covers a title.
-            let firstText = layers.firstIndex { $0.isText } ?? layers.count
-            layers.insert(layer, at: firstText)
+            // The drawing is the lowest layer, just above the base, so a
+            // doodle never covers a title, a photo or a sticker.
+            layers.insert(layer, at: 0)
             files[layer.id] = file
             previews[layer.id] = preview
         } else {

@@ -113,7 +113,7 @@ struct StoryEditorView: View {
                 showingCall = false
                 addCall(choice)
             }
-            .presentationDetents([.large])
+            .presentationDetents([.fraction(0.62), .large])
             .presentationBackground(Palette.ink)
         }
         .sheet(isPresented: $showingMention) {
@@ -341,7 +341,9 @@ struct StoryEditorView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 16)
         }
-        .opacity(model.isDragging ? 0.0 : 1)
+        // Out of the way while a finger drags a layer, and while the text or
+        // draw tool has the screen.
+        .opacity(model.isDragging || textTarget != nil || drawing ? 0 : 1)
         .animation(.easeOut(duration: 0.12), value: model.isDragging)
         .allowsHitTesting(textTarget == nil && !drawing)
     }
@@ -367,7 +369,7 @@ struct StoryEditorView: View {
                     .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
-                    .background(Circle().fill(.black.opacity(0.4)))
+                    .background(Circle().fill(.black.opacity(0.55)).overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 1)))
             }
             .accessibilityLabel(Text("Add text"))
             .accessibilityIdentifier("editor.text")
@@ -409,7 +411,7 @@ struct StoryEditorView: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
-                .background(Circle().fill(.black.opacity(0.4)))
+                .background(Circle().fill(.black.opacity(0.55)).overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 1)))
         }
         .accessibilityLabel(Text(verbatim: label))
         .accessibilityIdentifier(id)
@@ -519,13 +521,14 @@ struct StoryMediaBase: View {
     let muted: Bool
 
     private var fillsCanvas: Bool {
-        let aspect = draft.preview.size.width / max(1, draft.preview.size.height)
-        return abs(aspect - StoryCanvas.aspect) < 0.04
+        StoryCanvas.fillsCanvas(width: Int(draft.preview.size.width), height: Int(draft.preview.size.height))
     }
 
     var body: some View {
         ZStack {
-            if !fillsCanvas {
+            // A photo that does not fill sits over a blurred copy of itself; a
+            // video, over black.
+            if !fillsCanvas && !draft.isVideo {
                 Color.clear.overlay {
                     Image(uiImage: draft.preview).resizable().scaledToFill().blur(radius: 28).scaleEffect(1.15)
                 }

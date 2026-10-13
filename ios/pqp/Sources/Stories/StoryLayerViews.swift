@@ -11,19 +11,22 @@ extension StoryFont {
     /// exactly as wide as its text.
     func uiFont(size: CGFloat) -> UIFont {
         switch self {
+        // The closest system faces to the web's: classic is a bold sans (700),
+        // bold a heavy one (900), typewriter a monospace (600), serif an italic
+        // serif (700), neon a heavy sans (800) with a glow.
         case .classic:
             return .systemFont(ofSize: size, weight: .bold)
         case .bold:
-            let base = UIFont.systemFont(ofSize: size, weight: .black)
-            return base.fontDescriptor.withDesign(.rounded).map { UIFont(descriptor: $0, size: size) } ?? base
+            return .systemFont(ofSize: size, weight: .black)
         case .typewriter:
-            return .monospacedSystemFont(ofSize: size * 0.92, weight: .semibold)
+            return .monospacedSystemFont(ofSize: size, weight: .semibold)
         case .serif:
             let base = UIFont.systemFont(ofSize: size, weight: .bold)
-            return base.fontDescriptor.withDesign(.serif).map { UIFont(descriptor: $0, size: size) } ?? base
+            let serif = base.fontDescriptor.withDesign(.serif) ?? base.fontDescriptor
+            let italic = serif.withSymbolicTraits(.traitItalic) ?? serif
+            return UIFont(descriptor: italic, size: size)
         case .neon:
-            let base = UIFont.systemFont(ofSize: size, weight: .semibold)
-            return base.fontDescriptor.withDesign(.rounded).map { UIFont(descriptor: $0, size: size) } ?? base
+            return .systemFont(ofSize: size, weight: .heavy)
         }
     }
 
@@ -69,7 +72,9 @@ struct StoryTextLabel: View {
         let glow = data.font == .neon
         Text(verbatim: data.text)
             .font(Font(data.font.uiFont(size: fontSize)))
-            .foregroundStyle(glow ? Color.white : foreground)
+            .lineSpacing(StoryCanvas.textLineHeight * fontSize - data.font.uiFont(size: fontSize).lineHeight)
+            // Neon is the text color glowing around a lighter core.
+            .foregroundStyle(glow ? Color.white.opacity(0.92) : foreground)
             .multilineTextAlignment(data.align.textAlignment)
             .frame(width: textWidth, alignment: data.align.frameAlignment)
             .fixedSize(horizontal: false, vertical: true)
@@ -157,7 +162,7 @@ struct StoryMentionPill: View {
     let canvasWidth: CGFloat
 
     var body: some View {
-        let size = canvasWidth * 0.062
+        let size = canvasWidth * StoryCanvas.mentionFontFraction
         HStack(spacing: size * 0.2) {
             Text(verbatim: "@")
                 .foregroundStyle(Palette.signalDim)

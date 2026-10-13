@@ -62,7 +62,7 @@ final class StoryEditorUITests: XCTestCase {
     }
 
     private func layer(_ app: XCUIApplication, _ label: String) -> XCUIElement {
-        app.otherElements[label].firstMatch
+        app.descendants(matching: .any)[label].firstMatch
     }
 
     // MARK: - Tests
@@ -101,15 +101,22 @@ final class StoryEditorUITests: XCTestCase {
         let element = layer(app, "arrasta")
         XCTAssertTrue(element.waitForExistence(timeout: 5))
         let before = element.frame.center
-        let canvas = app.otherElements["editor.canvas"]
+        // The canvas fills the width; the screen is the frame of reference.
+        let window = app.windows.firstMatch.frame
+        let canvasHeight = window.width * 16 / 9
+        let canvasTop = window.minY + (window.height - canvasHeight) / 2
+        func point(_ x: CGFloat, _ y: CGFloat) -> XCUICoordinate {
+            app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: window.width * x, dy: canvasTop + canvasHeight * y))
+        }
         let start = element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        let target = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.25))
-        start.press(forDuration: 0.1, thenDragTo: target)
-        XCTAssertGreaterThan(abs(element.frame.center.x - before.x), 40, "It moved")
+        start.press(forDuration: 0.1, thenDragTo: point(0.25, 0.25), withVelocity: .slow, thenHoldForDuration: 0.2)
         snap(app, "editor-text-moved")
+        XCTAssertGreaterThan(abs(element.frame.center.x - before.x), 40, "It moved left")
+        XCTAssertGreaterThan(abs(element.frame.center.y - before.y), 40, "and up")
         // To the bin: bottom center of the canvas.
-        let bin = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.96))
-        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.1, thenDragTo: bin)
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: point(0.5, 0.94), withVelocity: .slow, thenHoldForDuration: 0.3)
         XCTAssertTrue(waitForGone(element), "Dropped on the bin")
         // And undo brings it back.
         app.buttons["editor.undo"].tap()
@@ -152,7 +159,7 @@ final class StoryEditorUITests: XCTestCase {
         snap(app, "editor-call-picker")
         room.tap()
         app.buttons["call.add"].tap()
-        let sticker = app.otherElements["story.call.sticker"].firstMatch
+        let sticker = app.descendants(matching: .any)["story.call.sticker"].firstMatch
         XCTAssertTrue(sticker.waitForExistence(timeout: 10), "The call is a layer on the canvas")
         snap(app, "editor-photo-layers")
         app.buttons["composer.next"].tap()
@@ -162,6 +169,24 @@ final class StoryEditorUITests: XCTestCase {
         XCTAssertTrue(app.buttons["stories.own"].waitForExistence(timeout: 25), "Posted with a text layer and a call layer")
     }
 
+    /// A mention: the stickers tray lists the people of the server, and the
+    /// pick is a pill on the canvas.
+    func testAMentionIsAStickerOnTheCanvas() throws {
+        let (app, serverId) = try launch()
+        openComposer(app, serverId: serverId)
+        app.buttons["composer.mode.text"].tap()
+        addText(app, "olha quem chegou")
+        app.buttons["editor.stickers"].tap()
+        app.buttons["tray.mention"].tap()
+        let person = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'mention.person.'")).firstMatch
+        XCTAssertTrue(person.waitForExistence(timeout: 15), "The server's people are listed")
+        snap(app, "editor-mention-picker")
+        person.tap()
+        let pill = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH '@'")).firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: 10), "The mention is on the canvas")
+        snap(app, "editor-mention-placed")
+    }
+
     /// Drawing: a stroke, Done, and the story has a drawing to undo.
     func testDrawingIsALayerOfItsOwn() throws {
         let (app, serverId) = try launch()
@@ -169,7 +194,7 @@ final class StoryEditorUITests: XCTestCase {
         app.buttons["camera.shutter"].tap()
         XCTAssertTrue(app.buttons["editor.draw"].waitForExistence(timeout: 15))
         app.buttons["editor.draw"].tap()
-        let canvas = app.otherElements["draw.canvas"]
+        let canvas = app.descendants(matching: .any)["draw.canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 5))
         let a = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.3))
         let b = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))

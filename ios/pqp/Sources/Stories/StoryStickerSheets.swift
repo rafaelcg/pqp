@@ -73,7 +73,11 @@ struct StoryCallSheet: View {
             } label: {
                 Text("Add to story").frame(maxWidth: .infinity)
             }
-            .buttonStyle(PrimaryButtonStyle(isEnabled: selection != nil))
+            .buttonStyle(.plain)
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(Palette.inkDeep)
+            .padding(.vertical, 14)
+            .background(Capsule().fill(selection == nil ? Palette.signal.opacity(0.35) : Palette.signal))
             .disabled(selection == nil)
             .accessibilityIdentifier("call.add")
         }

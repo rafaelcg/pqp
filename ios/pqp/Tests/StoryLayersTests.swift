@@ -172,6 +172,36 @@ final class StoryLayersTests: XCTestCase {
         XCTAssertEqual(size.height, 80)
     }
 
+    /// Web is the reference; `STORY_LAYOUT` and `STORY_TEXT_COLOR_HEX` in
+    /// `packages/shared/src/stories.ts` are the same numbers. A story must look
+    /// the same on every platform, so a change here is a change there.
+    func testTheLayoutConstantsMatchTheSharedReference() {
+        XCTAssertEqual(StoryCanvas.textFontFraction, 0.08)
+        XCTAssertEqual(StoryCanvas.textMaxWidthFraction, 0.84)
+        XCTAssertEqual(StoryCanvas.textLineHeight, 1.14)
+        XCTAssertEqual(StoryCanvas.imageWidthFraction, 0.40)
+        XCTAssertEqual(StoryCanvas.mentionFontFraction, 0.05)
+        XCTAssertEqual(StoryCanvas.stickerWidthFraction, 0.82)
+        XCTAssertEqual(StoryDrawingExport.pixelWidth, 810)
+    }
+
+    func testTheTextPaletteIsTheSharedHexes() {
+        let expected: [StoryTextColor: UInt32] = [
+            .white: 0xFFFFFF, .black: 0x000000, .lime: 0xBBEC4C, .yellow: 0xFFD60A, .orange: 0xFF9500, .red: 0xFF3B30,
+            .pink: 0xFF5FA2, .purple: 0xAF52DE, .blue: 0x0A84FF, .cyan: 0x64D2FF, .green: 0x30D158, .gray: 0x8E8E93,
+        ]
+        for color in StoryTextColor.allCases { XCTAssertEqual(color.hex, expected[color], "\(color)") }
+        XCTAssertEqual(expected.count, StoryTextColor.allCases.count)
+    }
+
+    func testAPictureFillsWithinTwelvePercentOfNineBySixteen() {
+        XCTAssertTrue(StoryCanvas.fillsCanvas(width: 1080, height: 1920))
+        XCTAssertTrue(StoryCanvas.fillsCanvas(width: 1080, height: 2160), "1:2 (0.5) is within 12%")
+        XCTAssertFalse(StoryCanvas.fillsCanvas(width: 1170, height: 2532), "A phone screenshot (0.462) is not")
+        XCTAssertFalse(StoryCanvas.fillsCanvas(width: 1080, height: 1350), "4:5 is not")
+        XCTAssertFalse(StoryCanvas.fillsCanvas(width: 1920, height: 1080))
+    }
+
     // MARK: - Snapping
 
     func testTheCenterLinesPullAndLetGo() {
@@ -382,7 +412,7 @@ final class StoryLayersTests: XCTestCase {
             PKStrokePoint(location: CGPoint(x: 20, y: 20), timeOffset: 0.1, size: CGSize(width: 4, height: 4), opacity: 1, force: 1, azimuth: 0, altitude: 0),
         ], creationDate: Date())))
         model.setDrawing(strokes, file: file, preview: UIImage())
-        XCTAssertEqual(model.layers.map(\.typeName), ["drawing", "text"], "A doodle never covers a title")
+        XCTAssertEqual(model.layers.map(\.typeName), ["drawing", "text"], "The drawing is the lowest layer above the base")
         model.setDrawing(strokes, file: file, preview: UIImage())
         XCTAssertEqual(model.layers.filter(\.isDrawing).count, 1)
         model.setDrawing(PKDrawing(), file: nil, preview: nil)

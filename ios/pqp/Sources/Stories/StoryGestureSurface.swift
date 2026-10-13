@@ -71,7 +71,15 @@ struct StoryGestureSurface: UIViewRepresentable {
             switch g.state {
             case .began:
                 started()
-                parent.model.beginGesture(at: g.location(in: view))
+                // A pan is only recognised after the finger has moved a few
+                // points (a fast one, a lot more), so the layer is looked for
+                // where the finger WENT DOWN, not where it is now.
+                let now = g.location(in: view)
+                let moved = g.translation(in: view)
+                let down = CGPoint(x: now.x - moved.x, y: now.y - moved.y)
+                if parent.model.beginGesture(at: down) {
+                    parent.model.drag(translation: CGSize(width: moved.x, height: moved.y), touch: now)
+                }
             case .changed:
                 parent.model.drag(translation: CGSize(width: g.translation(in: view).x, height: g.translation(in: view).y),
                                   touch: g.location(in: view))

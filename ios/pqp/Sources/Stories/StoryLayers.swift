@@ -24,6 +24,12 @@ enum StoryLayerLimits {
     static let rotationMax = 3.1416
 }
 
+extension Color {
+    init(hex: UInt32) {
+        self.init(red: Double((hex >> 16) & 0xFF) / 255, green: Double((hex >> 8) & 0xFF) / 255, blue: Double(hex & 0xFF) / 255)
+    }
+}
+
 enum StoryFont: String, CaseIterable, Codable, Sendable {
     case classic, bold, typewriter, serif, neon
 }
@@ -31,20 +37,24 @@ enum StoryFont: String, CaseIterable, Codable, Sendable {
 enum StoryTextColor: String, CaseIterable, Codable, Sendable {
     case white, black, lime, yellow, orange, red, pink, purple, blue, cyan, green, gray
 
-    var color: Color {
+    var color: Color { Color(hex: hex) }
+
+    /// The one palette every platform draws, as `STORY_TEXT_COLOR_HEX` in
+    /// `packages/shared/src/stories.ts`.
+    var hex: UInt32 {
         switch self {
-        case .white: .white
-        case .black: .black
-        case .lime: Palette.signal
-        case .yellow: Color(red: 1.0, green: 0.84, blue: 0.04)
-        case .orange: Color(red: 1.0, green: 0.62, blue: 0.04)
-        case .red: Color(red: 1.0, green: 0.27, blue: 0.23)
-        case .pink: Color(red: 1.0, green: 0.42, blue: 0.66)
-        case .purple: Color(red: 0.75, green: 0.35, blue: 0.95)
-        case .blue: Color(red: 0.04, green: 0.52, blue: 1.0)
-        case .cyan: Color(red: 0.39, green: 0.82, blue: 1.0)
-        case .green: Color(red: 0.19, green: 0.82, blue: 0.35)
-        case .gray: Color(red: 0.56, green: 0.56, blue: 0.58)
+        case .white: 0xFFFFFF
+        case .black: 0x000000
+        case .lime: 0xBBEC4C
+        case .yellow: 0xFFD60A
+        case .orange: 0xFF9500
+        case .red: 0xFF3B30
+        case .pink: 0xFF5FA2
+        case .purple: 0xAF52DE
+        case .blue: 0x0A84FF
+        case .cyan: 0x64D2FF
+        case .green: 0x30D158
+        case .gray: 0x8E8E93
         }
     }
 
@@ -383,10 +393,22 @@ struct StoryLayerUploadTarget: Codable, Hashable, Sendable {
 /// - a call or mention sticker is `stickerWidthFraction` of the width.
 enum StoryCanvas {
     static let aspect: CGFloat = 9.0 / 16.0
-    static let textFontFraction: CGFloat = 0.085
+    static let textFontFraction: CGFloat = 0.08
     static let textMaxWidthFraction: CGFloat = 0.84
+    /// Line height as a multiple of the font size.
+    static let textLineHeight: CGFloat = 1.14
     static let imageWidthFraction: CGFloat = 0.4
-    static let stickerWidthFraction: CGFloat = 0.78
+    static let stickerWidthFraction: CGFloat = 0.82
+    static let mentionFontFraction: CGFloat = 0.05
+    /// A picture within this fraction of 9:16 fills the canvas; anything else
+    /// is shown whole over a blurred copy of itself.
+    static let fillTolerance: Double = 0.12
+
+    static func fillsCanvas(width: Int, height: Int) -> Bool {
+        guard width > 0, height > 0 else { return false }
+        let target = Double(aspect)
+        return abs(Double(width) / Double(height) - target) / target <= fillTolerance
+    }
 
     static func clampUnit(_ value: Double) -> Double { min(max(value, 0), 1) }
 
