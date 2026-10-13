@@ -356,11 +356,12 @@ final class AVStoryCameraEngine: StoryCameraEngine {
     private(set) var recordsAudio = false
     var onInterruption: (@MainActor (StoryCameraFailure) -> Void)?
 
-    var hasMultipleCameras: Bool {
-        Self.device(for: .back) != nil && Self.device(for: .front) != nil
-    }
+    /// Asked of the system once: device discovery is synchronous hardware work,
+    /// and the view reads this on every update.
+    let hasMultipleCameras: Bool
 
     init(recordsAudio: Bool) {
+        hasMultipleCameras = Self.device(for: .back) != nil && Self.device(for: .front) != nil
         wantsAudio = recordsAudio
     }
 
@@ -483,7 +484,9 @@ final class AVStoryCameraEngine: StoryCameraEngine {
         return image
     }
 
-    private var recordingContinuation: CheckedContinuation<URL, Error>?
+    /// Everyone waiting for the clip (a release and an interruption can both
+    /// ask): all of them are answered when it is finalized.
+    private var recordingWaiters: [CheckedContinuation<URL, Error>] = []
     private var recordingResult: Result<URL, Error>?
 
     func startRecording(torch: Bool) async throws {
@@ -505,9 +508,10 @@ final class AVStoryCameraEngine: StoryCameraEngine {
     }
 
     private func recordingFinished(_ result: Result<URL, Error>) {
-        if let waiting = recordingContinuation {
-            recordingContinuation = nil
-            waiting.resume(with: result)
+        if !recordingWaiters.isEmpty {
+            let waiting = recordingWaiters
+            recordingWaiters = []
+            for continuation in waiting { continuation.resume(with: result) }
         } else {
             recordingResult = result
         }
@@ -521,8 +525,9 @@ final class AVStoryCameraEngine: StoryCameraEngine {
                 continuation.resume(with: ready)
                 return
             }
-            recordingContinuation = continuation
-            core.queue.async { core.stopRecording() }
+            let first = recordingWaiters.isEmpty
+            recordingWaiters.append(continuation)
+            if first { core.queue.async { core.stopRecording() } }
         }
     }
 }
