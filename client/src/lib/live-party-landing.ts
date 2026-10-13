@@ -29,3 +29,24 @@ export function pickLivePartyChannel(
     .sort((a, b) => (b.wentLiveAt ?? "").localeCompare(a.wentLiveAt ?? ""));
   return live[0]?.channelId ?? null;
 }
+
+/**
+ * The landing for a join that came out of the signed-out live preview: the
+ * channel the person was watching (`peekLiveChannelIntent`), when it is in the
+ * list the API returned for them, and otherwise exactly what
+ * `pickLivePartyChannel` would choose. The preferred channel wins even when
+ * its party has just ended: it is still the room they asked to walk into.
+ */
+export function pickArrivalPartyChannel(
+  parties: readonly Pick<WatchParty, "channelId" | "state" | "wentLiveAt">[],
+  channels: readonly Pick<Channel, "id">[],
+  preferredChannelId: string | null,
+): string | null {
+  if (
+    preferredChannelId &&
+    channels.some((channel) => channel.id === preferredChannelId)
+  ) {
+    return preferredChannelId;
+  }
+  return pickLivePartyChannel(parties, channels);
+}

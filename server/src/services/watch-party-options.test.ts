@@ -116,6 +116,7 @@ interface PartyBody {
     slowModeSeconds: number;
     reactionsEnabled: boolean;
     lowLatency: boolean;
+    publicPreview: boolean;
   };
   stage: {
     invited: StagePerson[];
@@ -381,6 +382,8 @@ describeDb("watch party options and the stage", () => {
       slowModeSeconds: 0,
       reactionsEnabled: true,
       lowLatency: false,
+      // "Prévia pública": off until a host opts the party in.
+      publicPreview: false,
     });
     // And the same object the shared module hands the client, so the panel
     // and the row cannot disagree about what "untouched" means.
@@ -796,6 +799,35 @@ describeDb("watch party options and the stage", () => {
     expect(byManager.status).toBe(200);
     expect(byManager.body.party.options.guests).toBe("off");
     expect(await everyoneSpeakDenied()).toBe(false);
+  });
+
+  /**
+   * "PRÉVIA PÚBLICA" (the signed-out live preview's per-party opt-in) rides
+   * the same options PATCH, so the same role table decides who may flip it:
+   * the host, a co-host, or MANAGE_CHANNELS. Never the audience, whatever
+   * their client sends, and it stays editable while the party is live so a
+   * host can turn it off mid-show.
+   */
+  it("lets only the people running the party switch the public preview, live included", async () => {
+    const party = await draft();
+    expect(party.options.publicPreview).toBe(false);
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+
+    const byMember = await patchOptions(member, party.id, { publicPreview: true });
+    expect(byMember.status).toBe(403);
+    expect((await readChannelParty(host)).body.party?.options.publicPreview).toBe(false);
+
+    const byHost = await patchOptions(host, party.id, { publicPreview: true });
+    expect(byHost.status).toBe(200);
+    expect(byHost.body.party.options.publicPreview).toBe(true);
+
+    // A moderator can take it away mid-party, which is the lever that matters.
+    const byManager = await patchOptions(manager, party.id, { publicPreview: false });
+    expect(byManager.status).toBe(200);
+    expect(byManager.body.party.options.publicPreview).toBe(false);
+
+    // A wrong type is refused, not coerced into "on".
+    expect((await patchOptions(host, party.id, { publicPreview: "yes" })).status).toBe(400);
   });
 
   /**

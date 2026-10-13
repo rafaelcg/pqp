@@ -1,8 +1,15 @@
 import { SignUpButton, SignedIn, SignedOut, useClerk } from "@clerk/clerk-react";
 import { intlLocale } from "@/lib/locale";
 import { ArrowUpRight, Check, Copy } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Link } from "react-router-dom";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { Link, useNavigate } from "react-router-dom";
 import {
   monthStampToDate,
   publicCommunityDisplayUrl,
@@ -14,6 +21,17 @@ import { CommunityAboutText } from "@/components/communities/community-about-tex
 import { CommunityFeaturedMedia } from "@/components/communities/community-featured-media";
 import { HeroMosaic } from "@/components/communities/hero-mosaic";
 import { CommunityOfficialLinks } from "@/components/communities/community-official-links";
+import {
+  ClerkLivePreviewAuth,
+  ClerkSignUpReturn,
+  devLivePreviewAuth,
+  hasClerkReturnHash,
+  type LivePreviewAuth,
+} from "@/components/live-preview/live-preview-auth";
+import {
+  LivePreviewPanel,
+  type LivePreviewCommunity,
+} from "@/components/live-preview/live-preview-panel";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
@@ -22,6 +40,7 @@ import { fetchPublicCommunity } from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { intentStorage, stashJoinIntent } from "@/lib/handle-intent";
+import { devSignedOutPreview } from "@/lib/live-preview";
 import {
   noteSignupCta,
   shouldResumeSignUp,
@@ -46,6 +65,10 @@ export function ResumeSignUp({ slug, appHref }: { slug: string; appHref: string 
   useEffect(() => {
     if (tried.current || !clerk.loaded) return;
     tried.current = true;
+    // An inline sign-up from the live preview coming back on its own `#/...`
+    // step is finished by `ClerkSignUpReturn`; a modal on top would be a
+    // second form for the same sign-up.
+    if (hasClerkReturnHash()) return;
     const signUp = clerk.client?.signUp;
     if (
       !shouldResumeSignUp({
@@ -262,6 +285,7 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
     noteSignupCta(COMMUNITY_SURFACE, community.slug);
   };
   const appHref = `/app?join=${encodeURIComponent(community.slug)}`;
+  const navigate = useNavigate();
 
   // Seeded from the slug rather than the name, for the reason the profile's is
   // seeded from the handle: a name can be edited at any moment, and the
@@ -269,6 +293,56 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
   const hue = useMemo(() => heroHue(community.slug), [community.slug]);
   const bannerUrl = resolveUploadedImageUrl(community.bannerUrl);
   const iconUrl = resolveUploadedImageUrl(community.iconUrl);
+
+  /**
+   * The signed-out live preview, only when the API marked this community
+   * (`livePreview`, the per-server flag) and only for somebody signed out.
+   * While a party is live its entry card leads the page (and takes the
+   * banner's place, since the card is drawn on it); from "Assistir agora" on
+   * it covers the page. Every sign-up from it carries the same join intent as
+   * the button below, plus the channel they were watching. Under the dev auth
+   * bypass nobody is signed out, so `devSignedOutPreview` (dev builds only)
+   * draws it anyway and every button goes straight to `/app?join=`.
+   */
+  const devSignedOut = bypass && devSignedOutPreview();
+  const [previewLive, setPreviewLive] = useState(false);
+  const previewCommunity = useMemo<LivePreviewCommunity>(
+    () => ({
+      name: community.name,
+      slug: community.slug,
+      tagline: community.tagline,
+      category: community.category,
+      memberCount: community.memberCount,
+      iconUrl,
+      bannerUrl,
+      hue,
+    }),
+    [community, iconUrl, bannerUrl, hue],
+  );
+  const renderPreview = (auth: LivePreviewAuth) => (
+    <LivePreviewPanel
+      source={{ kind: "community", slug: community.slug }}
+      landing={publicCommunityPath(community.slug)}
+      surface="community"
+      community={previewCommunity}
+      auth={auth}
+      onSignUpIntent={rememberIntent}
+      onLiveChange={setPreviewLive}
+    />
+  );
+  const previewPanel = !community.livePreview
+    ? null
+    : devSignedOut
+      ? renderPreview(devLivePreviewAuth(() => navigate(appHref)))
+      : bypass
+        ? null
+        : (
+            <SignedOut>
+              <ClerkSignUpReturn redirectUrl={appHref} />
+              <ClerkLivePreviewAuth redirectUrl={appHref}>{renderPreview}</ClerkLivePreviewAuth>
+            </SignedOut>
+          );
+  const showLiveEntry = previewPanel !== null && previewLive;
 
   const since = monthStampToDate(community.createdMonth);
   const sinceLabel = since
@@ -294,6 +368,18 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
   return (
     <CommunityShell>
       <article data-public-community={community.slug}>
+        {/* While a party is live the entry card leads the page, drawn on the
+            banner, so the banner itself steps aside. The panel stays mounted
+            either way: it is what asks whether anything is live. */}
+        {previewPanel && (
+          <div
+            className={cn(showLiveEntry && "mb-6", !reduced && "animate-rise")}
+            style={stagger(0)}
+          >
+            {previewPanel}
+          </div>
+        )}
+        {!showLiveEntry && (
         <div
           className={cn("relative h-44 w-full overflow-hidden rounded-3xl sm:h-64", !reduced && "animate-rise")}
           style={stagger(0)}
@@ -314,6 +400,7 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
             className="absolute inset-0 bg-[image:var(--scrim-hero)]"
           />
         </div>
+        )}
 
         <div className="px-6 pb-12 sm:px-10">
           <div
@@ -322,7 +409,10 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
           >
             <span
               aria-hidden
-              className="relative -mt-14 flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-3xl font-display text-2xl font-bold text-paper shadow-[var(--shadow-hero-avatar)] ring-4 ring-ink sm:-mt-16 sm:h-28 sm:w-28"
+              className={cn(
+                "relative flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-3xl font-display text-2xl font-bold text-paper shadow-[var(--shadow-hero-avatar)] ring-4 ring-ink sm:h-28 sm:w-28",
+                showLiveEntry ? "h-16 w-16 text-xl sm:h-20 sm:w-20" : "-mt-14 sm:-mt-16",
+              )}
               style={iconUrl ? undefined : heroTintStyle(hue, 60)}
             >
               {iconUrl ? (

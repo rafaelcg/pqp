@@ -162,3 +162,25 @@ test("purpose: a caller that DOES pass expected.purpose enforces it", async () =
   assert.ok(await verifyHlsViewerToken(noPurposeToken, liveExpected, SECRET, NOW));
   assert.equal(await verifyHlsViewerToken(noPurposeToken, replayExpected, SECRET, NOW), null);
 });
+
+/**
+ * THE SIGNED-OUT LIVE PREVIEW'S TOKEN (`mintHlsPreviewToken` on the API):
+ * the viewer token's shape and key with `p: "preview"`, a visitor id in `u`
+ * and an expiry at the end of that visitor's window. The live routes call
+ * `verifyHlsViewerToken` with no purpose, so the preview plays through this
+ * Worker with no new secret and no Worker release. This pins that contract: a
+ * purpose check added to the live routes later would break every preview in
+ * production, and the window's end has to be enforced here too.
+ */
+test("accepts a preview token until its window ends, and refuses it after", async () => {
+  const token = mintToken(
+    baseClaims({ u: "preview:visitor", p: "preview", e: NOW + 30_000, i: NOW }),
+    SECRET,
+  );
+  assert.deepEqual(await verifyHlsViewerToken(token, EXPECTED, SECRET, NOW + 29_999), {
+    userId: "preview:visitor",
+    issuedAt: NOW,
+  });
+  assert.equal(await verifyHlsViewerToken(token, EXPECTED, SECRET, NOW + 30_001), null);
+  assert.equal(await describeHlsViewerToken(token, EXPECTED, SECRET, NOW + 30_001), "expired");
+});

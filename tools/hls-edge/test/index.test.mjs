@@ -518,3 +518,40 @@ test("a cache HIT tells the browser two seconds, never the zone's four-hour Brow
     assert.equal(response.headers.get("Content-Type"), "application/vnd.apple.mpegurl");
   }, async () => stale());
 });
+
+/**
+ * THE SIGNED-OUT LIVE PREVIEW GETS THE FILM, NEVER THE CAMERA. A preview
+ * token (`u: "preview:<visitor>"`) names the channel and the session, which
+ * alone would open the presenter's camera rendition too. The Worker refuses
+ * it before its shared cache and its coalesced origin fetch, so the origin's
+ * own refusal of the same request can never ride a fetch a member shares.
+ */
+test("a preview token is refused on the camera rung before any origin is asked", async () => {
+  const channelId = "chan-preview-camera-1";
+  const startedAt = "1726000000020";
+  const token = tokenFor("preview:visitor-1", channelId, startedAt);
+  let apiCalls = 0;
+  const api = {
+    ready: true,
+    async fetchPlaylist() {
+      apiCalls += 1;
+      return new Response("#EXTM3U\n", { status: 200 });
+    },
+  };
+  const ll = fakeLlOrigin({ ready: true });
+
+  const response = await handlePlaylistRequest(
+    requestFor(channelId, startedAt, token),
+    { api, ll },
+    noopCtx,
+    baseEnv(),
+    channelId,
+    startedAt,
+    "cam360p30",
+  );
+
+  assert.equal(response.status, 404);
+  assert.equal((await response.json()).reason, "preview-rung");
+  assert.equal(apiCalls, 0);
+  assert.equal(ll.calls, 0);
+});

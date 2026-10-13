@@ -190,3 +190,69 @@ describe("the low-latency switch: the mutation payload", () => {
     expect(onChange).toHaveBeenCalledWith({ lowLatency: true });
   });
 });
+
+/**
+ * "PRÉVIA PÚBLICA" (the signed-out live preview's per-party opt-in). Absent,
+ * not disabled, wherever the server would refuse the preview anyway, off by
+ * default, and live while the party runs so a host can take it back.
+ */
+describe("the Prévia pública row", () => {
+  const render = (props: {
+    publicPreviewSeconds?: number | null;
+    options?: WatchPartyOptions;
+    live?: boolean;
+  }) =>
+    renderToStaticMarkup(
+      <WatchPartyOptionsPanel
+        options={props.options ?? WATCH_PARTY_DEFAULT_OPTIONS}
+        audienceCount={0}
+        onChange={() => {}}
+        publicPreviewSeconds={props.publicPreviewSeconds}
+        live={props.live}
+      />,
+    );
+
+  it("is absent when the preview could not work here", () => {
+    expect(render({})).not.toContain("data-watch-party-public-preview");
+    expect(render({ publicPreviewSeconds: null })).not.toContain(
+      "data-watch-party-public-preview",
+    );
+  });
+
+  it("is drawn off by default, with the real window length", () => {
+    const html = render({ publicPreviewSeconds: 300 });
+    expect(html).toContain("data-watch-party-public-preview");
+    expect(html).toContain("Public preview");
+    expect(html).toContain("watch 5 minutes from the community page");
+    expect(html).toContain('aria-checked="false"');
+    // LIVE_PREVIEW_SECONDS=60 says one minute, not five.
+    expect(render({ publicPreviewSeconds: 60 })).toContain("watch 1 minute from");
+  });
+
+  it("stays a live switch while the party runs, and saves on flip", () => {
+    const onChange = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    act(() =>
+      root.render(
+        <WatchPartyOptionsPanel
+          options={{ ...WATCH_PARTY_DEFAULT_OPTIONS, publicPreview: true }}
+          audienceCount={0}
+          onChange={onChange}
+          publicPreviewSeconds={300}
+          live
+        />,
+      ),
+    );
+    const control = host.querySelector<HTMLButtonElement>(
+      '[data-watch-party-public-preview] [role="switch"]',
+    )!;
+    expect(control.getAttribute("aria-checked")).toBe("true");
+    expect(control.disabled).toBe(false);
+    act(() => control.click());
+    expect(onChange).toHaveBeenCalledWith({ publicPreview: false });
+    act(() => root.unmount());
+    host.remove();
+  });
+});
