@@ -147,9 +147,12 @@ export const STORY_LAYER_DRAWING_TYPES = ["image/png", "image/webp"] as const;
  * - A mention chip is a white pill, dark text at `mentionFont`, "@name".
  * - The call card is `callCardWidth` of the width.
  * - A drawing is a transparent PNG of `drawingWidth` x `drawingHeight` that
- *   covers the canvas (x .5, y .5, scale 1, rotation 0). It is made at the
- *   BOTTOM of the stack (index 0, just above the base), so everything placed
- *   is drawn over it.
+ *   covers the canvas (x .5, y .5, scale 1, rotation 0). LAYER ORDER IS
+ *   CREATION ORDER for every type, the drawing included: a new drawing goes on
+ *   TOP of the stack when it is created, later layers go above it, and "bring
+ *   to front" works on it. A second drawing session does not add a second
+ *   drawing (there is one): it moves the drawing layer back to the top, so new
+ *   strokes are never hidden under a photo or a call card placed since.
  * - The BASE (the photo or clip) fills the canvas when it is within
  *   `baseFillTolerance` of 9:16 (cropped to fit), and otherwise is shown whole
  *   over a blurred copy of itself (a video, on black): `storyBaseFit`.
@@ -170,6 +173,15 @@ export const STORY_LAYOUT = {
   drawingHeight: 1440,
   baseFillTolerance: 0.12,
 } as const;
+
+/**
+ * The SAFE AREA of the canvas, as shares of its width (x) and height (top,
+ * bottom): what a viewer's own chrome (progress bars and header at the top, the
+ * reply row and the owner's bar at the bottom) can cover. Nothing is blocked
+ * there; an editor shows a faint guide while a layer is dragged near the edge
+ * of the safe rectangle, so the author knows what may sit under the chrome.
+ */
+export const STORY_SAFE_AREA = { x: 0.05, top: 0.1, bottom: 0.13 } as const;
 
 export type StoryLayerColor = (typeof STORY_LAYER_COLORS)[number];
 

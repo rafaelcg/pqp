@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  HANDLE_ROTATE_DEAD_ZONE,
   SNAP_DISTANCE,
+  clampScaleToFit,
   dragTo,
   handleDrag,
   keyboardTransform,
+  maxScaleToFit,
+  nearSafeEdge,
   overTrash,
   pinch,
   snap,
@@ -60,9 +64,77 @@ describe("handleDrag", () => {
     const result = handleDrag(start, center, { x: 250, y: 300 }, { x: 350, y: 300 });
     expect(result.scale).toBeCloseTo(3, 5);
   });
-  it("turns by the swing around the center", () => {
+  it("turns by the swing around the center, from the edge of the dead zone (no jump)", () => {
     const result = handleDrag(start, center, { x: 250, y: 300 }, { x: 200, y: 350 });
-    expect(result.rotation).toBeCloseTo(Math.PI / 2, 5);
+    expect(result.rotation).toBeCloseTo(Math.PI / 2 - HANDLE_ROTATE_DEAD_ZONE, 5);
+  });
+  it("does not turn on a small wobble: a pull in or out stays a pure scale", () => {
+    // The pointer drifts 6 degrees sideways while it pulls out.
+    const drift = (6 * Math.PI) / 180;
+    const result = handleDrag(start, center, { x: 250, y: 300 }, { x: 200 + 100 * Math.cos(drift), y: 300 + 100 * Math.sin(drift) });
+    expect(result.rotation).toBe(0);
+    expect(result.scale).toBeCloseTo(2, 5);
+  });
+  it("with Shift it only turns, freely, and the scale stays put", () => {
+    const drift = (6 * Math.PI) / 180;
+    const result = handleDrag(start, center, { x: 250, y: 300 }, { x: 200 + 100 * Math.cos(drift), y: 300 + 100 * Math.sin(drift) }, { shift: true });
+    expect(result.scale).toBe(1);
+    expect(result.rotation).toBeCloseTo(drift, 5);
+  });
+  it("swings the short way round: crossing the back of the layer is not a lap", () => {
+    const at = (degrees: number) => ({ x: 200 + 100 * Math.cos((degrees * Math.PI) / 180), y: 300 + 100 * Math.sin((degrees * Math.PI) / 180) });
+    const result = handleDrag(start, center, at(170), at(-170), { shift: true });
+    expect(result.rotation).toBeCloseTo((20 * Math.PI) / 180, 5);
+  });
+  it("never scales a layer past the canvas it is on", () => {
+    const natural = { width: 300, height: 60 };
+    const result = handleDrag(start, center, { x: 250, y: 300 }, { x: 1000, y: 300 }, { fit: natural, canvas });
+    // The canvas is 400 wide and the layer 300 wide at scale 1: a third more at most.
+    expect(result.scale).toBeCloseTo(400 / 300, 5);
+  });
+});
+
+describe("keeping a layer on the canvas", () => {
+  const natural = { width: 300, height: 60 };
+  it("the biggest scale is the one at which the turned layer still fits", () => {
+    expect(maxScaleToFit(natural, 0, canvas)).toBeCloseTo(400 / 300, 5);
+    // Turned a quarter, its 300 length is vertical: 711 / 300.
+    expect(maxScaleToFit(natural, Math.PI / 2, canvas)).toBeCloseTo(Math.min(400 / 60, 711 / 300), 5);
+  });
+  it("without a measured size there is no limit beyond the shared bounds", () => {
+    expect(maxScaleToFit(null, 0, canvas)).toBe(5);
+    expect(clampScaleToFit(9, null, 0, canvas)).toBe(5);
+  });
+  it("a layer that is already too big is not forced smaller, only kept from growing", () => {
+    const big = { width: 600, height: 60 };
+    expect(clampScaleToFit(1, big, 0, canvas, 1)).toBe(1);
+    expect(clampScaleToFit(1.5, big, 0, canvas, 1)).toBe(1);
+    expect(clampScaleToFit(0.5, big, 0, canvas, 1)).toBe(0.5);
+  });
+  it("keys and the wheel stop at the canvas too", () => {
+    expect(wheelScale(1.3, -5000, { natural, rotation: 0, canvas })).toBeCloseTo(400 / 300, 5);
+    const grown = keyboardTransform({ ...start, scale: 1.3 }, "+", false, { natural, canvas });
+    expect(grown!.scale).toBeCloseTo(400 / 300, 5);
+    // Turning it so that it no longer fits shrinks it to fit, never past.
+    const turned = keyboardTransform({ ...start, scale: 1.3 }, "]", false, { natural, canvas });
+    expect(turned!.scale).toBeLessThanOrEqual(1.3);
+  });
+});
+
+describe("the safe area guide", () => {
+  const natural = { width: 100, height: 40 };
+  it("is quiet in the middle of the canvas", () => {
+    expect(nearSafeEdge({ ...start }, natural, canvas)).toEqual({ near: false, outside: false });
+  });
+  it("shows near an edge of the safe rectangle, and turns bright past it", () => {
+    // Right edge of the layer at 400 * 0.95 - 4 = 376: inside, but within 14 px of the edge.
+    expect(nearSafeEdge({ ...start, x: (376 - 50) / 400 }, natural, canvas)).toEqual({ near: true, outside: false });
+    expect(nearSafeEdge({ ...start, x: 0.98 }, natural, canvas)).toEqual({ near: true, outside: true });
+    // The top band is a tenth of the height.
+    expect(nearSafeEdge({ ...start, y: 0.1 }, natural, canvas).outside).toBe(true);
+  });
+  it("sees a turned or scaled layer by its bounding box", () => {
+    expect(nearSafeEdge({ x: 0.5, y: 0.5, scale: 4.2, rotation: 0 }, natural, canvas).outside).toBe(true);
   });
 });
 
