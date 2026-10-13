@@ -1384,9 +1384,20 @@ class ChatViewModel(
 
     private fun onBotNotice(frame: JsonObject) {
         val notice = BotNotice.parse(frame) ?: return
-        if (notice.channelId != channelId || notice.isExpired(System.currentTimeMillis())) return
+        val now = System.currentTimeMillis()
+        if (notice.channelId != channelId || notice.isExpired(now)) return
         _state.value = _state.value.copy(botNotice = notice)
+        // "Answers again at 14:00" stops being true at 14:00.
+        botNoticeExpiry?.cancel()
+        botNoticeExpiry = notice.retryAtMs?.let { retryAt ->
+            viewModelScope.launch {
+                delay(retryAt - now)
+                if (_state.value.botNotice == notice) _state.value = _state.value.copy(botNotice = null)
+            }
+        }
     }
+
+    private var botNoticeExpiry: Job? = null
 
     fun dismissBotNotice() {
         if (_state.value.botNotice != null) _state.value = _state.value.copy(botNotice = null)
