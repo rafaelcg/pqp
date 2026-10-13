@@ -367,6 +367,120 @@ export function shouldReportPositionSample(playerState: number): boolean {
 }
 
 /**
+ * HOW A ROOM THAT IS NOT PLAYING MOVES THIS PLAYER'S PLAYHEAD.
+ *
+ * YouTube's `seekTo` keeps a PAUSED player paused and starts playback from
+ * every other state. `stopVideo` leaves the player CUED, and the pause path
+ * used to seek it to the room's clock straight after; with nothing on, that
+ * clock reads zero, so a listener more than `DRIFT_MS` into the song heard
+ * it again from the top while the bar said nothing was on (PQP-69).
+ *
+ * Only a PAUSED player is seeked in place. A PLAYING or BUFFERING one was
+ * just sent `pauseVideo`, and YouTube can drop a pause mid-load, so its seek
+ * waits for the player to report PAUSED. A CUED player is cued again at the
+ * room's clock, which moves the start without playing. Anything else, and
+ * any player with nothing on, is left where it is.
+ */
+export function pausedRoomSeekCommand(args: {
+  roomVideoId: string | null;
+  playerState: number;
+}): "seek" | "seek-when-paused" | "cue" | null {
+  if (!args.roomVideoId) {
+    return null;
+  }
+  switch (args.playerState) {
+    case YT_STATE.PAUSED:
+      return "seek";
+    case YT_STATE.PLAYING:
+    case YT_STATE.BUFFERING:
+      return "seek-when-paused";
+    case YT_STATE.CUED:
+      return "cue";
+    default:
+      return null;
+  }
+}
+
+/**
+ * The deferred half of `pausedRoomSeekCommand`: the player has just
+ * reported PAUSED, so `seekTo` keeps it paused. Asked again against the
+ * room as it is now, since the room may have moved while the pause landed.
+ */
+function seekPausedPlayerToRoom(player: YTPlayer, snap: MusicSnapshot): void {
+  const roomVideoId = snap.state?.current?.videoId ?? null;
+  if (!roomVideoId || snap.state?.status === "playing") {
+    return;
+  }
+  try {
+    if (player.getVideoData().video_id !== roomVideoId) {
+      return;
+    }
+    const at = expectedPositionMs(snap);
+    if (playerNeedsRoomSeek(player.getCurrentTime() * 1000, at)) {
+      player.seekTo(at / 1000, true);
+    }
+  } catch {
+    // player not ready to seek
+  }
+}
+
+/**
+ * THE PLAYER IS MAKING SOUND THE ROOM DID NOT ASK FOR.
+ *
+ * The room's state is the only thing the bar draws, so it is the only thing
+ * the speaker may follow. Every command above is sent once, on an edge, and
+ * YouTube can drop one (a pause while a load is still buffering, a seek on a
+ * cued player, a command to an iframe mid-reload). This is the level check
+ * that puts it right: asked on every state change and on a tick while the
+ * room is not playing, and answered with the command that silences it.
+ */
+export function silencePlayerCommand(args: {
+  roomVideoId: string | null;
+  status: "playing" | "paused";
+  playerState: number;
+}): "stop" | "pause" | null {
+  const sounding =
+    args.playerState === YT_STATE.PLAYING ||
+    args.playerState === YT_STATE.BUFFERING;
+  if (!sounding) {
+    return null;
+  }
+  if (!args.roomVideoId) {
+    return "stop";
+  }
+  return args.status === "playing" ? null : "pause";
+}
+
+function silencePlayer(player: YTPlayer, snap: MusicSnapshot): boolean {
+  let playerState: number;
+  try {
+    playerState = player.getPlayerState();
+  } catch {
+    return false;
+  }
+  const command = silencePlayerCommand({
+    roomVideoId: snap.state?.current?.videoId ?? null,
+    status: snap.state?.status ?? "paused",
+    playerState,
+  });
+  if (!command) {
+    return false;
+  }
+  try {
+    if (command === "stop") {
+      player.stopVideo();
+    } else {
+      player.pauseVideo();
+    }
+  } catch {
+    // a player being torn down; the next tick asks again
+  }
+  return true;
+}
+
+const SILENCE_CHECK_MS = 2_000;
+
+/**
  * Whether MiniPlayer should keep `MusicPlayer` in the tree. Once a track
  * has mounted the iframe, an empty queue must not take it out: that
  * destroy/recreate is the start-end-start miss. Leaving the call or
@@ -391,6 +505,7 @@ export function MusicPlayer({
   muted = false,
   playerRef,
   onNeedsTap,
+  onPlaybackFailed,
   duckEnabled = false,
   speakingPeerCount = 0,
   transmitting = false,
@@ -402,6 +517,8 @@ export function MusicPlayer({
   muted?: boolean;
   playerRef: MutableRefObject<YTPlayer | null>;
   onNeedsTap: (needs: boolean) => void;
+  /** Tells the bar this video cannot play here, so it can say so. */
+  onPlaybackFailed?: (failed: boolean) => void;
   duckEnabled?: boolean;
   speakingPeerCount?: number;
   transmitting?: boolean;
@@ -422,10 +539,18 @@ export function MusicPlayer({
   /** The room track the captions were last read for, and how to stop it. */
   const captionsFor = useRef<string | null>(null);
   const captionsCancel = useRef<(() => void) | null>(null);
+  const onPlaybackFailedRef = useRef(onPlaybackFailed);
+  onPlaybackFailedRef.current = onPlaybackFailed;
+  useEffect(() => {
+    onPlaybackFailedRef.current?.(failed);
+  }, [failed]);
+  useEffect(() => () => onPlaybackFailedRef.current?.(false), []);
   const videoId = music.state?.current?.videoId ?? null;
   const trackId = music.state?.current?.id ?? null;
   const status = music.state?.status ?? "paused";
   const durationReportedFor = useRef<string | null>(null);
+  /** A paused room's seek that waits for this player to report PAUSED. */
+  const seekWhenPausedRef = useRef(false);
 
   // Build the player once.
   useEffect(() => {
@@ -485,6 +610,17 @@ export function MusicPlayer({
             },
             onStateChange: (event) => {
               const snap = musicRef.current;
+              if (
+                (event.data === YT_STATE.PLAYING ||
+                  event.data === YT_STATE.BUFFERING) &&
+                silencePlayer(event.target, snap)
+              ) {
+                return;
+              }
+              if (event.data === YT_STATE.PAUSED && seekWhenPausedRef.current) {
+                seekWhenPausedRef.current = false;
+                seekPausedPlayerToRoom(event.target, snap);
+              }
               if (
                 event.data === YT_STATE.BUFFERING ||
                 event.data === YT_STATE.CUED
@@ -683,6 +819,7 @@ export function MusicPlayer({
     if (!ready || !player) {
       return;
     }
+    seekWhenPausedRef.current = false;
     let loaded: string | undefined;
     let ytState: number = YT_STATE.UNSTARTED;
     try {
@@ -691,11 +828,25 @@ export function MusicPlayer({
     } catch {
       // player not ready to read
     }
+    // While the room is paused or empty, the level check keeps this
+    // speaker quiet between commands.
+    const guardSilence = () => {
+      const guard = setInterval(() => {
+        silencePlayer(player, musicRef.current);
+      }, SILENCE_CHECK_MS);
+      return () => clearInterval(guard);
+    };
     if (playerIsOnWrongVideo(loaded, videoId)) {
       // The room moved on and this iframe did not. Put it back before the
       // drift loop below starts seeking the wrong song to the room's clock.
       repairWrongVideo(player, videoId!);
-      return;
+      if (status === "playing") {
+        return;
+      }
+      // The repair can be backing off or spent, and nothing else would stop
+      // the old song in a paused room.
+      silencePlayer(player, musicRef.current);
+      return guardSilence();
     }
     const repeat = musicRef.current.state?.repeat ?? "off";
     if (
@@ -717,14 +868,22 @@ export function MusicPlayer({
       try {
         const at = expectedPositionMs(musicRef.current);
         if (playerNeedsRoomSeek(player.getCurrentTime() * 1000, at)) {
-          player.seekTo(at / 1000, true);
+          const seek = pausedRoomSeekCommand({ roomVideoId: videoId, playerState: ytState });
+          if (seek === "seek") {
+            player.seekTo(at / 1000, true);
+          } else if (seek === "seek-when-paused") {
+            seekWhenPausedRef.current = true;
+          } else if (seek === "cue") {
+            // Cueing moves the start without playing, which seeking does not.
+            player.cueVideoById(videoId!, at / 1000);
+          }
         }
       } catch {
         // player not ready to seek
       }
     }
     if (status !== "playing" || !videoId) {
-      return;
+      return guardSilence();
     }
     // Autoplay can be refused until the page has a gesture. The button in
     // the panel is that gesture.
