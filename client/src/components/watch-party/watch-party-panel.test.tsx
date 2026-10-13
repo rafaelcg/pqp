@@ -184,6 +184,23 @@ describe("the host's transmission readout", () => {
     }
   });
 
+  it("carries the silent-film warning above it while the host's sound failed", () => {
+    const host = { ...PARTY, viewerRole: "host" as const };
+    const live = { slot: "chrome" as const, hasStream: true, inCall: true, liveStream: STREAM, isPresenting: true };
+    const silent = render({ ...live, party: host, shareSilent: true });
+    expect(silent).toContain("data-watch-party-silent-share");
+    expect(silent.indexOf("data-watch-party-silent-share")).toBeLessThan(
+      silent.indexOf("watch-party-transmission"),
+    );
+    expect(render({ ...live, party: host, shareSilent: false })).not.toContain(
+      "data-watch-party-silent-share",
+    );
+    // A viewer has nothing to fix, and never reads the host's flag anyway.
+    expect(render({ ...live, isPresenting: false, shareSilent: true })).not.toContain(
+      "data-watch-party-silent-share",
+    );
+  });
+
   it("is not shown to a manager, who is not transmitting anything", () => {
     const html = render({
       slot: "chrome",

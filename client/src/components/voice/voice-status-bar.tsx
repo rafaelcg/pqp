@@ -84,6 +84,11 @@ interface VoiceStatusBarProps {
   onToggleScreenShare?: () => void;
   onOpen: () => void;
   onLeave: () => void;
+  /**
+   * The dock is on screen, so hang-up lives there. This strip is the way
+   * out only when the person is looking at some other channel.
+   */
+  hideLeave?: boolean;
   /** One-shot share / Watch party coachmark when the stage is not on screen. */
   shareHintEnabled?: boolean;
   /** One-shot bring-friends coachmark when the stage is not on screen. */
@@ -131,6 +136,7 @@ export function VoiceStatusBar({
   onToggleScreenShare,
   onOpen,
   onLeave,
+  hideLeave = false,
   shareHintEnabled = false,
   bringFriendsHintEnabled = false,
   compact = false,
@@ -215,6 +221,7 @@ export function VoiceStatusBar({
             </Button>
           </Tooltip>
         )}
+        {!hideLeave && (
         <Tooltip label={t("voice.bar.leave")} side="right">
           <Button
             variant="ghost"
@@ -225,6 +232,7 @@ export function VoiceStatusBar({
             <PhoneOff className="h-4 w-4 text-danger" />
           </Button>
         </Tooltip>
+        )}
       </div>
     );
   }
@@ -286,8 +294,7 @@ export function VoiceStatusBar({
         {connected && (
           <VoiceQualityMeter quality={quality} compact className="shrink-0" />
         )}
-        {/* This widget is pinned to the bottom-left corner, so every bubble in
-            it points up and away from the window edge rather than off it. */}
+        {!hideLeave && (
         <Tooltip label={t("voice.bar.leave")}>
           <Button
             variant="ghost"
@@ -299,6 +306,7 @@ export function VoiceStatusBar({
             <PhoneOff className="h-4 w-4 text-danger" />
           </Button>
         </Tooltip>
+        )}
       </div>
 
       {connected && (

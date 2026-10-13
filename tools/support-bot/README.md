@@ -42,7 +42,7 @@ rather than configured:
 
 | Path | What it is |
 |---|---|
-| `facts.md` | **The whole content surface.** Everything the bot may assert. A human maintains it; editing it changes the answers with no deploy. |
+| `facts.md` | **The whole content surface.** Everything the bot may assert. A human maintains it; editing it needs no code change, but production reads the copy baked into the image, so an edit goes live only after `pqp-support` is redeployed. |
 | `src/facts.js` | Loads it, refuses a broken one at boot, and harvests the measurement vocabulary the screen grounds against. |
 | `src/trigger.js` | Should it answer at all: addressed, allowed channel, not a loop, inside the rate caps. Pure. |
 | `src/pending.js` | Answering a question nobody answered: the room-question heuristic, the one-per-channel pending store, the cancel rules and this path's own caps. Pure. |
@@ -167,7 +167,7 @@ Outside the pnpm workspace, like `tools/ambient` and for the same reason.
 
 ```bash
 cd tools/support-bot
-npm test          # 257 tests, no network, no key, no database
+npm test          # 262 tests, no network, no key, no database
                   # CI runs the same glob (`.github/workflows/ci.yml`)
 ```
 
@@ -351,7 +351,7 @@ and the number of model calls this path can ever cost.
 
 ### Silence, not "não sei"
 
-`fallbackAnswer` ("essa eu não sei responder, `@rafa` consegue te dizer") is
+`fallbackAnswer` ("essa eu não sei responder. já chamei a equipe (`@rafa`), é só esperar um pouco.") is
 **never** used here, and there is **no escalation ping**. That sentence is owed
 to somebody who typed the bot's name; a bot walking into a quiet channel to
 announce it cannot help has added a message and no information. The questions

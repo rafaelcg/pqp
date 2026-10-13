@@ -109,8 +109,9 @@ export const cookiesEn: LegalDocument = {
               <code>pqp-theme</code>: light, dark, or follow the system.
             </li>
             <li>
-              <code>pqp-appearance</code>: Classic, Harmony, Hearth, or Night.
-              The named look, separate from light and dark.
+              <code>pqp-appearance</code>: Classic, Harmony, Hearth, Night,
+              Halloween, or Christmas. The named look, separate from light and
+              dark.
             </li>
             <li>
               <code>pqp-accent-hue</code>: a custom accent colour, or the
@@ -267,7 +268,8 @@ export const cookiesEn: LegalDocument = {
               <code>pqp:voice-clean-settings-seen</code>,{" "}
               <code>pqp:obs-virtual-camera-hint-dismissed</code>,{" "}
               <code>pqp:linux-share-audio-hint-2026-09</code>, every key that starts
-              with <code>pqp:feature-hint-</code>, and{" "}
+              with <code>pqp:feature-hint-</code> or{" "}
+              <code>pqp:seasonal-look-</code>, and{" "}
               <code>pqp:voice-capacity-</code> followed by a voice channel id.
             </li>
           </ul>

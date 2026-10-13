@@ -45,7 +45,8 @@ const MAX_QUERY_LENGTH = 32;
 const MAX_SUGGESTIONS = 8;
 
 export function expandEmojiShortcodes(input: string): string {
-  return input.replace(/:([a-z0-9_+-]+):/gi, (match, name: string) => {
+  // `(?<!<)` leaves a custom emoji token (`<:fire:id>`) alone.
+  return input.replace(/(?<!<):([a-z0-9_+-]+):/gi, (match, name: string) => {
     const emoji = SHORTCODES[name.toLowerCase()];
     return emoji ?? match;
   });

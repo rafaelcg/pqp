@@ -45,8 +45,8 @@ interface Member {
 const RAFAEL: Member = { name: "Rafael Cammarano Guglielmi", handle: "rafaelcg" };
 const ANDRE: Member = { name: "André", handle: "AndreCamm" };
 
-const COMMITTERS: Member[] = [RAFAEL, ANDRE];
-const APPROVERS: Member[] = [RAFAEL];
+export const CODE_SIGNING_COMMITTERS: Member[] = [RAFAEL, ANDRE];
+export const CODE_SIGNING_APPROVERS: Member[] = [RAFAEL];
 
 export function CodeSigningPolicy() {
   const { t } = useTranslation();
@@ -98,12 +98,12 @@ export function CodeSigningPolicy() {
             <Role
               term={t("codeSigning.team.committers")}
               description={t("codeSigning.team.committers.desc")}
-              members={COMMITTERS}
+              members={CODE_SIGNING_COMMITTERS}
             />
             <Role
               term={t("codeSigning.team.approvers")}
               description={t("codeSigning.team.approvers.desc")}
-              members={APPROVERS}
+              members={CODE_SIGNING_APPROVERS}
             />
           </dl>
         </div>

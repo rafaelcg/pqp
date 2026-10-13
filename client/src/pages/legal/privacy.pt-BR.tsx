@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "8 de outubro de 2026",
+  updated: "12 de outubro de 2026",
   sections: [
     {
       id: "intro",
@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "2635023a",
+      sourceRev: "a1a0596f",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -355,6 +355,16 @@ export const privacyPtBr: LegalDocument = {
             operador lê têm contagens, não nomes. Os dois registros são
             apagados junto com a sua conta. A exportação de dados ainda não
             inclui nenhum deles.
+          </p>
+          <p>
+            <strong>Retrospectiva.</strong> Por conta e por dia, no horário de
+            São Paulo, a gente também conta quanto tempo você passou em
+            chamadas com pelo menos mais uma pessoa, quanto tempo compartilhou
+            a tela e quantas músicas pôs na fila de uma chamada. A gente também
+            guarda a lista das watch parties que você assistiu. A gente não
+            registra quem estava na chamada com você. Essas contagens servem só
+            para montar a sua retrospectiva do ano. Elas são apagadas junto com
+            a sua conta. A exportação de dados ainda não inclui nenhuma delas.
           </p>
           <p>
             <strong>Técnicos.</strong> Logs de aplicação com erros e eventos de
@@ -746,7 +756,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "legal-bases",
-      sourceRev: "8483b11b",
+      sourceRev: "fa7a415e",
       heading: "Por que a gente trata os seus dados, e a base legal",
       body: (
         <>
@@ -762,9 +772,9 @@ export const privacyPtBr: LegalDocument = {
               <strong>Fazer o pqp funcionar.</strong> Criar a sua conta,
               entregar as suas mensagens, manter o seu histórico para ele estar
               lá quando você recarrega, conectar as suas chamadas de voz, gravar
-              as watch parties para poderem ser assistidas de novo, e lembrar
-              das suas configurações. É o serviço básico para o qual você se
-              cadastrou.{" "}
+              as watch parties para poderem ser assistidas de novo, lembrar das
+              suas configurações e guardar as contagens da sua retrospectiva do
+              ano. É o serviço básico para o qual você se cadastrou.{" "}
               <em>(Isso se apoia no nosso contrato com você: art. 7, V.)</em>
             </li>
             <li>
@@ -1074,7 +1084,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "retention",
-      sourceRev: "ef48b070",
+      sourceRev: "a62b06fc",
       heading: "Por quanto tempo a gente guarda cada coisa",
       body: (
         <>
@@ -1136,6 +1146,10 @@ export const privacyPtBr: LegalDocument = {
             <li>
               <strong>Dias de atividade e primeiros passos</strong>: até a sua
               conta ser excluída.
+            </li>
+            <li>
+              <strong>Contagens da retrospectiva e watch parties assistidas</strong>:
+              até a sua conta ser excluída.
             </li>
             <li>
               <strong>Cards de alerta do AutoMod</strong>: o mesmo tempo que
@@ -1256,7 +1270,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "rights",
-      sourceRev: "ddafcc49",
+      sourceRev: "d49f839a",
       heading: "Os seus direitos, e como usar",
       body: (
         <>
@@ -1313,7 +1327,8 @@ export const privacyPtBr: LegalDocument = {
               ações de moderação que você tomou. Ainda não inclui o seu{" "}
               <code>@handle</code> público, o banner, os depoimentos, os
               parâmetros de campanha do seu cadastro, o país guardado, os seus dias de
-              atividade e os momentos dos primeiros passos, os seus
+              atividade e os momentos dos primeiros passos, as contagens da
+              retrospectiva e as watch parties que você assistiu, os seus
               registros de push, as suas respostas à lista de espera da watch
               party, as gravações de watch party, as suas reações, a sua lista de
               amigos, o feedback que você mandou nem as avaliações de chamada. Para esses, escreva para a

@@ -104,7 +104,11 @@ Converted (global unless noted): `WATCH_PARTY_WAITLIST` (per server),
 moderation asks only the box a room lives on, with a per-region budget and
 circuit for rooms whose box is unknown; off is the old ask-every-box-and-wait,
 see `docs/plans/SFU_REGIONS.md` §"The control plane"),
-`TURN_PREFER_STATIC`, `READ_CACHE`, `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
+`TURN_PREFER_STATIC`, `READ_CACHE`,
+`USER_STATS` (`user_stats`, default **on**: the per-person counts the
+Retrospectiva is built from; off stops every new write, nothing is deleted;
+see `server/src/services/user-stats.ts`),
+`COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
 `PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below),
 `COMMUNITY_HOME_TRANSLATION` (`community_home_translation`, **per server**,
 default off; automatic translation of Baú posts, which also needs
@@ -386,6 +390,16 @@ server with `PUT /api/admin/flag-overrides { key: "voice_notes", serverId,
 enabled: true }` or from controles → interruptores. The rules beside it (byte
 budget per second, a note travels alone with no text) are in
 `server/src/services/voice-notes.ts`.
+
+Born as a flag (no old reader): `SOUNDBOARD` (`soundboard`, default off,
+**per server**), the call soundboard. The migration grants `USE_SOUNDBOARD`
+to `@everyone` on every server, so the bit alone would turn it on
+everywhere; the flag is what goes on one server at a time. Read at the play
+gate on every click (a flip mid-call silences the room, or opens it with no
+rejoin), by the client for the call's button and the settings tab, and by
+the upload, claim and rename routes
+(403 when off; list and delete stay open). Served as `soundboard` on
+`GET /api/voice/config?serverId=`. See `docs/SOUNDBOARD.md`.
 
 Born as a flag (no old reader): `VOICE_NOTE_TRANSCRIPTION`
 (`voice_note_transcription`, default off, **per server**), the text under a

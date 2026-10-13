@@ -83,6 +83,7 @@ export function MusicComposer({ voiceState }: { voiceState: VoiceState }) {
           canSetSwitches={canSetSwitches}
           playing={playing}
           needsTap={local.needsTap}
+          playbackFailed={local.playbackFailed}
           listening={music.listening}
           volume={local.volume}
           muted={local.muted}

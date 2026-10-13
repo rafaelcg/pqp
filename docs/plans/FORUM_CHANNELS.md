@@ -339,7 +339,7 @@ when that exists) deletes shells older than 10 minutes through
 | `server/src/ws/chat.ts` | `postChannelMessageAttempt`: refuse `type === 'forum'` (`no-access`); refuse a reply in a locked post unless `MANAGE_MESSAGES` or `MANAGE_CHANNELS` (`locked`); the bump in §1.4. The slow-mode type list gains nothing (a forum is charged by the post route, a post is a `thread`). |
 | `server/src/services/users.ts` | `listUnread`: exclude posts, add forum rows (§4.2). |
 | `server/src/services/retention.ts` | `sweepMessageRetention` exempts opening messages (`id IN (SELECT opening_message_id FROM forum_posts ...)`), the way it already exempts pins: a post whose question was swept is a title with orphaned answers. |
-| `server/src/services/servers.ts`, `server/src/services/outgoing-webhooks.ts`, the incoming webhook create route | A forum cannot be a webhook target, an AutoMod alert channel, or a purge target. Each already checks `type === 'text'`; confirm, do not assume. |
+| `server/src/services/outgoing-webhooks.ts` | A forum **can** be an outgoing webhook target. The opening message and each reply fire `message.created` for a hook on the parent forum (`channelId` stays the post; `forumId`, `postTitle` and `isPostStart` are added). Threads and posts cannot be targets. Off for a server (`forum_channels`) rejects a newly picked forum and does not enqueue. AutoMod alert channels stay text-only. Incoming webhooks on a forum are the next row. |
 | `server/src/api/index.ts` (`handleWebhookExecute`), `server/src/services/webhooks.ts` (`executeWebhook`), `packages/shared/src/webhooks.ts` (`executeWebhookSchema`) | P1: refuse an execute into a forum with Discord's error (§7.1), instead of today's invisible insert. P1b: the webhook-to-post path (§7). |
 | `server/src/lib/flags.ts`, `flags.test.ts`, `tools/admin-dashboard/site/novo.js` | The flag (§10). |
 | `server/src/jobs.ts` | The shell sweep. |
@@ -819,6 +819,29 @@ whoever set up the tool can see why a chip is missing. When nothing resolves,
 `default_tag_ids` applies (a news feed gets "Notícias" without the tool
 knowing tag ids). Discord tag snowflakes copied from an old Discord setup never
 match an id here, which is why names match too.
+
+**Starter tags answer in every language.** A starter tag that staff have not
+renamed (`forum_tags.preset`) is shown as "Dúvida", "Question" or "Duda"
+depending on the reader, so `applied_tags` matches the stored name first and
+then any shipped-language name of the tag's preset (`FORUM_TAG_PRESET_NAMES` in
+`packages/shared/src/forums.ts`). Once staff rename the tag the preset is
+cleared and only the new name matches.
+
+### 7.3b Tag icons and presets
+
+A tag's picture is `forum_tags.icon`, a key from the curated set
+`FORUM_TAG_ICONS` (each client draws its own art: lucide on the web, SF Symbols
+on iOS, Material on Android). `emoji` stays readable for old rows, imports and
+phone builds that predate icons; the editor writes the icon's own emoji beside
+it, and a client that knows icons draws the icon and falls back to the emoji.
+`forum_tags.preset` (`question`, `bug`, `suggestion`, `tutorial`, `release`,
+`wip`, `discussion`) is set when a starter tag is created and shown in the
+reader's language (`forum.tags.preset.<key>`) until `replaceForumTags` sees a
+different name and clears it. Both columns are nullable and the schema
+tolerates an unknown key (`.catch(null)`), so old and new clients and servers
+interoperate. The one-shot boot migration `forum_tag_icons_presets_2026_10`
+backfills existing rows; `server/src/forum-tag-icons.test.ts` keeps its SQL
+lists equal to the TypeScript tables.
 
 ### 7.4 Dedupe: an RSS tool that re-sends does not double-post
 

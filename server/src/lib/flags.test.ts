@@ -65,6 +65,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   turn_prefer_static: (raw) => raw === "true",
   read_cache: offWords,
   // New with the flag, so there was no old reader: this is its definition.
+  user_stats: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
   voice_audio_self_heal: offWords,
   // New with the flag, so there was no old reader: this is its definition.
   ws_auth_admission: offWords,
@@ -109,6 +111,7 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   desktop_notify_default_on: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   voice_notes: (raw) => raw === "true",
+  soundboard: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   voice_note_transcription: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.

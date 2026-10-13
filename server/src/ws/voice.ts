@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { newlyQueuedTracks, userStats } from "../services/user-stats.js";
 import type { WebSocket } from "ws";
 import { isEnabled } from "../lib/flags.js";
 import {
@@ -296,6 +297,13 @@ import {
   setLiveReactionSink,
 } from "./live-reactions.js";
 import {
+  offerSoundboardPlay,
+  soundboardPlayAllowed,
+  noteRemoteSoundboardPlay,
+  soundboardRoomFull,
+} from "./soundboard.js";
+import { resolvePlayableSound } from "../services/soundboard.js";
+import {
   mintVoiceResumeToken,
   verifyVoiceResumeToken,
   VOICE_RESUME_TTL_MS,
@@ -344,6 +352,15 @@ interface VoicePeer {
   canStream: boolean;
   /** `Permission.MANAGE_MUSIC` here; always true in a conversation call. */
   canManageMusic: boolean;
+  /** `Permission.USE_SOUNDBOARD`. False in a conversation. */
+  canUseSoundboard: boolean;
+  /** `Permission.MANAGE_SOUNDBOARD`. False in a conversation. */
+  canManageSoundboard: boolean;
+  /**
+   * The server this seat's soundboard belongs to. Null in a conversation,
+   * which has no library. Set at join, not stored on the registry row.
+   */
+  soundboardServerId: string | null;
   /**
    * Why `canSpeak` is false, when it is (`permission` or `audience`, see
    * `voice/audience.ts`). Told to the person on `welcome` and
@@ -2092,6 +2109,30 @@ function localRoomOccupancy(): VoiceActivitySnapshot["rooms"] {
       openedAt: null,
     }))
     .sort((a, b) => b.participants - a.participants);
+}
+
+/**
+ * This process's live seats, one per peer, for the per-person stats sampler
+ * (`services/user-stats.ts`). A seat held for its resume window is left out:
+ * nobody is in it.
+ */
+export function localLiveSeats(): {
+  userId: string;
+  voiceChannelId: string;
+  sharingScreen: boolean;
+}[] {
+  const seats = [];
+  for (const peer of peers.values()) {
+    if (peer.orphanedAt !== undefined) {
+      continue;
+    }
+    seats.push({
+      userId: peer.userId,
+      voiceChannelId: peer.voiceChannelId,
+      sharingScreen: peer.sharingScreen,
+    });
+  }
+  return seats;
 }
 
 /**
@@ -6336,6 +6377,7 @@ const SELF_INITIATED_VOICE_FRAMES: ReadonlySet<string> = new Set([
   "set-music",
   "set-music-listening",
   "live-reaction",
+  "soundboard-play",
   "voice-still-here",
 ]);
 
@@ -7619,6 +7661,8 @@ async function welcomeVoicePeer(
     canSpeak: peer.canSpeak,
     canStream: peer.canStream,
     canManageMusic: peer.canManageMusic,
+    canUseSoundboard: peer.canUseSoundboard,
+    canManageSoundboard: peer.canManageSoundboard,
     ...(peer.speakReason ? { speakReason: peer.speakReason } : {}),
     audience: audienceWireState(
       audience !== undefined ? audience : cachedAudience(peer.voiceChannelId),
@@ -7865,6 +7909,8 @@ export async function handleVoiceMessage(
     let canSpeak = true;
     let canStream = true;
     let canManageMusic = true;
+    let canUseSoundboard = false;
+    let canManageSoundboard = false;
     let nickname: string | null = null;
     // Why the mic is locked, when it is: told to the person on `welcome`, so
     // a locked mic is never a silent no-op (2026-10-04: 146 refusals, no
@@ -7893,6 +7939,17 @@ export async function handleVoiceMessage(
         permissions: resolved.permissions,
       });
       canManageMusic = hasPermission(resolved.permissions, Permission.MANAGE_MUSIC);
+      // The bits only. The `soundboard` flag is read live instead: by the
+      // play gate on every click and by the client from
+      // `GET /api/voice/config`, so a flip either way needs no rejoin.
+      canUseSoundboard = hasPermission(
+        resolved.permissions,
+        Permission.USE_SOUNDBOARD,
+      );
+      canManageSoundboard = hasPermission(
+        resolved.permissions,
+        Permission.MANAGE_SOUNDBOARD,
+      );
       nickname = resolved.nickname;
       // AUDIENCE MODE, applied last and only ever taking away
       // (`voice/audience.ts`). Read from the rows with the registry on, so a
@@ -8571,6 +8628,10 @@ export async function handleVoiceMessage(
       resume.peer.canSpeak = canSpeak;
       resume.peer.canStream = canStream;
       resume.peer.canManageMusic = canManageMusic;
+      resume.peer.canUseSoundboard = canUseSoundboard;
+      resume.peer.canManageSoundboard = canManageSoundboard;
+      resume.peer.soundboardServerId =
+        channel.kind === "server" ? channel.server_id : null;
       resume.peer.speakReason = speakReason;
       resume.peer.watchParty = watchParty;
       if (!canSpeak) {
@@ -8632,6 +8693,10 @@ export async function handleVoiceMessage(
       canSpeak,
       canStream,
       canManageMusic,
+      canUseSoundboard,
+      canManageSoundboard,
+      soundboardServerId:
+        channel.kind === "server" ? (channel.server_id ?? null) : null,
       speakReason,
       watchParty,
       canPromoteTransport,
@@ -9176,6 +9241,7 @@ export async function handleVoiceMessage(
         console.error("[voice] music permission re-check failed:", error);
       }
     }
+    const heldMusic = getMusicState(peer.voiceChannelId);
     const write = applyMusicWrite(peer.voiceChannelId, incoming, {
       userId: user.id,
       canManage: peer.canManageMusic,
@@ -9232,6 +9298,15 @@ export async function handleVoiceMessage(
         });
       }
       if (persisted?.kind === "stale") {
+        // A write that lost in the row can still have been kept: a later
+        // write on this machine, built on top of it, may have reached the
+        // row first, and that winner does not count these tracks again
+        // (they were in its `heldMusic`). So count the ones the row holds.
+        // A winner from another machine never saw this write and holds none.
+        userStats.noteTracksQueued(
+          user.id,
+          newlyQueuedTracks(heldMusic, write.state, user.id, persisted.held),
+        );
         adoptMusicWithAnchor(
           peer.voiceChannelId,
           persisted.held,
@@ -9254,6 +9329,14 @@ export async function handleVoiceMessage(
         return;
       }
     }
+    // Counted once the write is the room's queue. A write the row refused
+    // is counted above, for the tracks the row kept. The `adopt*` paths take
+    // a queue another machine already counted. A failed persist leaves the
+    // local decision standing, so it counts.
+    userStats.noteTracksQueued(
+      user.id,
+      newlyQueuedTracks(heldMusic, write.state, user.id),
+    );
     broadcastToRoom(peer.voiceChannelId, {
       type: "music",
       channelId: peer.voiceChannelId,
@@ -9337,6 +9420,86 @@ export async function handleVoiceMessage(
     // The answer is deliberately unused. A refused tap is silence: see
     // `offerLiveReaction`.
     offerLiveReaction(peer.voiceChannelId, payload.emoji, existingPeerId);
+    return;
+  }
+
+  // --- soundboard ---
+  //
+  // Same audience as a live reaction: the people in the room. The clip
+  // itself is not in this frame. Each client plays a file it cached. A
+  // miss is silence, which is the right amount of effort for a joke.
+  //
+  // Self-mute does not block it. A locked microphone does (no SPEAK, a
+  // closed watch party floor, audience mode), and so do a moderator mute
+  // and deafening yourself, as on Discord.
+  // Deafening is the listener's own client. DMs have no library, so
+  // `soundboardServerId` null never gets past the gate.
+  if (payload.type === "soundboard-play") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    // One gate, asked twice: now, and again after the lookup below awaited.
+    // DMs have no library, so a null `soundboardServerId` never passes.
+    const allowed = (seat: VoicePeer): boolean =>
+      seat.soundboardServerId !== null &&
+      soundboardPlayAllowed({
+        enabled: isEnabled("soundboard", { serverId: seat.soundboardServerId }),
+        deafened: seat.deafened,
+        canUseSoundboard: seat.canUseSoundboard,
+        canSpeak: seat.canSpeak,
+        serverMuted: isVoiceUserServerMuted(seat.voiceChannelId, seat.userId),
+        channelMatches: seat.voiceChannelId === payload.channelId,
+      });
+    if (!peer || !allowed(peer) || !peer.soundboardServerId) {
+      return;
+    }
+    if (soundboardRoomFull(peer.voiceChannelId, Date.now(), peer.userId)) {
+      return;
+    }
+    const sound = await resolvePlayableSound(
+      peer.soundboardServerId,
+      payload.soundId,
+    );
+    if (!sound) {
+      return;
+    }
+    // The lookup above may have awaited a query. Ask the gate again about
+    // the peer as it is now: still seated in this room, still allowed, not
+    // moderator-muted.
+    const current = peers.get(existingPeerId);
+    if (current !== peer || !allowed(peer)) {
+      return;
+    }
+    if (
+      !offerSoundboardPlay({
+        channelId: peer.voiceChannelId,
+        userId: peer.userId,
+        durationMs: sound.durationMs,
+        now: Date.now(),
+      })
+    ) {
+      return;
+    }
+    const frame = {
+      type: "soundboard-play" as const,
+      channelId: peer.voiceChannelId,
+      soundId: sound.id,
+      userId: peer.userId,
+      displayName: peer.displayName.slice(0, 64),
+      emoji: sound.emoji,
+      playedAt: Date.now(),
+    };
+    broadcastToRoom(peer.voiceChannelId, frame);
+    if (clusterOn()) {
+      // The length rides the cluster frame only, so the other machine's
+      // overlap cap frees a slot when this clip ends. Its listeners get the
+      // frame without it.
+      publishVoice(VOICE_SOUNDBOARD_TOPIC, {
+        ...frame,
+        durationMs: sound.durationMs,
+      });
+    }
     return;
   }
 
@@ -10533,6 +10696,8 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
           peer.canSpeak !== next.canSpeak ||
           peer.canStream !== next.canStream ||
           peer.canManageMusic !== next.canManageMusic ||
+          peer.canUseSoundboard !== next.canUseSoundboard ||
+          peer.canManageSoundboard !== next.canManageSoundboard ||
           (peer.speakReason ?? null) !== next.speakReason,
       );
       if (changed.length === 0) {
@@ -10543,6 +10708,8 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
         peer.canSpeak = next.canSpeak;
         peer.canStream = next.canStream;
         peer.canManageMusic = next.canManageMusic;
+        peer.canUseSoundboard = next.canUseSoundboard;
+        peer.canManageSoundboard = next.canManageSoundboard;
         peer.speakReason = next.speakReason;
         if (!next.canSpeak) {
           peer.muted = true;
@@ -10558,6 +10725,8 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
           canSpeak: next.canSpeak,
           canStream: next.canStream,
           canManageMusic: next.canManageMusic,
+          canUseSoundboard: next.canUseSoundboard,
+          canManageSoundboard: next.canManageSoundboard,
           ...(next.speakReason ? { speakReason: next.speakReason } : {}),
         });
         writePeerRow(peer);
@@ -12141,6 +12310,8 @@ export const VOICE_MUSIC_TOPIC = "voice.music";
 export const VOICE_CALL_TOPIC = "voice.call";
 export const VOICE_MODERATION_TOPIC = "voice.moderation";
 export const VOICE_REACTIONS_TOPIC = "voice.reactions";
+/** A soundboard play. The clip is not in the frame. Receivers fan it out. */
+export const VOICE_SOUNDBOARD_TOPIC = "voice.soundboard";
 export const VOICE_SERVER_MUTE_TOPIC = "voice.serverMute";
 export const VOICE_RAISED_HAND_TOPIC = "voice.raisedHand";
 /**
@@ -12398,6 +12569,37 @@ setLiveReactionSink((channelId, items, seq) => {
       seq,
     } satisfies VoiceReactionsFrame);
   }
+});
+
+const voiceSoundboardFrameSchema = z.object({
+  type: z.literal("soundboard-play"),
+  channelId: z.string().uuid(),
+  soundId: z.string().min(1),
+  userId: z.string().min(1),
+  displayName: z.string().min(1).max(64),
+  emoji: z.string().min(1).max(32),
+  playedAt: z.number().int().nonnegative(),
+  durationMs: z.number().int().positive().max(60_000).optional(),
+});
+
+subscribeToCluster(VOICE_SOUNDBOARD_TOPIC, (data) => {
+  const parsed = voiceSoundboardFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const { durationMs, ...frame } = parsed.data;
+  // Counted even with nobody here yet: someone who joins this machine while
+  // the clip is still playing must find the slot taken.
+  noteRemoteSoundboardPlay({
+    channelId: frame.channelId,
+    userId: frame.userId,
+    durationMs,
+  });
+  if (getRoomPeers(frame.channelId).length === 0) {
+    return;
+  }
+  noteClusterFrameReceived();
+  broadcastToRoom(frame.channelId, frame);
 });
 
 /**

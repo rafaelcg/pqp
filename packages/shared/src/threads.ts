@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { customEmojiTokensAsText } from "./server-emoji.js";
 
 /**
  * Threads — a reply-chain that becomes its own scoped conversation off a
@@ -119,7 +120,7 @@ export type CreateThreadRequest = z.infer<typeof createThreadSchema>;
  * the server's stored name and any optimistic client rendering agree.
  */
 export function deriveThreadName(originBody: string): string {
-  const flat = originBody.replace(/\s+/g, " ").trim();
+  const flat = customEmojiTokensAsText(originBody).replace(/\s+/g, " ").trim();
   if (flat.length === 0) {
     return "thread";
   }

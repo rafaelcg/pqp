@@ -48,6 +48,8 @@ export interface MessagePreview {
 // Applied in order. Link syntax first, so a bolded link's inner `[]` survives
 // the bold pass rather than being eaten as literal asterisks.
 const MARKDOWN_PASSES: ReadonlyArray<readonly [RegExp, string]> = [
+  // A custom emoji token `<:pog:uuid>` reads as the `:pog:` that was typed.
+  [/<:([a-z0-9_]{2,32}):[0-9a-f-]{36}>/g, ":$1:"],
   // `[label](url)` -> `label`. Keeps the human-readable half, drops the URL.
   [/\[([^\]]+)\]\([^)]*\)/g, "$1"],
   // Bold+italic, bold, italic — longest markers first so `**x**` is not left

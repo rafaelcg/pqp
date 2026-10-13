@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   DiscordImportParseError,
   discordTemplateUrl,
+  forumTagIconForEmoji,
   mapGuildTemplate,
   MAX_SERVER_ICON_BYTES,
   parseDiscordTemplateCode,
@@ -243,9 +244,18 @@ async function insertForumTags(
     }
     channel.tags.forEach((tag, position) => {
       const base = params.length;
-      params.push(forumId, tag.name, tag.emoji, tag.moderated, position);
+      // The emoji stays (old phone builds read it); the icon is the nearest
+      // one in the curated set, when there is one, so the web draws an icon.
+      params.push(
+        forumId,
+        tag.name,
+        tag.emoji,
+        forumTagIconForEmoji(tag.emoji),
+        tag.moderated,
+        position,
+      );
       rows.push(
-        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`,
+        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`,
       );
     });
   }
@@ -253,7 +263,7 @@ async function insertForumTags(
     return;
   }
   await client.query(
-    `INSERT INTO forum_tags (forum_id, name, emoji, moderated, position)
+    `INSERT INTO forum_tags (forum_id, name, emoji, icon, moderated, position)
      VALUES ${rows.join(", ")}`,
     params,
   );

@@ -222,6 +222,14 @@ export const FEATURE_FLAGS = {
     codeDefault: true,
     perServer: false,
   },
+  user_stats: {
+    description:
+      "Conta por pessoa e por dia o tempo em call, o tempo compartilhando tela, as músicas postas na fila e as watch parties assistidas, pra Retrospectiva (desligado: nada novo é gravado).",
+    env: "USER_STATS",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    perServer: false,
+  },
   ws_auth_admission: {
     description:
       "Fila na chegada dos sockets: uma rajada de reconexão (deploy) espera na porta do WebSocket, não no pool do Postgres (desligado: todos de uma vez).",
@@ -436,6 +444,22 @@ export const FEATURE_FLAGS = {
     // sweep in ws/voice.ts), so this is the kill switch as well.
     perServer: true,
     clientVia: "GET /api/voice/config?serverId= (audienceMode)",
+  },
+  soundboard: {
+    description:
+      "Soundboard nas calls: quem pode falar toca clipes curtos (até 5,2 s) que todo mundo na sala ouve, e a staff sobe os sons do servidor nas configurações (desligado: o botão e a aba somem e o servidor recusa o clipe).",
+    env: "SOUNDBOARD",
+    parseEnv: exactTrue,
+    // Off: the migration grants USE_SOUNDBOARD to @everyone on every server,
+    // communities included, so the bit alone would turn it on everywhere at
+    // once. One server first (its override), then everybody.
+    codeDefault: false,
+    // Every reader knows the server: the play gate and the seat's grant read
+    // the call's server, the upload routes have it in the path, and the client
+    // asks `GET /api/voice/config?serverId=`. Off also refuses plays in a call
+    // already running, so it is the kill switch.
+    perServer: true,
+    clientVia: "GET /api/voice/config?serverId= (soundboard)",
   },
   voice_audio_self_heal: {
     description:
