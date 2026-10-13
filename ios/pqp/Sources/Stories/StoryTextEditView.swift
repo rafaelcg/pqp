@@ -43,11 +43,18 @@ struct StoryTextEditView: View {
                 VStack(spacing: 0) {
                     topBar
                     Spacer(minLength: 0)
-                    controls
+                    // The editor ignores the keyboard (the canvas must not
+                    // shrink under the line being typed), so the controls ride
+                    // on top of it themselves.
+                    controls.padding(.bottom, max(0, keyboard - proxy.safeAreaInsets.bottom))
                 }
+                // Centered in the room between the top bar and the controls,
+                // never under them.
                 StoryVerticalSlider(value: scaleFraction, range: 0...1)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                     .padding(.leading, 12)
+                    .padding(.top, 56)
+                    .padding(.bottom, 130 + max(0, keyboard - proxy.safeAreaInsets.bottom))
             }
         }
         .sensoryFeedback(.selection, trigger: tick)
