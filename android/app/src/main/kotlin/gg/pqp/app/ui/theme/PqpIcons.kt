@@ -70,7 +70,7 @@ import androidx.compose.ui.unit.dp
  * anything here is touched. The colour is a placeholder because `Icon()` tints
  * what it draws.
  */
-private fun lucide(vararg paths: String) = lazy {
+internal fun lucide(vararg paths: String) = lazy {
     ImageVector.Builder(
         defaultWidth = 24.dp,
         defaultHeight = 24.dp,

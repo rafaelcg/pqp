@@ -42,7 +42,8 @@ describe("DiscordImportPreview forums", () => {
     expect(html).toContain("lucide-messages-square");
     expect(html).toContain("questions");
     expect(html).toContain("Bug");
-    expect(html).toContain("🐛");
+    // The emoji becomes the icon the import will store.
+    expect(html).toContain('data-forum-tag-icon="bug"');
     // Eight chips, then "+4" for the other four of twelve.
     expect(html).toContain("+4");
     expect(html).not.toContain("extra 9");
