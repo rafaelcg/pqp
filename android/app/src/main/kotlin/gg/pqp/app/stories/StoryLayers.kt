@@ -48,6 +48,9 @@ object StoryLayers {
     /** A mention pill's font, as a share of the canvas width. */
     const val MENTION_FONT = 0.05f
 
+    /** The call card's width, as a share of the canvas width. */
+    const val CALL_CARD_WIDTH = 0.82f
+
     /** A photo layer at scale 1 is this share of the canvas width (the schema's own rule). */
     const val IMAGE_BASE_WIDTH = 0.4f
 

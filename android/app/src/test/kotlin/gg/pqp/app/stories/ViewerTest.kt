@@ -221,4 +221,9 @@ class ViewerTest {
         // A drawing follows the same rule.
         assertNull(StoryLayerParser.parse(Json.parseToJsonElement("""{${geometry("drawing")},"url":"file:///x.png","width":10,"height":10}""")))
     }
+
+    @Test
+    fun `the call card is 82 percent of the canvas wide, as on every platform`() {
+        assertEquals(0.82f, StoryLayers.CALL_CARD_WIDTH, 0f)
+    }
 }

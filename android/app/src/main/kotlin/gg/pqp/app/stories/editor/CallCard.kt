@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import gg.pqp.app.R
+import gg.pqp.app.stories.StoryLayers
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.theme.Gabarito
 import gg.pqp.app.ui.theme.InstrumentSans
@@ -136,7 +137,7 @@ fun StoryCallCard(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
-            .widthIn(max = dp(0.86f))
+            .width(dp(StoryLayers.CALL_CARD_WIDTH))
             .alpha(if (ended) 0.72f else 1f)
             .clip(shape)
             .background(Color.Black.copy(alpha = if (ended) 0.5f else 0.66f))
@@ -160,7 +161,7 @@ fun StoryCallCard(
             size = dp(0.11f),
             cornerRadius = dp(0.028f),
         )
-        Column(Modifier.padding(horizontal = dp(0.028f)).widthIn(max = dp(0.42f))) {
+        Column(Modifier.weight(1f).padding(horizontal = dp(0.028f))) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LiveDot(state, dp(0.018f))
                 Spacer(Modifier.size(dp(0.012f)))
