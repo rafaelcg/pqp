@@ -306,7 +306,9 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   }, [config.mediaEnabled, config.maxBytes, config.maxVideoMs, config.videoEnabled]);
 
   function retake() {
+    // Whatever was still being prepared is dropped (its ticket is stale now), and so is its overlay.
     fileTicket.current += 1;
+    setPreparing(false);
     setMedia(null);
     setCaption("");
     setProblem(null);

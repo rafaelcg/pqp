@@ -17,6 +17,7 @@ function camera(patch: Partial<CameraControls> = {}): CameraControls {
     toggleTorch: () => {},
     size: null,
     retry: () => {},
+    markFailed: () => {},
     ...patch,
   };
 }

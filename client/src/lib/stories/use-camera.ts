@@ -31,6 +31,8 @@ export interface CameraControls {
   /** The track's real size, for a clip whose own header cannot be read. */
   size: { width: number; height: number } | null;
   retry: () => void;
+  /** The preview cannot play (the browser refused it): the camera is no use, say so. */
+  markFailed: () => void;
 }
 
 function isCoarsePointer(): boolean {
@@ -177,10 +179,13 @@ export function useCamera(active: boolean): CameraControls {
   }, [torchOn]);
 
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
+  const markFailed = useCallback(() => {
+    setStatus("failed");
+  }, []);
 
   return useMemo(
-    () => ({ status, stream, mirrored, canFlip, flip, torchAvailable, torchOn, toggleTorch, size, retry }),
-    [status, stream, mirrored, canFlip, flip, torchAvailable, torchOn, toggleTorch, size, retry],
+    () => ({ status, stream, mirrored, canFlip, flip, torchAvailable, torchOn, toggleTorch, size, retry, markFailed }),
+    [status, stream, mirrored, canFlip, flip, torchAvailable, torchOn, toggleTorch, size, retry, markFailed],
   );
 }
 
@@ -230,6 +235,8 @@ export function useRecorder(
   const [elapsedMs, setElapsedMs] = useState(0);
   const [micMissing, setMicMissing] = useState(false);
   const recorder = useRef<MediaRecorder | null>(null);
+  /** The camera stream the running clip was started on. */
+  const recordedStream = useRef<MediaStream | null>(null);
   const chunks = useRef<Blob[]>([]);
   const micStream = useRef<MediaStream | null>(null);
   const startedAt = useRef(0);
@@ -329,6 +336,7 @@ export function useRecorder(
       }
     };
     recorder.current = next;
+    recordedStream.current = stream;
     startedAt.current = Date.now();
     try {
       next.start();
@@ -353,7 +361,8 @@ export function useRecorder(
   // cancels a start that is still waiting on the microphone prompt.
   useEffect(() => {
     startTicket.current += 1;
-    if (!stream && recorder.current && recorder.current.state !== "inactive") {
+    // A clip belongs to the stream it started on: a different one (a flip, a restart) ends it.
+    if (recorder.current && recorder.current.state !== "inactive" && recordedStream.current !== stream) {
       recorder.current.stop();
     }
   }, [stream]);

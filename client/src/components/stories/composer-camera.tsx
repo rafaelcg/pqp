@@ -51,8 +51,16 @@ export const CameraStage = forwardRef<HTMLVideoElement, CameraStageProps>(functi
     }
     element.srcObject = stream;
     if (stream) {
-      void element.play().catch(() => undefined);
+      // A preview the browser will not play is a camera that shows nothing: do not offer the shutter.
+      element.play().catch((error: unknown) => {
+        // Interrupted by the next stream loading is not a refusal.
+        if ((error as { name?: string } | null)?.name !== "AbortError") {
+          camera.markFailed();
+        }
+      });
     }
+    // `markFailed` is stable; the stream is what this follows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stream]);
 
   const problem =
