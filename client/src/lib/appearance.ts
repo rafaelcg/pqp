@@ -19,7 +19,14 @@ export type { AppearancePreference };
 export const APPEARANCE_STORAGE_KEY = "pqp-appearance";
 export const DEFAULT_APPEARANCE: AppearancePreference = "signal";
 
-export const APPEARANCES = ["signal", "harmony", "hearth", "night"] as const;
+export const APPEARANCES = [
+  "signal",
+  "harmony",
+  "hearth",
+  "night",
+  "halloween",
+  "christmas",
+] as const;
 
 /**
  * MODO 2005, the hidden fifth look. `data-appearance="retro"` like any other
@@ -72,10 +79,15 @@ export function mergeAccountAppearance(input: {
   return { retro: false, base: input.account, push: false };
 }
 
+/** Night and the seasonal looks only exist in dark. */
 export function appearanceForcesDark(
   appearance: AppearancePreference,
 ): boolean {
-  return appearance === "night";
+  return (
+    appearance === "night" ||
+    appearance === "halloween" ||
+    appearance === "christmas"
+  );
 }
 
 export function isAppearance(value: string | null): value is AppearancePreference {
@@ -83,7 +95,9 @@ export function isAppearance(value: string | null): value is AppearancePreferenc
     value === "signal" ||
     value === "harmony" ||
     value === "hearth" ||
-    value === "night"
+    value === "night" ||
+    value === "halloween" ||
+    value === "christmas"
   );
 }
 
@@ -250,7 +264,7 @@ export function setAppearancePreference(appearance: AppearancePreference): void 
   writeFlag(RETRO_SYNCED_STORAGE_KEY, true);
   storeAppearance(appearance);
   commit(appearance);
-  // Night also pins brightness. One PATCH so the account learns both keys
+  // Night and the seasonal looks also pin brightness. One PATCH so the account learns both keys
   // without a second immediate write. Local theme persist is theme.ts's
   // appearance subscription, which must not import this module.
   queuePreferenceSync(

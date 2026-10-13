@@ -89,6 +89,9 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
  * skin for dark, not a clone of another product's AMOLED theme. `retro` is
  * Modo 2005, the hidden look a person finds with `/2005`; it is accepted here
  * before any client can pick it, so the API that stores it ships first.
+ * `halloween` and `christmas` are dark-only seasonal looks: the client only
+ * offers them in their season, but a stored pick keeps working all year, so
+ * these values are permanent once shipped.
  *
  * `guild` and `accord` were earlier ids for harmony. Accept them on read so
  * a stored pick does not silently fall back to signal.
@@ -108,6 +111,8 @@ export const APPEARANCE_PREFERENCES = [
   "hearth",
   "night",
   "retro",
+  "halloween",
+  "christmas",
 ] as const;
 export const appearancePreferenceSchema = z.preprocess(
   (value) => (value === "guild" || value === "accord" ? "harmony" : value),
