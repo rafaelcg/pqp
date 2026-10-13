@@ -14,6 +14,10 @@ import {
   liveReactionsMessageSchema,
 } from "./live-reactions.js";
 import {
+  soundboardPlayMessageSchema,
+  soundboardPlayedMessageSchema,
+} from "./soundboard.js";
+import {
   setWatchPartyMessageSchema,
   watchPartyMessageSchema,
 } from "./watch-party.js";
@@ -209,6 +213,13 @@ export const welcomeMessageSchema = z.object({
   canStream: z.boolean().optional(),
   /** `Permission.MANAGE_MUSIC` here. Absent on older servers: treated as true. */
   canManageMusic: z.boolean().optional(),
+  /**
+   * `Permission.USE_SOUNDBOARD` here. Absent on an older server: the client
+   * hides the board. A conversation call sends false.
+   */
+  canUseSoundboard: z.boolean().optional(),
+  /** `Permission.MANAGE_SOUNDBOARD` here. Absent: the client hides Add. */
+  canManageSoundboard: z.boolean().optional(),
   /**
    * Why `canSpeak` is false, when it is: the channel's permissions, or
    * audience mode (`docs/plans/AUDIENCE_MODE.md`). Absent when the mic is not
@@ -602,6 +613,10 @@ export const voiceSpeakChangedMessageSchema = z.object({
   canStream: z.boolean().optional(),
   /** `Permission.MANAGE_MUSIC`, re-resolved with the rest. Absent: unchanged. */
   canManageMusic: z.boolean().optional(),
+  /** `Permission.USE_SOUNDBOARD`, re-resolved with the rest. Absent: unchanged. */
+  canUseSoundboard: z.boolean().optional(),
+  /** `Permission.MANAGE_SOUNDBOARD`, re-resolved with the rest. Absent: unchanged. */
+  canManageSoundboard: z.boolean().optional(),
   /** Why `canSpeak` is false, when it is. Same meaning as on `welcome`. */
   speakReason: speakReasonSchema.optional(),
 });
@@ -693,6 +708,8 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   // --- live reactions --- see packages/shared/src/live-reactions.ts. Coalesced
   // counts for the room, never per person and never stored.
   liveReactionsMessageSchema,
+  // --- soundboard --- one clip for the room. Not stored. See soundboard.ts.
+  soundboardPlayedMessageSchema,
   // --- live HLS (screen-share egress) ---
   voiceStreamMessageSchema,
   channelLiveMessageSchema,
@@ -917,6 +934,8 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   setMusicListeningMessageSchema,
   // --- live reactions ---
   liveReactionMessageSchema,
+  // --- soundboard ---
+  soundboardPlayMessageSchema,
   // --- live HLS watch mode (no seat) ---
   watchLiveMessageSchema,
 ]);

@@ -22,6 +22,8 @@ import {
   PictureInPicture2,
   Pin,
   Scan,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import type { VideoFitControls } from "@/hooks/use-video-fit";
@@ -67,6 +69,24 @@ function separator(id: string): ContextMenuItemDef {
   return { id, label: "", separator: true };
 }
 
+/**
+ * This person's soundboard clips, on or off for this listener only. Ticked
+ * while their clips play, like the switch it replaces in the audio panel.
+ */
+function soundboardItem(
+  t: Translate,
+  name: string,
+  soundboard: { muted: boolean; onToggle: () => void },
+): ContextMenuItemDef {
+  return {
+    id: "soundboard",
+    label: t("voice.audio.soundboardFor", { name }),
+    icon: soundboard.muted ? VolumeX : Volume2,
+    checked: !soundboard.muted,
+    onSelect: soundboard.onToggle,
+  };
+}
+
 /** The "⋯" on a camera tile in a call. */
 export function cameraTileMoreItems(
   t: Translate,
@@ -74,6 +94,8 @@ export function cameraTileMoreItems(
     name: string;
     fit?: VideoFitControls;
     pin?: { pinned: boolean; onToggle: () => void };
+    /** This person's soundboard clips, muted for this listener or not. */
+    soundboard?: { muted: boolean; onToggle: () => void };
     /** Not offered on our own tile: hiding yourself is the camera button. */
     hide?: { onHide: () => void };
   },
@@ -91,6 +113,9 @@ export function cameraTileMoreItems(
       icon: Pin,
       onSelect: input.pin.onToggle,
     });
+  }
+  if (input.soundboard) {
+    items.push(soundboardItem(t, input.name, input.soundboard));
   }
   if (input.hide) {
     if (items.length > 0) items.push(separator("hide-separator"));
@@ -113,6 +138,8 @@ export function shareTileMoreItems(
     fit?: VideoFitControls;
     selfPreview?: { hidden: boolean; onToggle: () => void };
     pin?: { pinned: boolean; onToggle: () => void };
+    /** The presenter's soundboard clips, muted for this listener or not. */
+    soundboard?: { muted: boolean; onToggle: () => void };
     /** Only a peer's share can be declined. */
     dismiss?: { onDismiss: () => void };
   },
@@ -140,6 +167,9 @@ export function shareTileMoreItems(
       icon: Pin,
       onSelect: input.pin.onToggle,
     });
+  }
+  if (input.soundboard && !input.isSelf) {
+    items.push(soundboardItem(t, input.name, input.soundboard));
   }
   if (input.dismiss && !input.isSelf) {
     if (items.length > 0) items.push(separator("dismiss-separator"));

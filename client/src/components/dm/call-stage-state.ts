@@ -29,6 +29,23 @@ export function hasWatchableVideo(input: {
 }
 
 /**
+ * The presenter's own share is a picture before the roster says so.
+ * `screenSharePeerIds` is the server's list, and it arrives a frame later
+ * than the local capture. Counting only that list left the stage collapsed
+ * for the whole wait, so "You are presenting" never mounted.
+ */
+export function sharePeerIdsIncludingLocal(
+  peerIds: readonly string[],
+  localPeerId: string | null,
+  localSharing: boolean,
+): string[] {
+  if (!localSharing || !localPeerId || peerIds.includes(localPeerId)) {
+    return [...peerIds];
+  }
+  return [...peerIds, localPeerId];
+}
+
+/**
  * The expanded stage is for watching something, or for an outgoing ring.
  * Voice-only occupancy stays a slim bar. Collapsing is a user choice
  * remembered for the session.

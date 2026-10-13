@@ -14,12 +14,15 @@ import {
 import { createPortal } from "react-dom";
 import { Volume1, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { useFullscreenPortalHost } from "@/components/ui/tooltip";
+import { SoundboardMutedMark } from "@/components/voice/soundboard-float";
 import {
   placeAnchoredPanel,
   type AnchoredPanelPlacement,
 } from "@/lib/anchored-panel";
 import { useTranslation } from "@/lib/i18n";
+import { useSoundboardUserMuted } from "@/lib/soundboard";
 import { cn } from "@/lib/utils";
 
 /**
@@ -185,6 +188,37 @@ function VolumeRow({
   );
 }
 
+/**
+ * This person's soundboard clips, on or off, for this listener only. A
+ * toggle rather than a slider: what people ask for is to stop hearing the one
+ * person who will not stop, not to set them at 40%.
+ *
+ * A switch, because the control and the state are one thing: on means their
+ * clips play, off means they are muted. The row's heading is the visible text
+ * and the switch's name carries the same word plus the person, so what a
+ * screen reader says is what the row shows.
+ */
+function SoundboardRow({ userId, name }: { userId: string; name: string }) {
+  const { t } = useTranslation();
+  const [muted, setMuted] = useSoundboardUserMuted(userId);
+  return (
+    <div data-testid="peer-audio-soundboard" className="px-1 pb-1.5 pt-1">
+      <div className="flex items-center justify-between gap-2 px-1">
+        <span className="truncate text-[11px] uppercase tracking-wide text-paper-muted">
+          {t("voice.audio.soundboard")}
+        </span>
+        <Switch
+          checked={!muted}
+          onCheckedChange={(on) => setMuted(!on)}
+          label={t("voice.audio.soundboardFor", { name })}
+          hideLabel
+          className="w-auto shrink-0 px-1 py-1"
+        />
+      </div>
+    </div>
+  );
+}
+
 /** Which edge of the anchor the panel hangs off. */
 export type PeerAudioMenuSide = "top" | "bottom";
 export type PeerAudioMenuAlign = "start" | "end";
@@ -204,6 +238,7 @@ export function PeerAudioMenu({
   open,
   voice,
   share,
+  soundboardUserId,
   failed = false,
   onRetry,
   side = "top",
@@ -219,6 +254,11 @@ export function PeerAudioMenu({
   voice?: PeerAudioTrack;
   /** Present only while this person is sharing a screen that carries sound. */
   share?: PeerAudioTrack;
+  /**
+   * Whose soundboard clips the panel can mute. Only where the person is
+   * somebody else in the call: never for ourselves.
+   */
+  soundboardUserId?: string;
   failed?: boolean;
   onRetry?: () => void;
   side?: PeerAudioMenuSide;
@@ -242,16 +282,19 @@ export function PeerAudioMenu({
   if (!open) {
     return null;
   }
-  const hasAnything = voice || share || (failed && onRetry);
+  const hasAnything = voice || share || soundboardUserId || (failed && onRetry);
   if (!hasAnything) {
     return null;
   }
   const label = t("voice.audio.title", { name });
   const body = (
     <>
-      <p className="truncate px-2 pb-0.5 pt-1 text-[13px] font-semibold text-paper">
-        {name}
-      </p>
+      <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1">
+        <p className="truncate text-[13px] font-semibold text-paper">{name}</p>
+        {soundboardUserId && (
+          <SoundboardMutedMark userId={soundboardUserId} name={name} />
+        )}
+      </div>
       {voice && (
         <VolumeRow
           testId="peer-audio-voice"
@@ -272,6 +315,7 @@ export function PeerAudioMenu({
           track={share}
         />
       )}
+      {soundboardUserId && <SoundboardRow userId={soundboardUserId} name={name} />}
       {failed && onRetry && (
         <div className="px-1 pb-1 pt-0.5">
           <Button
@@ -358,16 +402,18 @@ function samePlacement(
  * It takes focus when it appears and gives it back to the anchor when it goes,
  * so the keyboard still reaches a panel that now sits at the end of the page.
  */
-function AnchoredPanel({
+export function AnchoredPanel({
   label,
   anchorRef,
   panelRef,
   onClose,
   side,
   className,
+  testId = "peer-audio-menu",
   children,
 }: {
   label: string;
+  testId?: string;
   anchorRef: RefObject<HTMLElement | null>;
   panelRef?: RefObject<HTMLDivElement | null>;
   onClose?: () => void;
@@ -474,7 +520,7 @@ function AnchoredPanel({
     <div
       ref={setRefs}
       role="dialog"
-      data-testid="peer-audio-menu"
+      data-testid={testId}
       aria-label={label}
       tabIndex={-1}
       onKeyDown={onKeyDown}

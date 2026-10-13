@@ -201,6 +201,15 @@ export const AUDIT_ACTIONS = [
   "forum.settings_update",
   /** A forum webhook's tag allowlist, default tags or dedupe window (P1b). */
   "webhook.forum_settings",
+  /**
+   * A soundboard clip added, renamed or re-levelled, or deleted. Audio is
+   * not scanned, so "who put this clip on the server" has to have an answer.
+   * The row targets the clip and carries its name in `changes`, because a
+   * deleted clip's id points at nothing.
+   */
+  "soundboard.create",
+  "soundboard.update",
+  "soundboard.delete",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

@@ -4,10 +4,13 @@ import {
   useEffect,
   useRef,
   type ComponentType,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
+import { forgetMenuRowChosen, noteMenuRowChosen } from "@/components/ui/dialog";
 import { useFullscreenPortalHost } from "@/components/ui/tooltip";
 import {
   MenuItemRows,
@@ -84,13 +87,19 @@ export function Menu({
     },
     [],
   );
+  const triggerRef = useRef<HTMLElement>(null);
+  // Set when the menu closes because a row was chosen, not Escape or a
+  // click outside. A row that opens a dialog hands focus to that dialog, and
+  // Radix's own return-to-trigger would run after it and pull focus back out
+  // from under the modal (Enter then reopened the menu behind it).
+  const chosenRef = useRef(false);
   if (!rendered) {
     return <>{children}</>;
   }
 
   return (
     <DropdownMenuPrimitive.Root onOpenChange={reportOpen}>
-      <DropdownMenuPrimitive.Trigger asChild>
+      <DropdownMenuPrimitive.Trigger asChild ref={triggerRef as never}>
         {children}
       </DropdownMenuPrimitive.Trigger>
       <DropdownMenuPrimitive.Portal container={portalHost ?? undefined}>
@@ -103,10 +112,40 @@ export function Menu({
           // translated labels.
           data-server-menu=""
           className="elevation-3 z-[100] max-h-[var(--radix-dropdown-menu-content-available-height)] max-w-[var(--radix-dropdown-menu-content-available-width)] overflow-y-auto overscroll-contain rounded-[var(--radius-card)] p-1 animate-fade-in min-w-[11.5rem]"
-          // No `onCloseAutoFocus` override, unlike `ContextMenu`'s: THIS
-          // trigger is a single, real, focusable control (a right-click has
-          // no such thing), so Radix's default — return focus to it on close
-          // — is exactly what closing on Escape is supposed to do.
+          onClickCapture={(event: ReactMouseEvent) => {
+            if ((event.target as Element).closest?.('[role^="menuitem"]')) {
+              chosenRef.current = true;
+              noteMenuRowChosen(triggerRef.current);
+            }
+          }}
+          onKeyDownCapture={(event: ReactKeyboardEvent) => {
+            if (
+              (event.key === "Enter" || event.key === " ") &&
+              (event.target as Element).closest?.('[role^="menuitem"]')
+            ) {
+              chosenRef.current = true;
+              noteMenuRowChosen(triggerRef.current);
+            }
+          }}
+          // Escape or a click outside: Radix's default, focus back on this
+          // trigger. A chosen row: whatever it opened keeps focus, and the
+          // trigger only gets it back when nothing took it.
+          onCloseAutoFocus={(event: Event) => {
+            if (!chosenRef.current) {
+              return;
+            }
+            chosenRef.current = false;
+            event.preventDefault();
+            window.setTimeout(() => {
+              // From here on a dialog the row opened has focus, or the
+              // trigger does: the note is no longer needed to find it.
+              forgetMenuRowChosen(triggerRef.current);
+              const active = document.activeElement;
+              if (!active || active === document.body) {
+                triggerRef.current?.focus();
+              }
+            }, 0);
+          }}
         >
           {topContent}
           <MenuItemRows

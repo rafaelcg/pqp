@@ -21,6 +21,15 @@ import { publishLiveReactions } from "@/lib/live-reactions";
 import { notifyIncomingCall } from "@/lib/notifications";
 import { receiveMusic, setMusicSession } from "@/lib/music-store";
 import {
+  isSoundboardUserMuted,
+  noteOwnSoundboardEcho,
+  playSoundboardClip,
+  registerSoundboardSender,
+  showSoundboardMark,
+  silenceSoundboardClips,
+  stopSoundboardClips,
+} from "@/lib/soundboard";
+import {
   audibleScreenPeerIds,
   isCameraAtCap,
   isScreenShareAtCap,
@@ -388,6 +397,10 @@ export interface VoiceState {
   canStream: boolean;
   /** `Permission.MANAGE_MUSIC` in this room, from `welcome`. Older servers: true. */
   canManageMusic: boolean;
+  /** `Permission.USE_SOUNDBOARD`. False until welcome, and false in a DM. */
+  canUseSoundboard: boolean;
+  /** `Permission.MANAGE_SOUNDBOARD`. False until welcome says otherwise. */
+  canManageSoundboard: boolean;
   inputMode: VoiceInputMode;
   /**
    * Whether audio is actually leaving this machine right now — the one thing
@@ -1899,6 +1912,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     canSpeak: true,
     canStream: true,
     canManageMusic: true,
+    canUseSoundboard: false,
+    canManageSoundboard: false,
     isAudienceSeat: false,
     inputMode: "voice-activity",
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
@@ -2274,8 +2289,26 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  // The room the soundboard's clips belong to. Leaving it, or moving to
+  // another, cuts whatever is still sounding from it.
+  let soundboardRoom: string | null = null;
+  let soundboardDeafened = false;
+
   function emit() {
     pushAudioDelivery();
+    // Deafening cuts the clips already sounding: the check at the start of a
+    // play only stops the next one. Muting is not deafening, so a muted
+    // listener still hears the board, as on Discord.
+    if (state.isDeafened && !soundboardDeafened) {
+      silenceSoundboardClips();
+    }
+    soundboardDeafened = state.isDeafened;
+    if (state.voiceChannelId !== soundboardRoom) {
+      if (soundboardRoom !== null) {
+        stopSoundboardClips();
+      }
+      soundboardRoom = state.voiceChannelId;
+    }
     // THE PIN FOLLOWS THE SHARE, NOT ONLY THE FRAME. A share that goes up
     // after the stream frame (a reloaded presenter, a re-share on the same
     // page) or an SFU that comes up after it changes what `refreshHlsSource`
@@ -3427,6 +3460,29 @@ export function createVoiceController(transport: RealtimeTransport) {
       sendListening: (listening) =>
         transport.sendVoice({ type: "set-music-listening", listening }),
       canManage: () => state.canManageMusic,
+    });
+  }
+
+  let unregisterSoundboard: (() => void) | null = null;
+  function bindSoundboardSender() {
+    unregisterSoundboard?.();
+    unregisterSoundboard = registerSoundboardSender((soundId) => {
+      if (
+        !state.voiceChannelId ||
+        state.status === "idle" ||
+        !state.canUseSoundboard ||
+        !state.canSpeak ||
+        state.isDeafened ||
+        state.self?.serverMuted === true
+      ) {
+        return false;
+      }
+      transport.sendVoice({
+        type: "soundboard-play",
+        channelId: state.voiceChannelId,
+        soundId,
+      });
+      return true;
     });
   }
 
@@ -5081,6 +5137,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     // last one closed it: "the rest of the call" ends here.
     activeMicFallback = null;
     dismissedMicFallbackKey = null;
+    unregisterSoundboard?.();
+    unregisterSoundboard = null;
     state = {
       status: "idle",
       peerId: null,
@@ -5090,6 +5148,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       canSpeak: true,
       canStream: true,
       canManageMusic: true,
+      canUseSoundboard: false,
+      canManageSoundboard: false,
       isAudienceSeat: false,
       inputMode: state.inputMode,
       isTransmitting: false,
@@ -5462,8 +5522,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.peerId = peerId;
           state.voiceChannelId = channelId;
           state.canManageMusic = message.canManageMusic ?? true;
+          state.canUseSoundboard = message.canUseSoundboard ?? false;
+          state.canManageSoundboard = message.canManageSoundboard ?? false;
           state.roomTransport = roomTransport;
           registerMusicSession(peerId, channelId, message.self);
+          bindSoundboardSender();
           state.status = "connected";
           state.audience = message.audience ?? null;
           applyPublishRules(
@@ -5538,12 +5601,15 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.peerId = message.peerId;
         state.voiceChannelId = message.voiceChannelId;
         state.canManageMusic = message.canManageMusic ?? true;
+        state.canUseSoundboard = message.canUseSoundboard ?? false;
+        state.canManageSoundboard = message.canManageSoundboard ?? false;
         state.transportFailure = null;
         registerMusicSession(
           message.peerId,
           message.voiceChannelId,
           message.self,
         );
+        bindSoundboardSender();
         // A fresh seat, so there is no "before" to have grown from. This is
         // what keeps the capacity card off the screen of somebody who walks
         // into a room that was already promoted.
@@ -5774,6 +5840,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (message.canManageMusic !== undefined) {
           state.canManageMusic = message.canManageMusic;
         }
+        if (message.canUseSoundboard !== undefined) {
+          state.canUseSoundboard = message.canUseSoundboard;
+        }
+        if (message.canManageSoundboard !== undefined) {
+          state.canManageSoundboard = message.canManageSoundboard;
+        }
         emit();
         break;
       case "voice-audience":
@@ -5816,6 +5888,20 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         break;
       }
+      case "voice-moderation":
+        // The moderator's own word on this person's mute, sent to every one
+        // of their sockets. The roster says the same, but a delta can be
+        // refused while this client's view of the room is out of step (a
+        // seat of ours still held for its resume window), and the mic and
+        // the soundboard lock must not wait for the next full roster.
+        if (
+          message.voiceChannelId === state.voiceChannelId &&
+          (message.action === "muted" || message.action === "unmuted")
+        ) {
+          applySelfServerMute(message.action === "muted");
+          emit();
+        }
+        break;
       case "peer-updated": {
         // A rename or a new picture, not an arrival: no join cue, no new
         // connection, and the tile keeps whatever media it already has.
@@ -5984,6 +6070,36 @@ export function createVoiceController(transport: RealtimeTransport) {
         // track, so a 720p share caps every viewer at 720p.
         void refreshHlsSource();
         emit();
+        break;
+      case "soundboard-play":
+        // A late echo from the room this seat left counts nowhere: the move
+        // already dropped its pending sends, and the new room never saw it.
+        if (
+          message.userId === state.self?.userId &&
+          state.status !== "idle" &&
+          message.channelId === state.voiceChannelId
+        ) {
+          noteOwnSoundboardEcho(message.soundId);
+        }
+        if (
+          state.status === "idle" ||
+          message.channelId !== state.voiceChannelId ||
+          // Muted by this listener: neither heard nor marked.
+          isSoundboardUserMuted(message.userId)
+        ) {
+          break;
+        }
+        showSoundboardMark({
+          userId: message.userId,
+          displayName: message.displayName,
+          emoji: message.emoji,
+          soundId: message.soundId,
+        });
+        void playSoundboardClip(
+          message.soundId,
+          () => !state.isDeafened && state.voiceChannelId === message.channelId,
+          message.userId,
+        );
         break;
       case "channel-live":
         // Every channel this socket may view, in or out of the room. Same

@@ -779,6 +779,11 @@ export interface VoiceConfig {
    * (`lib/audio-health.ts`). Global, so it is read without a server.
    */
   audioSelfHeal?: boolean;
+  /**
+   * `soundboard`: this server's calls offer the soundboard and its settings
+   * tab. Per server, default off. The play gate on the server reads it too.
+   */
+  soundboard?: boolean;
 }
 
 export const fetchVoiceConfig = (serverId: string) =>
@@ -2419,3 +2424,59 @@ export const fetchAllReports = (
 /** Deletes the reported message. 400 when there is nothing live to remove. */
 export const removeReportedMessage = (reportId: string) =>
   post<{ ok: true }>(`/api/reports/${reportId}/remove-message`, undefined);
+
+export interface SoundboardSoundDto {
+  id: string;
+  name: string;
+  emoji: string;
+  contentType: "audio/mpeg" | "audio/ogg";
+  byteSize: number;
+  durationMs: number;
+  volume: number;
+  url: string | null;
+  /** Who added it. Only sent to people who manage the board. */
+  addedBy?: { id: string; name: string } | null;
+}
+
+export const fetchSoundboard = (serverId: string) =>
+  apiFetch<{
+    sounds: SoundboardSoundDto[];
+    maxSounds: number;
+    /** Stored sounds plus uploads in flight: what the mint counts. Older API: absent. */
+    slotsUsed?: number;
+  }>(
+    `/api/servers/${serverId}/soundboard`,
+  );
+
+export const createSoundboardUpload = (
+  serverId: string,
+  body: { contentType: "audio/mpeg" | "audio/ogg"; byteSize: number },
+) =>
+  post<{ key: string; uploadUrl: string; expiresAt: string }>(
+    `/api/servers/${serverId}/soundboard/uploads`,
+    body,
+  );
+
+export const claimSoundboardSound = (
+  serverId: string,
+  body: { key: string; name: string; emoji: string; volume?: number },
+) =>
+  post<{ sound: SoundboardSoundDto }>(
+    `/api/servers/${serverId}/soundboard`,
+    body,
+  );
+
+export const updateSoundboardSound = (
+  serverId: string,
+  soundId: string,
+  body: { name?: string; emoji?: string; volume?: number },
+) =>
+  patch<{ sound: SoundboardSoundDto }>(
+    `/api/servers/${serverId}/soundboard/${soundId}`,
+    body,
+  );
+
+export const deleteSoundboardSound = (serverId: string, soundId: string) =>
+  apiFetch<{ ok: true }>(`/api/servers/${serverId}/soundboard/${soundId}`, {
+    method: "DELETE",
+  });

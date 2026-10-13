@@ -14,6 +14,7 @@ import { CallStage } from "@/components/voice/call-stage";
  */
 export function VoiceChannelStage({
   channelId,
+  serverId = null,
   channelName,
   serverName = null,
   serverIconUrl = null,
@@ -60,6 +61,7 @@ export function VoiceChannelStage({
   presenterStage,
 }: {
   channelId: string;
+  serverId?: string | null;
   channelName: string;
   serverName?: string | null;
   serverIconUrl?: string | null;
@@ -131,6 +133,7 @@ export function VoiceChannelStage({
   return (
     <CallStage
       channelId={channelId}
+      serverId={serverId}
       title={channelName}
       serverName={serverName}
       serverIconUrl={serverIconUrl}
