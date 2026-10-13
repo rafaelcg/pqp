@@ -229,6 +229,8 @@ struct ChatView: View {
             VStack(spacing: 0) {
                 messageList
                 typingRow
+                botActivityRow
+                botNoticeRow
                 nudgeNoticeRow
                 sanctionRow
                 errorRow
@@ -1241,6 +1243,23 @@ struct ChatView: View {
         }
     }
 
+    /// Server bots at work, in place of "is typing". Nothing is drawn, and
+    /// nothing is read beyond an empty dictionary, in a channel with no bot.
+    @ViewBuilder
+    private var botActivityRow: some View {
+        if !model.botWork.isEmpty {
+            BotActivityRows(work: model.botWorkRows)
+        }
+    }
+
+    /// "The bot did not answer you", above the composer and dismissible.
+    @ViewBuilder
+    private var botNoticeRow: some View {
+        if let notice = model.botNotice {
+            BotNoticeRow(notice: notice) { model.botNotice = nil }
+        }
+    }
+
     @ViewBuilder
     private var typingRow: some View {
         if !model.typingNames.isEmpty {
@@ -1503,6 +1522,9 @@ struct MessageRow: View {
                         .buttonStyle(.plain)
                         .disabled(!isPerson)
                         .accessibilityIdentifier("message.author")
+                        if message.isServerBot {
+                            ServerBotTags()
+                        }
                         if isOriginalPoster && !message.isWebhook {
                             Text("OP")
                                 .font(.system(size: 9, weight: .bold))
