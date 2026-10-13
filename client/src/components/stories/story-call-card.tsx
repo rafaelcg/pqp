@@ -164,8 +164,8 @@ export function StoryCallCard({
       style={{
         padding: "3cqw",
         borderRadius: "5cqw",
-        border: `0.4cqw solid ${ended ? "rgb(255 255 255 / 0.25)" : "color-mix(in oklab, var(--story-accent) 75%, transparent)"}`,
-        background: ended ? "rgb(0 0 0 / 0.5)" : "rgb(0 0 0 / 0.66)",
+        border: `0.4cqw solid ${ended ? "color-mix(in oklab, var(--story-on-media) 25%, transparent)" : "color-mix(in oklab, var(--story-accent) 75%, transparent)"}`,
+        background: `color-mix(in oklab, var(--story-card) ${ended ? 50 : 66}%, transparent)`,
         boxShadow: "var(--story-shadow)",
         opacity: ended ? 0.72 : 1,
       }}
@@ -221,7 +221,7 @@ export function StoryCallCard({
             <span
               key={person.id}
               className={cn("rounded-full", fresh.has(person.id) && "animate-badge-pop")}
-              style={{ marginLeft: index > 0 ? "-1.4cqw" : 0, boxShadow: "0 0 0 0.4cqw rgb(0 0 0)" }}
+              style={{ marginLeft: index > 0 ? "-1.4cqw" : 0, boxShadow: "0 0 0 0.4cqw var(--story-card)" }}
             >
               <UserAvatar
                 name={person.displayName}
@@ -241,9 +241,9 @@ export function StoryCallCard({
                 height: "7cqw",
                 width: "7cqw",
                 fontSize: "2.8cqw",
-                background: "rgb(255 255 255 / 0.22)",
+                background: "color-mix(in oklab, var(--story-on-media) 22%, transparent)",
                 color: "var(--story-on-media)",
-                boxShadow: "0 0 0 0.4cqw rgb(0 0 0)",
+                boxShadow: "0 0 0 0.4cqw var(--story-card)",
               }}
             >
               +{extra}
