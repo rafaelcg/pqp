@@ -24,7 +24,7 @@ final class StoryEditorUITests: XCTestCase {
         return json
     }
 
-    private func launch() throws -> (XCUIApplication, String) {
+    private func launch(_ extra: [String: String] = [:]) throws -> (XCUIApplication, String) {
         let config = request("GET", "/api/stories/config")
         try XCTSkipUnless(config?["enabled"] as? Bool == true, "STORIES is off on the dev server.")
         try XCTSkipUnless((config?["layersMax"] as? Int ?? 0) > 0, "The dev server predates layers.")
@@ -33,6 +33,7 @@ final class StoryEditorUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment.merge(TestSeed.launchEnvironment) { _, new in new }
         app.launchEnvironment["PQP_STORY_CAMERA"] = "mock"
+        app.launchEnvironment.merge(extra) { _, new in new }
         app.launchArguments += ["-pqp.hasCompletedOnboarding", "YES", "-pqp.lastVisited", ""]
         if ProcessInfo.processInfo.environment["PQP_QA_SHOTS"] != nil {
             let language = ProcessInfo.processInfo.environment["PQP_QA_LANG"] ?? "pt-BR"
@@ -185,6 +186,21 @@ final class StoryEditorUITests: XCTestCase {
         let pill = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH '@'")).firstMatch
         XCTAssertTrue(pill.waitForExistence(timeout: 10), "The mention is on the canvas")
         snap(app, "editor-mention-placed")
+    }
+
+    /// A video opens in the editor with a sound toggle; muted, it posts.
+    func testAVideoCanBeMutedAndPosted() throws {
+        let (app, serverId) = try launch(["PQP_STORY_FIXTURE_VIDEO": "6"])
+        openComposer(app, serverId: serverId)
+        let mute = app.buttons["editor.mute"]
+        XCTAssertTrue(mute.waitForExistence(timeout: 30), "A video has a sound toggle")
+        snap(app, "editor-video")
+        mute.tap()
+        app.buttons["composer.next"].tap()
+        let post = app.buttons["audience.post"]
+        XCTAssertTrue(post.waitForExistence(timeout: 30))
+        post.tap()
+        XCTAssertTrue(app.buttons["stories.own"].waitForExistence(timeout: 40), "Posted without its sound")
     }
 
     /// Drawing: a stroke, Done, and the story has a drawing to undo.

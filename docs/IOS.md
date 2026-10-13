@@ -795,6 +795,59 @@ camera and the trim export; `StoryCameraUITests` drives the whole flow on the
 mock. **Owed: a pass on a real phone** (front/back flip, torch, pinch, hold to
 record, the mic prompt, an interruption by a call).
 
+## Stories: the editor and its layers
+
+A shot or a picked file (and the Text and Call tabs, on a card background)
+opens `StoryEditorView`: a 9:16 canvas with layers on it, over a dark page with
+the tools in the corner, the way Instagram's is. A layer is DATA
+(`StoryLayer`: id, x, y as 0..1 of the canvas, scale, rotation in radians, and
+one of text / image / drawing / call / mention), never burned into the picture.
+
+- **One gesture surface** (`StoryGestureSurface`, UIKit) owns every touch on the
+  canvas. The first finger picks the topmost layer under it (hit-tested through
+  the layer's own rotation and scale, `StoryCanvas.hit`), and that layer keeps
+  the drag, the pinch and the twist, which run at the same time, until the last
+  finger lifts. A pan is only recognised after the finger has moved, so the
+  layer is looked for where the finger went DOWN, not where it is when the
+  recogniser fires; a fast drag recognised late on the wrong spot was the first
+  bug the UI test found. A pinch with the fingers beside a small line of text
+  still scales the picked layer.
+- **Snap and bin** (`StorySnap`, pure): the center lines pull within 7 pt with
+  a light haptic once per entry, rotation sticks to 0 / 90 / 180 degrees within
+  about 4, a bin appears while dragging and a drop on it deletes with a second
+  haptic. Undo keeps the last 20 actions (a move is one action).
+- **Text** (`StoryTextEditView`): five fonts, the twelve palette colors, none /
+  solid / soft backgrounds, alignment, a size slider; a `UITextView` sized to
+  its text so the box behind it hugs the words while typing. Tapping a text
+  layer edits it. **Photos** come from `PhotosPicker` (re-encoded to 1440 px,
+  no EXIF, at most 6), **drawing** is PencilKit (pen, marker, highlighter,
+  eraser) exported as ONE transparent 810x1440 PNG, the lowest layer above the
+  base. **Stickers**: the call (one per story, picked from the voice rooms of the
+  servers you can post to, with who is in them now) and mentions (friends and the
+  members of the server the composer opened from, up to 5, each once).
+- **Posting**: `POST /api/stories` with `layers` (picture layers declare an
+  upload, never a key) and `altText`, then each file is PUT to its
+  `layerUploads` URL, then publish. The caption of a media story carries the text
+  layers for builds that predate layers.
+- **Shared layout.** Every size is a fraction of the canvas WIDTH, so a story
+  looks the same on every platform. The numbers are the web's
+  (`STORY_LAYOUT` / `STORY_TEXT_COLOR_HEX` in `packages/shared/src/stories.ts`)
+  and `StoryLayersTests.testTheLayoutConstantsMatchTheSharedReference` pins
+  them: text 0.08 x width x size, wrapping at 0.84 of the width, line height
+  1.14; a photo 0.40 of the width; the call card 0.82; the mention pill's font
+  0.05. A picture within 12% of 9:16 fills the canvas, anything else is shown
+  whole over a blurred copy of itself (a video over black).
+- VoiceOver: every layer is an element with its text as the label and actions
+  for edit, move (four ways), bigger, smaller, bring to front and delete; a
+  muted-sound toggle, a size slider and the trimmer are adjustable.
+
+Tests: `StoryLayersTests` (decoding, lenient reads, encoding, geometry, snapping,
+the editor's state), `StoryEditorUITests` (text card, drag and bin and undo,
+tap to edit, photo with text and a call sticker, a mention, drawing, mute,
+discard). **Owed: a pass on a real phone** for two-finger pinch and twist
+together, the haptics, and PencilKit with a finger; the simulator drives single
+finger gestures only.
+
 ## Copy and pt-BR
 
 All UI copy lives inline in Swift and is collected into
