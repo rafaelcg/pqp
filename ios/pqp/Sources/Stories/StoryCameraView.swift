@@ -375,6 +375,12 @@ struct StoryCameraView: View {
         // the session is rebuilt, because an input cannot be taken off one that
         // is recording for somebody else.
         if running, engineWantsAudio != recordsAudio {
+            // A recording in progress is finished and handed over first: the
+            // clip is kept, and the replacement engine never inherits its state.
+            if isRecording {
+                press.recordingEnded()
+                await finishRecording()
+            }
             engine?.stop()
             engine = nil
             running = false
