@@ -28,6 +28,8 @@ struct StoryTrimView: View {
 
     private var maxMs: Int { request.maxMs }
     @State private var seekTask: Task<Void, Never>?
+    /// Set when the trimmer goes away: nothing queued may restart playback.
+    @State private var gone = false
     private let stripHeight: CGFloat = 64
 
     private var kept: (startMs: Int, lengthMs: Int) {
@@ -105,6 +107,8 @@ struct StoryTrimView: View {
             }
         }
         .onDisappear {
+            seekTask?.cancel()
+            gone = true
             player.pause()
             if let observer { player.removeTimeObserver(observer) }
         }
@@ -207,6 +211,7 @@ struct StoryTrimView: View {
     }
 
     private func rewindWindow(exact: Bool = true) {
+        guard !gone else { return }
         let target = CMTime(seconds: Double(kept.startMs) / 1000, preferredTimescale: 600)
         let slack = exact ? CMTime.zero : CMTime(seconds: 0.4, preferredTimescale: 600)
         player.seek(to: target, toleranceBefore: slack, toleranceAfter: slack)
