@@ -209,6 +209,9 @@ struct StoryPlacedLayer: View {
     /// The viewer lets calls and mentions take taps; the editor leaves every
     /// touch to the gesture surface.
     var interactive = false
+    /// False in the viewer for what the story's alt text already says (text,
+    /// photos): a screen reader hears the story once, not twice.
+    var spoken = true
 
     var body: some View {
         let width = context.canvas.width
@@ -249,7 +252,7 @@ struct StoryPlacedLayer: View {
         .position(x: CGFloat(layer.x) * context.canvas.width, y: CGFloat(layer.y) * context.canvas.height)
         .accessibilityElement(children: layer.isDrawing ? .ignore : .contain)
         .accessibilityLabel(layer.isDrawing ? "" : layer.spokenLabel)
-        .accessibilityHidden(layer.isDrawing)
+        .accessibilityHidden(layer.isDrawing || !spoken)
     }
 
     @ViewBuilder
@@ -334,7 +337,7 @@ struct StoryCallStickerCard: View {
         .shadow(color: .black.opacity(0.35), radius: 14 * unit, y: 4)
         .saturation(isEnded ? 0.4 : 1)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text(verbatim: spoken))
+        .accessibilityLabel(Text(verbatim: spokenDescription))
         .accessibilityAddTraits(onJoin != nil && data.joinable ? .isButton : [])
         .accessibilityIdentifier("story.call.sticker")
     }
@@ -448,7 +451,7 @@ struct StoryCallStickerCard: View {
         }
     }
 
-    private var spoken: String {
+    var spokenDescription: String {
         let room = String(localized: "Call in \(data.roomName), \(data.serverName)")
         switch data.state {
         case .preview: return room

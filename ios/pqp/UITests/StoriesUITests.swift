@@ -174,11 +174,13 @@ final class StoriesUITests: XCTestCase {
         let textMode = app.buttons["composer.mode.text"]
         XCTAssertTrue(textMode.waitForExistence(timeout: 10))
         textMode.tap()
-        let field = app.textFields["composer.text"]
+        // The text tool opens with the keyboard up; Done places the line.
+        let field = app.textViews["text.input"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
-        field.tap()
         field.typeText("on hoje de noite")
         snap(app, "stories-composer")
+        app.buttons["text.done"].tap()
+        XCTAssertTrue(app.buttons["composer.next"].waitForExistence(timeout: 10))
         app.buttons["composer.next"].tap()
         let post = app.buttons["audience.post"]
         XCTAssertTrue(post.waitForExistence(timeout: 10))

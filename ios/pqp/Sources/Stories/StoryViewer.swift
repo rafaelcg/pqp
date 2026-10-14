@@ -36,6 +36,10 @@ struct StoryViewer: View {
     @State private var showingViewers = false
     @State private var showingMenu = false
     @State private var reportTarget: ReportTarget?
+    @State private var profileSubject: ProfileSubject?
+    /// For the call sticker's server icon: fetched once, only when a story on
+    /// screen has a call layer.
+    @State private var serversById: [String: Server] = [:]
     @State private var confirming: PendingAction?
     @State private var flash: String?
     @State private var flyingReaction: String?
@@ -67,7 +71,7 @@ struct StoryViewer: View {
     }
 
     private var current: Story? { playback.currentId.flatMap { stories[$0] } }
-    private var paused: Bool { holding || replyFocused || showingViewers || showingMenu || reportTarget != nil || confirming != nil }
+    private var paused: Bool { holding || replyFocused || showingViewers || showingMenu || reportTarget != nil || confirming != nil || profileSubject != nil }
 
     var body: some View {
         GeometryReader { geometry in
@@ -112,6 +116,12 @@ struct StoryViewer: View {
         .sheet(item: $reportTarget) { target in
             ReportSheet(target: target)
         }
+        .sheet(item: $profileSubject) { subject in
+            UserProfileSheet(subject: subject, onOpenConversation: { _, _ in }, server: nil)
+        }
+        .task(id: current?.id) {
+            if let story = current { await loadServersIfNeeded(for: story) }
+        }
         .confirmationDialog(
             confirmTitle,
             isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
@@ -136,7 +146,7 @@ struct StoryViewer: View {
         ZStack {
             // The story stays where it is when the keyboard comes up for a
             // reply; only the footer rides the keyboard.
-            content
+            content(size: size)
                 .id(playback.currentId)
                 .transition(.opacity)
                 .ignoresSafeArea(.keyboard)
@@ -169,11 +179,28 @@ struct StoryViewer: View {
             .accessibilityAction(named: Text("Previous story")) { previous() }
             .accessibilityAction(named: Text(holding ? "Resume" : "Pause")) { setHolding(!holding) }
 
+            // The author's layers, over the tap zones: only the call's door and
+            // a mention take touches, everything else falls through to them.
+            if let story = current, !story.layers.isEmpty {
+                StoryLayersOverlay(
+                    story: story, size: size, callData: callSticker, reduceMotion: reduceMotion,
+                    onJoin: { _ in
+                        if let call = current?.call { Task { await join(call) } }
+                    },
+                    onMention: { userId in openProfile(userId) }
+                )
+                .id(story.id)
+                .ignoresSafeArea(.keyboard)
+                .opacity(replyFocused ? 0.35 : 1)
+            }
+
             VStack(spacing: 0) {
                 header
                     .opacity(chromeHidden ? 0 : 1)
                 Spacer(minLength: 0)
-                if let call = current?.call {
+                // A server that predates layers has no call layer: the card
+                // keeps its old place at the bottom.
+                if let call = current?.call, !(current?.layers.contains { if case .call = $0.content { true } else { false } } ?? false) {
                     StoryCallCard(call: call) { Task { await join(call) } }
                         .padding(.horizontal, 24)
                         .padding(.bottom, 18)
@@ -214,59 +241,49 @@ struct StoryViewer: View {
     }
 
     @ViewBuilder
-    private var content: some View {
+    private func content(size: CGSize) -> some View {
         if let story = current {
-            if story.isText {
-                ZStack {
-                    LinearGradient(colors: StoryRules.backgroundColors(story.background),
-                                   startPoint: .top, endPoint: .bottom)
-                    Text(verbatim: story.text ?? "")
-                        .font(.system(size: 34, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .minimumScaleFactor(0.5)
-                        .padding(.horizontal, 28)
-                }
-                .ignoresSafeArea()
-            } else if story.isVideo, let player {
-                StoryVideoSurface(player: player)
-                    .ignoresSafeArea()
-                    .overlay(alignment: .topTrailing) {
-                        Button {
-                            muted.toggle()
-                            player.isMuted = muted
-                        } label: {
-                            Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(10)
-                                .background(Circle().fill(.black.opacity(0.4)))
-                        }
-                        .padding(.top, 90)
-                        .padding(.trailing, 14)
-                        .accessibilityLabel(muted ? "Turn the sound on" : "Turn the sound off")
-                    }
-            } else if let media = story.media, let url = Avatar.resolve(media.url) ?? URL(string: media.url) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFit()
-                    case .failure:
-                        Image(systemName: "photo").foregroundStyle(Palette.paperMuted)
-                    default:
-                        ProgressView().tint(.white)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
-            } else {
-                Color.black
-            }
+            StoryStageBase(story: story, player: player, muted: $muted, size: size)
+                .accessibilityElement(children: story.isVideo ? .contain : .ignore)
+                .accessibilityLabel(Text(verbatim: story.spokenDescription ?? (story.isText ? "" : String(localized: "Photo"))))
         } else if let id = playback.currentId, gone.contains(id) {
             Color.black.onAppear { next() }
         } else {
             ProgressView().tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: - Layers
+
+    /// The call layer's card: the live state the server answers for the
+    /// story, with the server's name and icon.
+    private func callSticker(_ layer: StoryLayer) -> StoryCallStickerData? {
+        guard case .call(let serverId, let channelId) = layer.content,
+              let story = current, let live = story.call, live.channelId == channelId
+        else { return nil }
+        let server = serversById[serverId]
+        let named = story.audiences.compactMap { audience -> String? in
+            if case .server(let id, let name) = audience, id == serverId { return name }
+            return nil
+        }.first
+        return StoryCallStickerData(live: live, serverName: server?.name ?? named ?? "", serverIconUrl: server?.iconUrl)
+    }
+
+    private func openProfile(_ userId: String) {
+        guard let story = current else { return }
+        for layer in story.layers {
+            if case .mention(let id, let user) = layer.content, id == userId, let user {
+                profileSubject = ProfileSubject(id: user.id, displayName: user.displayName, tag: nil, avatarUrl: user.avatarUrl)
+                return
+            }
+        }
+    }
+
+    private func loadServersIfNeeded(for story: Story) async {
+        guard serversById.isEmpty, story.layers.contains(where: { if case .call = $0.content { true } else { false } }) else { return }
+        if let list = try? await session.api.servers() {
+            serversById = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
         }
     }
 
@@ -872,18 +889,21 @@ struct StoryReactionFlight: View {
     }
 }
 
-/// An `AVPlayerLayer`, plain, aspect-fit.
+/// An `AVPlayerLayer`, plain.
 struct StoryVideoSurface: UIViewRepresentable {
     let player: AVPlayer
+    /// A video shaped like the canvas fills it; any other is shown whole.
+    var fills = false
 
     func makeUIView(context: Context) -> StoryPlayerView {
         let view = StoryPlayerView()
-        view.playerLayer.videoGravity = .resizeAspect
+        view.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
         view.playerLayer.player = player
         return view
     }
 
     func updateUIView(_ view: StoryPlayerView, context: Context) {
+        view.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
         view.playerLayer.player = player
     }
 }

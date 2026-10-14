@@ -291,6 +291,16 @@ final class StoryEditorModel {
         record(before)
     }
 
+    /// Puts a layer exactly where it is told: the debug fixture that builds a
+    /// known composition, and nothing a person's finger goes through.
+    func setGeometry(id: String, x: Double, y: Double, scale: Double, rotation: Double) {
+        guard let index = layers.firstIndex(where: { $0.id == id }) else { return }
+        layers[index].x = StoryCanvas.clampUnit(x)
+        layers[index].y = StoryCanvas.clampUnit(y)
+        layers[index].scale = StoryCanvas.clampScale(scale)
+        layers[index].rotation = StoryCanvas.normalizedRotation(rotation)
+    }
+
     /// A keyboard or VoiceOver nudge: move by a fraction of the canvas.
     func nudge(id: String, dx: Double, dy: Double) {
         guard let index = layers.firstIndex(where: { $0.id == id }) else { return }

@@ -855,6 +855,45 @@ discard). **Owed: a pass on a real phone** for two-finger pinch and twist
 together, the haptics, and PencilKit with a finger; the simulator drives single
 finger gestures only.
 
+## Stories: the viewer with layers, and the call sticker
+
+`StoryViewer` draws the base and then every layer over it (`StoryStage.swift`),
+on the same 9:16 canvas the editor used.
+
+- **The author's canvas is never cropped**: it is the biggest 9:16 box that
+  FITS the card (contain), centered, and what the card has left over (a tall phone
+  has a little above and below) is filled by the base itself, blurred for a photo
+  or a video and the background color for a card. The chrome sits over the canvas
+  as it always has. Everything a layer is, is a fraction of the canvas, so it sits
+  where the author put it, and the viewer and the editor share the same canvas
+  rule (`StoryViewerLayersTests`).
+- **Base**: a picture within 12% of 9:16 fills the canvas; any other photo is
+  shown whole over a blurred copy of itself and a video over black. A text card
+  is its background plus its text layers; a card from before layers keeps its
+  one line in the middle.
+- **Touches**: the layers sit above the tap zones, but only the call's door and a
+  mention take touches; a tap on a title still goes to the next story. A mention
+  opens that person's profile over the story, which pauses it.
+- **VoiceOver** reads the story once, from `altText` (else the caption, else the
+  card's text); the text and photo layers are hidden from it, the call sticker
+  reads as one sentence (room, server, who is in, or that nobody is / it ended)
+  and the mention is a button.
+- **The call sticker** (`StoryCallStickerCard`): the room's name, the server's
+  icon, up to three faces and a "+n", the count, a pulsing live dot (still under
+  Reduce Motion) and "Entrar", which joins through the existing path. A call is
+  `live` whenever the room exists and its author can still use it, so an empty
+  room says "Ninguém na call agora" and keeps its door (there is no warning in
+  the editor about the author being outside the room); a viewer without CONNECT
+  sees it live with no door; a full room says so; `ended` ("A call acabou", no
+  door) is only a deleted channel (it arrives with no name, and the card says
+  "Call") or an author who lost CONNECT. No `call` from the server means the
+  viewer cannot see the channel, and nothing is drawn. The same view is the editor's preview, so what
+  you place is what is seen. Its live data is the story's own `call` (the server
+  answers it at read time); the server's icon is read once from `GET
+  /api/servers` when a story on screen has a call layer.
+- A server that predates layers has no call layer; the old card keeps its place
+  at the bottom of the viewer.
+
 ## Copy and pt-BR
 
 All UI copy lives inline in Swift and is collected into

@@ -80,6 +80,34 @@ struct StoryComposer: View {
         .task {
             await loadConfig()
             #if DEBUG
+            // A known composition, for comparing what the editor shows with what
+            // the viewer draws: text moved, scaled and turned, and a photo layer.
+            if ProcessInfo.processInfo.environment["PQP_STORY_FIXTURE_LAYERS"] == "1" {
+                mode = .text
+                editor.clear()
+                var title = StoryTextData(text: "posicao", font: .bold, color: .lime)
+                title.size = 1
+                if let id = editor.addText(title, x: 0.30, y: 0.30, scale: 1.7) {
+                    editor.setGeometry(id: id, x: 0.30, y: 0.30, scale: 1.7, rotation: 0.35)
+                }
+                let box = StoryTextData(text: "caixa", font: .serif, color: .pink, background: .solid, align: .center, size: 1)
+                if let id = editor.addText(box, x: 0.68, y: 0.55, scale: 0.8) {
+                    editor.setGeometry(id: id, x: 0.68, y: 0.55, scale: 0.8, rotation: -0.5)
+                }
+                let size = CGSize(width: 600, height: 400)
+                let picture = UIGraphicsImageRenderer(size: size).image { context in
+                    UIColor(red: 1, green: 0.58, blue: 0, alpha: 1).setFill()
+                    context.fill(CGRect(origin: .zero, size: size))
+                }
+                if let draft = StoryMediaPrep.image(picture),
+                   let id = editor.addImage(
+                    StoryLayerFile(data: draft.data, contentType: draft.contentType, width: draft.width, height: draft.height),
+                    preview: draft.preview
+                   ) {
+                    editor.setGeometry(id: id, x: 0.45, y: 0.80, scale: 0.9, rotation: 0.2)
+                }
+                editor.selectedId = nil
+            }
             // A picked video, for a simulator whose photo library has none and
             // whose picker a UI test cannot drive: a synthetic clip of this
             // many seconds goes down the same path a picked one does.
