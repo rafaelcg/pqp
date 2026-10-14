@@ -287,9 +287,10 @@ struct StoryPlacedLayer: View {
 
 // MARK: - The call sticker
 
-/// What the sticker shows. `preview` is the editor's, before anything is live.
+/// What the sticker shows. The editor's card is in the SAME states as the
+/// viewer's, with the same words (`isPreview` only makes its door inert).
 struct StoryCallStickerData: Equatable, Sendable {
-    enum State: Equatable, Sendable { case preview, live, ended, full }
+    enum State: Equatable, Sendable { case live, ended, full }
 
     var roomName: String
     var serverName: String
@@ -299,6 +300,9 @@ struct StoryCallStickerData: Equatable, Sendable {
     var count: Int
     var state: State
     var joinable: Bool
+    /// The editor's card: the same picture and words, its Entrar drawn but not
+    /// tappable.
+    var isPreview = false
 }
 
 /// The "chama pra call" card: ONE compact row, the same card web and Android
@@ -384,7 +388,6 @@ struct StoryCallStickerCard: View {
         switch data.state {
         case .ended: return String(localized: "The call ended")
         case .full: return String(localized: "The room is full")
-        case .preview: return String(localized: "Live")
         case .live:
             if data.count == 0 { return String(localized: "Nobody in the call right now") }
             return String(localized: "Live") + " · \(data.count)"
@@ -405,13 +408,13 @@ struct StoryCallStickerCard: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
         }
-        .foregroundStyle(isLive || data.state == .preview ? Palette.signal : Color.white.opacity(0.7))
+        .foregroundStyle(isLive ? Palette.signal : Color.white.opacity(0.7))
     }
 
     /// Up to three live faces and a "+n", overlapping.
     @ViewBuilder
     private var faces: some View {
-        if !isEnded, !data.participants.isEmpty, data.state != .preview {
+        if !isEnded, !data.participants.isEmpty {
             HStack(spacing: -1.4 * cq) {
                 ForEach(Array(data.participants.prefix(3).enumerated()), id: \.element.id) { index, person in
                     Avatar(name: person.displayName, seed: person.id, size: 7 * cq, url: person.avatarUrl)
@@ -440,7 +443,7 @@ struct StoryCallStickerCard: View {
             Button(action: onJoin) { joinLabel }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("story.call.join")
-        } else if data.state == .preview {
+        } else if data.isPreview, data.joinable, !isEnded, data.state != .full {
             joinLabel
         }
     }
@@ -459,7 +462,6 @@ struct StoryCallStickerCard: View {
     var spokenDescription: String {
         let room = String(localized: "Call in \(data.roomName), \(data.serverName)")
         switch data.state {
-        case .preview: return room
         case .ended: return room + ". " + String(localized: "The call ended")
         case .full: return room + ". " + String(localized: "The room is full")
         case .live:

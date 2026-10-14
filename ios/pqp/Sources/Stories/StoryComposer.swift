@@ -221,6 +221,7 @@ struct StoryComposer: View {
                             .foregroundStyle(.white)
                             .frame(width: 40, height: 40)
                             .background(Circle().fill(.black.opacity(0.35)))
+                            .decorative()
                     }
                     .accessibilityLabel(Text("Close"))
                     .accessibilityIdentifier("composer.close")
@@ -242,7 +243,7 @@ struct StoryComposer: View {
     /// it is shown, and posting asks again.
     private var configFailedBanner: some View {
         HStack(spacing: 10) {
-            Image(systemName: "wifi.exclamationmark")
+            Image(systemName: "wifi.exclamationmark").decorative()
             Text("Couldn't reach pqp. Check your connection.")
                 .font(Typography.callout)
                 .fixedSize(horizontal: false, vertical: true)
@@ -443,6 +444,9 @@ struct StoryComposer: View {
     }
 
     private func open(_ draft: StoryDraftMedia) {
+        // A new photo or clip is a fresh start: the refusal of the one before
+        // (a bad file from Files) does not follow it into the editor.
+        error = nil
         editor.clear()
         editorSerial += 1
         muted = false
@@ -722,12 +726,12 @@ struct StoryCallPicker: View {
                         Button { selection = room } label: {
                             HStack(spacing: 12) {
                                 Avatar(name: room.serverName, seed: room.serverId, size: 38, url: room.serverIconUrl)
-                                    .accessibilityHidden(true)
+                                    .decorative()
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 5) {
                                         Image(systemName: "speaker.wave.2.fill")
                                             .font(.system(size: 11, weight: .bold))
-                                            .accessibilityHidden(true)
+                                            .decorative()
                                         Text(verbatim: room.channelName)
                                             .font(Typography.bodyMedium)
                                             .lineLimit(1)
@@ -749,7 +753,7 @@ struct StoryCallPicker: View {
                                         ForEach(inside.prefix(3), id: \.userId) { person in
                                             Avatar(name: person.displayName, seed: person.userId, size: 24)
                                                 .overlay(Circle().strokeBorder(Palette.ink, lineWidth: 2))
-                                                .accessibilityHidden(true)
+                                                .decorative()
                                         }
                                     }
                                     Text(verbatim: "\(inside.count)")
@@ -759,7 +763,7 @@ struct StoryCallPicker: View {
                                 }
                                 Image(systemName: selection == room ? "largecircle.fill.circle" : "circle")
                                     .foregroundStyle(selection == room ? Palette.signal : .white.opacity(0.6))
-                                    .accessibilityHidden(true)
+                                    .decorative()
                             }
                             .padding(10)
                             .background(RoundedRectangle(cornerRadius: 12).fill(.black.opacity(selection == room ? 0.55 : 0.35)))
@@ -928,7 +932,7 @@ struct StoryAudienceSheet: View {
                 Image(systemName: checked ? "checkmark.square.fill" : "square")
                     .font(.system(size: 20))
                     .foregroundStyle(checked ? Palette.signal : Palette.border)
-                    .accessibilityHidden(true)
+                    .decorative()
                 VStack(alignment: .leading, spacing: 1) {
                     Text(verbatim: title)
                         .font(Typography.bodyMedium)

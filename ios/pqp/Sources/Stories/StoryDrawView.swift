@@ -134,6 +134,7 @@ struct StoryDrawView: View {
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
                     .background(Circle().fill(.black.opacity(0.45)))
+                    .decorative()
             }
             .accessibilityLabel(Text("Cancel"))
             .accessibilityIdentifier("draw.cancel")
@@ -143,6 +144,7 @@ struct StoryDrawView: View {
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
                     .background(Circle().fill(.black.opacity(0.45)))
+                    .decorative()
             }
             .accessibilityLabel(Text("Undo"))
             .accessibilityIdentifier("draw.undo")
@@ -209,6 +211,7 @@ struct StoryDrawView: View {
                         .foregroundStyle(pen == value ? Palette.inkDeep : .white)
                         .frame(width: 50, height: 44)
                         .background(Capsule().fill(pen == value ? Color.white : Color.white.opacity(0.18)))
+                        .decorative()
                 }
                 .accessibilityLabel(Text(verbatim: value.label))
                 .accessibilityAddTraits(pen == value ? .isSelected : [])

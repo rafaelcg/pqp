@@ -73,6 +73,9 @@ final class StoryEditorModel {
     var onDelete: (() -> Void)?
 
     private var undoStack: [Snapshot] = []
+    /// The state from before `beginDrawing` moved the drawing to the top, so
+    /// the pen session records one undo entry that restores the order too.
+    private var reorderBefore: Snapshot?
     static let undoDepth = 20
 
     // Gesture baselines.
@@ -236,17 +239,32 @@ final class StoryEditorModel {
     /// creation order for every type (web and Android say the same), so a second
     /// session that starts with layers above the drawing brings it back to the
     /// top: the new stroke stays over what the finger sees, never under a photo
-    /// or a line of text placed since. One undo step, nothing when it is
-    /// already topmost or there is no drawing yet.
+    /// or a line of text placed since. The move is NOT an undo step of its own:
+    /// it is remembered and folded into the session's one entry, so a single
+    /// undo takes the strokes AND the order back, and a session that ends with
+    /// no stroke puts the order back (`endDrawingUnchanged`). Nothing happens
+    /// when the drawing is already topmost or there is none yet.
     func beginDrawing() {
-        guard let existing = drawingLayer, layers.last?.id != existing.id else { return }
-        bringToFront(id: existing.id)
+        reorderBefore = nil
+        guard let existing = drawingLayer, layers.last?.id != existing.id,
+              let index = layers.firstIndex(where: { $0.id == existing.id }) else { return }
+        reorderBefore = snapshot()
+        layers.append(layers.remove(at: index))
+    }
+
+    /// The pen was put away without a change (cancelled, or Done on the strokes
+    /// it opened with): the order `beginDrawing` changed goes back, and no undo
+    /// entry is made.
+    func endDrawingUnchanged() {
+        if let before = reorderBefore { layers = before.layers }
+        reorderBefore = nil
     }
 
     /// The drawing is one layer covering the canvas, replaced as a whole each
     /// time the pen is put down. An empty drawing removes it.
     func setDrawing(_ strokes: PKDrawing, file: StoryLayerFile?, preview: UIImage?) {
-        let before = snapshot()
+        let before = reorderBefore ?? snapshot()
+        reorderBefore = nil
         let existing = drawingLayer
         guard !strokes.strokes.isEmpty, let file, let preview else {
             if let existing { layers.removeAll { $0.id == existing.id }; files[existing.id] = nil; previews[existing.id] = nil }
@@ -268,6 +286,7 @@ final class StoryEditorModel {
             files[layer.id] = file
             previews[layer.id] = preview
         } else {
+            layers = before.layers
             return
         }
         drawing = strokes

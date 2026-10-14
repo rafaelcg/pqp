@@ -185,6 +185,7 @@ struct StoryCameraView: View {
                 .frame(width: 44, height: 44)
                 .background(Circle().fill(.black.opacity(0.4)))
                 .contentTransition(.symbolEffect(.replace))
+                .decorative()
         }
         .accessibilityLabel(label)
         .accessibilityIdentifier(id)
@@ -201,6 +202,7 @@ struct StoryCameraView: View {
                     .frame(width: 52, height: 52)
                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.black.opacity(0.4)))
                     .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.85), lineWidth: 2))
+                    .decorative()
             }
             .accessibilityLabel(Text("Gallery"))
             .accessibilityIdentifier("composer.gallery")
@@ -216,6 +218,7 @@ struct StoryCameraView: View {
                     .rotationEffect(.degrees(flipTurns * 180))
                     .frame(width: 52, height: 52)
                     .background(Circle().fill(.black.opacity(0.4)))
+                    .decorative()
             }
             .accessibilityLabel(Text("Flip camera"))
             .accessibilityValue(position == .front ? Text("Front") : Text("Back"))
@@ -320,7 +323,7 @@ struct StoryCameraView: View {
             Image(systemName: access == .noDevice ? "camera.metering.unknown" : "camera.fill")
                 .font(.system(size: 40, weight: .light))
                 .foregroundStyle(.white.opacity(0.85))
-                .accessibilityHidden(true)
+                .decorative()
             Text(verbatim: access.title)
                 .font(Typography.title(19))
                 .foregroundStyle(.white)
@@ -343,15 +346,24 @@ struct StoryCameraView: View {
                 .accessibilityIdentifier("camera.openSettings")
             }
             HStack(spacing: 10) {
-                Button(action: onGallery) { Label("Gallery", systemImage: "photo") }
+                Button(action: onGallery) { iconTitle("Gallery", symbol: "photo") }
                     .accessibilityIdentifier("composer.gallery")
-                Button(action: onFiles) { Label("Choose a file", systemImage: "folder") }
+                Button(action: onFiles) { iconTitle("Choose a file", symbol: "folder") }
                     .accessibilityIdentifier("camera.files")
             }
             .buttonStyle(.bordered)
             .tint(.white)
         }
         .padding(.horizontal, 32)
+    }
+
+    /// What `Label` draws (the icon, then the words) with the icon out of the
+    /// accessibility tree: the button is named by its words.
+    private func iconTitle(_ title: LocalizedStringKey, symbol: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol).decorative()
+            Text(title)
+        }
     }
 
     // MARK: - Lifecycle

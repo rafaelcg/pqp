@@ -350,6 +350,7 @@ struct StoryViewer: View {
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 36, height: 36)
+                        .decorative()
                 }
                 .accessibilityLabel("More")
                 .accessibilityIdentifier("story.menu")
@@ -358,6 +359,7 @@ struct StoryViewer: View {
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 36, height: 36)
+                        .decorative()
                 }
                 .accessibilityLabel("Close")
                 .accessibilityIdentifier("story.close")
@@ -400,13 +402,13 @@ struct StoryViewer: View {
     private func ownFooter(_ story: Story) -> some View {
         Button { showingViewers = true } label: {
             HStack(spacing: 8) {
-                Image(systemName: "eye")
+                Image(systemName: "eye").decorative()
                 if let own = story.own, own.status != "live" {
                     Text("Processing the video…")
                 } else {
                     Text("Seen by \(story.own?.viewCount ?? 0)")
                 }
-                Image(systemName: "chevron.up").font(.system(size: 11, weight: .bold))
+                Image(systemName: "chevron.up").font(.system(size: 11, weight: .bold)).decorative()
             }
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(.white)
@@ -454,6 +456,7 @@ struct StoryViewer: View {
                         .foregroundStyle(Palette.inkDeep)
                         .frame(width: 40, height: 40)
                         .background(Circle().fill(Palette.signal))
+                        .decorative()
                 }
                 .accessibilityLabel("Send")
             }
@@ -882,7 +885,7 @@ struct StoryCallCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: "headphones")
+                Image(systemName: "headphones").decorative()
                 Text(call.state == "live" ? "In the call now" : (call.state == "full" ? "The room is full" : "The call ended"))
                     .textCase(.uppercase)
             }
