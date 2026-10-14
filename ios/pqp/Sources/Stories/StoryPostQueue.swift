@@ -1,5 +1,7 @@
 import Foundation
+import Network
 import Observation
+import os
 import UIKit
 
 // POSTING A STORY IN THE BACKGROUND.
@@ -187,8 +189,12 @@ struct LiveStoryPostBackend: StoryPostBackend {
         #if DEBUG
         // A UI test's way to make the first post fail once, as a dead
         // connection would, and prove the draft survives to be retried.
-        if ProcessInfo.processInfo.environment["PQP_STORY_POST_FAIL"] == "once", Self.failures.take() {
-            throw APIError.transport("simulated")
+        // `once` is a server refusal (the red state), `offline` a lost
+        // connection (the waiting state, which posts by itself on return).
+        let mode = ProcessInfo.processInfo.environment["PQP_STORY_POST_FAIL"]
+        if mode == "once" || mode == "offline", Self.failures.take() {
+            if mode == "offline" { throw APIError.transport("simulated") }
+            throw APIError.server(status: 500, message: "simulated")
         }
         #endif
         return try await api.createStory(request)
@@ -300,6 +306,44 @@ final class StoryPostProgress: @unchecked Sendable {
     }
 }
 
+// MARK: - Connectivity
+
+/// Whether there is a network, and when one comes back.
+@MainActor
+protocol StoryConnectivity: AnyObject {
+    var isSatisfied: Bool { get }
+    /// Called each time the path goes from no network to a network.
+    func onRestored(_ handler: @escaping @MainActor () -> Void)
+}
+
+@MainActor
+final class PathConnectivity: StoryConnectivity {
+    private let monitor = NWPathMonitor()
+    private let satisfied = OSAllocatedUnfairLock(initialState: true)
+    private var handler: (@MainActor () -> Void)?
+
+    init() {
+        monitor.pathUpdateHandler = { [satisfied, weak self] path in
+            let now = path.status == .satisfied
+            let before = satisfied.withLock { value -> Bool in
+                let previous = value
+                value = now
+                return previous
+            }
+            if now, !before {
+                Task { @MainActor [weak self] in self?.handler?() }
+            }
+        }
+        monitor.start(queue: DispatchQueue.global(qos: .utility))
+    }
+
+    var isSatisfied: Bool { satisfied.withLock { $0 } }
+
+    func onRestored(_ handler: @escaping @MainActor () -> Void) {
+        self.handler = handler
+    }
+}
+
 // MARK: - The queue
 
 @MainActor
@@ -307,6 +351,9 @@ final class StoryPostProgress: @unchecked Sendable {
 final class StoryPostQueue {
     enum Phase: Equatable, Sendable {
         case posting
+        /// The connection is gone: nothing is wrong with the story. The ring
+        /// waits, and the post goes by itself when the network is back.
+        case waiting
         /// Published; a video's frames are still being made, and the story is
         /// not on the strip yet. The ring stays until it is.
         case processing
@@ -324,6 +371,8 @@ final class StoryPostQueue {
             if case .failed = phase { return true }
             return false
         }
+
+        var waiting: Bool { phase == .waiting }
 
         var failureMessage: String? {
             if case .failed(let message) = phase { return message }
@@ -358,23 +407,41 @@ final class StoryPostQueue {
     @ObservationIgnored private let usesBackgroundTime: Bool
     /// Watchers of stories that are published but not yet live.
     @ObservationIgnored private var watchers: [String: Task<Void, Never>] = [:]
+    /// Waiting posts' retry timers, and the posts already retried by itself once.
+    @ObservationIgnored private var waitTimers: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var autoRetried: Set<String> = []
+    @ObservationIgnored private let connectivity: any StoryConnectivity
+    @ObservationIgnored private let waitRetry: Duration
+
     @ObservationIgnored private let processingPoll: Duration
 
     init(
         backend: any StoryPostBackend, store: StoryPostStore = .standard, usesBackgroundTime: Bool = true,
-        processingPoll: Duration = .seconds(2)
+        processingPoll: Duration = .seconds(2), connectivity: (any StoryConnectivity)? = nil,
+        waitRetry: Duration = .seconds(20)
     ) {
         self.backend = backend
         self.store = store
         self.usesBackgroundTime = usesBackgroundTime
         self.processingPoll = processingPoll
+        self.connectivity = connectivity ?? PathConnectivity()
+        self.waitRetry = waitRetry
+        self.connectivity.onRestored { [weak self] in self?.retryWaiting() }
+        if usesBackgroundTime {
+            // Back on screen: a post that was waiting tries again.
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.retryWaiting() }
+            }
+        }
     }
 
     /// What a strip draws on the person's own ring: a post in flight to that
     /// scope, or one that failed (a failure shows everywhere, so it is never
     /// silent behind a screen that is not the one it was aimed at).
     func job(for scope: StoryScope) -> Job? {
-        jobs.first { $0.targets(scope) || $0.failed }
+        jobs.first { $0.targets(scope) || $0.failed || $0.waiting }
     }
 
     func job(id: String) -> Job? { jobs.first { $0.id == id } }
@@ -411,7 +478,9 @@ final class StoryPostQueue {
     }
 
     func retry(_ id: String) {
-        guard let index = jobs.firstIndex(where: { $0.id == id }), jobs[index].failed else { return }
+        guard let index = jobs.firstIndex(where: { $0.id == id }), jobs[index].failed || jobs[index].waiting else { return }
+        autoRetried.remove(id)
+        waitTimers.removeValue(forKey: id)?.cancel()
         jobs[index].phase = .posting
         jobs[index].progress = 0
         start(id)
@@ -421,6 +490,8 @@ final class StoryPostQueue {
         tasks[id]?.cancel()
         tasks[id] = nil
         watchers.removeValue(forKey: id)?.cancel()
+        waitTimers.removeValue(forKey: id)?.cancel()
+        autoRetried.remove(id)
         waiting.removeAll { $0 == id }
         endBackgroundTime(id)
         let record = job(id: id)?.record
@@ -454,6 +525,9 @@ final class StoryPostQueue {
         for id in jobs.map(\.id) { tasks[id]?.cancel(); endBackgroundTime(id) }
         for watcher in watchers.values { watcher.cancel() }
         watchers.removeAll()
+        for timer in waitTimers.values { timer.cancel() }
+        waitTimers.removeAll()
+        autoRetried.removeAll()
         for files in early.values { for file in files.values { file.abandon(backend: backend) } }
         early.removeAll()
         tasks.removeAll()
@@ -675,6 +749,7 @@ final class StoryPostQueue {
         // Discarded while the last request was in flight: nothing went live
         // that the person still means to be there.
         guard let record = job(id: id)?.record else { pump(); return }
+        autoRetried.remove(id)
         store.remove(id)
         early[id] = nil
         if storyStatus == "processing", let storyId = record.storyId {
@@ -728,8 +803,51 @@ final class StoryPostQueue {
     private func fail(_ id: String, _ error: any Error) {
         tasks[id] = nil
         endBackgroundTime(id)
-        update(id) { $0.phase = .failed(Self.message(for: error)) }
+        if Self.isConnectivity(error), !(autoRetried.contains(id) && connectivity.isSatisfied) {
+            // No connection (or the first miss of one): not a refusal. The ring
+            // waits and the post goes by itself. Red only comes after an
+            // automatic retry, made with a network, failed again.
+            update(id) { $0.phase = .waiting }
+            scheduleWaitRetry(id)
+        } else {
+            update(id) { $0.phase = .failed(Self.message(for: error)) }
+        }
         pump()
+    }
+
+    /// Whether the failure is the network and not the server's answer.
+    static func isConnectivity(_ error: any Error) -> Bool {
+        if let api = error as? APIError {
+            if case .transport = api { return true }
+            return false
+        }
+        return error is URLError
+    }
+
+    /// Posts that are waiting go again (the network is back, the app is on
+    /// screen, or the timer says so). With no network they keep waiting.
+    func retryWaiting() {
+        guard connectivity.isSatisfied else { return }
+        for id in jobs.filter(\.waiting).map(\.id) {
+            waitTimers.removeValue(forKey: id)?.cancel()
+            autoRetried.insert(id)
+            update(id) { $0.phase = .posting; $0.progress = 0 }
+            start(id)
+        }
+    }
+
+    private func scheduleWaitRetry(_ id: String) {
+        waitTimers[id]?.cancel()
+        waitTimers[id] = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: self.waitRetry)
+            guard !Task.isCancelled, self.job(id: id)?.waiting == true else { return }
+            if self.connectivity.isSatisfied {
+                self.retryWaiting()
+            } else {
+                self.scheduleWaitRetry(id)
+            }
+        }
     }
 
     private func update(_ id: String, _ change: (inout Job) -> Void) {
@@ -810,7 +928,9 @@ enum StoryUploader {
 
     private static func check(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw APIError.transport(String(localized: "Didn't upload. Try again"))
+            throw APIError.server(
+                status: (response as? HTTPURLResponse)?.statusCode ?? 0, message: String(localized: "Didn't upload. Try again")
+            )
         }
     }
 

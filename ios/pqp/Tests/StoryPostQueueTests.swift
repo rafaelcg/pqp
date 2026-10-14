@@ -34,6 +34,8 @@ final class StoryPostQueueTests: XCTestCase {
         private(set) var minted: [(kind: String, contentType: String, byteLength: Int)] = []
         private(set) var deletedUploads: [String] = []
         var failPuts = false
+        /// Failures arrive as the server's refusal (500), not a lost connection.
+        var failsAsServerError = false
         var holdPuts = false
         var holdCreates = false
         /// What publish answers (`processing` for a video whose frames are being made).
@@ -66,7 +68,7 @@ final class StoryPostQueueTests: XCTestCase {
                 failCreatesLeft -= 1
                 return true
             }) {
-                throw APIError.transport("offline")
+                throw failure()
             }
             let claims = request.media?.uploadId != nil
                 || (request.layers ?? []).contains { $0["upload"]?["uploadId"] != nil }
@@ -150,9 +152,17 @@ final class StoryPostQueueTests: XCTestCase {
             while locked({ holdPuts }) {
                 try await Task.sleep(for: .milliseconds(10))
             }
-            if locked({ failPuts }) { throw APIError.transport("offline") }
+            if locked({ failPuts }) { throw failure() }
             progress(Int64(size))
         }
+
+        private func failure() -> APIError {
+            locked { failsAsServerError }
+                ? APIError.server(status: 500, message: "refused")
+                : APIError.transport("offline")
+        }
+
+        func serverErrors(_ on: Bool) { locked { failsAsServerError = on } }
 
         func set(fail: Bool? = nil, hold: Bool? = nil, holdCreate: Bool? = nil) {
             locked {
@@ -278,11 +288,12 @@ final class StoryPostQueueTests: XCTestCase {
 
     func testAFailedPostKeepsItsDraftAndRetryIsTheSameStory() async throws {
         let backend = FakeBackend(storyId: storyId)
+        backend.serverErrors(true)
         backend.set(fail: true)
         let posts = queue(backend)
         let id = try posts.enqueue(request: try photoRequest(), base: photo, layers: [:], userId: me)
         try await waitUntil("the failure") { posts.job(id: id)?.failed == true }
-        XCTAssertEqual(posts.job(id: id)?.failureMessage, String(localized: "Couldn't reach pqp. Check your connection."))
+        XCTAssertEqual(posts.job(id: id)?.failureMessage, "refused", "The server's own words for a refusal")
         XCTAssertEqual(store.loadAll().count, 1, "Kept until it posts or is discarded")
         XCTAssertEqual(posts.publishedCount, 0)
 

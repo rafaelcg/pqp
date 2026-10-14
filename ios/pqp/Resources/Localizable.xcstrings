@@ -221,6 +221,16 @@
         }
       }
     },
+    "It posts by itself when you're back online." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Posta sozinho quando tu voltar a ficar online."
+          }
+        }
+      }
+    },
     "Keep posting" : {
       "localizations" : {
         "pt-BR" : {
@@ -621,6 +631,16 @@
         }
       }
     },
+    "No connection" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem conexão"
+          }
+        }
+      }
+    },
     "No connection. This is the list from last time, and the story posts when you're back online." : {
       "localizations" : {
         "pt-BR" : {
@@ -657,6 +677,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "(tu)"
+          }
+        }
+      }
+    },
+    "Waiting for connection" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esperando conexão"
           }
         }
       }
@@ -9357,6 +9387,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Teu story não postou. Toca duas vezes pra ver as opções"
+          }
+        }
+      }
+    },
+    "Your story is waiting for a connection. Double tap for options" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teu story tá esperando conexão. Toca duas vezes pra ver as opções"
           }
         }
       }

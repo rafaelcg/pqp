@@ -228,17 +228,21 @@ struct StoryStripView: View {
             Task { await model.load() }
         }
         .confirmationDialog(
-            askedJob?.failed == true ? "Couldn't post your story" : "Posting your story",
+            askedJob?.failed == true ? "Couldn't post your story" : (askedJob?.waiting == true ? "Waiting for connection" : "Posting your story"),
             isPresented: Binding(get: { askedJob != nil }, set: { if !$0 { askingAboutPost = nil } }),
             titleVisibility: .visible, presenting: askedJob
         ) { job in
-            if job.failed {
+            if job.failed || job.waiting {
                 Button("Try again") { session.storyPosts.retry(job.id) }
             }
             Button("Discard", role: .destructive) { session.storyPosts.discard(job.id) }
             Button(job.failed ? "Cancel" : "Keep posting", role: .cancel) {}
         } message: { job in
-            if let message = job.failureMessage { Text(verbatim: message) }
+            if let message = job.failureMessage {
+                Text(verbatim: message)
+            } else if job.waiting {
+                Text("It posts by itself when you're back online.")
+            }
         }
         .fullScreenCover(item: $model.viewing) { launch in
             StoryViewer(launch: launch) { seen in
@@ -301,7 +305,7 @@ struct StoryStripView: View {
                 hasCall: strip.own?.hasCall ?? false,
                 label: label(for: job),
                 showsPlus: strip.canPost && job == nil,
-                posting: job.map { StoryRingPosting(progress: $0.progress, failed: $0.failed) }
+                posting: job.map { StoryRingPosting(progress: $0.progress, failed: $0.failed, waiting: $0.waiting) }
             )
         }
         .buttonStyle(.plain)
@@ -321,16 +325,18 @@ struct StoryStripView: View {
 
     private func label(for job: StoryPostQueue.Job?) -> String {
         guard let job else { return String(localized: "Your story") }
+        if job.waiting { return String(localized: "No connection") }
         return job.failed ? String(localized: "Didn't post") : String(localized: "Posting")
     }
 
     private func progressValue(for job: StoryPostQueue.Job?) -> Text {
-        guard let job, !job.failed else { return Text(verbatim: "") }
+        guard let job, !job.failed, !job.waiting else { return Text(verbatim: "") }
         return Text("\(Int(job.progress * 100)) percent")
     }
 
     private func accessibilityLabel(for job: StoryPostQueue.Job?) -> Text {
         if let job {
+            if job.waiting { return Text("Your story is waiting for a connection. Double tap for options") }
             return job.failed ? Text("Your story didn't post. Double tap for options") : Text("Posting your story")
         }
         return strip.own != nil ? Text("Your story") : Text("Your story, post")
@@ -342,6 +348,8 @@ struct StoryRingPosting: Equatable {
     /// 0...1 of the bytes sent.
     let progress: Double
     let failed: Bool
+    /// No connection: a grey ring that posts by itself when one is back.
+    var waiting = false
 }
 
 /// A ring and the name under it.
@@ -368,6 +376,15 @@ struct StoryRingCell: View {
                         .overlay(Circle().strokeBorder(Palette.ink, lineWidth: 2))
                         .offset(x: 2, y: 2)
                         .accessibilityHidden(true)
+                } else if posting?.waiting == true {
+                    Image(systemName: "wifi.slash")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Palette.paper)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(Palette.surfaceRaised))
+                        .overlay(Circle().strokeBorder(Palette.ink, lineWidth: 2))
+                        .offset(x: 2, y: 2)
+                        .accessibilityHidden(true)
                 } else if showsPlus {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .heavy))
@@ -391,6 +408,7 @@ struct StoryRingCell: View {
                 .font(.system(size: 11, weight: unseen ? .semibold : .regular))
                 .foregroundStyle(posting?.failed == true ? Palette.danger : (unseen ? Palette.paper : Palette.paperMuted))
                 .lineLimit(1)
+                .minimumScaleFactor(0.7)
                 .frame(width: 66)
         }
     }
@@ -419,7 +437,12 @@ struct StoryRing<Content: View>: View {
                     lineWidth: 2.5
                 )
                 .opacity(unseen ? 1 : 0)
-            if let posting, !posting.failed {
+            if let posting, posting.waiting {
+                // Nothing is wrong with the story: a dim ring, still.
+                Circle()
+                    .strokeBorder(Palette.paperMuted.opacity(0.7), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [5, 4]))
+                    .accessibilityIdentifier("stories.own.waiting")
+            } else if let posting, !posting.failed {
                 postingArc(posting)
             }
             content

@@ -269,6 +269,7 @@ final class StoryEagerUploadsTests: XCTestCase {
     /// again, and a discard would delete them.
     func testARetryAfterAFailedCreateReusesTheUploads() async throws {
         let backend = Backend(storyId: storyId)
+        backend.serverErrors(true)
         backend.failNextCreates(1)
         let uploads = StoryEagerUploads(backend: backend, enabled: true)
         uploads.sync([photoWant()])
