@@ -168,15 +168,19 @@ final class StoryPreloader {
                 value = path.isConstrained
                 return before
             }
-            // Low Data Mode just came on: what is buffering a video stops.
-            if path.isConstrained, !wasConstrained {
+            // Low Data Mode came on or went off: videos stop buffering, or the
+            // ones the window still wants start.
+            if path.isConstrained != wasConstrained {
                 Task { @MainActor in StoryPreloader.shared.replan() }
             }
         }
         monitor.start(queue: DispatchQueue.global(qos: .utility))
     }
 
-    var lowDataMode: Bool { constrained.withLock { $0 } }
+    /// Set by a test; nil follows the network path.
+    var lowDataOverride: Bool?
+
+    var lowDataMode: Bool { lowDataOverride ?? constrained.withLock { $0 } }
 
     // MARK: Stories
 
@@ -261,20 +265,25 @@ final class StoryPreloader {
 
     // MARK: The window
 
-    /// Sets what is worth having. Whatever was being fetched and is not in
-    /// `items` any more is cancelled (a swipe past it, a closed viewer); the
-    /// rest is started, two at a time, in order.
-    /// The window as last set, to be re-planned when the connection changes.
+    /// The window as the caller set it, videos and all: Low Data Mode filters
+    /// what is run, never what is wanted, so it can be undone.
     private var lastWindow: [StoryPreloadItem] = []
 
-    /// Low Data Mode came on while videos were scheduled or buffering: they go.
+    /// The connection changed (Low Data Mode on or off): run the window again.
     func replan() {
-        guard lowDataMode else { return }
-        setWindow(lastWindow.filter { !$0.isVideo })
+        apply(lastWindow)
     }
 
+    /// Sets what is worth having. Whatever was being fetched and is not in
+    /// `items` any more is cancelled (a swipe past it, a closed viewer); the
+    /// rest is started, two at a time, in order. No video runs on Low Data Mode.
     func setWindow(_ items: [StoryPreloadItem]) {
         lastWindow = items
+        apply(items)
+    }
+
+    private func apply(_ wantedItems: [StoryPreloadItem]) {
+        let items = lowDataMode ? wantedItems.filter { !$0.isVideo } : wantedItems
         wanted = Set(items.map(\.key))
         for (key, task) in running where !wanted.contains(key) {
             task.cancel()

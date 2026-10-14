@@ -754,7 +754,7 @@ struct StoryViewer: View {
         let preloader = StoryPreloader.shared
         let ids = playback.windowIds
         let ahead = ids.dropFirst().compactMap { stories[$0] }
-        preloader.setWindow(StoryPreloadPlan.window(current: current, ahead: ahead, lowData: preloader.lowDataMode))
+        preloader.setWindow(StoryPreloadPlan.window(current: current, ahead: ahead, lowData: false))
     }
 
     /// Linear, because it is a clock. A video's bar follows the video.

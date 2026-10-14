@@ -122,7 +122,7 @@ final class StoryStripModel {
         }
         guard !Task.isCancelled, viewing == nil else { return }
         let ordered = ids.compactMap { id in known.first { $0.id == id } }
-        preloader.setWindow(StoryPreloadPlan.items(for: ordered, lowData: preloader.lowDataMode))
+        preloader.setWindow(StoryPreloadPlan.items(for: ordered, lowData: false))
     }
 
     /// What `preloadTray` depends on: the ring order and whether the viewer is up.

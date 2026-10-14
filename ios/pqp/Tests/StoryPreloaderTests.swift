@@ -169,6 +169,27 @@ final class StoryPreloaderTests: XCTestCase {
         XCTAssertNotNil(loader.image(for: c))
     }
 
+    /// Low Data Mode filters what runs, not what is wanted: when it goes off
+    /// again the videos the window still holds start without the caller asking.
+    func testLowDataModeHoldsVideosBackAndLetsThemGoWhenItEnds() async throws {
+        let gate = Gate()
+        let loader = preloader(gate: gate)
+        let video = url("https://x.y/v.mp4")
+        let picture = url("https://x.y/p.jpg")
+        loader.lowDataOverride = true
+        loader.setWindow([.image(picture), .video(video)])
+        await settle()
+        XCTAssertEqual(loader.started, ["img:" + picture.absoluteString])
+        loader.lowDataOverride = false
+        loader.replan()
+        await settle()
+        XCTAssertTrue(loader.started.contains("vid:" + video.absoluteString))
+        // And it comes on again: the one buffering is cancelled.
+        loader.lowDataOverride = true
+        loader.replan()
+        XCTAssertTrue(loader.cancelled.contains("vid:" + video.absoluteString))
+    }
+
     func testClosingTheViewerCancelsEverything() async throws {
         let gate = Gate()
         let loader = preloader(gate: gate)
