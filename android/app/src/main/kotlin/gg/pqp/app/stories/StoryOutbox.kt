@@ -239,8 +239,10 @@ class StoryOutbox(
                 is SessionPhase.Ready -> withContext(Dispatchers.IO) { restore(phase.me.id) }
                 // Somebody else may sign in next on this phone: a story is never posted as them.
                 is SessionPhase.SignedOut -> {
-                    jobs.values.forEach { it.cancel() }
+                    // Stopped, and waited for: a draft still being written must not appear after the cleanup below.
+                    val stopping = jobs.values.toList()
                     jobs.clear()
+                    stopping.forEach { it.cancelAndJoin() }
                     pendingInputs.clear()
                     eagers.values.forEach { it.values.forEach(eager::discard) }
                     eagers.clear()
