@@ -304,10 +304,14 @@ export async function computeBotsAdminReport(now: number = Date.now()): Promise<
     micros: number;
     input_tokens: number;
     output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
   }>(
     `SELECT model, COUNT(*)::int AS runs, COALESCE(SUM(cost_micros), 0)::float8 AS micros,
             COALESCE(SUM(input_tokens), 0)::float8 AS input_tokens,
-            COALESCE(SUM(output_tokens), 0)::float8 AS output_tokens
+            COALESCE(SUM(output_tokens), 0)::float8 AS output_tokens,
+            COALESCE(SUM(cache_read_tokens), 0)::float8 AS cache_read_tokens,
+            COALESCE(SUM(cache_write_tokens), 0)::float8 AS cache_write_tokens
        FROM server_bot_runs
       WHERE created_at >= ($1::date)::timestamp AT TIME ZONE $2
       GROUP BY model
@@ -429,6 +433,9 @@ export async function computeBotsAdminReport(now: number = Date.now()): Promise<
         usd: usd(row.micros),
         inputTokens: row.input_tokens,
         outputTokens: row.output_tokens,
+        // Parts of inputTokens: read from the prompt cache, and written to it.
+        cacheReadTokens: row.cache_read_tokens,
+        cacheWriteTokens: row.cache_write_tokens,
       })),
       topServers: topServers.rows.map((row) => ({
         name: row.name,

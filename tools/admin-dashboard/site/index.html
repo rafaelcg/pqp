@@ -5525,7 +5525,8 @@
           ? '<span class="srv-name">' + esc(m.model) + "</span>"
           : '<span style="color:var(--faint)" title="execução que não chegou a chamar um modelo: pulada, recusada ou o sim de um plano">sem modelo</span>') + "</td>" +
           '<td class="r num">' + fmt(m.runs) + "</td>" +
-          '<td class="r num" style="white-space:nowrap" title="' + fmt(m.inputTokens) + " de entrada, " + fmt(m.outputTokens) + ' de saída">' + botTokens(m.inputTokens) + " · " + botTokens(m.outputTokens) + "</td>" +
+          '<td class="r num" style="white-space:nowrap" title="' + fmt(m.inputTokens) + " de entrada (" + fmt(m.cacheReadTokens || 0) + " lidos do cache, " + fmt(m.cacheWriteTokens || 0) + " gravados no cache), " + fmt(m.outputTokens) + ' de saída">' + botTokens(m.inputTokens) + " · " + botTokens(m.outputTokens) +
+          (m.inputTokens > 0 ? '<div style="color:var(--faint);font-size:11px">' + Math.round(((m.cacheReadTokens || 0) / m.inputTokens) * 100) + "% do cache</div>" : "") + "</td>" +
           '<td class="r num cell-strong" style="white-space:nowrap">' + botUsd(m.usd) + "</td></tr>";
       }).join("") : '<tr><td colspan="4" style="color:var(--faint)">nenhuma execução nos últimos 7 dias</td></tr>';
     }

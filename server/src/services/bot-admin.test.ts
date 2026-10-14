@@ -226,8 +226,16 @@ describeDb("the bots report", () => {
     expect(report.cost.perThousandRepliesWindow).toBe(102.9412);
     expect(report.cost.days[30]).toEqual({ day: today, usd: 1.5, calls: 20, refused: 3 });
     expect(report.cost.byModel7d).toEqual([
-      { model: "anthropic:claude-haiku-5-5", runs: 2, usd: 0.4, inputTokens: 0, outputTokens: 0 },
-      { model: null, runs: 1, usd: 0, inputTokens: 0, outputTokens: 0 },
+      {
+        model: "anthropic:claude-haiku-5-5",
+        runs: 2,
+        usd: 0.4,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+      { model: null, runs: 1, usd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
     ]);
     expect(report.cost.topServers.map((s) => [s.name, s.usd])).toEqual([
       ["Hall Alfa", 0.65],

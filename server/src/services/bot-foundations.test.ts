@@ -24,7 +24,7 @@ const { botToolPermissions } = await import("./bot-actions.js");
 const { deleteBotRole, renameBotRole, syncBotRole } = await import("./bot-role.js");
 const { botDay, bumpBotStats, nextBotDayStart, readBotOverview } = await import("./bot-stats.js");
 const { runBotRunsTick } = await import("./bot-runner.js");
-const { setBotProviderForTests } = await import("./bot-llm.js");
+const { setBotProviderForTests, toAnthropicMessages } = await import("./bot-llm.js");
 const { postChannelMessage, resetChatRateLimits } = await import("../ws/chat.js");
 const { readBotFacePng } = await import("./bot-faces.js");
 const { runBotTestTurn } = await import("./bot-test.js");
@@ -40,6 +40,40 @@ describe("the bot day", () => {
     expect(nextBotDayStart(Date.parse("2026-10-14T02:59:00Z")).toISOString()).toBe(
       "2026-10-14T03:00:00.000Z",
     );
+  });
+});
+
+describe("the prompt cache", () => {
+  type Block = { type: string; cache_control?: unknown };
+  const marked = (messages: ReturnType<typeof toAnthropicMessages>) =>
+    messages.flatMap((message, index) =>
+      (message.content as Block[]).flatMap((block, at) => (block.cache_control ? [`${index}.${at}`] : [])),
+    );
+
+  it("marks the conversation, so a tool turn reads it instead of paying for it again", () => {
+    expect(marked(toAnthropicMessages([{ role: "user", text: "oi" }]))).toEqual(["0.0"]);
+  });
+
+  it("marks the last two user-side messages of a tool loop, and the end of each", () => {
+    const messages = toAnthropicMessages([
+      {
+        role: "user",
+        text: "cria um canal",
+        images: [{ mediaType: "image/png", data: "AAAA" }],
+      },
+      { role: "assistant", text: null, toolCalls: [], raw: [{ type: "text", text: "..." }] },
+      {
+        role: "tool",
+        results: [
+          { id: "a", content: "{}", isError: false },
+          { id: "b", content: "{}", isError: false },
+        ],
+      },
+      { role: "assistant", text: null, toolCalls: [], raw: [{ type: "text", text: "..." }] },
+      { role: "tool", results: [{ id: "c", content: "{}", isError: false }] },
+    ]);
+    // Only the newest two user-side messages, each on its last block.
+    expect(marked(messages)).toEqual(["2.1", "4.0"]);
   });
 });
 
@@ -67,10 +101,11 @@ describeDb("server bot foundations", () => {
           toolCalls: [],
           message: { role: "assistant", text: "Oi!", toolCalls: [], raw: [] },
           reportedCostMicros: null,
-          inputTokens: 1000,
+          // 1,000 tokens of input in all, most of it from the prompt cache.
+          inputTokens: 200,
           outputTokens: 20,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
+          cacheReadTokens: 700,
+          cacheWriteTokens: 100,
           model: "claude-haiku-5-5",
           stopReason: "end_turn",
         };
@@ -444,13 +479,20 @@ describeDb("server bot foundations", () => {
       input_tokens: string;
       output_tokens: string;
       cost_micros: string;
-    }>(`SELECT trigger, model, turns, input_tokens, output_tokens, cost_micros FROM server_bot_runs`);
+      cache_read_tokens: string;
+      cache_write_tokens: string;
+    }>(
+      `SELECT trigger, model, turns, input_tokens, output_tokens, cost_micros, cache_read_tokens, cache_write_tokens
+         FROM server_bot_runs`,
+    );
     expect(run.rows[0]).toMatchObject({
       trigger: "mention",
       model: "claude-haiku-5-5",
       turns: 1,
       input_tokens: "1000",
       output_tokens: "20",
+      cache_read_tokens: "700",
+      cache_write_tokens: "100",
     });
     expect(Number(run.rows[0]!.cost_micros)).toBeGreaterThan(0);
 

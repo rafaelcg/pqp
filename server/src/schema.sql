@@ -6574,6 +6574,10 @@ ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS turns INTEGER NOT NULL DEFA
 ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS input_tokens BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS output_tokens BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cost_micros BIGINT NOT NULL DEFAULT 0;
+-- The part of input_tokens served from Anthropic's prompt cache (billed at a
+-- tenth) and written to it (1.25x). input_tokens stays the whole input.
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cache_read_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT NOT NULL DEFAULT 0;
 
 -- The operator's history of bots (services/bot-stats.ts), per São Paulo day.
 -- No foreign keys on purpose: a deleted bot or server keeps its past here,
@@ -6597,6 +6601,8 @@ CREATE TABLE IF NOT EXISTS server_bot_stats_daily (
   cost_micros     BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY (day, server_id, bot_user_id)
 );
+ALTER TABLE server_bot_stats_daily ADD COLUMN IF NOT EXISTS cache_read_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_stats_daily ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT NOT NULL DEFAULT 0;
 
 -- Who asked, per day, only to count distinct people. Pruned after 90 days.
 CREATE TABLE IF NOT EXISTS server_bot_people_daily (

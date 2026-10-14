@@ -59,6 +59,8 @@ export interface BotStatsDelta {
   inputTokens?: number;
   outputTokens?: number;
   costMicros?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 const COLUMNS: Array<[keyof BotStatsDelta, string]> = [
@@ -75,6 +77,8 @@ const COLUMNS: Array<[keyof BotStatsDelta, string]> = [
   ["inputTokens", "input_tokens"],
   ["outputTokens", "output_tokens"],
   ["costMicros", "cost_micros"],
+  ["cacheReadTokens", "cache_read_tokens"],
+  ["cacheWriteTokens", "cache_write_tokens"],
 ];
 
 const BUMP_SQL = `

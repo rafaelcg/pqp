@@ -288,25 +288,29 @@ async function refundReply(serverId: string, day: string = botDay()): Promise<vo
 async function recordCall(
   run: ClaimedRun,
   serverId: string,
-  call: { model: string; input: number; output: number; costMicros: number },
+  call: { model: string; output: number; costMicros: number; uncached: number; cacheRead: number; cacheWrite: number },
 ): Promise<void> {
+  const input = call.uncached + call.cacheRead + call.cacheWrite;
   await getPool().query(
     `UPDATE server_bot_usage_daily
         SET input_tokens = input_tokens + $2, output_tokens = output_tokens + $3
       WHERE day = $4::date AND server_id = $1`,
-    [serverId, call.input, call.output, botDay()],
+    [serverId, input, call.output, botDay()],
   );
   await getPool().query(
     `UPDATE server_bot_runs
         SET model = $2, turns = turns + 1, input_tokens = input_tokens + $3,
-            output_tokens = output_tokens + $4, cost_micros = cost_micros + $5
+            output_tokens = output_tokens + $4, cost_micros = cost_micros + $5,
+            cache_read_tokens = cache_read_tokens + $6, cache_write_tokens = cache_write_tokens + $7
       WHERE id = $1`,
-    [run.id, call.model, call.input, call.output, call.costMicros],
+    [run.id, call.model, input, call.output, call.costMicros, call.cacheRead, call.cacheWrite],
   );
   await bumpBotStats(run.bot_id, {
-    inputTokens: call.input,
+    inputTokens: input,
     outputTokens: call.output,
     costMicros: call.costMicros,
+    cacheReadTokens: call.cacheRead,
+    cacheWriteTokens: call.cacheWrite,
   });
 }
 
@@ -802,7 +806,9 @@ async function runOne(run: ClaimedRun): Promise<void> {
     await settleSpend(spendDay, estimate, costMicros);
     await recordCall(run, ctx.serverId, {
       model: completion.model,
-      input: completion.inputTokens + completion.cacheReadTokens + completion.cacheWriteTokens,
+      uncached: completion.inputTokens,
+      cacheRead: completion.cacheReadTokens,
+      cacheWrite: completion.cacheWriteTokens,
       output: completion.outputTokens,
       costMicros,
     });
@@ -1089,7 +1095,9 @@ async function explainFailures(
     await settleSpend(spendDay, estimate, costMicros);
     await recordCall(run, actionCtx.serverId, {
       model: completion.model,
-      input: completion.inputTokens + completion.cacheReadTokens + completion.cacheWriteTokens,
+      uncached: completion.inputTokens,
+      cacheRead: completion.cacheReadTokens,
+      cacheWrite: completion.cacheWriteTokens,
       output: completion.outputTokens,
       costMicros,
     });
