@@ -136,6 +136,16 @@ class StoryOutbox(
     }
 
     /**
+     * The app came to the front: read the drafts on disk again (one that could not be read earlier is found now) and send
+     * whatever is waiting.
+     */
+    fun onForeground() {
+        scope.launch(Dispatchers.IO) {
+            (session.phase.value as? SessionPhase.Ready)?.let { restore(it.me.id) } ?: retryWaiting()
+        }
+    }
+
+    /**
      * Send every post that is waiting for a connection, if there is one now. Called when the connection comes back
      * and whenever the app comes to the front.
      */
@@ -256,6 +266,8 @@ class StoryOutbox(
                     StoryOutboxRules.Outcome.Waiting -> {
                         autoRetried.remove(id)
                         setEntry(id, StoryOutboxRules.Status.Waiting, null)
+                        // The session may have become ready between the check that failed and now: nobody would say so again.
+                        if (e is StoryOutboxRules.SessionNotReady && session.phase.value is SessionPhase.Ready) retryWaiting()
                     }
                     // A connection but no answer: once more at once, and only a second failure is red.
                     StoryOutboxRules.Outcome.RetrySoon -> {

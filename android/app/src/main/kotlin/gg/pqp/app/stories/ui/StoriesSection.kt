@@ -67,7 +67,7 @@ fun StoriesSection(
     LifecycleResumeEffect(key) {
         store.refresh(key)
         // Back in front: a post that was waiting for a connection goes on if there is one now.
-        outbox.retryWaiting()
+        outbox.onForeground()
         onPauseOrDispose { }
     }
 
