@@ -47,8 +47,13 @@ struct StoriesConfig: Codable, Hashable, Sendable {
     /// predates layers: the editor is hidden, because that server would
     /// silently drop what was placed.
     var layersMax: Int? = nil
+    /// Whether `POST /api/stories/uploads` is on. Absent on a server that
+    /// predates eager uploads, which reads as off: a file then goes up the
+    /// old way, after Post.
+    var eagerUploads: Bool? = nil
 
     var layersEnabled: Bool { (layersMax ?? 0) > 0 }
+    var eagerUploadsEnabled: Bool { eagerUploads == true }
 
     static let off = StoriesConfig(
         enabled: false, friendsEnabled: false, mediaEnabled: false,
@@ -318,6 +323,9 @@ struct StoryMediaInput: Codable, Hashable, Sendable {
     let width: Int
     let height: Int
     var durationMs: Int? = nil
+    /// An eager upload (`POST /api/stories/uploads`) that already holds these
+    /// bytes: the create then hands back no URL for the file.
+    var uploadId: String? = nil
 }
 
 struct StoryAudienceTargets: Codable, Hashable, Sendable {
@@ -345,6 +353,19 @@ struct CreateStoryRequest: Codable, Sendable {
     /// declaration has to be patched once its upload is known.
     var layers: [JSONValue]? = nil
     var altText: String? = nil
+    /// Create AND publish in one call. Only when every file is an eager upload.
+    var publish: Bool? = nil
+}
+
+/// `POST /api/stories/uploads`: a URL for a file before its story exists.
+struct StoryUploadTicket: Codable, Sendable {
+    let uploadId: String
+    let url: String
+    let method: String
+    let headers: [String: String]
+    let expiresAt: String?
+
+    var upload: StoryUpload { StoryUpload(url: url, method: method, headers: headers) }
 }
 
 struct StoryUpload: Codable, Hashable, Sendable {

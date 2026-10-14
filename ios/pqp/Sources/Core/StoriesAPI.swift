@@ -49,6 +49,19 @@ extension APIClient {
         try await post("/api/stories", body: request)
     }
 
+    /// Eager upload: where to PUT a story's file before the story exists.
+    /// `kind` is `base` (the photo or video) or `layer` (a placed photo or the
+    /// drawing); `byteLength` is signed into the PUT.
+    func mintStoryUpload(kind: String, contentType: String, byteLength: Int) async throws -> StoryUploadTicket {
+        struct Body: Encodable { let kind: String; let contentType: String; let byteLength: Int }
+        return try await post("/api/stories/uploads", body: Body(kind: kind, contentType: contentType, byteLength: byteLength))
+    }
+
+    /// Throws an unused upload away (the object and its row).
+    func deleteStoryUpload(id: String) async throws {
+        let _: EmptyResponse = try await delete("/api/stories/uploads/\(id)")
+    }
+
     func publishStory(id: String) async throws -> Story {
         let response: PublishStoryResponse = try await post("/api/stories/\(id)/publish", body: EmptyBody())
         return response.story

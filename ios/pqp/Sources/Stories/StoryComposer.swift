@@ -49,6 +49,8 @@ struct StoryComposer: View {
     @State private var finalMedia: StoryDraftMedia?
     @State private var builtRequest = StoryDraftRequest(kind: "text", text: nil, background: nil, caption: nil, sticker: nil)
     @State private var error: String?
+    /// The files going up ahead of Post, when the server offers it.
+    @State private var eager: StoryEagerUploads?
 
     var body: some View {
         ZStack {
@@ -77,7 +79,13 @@ struct StoryComposer: View {
                 cameraStep
             }
         }
-        .onDisappear { StoryMetrics.mark("composer.closed") }
+        .onDisappear {
+            StoryMetrics.mark("composer.closed")
+            // Closed without posting: whatever went up ahead is thrown away
+            // (a post has already taken its files, so this finds none).
+            eager?.discardAll()
+        }
+        .onChange(of: editor.filesRevision) { _, _ in syncEager() }
         .task {
             await loadConfig()
             #if DEBUG
@@ -154,7 +162,8 @@ struct StoryComposer: View {
                 preselectsFriends: preselectsFriends,
                 callServerId: builtRequest.callServerId,
                 request: builtRequest,
-                media: finalMedia
+                media: finalMedia,
+                eager: eager
             ) {
                 // Posted: the temporary exports are no longer needed.
                 StoryImport.remove(finalMedia?.fileURL)
@@ -178,6 +187,9 @@ struct StoryComposer: View {
             }
             #endif
             config = try await session.api.storiesConfigOrThrow(serverId: preselectedServerId)
+            if eager == nil {
+                eager = session.storyPosts.makeEagerUploads(enabled: config.eagerUploadsEnabled)
+            }
             configLoaded = true
             configFailed = false
             if !config.mediaEnabled, mode == .media { mode = .text }
@@ -324,6 +336,7 @@ struct StoryComposer: View {
     /// to the camera tab.
     private func leaveEditor() {
         error = nil
+        eager?.discardAll()
         StoryImport.remove(draft?.fileURL)
         editor.clear()
         editorSerial += 1
@@ -404,6 +417,7 @@ struct StoryComposer: View {
         }
         finalMedia = mode == .media ? media : nil
         builtRequest = buildRequest(media: finalMedia)
+        syncEager()
         showingAudience = true
     }
 
@@ -463,6 +477,29 @@ struct StoryComposer: View {
             mode = .media
             self.draft = draft
         }
+        syncEager()
+    }
+
+    /// Starts uploading what is final and abandons what is gone: the base the
+    /// moment there is one (a clip once it is trimmed), each placed photo the
+    /// moment it is added, the drawing as it stands. Never blocks the editor.
+    private func syncEager() {
+        guard let eager, eager.enabled else { return }
+        var wants: [StoryEagerWant] = []
+        if mode == .media, let media = finalMedia ?? draft {
+            wants.append(StoryEagerWant(
+                key: StoryEagerWant.baseKey(), kind: "base", contentType: media.contentType, byteSize: media.data.count,
+                fingerprint: StoryEagerWant.fingerprint(of: media.data),
+                data: media.isVideo ? nil : media.data, fileURL: media.isVideo ? media.fileURL : nil
+            ))
+        }
+        for (layerId, file) in editor.files {
+            wants.append(StoryEagerWant(
+                key: StoryEagerWant.layerKey(layerId), kind: "layer", contentType: file.contentType, byteSize: file.data.count,
+                fingerprint: StoryEagerWant.fingerprint(of: file.data), data: file.data
+            ))
+        }
+        eager.sync(wants)
     }
 
     /// A file from the Files app. The copy of a movie and the decode of a
@@ -829,6 +866,8 @@ struct StoryAudienceSheet: View {
     let callServerId: String?
     let request: StoryDraftRequest
     let media: StoryDraftMedia?
+    /// Files already going up; the post takes them over.
+    var eager: StoryEagerUploads?
     let onPosted: () -> Void
 
     @State private var options: StoryAudienceOptions?
@@ -1007,7 +1046,7 @@ struct StoryAudienceSheet: View {
             )
             let base = media.map { StoryPostBytes(contentType: $0.contentType, data: $0.data, fileURL: $0.fileURL) }
             let layers = request.layerFiles.mapValues { StoryPostBytes(contentType: $0.contentType, data: $0.data) }
-            try session.storyPosts.enqueue(request: body, base: base, layers: layers, userId: session.currentUser?.id)
+            try session.storyPosts.enqueue(request: body, base: base, layers: layers, userId: session.currentUser?.id, eager: eager)
             onPosted()
         } catch {
             posting = false

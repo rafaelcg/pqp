@@ -36,14 +36,40 @@ struct StoryPostRecord: Codable, Sendable {
     /// Set once the server minted it, so discarding the draft can delete it.
     var storyId: String?
     let createdAt: Date
+    /// The files go up as eager uploads and the create claims them by id,
+    /// publishing in the same call. Off with a server that has none.
+    var eager: Bool?
+    /// The upload ids already in storage, by file key (`base`, `layer:<id>`),
+    /// kept so a retry sends only what is missing.
+    var uploadIds: [String: String]?
 
     var serverIds: [String] { request.audiences.serverIds }
     var includesFriends: Bool { request.audiences.friends }
+
+    /// The files this post sends, base first.
+    var items: [StoryPostItem] {
+        var result: [StoryPostItem] = []
+        if let base { result.append(StoryPostItem(key: StoryEagerWant.baseKey(), kind: "base", file: base)) }
+        for (layerId, file) in layerFiles.sorted(by: { $0.key < $1.key }) {
+            result.append(StoryPostItem(key: StoryEagerWant.layerKey(layerId), kind: "layer", file: file))
+        }
+        return result
+    }
+
+    var usesEagerUploads: Bool { eager == true && !items.isEmpty }
 
     /// Every byte this post sends.
     var totalBytes: Int {
         (base?.byteSize ?? 0) + layerFiles.values.reduce(0) { $0 + $1.byteSize }
     }
+}
+
+/// One file of a post, with the key an eager upload is known by.
+struct StoryPostItem: Sendable {
+    let key: String
+    /// `base` or `layer`, as the upload endpoint takes it.
+    let kind: String
+    let file: StoryPostFile
 }
 
 /// Bytes handed to the queue: in memory (a photo) or already a file (a video
@@ -74,7 +100,7 @@ struct StoryPostStore: Sendable {
     /// is what the post uploads from, whatever happens to the original.
     func create(
         id: String, userId: String?, request: CreateStoryRequest,
-        base: StoryPostBytes?, layers: [String: StoryPostBytes]
+        base: StoryPostBytes?, layers: [String: StoryPostBytes], eager: Bool = false
     ) throws -> StoryPostRecord {
         let directory = folder(id)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -89,7 +115,7 @@ struct StoryPostStore: Sendable {
             }
             let record = StoryPostRecord(
                 id: id, userId: userId, request: request, base: baseFile,
-                layerFiles: layerFiles, storyId: nil, createdAt: Date()
+                layerFiles: layerFiles, storyId: nil, createdAt: Date(), eager: eager ? true : nil, uploadIds: nil
             )
             try save(record)
             return record
@@ -143,6 +169,10 @@ protocol StoryPostBackend: Sendable {
     func delete(storyId: String) async
     /// PUT a file, reporting the bytes sent so far.
     func put(file: URL, to upload: StoryUpload, progress: @escaping @Sendable (Int64) -> Void) async throws
+    /// A URL for a file whose story does not exist yet.
+    func mintUpload(kind: String, contentType: String, byteLength: Int) async throws -> StoryUploadTicket
+    /// Throws an upload away. Best effort: the server's sweep is the backstop.
+    func deleteUpload(id: String) async
 }
 
 struct LiveStoryPostBackend: StoryPostBackend {
@@ -184,6 +214,14 @@ struct LiveStoryPostBackend: StoryPostBackend {
     func put(file: URL, to upload: StoryUpload, progress: @escaping @Sendable (Int64) -> Void) async throws {
         try await StoryUploader.put(fileAt: file, to: upload, progress: progress)
     }
+
+    func mintUpload(kind: String, contentType: String, byteLength: Int) async throws -> StoryUploadTicket {
+        try await api.mintStoryUpload(kind: kind, contentType: contentType, byteLength: byteLength)
+    }
+
+    func deleteUpload(id: String) async {
+        try? await api.deleteStoryUpload(id: id)
+    }
 }
 
 // MARK: - Progress
@@ -217,6 +255,13 @@ final class StoryPostProgress: @unchecked Sendable {
         defer { lock.unlock() }
         sent[index] = bytes
         return fraction()
+    }
+
+    /// Where it stands, whether or not it moved.
+    var current: Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastReported < 0 ? 0 : lastReported
     }
 
     /// The server answered this file's PUT: it counts in full.
@@ -294,6 +339,9 @@ final class StoryPostQueue {
     /// A phone's uplink is shared: two stories at a time, the rest in line.
     static let maxRunning = 2
     @ObservationIgnored private var backgroundTasks: [String: UIBackgroundTaskIdentifier] = [:]
+    /// Uploads that started in the composer, by post, until the post has
+    /// claimed or dropped them.
+    @ObservationIgnored private var early: [String: [String: StoryEagerFile]] = [:]
     @ObservationIgnored private var ownerId: String?
     @ObservationIgnored private let usesBackgroundTime: Bool
 
@@ -312,6 +360,11 @@ final class StoryPostQueue {
 
     func job(id: String) -> Job? { jobs.first { $0.id == id } }
 
+    /// The composer's uploads: ahead of Post when the server offers them.
+    func makeEagerUploads(enabled: Bool) -> StoryEagerUploads {
+        StoryEagerUploads(backend: backend, enabled: enabled)
+    }
+
     var isPosting: Bool { jobs.contains { !$0.failed } }
 
     // MARK: Enqueue, retry, discard
@@ -319,12 +372,19 @@ final class StoryPostQueue {
     /// Keeps the post on disk and starts it. Throws, with nothing started,
     /// when the files cannot be kept (the disk is full): the composer then
     /// stays open and says so.
+    ///
+    /// `eager`: the files the composer already started uploading. They are the
+    /// post's now; any it has none for are sent with it.
     @discardableResult
     func enqueue(
-        request: CreateStoryRequest, base: StoryPostBytes?, layers: [String: StoryPostBytes], userId: String?
+        request: CreateStoryRequest, base: StoryPostBytes?, layers: [String: StoryPostBytes], userId: String?,
+        eager: StoryEagerUploads? = nil
     ) throws -> String {
         let id = UUID().uuidString.lowercased()
-        let record = try store.create(id: id, userId: userId, request: request, base: base, layers: layers)
+        let record = try store.create(
+            id: id, userId: userId, request: request, base: base, layers: layers, eager: eager?.enabled == true
+        )
+        if let eager, eager.enabled { early[id] = eager.release() }
         ownerId = userId
         jobs.append(Job(id: id, record: record))
         start(id)
@@ -343,11 +403,16 @@ final class StoryPostQueue {
         tasks[id] = nil
         waiting.removeAll { $0 == id }
         endBackgroundTime(id)
-        let storyId = job(id: id)?.record.storyId
+        let record = job(id: id)?.record
         jobs.removeAll { $0.id == id }
         store.remove(id)
-        if let storyId {
-            let backend = backend
+        let backend = backend
+        // Uploads nobody will claim: stopped if still going, deleted if up.
+        for file in early.removeValue(forKey: id).map({ Array($0.values) }) ?? [] { file.abandon(backend: backend) }
+        for uploadId in (record?.uploadIds).map({ Array($0.values) }) ?? [] {
+            Task.detached { await backend.deleteUpload(id: uploadId) }
+        }
+        if let storyId = record?.storyId {
             Task.detached { await backend.delete(storyId: storyId) }
         }
         pump()
@@ -367,6 +432,8 @@ final class StoryPostQueue {
     /// Signing out: nothing of this account's stays on the phone.
     func clear() {
         for id in jobs.map(\.id) { tasks[id]?.cancel(); endBackgroundTime(id) }
+        for files in early.values { for file in files.values { file.abandon(backend: backend) } }
+        early.removeAll()
         tasks.removeAll()
         waiting.removeAll()
         jobs.removeAll()
@@ -395,51 +462,26 @@ final class StoryPostQueue {
     private func execute(_ id: String) async {
         guard var record = job(id: id)?.record else { return }
         do {
-            let created = try await backend.create(record.request)
-            try await settleDiscard(created)
-            record.storyId = created.story.id
-            try? store.save(record)
-            update(id) { $0.record.storyId = created.story.id }
-
-            // Every file goes up before the story is published: the base photo
-            // or video, and each placed photo and the drawing, all at once (they
-            // are independent, and the post waits for the slowest, not the sum).
-            var files: [(url: URL, size: Int, upload: StoryUpload)] = []
-            if let upload = created.upload, let base = record.base {
-                files.append((store.fileURL(record, base), base.byteSize, upload))
-            }
-            for target in created.layerUploads {
-                guard let file = record.layerFiles[target.layerId] else { continue }
-                files.append((
-                    store.fileURL(record, file), file.byteSize,
-                    StoryUpload(url: target.url, method: target.method, headers: target.headers)
-                ))
-            }
-            let tracker = StoryPostProgress(fileSizes: files.map(\.size))
-            let backend = backend
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                for (index, file) in files.enumerated() {
-                    group.addTask { [weak self] in
-                        try await backend.put(file: file.url, to: file.upload) { sent in
-                            guard let fraction = tracker.record(file: index, sent: sent) else { return }
-                            Task { @MainActor in self?.update(id) { $0.progress = fraction } }
-                        }
-                        if let fraction = tracker.complete(file: index) {
-                            await self?.update(id) { $0.progress = fraction }
-                        }
+            if record.usesEagerUploads {
+                do {
+                    try await executeEager(id, &record)
+                    return
+                } catch APIError.server(let status, _) where (400..<500).contains(status) && status != 429 {
+                    // The server would not take the uploads it was handed (gone,
+                    // claimed, not what was declared): the old way, the files go
+                    // up on the URLs the create hands back.
+                    let backend = backend
+                    for file in early.removeValue(forKey: id).map({ Array($0.values) }) ?? [] { file.abandon(backend: backend) }
+                    for uploadId in (record.uploadIds ?? [:]).values {
+                        Task.detached { await backend.deleteUpload(id: uploadId) }
                     }
+                    record.uploadIds = nil
+                    record.eager = nil
+                    try? store.save(record)
+                    update(id) { $0.record = record }
                 }
-                try await group.waitForAll()
             }
-            try Task.checkCancellation()
-            // A story with nothing to upload (text, a call, a mention) is live
-            // on the create answer and has nothing to publish.
-            if created.upload != nil || !created.layerUploads.isEmpty {
-                try await backend.publish(storyId: created.story.id)
-            }
-            update(id) { $0.progress = 1 }
-            StoryMetrics.mark("post.live")
-            finish(id)
+            try await executeClassic(id, &record)
         } catch {
             guard !Task.isCancelled, !error.isCancellation else { return }
             fail(id, error)
@@ -453,6 +495,145 @@ final class StoryPostQueue {
             await backend.delete(storyId: created.story.id)
             throw CancellationError()
         }
+    }
+
+    /// Create, PUT every file on the URL the create returns, publish.
+    private func executeClassic(_ id: String, _ record: inout StoryPostRecord) async throws {
+        let created = try await backend.create(record.request)
+        try await settleDiscard(created)
+        record.storyId = created.story.id
+        try? store.save(record)
+        update(id) { $0.record.storyId = created.story.id }
+
+        // Every file goes up before the story is published: the base photo
+        // or video, and each placed photo and the drawing, all at once (they
+        // are independent, and the post waits for the slowest, not the sum).
+        var files: [(url: URL, size: Int, upload: StoryUpload)] = []
+        if let upload = created.upload, let base = record.base {
+            files.append((store.fileURL(record, base), base.byteSize, upload))
+        }
+        for target in created.layerUploads {
+            guard let file = record.layerFiles[target.layerId] else { continue }
+            files.append((
+                store.fileURL(record, file), file.byteSize,
+                StoryUpload(url: target.url, method: target.method, headers: target.headers)
+            ))
+        }
+        let tracker = StoryPostProgress(fileSizes: files.map(\.size))
+        let backend = backend
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for (index, file) in files.enumerated() {
+                group.addTask { [weak self] in
+                    try await backend.put(file: file.url, to: file.upload) { sent in
+                        guard let fraction = tracker.record(file: index, sent: sent) else { return }
+                        Task { @MainActor in self?.update(id) { $0.progress = fraction } }
+                    }
+                    if let fraction = tracker.complete(file: index) {
+                        await self?.update(id) { $0.progress = fraction }
+                    }
+                }
+            }
+            try await group.waitForAll()
+        }
+        try Task.checkCancellation()
+        // A story with nothing to upload (text, a call, a mention) is live
+        // on the create answer and has nothing to publish.
+        if created.upload != nil || !created.layerUploads.isEmpty {
+            try await backend.publish(storyId: created.story.id)
+        }
+        update(id) { $0.progress = 1 }
+        StoryMetrics.mark("post.live")
+        finish(id)
+    }
+
+    /// Every file is an upload by id (most already up, from the composer),
+    /// then ONE request claims them and publishes: with the bytes already in
+    /// storage, Post is a single small call.
+    private func executeEager(_ id: String, _ record: inout StoryPostRecord) async throws {
+        let items = record.items
+        let tracker = StoryPostProgress(fileSizes: items.map(\.file.byteSize))
+        var ids = record.uploadIds ?? [:]
+        for (index, item) in items.enumerated() where ids[item.key] != nil { _ = tracker.complete(file: index) }
+        update(id) { $0.progress = tracker.current }
+
+        let snapshot = record
+        try await withThrowingTaskGroup(of: (String, String).self) { group in
+            for (index, item) in items.enumerated() where ids[item.key] == nil {
+                group.addTask { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    let uploadId = try await self.uploadId(for: item, in: snapshot, jobId: id, index: index, tracker: tracker)
+                    return (item.key, uploadId)
+                }
+            }
+            for try await (key, uploadId) in group {
+                ids[key] = uploadId
+                record.uploadIds = ids
+                try? store.save(record)
+            }
+        }
+        try Task.checkCancellation()
+        early[id] = nil
+
+        let created = try await createClaiming(record.request.claiming(ids))
+        try await settleDiscard(created)
+        record.storyId = created.story.id
+        try? store.save(record)
+        update(id) { $0.record.storyId = created.story.id }
+        // Answered published when it was one call; a replay can land a story
+        // still pending.
+        if created.story.own?.status == "pending" || created.upload != nil || !created.layerUploads.isEmpty {
+            try await backend.publish(storyId: created.story.id)
+        }
+        update(id) { $0.progress = 1 }
+        StoryMetrics.mark("post.live")
+        finish(id)
+    }
+
+    /// The create that claims the uploads. A 409 says an object is not there
+    /// yet (a PUT the server has not finished taking in): wait and send the
+    /// very same create again, same `requestId`, a few times before giving up.
+    private func createClaiming(_ request: CreateStoryRequest) async throws -> CreateStoryResponse {
+        var attempt = 0
+        while true {
+            do {
+                return try await backend.create(request)
+            } catch APIError.server(let status, _) where status == 409 && attempt < 4 {
+                attempt += 1
+                try await Task.sleep(for: .milliseconds(1_500))
+            }
+        }
+    }
+
+    /// The upload id of one file: the composer's own upload if it has one that
+    /// made it, else a fresh one from the copy kept on disk.
+    private func uploadId(
+        for item: StoryPostItem, in record: StoryPostRecord, jobId: String, index: Int, tracker: StoryPostProgress
+    ) async throws -> String {
+        let report: @Sendable (Int64) -> Void = { [weak self] sent in
+            guard let fraction = tracker.record(file: index, sent: sent) else { return }
+            Task { @MainActor in self?.update(jobId) { $0.progress = fraction } }
+        }
+        let finished: () -> Void = { [weak self] in
+            guard let fraction = tracker.complete(file: index) else { return }
+            Task { @MainActor in self?.update(jobId) { $0.progress = fraction } }
+        }
+        if let started = early[jobId]?[item.key], let task = started.task {
+            started.attach(report)
+            if let uploadId = try? await task.value {
+                finished()
+                return uploadId
+            }
+            try Task.checkCancellation()
+        }
+        let ticket = try await backend.mintUpload(kind: item.kind, contentType: item.file.contentType, byteLength: item.file.byteSize)
+        do {
+            try await backend.put(file: store.fileURL(record, item.file), to: ticket.upload, progress: report)
+        } catch {
+            await backend.deleteUpload(id: ticket.uploadId)
+            throw error
+        }
+        finished()
+        return ticket.uploadId
     }
 
     private func finish(_ id: String) {

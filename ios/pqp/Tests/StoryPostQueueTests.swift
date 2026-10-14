@@ -31,10 +31,15 @@ final class StoryPostQueueTests: XCTestCase {
         private(set) var published: [String] = []
         private(set) var deleted: [String] = []
         private(set) var putCount = 0
+        private(set) var minted: [(kind: String, contentType: String, byteLength: Int)] = []
+        private(set) var deletedUploads: [String] = []
         var failPuts = false
         var holdPuts = false
         var holdCreates = false
         var withUploads = true
+        /// A create that names an upload is refused with this status.
+        var refuseClaims: Int?
+        private var refusals = 0
         let storyId: String
 
         init(storyId: String) { self.storyId = storyId }
@@ -47,6 +52,28 @@ final class StoryPostQueueTests: XCTestCase {
             // that was cancelled meanwhile.
             while locked({ holdCreates }) {
                 try? await Task.sleep(for: .milliseconds(10))
+            }
+            let claims = request.media?.uploadId != nil
+                || (request.layers ?? []).contains { $0["upload"]?["uploadId"] != nil }
+            if claims, let status = locked({ () -> Int? in
+                guard let status = refuseClaims, refusals > 0 else { return nil }
+                refusals -= 1
+                return status
+            }) {
+                throw APIError.server(status: status, message: "claimed")
+            }
+            if claims {
+                // Every file was uploaded ahead: nothing to hand back, and with
+                // `publish` the story is answered live.
+                let own = request.publish == true ? "live" : "pending"
+                let json = """
+                {"story":{"id":"\(storyId)","author":{"id":"u","displayName":"Bia","avatarUrl":null},"kind":"image","caption":null,"text":null,"background":null,
+                 "media":null,"sticker":null,"call":null,"publishedAt":null,"expiresAt":null,"audiences":[],
+                 "viewer":{"seen":false,"reaction":null,"canReply":false,"replyBlockedReason":null,"canModerate":[]},
+                 "own":{"status":"\(own)","viewCount":0,"reactionCount":0,"replyCount":0,"repliesEnabled":true}},
+                 "upload":null,"layerUploads":[]}
+                """
+                return try Coding.decoder.decode(CreateStoryResponse.self, from: Data(json.utf8))
             }
             let upload = withUploads
                 ? #","upload":{"url":"https://store.test/base","method":"PUT","headers":{"Content-Type":"image/jpeg"}}"#
@@ -62,6 +89,19 @@ final class StoryPostQueueTests: XCTestCase {
             """
             return try Coding.decoder.decode(CreateStoryResponse.self, from: Data(json.utf8))
         }
+
+        func mintUpload(kind: String, contentType: String, byteLength: Int) async throws -> StoryUploadTicket {
+            let n = locked { () -> Int in
+                minted.append((kind, contentType, byteLength))
+                return minted.count
+            }
+            return StoryUploadTicket(
+                uploadId: "up-\(n)", url: "https://store.test/up-\(n)", method: "PUT",
+                headers: ["Content-Type": contentType], expiresAt: nil
+            )
+        }
+
+        func deleteUpload(id: String) async { locked { deletedUploads.append(id) } }
 
         func publish(storyId: String) async throws { locked { published.append(storyId) } }
         func delete(storyId: String) async { locked { deleted.append(storyId) } }
@@ -86,6 +126,10 @@ final class StoryPostQueueTests: XCTestCase {
         }
         func snapshot() -> (requests: [CreateStoryRequest], published: [String], deleted: [String], puts: Int) {
             locked { (requests, published, deleted, putCount) }
+        }
+        func setRefuseClaims(_ status: Int?, times: Int = .max) { locked { refuseClaims = status; refusals = times } }
+        func uploads() -> (minted: [(kind: String, contentType: String, byteLength: Int)], deleted: [String]) {
+            locked { (minted: minted, deleted: deletedUploads) }
         }
     }
 
