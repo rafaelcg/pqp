@@ -206,6 +206,14 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const drawingUpload = useRef<{ strokes: unknown; file: { blob: Blob; width: number; height: number }; handle: EagerUpload | null } | null>(null);
   // Set when Post hands the uploads to the draft: from then on they are no longer this component's to cancel.
   const handedOver = useRef(false);
+  // The server's runtime switch (`stories_eager_uploads`, in the stories config). Off, or a server that
+  // predates it, and every file goes up at Post the way it always did.
+  const eagerOn = useRef(false);
+  eagerOn.current = config.eagerUploads === true;
+  const startEager = useCallback(
+    (input: Parameters<typeof startEagerUpload>[0]) => (eagerOn.current ? startEagerUpload(input) : null),
+    [],
+  );
 
   const cancelUploads = useCallback(() => {
     baseUpload.current?.cancel();
@@ -314,13 +322,13 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     }
     for (const [id, layer] of wanted) {
       if (!layerUploads.current.has(id)) {
-        const handle = startEagerUpload({ kind: "layer", blob: layer.blob, contentType: layer.contentType });
+        const handle = startEager({ kind: "layer", blob: layer.blob, contentType: layer.contentType });
         if (handle) {
           layerUploads.current.set(id, handle);
         }
       }
     }
-  }, [layers]);
+  }, [layers, config.eagerUploads, startEager]);
 
   // The drawing, once the pen is up: rendered to its picture and sent, so Post does not wait for it. Any
   // change to the strokes (another stroke, an undo) throws that copy away and sends the new one.
@@ -349,13 +357,13 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       drawingUpload.current = {
         strokes: drawingStrokes,
         file,
-        handle: startEagerUpload({ kind: "layer", blob: file.blob, contentType: "image/png" }),
+        handle: startEager({ kind: "layer", blob: file.blob, contentType: "image/png" }),
       };
     });
     return () => {
       stale = true;
     };
-  }, [drawing, drawingStrokes]);
+  }, [drawing, drawingStrokes, config.eagerUploads, startEager]);
 
   // The camera light goes out the moment the tab is not looked at.
   useEffect(() => {
@@ -391,12 +399,20 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     // The bytes are final (a photo is already cropped and encoded, a clip is recorded): start sending
     // them now. A newer file replaces an older one, and the older one's upload is thrown away.
     baseUpload.current?.cancel();
-    baseUpload.current = startEagerUpload({ kind: "base", blob: next.blob, contentType: next.contentType });
+    baseUpload.current = startEager({ kind: "base", blob: next.blob, contentType: next.contentType });
     setMode("camera");
     // Whatever was being typed or drawn on the way here is over: the picture is the base now.
     setEditing(null);
     setDrawing(false);
-  }, []);
+  }, [startEager]);
+
+  // The config can arrive after a file did (one handed over by a drop opens the composer already
+  // holding it): the base starts going up as soon as the server says it may.
+  useEffect(() => {
+    if (config.eagerUploads === true && media && mode === "camera" && !baseUpload.current && !handedOver.current) {
+      baseUpload.current = startEager({ kind: "base", blob: media.blob, contentType: media.contentType });
+    }
+  }, [config.eagerUploads, media, mode, startEager]);
 
   const showProblem = useCallback(
     (found: StoryFileProblem) => {

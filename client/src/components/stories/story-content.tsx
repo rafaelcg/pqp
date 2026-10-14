@@ -426,7 +426,13 @@ function StoryVideo({
         // Not seekable yet: it starts from the top anyway.
       }
       element.remove();
-      giveBackVideo(src, element);
+      if (src.startsWith("blob:")) {
+        // The composer's own preview of a clip it just recorded: nobody will warm that URL again.
+        element.removeAttribute("src");
+        element.load();
+      } else {
+        giveBackVideo(src, element);
+      }
     };
   }, [src, poster]);
 

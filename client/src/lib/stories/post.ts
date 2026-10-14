@@ -166,8 +166,10 @@ export function cancelDraftUploads(draft: Pick<StoryDraft, "eager">): void {
 }
 
 function releasePreview(draft: StoryDraft): void {
-  if (draft.media?.previewUrl) {
-    URL.revokeObjectURL(draft.media.previewUrl);
+  const url = draft.media?.previewUrl;
+  if (url) {
+    // A moment late: the card that flew into the ring is a clone showing this very picture.
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 }
 

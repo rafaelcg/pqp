@@ -225,7 +225,7 @@ test("stubbed storage: the file starts at capture, Post closes at once and is on
   await page.route("**/api/stories/config*", async (route) => {
     const response = await route.fetch();
     const body = (await response.json()) as Record<string, unknown>;
-    await route.fulfill({ response, json: { ...body, mediaEnabled: true, videoEnabled: false } });
+    await route.fulfill({ response, json: { ...body, mediaEnabled: true, videoEnabled: false, eagerUploads: true } });
   });
   const requests = recordRequests(page, /^\/api\/stories(\/|$)/);
   const stored: string[] = [];
@@ -287,12 +287,65 @@ test("stubbed storage: the file starts at capture, Post closes at once and is on
   expect(stored).toEqual(["PUT"]);
 });
 
+test("stubbed storage: with the kill switch off nothing is uploaded early and Post is the plain create, PUT, publish", async ({ page }) => {
+  const ctx = await setup();
+  await page.route("**/api/stories/config*", async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as Record<string, unknown>;
+    await route.fulfill({ response, json: { ...body, mediaEnabled: true, videoEnabled: false, eagerUploads: false } });
+  });
+  const requests = recordRequests(page, /^\/api\/stories(\/|$)/);
+  const stored: string[] = [];
+  await page.route("http://stub.pqp.test/**", async (route) => {
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers: STUB_CORS });
+      return;
+    }
+    stored.push(route.request().method());
+    await route.fulfill({ status: 200, headers: STUB_CORS, body: "" });
+  });
+  await page.route("**/api/stories", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 201,
+      json: {
+        story: { id: "00000000-0000-4000-8000-0000000000b2", own: { status: "pending" } },
+        upload: { url: "http://stub.pqp.test/bucket/plain.jpg?sig=1", method: "PUT", headers: { "Content-Type": "image/jpeg" }, expiresAt: "" },
+        layerUploads: [],
+      },
+    });
+  });
+  await page.route("**/api/stories/*/publish", (route) =>
+    route.fulfill({ status: 200, json: { story: { id: "00000000-0000-4000-8000-0000000000b2", own: { status: "live" } } } }),
+  );
+
+  const composer = await openComposer(page, ctx);
+  await attachPhoto(page, composer);
+  await page.waitForTimeout(500);
+  expect(requests.list.filter((entry) => entry.includes("/uploads"))).toEqual([]);
+  expect(stored).toEqual([]);
+
+  await realClick(page, composer.locator("[data-story-post]"), "Post");
+  await expect(composer).toHaveCount(0, { timeout: 1000 });
+  await expect.poll(() => requests.list.some((entry) => entry.endsWith("/publish"))).toBe(true);
+  expect(stored).toEqual(["PUT"]);
+  const create = requests.bodies.find((body) => (body as { kind?: string } | null)?.kind === "image") as {
+    media: { uploadId?: string };
+    publish?: boolean;
+  };
+  expect(create.media.uploadId).toBeUndefined();
+  expect(create.publish).toBeUndefined();
+});
+
 test("stubbed storage: discarding the draft aborts the upload and asks the server to delete it", async ({ page }) => {
   const ctx = await setup();
   await page.route("**/api/stories/config*", async (route) => {
     const response = await route.fetch();
     const body = (await response.json()) as Record<string, unknown>;
-    await route.fulfill({ response, json: { ...body, mediaEnabled: true, videoEnabled: false } });
+    await route.fulfill({ response, json: { ...body, mediaEnabled: true, videoEnabled: false, eagerUploads: true } });
   });
   const requests = recordRequests(page, /^\/api\/stories\/uploads/);
   await page.route("**/api/stories/uploads", (route) =>
@@ -335,10 +388,12 @@ test("real storage: Post closes the composer at once, the ring takes over, the s
   const ctx = await setup();
   test.skip(!ctx.storage || !s3(), "object storage is off: no uploads to watch");
   const requests = recordRequests(page, /^\/api\/stories(\/|$)/);
+  const minted = page.waitForResponse((response) => response.url().endsWith("/api/stories/uploads") && response.request().method() === "POST");
   const composer = await openComposer(page, ctx);
   await attachPhoto(page, composer, 200);
-  const stored = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().includes("/uploads/"));
-  await stored;
+  const upload = (await (await minted).json()) as { url: string };
+  // The file is in the bucket before Post is pressed.
+  await expect.poll(() => objectExists(upload.url), { timeout: 20_000 }).toBe(true);
 
   const t0 = Date.now();
   await realClick(page, composer.locator("[data-story-post]"), "Post");
@@ -363,8 +418,7 @@ test("real storage: a draft discarded after its upload finished deletes the obje
   const composer = await openComposer(page, ctx);
   await attachPhoto(page, composer);
   const upload = (await (await minted).json()) as { uploadId: string; url: string };
-  await page.waitForResponse((response) => response.request().method() === "PUT" && response.url().startsWith(upload.url.split("?")[0]!));
-  expect(await objectExists(upload.url), "the file is in the bucket before Post").toBe(true);
+  await expect.poll(() => objectExists(upload.url), { timeout: 20_000, message: "the file is in the bucket before Post" }).toBe(true);
 
   const deleted = page.waitForResponse((response) => response.url().endsWith(`/api/stories/uploads/${upload.uploadId}`) && response.request().method() === "DELETE");
   await discardComposer(page, composer);
@@ -406,8 +460,7 @@ test("real storage: taking a placed photo off the story deletes its upload", asy
   await composer.locator("[data-story-photo-file]").setInputFiles(await noisePhoto(page, 60));
   await expect(composer.locator('[data-layer-type="image"]')).toHaveCount(1, { timeout: 20_000 });
   const layerUpload = (await (await minted).json()) as { uploadId: string; url: string };
-  await page.waitForResponse((response) => response.request().method() === "PUT" && response.url().startsWith(layerUpload.url.split("?")[0]!));
-  expect(await objectExists(layerUpload.url)).toBe(true);
+  await expect.poll(() => objectExists(layerUpload.url), { timeout: 20_000 }).toBe(true);
 
   const deleted = page.waitForResponse((response) => response.url().endsWith(`/api/stories/uploads/${layerUpload.uploadId}`) && response.request().method() === "DELETE");
   await composer.locator('[data-layer-type="image"]').first().click();
@@ -451,7 +504,7 @@ test("real storage: Discard on a failed ring clears it, deletes the upload and p
   const composer = await openComposer(page, ctx);
   await attachPhoto(page, composer);
   const upload = (await (await minted).json()) as { uploadId: string; url: string };
-  await page.waitForResponse((response) => response.request().method() === "PUT" && response.url().startsWith(upload.url.split("?")[0]!));
+  await expect.poll(() => objectExists(upload.url), { timeout: 20_000 }).toBe(true);
   await realClick(page, composer.locator("[data-story-post]"), "Post");
   await expect(composer).toHaveCount(0, { timeout: 1500 });
   const ring = ownRing(page, ctx);
@@ -463,7 +516,8 @@ test("real storage: Discard on a failed ring clears it, deletes the upload and p
   await realClick(page, ring, "failed ring");
   await page.getByRole("menuitem", { name: "Discard" }).click();
   expect((await deleted).status()).toBe(204);
-  await expect(strip(page, ctx)).not.toContainText("Didn't post");
+  // With nothing live the strip draws nothing at all once the failed post is gone.
+  await expect(page.getByText("Didn't post")).toHaveCount(0);
   await expect.poll(() => objectExists(upload.url), { timeout: 10_000 }).toBe(false);
   expect(await ownStoryIds(ctx)).toEqual([]);
 });
