@@ -141,8 +141,10 @@ export function StoryRing({
         }}
         // The dot is 24 px but the thing to hit is bigger: the before: pseudo-element is part of the button, so a
         // click anywhere on it is the badge's, and it sits over the ring (the badge comes later in the box), so it
-        // wins over the ring's own click. 32 px square with a mouse (4 px out on every side), 44 px on a touch screen.
-        className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-accent text-on-accent shadow-[0_0_0_2.5px_var(--story-ring-bg,var(--color-surface-1))] transition-transform duration-[var(--duration-fast)] before:absolute before:-inset-1 before:content-[''] hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [@media(pointer:coarse)]:before:-inset-[10px]"
+        // wins over the ring's own click. It grows away from the picture (mostly to the right, a little up and
+        // down, never left), so the middle of the ring is still the ring: 32 px square with a mouse, 44 px on a touch
+        // screen. (Not further down: the strip scrolls, so it would be clipped under the label.)
+        className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-accent text-on-accent shadow-[0_0_0_2.5px_var(--story-ring-bg,var(--color-surface-1))] transition-transform duration-[var(--duration-fast)] before:absolute before:inset-0 before:content-[''] [@media(pointer:fine)]:before:-bottom-1 [@media(pointer:fine)]:before:-right-2 [@media(pointer:fine)]:before:-top-1 hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [@media(pointer:coarse)]:before:-bottom-3 [@media(pointer:coarse)]:before:-right-5 [@media(pointer:coarse)]:before:-top-2"
         style={{ width: badgeSize, height: badgeSize }}
       >
         <Plus className="h-3 w-3" strokeWidth={3.5} aria-hidden />

@@ -84,16 +84,21 @@ test("the + on the own ring is a 32 px target with a mouse and wins over the rin
   const box = (await plus.boundingBox())!;
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
-  // The dot is drawn 24 px; every edge of a 32 px square around it is the badge's.
-  for (const [dx, dy] of [[15, 0], [-15, 0], [0, 15], [0, -15], [15, 15], [-15, -15], [15, -15], [-15, 15]]) {
-    expect(await reached(page, cx + dx!, cy + dy!), `(${dx}, ${dy}) from the centre`).toBe("plus");
+  // The dot is drawn 24 px; the target is 32 px, grown outward (down and right) so the ring's own
+  // middle stays the ring's: every corner and edge of that square is the badge's.
+  for (const [dx, dy] of [[19, 0], [0, 15], [19, 15], [-11, -15], [19, -15], [-11, 15], [-11, 0], [0, -15]]) {
+    expect(await reached(page, cx + dx!, cy + dy!), `(${dx}, ${dy}) from the dot's centre`).toBe("plus");
   }
   // ...and just past it is the ring or nothing, so the target did not grow without bound.
   expect(await reached(page, cx + 22, cy + 22)).not.toBe("plus");
+  expect(await reached(page, cx + 22, cy)).not.toBe("plus");
+  // The middle of the ring is still the ring.
+  const ringBox = (await ringOf(page, ctx).boundingBox())!;
+  expect(await reached(page, ringBox.x + ringBox.width / 2, ringBox.y + ringBox.height / 2)).toBe("ring");
   // A real click at the edge opens the composer, not the story.
-  await page.mouse.click(cx + 15, cy + 15);
+  await page.mouse.click(cx + 19, cy + 15);
   await expect(page.getByRole("dialog", { name: "New story" })).toBeVisible();
-  await expect(page.locator("[data-story-root]")).toHaveCount(0);
+  await expect(page.locator("[data-story-viewer]")).toHaveCount(0);
 });
 
 test("the own ring offers New story on a right-click, and a plain click on it still opens the story", async ({ page }) => {
@@ -125,10 +130,12 @@ test.describe("on a touch screen", () => {
     const box = (await plus.boundingBox())!;
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
-    for (const [dx, dy] of [[21, 0], [-21, 0], [0, 21], [0, -21], [20, 20], [-20, -20]]) {
-      expect(await reached(page, cx + dx!, cy + dy!), `(${dx}, ${dy}) from the centre`).toBe("plus");
+    for (const [dx, dy] of [[31, 0], [0, 23], [30, 23], [-11, -19], [31, -19], [-11, 23]]) {
+      expect(await reached(page, cx + dx!, cy + dy!), `(${dx}, ${dy}) from the dot's centre`).toBe("plus");
     }
-    await page.touchscreen.tap(cx + 20, cy + 20);
+    const ringBox = (await ringOf(page, ctx).boundingBox())!;
+    expect(await reached(page, ringBox.x + ringBox.width / 2, ringBox.y + ringBox.height / 2)).toBe("ring");
+    await page.touchscreen.tap(cx + 30, cy + 23);
     await expect(page.getByRole("dialog", { name: "New story" })).toBeVisible();
   });
 });
