@@ -2318,10 +2318,15 @@ does with it.
   - **The call card** is one drawing for the editor's preview and the viewer's
     result (`StoryCallCard`): the server's icon, the room, up to three live
     faces and "+n", the head count, a live dot that pulses while people are in,
-    and "Entrar" when the server says it can be joined. Four states from the
-    live `call` object: in the call, nobody in the call right now, full, and a
-    quiet "A call acabou" with no button after the room empties or the author
-    leaves it. The whole card is one TalkBack button ("Na call agora: Lobby,
+    and "Entrar" when the server says it can be joined. Five states from the
+    live `call` object (`callCardState`, #1210 semantics): in the call; live
+    with nobody in it ("Ninguém na call agora" and still "Entrar", the room is
+    the author's and open); live but `joinable` false for this viewer (no
+    button, "Tu não pode entrar nessa sala"); full (a mesh room at its seat
+    limit, no button); and a quiet dimmed "A call acabou" only when the channel
+    was deleted (its name is then blank and the card leaves the line out) or the
+    author lost CONNECT. The ring badge on the strip follows `hasCall`, which is
+    true only while somebody is in the room. The whole card is one TalkBack button ("Na call agora: Lobby,
     Sandbox, 3 pessoas na call. Entrar").
   - **TalkBack.** The base carries the story's `altText` (its text layers, in
     order, else its caption) as its description, and the text layers are hidden
@@ -2400,8 +2405,8 @@ does with it.
     backoff (1 s doubling to 15 s), again the moment the live connection is back
     and from a "Tentar de novo" button on the pill, so a composer opened while
     the API is down keeps the photo and the words and posts once it is back.
-    Posting a call card for a room its author is not in asks first (the server
-    reads such a card as "A call acabou" until the author joins).
+    A call card for an empty room, or one its author is not in, posts without a
+    question: the server keeps it live while the room exists.
   - **The photo picker** is asked for one item through `PickVisualMediaList`,
     which hands back everything that came back (a long press on a thumbnail
     starts a selection in recent pickers, though with one item allowed the
@@ -2411,8 +2416,7 @@ does with it.
   - **Call card.** Picking the room is a sheet whose header is fixed and whose
     list scrolls on its own (the old picker was one fixed-height scroll, and the
     "you are not in the room" line pushed the second room under the edge). Each
-    room says who is in it now; a card for a room the author is not in is
-    flagged until they join. The server stays ticked and locked in "Quem vê".
+    room says who is in it now. The server stays ticked and locked in "Quem vê".
   - A server that predates layers (`layersMax` 0) gets the old shape: the words
     folded into the card's `text`, or a photo's `caption`, with only the text
     tool left.

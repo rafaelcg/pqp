@@ -48,7 +48,6 @@ class StoryEditorGestureTest {
         audienceLabel = "Amigos",
         canPost = true,
         posting = false,
-        callWarning = null,
         occupancy = emptyMap(),
     )
 
