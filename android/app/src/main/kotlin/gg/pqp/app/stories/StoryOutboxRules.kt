@@ -44,6 +44,9 @@ object StoryOutboxRules {
         data class Waiting(val id: String) : Bubble
     }
 
+    /** The session was starting, refreshing or failed when the post was about to go: not the link, and not a refusal. */
+    class SessionNotReady : Exception("The session is not ready")
+
     /** What to do with a post that stopped with an error. */
     enum class Outcome { Waiting, RetrySoon, Failed }
 
@@ -54,6 +57,8 @@ object StoryOutboxRules {
      * Anything else (the phone's own state) is red.
      */
     fun outcome(error: Throwable, online: Boolean, retriedAlready: Boolean): Outcome = when {
+        // The account is not signed in (yet): it waits, and goes on when the session is ready again (see `restore`).
+        error is SessionNotReady -> Outcome.Waiting
         error is gg.pqp.app.core.ApiException -> Outcome.Failed
         error is java.io.IOException -> when {
             !online -> Outcome.Waiting

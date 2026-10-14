@@ -296,8 +296,8 @@ class StoryOutbox(
                 return removeEntry(id)
             }
             // The session is not there right now (starting, refreshing, failed): not a reason to throw a post away.
-            // It stays, failed, and is tried again when the person taps it.
-            else -> throw java.io.IOException("The session is not ready")
+            // It waits, and is sent again when the session is ready.
+            else -> throw StoryOutboxRules.SessionNotReady()
         }
         val total = draft.files.sumOf { it.size }
         val pace = StoryPerf.uploadPaceMs(appContext.filesDir)

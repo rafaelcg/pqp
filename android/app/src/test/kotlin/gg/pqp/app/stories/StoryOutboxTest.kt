@@ -102,6 +102,13 @@ class StoryOutboxTest {
     }
 
     @Test
+    fun `a session that is not ready waits whether or not there is a connection`() {
+        val notReady = StoryOutboxRules.SessionNotReady()
+        assertEquals(StoryOutboxRules.Outcome.Waiting, StoryOutboxRules.outcome(notReady, online = true, retriedAlready = false))
+        assertEquals(StoryOutboxRules.Outcome.Waiting, StoryOutboxRules.outcome(notReady, online = false, retriedAlready = true))
+    }
+
+    @Test
     fun `anything that is not the link or the server is red`() {
         assertEquals(StoryOutboxRules.Outcome.Failed, StoryOutboxRules.outcome(IllegalStateException("x"), online = false, retriedAlready = false))
     }
