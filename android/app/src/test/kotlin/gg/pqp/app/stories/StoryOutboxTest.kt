@@ -71,6 +71,41 @@ class StoryOutboxTest {
         assertEquals(StoryOutboxRules.Bubble.Posting(null, "b"), unknown)
     }
 
+    // --- waiting for a connection ---
+
+    @Test
+    fun `a post with no connection waits, grey, and a failure still wins over it`() {
+        assertEquals(
+            StoryOutboxRules.Bubble.Waiting("w"),
+            StoryOutboxRules.bubble(listOf(entry("w", StoryOutboxRules.Status.Waiting), entry("g", StoryOutboxRules.Status.Uploading, 0.5f))),
+        )
+        assertEquals(
+            StoryOutboxRules.Bubble.Failed("f"),
+            StoryOutboxRules.bubble(listOf(entry("w", StoryOutboxRules.Status.Waiting), entry("f", StoryOutboxRules.Status.Failed))),
+        )
+    }
+
+    @Test
+    fun `an answer from the server is red, whatever it is`() {
+        val refused = gg.pqp.app.core.ApiException(403, "no")
+        assertEquals(StoryOutboxRules.Outcome.Failed, StoryOutboxRules.outcome(refused, online = true, retriedAlready = false))
+        assertEquals(StoryOutboxRules.Outcome.Failed, StoryOutboxRules.outcome(refused, online = false, retriedAlready = false))
+    }
+
+    @Test
+    fun `no answer and no connection waits, and a connection that fails is tried once more before it is red`() {
+        val link = java.io.IOException("no route")
+        assertEquals(StoryOutboxRules.Outcome.Waiting, StoryOutboxRules.outcome(link, online = false, retriedAlready = false))
+        assertEquals(StoryOutboxRules.Outcome.Waiting, StoryOutboxRules.outcome(link, online = false, retriedAlready = true))
+        assertEquals(StoryOutboxRules.Outcome.RetrySoon, StoryOutboxRules.outcome(link, online = true, retriedAlready = false))
+        assertEquals(StoryOutboxRules.Outcome.Failed, StoryOutboxRules.outcome(link, online = true, retriedAlready = true))
+    }
+
+    @Test
+    fun `anything that is not the link or the server is red`() {
+        assertEquals(StoryOutboxRules.Outcome.Failed, StoryOutboxRules.outcome(IllegalStateException("x"), online = false, retriedAlready = false))
+    }
+
     // --- the number ---
 
     @Test

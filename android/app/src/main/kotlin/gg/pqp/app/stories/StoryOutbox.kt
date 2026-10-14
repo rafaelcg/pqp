@@ -1,6 +1,9 @@
 package gg.pqp.app.stories
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.util.Log
 import android.widget.Toast
@@ -102,8 +105,43 @@ class StoryOutbox(
     private val _entries = MutableStateFlow<List<StoryOutboxRules.Entry>>(emptyList())
     val entries: StateFlow<List<StoryOutboxRules.Entry>> = _entries.asStateFlow()
 
+    /** Posts that were already tried again by themselves once since they last waited: the second failure is red. */
+    private val autoRetried = ConcurrentHashMap.newKeySet<String>()
+
     init {
         scope.launch { followSession() }
+        watchConnection()
+    }
+
+    /** Whether the phone has a connection that reaches the internet right now. */
+    private fun online(): Boolean {
+        val manager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return true
+        val caps = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
+    /** The moment a usable connection is back, the posts that were waiting for one go on. */
+    private fun watchConnection() {
+        val manager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        runCatching {
+            manager.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) = retryWaiting()
+
+                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                    if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) retryWaiting()
+                }
+            })
+        }
+    }
+
+    /**
+     * Send every post that is waiting for a connection, if there is one now. Called when the connection comes back
+     * and whenever the app comes to the front.
+     */
+    fun retryWaiting() {
+        if (!online()) return
+        _entries.value.filter { it.status == StoryOutboxRules.Status.Waiting }.forEach { retry(it.id) }
     }
 
     /** The post is the outbox's from this call on. Returns at once; the composer can close. */
@@ -139,7 +177,11 @@ class StoryOutbox(
 
     /** Send a failed draft again, the same request. */
     fun retry(id: String) {
-        if (jobs[id]?.isActive == true) return
+        // A post that is working is left alone. One that has just reported it cannot go on (waiting, failed) is not
+        // working, even if the job that reported it is still on its way out.
+        val status = _entries.value.firstOrNull { it.id == id }?.status
+        val working = status == StoryOutboxRules.Status.Preparing || status == StoryOutboxRules.Status.Uploading
+        if (jobs[id]?.isActive == true && working) return
         setEntry(id, StoryOutboxRules.Status.Uploading, null)
         launch(id) {
             val input = pendingInputs[id]
@@ -175,8 +217,10 @@ class StoryOutbox(
         val found = drafts.list()
         found.filter { it.userId != userId }.forEach { drafts.delete(it.id) }
         found.filter { it.userId == userId && _entries.value.none { e -> e.id == it.id } }.forEach {
-            setEntry(it.id, StoryOutboxRules.Status.Failed, null)
+            // What stopped it is not known: it waits, and goes on by itself (red only if that fails).
+            setEntry(it.id, StoryOutboxRules.Status.Waiting, null)
         }
+        retryWaiting()
     }
 
     private suspend fun followSession() {
@@ -207,7 +251,24 @@ class StoryOutbox(
                 throw e
             } catch (e: Exception) {
                 Log.w(TAG, "post $id failed: ${e.message}")
-                setEntry(id, StoryOutboxRules.Status.Failed, null)
+                when (StoryOutboxRules.outcome(e, online(), retriedAlready = id in autoRetried)) {
+                    // No connection: grey, and it goes on by itself when one is back.
+                    StoryOutboxRules.Outcome.Waiting -> {
+                        autoRetried.remove(id)
+                        setEntry(id, StoryOutboxRules.Status.Waiting, null)
+                    }
+                    // A connection but no answer: once more at once, and only a second failure is red.
+                    StoryOutboxRules.Outcome.RetrySoon -> {
+                        autoRetried.add(id)
+                        setEntry(id, StoryOutboxRules.Status.Waiting, null)
+                        delay(AUTO_RETRY_MS)
+                        retry(id)
+                    }
+                    StoryOutboxRules.Outcome.Failed -> {
+                        autoRetried.remove(id)
+                        setEntry(id, StoryOutboxRules.Status.Failed, null)
+                    }
+                }
             }
         }
     }
@@ -227,13 +288,16 @@ class StoryOutbox(
         // A draft is posted only as the person who made it: never as whoever signed in since.
         when (val phase = session.phase.value) {
             is SessionPhase.Ready -> if (phase.me.id != draft.userId) {
+                // Somebody else's post: gone with everything it started (the uploads are theirs to be swept, not ours to claim).
+                eagers.remove(id)?.values?.forEach(eager::discard)
+                eager.deleteIds(draft.uploadIds.values)
                 withContext(Dispatchers.IO) { drafts.delete(id) }
                 jobs.remove(id)
                 return removeEntry(id)
             }
             // The session is not there right now (starting, refreshing, failed): not a reason to throw a post away.
             // It stays, failed, and is tried again when the person taps it.
-            else -> error("The session is not ready")
+            else -> throw java.io.IOException("The session is not ready")
         }
         val total = draft.files.sumOf { it.size }
         val pace = StoryPerf.uploadPaceMs(appContext.filesDir)
@@ -411,6 +475,7 @@ class StoryOutbox(
         private const val UPLOADS_AT_ONCE = 3
 
         private const val PROGRESS_POLL_MS = 150L
+        private const val AUTO_RETRY_MS = 2_000L
         private const val REFRESH_ATTEMPTS = 3
         private const val REFRESHES_AT_ONCE = 3
         private const val REFRESH_BUDGET_MS = 6_000L

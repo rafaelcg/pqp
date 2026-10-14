@@ -1188,7 +1188,10 @@
     <string name="stories_viewer_loading">Carregando story</string>
     <string name="stories_upload_posted">Postado</string>
     <string name="stories_upload_posting">Postando…</string>
-    <string name="stories_outbox_failed_label">Não subiu</string>
+    <string name="stories_outbox_waiting_label">Esperando conexão</string>
+    <string name="stories_outbox_waiting_body">Teu story vai postar sozinho quando a conexão voltar.</string>
+    <string name="stories_outbox_try_now">Tentar agora</string>
+    <string name="stories_outbox_failed_label">Não postou</string>
     <string name="stories_outbox_failed_title">Teu story não subiu</string>
     <string name="stories_outbox_failed_body">Tua foto ou teu vídeo continua guardado. Tenta de novo ou descarta.</string>
     <string name="stories_outbox_posting_title">Postando teu story</string>

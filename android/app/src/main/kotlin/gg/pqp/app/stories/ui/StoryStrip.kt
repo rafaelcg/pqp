@@ -134,6 +134,7 @@ fun StoryStripRow(
     bubble: StoryOutboxRules.Bubble = StoryOutboxRules.Bubble.Idle,
     onFailedTap: (String) -> Unit = {},
     onPostingTap: (String) -> Unit = {},
+    onWaitingTap: (String) -> Unit = {},
 ) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = Spacing.gutter),
@@ -153,6 +154,7 @@ fun StoryStripRow(
                     onCompose = onCompose,
                     onFailedTap = onFailedTap,
                     onPostingTap = onPostingTap,
+                    onWaitingTap = onWaitingTap,
                     modifier = Modifier.animateItem(),
                 )
             }
@@ -173,12 +175,15 @@ private fun OwnBubble(
     onCompose: () -> Unit,
     onFailedTap: (String) -> Unit,
     onPostingTap: (String) -> Unit,
+    onWaitingTap: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val yours = stringResource(R.string.stories_yours)
     val posting = bubble as? StoryOutboxRules.Bubble.Posting
     val failed = bubble as? StoryOutboxRules.Bubble.Failed
+    val waiting = bubble as? StoryOutboxRules.Bubble.Waiting
     val label = when {
+        waiting != null -> stringResource(R.string.stories_outbox_waiting_label)
         posting != null -> stringResource(R.string.stories_upload_posting)
         failed != null -> stringResource(R.string.stories_outbox_failed_label)
         else -> yours
@@ -187,6 +192,7 @@ private fun OwnBubble(
     val spoken = when {
         percent != null -> stringResource(R.string.stories_outbox_progress_desc, percent)
         posting != null -> stringResource(R.string.stories_upload_posting)
+        waiting != null -> stringResource(R.string.stories_outbox_waiting_label)
         failed != null -> stringResource(R.string.stories_outbox_failed_title)
         else -> yours
     }
@@ -197,6 +203,7 @@ private fun OwnBubble(
             .clickable(
                 onClick = when {
                     failed != null -> ({ onFailedTap(failed.id) })
+                    waiting != null -> ({ onWaitingTap(waiting.id) })
                     // Mid-post there is nothing to compose: a tap is the way to stop it.
                     posting != null -> ({ onPostingTap(posting.id) })
                     own != null -> onOpen
@@ -208,10 +215,14 @@ private fun OwnBubble(
     ) {
         Box {
             when {
-                posting != null || failed != null -> PostingRing(fraction = posting?.fraction, failed = failed != null) {
+                posting != null || failed != null || waiting != null -> PostingRing(
+                    fraction = posting?.fraction,
+                    failed = failed != null,
+                    waiting = waiting != null,
+                ) {
                     Avatar(name = me?.displayName.orEmpty(), url = me?.avatarUrl, size = 56.dp, seed = me?.id ?: "")
                     // A veil while it is on its way, so the ring is the thing to read.
-                    if (posting != null) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)))
+                    if (posting != null || waiting != null) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)))
                 }
                 own != null -> StoryRing(unseen = false, seenColor = MaterialTheme.colorScheme.onSurfaceVariant, seenWidth = 2.dp) {
                     Avatar(name = me?.displayName.orEmpty(), url = me?.avatarUrl, size = 56.dp, seed = me?.id ?: "")
@@ -232,6 +243,20 @@ private fun OwnBubble(
                         .border(2.dp, MaterialTheme.colorScheme.background, CircleShape),
                 ) {
                     Icon(PqpIcons.Warning, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                }
+            } else if (waiting != null) {
+                // Grey and quiet: it is not broken, it is waiting.
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 2.dp, y = 2.dp)
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                        .border(2.dp, MaterialTheme.colorScheme.background, CircleShape),
+                ) {
+                    Icon(PqpIcons.Pause, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(12.dp))
                 }
             } else if (canPost && posting == null) {
                 Box(
@@ -256,7 +281,7 @@ private fun OwnBubble(
             }
         }
         Spacer(Modifier.size(4.dp))
-        BubbleLabel(label, strong = failed != null)
+        BubbleLabel(label, strong = failed != null, maxLines = if (waiting != null) 2 else 1)
     }
 }
 
@@ -273,6 +298,8 @@ fun PostingRing(
     fraction: Float?,
     failed: Boolean,
     modifier: Modifier = Modifier,
+    /** No connection: the whole ring in the quiet colour, no arc, nothing turning. */
+    waiting: Boolean = false,
     size: Dp = 64.dp,
     content: @Composable () -> Unit,
 ) {
@@ -305,6 +332,8 @@ fun PostingRing(
             val topLeft = Offset(inset, inset)
             if (failed) {
                 drawArc(Palette.Danger, 0f, 360f, false, topLeft, arcSize, style = Stroke(width))
+            } else if (waiting) {
+                drawArc(track, 0f, 360f, false, topLeft, arcSize, style = Stroke(width))
             } else {
                 drawArc(track, 0f, 360f, false, topLeft, arcSize, style = Stroke(width))
                 val sweep = if (fraction == null) 90f else 360f * shown
@@ -369,12 +398,12 @@ fun AuthorAvatar(author: StoryAuthor, size: Dp) {
 }
 
 @Composable
-private fun BubbleLabel(text: String, strong: Boolean) {
+private fun BubbleLabel(text: String, strong: Boolean, maxLines: Int = 1) {
     Text(
         text = text,
         style = MaterialTheme.typography.labelMedium,
         color = if (strong) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
+        maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
         textAlign = TextAlign.Center,
     )

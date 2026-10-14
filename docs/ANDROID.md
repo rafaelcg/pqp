@@ -2339,12 +2339,19 @@ does with it.
   ring on every strip draws that count as a progress ring (`PostingRing`,
   capped at 96% until the story is live; no number for a card of only words;
   a fixed arc, not a spinning one, with "Remove animations" on). A failure
-  turns the ring red; tapping it offers "Tentar de novo" (same request id, so a
-  lost answer never posts twice) or "Descartar". Tapping a ring that is still
-  posting offers "Descartar" too, which stops the upload and deletes the story
-  the server had already made. The draft survives leaving the composer and the
-  app; a draft found on disk after the process died comes back as a failed ring
-  and posts only when the person taps retry. Signing out wipes drafts. There is
+  turns the ring red ("Não postou"); tapping it offers "Tentar de novo" (same
+  request id, so a lost answer never posts twice) or "Descartar". Red is for a
+  real answer from the server, or for a link error that a second try (two
+  seconds later, with a connection) did not fix. A post that stopped because
+  there is **no connection** is not a failure: its ring is grey ("Esperando
+  conexão", `StoryOutboxRules.outcome`), and it goes on by itself when the
+  system reports a validated network (a `NetworkCallback` in the outbox) and
+  whenever the app comes to the front; tapping it offers "Tentar agora" or
+  "Descartar". Tapping a ring that is still posting offers "Descartar" too,
+  which stops the upload and deletes the story the server had already made.
+  The draft survives leaving the composer and the app; a draft found on disk
+  after the process died comes back waiting and is sent again by itself (red
+  only if that fails). Signing out wipes drafts. There is
   no foreground service: a post is a few seconds of upload, and one that loses
   its process is a draft, not a loss. The one gap is the moment between "Postar"
   and the draft reaching disk (the files being made ready: milliseconds for a

@@ -60,10 +60,14 @@ fun StoriesSection(
     var askingAbout by remember { mutableStateOf<String?>(null) }
     // The post on its way the person tapped: keep going, or throw it away.
     var stopping by remember { mutableStateOf<String?>(null) }
+    // The post that is waiting for a connection the person tapped: try now, or throw it away.
+    var waitingFor by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(key) { store.refreshConfig() }
     LifecycleResumeEffect(key) {
         store.refresh(key)
+        // Back in front: a post that was waiting for a connection goes on if there is one now.
+        outbox.retryWaiting()
         onPauseOrDispose { }
     }
 
@@ -95,6 +99,7 @@ fun StoriesSection(
                     onCompose = { composing = true },
                     onFailedTap = { askingAbout = it },
                     onPostingTap = { stopping = it },
+                    onWaitingTap = { waitingFor = it },
                     modifier = Modifier.padding(vertical = Spacing.sm),
                 )
                 nothingLive && strip.firstRunHint && strip.canPost ->
@@ -118,6 +123,32 @@ fun StoriesSection(
                 )
             }
         }
+    }
+
+    waitingFor?.let { id ->
+        AlertDialog(
+            onDismissRequest = { waitingFor = null },
+            title = { Text(stringResource(R.string.stories_outbox_waiting_label)) },
+            text = { Text(stringResource(R.string.stories_outbox_waiting_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        waitingFor = null
+                        outbox.retry(id)
+                    },
+                    modifier = Modifier.testTag("stories.outbox.tryNow"),
+                ) { Text(stringResource(R.string.stories_outbox_try_now)) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        waitingFor = null
+                        outbox.discard(id)
+                    },
+                    modifier = Modifier.testTag("stories.outbox.cancelWaiting"),
+                ) { Text(stringResource(R.string.stories_outbox_discard), color = MaterialTheme.colorScheme.error) }
+            },
+        )
     }
 
     stopping?.let { id ->

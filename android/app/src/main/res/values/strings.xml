@@ -1195,6 +1195,9 @@
     <string name="stories_viewer_loading">Loading story</string>
     <string name="stories_upload_posted">Posted</string>
     <string name="stories_upload_posting">Posting…</string>
+    <string name="stories_outbox_waiting_label">Waiting for connection</string>
+    <string name="stories_outbox_waiting_body">Your story will post on its own when the connection is back.</string>
+    <string name="stories_outbox_try_now">Try now</string>
     <string name="stories_outbox_failed_label">Didn\'t post</string>
     <string name="stories_outbox_failed_title">Your story didn\'t post</string>
     <string name="stories_outbox_failed_body">Your photo or video is still saved. Try again, or discard it.</string>

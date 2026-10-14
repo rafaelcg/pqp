@@ -17,7 +17,8 @@ object StoryOutboxRules {
     /** The ring stops here until the server says the story is live. */
     const val RING_CAP = 0.96f
 
-    enum class Status { Preparing, Uploading, Failed }
+    /** [Waiting] is a post that has no connection to go on: grey, and it goes on by itself when the connection is back. */
+    enum class Status { Preparing, Uploading, Waiting, Failed }
 
     /** One post the phone is still making. */
     data class Entry(
@@ -38,12 +39,35 @@ object StoryOutboxRules {
         data class Posting(val fraction: Float?, val id: String) : Bubble
 
         data class Failed(val id: String) : Bubble
+
+        /** No connection: not a failure, and nothing to do but wait (or throw it away). */
+        data class Waiting(val id: String) : Bubble
     }
 
-    /** A failure wins over a post still going: it is the one that needs a finger. */
+    /** What to do with a post that stopped with an error. */
+    enum class Outcome { Waiting, RetrySoon, Failed }
+
+    /**
+     * An answer from the server, whatever it is, is a real refusal: red, with "Tentar de novo" and "Descartar". An error
+     * with no answer at all (an [java.io.IOException]) is the link: with no connection the post waits (grey) and goes on
+     * by itself when one is back; with a connection it is tried once more at once, and only when that also fails is it red.
+     * Anything else (the phone's own state) is red.
+     */
+    fun outcome(error: Throwable, online: Boolean, retriedAlready: Boolean): Outcome = when {
+        error is gg.pqp.app.core.ApiException -> Outcome.Failed
+        error is java.io.IOException -> when {
+            !online -> Outcome.Waiting
+            !retriedAlready -> Outcome.RetrySoon
+            else -> Outcome.Failed
+        }
+        else -> Outcome.Failed
+    }
+
+    /** A failure wins over a wait, and a wait over a post still going: the one that needs a finger first. */
     fun bubble(entries: List<Entry>): Bubble {
         entries.firstOrNull { it.status == Status.Failed }?.let { return Bubble.Failed(it.id) }
-        val going = entries.filter { it.status != Status.Failed }
+        entries.firstOrNull { it.status == Status.Waiting }?.let { return Bubble.Waiting(it.id) }
+        val going = entries.filter { it.status != Status.Failed && it.status != Status.Waiting }
         if (going.isEmpty()) return Bubble.Idle
         // Several at once (rare): the one furthest behind is the honest number, and a tap stops that same one.
         val unknown = going.firstOrNull { it.fraction == null }
