@@ -74,9 +74,6 @@ class StoryPreloader(
     @Volatile
     private var generation = 0
 
-    /** Pictures in flight at once, across stories: a story can carry many layers. */
-    private val imageGate = Semaphore(IMAGES_AT_ONCE)
-
     private val running = ConcurrentHashMap<String, Job>()
 
     /** Stories that finished, so one that is still in the window is not fetched twice. */
@@ -284,33 +281,14 @@ class StoryPreloader(
     private suspend fun preload(story: Story) {
         // Everything the viewer waits for before it shows the story (the base, every layer, faces and icons), so a
         // preloaded story is all there at once. A clip's bytes follow, when the link and Data Saver allow.
-        StoryAssets.load(appContext, StoryAssets.of(story, session.servers.value))
+        // One that could not be fetched makes the preload a failure (backed off, tried again later), not a success.
+        if (StoryAssets.load(appContext, StoryAssets.of(story, session.servers.value)) > 0) {
+            throw java.io.IOException("A picture of the story could not be fetched")
+        }
         val media = story.media
         if (story.kind == "video" && media != null && StoryPreloadRules.videoAllowed(restrictBackgroundStatus())) {
             StoryVideoCache.prefetch(appContext, StoryPreloadRules.videoKey(story.id), absolute(media.url))
         }
-    }
-
-    /** A face or a poster that cannot be fetched does not stop the story's own picture from being fetched. */
-    private suspend fun ancillary(block: suspend () -> Unit) {
-        try {
-            block()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(TAG, "preload extra failed: ${e.message}")
-        }
-    }
-
-    /** Fetch and decode into Coil's caches, the way the viewer will ask for it. */
-    private suspend fun image(url: String, key: String?) {
-        val screen = appContext.resources.displayMetrics
-        val size = coil3.size.Size(screen.widthPixels, screen.heightPixels)
-        // `execute` answers an error as a value, not an exception: a failed fetch must not count as a finished preload.
-        val result = imageGate.withPermit {
-            SingletonImageLoader.get(appContext).execute(storyImageRequest(appContext, url, key, size))
-        }
-        if (result is coil3.request.ErrorResult) throw result.throwable
     }
 
     private fun restrictBackgroundStatus(): Int =
@@ -327,7 +305,6 @@ class StoryPreloader(
         /** Three rings of this many make the 18 ids one request may carry. */
         private const val TRAY_IDS_PER_RING = 6
         private const val FAILED_RETRY_MS = 30_000L
-        private const val IMAGES_AT_ONCE = 3
         private const val DETAILS_KEEP_MS = 30 * 60 * 1000L
 
         @Volatile

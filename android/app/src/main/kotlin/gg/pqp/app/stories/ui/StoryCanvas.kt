@@ -107,6 +107,10 @@ fun StoryCanvas(
             // Whatever happens to a picture, the story is shown: one that failed simply draws the way it always did.
             try {
                 StoryAssets.load(context, assets)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Nothing here may stop the story from being shown.
             } finally {
                 assetsReady = true
             }

@@ -62,29 +62,31 @@ object StoryAssets {
 
     /**
      * Fetch and decode all of [assets] into Coil's caches, a few at a time, at the screen's size (the most any is drawn
-     * at). One that fails does not hold the others, or the story, back: it simply draws when it can.
+     * at). One that fails does not hold the others, or the story, back: it simply draws when it can. Returns how many failed.
      */
-    suspend fun load(context: Context, assets: List<Asset>) {
-        if (assets.isEmpty()) return
+    suspend fun load(context: Context, assets: List<Asset>): Int {
+        if (assets.isEmpty()) return 0
         val screen = context.resources.displayMetrics
         val size = coil3.size.Size(screen.widthPixels, screen.heightPixels)
         val loader = SingletonImageLoader.get(context)
         val gate = Semaphore(AT_ONCE)
-        coroutineScope {
+        return coroutineScope {
             assets.map { asset ->
                 async {
                     gate.withPermit {
                         try {
                             val result = loader.execute(storyImageRequest(context, asset.url, asset.key, size))
                             if (result is ErrorResult) throw result.throwable
+                            0
                         } catch (e: CancellationException) {
                             throw e
-                        } catch (_: Exception) {
-                            // It will draw (or not) the way it always did.
+                        } catch (_: Throwable) {
+                            // It will draw (or not) the way it always did; the caller is told how many did not load.
+                            1
                         }
                     }
                 }
-            }.awaitAll()
+            }.awaitAll().sum()
         }
     }
 
