@@ -5885,8 +5885,23 @@ router.post("/api/stories", async ({ req, res, user }) => {
         friends: result.liveFriends,
       });
     }
+    let story = result.story;
+    if (body.publish && story.own?.status === "pending") {
+      // Every file was uploaded ahead (the schema insists), so publishing
+      // here saves the client a round trip. A replay of a story the first
+      // attempt left pending lands here too and finishes it.
+      const published = await publishStory(user, story.id);
+      story = published.story;
+      if (published.wentLive) {
+        await storyAudienceTargets(story.id)
+          .then((targets) => notifyStoryAudiences(user.id, targets))
+          .catch((error: unknown) => {
+            console.error("[stories] publish nudge failed:", error);
+          });
+      }
+    }
     return created({
-      story: result.story,
+      story,
       upload: result.upload,
       layerUploads: result.layerUploads,
     });

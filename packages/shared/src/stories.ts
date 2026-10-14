@@ -839,8 +839,9 @@ export type StoryAudienceTargets = z.infer<typeof storyAudienceTargetsSchema>;
  * EAGER UPLOADS. `media.uploadId` and a layer's `upload.uploadId` name files
  * already stored through `POST /api/stories/uploads`. For those the response
  * carries no `upload` / `layerUploads` entry, and the client calls
- * `POST /api/stories/:storyId/publish` straight away. Without `uploadId`
- * everything below is unchanged.
+ * `POST /api/stories/:storyId/publish` straight away, or sends `publish: true`
+ * with the create when every file is eager and gets the published story back in
+ * the one call. Without `uploadId` everything below is unchanged.
  *
  * UPLOADS. A story with media or with image/drawing layers answers `upload`
  * (the base) and `layerUploads` (one per image/drawing layer, `layerId` naming
@@ -875,10 +876,31 @@ export const createStorySchema = z
      * instead of posting a second one. Optional; strongly recommended.
      */
     requestId: z.string().uuid().optional(),
+    /**
+     * Create AND publish in one call, for a story whose every file is already
+     * uploaded (`uploadId` on the media and on each photo or drawing layer):
+     * one round trip instead of two, which is what makes Post feel instant on
+     * a slow link. The answer is the published story (`own.status` `live`, or
+     * `processing` for a video). Needs every file eager, else 400. A failure
+     * after the story was made (a scan refusal, storage trouble) answers as
+     * `POST /api/stories/:id/publish` would; a retry with the same
+     * `requestId` finds the story and publishes it again.
+     */
+    publish: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
     const fail = (message: string, path: string) =>
       ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: [path] });
+    if (value.publish) {
+      const everyFileUploaded =
+        (value.kind === "text" || Boolean(value.media?.uploadId)) &&
+        value.layers.every(
+          (layer) => (layer.type !== "image" && layer.type !== "drawing") || Boolean(layer.upload.uploadId),
+        );
+      if (!everyFileUploaded) {
+        fail("publish needs every file uploaded first (uploadId)", "publish");
+      }
+    }
     if (value.kind === "text") {
       if (!value.text && value.layers.length === 0) {
         fail("A text story needs text or at least one layer", "text");

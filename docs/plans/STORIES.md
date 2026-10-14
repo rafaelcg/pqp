@@ -1362,6 +1362,10 @@ moment the author has it, and Post only creates and publishes.
 - The response has no `upload` for an eager base and no `layerUploads` entry for
   an eager layer, so a client can mix: eager where it had time, the old URLs for
   the rest. A client that sends no `uploadId` gets exactly the old behaviour.
+- `publish: true` on the create, allowed only when every file is eager (else 400),
+  creates and publishes in one call and answers the published story: one round
+  trip instead of two. A failure after the story exists answers as publish would,
+  and a retry with the same `requestId` finds the pending story and publishes it.
 - Sweep: unclaimed uploads older than `STORY_UPLOAD_UNCLAIMED_HOURS` (6), and
   those of a deleted account, lose object and row; a claimed row is a one hour
   tombstone that retries the source delete.

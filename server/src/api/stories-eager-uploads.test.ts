@@ -31,6 +31,7 @@ const storage = vi.hoisted(() => ({
   heads: [] as string[],
   failDeletes: false,
   failCopies: false,
+  failAfterCopies: null as number | null,
 }));
 
 const scan = vi.hoisted(() => ({ configured: false }));
@@ -55,7 +56,9 @@ vi.mock("../lib/s3.js", async (importOriginal) => {
     },
     putObject: async () => undefined,
     copyObject: async (from: string, to: string) => {
-      if (storage.failCopies) throw new Error("storage down");
+      if (storage.failCopies || (storage.failAfterCopies !== null && storage.copies.length >= storage.failAfterCopies)) {
+        throw new Error("storage down");
+      }
       storage.copies.push({ from, to });
       const object = storage.objects.get(from);
       if (object) storage.objects.set(to, object);
@@ -173,6 +176,7 @@ describeDb("stories: eager uploads", () => {
     storage.heads.length = 0;
     storage.failDeletes = false;
     storage.failCopies = false;
+    storage.failAfterCopies = null;
     scan.configured = false;
     resetStoryProcessorCacheForTests();
     resetStoryStatsForTests();
@@ -501,6 +505,67 @@ describeDb("stories: eager uploads", () => {
       expect(published.status).toBe(200);
       // No scanner and nothing that can probe it: live as it is, which is the old behaviour.
       expect(published.body.story.own.status).toBe("live");
+    });
+
+    it("publish: true creates and publishes in one call when every file is eager", async () => {
+      const base = await upload("base", "image/jpeg", JPEG);
+      const photo = await upload("layer", "image/jpeg", JPEG);
+      const created = await call("POST", "/api/stories", {
+        ...imageStory(base),
+        layers: [photoLayer(photo)],
+        publish: true,
+      });
+      expect(created.status).toBe(201);
+      expect(created.body.upload).toBeNull();
+      expect(created.body.layerUploads).toEqual([]);
+      expect((created.body.story as Story).own?.status).toBe("live");
+      expect((await rowOf(created.body.story.id)).status).toBe("live");
+    });
+
+    it("publish: true on a video answers the way publish does, and on a text card is a no-op", async () => {
+      const id = await upload("base", "video/mp4", MP4);
+      const video = await call("POST", "/api/stories", {
+        kind: "video",
+        audiences: { serverIds: [serverId] },
+        media: { contentType: "video/mp4", byteSize: 4000, width: 1080, height: 1920, durationMs: 5000, uploadId: id },
+        publish: true,
+      });
+      expect(video.status).toBe(201);
+      expect(video.body.story.own.status).toBe("live");
+      const text = await call("POST", "/api/stories", {
+        kind: "text",
+        background: "night",
+        audiences: { serverIds: [serverId] },
+        layers: [geo({ type: "text", text: "oi" })],
+        publish: true,
+      });
+      expect(text.status).toBe(201);
+      expect(text.body.story.own.status).toBe("live");
+    });
+
+    it("publish: true needs every file eager: a base or a layer without an uploadId is a 400", async () => {
+      const base = await upload("base", "image/jpeg", JPEG);
+      expect((await call("POST", "/api/stories", { ...imageStory(undefined), publish: true })).status).toBe(400);
+      expect(
+        (await call("POST", "/api/stories", { ...imageStory(base), layers: [photoLayer()], publish: true })).status,
+      ).toBe(400);
+      expect(await storyCount()).toBe(0);
+    });
+
+    it("publish: true that fails after the create leaves a pending story a retry with the same requestId finishes", async () => {
+      const base = await upload("base", "image/jpeg", JPEG);
+      const requestId = uuid();
+      // The claim's copy goes through; the pin at publish is the second copy, which fails.
+      storage.failAfterCopies = 1;
+      const failed = await call("POST", "/api/stories", { ...imageStory(base), requestId, publish: true });
+      storage.failAfterCopies = null;
+      expect(failed.status).toBe(409);
+      expect(await storyCount()).toBe(1);
+
+      const retried = await call("POST", "/api/stories", { ...imageStory(base), requestId, publish: true });
+      expect(retried.status).toBe(201);
+      expect(retried.body.story.own.status).toBe("live");
+      expect(await storyCount()).toBe(1);
     });
 
     it("keeps old clients working: no uploadId means the URLs come back as they always did", async () => {
