@@ -2347,6 +2347,26 @@ does with it.
   and posts only when the person taps retry. Signing out wipes drafts. There is
   no foreground service: a post is a few seconds of upload, and one that loses
   its process is a draft, not a loss.
+- **Files go ahead of the story (eager uploads).** Where the server says
+  `eagerUploads` in `GET /api/stories/config`, `EagerSession` (one per composer)
+  starts each file the moment its bytes are final: the base when the composer
+  holds the picked, taken or trimmed-and-cut media, a photo layer when it is
+  placed, a drawing when its tool closes ("Pronto"; not stroke by stroke). Each
+  is `POST /api/stories/uploads` then a PUT from memory (`StoryEagerUploads`,
+  app-scoped, so it outlives the composer). Backing out, removing a layer,
+  redrawing or re-trimming stops that PUT and `DELETE`s the upload; closing the
+  composer does the same for everything it started. At "Postar" the outbox waits
+  for any still going (the ring follows them), names the finished ones by
+  `uploadId` in the create (`EagerRequest`), and asks for `publish: true` when
+  every file is eager, which is one round trip. A mix works: eager where the
+  bytes were ready, the old per-file URLs for the rest. A file whose eager
+  upload failed (link down, no budget) simply goes the old way. A create that
+  answers 409 or 404/400 for an upload (not finished, gone, a mismatch) is sent
+  once more after a short wait and then every file goes the old way: each create
+  counts against the story budget, so it is not hammered. The ids are kept on
+  the draft, so a retry after the process died still claims them. A clip posted
+  muted is a different file from the one sent ahead: that one is thrown away and
+  the muted clip is sent at "Postar".
 - **Preload.** `StoryPreloader` has the next story ready before the tap: with a
   story open, the next two of the queue (across authors, from where the viewer
   would open each deck) and the first of the next author; with the tray

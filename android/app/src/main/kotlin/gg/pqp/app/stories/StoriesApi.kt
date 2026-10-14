@@ -48,6 +48,16 @@ suspend fun ApiClient.storyAudiences(): StoryAudienceOptions = getJson("/api/sto
 suspend fun ApiClient.createStory(request: CreateStoryRequest): CreateStoryResponse =
     postJson("/api/stories", encode(CreateStoryRequest.serializer(), request))
 
+/** Start a file before the story exists. 201 with the signed PUT and the `uploadId` the create will claim. */
+suspend fun ApiClient.createStoryUpload(kind: String, contentType: String, byteLength: Long): CreateStoryUploadResponse =
+    postJson(
+        "/api/stories/uploads",
+        encode(CreateStoryUploadRequest.serializer(), CreateStoryUploadRequest(kind, contentType, byteLength)),
+    )
+
+/** Throw one away: 204 (and 404 for an id that is not ours, which a caller ignores). */
+suspend fun ApiClient.deleteStoryUpload(uploadId: String) = send("DELETE", "/api/stories/uploads/$uploadId", null)
+
 suspend fun ApiClient.publishStory(storyId: String): Story =
     postJson<PublishStoryResponse>("/api/stories/$storyId/publish", "{}").story
 
@@ -122,8 +132,18 @@ suspend fun ApiClient.uploadStoryFile(
     file: File,
     paceMs: Long = 0L,
     onSent: (Long) -> Unit,
-) {
-    val body = ProgressFileBody(file, contentType.toMediaTypeOrNull(), paceMs, onSent)
+) = putStoryBody(upload, contentType, ProgressBody(file.length(), contentType.toMediaTypeOrNull(), paceMs, onSent) { file.source() })
+
+/** The same PUT for bytes already in memory (an eager upload starts from what the composer holds). */
+suspend fun ApiClient.uploadStoryBytes(
+    upload: StoryUpload,
+    contentType: String,
+    bytes: ByteArray,
+    paceMs: Long = 0L,
+    onSent: (Long) -> Unit,
+) = putStoryBody(upload, contentType, ProgressBody(bytes.size.toLong(), contentType.toMediaTypeOrNull(), paceMs, onSent) { Buffer().write(bytes) })
+
+private suspend fun ApiClient.putStoryBody(upload: StoryUpload, contentType: String, body: RequestBody) {
     val builder = Request.Builder().url(upload.url).put(body)
     upload.headers.forEach { (name, value) -> builder.header(name, value) }
     if (upload.headers.keys.none { it.equals("Content-Type", ignoreCase = true) }) {
@@ -151,20 +171,21 @@ suspend fun ApiClient.uploadStoryFile(
     }
 }
 
-/** A file as a request body that says how much of it has gone out. */
-private class ProgressFileBody(
-    private val file: File,
+/** A body that says how much of it has gone out; [open] gives a fresh source each time OkHttp writes it (a retry starts over). */
+private class ProgressBody(
+    private val length: Long,
     private val type: okhttp3.MediaType?,
     private val paceMs: Long,
     private val onSent: (Long) -> Unit,
+    private val open: () -> okio.Source,
 ) : RequestBody() {
     override fun contentType() = type
-    override fun contentLength() = file.length()
+    override fun contentLength() = length
 
     override fun writeTo(sink: BufferedSink) {
         var sent = 0L
         onSent(0L)
-        file.source().use { source ->
+        open().use { source ->
             val buffer = Buffer()
             while (true) {
                 val read = source.read(buffer, CHUNK)

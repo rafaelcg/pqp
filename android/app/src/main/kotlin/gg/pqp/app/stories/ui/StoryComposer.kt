@@ -34,6 +34,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +62,7 @@ import gg.pqp.app.core.SessionStore
 import gg.pqp.app.social.friends
 import gg.pqp.app.stories.PrepResult
 import gg.pqp.app.stories.PreparedMedia
+import gg.pqp.app.stories.EagerSession
 import gg.pqp.app.stories.StoriesRules
 import gg.pqp.app.stories.StoriesStore
 import gg.pqp.app.stories.StoryOutbox
@@ -338,12 +340,23 @@ fun StoryComposer(
     // "Postar" hands the story to the outbox and closes the composer: the files, the request, the
     // upload and the publish all happen there, with the own ring showing how far along it is.
     val outbox = remember(session, context) { StoryOutbox.of(context, session, store) }
+
+    // Files go ahead of the story: sent the moment their bytes are final, thrown away if the person changes their mind.
+    val eager = remember(outbox) { EagerSession(outbox.eager) }
+    // The composer closing without a post (X, back, discard) takes everything it started with it; after "Postar" there is nothing left to take.
+    DisposableEffect(eager) { onDispose { eager.discardAll() } }
+    LaunchedEffect(media, config.eagerUploads) { if (config.eagerUploads) eager.syncBase(media) }
+    LaunchedEffect(editor, editor.layers, editor.drawingOpen, config.eagerUploads) {
+        if (layersEnabled && config.eagerUploads) eager.syncLayers(editor.layers, layerFiles, editor.drawingOpen)
+    }
     // A second tap before the composer has gone must not hand the same story over twice.
     val handedOver = remember { booleanArrayOf(false) }
     val doPost: () -> Unit = post@{
         val userId = meId ?: return@post
         if (handedOver[0]) return@post
         handedOver[0] = true
+        // A muted clip is a different file from the one sent ahead: that one goes, the muted one is sent at "Postar".
+        val eagerFiles = eager.handOver(baseIsUsable = !(muted && media?.isVideo == true))
         // Already ticked and shown (see above); this only keeps what is sent identical to what the sheet showed.
         val audience = StoriesRules.withSticker(targets, stickerServerId)
         outbox.enqueue(
@@ -359,6 +372,7 @@ fun StoryComposer(
                 replies = replies,
                 audience = audience,
                 maxBytes = config.maxBytes,
+                eager = eagerFiles,
                 refreshKeys = buildList {
                     contextServerId?.let { add(store.serverKey(it)) }
                     audience.serverIds.forEach { add(store.serverKey(it)) }

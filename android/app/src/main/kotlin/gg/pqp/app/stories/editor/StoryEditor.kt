@@ -43,6 +43,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -155,6 +156,9 @@ fun StoryEditor(
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
     var drawing by remember { mutableStateOf(false) }
+    // The composer sends a finished drawing ahead of the story, so it needs to know when the tool closes.
+    LaunchedEffect(drawing) { session.drawingOpen = drawing }
+    DisposableEffect(session) { onDispose { session.drawingOpen = false } }
     var sheet by remember { mutableStateOf(if (openCallSheetAtStart) Sheet.Call else Sheet.None) }
     var textTarget by remember { mutableStateOf<TextTarget?>(null) }
     var menu by remember { mutableStateOf<LayerMenu?>(null) }

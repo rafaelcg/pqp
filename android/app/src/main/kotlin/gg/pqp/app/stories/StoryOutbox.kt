@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import gg.pqp.app.R
+import gg.pqp.app.core.ApiException
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.stories.editor.CallLayer
@@ -54,6 +55,8 @@ class StoryPostInput(
     val audience: StoryAudienceTargets,
     val maxBytes: Long,
     val refreshKeys: List<String>,
+    /** Files already on their way ahead of the story, by file key: the outbox waits for them and claims them. */
+    val eager: Map<String, EagerUpload> = emptyMap(),
 )
 
 /**
@@ -83,6 +86,12 @@ class StoryOutbox(
     private val drafts = StoryDraftStore(root)
     private val jobs = ConcurrentHashMap<String, Job>()
 
+    /** Eager uploads, shared with the composer that starts them and the outbox that claims them. */
+    val eager = StoryEagerUploads(appContext, session, scope)
+
+    /** The eager uploads each post was handed, until it is live or discarded. */
+    private val eagers = ConcurrentHashMap<String, Map<String, EagerUpload>>()
+
     /** The story the server minted for a draft, so discarding a half-sent one takes it down now instead of at the sweep. */
     private val minted = ConcurrentHashMap<String, String>()
 
@@ -100,6 +109,7 @@ class StoryOutbox(
     fun enqueue(input: StoryPostInput): String {
         val id = UUID.randomUUID().toString()
         pendingInputs[id] = input
+        eagers[id] = input.eager
         setEntry(id, StoryOutboxRules.Status.Preparing, null)
         launch(id) {
             // Read from the map, not captured: once the draft is on disk the editor's buffers can go.
@@ -129,9 +139,12 @@ class StoryOutbox(
     fun discard(id: String) {
         val job = jobs.remove(id)
         pendingInputs.remove(id)
+        // Eager uploads nobody will claim: stopped, and the server told (it sweeps the ones this misses).
+        eagers.remove(id)?.values?.forEach(eager::discard)
         // After the job has stopped, so a draft still being written cannot come back after the delete.
         scope.launch(Dispatchers.IO) {
             job?.cancelAndJoin()
+            drafts.list().firstOrNull { it.id == id }?.let { eager.deleteIds(it.uploadIds.values) }
             drafts.delete(id)
         }
         minted.remove(id)?.let { storyId -> scope.launch { runCatching { session.api.deleteStory(storyId) } } }
@@ -156,6 +169,8 @@ class StoryOutbox(
                     jobs.values.forEach { it.cancel() }
                     jobs.clear()
                     pendingInputs.clear()
+                    eagers.values.forEach { it.values.forEach(eager::discard) }
+                    eagers.clear()
                     withContext(Dispatchers.IO) { drafts.list().forEach { drafts.delete(it.id) } }
                     _entries.value = emptyList()
                 }
@@ -207,14 +222,46 @@ class StoryOutbox(
             }
         }
 
-        val created = session.api.createStory(draft.request)
+        // Files that were started ahead of the story: wait for them, and name them in the create.
+        var ids = resolveEager(draft, tally, tick)
+        if (ids != draft.uploadIds) withContext(Dispatchers.IO) { drafts.rewrite(draft.copy(uploadIds = ids)) }
+        var request = EagerRequest.apply(draft.request, draft.files, ids)
+
+        var attempt = 0
+        var made: CreateStoryResponse? = null
+        while (made == null) {
+            try {
+                made = session.api.createStory(request)
+            } catch (e: ApiException) {
+                when {
+                    // The PUT has not landed as far as the server can see: wait, and send the same create again.
+                    ids.isNotEmpty() && EagerRequest.notYet(e.status) && attempt++ < EagerRequest.NOT_YET_ATTEMPTS ->
+                        delay(EagerRequest.NOT_YET_WAIT_MS)
+                    // An upload the server will not take (gone, not ours, a mismatch), or one that never shows up
+                    // after the waits above: every file goes the old way.
+                    ids.isNotEmpty() && (EagerRequest.unusable(e.status) || EagerRequest.notYet(e.status)) -> {
+                        Log.w(TAG, "post $id: eager uploads refused (${e.status}); sending the files again")
+                        eager.deleteIds(ids.values)
+                        draft.files.forEach { tally.report(it.key, 0L) }
+                        ids = emptyMap()
+                        request = draft.request
+                        withContext(Dispatchers.IO) { drafts.rewrite(draft.copy(uploadIds = emptyMap())) }
+                        tick()
+                    }
+                    else -> throw e
+                }
+            }
+        }
+        val created: CreateStoryResponse = made
         minted[id] = created.story.id
         StoryPerf.since("post", "post_stage_created", clear = false)
-        val live = created.story.own?.status == "live"
+        // `publish: true` created and published in one call: nothing is left to send.
+        val live = request.publish == true || created.story.own?.status == "live"
         if (!live) {
-            val base = draft.files.firstOrNull { it.key == DraftFile.BASE }
+            val remaining = draft.files.filter { it.key !in ids }
+            val base = remaining.firstOrNull { it.key == DraftFile.BASE }
             if (base != null && created.upload == null) error("The server made a story with media and no place to upload it")
-            val layerFiles = draft.files.filter { it.key != DraftFile.BASE }
+            val layerFiles = remaining.filter { it.key != DraftFile.BASE }
             val slots = created.layerUploads.associateBy { it.layerId }
             if (slots.keys != layerFiles.map { it.key }.toSet()) error("The server and the phone disagree about which layer files to upload")
             // A few independent signed PUTs at a time; publish only when every one is up.
@@ -249,10 +296,44 @@ class StoryOutbox(
                 sends.awaitAll()
             }
             StoryPerf.since("post", "post_stage_uploaded", clear = false)
-            if (EditorPost.needsPublish(created.upload != null, created.layerUploads)) session.api.publishStory(created.story.id)
+            // Anything with a file waits for the publish, an eager file included.
+            if (draft.files.isNotEmpty() || EditorPost.needsPublish(created.upload != null, created.layerUploads)) {
+                session.api.publishStory(created.story.id)
+            }
         }
         StoryPerf.since("post", "post_to_live", clear = false)
         finish(draft)
+    }
+
+    /**
+     * The eager uploads this post can claim, by file key. Waits for the ones still going (the ring follows them), keeps
+     * the ids a previous run saved on the draft, and sets aside any upload that is not the file the draft ended up with.
+     */
+    private suspend fun resolveEager(draft: StoryDraft, tally: StoryOutboxRules.Tally, tick: () -> Unit): Map<String, String> {
+        val handles = eagers[draft.id].orEmpty()
+        val ids = LinkedHashMap<String, String>()
+        draft.uploadIds.forEach { (key, uploadId) -> if (key !in handles && draft.files.any { it.key == key }) ids[key] = uploadId }
+        val mine = handles.values.filter { handle ->
+            val file = draft.files.firstOrNull { it.key == handle.key }
+            // A handle for a file the draft does not have, or made from other bytes, is no use here.
+            (file != null && file.size == handle.size && file.contentType == handle.contentType).also { fits ->
+                if (!fits) eager.discard(handle)
+            }
+        }
+        coroutineScope {
+            val watcher = launch {
+                while (true) {
+                    mine.forEach { tally.report(it.key, it.sent) }
+                    tick()
+                    delay(PROGRESS_POLL_MS)
+                }
+            }
+            mine.forEach { handle -> handle.await()?.let { ids[handle.key] = it } }
+            watcher.cancel()
+        }
+        ids.keys.forEach { key -> draft.files.firstOrNull { it.key == key }?.let { tally.report(key, it.size) } }
+        tick()
+        return ids
     }
 
     /** Live: read the strips again, and only then let the ring go, so it never flickers back to "no story". */
@@ -274,6 +355,7 @@ class StoryOutbox(
         }
         withContext(Dispatchers.IO) { drafts.delete(draft.id) }
         minted.remove(draft.id)
+        eagers.remove(draft.id)
         jobs.remove(draft.id)
         removeEntry(draft.id)
         withContext(Dispatchers.Main) {
@@ -298,6 +380,7 @@ class StoryOutbox(
         /** Files are PUT this many at once. */
         private const val UPLOADS_AT_ONCE = 3
 
+        private const val PROGRESS_POLL_MS = 150L
         private const val REFRESH_ATTEMPTS = 3
         private const val REFRESH_BUDGET_MS = 6_000L
         private const val REFRESH_RETRY_MS = 1_500L
@@ -344,9 +427,15 @@ object StoryDraftBuilder {
                     when (layer) {
                         is PhotoLayer -> input.layerFiles[layer.id]?.let { put(layer.id, it) }
                         is InkLayer -> {
-                            val (w, h) = InkRenderer.exportSize()
-                            val png = withContext(Dispatchers.Default) { InkRenderer.renderPng(layer.strokes, w, h) }
-                            put(layer.id, LayerFile(layer.id, "image/png", png, w, h))
+                            // The drawing was already rendered and sent when its tool closed: the same bytes, not a second render.
+                            val sent = input.eager[layer.id]?.takeIf { it.tag == layer.strokes }?.file
+                            if (sent != null) {
+                                put(layer.id, sent)
+                            } else {
+                                val (w, h) = InkRenderer.exportSize()
+                                val png = withContext(Dispatchers.Default) { InkRenderer.renderPng(layer.strokes, w, h) }
+                                put(layer.id, LayerFile(layer.id, "image/png", png, w, h))
+                            }
                         }
                         else -> Unit
                     }

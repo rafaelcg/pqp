@@ -35,6 +35,11 @@ data class StoryDraft(
     /** Strips to read again once it is live: "server:<id>" or "friends". */
     val refreshKeys: List<String> = emptyList(),
     val createdAt: Long = 0L,
+    /**
+     * Eager uploads that finished, by file key ([DraftFile.key]): a retry, even after the process died,
+     * claims them instead of sending the files again. One the server no longer knows is simply sent again.
+     */
+    val uploadIds: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -59,6 +64,15 @@ class StoryDraftStore(private val root: File) {
         val temp = File(folder, "draft.json.tmp")
         temp.writeText(PqpJson.encodeToString(StoryDraft.serializer(), draft))
         check(temp.renameTo(File(folder, MANIFEST))) { "Cannot finish ${draft.id}" }
+    }
+
+    /** Replace the manifest of a draft that is already on disk (its files stay). */
+    fun rewrite(draft: StoryDraft) {
+        val folder = dir(draft.id)
+        if (!folder.isDirectory) return
+        val temp = File(folder, "draft.json.tmp")
+        temp.writeText(PqpJson.encodeToString(StoryDraft.serializer(), draft))
+        check(temp.renameTo(File(folder, MANIFEST))) { "Cannot update ${draft.id}" }
     }
 
     fun file(id: String, name: String): File = File(dir(id), name)
