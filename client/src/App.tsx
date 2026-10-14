@@ -176,11 +176,6 @@ import {
   moveMembersBit,
   moveOccupantSeat,
 } from "@/lib/voice-occupant-dnd";
-import {
-  requestUpdatePrompt,
-  useUpdatePromptShowing,
-  useUpdateWaiting,
-} from "@/lib/update-prompt-state";
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
 import { setSoundboardCatalogServer } from "@/lib/soundboard";
 import { isNotifyOfferSeen } from "@/lib/notify-offer-hint";
@@ -689,6 +684,7 @@ import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall, setWatchingParty } from "@/lib/in-call-state";
+import { useUpdateOffered } from "@/lib/update-prompt-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
 import { useChannelLivePreview } from "@/hooks/use-channel-live-preview";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
@@ -10030,13 +10026,10 @@ function MainAppContent({
     return ids;
   }, [conversations, voiceState.occupancy]);
 
-  const updatePromptShowing = useUpdatePromptShowing();
-  // The durable half: a build is precached and has not been taken. The rail
-  // keeps a way back to the notice for as long as this is true, so a snooze,
-  // a stray Escape or a three-hour call cannot strand somebody on an old
-  // bundle with no button to press.
-  const updateWaiting = useUpdateWaiting();
-  // Let the update card (mounted outside App) know when a reload would end a call.
+  // A new build to take: the quiet indicator (rail, phone tabs) draws itself;
+  // this only lets the narrow-window menu button wear a dot for it.
+  const updateOffered = useUpdateOffered();
+  // Let the update machinery (mounted outside App) know when a reload would end a call.
   useEffect(() => {
     setInCall(voiceState.status !== "idle");
     return () => setInCall(false);
@@ -10892,7 +10885,6 @@ function MainAppContent({
   const campaignsYield =
     Boolean(selectedPartyLive) || watchNowStreams.length > 0;
   const cornerHint = winningCornerHint({
-    update: updatePromptShowing,
     communityHomePost: Boolean(
       communityHomePostToast &&
         communityHomePostToast.serverId === selectedServerId,
@@ -11377,12 +11369,22 @@ function MainAppContent({
       <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4">
         <button
           type="button"
-          className="mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
+          className="relative mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
           aria-label={phoneShell ? t("phoneTabs.back") : t("chrome.openNav")}
           data-phone-back={phoneShell ? "" : undefined}
           onClick={() => setMobileNavOpen(true)}
         >
           {phoneShell ? <ChevronLeft className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          {/* On a narrow window without the phone tabs the rail (and the
+              update indicator at its foot) is behind this button: a dot says
+              there is something in there. */}
+          {!phoneShell && updateOffered && (
+            <span
+              aria-hidden="true"
+              data-update-menu-dot=""
+              className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+            />
+          )}
         </button>
         {/* The channel list's own fold control lives in ITS header now,
             beside settings, members and invite (see `channelSidebarToggle`
@@ -12780,8 +12782,6 @@ function MainAppContent({
         whatsNewSelected={whatsNewOpen}
         whatsNewUnread={whatsNewUnread}
         onOpenWhatsNew={handleOpenWhatsNew}
-        updateWaiting={updateWaiting}
-        onOpenUpdate={() => requestUpdatePrompt()}
         pinnedConversations={pinnedConversations}
         pinnedUnread={unread}
         conversationsHome={conversationsHome}

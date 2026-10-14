@@ -595,7 +595,7 @@ export const FEATURE_FLAGS = {
   },
   client_force_update: {
     description:
-      "Forçar atualização: todo cliente web ou desktop fora do último build vê a tela \"atualização necessária\" (não aparece durante uma chamada). Ligue só enquanto o build bom estiver no ar.",
+      "Empurrar atualização: todo cliente web ou desktop fora do último build recebe o aviso na hora, sem esperar o horário diário (09:00 UTC), e o ícone de atualização fica em destaque. Não bloqueia a tela de ninguém e não recarrega ninguém numa call. Desligue quando o build bom já estiver na mão de todo mundo.",
     env: "CLIENT_FORCE_UPDATE",
     parseEnv: exactTrue,
     codeDefault: false,
@@ -604,7 +604,7 @@ export const FEATURE_FLAGS = {
   },
   client_force_update_in_call: {
     description:
-      "Atualização crítica: com a atualização forçada ligada (ou CLIENT_MIN_BUILT_AT), o cliente recarrega mesmo no meio de uma call. Derruba quem está em call; só para um conserto crítico, e desligue assim que o build bom estiver no ar.",
+      "Atualização crítica: com \"Empurrar atualização\" ligada (ou CLIENT_MIN_BUILT_AT), o cliente recarrega sozinho mesmo no meio de uma call e mostra a tela \"atualização necessária\". É a única coisa que bloqueia a tela, e derruba quem está em call: só para um conserto crítico, e desligue assim que o build bom estiver no ar.",
     env: "CLIENT_FORCE_UPDATE_IN_CALL",
     parseEnv: exactTrue,
     codeDefault: false,

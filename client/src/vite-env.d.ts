@@ -15,6 +15,8 @@ interface ImportMetaEnv {
   readonly VITE_WS_URL?: string;
   /** Hours past which a page that is out of date reloads without asking; 0 is off. Default 12. */
   readonly VITE_UPDATE_MAX_STALE_HOURS?: string;
+  /** Hour of day (UTC, 0 to 23) a new build is announced to an open page; `off` announces at once. Default 9. */
+  readonly VITE_UPDATE_ANNOUNCE_HOUR_UTC?: string;
   readonly VITE_TURN_URL?: string;
   readonly VITE_TURN_USERNAME?: string;
   readonly VITE_TURN_CREDENTIAL?: string;

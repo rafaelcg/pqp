@@ -68,3 +68,14 @@ export function isWatchingParty(): boolean {
 export function useWatchingParty(): boolean {
   return useSyncExternalStore(subscribe, isWatchingParty, () => false);
 }
+
+/**
+ * Whether a reload would take something away from this person: they are in a
+ * call (which includes sharing a screen, a camera and every seat in a room), or
+ * watching a live party. The one question every automatic reload asks: the
+ * update (`build-watcher.tsx`, and once more at the last moment inside
+ * `applyUpdate`) and the stale-chunk recovery (`chunk-reload.ts`) alike.
+ */
+export function isBusyNow(): boolean {
+  return inCall || watching;
+}

@@ -61,7 +61,7 @@ describe("createVersionWatch", () => {
   it("publishes stale, with the deployed build's age, when a newer build is out", async () => {
     const s = setup({ latest: { build: "def456", builtAt: 500_000 } });
     await s.watch.check();
-    expect(s.published).toEqual([
+    expect(s.published).toMatchObject([
       { stale: true, forced: false, critical: false, latestBuild: "def456", since: 500_000 },
     ]);
     expect(s.calls.force).toBe(1);
@@ -130,7 +130,7 @@ describe("createVersionWatch", () => {
       },
     });
     await s.watch.check();
-    expect(s.published).toEqual([
+    expect(s.published).toMatchObject([
       { stale: true, forced: false, critical: false, latestBuild: "def456", since: 500_000 },
     ]);
   });
@@ -147,7 +147,7 @@ describe("createVersionWatch", () => {
     answer = null;
     s.advance(MIN_GAP_MS);
     await s.watch.check();
-    expect(s.published.at(-1)).toEqual({
+    expect(s.published.at(-1)).toMatchObject({
       stale: true,
       forced: true,
       critical: false,

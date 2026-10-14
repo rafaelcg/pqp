@@ -51,11 +51,11 @@ import { forceTheme } from "./lib/theme";
 import { LandingPage } from "./pages/landing-page";
 import { BuildWatcher } from "./components/layout/build-watcher";
 import { ForcedUpdateScreen } from "./components/layout/forced-update-screen";
-import { UpdateCallBanner } from "./components/layout/update-call-banner";
 import { UpdatePrompt } from "./components/layout/update-prompt";
 import { StaleChunkBanner } from "./components/layout/stale-chunk-banner";
+import { StandaloneUpdateIndicator } from "./components/layout/standalone-update-indicator";
 import { recoverFromChunkLoadError } from "./lib/chunk-reload";
-import { isInCall } from "./lib/in-call-state";
+import { isBusyNow } from "./lib/in-call-state";
 import { ensureOsCanExcludeCallAudio } from "./lib/screen-capture-audio";
 import { installFileDropGuard } from "./lib/file-drop";
 import { installShareAudioProbe } from "./lib/share-audio-probe";
@@ -227,9 +227,9 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
     <Suspense fallback={<AppLoadingShell label={t("app.loading")} />}>
       <BuildWatcher />
       <UpdatePrompt />
-      <UpdateCallBanner />
       <ForcedUpdateScreen />
       <StaleChunkBanner />
+      <StandaloneUpdateIndicator />
       <Routes>
         <Route element={<DarkRoutes />}>
           <Route path="/" element={<LandingPage />} />
@@ -546,7 +546,8 @@ window.addEventListener("vite:preloadError", (event) => {
   const action = recoverFromChunkLoadError(
     preloadEvent.payload ?? preloadEvent,
     {
-      isInCall,
+      // A call or a watch party: a reload would take either away.
+      isInCall: isBusyNow,
       onDeferred: () => setStaleChunkBannerVisible(true),
     },
   );
