@@ -1,41 +1,101 @@
-import { ImageIcon, Upload } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowUpToLine,
+  Camera,
+  ChevronLeft,
+  Circle,
+  Loader2,
+  Pen,
+  PenLine,
+  Redo2,
+  RectangleHorizontal,
+  Square,
+  Sticker,
+  Trash2,
+  Type,
+  Undo2,
+  X,
+  ImagePlus,
+} from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import { createPortal } from "react-dom";
 import {
   STORY_BACKGROUNDS,
   STORY_CAPTION_MAX,
+  STORY_LAYER_IMAGE_SHAPES,
+  STORY_LAYER_IMAGES_MAX,
+  STORY_LAYERS_MAX,
   STORY_TEXT_MAX,
   type StoriesConfig,
   type StoryAudienceOptions,
   type StoryBackground,
-  type StorySticker,
 } from "@pqp/shared";
-import { Button } from "@/components/ui/button";
-import { CheckRow } from "@/components/ui/check-row";
-import { Dialog } from "@/components/ui/dialog";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
-import { Input } from "@/components/ui/input";
-import { RadioGroup } from "@/components/ui/radio-group";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { fetchStoryAudiences } from "@/lib/stories/api";
 import { STORIES_CONFIG_OFF, loadStoriesConfig } from "@/lib/stories/config";
-import { authorInRoom, defaultCallRoom } from "@/lib/stories/call-room";
+import { captureStill } from "@/lib/stories/camera";
+import { colorFromTokens, hasInk, renderDrawingBlob, type Stroke } from "@/lib/stories/drawing";
+import {
+  DEFAULT_TEXT,
+  altTextFor,
+  canAddLayer,
+  editorReducer,
+  initialEditorState,
+  newLayerId,
+  toLayerInput,
+  type EditorLayer,
+  type ImageShape,
+  type TextLayerFields,
+} from "@/lib/stories/layers";
+import { loadMentionPeople, type MentionPerson } from "@/lib/stories/mention-people";
 import { postStory } from "@/lib/stories/post";
 import {
+  preparedFromStill,
+  prepareLayerImage,
+  prepareRecordedClip,
   prepareStoryFile,
+  type PrepareResult,
   type PreparedStoryMedia,
   type StoryFileProblem,
 } from "@/lib/stories/upload";
+import { useCamera, useRecorder, type RecordedClip } from "@/lib/stories/use-camera";
 import type { ComposerRequest } from "@/lib/stories/ui-store";
 import { cn } from "@/lib/utils";
+import { AudienceChip, AudienceSheet, audienceSummary } from "./composer-audience";
+import { CameraControlsRow, CameraStage } from "./composer-camera";
+import { ComposerCanvas } from "./composer-canvas";
+import { DEFAULT_DRAW, DrawBar, DrawOverlay, type DrawSettings } from "./composer-draw";
+import { CallPickerSheet, MentionSheet, StickerTray } from "./composer-stickers";
+import { TextEditor, type TextEditorGeometry } from "./composer-text";
+import { ModeTabs, StoryButton, type ModeOption } from "./composer-ui";
+import { StoryCallCard } from "./story-call-card";
 import { StoryContent, type StoryDisplay } from "./story-content";
+import type { DisplayLayer } from "./story-layers";
 
 /**
- * "Novo story" on the web (design E3): a modal with the preview on the left
- * and the form on the right. Photo or video by drop, paste or picker; a text
- * card on one of six backgrounds; or "Chama pra call", a text card carrying a
- * live sticker for a voice room of the server it was opened from.
+ * "Novo story" on the web: a phone-shaped column, the same on a desktop and at
+ * 390 px. A 9:16 canvas in the middle, chrome above and below it.
+ *
+ * It opens on the camera. Tap the shutter for a photo, hold it (or press the
+ * record button) for a video of up to 30 s; the gallery button, a file dropped
+ * anywhere on the composer and Ctrl+V all arrive at the same place. Text is the
+ * other starting point, a card on one of six backgrounds.
+ *
+ * Once there is a base the canvas is an editor: text, photos, a drawing, a
+ * mention and the call card are LAYERS, each dragged, pinched, turned and
+ * deleted on the canvas itself (`composer-canvas.tsx`). The layers go up as
+ * data, not burned into the picture, so every viewer draws them at its own
+ * size.
  *
  * "Quem vê" starts ticked where the person was (decision 3), lists every
  * server with stories on, greys out the ones they may not post to with the
@@ -51,16 +111,17 @@ export interface ComposerVoiceRoom {
 
 interface StoryComposerProps {
   request: ComposerRequest;
-  /** The signed-in account: the call sticker is live only while its author is in the room. */
+  /** The signed-in account: the call card is live only while its author is in the room. */
   meId: string;
-  /** Voice rooms of the server the composer was opened from, for the call sticker. */
-  voiceRooms: { serverId: string; serverName: string; rooms: ComposerVoiceRoom[] } | null;
+  /** Voice rooms of the server the composer was opened from, for the call card. */
+  voiceRooms: { serverId: string; serverName: string; serverIconUrl?: string | null; rooms: ComposerVoiceRoom[] } | null;
   onClose: () => void;
   /** The posted card flies into this ring (design §4, Posting). */
   onPosted?: (preview: HTMLElement | null) => void;
 }
 
-type Tab = "media" | "text" | "call";
+type Mode = "camera" | "text";
+type Panel = "stickers" | "call" | "mention" | "audience" | null;
 
 const PROBLEM_KEY: Record<StoryFileProblem["kind"], MessageKey> = {
   "wrong-type": "stories.compose.wrongType",
@@ -69,36 +130,69 @@ const PROBLEM_KEY: Record<StoryFileProblem["kind"], MessageKey> = {
   unreadable: "stories.compose.unreadable",
 };
 
+const SHAPE_KEY: Record<ImageShape, MessageKey> = {
+  rect: "stories.editor.shape.rect",
+  rounded: "stories.editor.shape.rounded",
+  circle: "stories.editor.shape.circle",
+};
+
+function modeFor(tab: ComposerRequest["tab"]): Mode {
+  return tab === "text" || tab === "call" ? "text" : "camera";
+}
+
+function isVideoFile(file: File): boolean {
+  return file.type.startsWith("video/");
+}
+
 export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: StoryComposerProps) {
   const { t, locale } = useTranslation();
   const [config, setConfig] = useState<StoriesConfig>(STORIES_CONFIG_OFF);
+  const [configReady, setConfigReady] = useState(false);
   const [options, setOptions] = useState<StoryAudienceOptions | null>(null);
   const [optionsFailed, setOptionsFailed] = useState(false);
-  const [tab, setTab] = useState<Tab>(request.tab ?? "media");
+  const [mode, setMode] = useState<Mode>(() => modeFor(request.tab));
   const [media, setMedia] = useState<PreparedStoryMedia | null>(null);
-  const [fileName, setFileName] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
-  const [caption, setCaption] = useState("");
-  const [text, setText] = useState("");
-  const [callText, setCallText] = useState(() => t("stories.compose.callText"));
+  // Photos being prepared to place: several can be in flight, and each one holds a layer slot.
+  const [photoJobs, setPhotoJobs] = useState(0);
+  const pendingPhotos = useRef(0);
+  // Bumped when the stage is reset (Back, a tab switch): a photo still being prepared for the old
+  // stage is dropped when it finishes instead of landing on the new one.
+  const stageEpoch = useRef(0);
+  const photoUrls = useRef(new Set<string>());
   const [background, setBackground] = useState<StoryBackground>("night");
-  // The room the author is in (the sticker closes when they are not), else
-  // the room people are in already.
-  const [roomId, setRoomId] = useState<string | null>(() =>
-    defaultCallRoom(voiceRooms?.rooms ?? [], meId),
-  );
+  const [editor, dispatch] = useReducer(editorReducer, initialEditorState);
+  const { layers, selectedId } = editor;
+  const [editing, setEditing] = useState<{ id: string | null; geometry: TextEditorGeometry } | null>(null);
+  const [textStyle, setTextStyle] = useState<Omit<TextLayerFields, "text">>(DEFAULT_TEXT);
+  const [drawing, setDrawing] = useState(false);
+  const [drawSettings, setDrawSettings] = useState<DrawSettings>(DEFAULT_DRAW);
+  const [panel, setPanel] = useState<Panel>(null);
+  const [mentionPeople, setMentionPeople] = useState<MentionPerson[] | null>(null);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  const [gestureActive, setGestureActive] = useState(false);
   const [serverIds, setServerIds] = useState<string[]>(
     request.context.kind === "server" ? [request.context.serverId] : [],
   );
   const [friends, setFriends] = useState(request.context.kind === "friends");
   const [repliesEnabled, setRepliesEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [flash, setFlash] = useState(0);
+  // What the discard question is about: closing the composer, or leaving the picture / text card for the camera.
+  const [discardFor, setDiscardFor] = useState<null | { kind: "close" } | { kind: "retake" } | { kind: "mode"; mode: Mode }>(null);
+  const [tabHidden, setTabHidden] = useState(() => document.visibilityState === "hidden");
   const fileInput = useRef<HTMLInputElement>(null);
+  const photoInput = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const autoOpenedText = useRef(false);
   // The newest file wins: a slow decode of an earlier pick must not replace
   // the one chosen after it.
   const fileTicket = useRef(0);
-  const previewRef = useRef<HTMLDivElement>(null);
+  const layersRef = useRef(layers);
+  layersRef.current = layers;
 
   const loadOptions = () => {
     setOptionsFailed(false);
@@ -107,16 +201,19 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       .catch(() => setOptionsFailed(true));
   };
   useEffect(() => {
-    void loadStoriesConfig().then(setConfig);
+    void loadStoriesConfig().then((loaded) => {
+      setConfig(loaded);
+      setConfigReady(true);
+    });
     loadOptions();
   }, []);
 
   // No media on this deployment: there is only the text card to offer.
   useEffect(() => {
-    if (options && !config.mediaEnabled && tab === "media") {
-      setTab("text");
+    if (configReady && !config.mediaEnabled && mode === "camera") {
+      setMode("text");
     }
-  }, [config.mediaEnabled, options, tab]);
+  }, [config.mediaEnabled, configReady, mode]);
 
   // A context server the person may not post to starts unticked.
   useEffect(() => {
@@ -137,6 +234,131 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     }
   }, [media]);
 
+  // A placed photo's object URL lives as long as something can still show it: the layer, or an
+  // undo step that would bring it back. Once none can (the step aged out), it is released.
+  useEffect(() => {
+    const live = new Set<string>();
+    for (const snapshot of [...editor.past, editor.layers, ...editor.future]) {
+      for (const layer of snapshot) {
+        if (layer.type === "image") {
+          live.add(layer.previewUrl);
+        }
+      }
+    }
+    for (const url of [...photoUrls.current]) {
+      if (!live.has(url)) {
+        URL.revokeObjectURL(url);
+        photoUrls.current.delete(url);
+      }
+    }
+  }, [editor.past, editor.layers, editor.future]);
+  useEffect(
+    () => () => {
+      for (const url of photoUrls.current) {
+        URL.revokeObjectURL(url);
+      }
+      photoUrls.current.clear();
+    },
+    [],
+  );
+
+  // The camera light goes out the moment the tab is not looked at.
+  useEffect(() => {
+    const onVisibility = () => setTabHidden(document.visibilityState === "hidden");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  const hasBase = (mode === "camera" && Boolean(media)) || mode === "text";
+  const showingCamera = mode === "camera" && !media;
+
+  // ---------------------------------------------------------------- camera
+  const cameraActive = showingCamera && config.mediaEnabled && !tabHidden && !submitting;
+  const camera = useCamera(cameraActive);
+
+  const alive = useRef(true);
+  useEffect(() => {
+    // Set again on mount: StrictMode runs the cleanup once before the real mount.
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  const acceptMedia = useCallback((next: PreparedStoryMedia) => {
+    // A photo that finished after the composer closed has nowhere to go: let its URL go.
+    if (!alive.current) {
+      URL.revokeObjectURL(next.previewUrl);
+      return;
+    }
+    setProblem(null);
+    setMedia(next);
+    setMode("camera");
+    // Whatever was being typed or drawn on the way here is over: the picture is the base now.
+    setEditing(null);
+    setDrawing(false);
+  }, []);
+
+  const showProblem = useCallback(
+    (found: StoryFileProblem) => {
+      const key =
+        found.kind === "wrong-type" && !config.videoEnabled
+          ? "stories.compose.wrongTypeNoVideo"
+          : PROBLEM_KEY[found.kind];
+      setProblem(t(key, found.kind === "too-long" ? { seconds: found.seconds } : undefined));
+    },
+    [config.videoEnabled, t],
+  );
+
+  const onClip = useCallback(
+    (clip: RecordedClip) => {
+      const ticket = ++fileTicket.current;
+      setPreparing(true);
+      void prepareRecordedClip(
+        clip,
+        { maxBytes: config.maxBytes, maxVideoMs: config.maxVideoMs, videoEnabled: config.videoEnabled },
+        camera.size,
+      )
+        .catch((): PrepareResult => ({ ok: false, problem: { kind: "unreadable" } }))
+        .then((result) => {
+          if (ticket !== fileTicket.current) {
+            if (result.ok) {
+              URL.revokeObjectURL(result.media.previewUrl);
+            }
+            return;
+          }
+          setPreparing(false);
+          if (result.ok) {
+            acceptMedia(result.media);
+          } else {
+            showProblem(result.problem);
+          }
+        });
+    },
+    [acceptMedia, camera.size, config.maxBytes, config.maxVideoMs, config.videoEnabled, showProblem],
+  );
+  const recorder = useRecorder(camera.stream, onClip, config.maxVideoMs, () => videoRef.current);
+
+  async function takePhoto() {
+    const element = videoRef.current;
+    if (!element || camera.status !== "live") {
+      return;
+    }
+    // Newest wins: a file chosen while this frame is still encoding replaces it, not the other way round.
+    const ticket = ++fileTicket.current;
+    const still = await captureStill(element);
+    if (ticket !== fileTicket.current) {
+      return;
+    }
+    if (!still) {
+      setProblem(t("stories.compose.unreadable"));
+      return;
+    }
+    setFlash((value) => value + 1);
+    acceptMedia(preparedFromStill(still));
+  }
+
+  /** A file to be the story's picture or clip. */
   async function takeFile(file: File | null | undefined) {
     if (!file) {
       return;
@@ -157,18 +379,78 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     }
     setPreparing(false);
     if (!result.ok) {
-      const key =
-        result.problem.kind === "wrong-type" && !config.videoEnabled
-          ? "stories.compose.wrongTypeNoVideo"
-          : PROBLEM_KEY[result.problem.kind];
+      showProblem(result.problem);
+      return;
+    }
+    acceptMedia(result.media);
+  }
+
+  /** A picture to PLACE on the story, anywhere on the canvas. */
+  async function placePhoto(file: File | null | undefined) {
+    if (!file) {
+      return;
+    }
+    // Slots are claimed before the wait: a batch of photos cannot all see the same free room.
+    const reserved = pendingPhotos.current;
+    const photos = layersRef.current.filter((layer) => layer.type === "image").length;
+    if (layersRef.current.length + reserved >= STORY_LAYERS_MAX || photos + reserved >= STORY_LAYER_IMAGES_MAX) {
       setProblem(
-        t(key, result.problem.kind === "too-long" ? { seconds: result.problem.seconds } : undefined),
+        t(layersRef.current.length + reserved >= STORY_LAYERS_MAX ? "stories.editor.limit.layers" : "stories.editor.limit.image"),
       );
       return;
     }
-    setMedia(result.media);
-    setFileName(file.name || null);
-    setTab("media");
+    pendingPhotos.current += 1;
+    setPhotoJobs(pendingPhotos.current);
+    setProblem(null);
+    const epoch = stageEpoch.current;
+    let result: Awaited<ReturnType<typeof prepareLayerImage>>;
+    try {
+      result = await prepareLayerImage(file);
+    } finally {
+      pendingPhotos.current -= 1;
+      setPhotoJobs(pendingPhotos.current);
+    }
+    if (epoch !== stageEpoch.current) {
+      // The stage was reset while this photo was being prepared: it belongs to work that is gone.
+      if (result.ok) {
+        URL.revokeObjectURL(result.layer.previewUrl);
+      }
+      return;
+    }
+    if (!result.ok) {
+      showProblem(result.problem);
+      return;
+    }
+    if (!alive.current) {
+      URL.revokeObjectURL(result.layer.previewUrl);
+      return;
+    }
+    photoUrls.current.add(result.layer.previewUrl);
+    const spread = (layersRef.current.filter((layer) => layer.type === "image").length % 4) * 0.04;
+    dispatch({
+      type: "add",
+      layer: { id: newLayerId(), type: "image", x: 0.5 + spread, y: 0.45 + spread, scale: 1, rotation: 0, shape: "rect", ...result.layer },
+    });
+    setPanel(null);
+  }
+
+  /**
+   * What a dropped or pasted file does. With no picture yet it becomes the
+   * picture. With one, a photo is placed on top of it (move it wherever it
+   * belongs) and a video replaces it.
+   */
+  function takeFiles(files: readonly File[]) {
+    const [first] = files;
+    if (!first || !config.mediaEnabled) {
+      return;
+    }
+    if (media && !isVideoFile(first)) {
+      for (const file of files.filter((entry) => !isVideoFile(entry)).slice(0, 6)) {
+        void placePhoto(file);
+      }
+      return;
+    }
+    void takeFile(first);
   }
 
   useEffect(() => {
@@ -179,37 +461,50 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Paste a screenshot anywhere in the composer (Ctrl+V).
+  // Paste a screenshot anywhere in the composer (Ctrl+V), unless a field is taking the paste.
   useEffect(() => {
     if (!config.mediaEnabled) {
       return;
     }
     function onPaste(event: ClipboardEvent) {
-      const file = [...(event.clipboardData?.files ?? [])][0];
-      if (file) {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) {
+        return;
+      }
+      const files = [...(event.clipboardData?.files ?? [])];
+      if (files.length > 0) {
         event.preventDefault();
-        void takeFile(file);
+        takeFiles(files);
       }
     }
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.mediaEnabled, config.maxBytes, config.maxVideoMs, config.videoEnabled]);
+  }, [config.mediaEnabled, config.maxBytes, config.maxVideoMs, config.videoEnabled, media]);
 
-  const room = voiceRooms?.rooms.find((entry) => entry.id === roomId) ?? null;
-  const sticker: StorySticker | null =
-    tab === "call" && room && voiceRooms
-      ? { type: "call", serverId: voiceRooms.serverId, channelId: room.id }
-      : null;
+  function retake() {
+    // Whatever was still being prepared is dropped (its ticket is stale now), and so is its overlay.
+    fileTicket.current += 1;
+    setPreparing(false);
+    setMedia(null);
+    setProblem(null);
+    setDrawing(false);
+    setEditing(null);
+    setPanel(null);
+    // The layers were placed on that picture: the camera has none of them.
+    stageEpoch.current += 1;
+    dispatch({ type: "reset" });
+  }
 
+  // ---------------------------------------------------------------- the call card
+  const callLayer = layers.find((layer): layer is Extract<EditorLayer, { type: "call" }> => layer.type === "call");
+  const lockedServerId = callLayer?.serverId ?? null;
+  const lockedServerCanPost = Boolean(
+    lockedServerId && options?.servers.some((server) => server.serverId === lockedServerId && server.canPost),
+  );
   // The call lives in one server: the story has to go there too, which only
   // works where the author may post. Elsewhere the call cannot be posted at
   // all, and the server stays unticked with its reason.
-  const lockedServerId = sticker?.serverId ?? null;
-  const lockedServerCanPost = Boolean(
-    lockedServerId &&
-      options?.servers.some((server) => server.serverId === lockedServerId && server.canPost),
-  );
   const effectiveServerIds = useMemo(
     () =>
       lockedServerId && lockedServerCanPost && !serverIds.includes(lockedServerId)
@@ -218,56 +513,103 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     [lockedServerId, lockedServerCanPost, serverIds],
   );
 
-  const body = tab === "call" ? callText : text;
+  const renderCall = useCallback(
+    (layer: Extract<DisplayLayer, { type: "call" }>) => {
+      const placed = layersRef.current.find((entry) => entry.id === layer.id);
+      const room = placed?.type === "call" ? voiceRooms?.rooms.find((entry) => entry.id === placed.channelId) : null;
+      const channelName = placed?.type === "call" ? (room?.name ?? placed.channelName) : "";
+      return (
+        <StoryCallCard
+          call={null}
+          passThrough
+          server={voiceRooms ? { name: voiceRooms.serverName, iconUrl: voiceRooms.serverIconUrl ?? null } : null}
+          preview={{
+            channelName,
+            names: (room?.occupants ?? []).map((person) => person.displayName.split(/\s+/)[0] ?? ""),
+          }}
+        />
+      );
+    },
+    [voiceRooms],
+  );
+
   const ready =
     !preparing &&
+    photoJobs === 0 &&
     !submitting &&
+    !recorder.recording &&
+    !editing &&
+    !drawing &&
     (effectiveServerIds.length > 0 || friends) &&
-    (tab === "media" ? Boolean(media) : body.trim().length > 0) &&
-    (tab !== "call" || (Boolean(sticker) && lockedServerCanPost));
+    (mode === "camera" ? Boolean(media) : layers.length > 0) &&
+    (!callLayer || lockedServerCanPost);
 
   const display: StoryDisplay = {
     id: "draft",
-    kind: tab === "media" ? (media?.kind ?? "image") : "text",
-    text: tab === "media" ? null : body || t("stories.compose.textPlaceholder"),
-    background: tab === "media" ? null : tab === "call" ? "lime" : background,
-    caption: tab === "media" ? caption.trim() || null : null,
+    kind: mode === "camera" ? (media?.kind ?? "image") : "text",
+    text: null,
+    background: mode === "camera" ? null : background,
+    caption: null,
     mediaUrl: media?.previewUrl ?? null,
+    mediaWidth: media?.width ?? null,
+    mediaHeight: media?.height ?? null,
     posterUrl: null,
     call: null,
-    callPreview:
-      tab === "call" && room
-        ? { channelName: room.name, names: room.occupants.map((person) => person.displayName.split(/\s+/)[0] ?? "") }
-        : null,
+    callPreview: null,
   };
 
-  function submit() {
+  async function submit() {
     if (!ready) {
       return;
     }
     setSubmitting(true);
     const audiences = { serverIds: effectiveServerIds, friends };
+    const current = layersRef.current;
+    const drawingLayer = current.find((layer): layer is Extract<EditorLayer, { type: "drawing" }> => layer.type === "drawing");
+    const drawingFile = drawingLayer ? await renderDrawingBlob(drawingLayer.strokes as Stroke[], colorFromTokens) : null;
+    if (drawingLayer && hasInk(drawingLayer.strokes) && !drawingFile) {
+      // The drawing could not be turned into a picture: posting without it would drop what was drawn.
+      setProblem(t("stories.compose.unreadable"));
+      setSubmitting(false);
+      return;
+    }
+    const layerFiles = new Map<string, Blob>();
+    const inputs = current.flatMap((layer) => {
+      if (layer.type === "image") {
+        layerFiles.set(layer.id, layer.blob);
+      }
+      if (layer.type === "drawing" && drawingFile) {
+        layerFiles.set(layer.id, drawingFile.blob);
+      }
+      const input = toLayerInput(layer, drawingFile ?? undefined);
+      return input ? [input] : [];
+    });
+    const altText = altTextFor(current, "", (name) => t("stories.editor.altMention", { name }));
+    // The words go up twice: as layers, and as the plain caption older builds still read.
+    const words = current
+      .filter((layer): layer is Extract<EditorLayer, { type: "text" }> => layer.type === "text")
+      .sort((a, b) => a.y - b.y || a.x - b.x)
+      .map((layer) => layer.text.trim().replace(/\s+/g, " "))
+      .join(" ")
+      .slice(0, STORY_TEXT_MAX);
+    const caption = words.slice(0, STORY_CAPTION_MAX);
+    const common = {
+      ...(altText ? { altText } : {}),
+      ...(inputs.length > 0 ? { layers: inputs } : {}),
+      repliesEnabled,
+      audiences,
+    };
     const draft =
-      tab === "media" && media
+      mode === "camera" && media
         ? {
-            request: {
-              kind: media.kind,
-              ...(caption.trim() ? { caption: caption.trim() } : {}),
-              repliesEnabled,
-              audiences,
-            },
+            request: { kind: media.kind, ...(caption ? { caption } : {}), ...common },
             media,
+            layerFiles,
           }
         : {
-            request: {
-              kind: "text" as const,
-              text: body.trim(),
-              background: tab === "call" ? ("lime" as const) : background,
-              ...(sticker ? { sticker } : {}),
-              repliesEnabled,
-              audiences,
-            },
+            request: { kind: "text" as const, background, ...(words ? { text: words } : {}), ...common },
             media: null,
+            layerFiles,
           };
     onPosted?.(previewRef.current);
     // The media's object URL now belongs to the post; do not revoke it here.
@@ -276,246 +618,781 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     onClose();
   }
 
-  const tabs: { value: Tab; label: string; disabled?: boolean }[] = [
-    { value: "media", label: t("stories.compose.tabMedia"), disabled: !config.mediaEnabled },
-    { value: "text", label: t("stories.compose.modeText") },
-    ...(voiceRooms ? [{ value: "call" as const, label: t("stories.compose.modeCall") }] : []),
+  // ---------------------------------------------------------------- text
+  const editingLayer = editing?.id ? layers.find((layer) => layer.id === editing.id) : null;
+  const editingFields: TextLayerFields | null = editing
+    ? editingLayer?.type === "text"
+      ? editingLayer
+      : { text: "", ...textStyle }
+    : null;
+
+  /**
+   * Edit a text layer where it is, or start a new one at the default spot. The geometry is fixed
+   * when editing starts and handed to the editor, which draws the words with it: nothing moves.
+   */
+  const openText = useCallback((id: string | null) => {
+    setPanel(null);
+    setDrawing(false);
+    const existing = id ? layersRef.current.find((layer) => layer.id === id) : null;
+    const count = layersRef.current.filter((layer) => layer.type === "text").length;
+    setEditing({
+      id,
+      geometry: existing
+        ? { x: existing.x, y: existing.y, scale: existing.scale, rotation: existing.rotation }
+        : { x: 0.5, y: 0.4 + ((count * 0.07) % 0.3), scale: 1, rotation: 0 },
+    });
+  }, []);
+
+  function finishText(fields: TextLayerFields, scale: number) {
+    const trimmed = fields.text.trim();
+    const { text: _text, ...style } = fields;
+    setTextStyle(style);
+    if (editing?.id) {
+      if (trimmed) {
+        // One history step for the whole edit: the words, their style and the scale together.
+        dispatch({ type: "patch", id: editing.id, patch: { ...style, text: trimmed, scale } });
+      } else {
+        dispatch({ type: "remove", id: editing.id });
+      }
+    } else if (trimmed) {
+      if (!canAddLayer(layersRef.current, "text")) {
+        setProblem(t("stories.editor.limit.layers"));
+      } else {
+        const { x, y, rotation } = editing!.geometry;
+        dispatch({
+          type: "add",
+          layer: { id: newLayerId(), type: "text", x, y, scale, rotation, ...style, text: trimmed },
+        });
+      }
+    }
+    setEditing(null);
+  }
+
+  // How far a soft keyboard makes the whole stage rise while text is edited (0 almost always).
+  const [stageLift, setStageLift] = useState(0);
+
+  // "Chama pra call" from a menu: start on a card with the room picker already open.
+  useEffect(() => {
+    if (request.tab === "call" && voiceRooms) {
+      setPanel("call");
+    }
+    // Once, for the way the composer was opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The text card starts on the keyboard: nothing else to do there until there are words.
+  useEffect(() => {
+    if (mode === "text" && layers.length === 0 && !autoOpenedText.current && configReady && request.tab !== "call") {
+      autoOpenedText.current = true;
+      openText(null);
+    }
+  }, [mode, layers.length, configReady, request.tab, openText]);
+
+  // ---------------------------------------------------------------- draw
+  const drawingLayer = layers.find((layer): layer is Extract<EditorLayer, { type: "drawing" }> => layer.type === "drawing");
+  const strokes = (drawingLayer?.strokes ?? []) as readonly Stroke[];
+
+  function commitStroke(stroke: Stroke) {
+    if (drawingLayer) {
+      // Layer order is creation order, so a layer placed since would hide these strokes: drawing again
+      // brings the (single) drawing back to the top, in the same undo step as the stroke.
+      dispatch({ type: "patch", id: drawingLayer.id, patch: { strokes: [...drawingLayer.strokes, stroke] }, toTop: true });
+    } else {
+      if (!canAddLayer(layersRef.current, "drawing")) {
+        setProblem(t("stories.editor.limit.layers"));
+        return;
+      }
+      dispatch({
+        type: "add",
+        layer: { id: newLayerId(), type: "drawing", x: 0.5, y: 0.5, scale: 1, rotation: 0, strokes: [stroke] },
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------- mention + call
+  function openMention() {
+    setPanel("mention");
+    setMentionLoading(true);
+    void loadMentionPeople({ serverIds: effectiveServerIds, friends }, meId)
+      .catch((): MentionPerson[] => [])
+      .then((people) => {
+        setMentionPeople(people);
+        setMentionLoading(false);
+      });
+  }
+
+  function addMention(person: MentionPerson) {
+    if (!canAddLayer(layersRef.current, "mention")) {
+      setProblem(t("stories.editor.limit.mention"));
+      setPanel(null);
+      return;
+    }
+    const count = layersRef.current.filter((layer) => layer.type === "mention").length;
+    dispatch({
+      type: "add",
+      layer: { id: newLayerId(), type: "mention", x: 0.5, y: 0.56 + count * 0.07, scale: 1, rotation: 0, userId: person.id, name: person.displayName },
+    });
+    setPanel(null);
+  }
+
+  function addCall(room: ComposerVoiceRoom) {
+    if (!voiceRooms || !canAddLayer(layersRef.current, "call")) {
+      return;
+    }
+    dispatch({
+      type: "add",
+      layer: { id: newLayerId(), type: "call", x: 0.5, y: 0.76, scale: 1, rotation: 0, serverId: voiceRooms.serverId, channelId: room.id, channelName: room.name },
+    });
+    setPanel(null);
+  }
+
+  // ---------------------------------------------------------------- mode, discard
+  /** Anything the person would lose by closing: a picture or clip, or a layer. */
+  const hasContent = Boolean(media) || layers.length > 0;
+
+  function switchMode(next: Mode) {
+    setProblem(null);
+    setEditing(null);
+    setDrawing(false);
+    setPanel(null);
+    // A text card's layers are not the camera's: each side starts clean.
+    stageEpoch.current += 1;
+    dispatch({ type: "reset" });
+    // The text card opens its editor every time the person lands on it with nothing written.
+    autoOpenedText.current = false;
+    setMode(next);
+  }
+
+  /** The camera / text tabs. Whatever was open in the other mode (the editor, a sheet) closes with it. */
+  function changeMode(next: Mode) {
+    if (recorder.recording || next === mode) {
+      return;
+    }
+    if (layers.length > 0) {
+      setDiscardFor({ kind: "mode", mode: next });
+    } else {
+      switchMode(next);
+    }
+  }
+
+  /** Back to the camera. Layers placed on the picture go with it, so a tap that cannot be undone asks first. */
+  function requestRetake() {
+    if (layers.length > 0) {
+      setDiscardFor({ kind: "retake" });
+    } else {
+      retake();
+    }
+  }
+
+  /** X and Escape: ask before throwing work away. */
+  function requestClose() {
+    if (hasContent && !submitting) {
+      setDiscardFor({ kind: "close" });
+    } else {
+      onClose();
+    }
+  }
+
+  function confirmDiscardAction() {
+    const what = discardFor;
+    setDiscardFor(null);
+    rootRef.current?.focus({ preventScroll: true });
+    if (what?.kind === "close") {
+      onClose();
+    } else if (what?.kind === "retake") {
+      retake();
+    } else if (what?.kind === "mode") {
+      switchMode(what.mode);
+    }
+  }
+
+  // The camera screen and the text editor never share the stage: if the camera is what is showing,
+  // nothing is being edited on top of it.
+  useEffect(() => {
+    if (showingCamera && (editing || drawing)) {
+      setEditing(null);
+      setDrawing(false);
+    }
+  }, [showingCamera, editing, drawing]);
+
+  // ---------------------------------------------------------------- focus + keys
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // A field that took focus on its own (the text card's) keeps it.
+    if (rootRef.current && !rootRef.current.contains(document.activeElement)) {
+      rootRef.current.focus({ preventScroll: true });
+    }
+    return () => {
+      if (opener && document.contains(opener)) {
+        opener.focus({ preventScroll: true });
+      }
+    };
+  }, []);
+
+  function onRootKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (discardFor) {
+        setDiscardFor(null);
+        rootRef.current?.focus({ preventScroll: true });
+      } else if (panel) {
+        setPanel(null);
+      } else if (drawing) {
+        setDrawing(false);
+      } else if (recorder.recording) {
+        recorder.stop();
+      } else if (selectedId) {
+        dispatch({ type: "select", id: null });
+      } else {
+        requestClose();
+      }
+      return;
+    }
+    const typing = (event.target as HTMLElement).tagName === "TEXTAREA" || (event.target as HTMLElement).tagName === "INPUT";
+    if ((event.metaKey || event.ctrlKey) && !typing && !editing && !discardFor) {
+      const key = event.key.toLowerCase();
+      if (key === "z") {
+        event.preventDefault();
+        dispatch({ type: event.shiftKey ? "redo" : "undo" });
+        return;
+      }
+      if (key === "y") {
+        event.preventDefault();
+        dispatch({ type: "redo" });
+        return;
+      }
+    }
+    if (event.key !== "Tab" || !rootRef.current) {
+      return;
+    }
+    const focusable = [
+      ...rootRef.current.querySelectorAll<HTMLElement>(
+        "button:not([disabled]):not([tabindex='-1']), input:not([disabled]), textarea:not([disabled]), [tabindex='0']",
+      ),
+    ].filter((element) => element.offsetParent !== null && !element.closest("[inert]"));
+    if (focusable.length === 0) {
+      return;
+    }
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === rootRef.current)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  // ---------------------------------------------------------------- render
+  const modes: ModeOption<Mode>[] = [
+    {
+      value: "camera",
+      label: t("stories.compose.modeCamera"),
+      icon: <Camera className="h-3.5 w-3.5" aria-hidden />,
+      disabled: !config.mediaEnabled,
+    },
+    { value: "text", label: t("stories.compose.modeText"), icon: <Type className="h-3.5 w-3.5" aria-hidden /> },
   ];
 
+  const summary = audienceSummary({ options, serverIds: effectiveServerIds, friends }, t);
   const numberFormat = new Intl.NumberFormat(locale);
+  const selected = layers.find((layer) => layer.id === selectedId) ?? null;
+  const overlayOpen = Boolean(editing) || drawing || panel !== null;
 
-  return (
-    <Dialog
-      open
-      size="lg"
-      title={t("stories.compose.title")}
-      onClose={onClose}
-      closeOnBackdrop={false}
-      footer={
-        <div className="flex w-full flex-wrap items-center gap-3">
-          <p className="min-w-0 flex-1 text-xs leading-snug text-text-tertiary">
-            {t("stories.audience.footer")}
-          </p>
-          <Button variant="secondary" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button data-story-post="" disabled={!ready} onClick={submit}>
-            {t("stories.audience.post")}
-          </Button>
-        </div>
-      }
+  // The selection bar stays where it always is, centered at the top of the canvas, so it never
+  // lands on a neighbouring layer; it only steps to the foot of the canvas when the selected layer
+  // reaches up into the top strip, so it is never ON the words placed there.
+  const [barAtFoot, setBarAtFoot] = useState(false);
+  useLayoutEffect(() => {
+    const canvas = previewRef.current;
+    const layer = selected && canvas ? canvas.querySelector<HTMLElement>(`[data-story-layer="${CSS.escape(selected.id)}"]`) : null;
+    if (!canvas || !layer) {
+      setBarAtFoot(false);
+      return;
+    }
+    const box = layer.getBoundingClientRect();
+    // The bar is 40 px tall and sits 12 px down; a layer whose top is above 68 px is in its way.
+    setBarAtFoot(box.top - canvas.getBoundingClientRect().top < 12 + 40 + 16);
+  }, [selected, gestureActive, overlayOpen]);
+  const canUndo = editor.past.length > 0;
+  const canRedo = editor.future.length > 0;
+  const taken = useMemo(
+    () => new Set(layers.flatMap((layer) => (layer.type === "mention" ? [layer.userId] : []))),
+    [layers],
+  );
+
+  function describe(layer: EditorLayer): string {
+    switch (layer.type) {
+      case "text":
+        return t("stories.editor.layer.text", { text: layer.text });
+      case "image":
+        return t("stories.editor.layer.image");
+      case "drawing":
+        return t("stories.editor.layer.drawing");
+      case "call":
+        return t("stories.editor.layer.call", { room: layer.channelName });
+      case "mention":
+        return t("stories.editor.layer.mention", { name: layer.name });
+    }
+  }
+
+  function cycleShape(layer: Extract<EditorLayer, { type: "image" }>) {
+    const next = STORY_LAYER_IMAGE_SHAPES[(STORY_LAYER_IMAGE_SHAPES.indexOf(layer.shape) + 1) % STORY_LAYER_IMAGE_SHAPES.length]!;
+    dispatch({ type: "patch", id: layer.id, patch: { shape: next } });
+  }
+
+  return createPortal(
+    <div
+      ref={rootRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("stories.compose.title")}
+      tabIndex={-1}
+      data-story-composer=""
+      onKeyDown={onRootKeyDown}
+      className="story-backdrop-in fixed inset-0 z-[55] flex items-center justify-center overflow-hidden outline-none"
+      style={{ background: "var(--story-backdrop)", backdropFilter: "blur(10px)" }}
     >
-      <div className="flex flex-col gap-5 px-5 py-4 sm:flex-row">
-        <div className="flex shrink-0 justify-center sm:block">
-          <div
-            ref={previewRef}
-            aria-label={t("stories.compose.preview")}
-            role="img"
-            className="relative aspect-[9/16] w-40 overflow-hidden rounded-[12px] sm:w-[200px]"
-            style={{ background: "var(--story-card)" }}
+      <FileDropZone
+        mode={config.mediaEnabled ? "accept" : "refuse"}
+        acceptLabel={t("stories.compose.dropHere")}
+        refuseLabel={t("stories.compose.mediaOff")}
+        size="pane"
+        className="story-cmp story-cmp-lift"
+        style={{ "--story-lift": `${stageLift}px` } as CSSProperties}
+        onDrop={(items) => takeFiles(items.files)}
+      >
+        {/* While words are being typed only the text controls are on screen: the rest comes back on Done. */}
+        <div className={cn("story-cmp-head", editing && "invisible")} inert={Boolean(editing) || Boolean(discardFor)}>
+          <button
+            type="button"
+            className="story-cbtn"
+            data-story-close=""
+            aria-label={t("stories.compose.close")}
+            onClick={requestClose}
           >
-            {tab === "media" && !media ? (
-              <div className="absolute inset-0 flex items-center justify-center" style={{ color: "var(--story-on-media-2)" }}>
-                <ImageIcon className="h-8 w-8" aria-hidden />
-              </div>
-            ) : (
-              <StoryContent story={display} still={false} playVideo muted paused={false} />
-            )}
-          </div>
+            <X className="h-[18px] w-[18px]" aria-hidden />
+          </button>
+          {media && !drawing && (
+            <button
+              type="button"
+              className="story-cbtn"
+              data-story-retake=""
+              title={t("stories.compose.retake")}
+              aria-label={t("stories.compose.retake")}
+              onClick={requestRetake}
+            >
+              <ChevronLeft className="h-[18px] w-[18px]" aria-hidden />
+            </button>
+          )}
+          {hasBase && !drawing && (
+            <div role="toolbar" aria-label={t("stories.editor.tools")} className="ml-auto flex min-w-0 shrink items-center gap-1.5">
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-tool-text=""
+                aria-label={t("stories.editor.tool.text")}
+                onClick={() => openText(null)}
+              >
+                <Type className="h-[18px] w-[18px]" aria-hidden />
+              </button>
+              {config.mediaEnabled && (
+                <button
+                  type="button"
+                  className="story-cbtn"
+                  data-story-tool-photo=""
+                  aria-label={t("stories.editor.tool.photo")}
+                  onClick={() => photoInput.current?.click()}
+                >
+                  <ImagePlus className="h-[18px] w-[18px]" aria-hidden />
+                </button>
+              )}
+              {/* A drawing goes up as a picture: with no object storage there is nowhere to put it. */}
+              {config.mediaEnabled && (
+                <button
+                  type="button"
+                  className="story-cbtn"
+                  data-story-tool-draw=""
+                  aria-label={t("stories.editor.tool.draw")}
+                  onClick={() => {
+                    setPanel(null);
+                    setEditing(null);
+                    dispatch({ type: "select", id: null });
+                    setDrawing(true);
+                  }}
+                >
+                  <Pen className="h-[18px] w-[18px]" aria-hidden />
+                </button>
+              )}
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-tool-stickers=""
+                aria-label={t("stories.editor.tool.stickers")}
+                onClick={() => setPanel("stickers")}
+              >
+                <Sticker className="h-[18px] w-[18px]" aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-undo=""
+                aria-label={t("stories.editor.undo")}
+                disabled={!canUndo}
+                onClick={() => dispatch({ type: "undo" })}
+              >
+                <Undo2 className="h-[18px] w-[18px]" aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-redo=""
+                aria-label={t("stories.editor.redo")}
+                disabled={!canRedo}
+                onClick={() => dispatch({ type: "redo" })}
+              >
+                <Redo2 className="h-[18px] w-[18px]" aria-hidden />
+              </button>
+            </div>
+          )}
         </div>
 
-        <div className="min-w-0 flex-1 space-y-4">
-          <RadioGroup
-            label={t("stories.compose.title")}
-            value={tab}
-            onValueChange={(value) => setTab(value)}
-            options={tabs}
-            size="sm"
-          />
+        <div
+          ref={previewRef}
+          className="story-cmp-canvas"
+          inert={Boolean(discardFor)}
+          role="group"
+          aria-label={t("stories.compose.preview")}
+        >
+          {showingCamera ? (
+            <CameraStage
+              ref={videoRef}
+              camera={camera}
+              recorder={recorder}
+              onChooseFile={() => fileInput.current?.click()}
+            />
+          ) : (
+            <StoryContent story={display} still={false} playVideo muted={false} paused={false} loop withLayers={false} />
+          )}
 
-          {tab === "media" && (
-            <div className="space-y-3">
-              {!config.mediaEnabled && options ? (
-                <p className="text-sm text-text-secondary">{t("stories.compose.mediaOff")}</p>
-              ) : (
-                <FileDropZone
-                  mode="accept"
-                  acceptLabel={t("stories.compose.dropTitle")}
-                  size="field"
-                  onDrop={(items) => void takeFile(items.files[0])}
-                  className="rounded-[var(--radius-card)] border border-dashed border-border-strong"
+          {hasBase && (
+            <ComposerCanvas
+              layers={layers}
+              selectedId={selectedId}
+              dispatch={dispatch}
+              hiddenId={editing?.id ?? (drawing ? (drawingLayer?.id ?? null) : null)}
+              interactive={!overlayOpen}
+              renderCall={renderCall}
+              onEditText={openText}
+              describe={describe}
+              onGesture={setGestureActive}
+            />
+          )}
+
+          {mode === "text" && layers.length === 0 && !editing && (
+            <p
+              className="pointer-events-none absolute inset-x-[12%] top-[40%] text-center text-sm font-semibold"
+              style={{ color: "var(--story-on-media-2)" }}
+            >
+              {t("stories.editor.textCardHint")}
+            </p>
+          )}
+
+          {mode === "text" && !overlayOpen && <BackgroundPicker value={background} onChange={setBackground} />}
+
+          {drawing && (
+            <DrawOverlay strokes={strokes} settings={drawSettings} onStroke={commitStroke} />
+          )}
+
+          {selected && hasBase && !gestureActive && !overlayOpen && selected.type !== "drawing" && (
+            <div
+              role="toolbar"
+              aria-label={describe(selected)}
+              data-story-layer-bar=""
+              className={cn(
+                "absolute inset-x-0 z-10 flex justify-center gap-1.5",
+                // In the text card the background picker holds the foot row.
+                barAtFoot ? (mode === "text" ? "bottom-[60px]" : "bottom-3") : "top-3",
+              )}
+            >
+              {selected.type === "text" && (
+                <button type="button" className="story-cbtn" aria-label={t("stories.editor.layer.edit")} onClick={() => openText(selected.id)}>
+                  <PenLine className="h-[18px] w-[18px]" aria-hidden />
+                </button>
+              )}
+              {selected.type === "image" && (
+                <button
+                  type="button"
+                  className="story-cbtn"
+                  data-story-shape=""
+                  aria-label={t("stories.editor.layer.shape", { shape: t(SHAPE_KEY[selected.shape]) })}
+                  onClick={() => cycleShape(selected)}
                 >
-                  <div className="flex items-center gap-3 p-3">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-surface-2 text-text-secondary">
-                      <Upload className="h-4 w-4" aria-hidden />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-text">
-                        {fileName ?? t("stories.compose.dropTitle")}
-                      </p>
-                      <p className="text-xs leading-snug text-text-tertiary">{t("stories.compose.drop")}</p>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={preparing}
-                      onClick={() => fileInput.current?.click()}
-                    >
-                      {media ? t("stories.compose.replace") : t("stories.compose.choose")}
-                    </Button>
-                    <input
-                      ref={fileInput}
-                      type="file"
-                      className="hidden"
-                      accept={config.videoEnabled ? "image/jpeg,image/png,image/webp,video/mp4" : "image/jpeg,image/png,image/webp"}
-                      onChange={(event) => {
-                        void takeFile(event.target.files?.[0]);
-                        event.target.value = "";
-                      }}
-                    />
-                  </div>
-                </FileDropZone>
+                  {selected.shape === "circle" ? (
+                    <Circle className="h-[18px] w-[18px]" aria-hidden />
+                  ) : selected.shape === "rounded" ? (
+                    <RectangleHorizontal className="h-[18px] w-[18px]" aria-hidden />
+                  ) : (
+                    <Square className="h-[18px] w-[18px]" aria-hidden />
+                  )}
+                </button>
               )}
-              {problem && (
-                <p role="alert" className="text-sm text-danger">
-                  {problem}
-                </p>
-              )}
-              {config.mediaEnabled && (
-                <Input
-                  value={caption}
-                  maxLength={STORY_CAPTION_MAX}
-                  onChange={(event) => setCaption(event.target.value)}
-                  placeholder={t("stories.compose.captionPlaceholder")}
-                  aria-label={t("stories.compose.caption")}
-                />
-              )}
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-forward=""
+                aria-label={t("stories.editor.layer.forward")}
+                onClick={() => dispatch({ type: "forward", id: selected.id })}
+              >
+                <ArrowUpToLine className="h-[18px] w-[18px]" aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="story-cbtn"
+                data-story-delete=""
+                aria-label={t("stories.editor.layer.delete")}
+                onClick={() => dispatch({ type: "remove", id: selected.id })}
+              >
+                <Trash2 className="h-[18px] w-[18px]" aria-hidden />
+              </button>
             </div>
           )}
 
-          {tab === "text" && (
-            <div className="space-y-3">
-              <Textarea
-                value={text}
-                maxLength={STORY_TEXT_MAX}
-                rows={3}
-                className="min-h-20"
-                autoFocus
-                onChange={(event) => setText(event.target.value)}
-                placeholder={t("stories.compose.textPlaceholder")}
-                aria-label={t("stories.compose.textLabel")}
-                data-story-text=""
-              />
-              <BackgroundPicker value={background} onChange={setBackground} />
+          {editingFields && editing && (
+            <TextEditor
+              key={editing.id ?? "new"}
+              initial={editingFields}
+              geometry={editing.geometry}
+              onDone={finishText}
+              onCancel={() => setEditing(null)}
+              onLift={setStageLift}
+            />
+          )}
+
+          {(preparing || photoJobs > 0) && (
+            <div
+              role="status"
+              className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2"
+              style={{ background: "var(--story-dim)", color: "var(--story-on-media)" }}
+            >
+              <Loader2 className="h-6 w-6 motion-safe:animate-spin" aria-hidden />
+              <p className="text-sm font-semibold">{t("stories.compose.preparing")}</p>
             </div>
           )}
 
-          {tab === "call" && voiceRooms && (
-            <div className="space-y-3">
-              <p className="text-xs leading-snug text-text-secondary">{t("stories.callPicker.body")}</p>
-              {voiceRooms.rooms.length === 0 ? (
-                <p className="text-sm text-text-tertiary">{t("stories.callPicker.empty")}</p>
-              ) : (
-                <RadioGroup
-                  variant="list"
-                  label={t("stories.callPicker.rooms", { server: voiceRooms.serverName })}
-                  value={roomId ?? ""}
-                  onValueChange={(value) => setRoomId(value || null)}
-                  options={voiceRooms.rooms.map((entry) => ({
-                    value: entry.id,
-                    label: entry.name,
-                    description:
-                      entry.occupants.length === 0
-                        ? t("stories.callPicker.emptyRoom")
-                        : t("stories.callPicker.inRoom", { count: entry.occupants.length }),
-                  }))}
-                />
-              )}
-              {room && !authorInRoom(room, meId) && (
-                <p data-story-call-hint="" className="text-xs leading-snug text-warning">
-                  {t("stories.callPicker.notInRoom", { room: room.name })}
-                </p>
-              )}
-              <Input
-                value={callText}
-                maxLength={STORY_TEXT_MAX}
-                onChange={(event) => setCallText(event.target.value)}
-                aria-label={t("stories.compose.textLabel")}
-              />
+          {problem && (
+            <p
+              role="alert"
+              data-story-problem=""
+              className="absolute inset-x-3 top-3 z-50 rounded-[14px] px-3.5 py-2.5 text-center text-sm font-semibold leading-snug"
+              style={{ background: "var(--story-tray)", color: "var(--story-on-media)", boxShadow: "var(--story-shadow)" }}
+              onClick={() => setProblem(null)}
+            >
+              {problem}
+            </p>
+          )}
+
+          {flash > 0 && <span key={flash} className="story-flash" aria-hidden />}
+        </div>
+
+        <div className={cn("story-cmp-foot", editing && "invisible")} inert={Boolean(editing) || Boolean(discardFor)}>
+          {showingCamera && config.mediaEnabled && (
+            <CameraControlsRow
+              camera={camera}
+              recorder={recorder}
+              shutterDisabled={preparing || photoJobs > 0}
+              onChooseFile={() => fileInput.current?.click()}
+              onPhoto={() => void takePhoto()}
+              onRecordStart={() => void recorder.start()}
+              onRecordStop={recorder.stop}
+            />
+          )}
+
+          {drawing && (
+            <DrawBar
+              settings={drawSettings}
+              onChange={setDrawSettings}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={() => dispatch({ type: "undo" })}
+              onRedo={() => dispatch({ type: "redo" })}
+              onDone={() => setDrawing(false)}
+            />
+          )}
+
+          {!showingCamera && !drawing && (
+            <div className="flex items-center gap-2.5 px-2">
+              <AudienceChip summary={summary} onOpen={() => setPanel("audience")} />
+              <StoryButton data-story-post="" disabled={!ready} onClick={() => void submit()}>
+                {t("stories.audience.post")}
+              </StoryButton>
             </div>
           )}
 
-          <fieldset className="space-y-1">
-            <legend className="text-[11px] font-bold uppercase tracking-wider text-text-tertiary">
-              {t("stories.audience.title")}
-            </legend>
-            {optionsFailed && (
-              <div className="flex items-center gap-3 px-2 py-1">
-                <p role="alert" className="flex-1 text-sm text-danger">
-                  {t("stories.audience.loadFailed")}
-                </p>
-                <Button size="sm" variant="secondary" onClick={loadOptions}>
-                  {t("stories.viewer.retry")}
-                </Button>
-              </div>
-            )}
-            {options?.servers.map((server) => {
-              const locked = server.serverId === lockedServerId && server.canPost;
-              const checked = effectiveServerIds.includes(server.serverId);
-              const reason =
-                server.blockedReason === "timed_out"
-                  ? t("stories.audience.timedOut")
-                  : server.blockedReason === "account_too_new"
-                    ? t("stories.audience.tooNew")
-                    : server.blockedReason
-                      ? t("stories.audience.noPermission")
-                      : null;
-              return (
-                <CheckRow
-                  key={server.serverId}
-                  checked={checked && server.canPost}
-                  disabled={!server.canPost || locked}
-                  label={server.serverName}
-                  description={
-                    reason ??
-                    (locked
-                      ? t("stories.audience.callServer")
-                      : t("stories.audience.members", {
-                          count: server.memberCount,
-                          countLabel: numberFormat.format(server.memberCount),
-                        }))
-                  }
-                  className={cn(!server.canPost && "opacity-60")}
-                  onCheckedChange={(next) =>
-                    setServerIds((current) =>
-                      next ? [...current, server.serverId] : current.filter((id) => id !== server.serverId),
-                    )
-                  }
-                />
-              );
-            })}
-            {options?.friends.enabled && (
-              <CheckRow
-                checked={friends}
-                disabled={!options.friends.canPost}
-                label={t("stories.audience.friends")}
-                onCheckedChange={setFriends}
-              />
-            )}
-            {options && effectiveServerIds.length === 0 && !friends && (
-              <p className="px-2 pt-1 text-xs text-text-tertiary">{t("stories.audience.none")}</p>
-            )}
-          </fieldset>
+          {!media && !drawing && (
+            <ModeTabs
+              label={t("stories.compose.title")}
+              value={mode}
+              options={modes}
+              onChange={changeMode}
+            />
+          )}
+        </div>
 
-          <Switch
-            checked={repliesEnabled}
-            onCheckedChange={setRepliesEnabled}
-            label={t("stories.audience.replies")}
-            description={t("stories.audience.repliesHint")}
+        {discardFor && (
+          <DiscardDialog
+            onKeep={() => {
+              setDiscardFor(null);
+              // The dialog's button is gone: keep the keys (Escape) with the composer.
+              rootRef.current?.focus({ preventScroll: true });
+            }}
+            onDiscard={confirmDiscardAction}
           />
+        )}
+        {panel === "audience" && (
+          <AudienceSheet
+            state={{
+              options,
+              failed: optionsFailed,
+              serverIds: effectiveServerIds,
+              friends,
+              lockedServerId: lockedServerCanPost ? lockedServerId : null,
+              repliesEnabled,
+            }}
+            numberFormat={numberFormat}
+            onClose={() => setPanel(null)}
+            onRetry={loadOptions}
+            onToggleServer={(serverId, next) =>
+              setServerIds((current) =>
+                next ? [...current, serverId] : current.filter((id) => id !== serverId),
+              )
+            }
+            onToggleFriends={setFriends}
+            onRepliesChange={setRepliesEnabled}
+          />
+        )}
+        {panel === "stickers" && (
+          <StickerTray
+            onClose={() => setPanel(null)}
+            onCall={() => setPanel("call")}
+            onMention={openMention}
+            onPhoto={() => {
+              setPanel(null);
+              photoInput.current?.click();
+            }}
+            photoAvailable={config.mediaEnabled}
+            callAvailable={Boolean(voiceRooms)}
+            callPlaced={Boolean(callLayer)}
+            mentionFull={!canAddLayer(layers, "mention")}
+          />
+        )}
+        {panel === "call" && voiceRooms && (
+          <CallPickerSheet
+            serverName={voiceRooms.serverName}
+            rooms={voiceRooms.rooms}
+            meId={meId}
+            onPick={addCall}
+            onClose={() => setPanel(null)}
+          />
+        )}
+        {panel === "mention" && (
+          <MentionSheet
+            people={mentionPeople}
+            loading={mentionLoading}
+            taken={taken}
+            onPick={addMention}
+            onClose={() => setPanel(null)}
+          />
+        )}
+
+        <input
+          ref={fileInput}
+          type="file"
+          className="hidden"
+          tabIndex={-1}
+          data-story-file=""
+          accept={
+            config.videoEnabled
+              ? "image/jpeg,image/png,image/webp,video/mp4"
+              : "image/jpeg,image/png,image/webp"
+          }
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            // A picture chosen while editing one is a photo to place; with none yet it is the picture.
+            if (file && media && !isVideoFile(file)) {
+              void placePhoto(file);
+            } else {
+              void takeFile(file);
+            }
+            event.target.value = "";
+          }}
+        />
+        <input
+          ref={photoInput}
+          type="file"
+          multiple
+          className="hidden"
+          tabIndex={-1}
+          data-story-photo-file=""
+          accept="image/jpeg,image/png,image/webp"
+          onChange={(event) => {
+            for (const file of [...(event.target.files ?? [])].slice(0, 6)) {
+              void placePhoto(file);
+            }
+            event.target.value = "";
+          }}
+        />
+      </FileDropZone>
+    </div>,
+    document.body,
+  );
+}
+
+/** "Descartar story?": asked when X or Escape would throw away a picture or a layer. */
+function DiscardDialog({ onKeep, onDiscard }: { onKeep: () => void; onDiscard: () => void }) {
+  const { t } = useTranslation();
+  const keep = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    keep.current?.focus({ preventScroll: true });
+  }, []);
+  return (
+    <div
+      className="absolute inset-0 z-[60] flex items-center justify-center px-6"
+      style={{ background: "var(--story-dim)" }}
+      data-story-discard=""
+    >
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="story-discard-title"
+        aria-describedby="story-discard-body"
+        className="w-full max-w-[300px] rounded-[18px] p-4 text-center"
+        style={{ background: "var(--story-tray)", color: "var(--story-on-media)", boxShadow: "var(--story-shadow)" }}
+      >
+        <h2 id="story-discard-title" className="text-base font-bold">
+          {t("stories.compose.discard.title")}
+        </h2>
+        <p id="story-discard-body" className="mt-1 text-sm" style={{ color: "var(--story-on-media-2)" }}>
+          {t("stories.compose.discard.body")}
+        </p>
+        <div className="mt-4 flex flex-col gap-2">
+          <button ref={keep} type="button" className="story-cbtn !h-11 w-full" data-story-discard-keep="" onClick={onKeep}>
+            {t("stories.compose.discard.keep")}
+          </button>
+          <button
+            type="button"
+            className="story-cbtn !h-11 w-full"
+            data-story-discard-confirm=""
+            style={{ background: "var(--color-danger)", color: "var(--color-on-danger)" }}
+            onClick={onDiscard}
+          >
+            {t("stories.compose.discard.confirm")}
+          </button>
         </div>
       </div>
-    </Dialog>
+    </div>
   );
 }
 
@@ -528,7 +1405,11 @@ function BackgroundPicker({
 }) {
   const { t } = useTranslation();
   return (
-    <div role="radiogroup" aria-label={t("stories.compose.background")} className="flex flex-wrap gap-2.5">
+    <div
+      role="radiogroup"
+      aria-label={t("stories.compose.background")}
+      className="absolute inset-x-0 bottom-3 z-10 flex justify-center gap-2.5 px-3"
+    >
       {STORY_BACKGROUNDS.map((key, index) => (
         <button
           key={key}
@@ -539,13 +1420,18 @@ function BackgroundPicker({
           data-story-bg={key}
           onClick={() => onChange(key)}
           className={cn(
-            "story-text-card h-8 w-8 rounded-full ring-offset-2 ring-offset-ring-offset transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
-            value === key ? "ring-2 ring-text" : "ring-1 ring-border-strong",
+            "story-text-card h-8 w-8 rounded-full transition-transform duration-[var(--duration-fast)] motion-reduce:transition-none",
+            value === key ? "scale-110" : "hover:scale-105",
           )}
+          style={{
+            boxShadow:
+              value === key
+                ? "0 0 0 2px var(--story-card), 0 0 0 4px var(--story-on-media)"
+                : "0 0 0 1.5px var(--story-field-edge)",
+          }}
           data-bg={key}
         />
       ))}
     </div>
   );
 }
-

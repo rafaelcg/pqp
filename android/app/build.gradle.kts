@@ -130,8 +130,8 @@ android {
         // Bump this for every upload, forever. A version code is not a version,
         // it is a monotonic upload counter, and the day it stops moving is the
         // day a fix silently cannot ship.
-        versionCode = 25
-        versionName = "0.4.18"
+        versionCode = 28
+        versionName = "0.4.21"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -537,6 +537,15 @@ dependencies {
     // duplicate.
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.ui)
+    implementation(libs.media3.common)
+    implementation(libs.media3.transformer)
+    implementation(libs.media3.effect)
+
+    implementation(libs.camerax.core)
+    implementation(libs.camerax.camera2)
+    implementation(libs.camerax.lifecycle)
+    implementation(libs.camerax.video)
+    implementation(libs.camerax.view)
 
     implementation(libs.clerk.ui)
     implementation(libs.webrtc)

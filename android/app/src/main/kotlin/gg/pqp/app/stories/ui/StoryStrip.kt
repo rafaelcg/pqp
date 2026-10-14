@@ -68,6 +68,9 @@ fun StoryRing(
     unseen: Boolean,
     modifier: Modifier = Modifier,
     size: Dp = 64.dp,
+    /** The quiet ring's colour: yours is brighter than somebody else's seen one, so a story you posted still reads as there. */
+    seenColor: Color = MaterialTheme.colorScheme.outline,
+    seenWidth: Dp = 1.5.dp,
     content: @Composable () -> Unit,
 ) {
     val fresh by animateFloatAsState(
@@ -75,16 +78,15 @@ fun StoryRing(
         animationSpec = tween(Motion.SETTLE_MILLIS),
         label = "story-ring",
     )
-    val seenColor = MaterialTheme.colorScheme.outline
     val sweep = Brush.sweepGradient(listOf(Palette.Signal, Palette.Warning, Palette.Signal))
     Box(modifier = modifier.size(size), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
             val freshWidth = 2.5.dp.toPx()
-            val seenWidth = 1.5.dp.toPx()
+            val seenPx = seenWidth.toPx()
             drawCircle(
                 color = seenColor,
-                radius = (this.size.minDimension - seenWidth) / 2,
-                style = Stroke(seenWidth),
+                radius = (this.size.minDimension - seenPx) / 2,
+                style = Stroke(seenPx),
                 alpha = 1f - fresh,
             )
             drawCircle(
@@ -163,7 +165,7 @@ private fun OwnBubble(
     ) {
         Box {
             if (own != null) {
-                StoryRing(unseen = false) {
+                StoryRing(unseen = false, seenColor = MaterialTheme.colorScheme.onSurfaceVariant, seenWidth = 2.dp) {
                     Avatar(name = me?.displayName.orEmpty(), url = me?.avatarUrl, size = 56.dp, seed = me?.id ?: "")
                 }
             } else {
@@ -312,3 +314,21 @@ fun StoryFirstRunRow(me: Me?, onPost: () -> Unit, modifier: Modifier = Modifier)
     }
 }
 
+
+/**
+ * One quiet line on a server where nobody has posted and the first-run row is
+ * gone: the way in to the composer, without a bubble's worth of height.
+ */
+@Composable
+fun StoryComposeLink(onPost: () -> Unit, modifier: Modifier = Modifier) {
+    androidx.compose.material3.TextButton(
+        onClick = onPost,
+        modifier = modifier
+            .padding(horizontal = Spacing.sm)
+            .testTag("stories.composeLink"),
+    ) {
+        Icon(PqpIcons.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(Spacing.xs))
+        Text(stringResource(R.string.stories_empty_compact_cta))
+    }
+}

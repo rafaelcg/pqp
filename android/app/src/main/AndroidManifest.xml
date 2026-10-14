@@ -39,6 +39,16 @@
 
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
+    <!-- The story camera (stories/camera/) and the camera in a call. Declared
+         here rather than left to a library's manifest, with the hardware
+         features optional so a device with no (front) camera still installs and
+         the story composer falls back to the photo picker. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
+
     <!-- Android 11+ hides other packages unless asked for. Push checks that Google
          Play services is installed and enabled before it tries to get a token,
          so it can say "this phone has no Play services" instead of retrying. -->

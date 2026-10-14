@@ -2800,6 +2800,16 @@ ALTER TABLE server_members ADD COLUMN IF NOT EXISTS show_on_profile BOOLEAN NOT 
 CREATE INDEX IF NOT EXISTS idx_server_members_profile
   ON server_members (user_id, server_id)
   WHERE show_on_profile;
+
+-- Where THIS member's server rail puts this server (0 is the top). A fact
+-- about one account's view, never shared: the member dragged their own rail
+-- (`PUT /api/servers/order`). NULL is "never placed": every membership before
+-- the feature, and every server joined or created since the last save. The
+-- list sorts placed ones first by position, then the NULLs by the server's
+-- creation date, which is the order the rail always had, so nobody's rail moves
+-- until they drag it, and a new join lands at the bottom beside the "+".
+-- Nullable with no default: a catalog-only change, no table rewrite.
+ALTER TABLE server_members ADD COLUMN IF NOT EXISTS rail_position INTEGER;
 -- Public handles: the `pqp.gg/@rafa` half of an account
 -- ---------------------------------------------------------------------------
 --

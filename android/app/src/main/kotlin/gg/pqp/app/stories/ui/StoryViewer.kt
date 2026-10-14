@@ -28,7 +28,9 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.BoxWithConstraints
+import gg.pqp.app.stories.editor.toolsBottom
+import gg.pqp.app.stories.editor.toolsTop
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
@@ -307,10 +309,15 @@ private fun DeckPage(
     var reporting by remember { mutableStateOf<Story?>(null) }
     var confirmingDelete by remember { mutableStateOf<Story?>(null) }
     var muted by remember { mutableStateOf(true) }
-    val paused = holding || typing || sheetOpen || menuOpen || reporting != null || confirmingDelete != null
+    // Whether the clip on screen has a sound track at all (a clip shot with no microphone has none).
+    var hasAudio by remember(deck) { mutableStateOf(true) }
+    // Somebody a mention opened: the story waits while their card is up.
+    var profile by remember { mutableStateOf<StoryAuthor?>(null) }
+    val paused = holding || typing || sheetOpen || menuOpen || reporting != null || confirmingDelete != null || profile != null
 
     val story = stories?.getOrNull(index)
     val progress = remember(story?.id) { Animatable(0f) }
+    LaunchedEffect(story?.id) { hasAudio = true }
     var videoProgress by remember(story?.id) { mutableFloatStateOf(0f) }
 
     val advance: () -> Unit = {
@@ -353,7 +360,9 @@ private fun DeckPage(
     val pauseLabel = stringResource(R.string.stories_viewer_pause)
     val resumeLabel = stringResource(R.string.stories_viewer_resume)
 
-    Box(modifier.fillMaxSize().background(Color.Black)) {
+    BoxWithConstraints(modifier.fillMaxSize().background(Color.Black)) {
+        // The bar above and below the 9:16 canvas on a taller screen: the bars and the header sit inside it.
+        val gap = gg.pqp.app.stories.editor.CanvasInsets.gap(maxWidth, maxHeight)
         when {
             failed -> Text(
                 stringResource(R.string.error_network),
@@ -394,26 +403,21 @@ private fun DeckPage(
                         }
                         .testTag("stories.viewer.content"),
                 ) {
-                    StoryBody(
+                    StoryCanvas(
                         story = story,
+                        session = session,
                         active = active,
                         paused = paused,
                         muted = muted,
                         onVideoProgress = { videoProgress = it },
                         onVideoEnded = advance,
+                        onHasAudio = { hasAudio = it },
+                        onJoinCall = { call ->
+                            onJoinCall(call.serverId, call.channelId, call.channelName)
+                            onClose()
+                        },
+                        onOpenMention = { profile = it },
                     )
-                    story.call?.let { call ->
-                        CallStickerCard(
-                            call = call,
-                            onJoin = {
-                                onJoinCall(call.serverId, call.channelId, call.channelName)
-                                onClose()
-                            },
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .padding(top = 160.dp),
-                        )
-                    }
                 }
 
                 // Writing a reply: the story pauses and steps back.
@@ -424,7 +428,7 @@ private fun DeckPage(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .statusBarsPadding()
+                        .toolsTop(gap)
                         .graphicsLayer { alpha = chromeAlpha }
                         .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent)))
                         .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
@@ -439,6 +443,7 @@ private fun DeckPage(
                         story = story,
                         contextLabel = contextLabel,
                         muted = muted,
+                        hasSound = hasAudio,
                         onToggleMute = { muted = !muted },
                         menuOpen = menuOpen,
                         onMenu = { menuOpen = it },
@@ -476,8 +481,8 @@ private fun DeckPage(
                         .fillMaxWidth()
                         .graphicsLayer { alpha = chromeAlpha }
                         .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f))))
-                        .navigationBarsPadding()
-                        .imePadding()
+                        // With the keyboard up the reply sits on it; otherwise inside the canvas, not across its edge.
+                        .then(if (typing) Modifier.navigationBarsPadding().imePadding() else Modifier.toolsBottom(gap))
                         .padding(Spacing.md),
                 ) {
                     story.caption?.takeIf { it.isNotBlank() && story.kind != "text" }?.let {
@@ -513,6 +518,10 @@ private fun DeckPage(
                 confirmingDelete = target
             },
         )
+    }
+
+    profile?.let { person ->
+        StoryProfileSheet(person = person, session = session, meId = meId, onDismiss = { profile = null })
     }
 
     reporting?.let { target ->
@@ -582,6 +591,7 @@ private fun Header(
     story: Story,
     contextLabel: String,
     muted: Boolean,
+    hasSound: Boolean,
     onToggleMute: () -> Unit,
     menuOpen: Boolean,
     onMenu: (Boolean) -> Unit,
@@ -616,7 +626,7 @@ private fun Header(
                 maxLines = 1,
             )
         }
-        if (story.kind == "video") {
+        if (story.kind == "video" && hasSound) {
             IconButton(onClick = onToggleMute) {
                 Icon(
                     if (muted) PqpIcons.Deafened else PqpIcons.Listening,
@@ -690,55 +700,21 @@ private fun StoryMenu(
     }
 }
 
-/** What fills the screen: the picture, the clip, or the text card. */
+/** A story's clip, played once over its poster; the canvas decides whether it fills or fits. */
 @OptIn(UnstableApi::class)
 @Composable
-private fun StoryBody(
-    story: Story,
-    active: Boolean,
-    paused: Boolean,
-    muted: Boolean,
-    onVideoProgress: (Float) -> Unit,
-    onVideoEnded: () -> Unit,
-) {
-    val media = story.media
-    when {
-        story.kind == "text" -> TextCard(story.text.orEmpty(), story.background)
-        story.own?.status == "processing" || story.own?.status == "pending" -> Box(Modifier.fillMaxSize()) {
-            Text(
-                stringResource(R.string.stories_own_processing),
-                color = Color.White,
-                modifier = Modifier.align(Alignment.Center),
-            )
-        }
-        story.kind == "video" && media != null -> StoryVideo(
-            url = absolute(media.url),
-            posterUrl = media.posterUrl?.let(::absolute),
-            active = active,
-            paused = paused,
-            muted = muted,
-            onProgress = onVideoProgress,
-            onEnded = onVideoEnded,
-        )
-        media != null -> AsyncImage(
-            model = absolute(media.url),
-            contentDescription = story.caption,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize(),
-        )
-    }
-}
-
-@OptIn(UnstableApi::class)
-@Composable
-private fun StoryVideo(
+internal fun StoryVideo(
     url: String,
     posterUrl: String?,
     active: Boolean,
     paused: Boolean,
     muted: Boolean,
+    /** Near 9:16 (`BaseFit`): cropped to fill the canvas rather than shown whole. */
+    fill: Boolean,
     onProgress: (Float) -> Unit,
     onEnded: () -> Unit,
+    /** Whether the clip has a sound track at all: a clip shot with no microphone has none, and the sound button has nothing to do. */
+    onHasAudio: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     var ready by remember(url) { mutableStateOf(false) }
@@ -754,6 +730,10 @@ private fun StoryVideo(
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) ready = true
                 if (state == Player.STATE_ENDED) onEnded()
+            }
+
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                if (!tracks.isEmpty) onHasAudio(tracks.containsType(androidx.media3.common.C.TRACK_TYPE_AUDIO))
             }
         }
         player.addListener(listener)
@@ -774,6 +754,13 @@ private fun StoryVideo(
     Box(Modifier.fillMaxSize()) {
         AndroidView(
             factory = { PlayerView(it).apply { useController = false; this.player = player } },
+            update = {
+                it.resizeMode = if (fill) {
+                    androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                } else {
+                    androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
+            },
             modifier = Modifier.fillMaxSize(),
         )
         // The poster until the first frame, so the open never flashes black.
@@ -807,7 +794,12 @@ fun TextCard(text: String, background: String?, modifier: Modifier = Modifier, f
 
 /** `STORY_BACKGROUNDS`: two stops each, so a card has depth without an image. */
 fun backgroundBrush(key: String?): Brush {
-    val (top, bottom) = when (key) {
+    val (top, bottom) = backgroundColors(key)
+    return Brush.verticalGradient(listOf(top, bottom))
+}
+
+/** A card's two stops, top then bottom. */
+fun backgroundColors(key: String?): Pair<Color, Color> = when (key) {
         "lime" -> Palette.Signal to Palette.SignalDim
         "ember" -> Color(0xFF7A1F12) to Color(0xFFE0662E)
         "grape" -> Color(0xFF2B1446) to Color(0xFF7B3FB0)
@@ -815,74 +807,10 @@ fun backgroundBrush(key: String?): Brush {
         "ink" -> Color(0xFF0A0A0A) to Color(0xFF2A2F36)
         else -> Color(0xFF0B1020) to Color(0xFF1E2A4A)
     }
-    return Brush.verticalGradient(listOf(top, bottom))
-}
 
 fun textOn(background: String?): Color = when (background) {
     "lime", "sand" -> Palette.Ink
     else -> Color.White
-}
-
-/** The call sticker, live: who is in the room right now, and one tap to join. */
-@Composable
-private fun CallStickerCard(
-    call: gg.pqp.app.stories.StoryCallLive,
-    onJoin: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .padding(horizontal = Spacing.xl)
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium)
-            .background(Color.Black.copy(alpha = 0.55f))
-            .border(1.dp, Palette.Signal.copy(alpha = 0.6f), MaterialTheme.shapes.medium)
-            .padding(Spacing.md)
-            .testTag("stories.callSticker"),
-    ) {
-        Text(
-            text = stringResource(
-                when (call.state) {
-                    "live" -> R.string.stories_call_live
-                    "full" -> R.string.stories_call_full
-                    else -> R.string.stories_call_ended
-                },
-            ).uppercase(),
-            color = Palette.Signal,
-            style = MaterialTheme.typography.labelSmall,
-        )
-        Text(call.channelName, color = Color.White, style = MaterialTheme.typography.titleMedium)
-        if (call.participants.isNotEmpty()) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = Spacing.xs)) {
-                call.participants.take(5).forEach { person ->
-                    Box(Modifier.padding(end = 2.dp)) { AuthorAvatar(person, 22.dp) }
-                }
-                Spacer(Modifier.width(Spacing.xs))
-                Text(
-                    call.participants.joinToString(", ") { it.displayName.substringBefore(' ') },
-                    color = Color.White.copy(alpha = 0.8f),
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        if (call.joinable) {
-            Button(
-                onClick = onJoin,
-                shape = MaterialTheme.shapes.small,
-                colors = ButtonDefaults.buttonColors(containerColor = Palette.Signal, contentColor = Palette.Ink),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = Spacing.sm)
-                    .testTag("stories.callSticker.join"),
-            ) {
-                Icon(PqpIcons.Listening, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(Spacing.xs))
-                Text(stringResource(R.string.stories_call_join))
-            }
-        }
-    }
 }
 
 @Composable

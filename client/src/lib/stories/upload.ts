@@ -1,5 +1,6 @@
 import {
   STORY_IMAGE_MAX_EDGE,
+  STORY_LAYER_MAX_BYTES,
   STORY_MAX_BYTES,
   STORY_MAX_VIDEO_MS,
   STORY_SNIFF_BYTES,
@@ -114,7 +115,8 @@ function readVideo(url: string): Promise<{ durationMs: number; width: number; he
     };
     video.onloadedmetadata = () => {
       const result = {
-        durationMs: Math.round(video.duration * 1000),
+        // A fragmented MP4 straight off a MediaRecorder can report Infinity.
+        durationMs: Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : 0,
         width: video.videoWidth,
         height: video.videoHeight,
       };
@@ -239,6 +241,155 @@ export function mediaInputFor(media: PreparedStoryMedia): StoryMediaInput {
     width: media.width,
     height: media.height,
     ...(media.durationMs !== null ? { durationMs: media.durationMs } : {}),
+  };
+}
+
+export interface PreparedLayerImage {
+  blob: Blob;
+  contentType: "image/jpeg" | "image/webp" | "image/png";
+  width: number;
+  height: number;
+  /** An object URL for the editor. The caller revokes it. */
+  previewUrl: string;
+}
+
+/** A placed photo is shown at 40% of the canvas width, so it never needs the base photo's resolution. */
+export const LAYER_IMAGE_MAX_EDGE = 1080;
+
+/**
+ * A photo to place ON a story. Same checks as the base (type from the bytes,
+ * EXIF gone because the pixels are redrawn) but it keeps transparency: a PNG or
+ * WebP goes up as one, anything else as a JPEG. Over the layer cap (8 MiB) it is
+ * re-encoded once more as a JPEG, which is always smaller.
+ */
+export async function prepareLayerImage(file: Blob): Promise<
+  { ok: true; layer: PreparedLayerImage } | { ok: false; problem: StoryFileProblem }
+> {
+  const sniffed = await sniffFile(file);
+  if (!sniffed || !isStoryImageType(sniffed)) {
+    return { ok: false, problem: { kind: "wrong-type" } };
+  }
+  if (file.size > STORY_MAX_BYTES * 4) {
+    return { ok: false, problem: { kind: "too-big" } };
+  }
+  const sourceUrl = URL.createObjectURL(file);
+  try {
+    const image = await loadImage(sourceUrl);
+    const size = fitWithin(image.naturalWidth, image.naturalHeight, LAYER_IMAGE_MAX_EDGE);
+    const canvas = document.createElement("canvas");
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return { ok: false, problem: { kind: "unreadable" } };
+    }
+    context.drawImage(image, 0, 0, size.width, size.height);
+    const encode = (type: string, quality?: number) =>
+      new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, quality));
+    let blob: Blob | null = null;
+    let contentType: PreparedLayerImage["contentType"] = "image/jpeg";
+    if (sniffed !== "image/jpeg") {
+      const webp = await encode("image/webp", 0.9);
+      if (webp && webp.type === "image/webp") {
+        blob = webp;
+        contentType = "image/webp";
+      } else {
+        blob = await encode("image/png");
+        contentType = "image/png";
+      }
+    }
+    if (!blob || blob.size > STORY_LAYER_MAX_BYTES) {
+      // JPEG has no alpha: paint the transparent pixels dark rather than black-by-accident.
+      context.globalCompositeOperation = "destination-over";
+      context.fillStyle = "black";
+      context.fillRect(0, 0, size.width, size.height);
+      blob = await encode("image/jpeg", 0.88);
+      contentType = "image/jpeg";
+    }
+    if (!blob || blob.size > STORY_LAYER_MAX_BYTES) {
+      return { ok: false, problem: { kind: "too-big" } };
+    }
+    return {
+      ok: true,
+      layer: { blob, contentType, width: size.width, height: size.height, previewUrl: URL.createObjectURL(blob) },
+    };
+  } catch {
+    return { ok: false, problem: { kind: "unreadable" } };
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
+}
+
+/**
+ * A frame taken from the camera, already cropped to 9:16 and encoded. It goes
+ * up as it is: re-encoding a second time would only cost it quality.
+ */
+export function preparedFromStill(still: {
+  blob: Blob;
+  width: number;
+  height: number;
+}): PreparedStoryMedia {
+  return {
+    kind: "image",
+    blob: still.blob,
+    contentType: "image/jpeg",
+    width: still.width,
+    height: still.height,
+    durationMs: null,
+    previewUrl: URL.createObjectURL(still.blob),
+  };
+}
+
+/**
+ * A clip off a MediaRecorder. Its length is the recorder's own clock, because
+ * a fragmented MP4 does not always carry one a `<video>` element can read; the
+ * element is only asked for the picture size, and `fallbackSize` (the camera
+ * track's) answers when it cannot.
+ */
+export async function prepareRecordedClip(
+  clip: { blob: Blob; durationMs: number },
+  limits: { maxBytes: number; maxVideoMs: number; videoEnabled: boolean },
+  fallbackSize: { width: number; height: number } | null,
+): Promise<PrepareResult> {
+  // The bytes decide, not the label a recorder put on them: a WebM never becomes an MP4 here.
+  const sniffed = await sniffFile(clip.blob);
+  const early = checkStoryFile(sniffed, clip.blob.size, limits);
+  if (early) {
+    return { ok: false, problem: early };
+  }
+  // A recorder labels its MP4 with its codecs ("video/mp4;codecs=..."); the wire type is plain.
+  const blob =
+    clip.blob.type === "video/mp4" ? clip.blob : new Blob([clip.blob], { type: "video/mp4" });
+  if (blob.size > limits.maxBytes) {
+    return { ok: false, problem: { kind: "too-big" } };
+  }
+  // The recorder stops at the limit; a few frames of slack is its clock, not a long clip.
+  const durationMs = Math.min(clip.durationMs, limits.maxVideoMs);
+  const previewUrl = URL.createObjectURL(blob);
+  let size = fallbackSize;
+  try {
+    const probed = await readVideo(previewUrl);
+    if (probed.width && probed.height) {
+      size = { width: probed.width, height: probed.height };
+    }
+  } catch {
+    // The camera's own size, above, is enough to post.
+  }
+  if (!size || durationMs <= 0) {
+    URL.revokeObjectURL(previewUrl);
+    return { ok: false, problem: { kind: "unreadable" } };
+  }
+  return {
+    ok: true,
+    media: {
+      kind: "video",
+      blob,
+      contentType: "video/mp4",
+      width: size.width,
+      height: size.height,
+      durationMs,
+      previewUrl,
+    },
   };
 }
 
