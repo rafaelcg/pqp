@@ -220,6 +220,82 @@ final class StoryCameraTests: XCTestCase {
         XCTAssertTrue(StoryCameraEngineFactory.make(recordsAudio: true) is AVStoryCameraEngine)
     }
 
+    // MARK: - The main thread never waits on the camera
+    //
+    // The report: leaving the editor after a video froze the app on a dimmed
+    // camera screen. Opening the next camera did device discovery (a round trip
+    // to the camera daemon) and `queue.sync` reads ON THE MAIN THREAD, in the
+    // middle of the transition, while the daemon was still stopping the
+    // previous session. These tests pin where that work now happens. They
+    // cannot run a real capture session on a simulator; they can say which
+    // thread asks, and that nothing asks while the screen is being built.
+
+    /// Records who looked for a camera, and from which thread.
+    private final class DiscoverySpy: @unchecked Sendable {
+        private let lock = NSLock()
+        private var onMain: [Bool] = []
+        var calls: Int { lock.withLock { onMain.count } }
+        var anyOnMain: Bool { lock.withLock { onMain.contains(true) } }
+        func look(_ position: StoryCameraPosition) -> AVCaptureDevice? {
+            lock.withLock { onMain.append(Thread.isMainThread) }
+            return nil
+        }
+    }
+
+    func testBuildingTheEngineAsksNothingOfTheCameraDaemon() {
+        let spy = DiscoverySpy()
+        _ = AVStoryCameraEngine(recordsAudio: true, discovery: { spy.look($0) })
+        XCTAssertEqual(spy.calls, 0, "init runs on the main actor in the middle of a transition: no discovery there")
+    }
+
+    func testStartingLooksForTheCameraOffTheMainThread() async {
+        let spy = DiscoverySpy()
+        let engine = AVStoryCameraEngine(recordsAudio: true, discovery: { spy.look($0) })
+        do {
+            try await engine.start()
+            XCTFail("There is no camera: starting must say so")
+        } catch {
+            XCTAssertEqual(error as? StoryCameraFailure, .noDevice)
+        }
+        XCTAssertGreaterThan(spy.calls, 0)
+        XCTAssertFalse(spy.anyOnMain, "Discovery is on the capture queue, never on the main thread")
+    }
+
+    func testFlippingLooksForTheOtherCameraOffTheMainThread() async {
+        let spy = DiscoverySpy()
+        let engine = AVStoryCameraEngine(recordsAudio: true, discovery: { spy.look($0) })
+        await engine.flip()
+        XCTAssertGreaterThan(spy.calls, 0)
+        XCTAssertFalse(spy.anyOnMain)
+        XCTAssertEqual(engine.position, .back, "No second camera: the flip does not happen")
+    }
+
+    func testDevicePresenceIsAskedOffTheMainThread() async {
+        // The async form exists so the answer can be slow without the screen
+        // being; on a simulator it simply says there is no camera.
+        let has = await StoryCameraEngineFactory.hasCameraDevice()
+        XCTAssertFalse(has)
+    }
+
+    func testEverySessionRunsOnTheSameQueue() {
+        // A new camera's start waits behind the old one's stop instead of
+        // racing it on the device.
+        XCTAssertTrue(StoryCaptureCore().queue === StoryCaptureCore().queue)
+    }
+
+    func testStoppingWhenNothingIsRecordingDoesNotLeaveTheStopWaiting() async {
+        // A release path awaits the clip before it lets go of the camera: a
+        // stop that finds nothing recording has to answer, or the camera is
+        // never released and the next open finds it busy.
+        let engine = AVStoryCameraEngine(recordsAudio: false, discovery: { _ in nil })
+        let answered = expectation(description: "the stop is answered")
+        Task { @MainActor in
+            do { _ = try await engine.stopRecording() } catch {}
+            answered.fulfill()
+        }
+        await fulfillment(of: [answered], timeout: 5)
+    }
+
     // MARK: - Trimming a long video
 
     func testALongVideoIsCutToTheWindowTheTrimmerChose() async throws {

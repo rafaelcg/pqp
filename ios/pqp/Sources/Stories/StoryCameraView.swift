@@ -404,9 +404,14 @@ struct StoryCameraView: View {
             running = false
         }
         guard !running else { return }
+        // Asked off the main actor: this runs in the middle of the transition
+        // back from the editor, right after the previous camera was stopped,
+        // and the camera daemon can take its time to answer.
+        let hasDevice = await StoryCameraEngineFactory.hasCameraDevice()
+        guard current() else { return }
         access = StoryCameraAccess.resolve(
             status: StoryCameraEngineFactory.authorizationStatus,
-            hasDevice: StoryCameraEngineFactory.hasCameraDevice
+            hasDevice: hasDevice
         )
         if access == .needsPrompt {
             let granted = await StoryCameraEngineFactory.requestAccess()
