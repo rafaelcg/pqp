@@ -109,8 +109,10 @@ describe("BotActionCard", () => {
 
   it("marks the chosen answer once it is answered, and drops the buttons when it runs out", () => {
     const answered = render({ ...question, state: "answered", answer: 1 }, { viewer: ASKER });
+    // One line: who chose what, and not the answers they passed over.
     expect(answered).toContain("@rafa chose");
-    expect(answered).toContain('aria-label="Chosen"');
+    expect(answered).toContain("Memes");
+    expect(answered).not.toContain("Geral");
     expect(answered).not.toContain("<button");
     const expired = render(
       { ...question, expiresAt: new Date(Date.now() - 1000).toISOString() },
@@ -118,6 +120,59 @@ describe("BotActionCard", () => {
     );
     expect(expired).toContain("Question expired");
     expect(expired).not.toContain("<button");
+  });
+
+  it("folds a finished plan to one line, with its steps behind a toggle", () => {
+    const html = render({
+      ...waitingPlan,
+      state: "confirmed",
+      items: [
+        { tool: "edit_channel", label: "Editar #geral", status: "ok", detail: null },
+        { tool: "edit_channel", label: "Editar #memes", status: "ok", detail: null },
+      ],
+    });
+    expect(html).toContain("2 actions done");
+    expect(html).toContain("Confirmed by @rafa");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("Show steps");
+    expect(html).not.toContain("Editar");
+  });
+
+  it("names the step itself when a finished request had only one", () => {
+    const html = render({
+      kind: "result",
+      items: [{ tool: "pin_message", label: "Fixar a mensagem", status: "ok", detail: null }],
+    });
+    expect(html).toContain("Fixar a mensagem");
+    expect(html).not.toContain("Show steps");
+  });
+
+  it("keeps a card open while it runs, and when a step failed", () => {
+    const running = render({
+      ...waitingPlan,
+      state: "confirmed",
+      items: [
+        { tool: "edit_channel", label: "Editar #geral", status: "ok", detail: null },
+        { tool: "edit_channel", label: "Editar #memes", status: "pending", detail: null },
+      ],
+    });
+    expect(running).toContain("Editar #memes".slice(0, 6));
+    expect(running).not.toContain("Show steps");
+    const failed = render({
+      kind: "result",
+      items: [
+        { tool: "edit_channel", label: "Editar #geral", status: "ok", detail: null },
+        { tool: "delete_channel", label: "Apagar #velho", status: "failed", detail: "Forbidden" },
+      ],
+    });
+    expect(failed).toContain("Forbidden");
+    expect(failed).not.toContain("Show steps");
+  });
+
+  it("lays a question's answers side by side", () => {
+    const html = render(question, { viewer: ASKER });
+    expect(html).toContain("flex-wrap");
+    expect(html.match(/<button/g)).toHaveLength(2);
   });
 
   it("plays its entrance only when it just arrived", () => {

@@ -6075,6 +6075,8 @@
   "chat.botCard.pickOne": "Elige una",
   "chat.botCard.orOwnWords": "o responde con tus palabras",
   "chat.botCard.askFor": "Pregunta para {who}",
+  "chat.botCard.showSteps": "Ver pasos",
+  "chat.botCard.hideSteps": "Ocultar",
   "qaBots.title": "Bots: every state",
   "qaBots.cards": "Plan and result cards",
   "qaBots.asks": "Questions",

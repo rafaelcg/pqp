@@ -6006,6 +6006,8 @@
   "chat.botCard.pickOne": "Escolha uma",
   "chat.botCard.orOwnWords": "ou responda com suas palavras",
   "chat.botCard.askFor": "Pergunta pro {who}",
+  "chat.botCard.showSteps": "Ver passos",
+  "chat.botCard.hideSteps": "Esconder",
   "qaBots.title": "Bots: todos os estados",
   "qaBots.cards": "Cartões de plano e resultado",
   "qaBots.asks": "Perguntas",

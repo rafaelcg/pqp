@@ -1,6 +1,7 @@
 import type { BotActionCard as BotActionCardData, BotActionItem, BotNotice } from "@pqp/shared";
 import {
   Check,
+  ChevronDown,
   CircleHelp,
   Clock,
   EyeOff,
@@ -91,6 +92,57 @@ function CardHeader({
       </div>
       {trailing}
     </div>
+  );
+}
+
+/**
+ * A settled card in one line: what happened, who decided it, and (for a card
+ * with steps to show) a toggle that opens them. A card only takes room while
+ * it needs somebody, or when something went wrong.
+ */
+function CompactRow({
+  icon: Icon,
+  tone,
+  title,
+  subtitle,
+  trailing,
+}: {
+  icon: LucideIcon;
+  tone: Tone;
+  title: ReactNode;
+  subtitle?: string | null;
+  trailing?: ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-2 px-2.5 py-2">
+      <span className={cn("grid h-6 w-6 shrink-0 place-items-center rounded-[var(--radius-control)]", TILE[tone])}>
+        <Icon className="h-3.5 w-3.5" aria-hidden />
+      </span>
+      {/* Two lines at most: a long answer or step stays readable. */}
+      <p className="line-clamp-2 min-w-0 flex-1 break-words pt-[3px] text-[13px] leading-snug text-text">
+        <span className="font-semibold">{title}</span>
+        {subtitle && <span className="text-text-tertiary"> · {subtitle}</span>}
+      </p>
+      {trailing}
+    </div>
+  );
+}
+
+function StepsToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      onClick={onToggle}
+      className="flex shrink-0 items-center gap-1 rounded-[var(--radius-control)] px-1.5 py-1 text-xs text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]"
+    >
+      {t(open ? "chat.botCard.hideSteps" : "chat.botCard.showSteps")}
+      <ChevronDown
+        className={cn("h-3.5 w-3.5 transition-transform duration-[var(--duration-fast)] motion-reduce:transition-none", open && "rotate-180")}
+        aria-hidden
+      />
+    </button>
   );
 }
 
@@ -213,6 +265,7 @@ export function BotActionCard({
   const [fresh] = useState(() => Date.now() - new Date(createdAt).getTime() < FRESH_MS);
   const { t, locale } = useTranslation();
   const expired = useExpired(card.expiresAt, card.kind !== "result" && !card.state);
+  const [open, setOpen] = useState(false);
 
   if (card.kind === "ask") {
     return (
@@ -301,10 +354,11 @@ export function BotActionCard({
       ) : null
     ) : null;
 
-  return (
-    <CardFrame kind={card.kind} fresh={fresh} calling={planState === "waiting" && mine}>
-      <CardHeader {...header} trailing={trailing} />
-      <ol className="space-y-1.5 px-3 pb-3 pt-1">
+  // Done, cancelled or expired, with nothing that failed: one line. A step
+  // that failed, or may not have finished, keeps the card open so it is seen.
+  const settled = struck || (!running && planState !== "waiting" && failed === 0 && unknown === 0);
+  const steps = (
+      <ol className={cn("space-y-1.5 px-3 pb-3", settled ? "pt-0.5" : "pt-1")}>
         {card.items.map((item, index) => {
           const firstPending = running && item.status === "pending" && index === total - pending;
           const destructive = planState === "waiting" && DESTRUCTIVE_TOOLS.has(item.tool);
@@ -340,6 +394,28 @@ export function BotActionCard({
           );
         })}
       </ol>
+  );
+
+  if (settled) {
+    const single = total === 1 && !struck;
+    return (
+      <CardFrame kind={card.kind} fresh={fresh} calling={false}>
+        <CompactRow
+          icon={header.icon}
+          tone={header.tone}
+          title={single ? <StepLabel label={card.items[0]!.label} struck={false} /> : header.title}
+          subtitle={header.subtitle}
+          trailing={single ? null : <StepsToggle open={open} onToggle={() => setOpen((value) => !value)} />}
+        />
+        {open && !single && steps}
+      </CardFrame>
+    );
+  }
+
+  return (
+    <CardFrame kind={card.kind} fresh={fresh} calling={planState === "waiting" && mine}>
+      <CardHeader {...header} trailing={trailing} />
+      {steps}
       {planState === "waiting" &&
         (card.planId && mine ? (
           <PlanButtons planId={card.planId} />
@@ -415,8 +491,8 @@ function useExpired(expiresAt: string | null, active: boolean): boolean {
 /**
  * A question back to the member who called the bot (`ask_member`), with its
  * answers. The question itself is the message's lead, drawn above the card.
- * Only that member gets buttons; a press posts the answer as their own reply,
- * which is what wakes the bot again. Typing an answer works as well.
+ * Only that member gets buttons; a press wakes the bot with the answer and
+ * posts nothing for them. Typing an answer works as well.
  */
 function AskCard({
   card,
@@ -476,6 +552,31 @@ function AskCard({
             subtitle: deadline ? t("chat.botCard.onlyAskedUntil", { who, time: deadline }) : t("chat.botCard.onlyAsked", { who }),
           };
 
+  // Answered or run out: one line. The answer stays readable in it.
+  if (answered || !waiting) {
+    const picked = answered && card.answer !== null ? options[card.answer] : null;
+    return (
+      <CardFrame kind="ask" fresh={fresh} calling={false}>
+        <CompactRow
+          icon={header.icon}
+          tone={header.tone}
+          title={
+            picked ? (
+              <>
+                <span className="font-normal text-text-secondary">{header.title}</span> {picked}
+              </>
+            ) : (
+              header.title
+            )
+          }
+          subtitle={picked ? null : header.subtitle}
+        />
+      </CardFrame>
+    );
+  }
+
+  // The answers side by side, wrapping when they are long: a question with
+  // short answers is two lines tall, not one row per answer.
   return (
     <CardFrame kind="ask" fresh={fresh} calling={mine}>
       <CardHeader
@@ -486,71 +587,42 @@ function AskCard({
           ) : null
         }
       />
-      {mine ? (
-        <div className="flex flex-col gap-1.5 px-3 pb-3 pt-1">
-          {options.map((option, index) => (
+      <div className="flex flex-wrap gap-1.5 px-3 pb-3 pt-1">
+        {options.map((option, index) =>
+          mine ? (
             <button
               key={index}
               type="button"
               disabled={sending !== null}
               onClick={() => void answer(index)}
               className={cn(
-                "flex items-center gap-2.5 rounded-[var(--radius-control)] border px-2.5 py-2 text-left text-[13px] text-text transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)] disabled:cursor-default",
+                "flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[13px] font-medium text-text transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)] disabled:cursor-default",
                 sending === index
                   ? "border-accent bg-accent-soft text-on-accent-soft"
-                  : "border-border bg-surface-2 hover:border-border-strong",
+                  : "border-border-strong bg-surface-2 hover:border-accent hover:bg-accent-soft hover:text-on-accent-soft",
                 sending !== null && sending !== index && "text-text-tertiary",
                 fresh && "bot-step-in",
               )}
               style={{ animationDelay: `${index * STAGGER_MS}ms` }}
             >
-              {sending === index ? (
-                <Loader2 className="h-5 w-5 shrink-0 motion-safe:animate-spin" aria-hidden />
-              ) : (
-                <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-border-strong text-[10px] font-semibold text-text-secondary">
-                  {index + 1}
-                </span>
-              )}
+              {sending === index && <Loader2 className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" aria-hidden />}
               <span className="min-w-0 break-words">{option}</span>
             </button>
-          ))}
-          {error && (
-            <span role="alert" className="text-xs text-danger">
-              {t(error)}
+          ) : (
+            <span
+              key={index}
+              className="max-w-full break-words rounded-full border border-border px-3 py-1.5 text-[13px] text-text-secondary"
+            >
+              {option}
             </span>
-          )}
-        </div>
-      ) : (
-        <ol className="space-y-1.5 px-3 pb-3 pt-1">
-          {options.map((option, index) => {
-            const chosen = answered && card.answer === index;
-            return (
-              <li
-                key={index}
-                className={cn(
-                  "flex items-start gap-2.5 text-[13px] leading-snug",
-                  chosen ? "font-semibold text-text" : answered || !waiting ? "text-text-tertiary" : "text-text",
-                )}
-              >
-                {chosen ? (
-                  <span
-                    className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-success-soft text-on-success-soft"
-                    aria-label={t("chat.botCard.chosen")}
-                    role="img"
-                  >
-                    <Check className="h-3 w-3" strokeWidth={3} aria-hidden />
-                  </span>
-                ) : (
-                  <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-border-strong text-[10px] font-semibold text-text-secondary">
-                    {index + 1}
-                  </span>
-                )}
-                <span className="min-w-0 break-words pt-px">{option}</span>
-              </li>
-            );
-          })}
-        </ol>
-      )}
+          ),
+        )}
+        {error && (
+          <span role="alert" className="w-full text-xs text-danger">
+            {t(error)}
+          </span>
+        )}
+      </div>
     </CardFrame>
   );
 }
