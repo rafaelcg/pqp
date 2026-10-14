@@ -167,8 +167,9 @@ protocol StoryPostBackend: Sendable {
     /// Publishes; answers the story's status (`live`, or `processing` for a
     /// video whose frames are still being made).
     func publish(storyId: String) async throws -> String?
-    /// Where a published story stands now; nil when it is gone or unknown.
-    func storyStatus(id: String) async -> String?
+    /// Where a published story stands now. nil: the server has no such story
+    /// (gone). A request that fails throws, which is not an answer.
+    func storyStatus(id: String) async throws -> String?
     /// Best effort: the server's own sweep is the backstop.
     func delete(storyId: String) async
     /// PUT a file, reporting the bytes sent so far.
@@ -211,8 +212,8 @@ struct LiveStoryPostBackend: StoryPostBackend {
         try await api.publishStory(id: storyId).own?.status
     }
 
-    func storyStatus(id: String) async -> String? {
-        try? await api.stories(ids: [id]).first?.own?.status
+    func storyStatus(id: String) async throws -> String? {
+        try await api.stories(ids: [id]).first?.own?.status
     }
 
     func delete(storyId: String) async {
@@ -689,13 +690,23 @@ final class StoryPostQueue {
         pump()
     }
 
+    /// Asks until the story is live. A failed ask is not an answer (the ring
+    /// stays and it asks again); the gaps grow, so a slow video is not a
+    /// request every two seconds, and after about three minutes the ring goes
+    /// and the strip's own read says what is true.
     private func waitUntilLive(_ id: String, storyId: String) async {
-        // Up to about three minutes; a story that will not go live is the
-        // server's to say, not a ring that spins for ever.
-        for _ in 0..<90 {
-            try? await Task.sleep(for: processingPoll)
+        var delay = processingPoll
+        var waited: Duration = .zero
+        while waited < processingPoll * 90 {
+            try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
-            if await backend.storyStatus(id: storyId) != "processing" { break }
+            waited += delay
+            do {
+                if try await backend.storyStatus(id: storyId) != "processing" { break }
+            } catch {
+                // The ask failed: not an answer. Again, a little later.
+            }
+            delay = min(processingPoll * 5, delay * 3 / 2)
         }
         guard !Task.isCancelled, job(id: id) != nil else { return }
         watchers[id] = nil

@@ -700,6 +700,8 @@ struct StoryViewer: View {
     /// A story with no picture to wait for is ready at once; one that has, is
     /// ready when its first frame is on screen. Late by 300 ms, a spinner; a
     /// clip that cannot load does not hold the queue for ever.
+    private static let firstFrameGiveUpMs = 20_000
+
     private func watchFirstFrame() async {
         guard let story = current else { return }
         waitingId = nil
@@ -710,9 +712,17 @@ struct StoryViewer: View {
         try? await Task.sleep(for: .milliseconds(300))
         guard !Task.isCancelled, !readyIds.contains(story.id) else { return }
         waitingId = story.id
+        var waited = 300
         while !Task.isCancelled, !readyIds.contains(story.id) {
             if story.isVideo, player?.currentItem?.status == .failed { readyIds.insert(story.id) }
             try? await Task.sleep(for: .milliseconds(250))
+            waited += 250
+            // Nothing after twenty seconds (a request that stalls without
+            // failing): skip it rather than hold the queue for ever.
+            if waited >= Self.firstFrameGiveUpMs, !readyIds.contains(story.id), !Task.isCancelled, current?.id == story.id {
+                next()
+                return
+            }
         }
     }
 

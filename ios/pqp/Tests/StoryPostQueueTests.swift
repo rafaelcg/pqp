@@ -40,6 +40,8 @@ final class StoryPostQueueTests: XCTestCase {
         var publishStatus: String? = "live"
         var processingChecks = 0
         private var statusChecks = 0
+        /// This many status asks fail like a dead connection.
+        var failStatusChecks = 0
         /// This many creates fail like a dead connection, then they work.
         var failCreatesLeft = 0
         var withUploads = true
@@ -123,8 +125,15 @@ final class StoryPostQueueTests: XCTestCase {
             }
         }
 
-        func storyStatus(id: String) async -> String? {
-            locked {
+        func storyStatus(id: String) async throws -> String? {
+            if locked({ () -> Bool in
+                guard failStatusChecks > 0 else { return false }
+                failStatusChecks -= 1
+                return true
+            }) {
+                throw APIError.transport("offline")
+            }
+            return locked {
                 if statusChecks < processingChecks {
                     statusChecks += 1
                     return "processing"
@@ -155,6 +164,7 @@ final class StoryPostQueueTests: XCTestCase {
         func snapshot() -> (requests: [CreateStoryRequest], published: [String], deleted: [String], puts: Int) {
             locked { (requests, published, deleted, putCount) }
         }
+        func failNextStatusChecks(_ count: Int) { locked { failStatusChecks = count } }
         func setProcessing(checks: Int) { locked { publishStatus = "processing"; processingChecks = checks } }
         func failNextCreates(_ count: Int) { locked { failCreatesLeft = count } }
         func setRefuseClaims(_ status: Int?, times: Int = .max) { locked { refuseClaims = status; refusals = times } }
@@ -385,6 +395,20 @@ final class StoryPostQueueTests: XCTestCase {
         XCTAssertTrue(store.loadAll().isEmpty, "Nothing left to send, so nothing on disk")
         try await waitUntil("the story to go live") { posts.publishedCount == 1 }
         XCTAssertTrue(posts.jobs.isEmpty)
+    }
+
+    /// A status ask that fails is not an answer: the ring stays and asks again.
+    func testAFailedStatusAskDoesNotClearTheRing() async throws {
+        let backend = FakeBackend(storyId: storyId)
+        backend.setProcessing(checks: 1)
+        backend.failNextStatusChecks(2)
+        let posts = StoryPostQueue(backend: backend, store: store, usesBackgroundTime: false, processingPoll: .milliseconds(20))
+        let id = try posts.enqueue(request: try photoRequest(), base: photo, layers: [:], userId: me)
+        try await waitUntil("the job to be processing") { posts.job(id: id)?.phase == .processing }
+        try await Task.sleep(for: .milliseconds(70))
+        XCTAssertEqual(posts.job(id: id)?.phase, .processing, "Two asks failed: still not live as far as it knows")
+        XCTAssertEqual(posts.publishedCount, 0)
+        try await waitUntil("the story to go live", timeout: 8) { posts.publishedCount == 1 }
     }
 
     func testDiscardingWhileProcessingDeletesTheStory() async throws {
