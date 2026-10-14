@@ -4457,3 +4457,105 @@ html[data-immersive-stage] [data-immersive-hide] {
     animation: bot-pop 0.52s var(--ease-emphasized) both;
   }
 }
+
+/* Chat arrivals. Nothing in the conversation should pop into place: a new
+   message rises in, and a row that comes and goes under the log (typing, a
+   bot at work, a notice) opens and closes its own height, so the messages
+   above slide instead of jumping. `Reveal` (`components/ui/reveal.tsx`)
+   drives the second; a card's sections use `.chat-collapse`. Motion off:
+   everything is simply there, or not. */
+@keyframes chat-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chat-reveal-in {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+
+@keyframes chat-reveal-out {
+  from {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+.chat-reveal {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.chat-reveal > *,
+.chat-collapse > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.chat-collapse[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-msg-in {
+    animation: chat-msg-in 0.26s var(--ease-emphasized) both;
+  }
+
+  .chat-reveal[data-state="open"] {
+    animation: chat-reveal-in var(--duration-slow) var(--ease-emphasized) both;
+  }
+
+  .chat-reveal[data-state="closed"] {
+    animation: chat-reveal-out var(--duration-base) var(--ease-standard) both;
+  }
+
+  /* Swapped content (a label, a header) fades in where the old one was. */
+  .chat-swap-in {
+    animation: fade-in var(--duration-base) var(--ease-standard) both;
+  }
+
+  .chat-collapse {
+    transition:
+      grid-template-rows var(--duration-slow) var(--ease-emphasized),
+      opacity var(--duration-base) var(--ease-standard),
+      visibility 0s linear var(--duration-slow);
+  }
+
+  .chat-collapse[data-open="true"] {
+    transition:
+      grid-template-rows var(--duration-slow) var(--ease-emphasized),
+      opacity var(--duration-base) var(--ease-standard) 60ms,
+      visibility 0s;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-reveal[data-state="closed"] {
+    display: none;
+  }
+}

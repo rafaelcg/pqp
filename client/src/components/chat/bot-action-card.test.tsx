@@ -135,7 +135,8 @@ describe("BotActionCard", () => {
     expect(html).toContain("Confirmed by @rafa");
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("Show steps");
-    expect(html).not.toContain("Editar");
+    // The steps are there to unfold, folded away (hidden from everyone).
+    expect(html).toMatch(/class="chat-collapse" data-open="false"><div><ol[^>]*>.*Editar/);
   });
 
   it("names the step itself when a finished request had only one", () => {

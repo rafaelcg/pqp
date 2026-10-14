@@ -83,6 +83,7 @@ import {
   expandCustomEmoji,
 } from "@/lib/server-emoji";
 import { ThreadChip } from "@/components/chat/thread-chip";
+import { Reveal } from "@/components/ui/reveal";
 import {
   ContextMenu,
   type ContextMenuItemDef,
@@ -2326,7 +2327,9 @@ export const MessageList = memo(function MessageList({
         onClose={() => setBulkConfirmOpen(false)}
       />
 
-      {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
+      <Reveal show={!!botNotice}>
+        {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
+      </Reveal>
       <TypingIndicator users={typingUsers} authors={authors} />
 
       {jumpNotice && (
@@ -2644,24 +2647,23 @@ function TypingIndicator({
   }
   const bots = users.filter((user) => user.activity);
   const people = users.filter((user) => !user.activity);
-  if (users.length === 0) {
-    return null;
-  }
-  if (people.length === 0) {
-    return <BotActivityRows users={bots} authors={authors} />;
-  }
   const names = people.map((user) => user.displayName);
   const label =
-    names.length === 1
-      ? t("chat.typing_one", { name: names[0]! })
-      : names.length === 2
-        ? t("chat.typing_two", { name: names[0]!, other: names[1]! })
-        : t("chat.typing_other", { count: names.length });
+    names.length === 0
+      ? ""
+      : names.length === 1
+        ? t("chat.typing_one", { name: names[0]! })
+        : names.length === 2
+          ? t("chat.typing_two", { name: names[0]!, other: names[1]! })
+          : t("chat.typing_other", { count: names.length });
 
+  // Both open and close their own height, so the log above slides rather
+  // than jumps when somebody starts or stops typing.
   return (
     <>
+    <Reveal show={people.length > 0}>
     <p
-      className="shrink-0 px-4 pb-1 text-xs text-paper-muted"
+      className="px-4 pb-1 text-xs text-paper-muted"
       aria-live="polite"
     >
       <span className="inline-flex items-center gap-1.5">
@@ -2677,7 +2679,10 @@ function TypingIndicator({
         {label}…
       </span>
     </p>
-    {bots.length > 0 && <BotActivityRows users={bots} authors={authors} />}
+    </Reveal>
+    <Reveal show={bots.length > 0}>
+      <BotActivityRows users={bots} authors={authors} />
+    </Reveal>
     </>
   );
 }
@@ -2752,7 +2757,7 @@ function BotActivityRows({
     return () => clearTimeout(timer);
   });
   return (
-    <div className="flex shrink-0 flex-col gap-2 px-4 pb-2" aria-live="polite">
+    <div className="flex flex-col gap-2 px-4 pb-2 pt-1" aria-live="polite">
       {users.map((user) => {
         const tool = user.activity?.tool ?? null;
         const slow = tool === null && now - (started.current.get(user.userId) ?? now) > BOT_SLOW_MS;
@@ -2780,13 +2785,17 @@ function BotActivityRows({
                 {user.displayName}
                 <ServerBotTags />
               </p>
+              {/* Keyed by what it says: a new step fades in over the last. */}
               {tool === null ? (
-                <p className="text-sm text-text-secondary">
+                <p key={key} className="chat-swap-in text-sm text-text-secondary">
                   <span className="bot-shimmer">{t(key, { name: user.displayName })}</span>
                   {slow && <span className="block text-xs text-text-tertiary">{t("chat.botActivity.slowHint")}</span>}
                 </p>
               ) : (
-                <span className="mt-0.5 inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-sm text-text-secondary">
+                <span
+                  key={key}
+                  className="chat-swap-in mt-0.5 inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-sm text-text-secondary"
+                >
                   <Loader2 className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" aria-hidden />
                   <span className="bot-shimmer">{t(key, { name: user.displayName })}</span>
                 </span>
@@ -3093,6 +3102,10 @@ const MessageRow = memo(function MessageRow({
   const [freshBotReply] = useState(
     () => serverBot && Date.now() - new Date(message.createdAt).getTime() < 10_000,
   );
+  // Any message that just arrived rises in; history, a channel opened on old
+  // messages, and a row that remounts later are drawn still. Read once per
+  // mount, so the optimistic copy turning into the real one does not replay it.
+  const [arrived] = useState(() => Date.now() - new Date(message.createdAt).getTime() < 8_000);
   // A server bot's action card replaces its plain-text copy in the body. Only
   // for a bot author: the field is server-written, and this keeps it that way
   // on screen too.
@@ -3557,6 +3570,7 @@ const MessageRow = memo(function MessageRow({
           data-group-start={startsGroup ? "" : undefined}
           className={cn(
             "group relative flex items-start gap-0 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+            arrived && "chat-msg-in",
             stream ? "px-3" : "px-5",
             zebra && "bg-surface-1/60",
             stream ? "py-0.5" : startsGroup ? "mt-[var(--chat-group-gap)] pt-1" : "pt-px",

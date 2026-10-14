@@ -899,7 +899,7 @@ function TestChat({
         )}
         {messages.map((message, index) =>
           message.from === "bot" ? (
-            <div key={index} className="flex gap-2.5">
+            <div key={index} className="chat-msg-in flex gap-2.5">
               <BotFace color={draft.color} face={draft.face} className="h-7 w-7" />
               <div className="min-w-0">
                 <p className="flex items-center gap-1.5 text-xs font-bold text-text">
@@ -910,13 +910,13 @@ function TestChat({
               </div>
             </div>
           ) : (
-            <p key={index} className="ml-auto w-fit max-w-[80%] rounded-[var(--radius-card)] bg-surface-2 px-3 py-1.5 text-sm text-text">
+            <p key={index} className="chat-msg-in ml-auto w-fit max-w-[80%] rounded-[var(--radius-card)] bg-surface-2 px-3 py-1.5 text-sm text-text">
               {message.text}
             </p>
           ),
         )}
         {waiting && (
-          <p className="flex items-center gap-2 text-sm text-text-tertiary">
+          <p className="chat-swap-in flex items-center gap-2 text-sm text-text-tertiary">
             <BotFace color={draft.color} face="falando" className="h-7 w-7" />
             <span className="bot-shimmer">{t("chat.botActivity.thinkingPill")}</span>
           </p>
