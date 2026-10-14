@@ -61,14 +61,14 @@ class StoryOutboxTest {
                 entry("b", StoryOutboxRules.Status.Uploading, 0.2f),
             ),
         )
-        assertEquals(StoryOutboxRules.Bubble.Posting(0.2f, "a"), behind)
+        assertEquals(StoryOutboxRules.Bubble.Posting(0.2f, "b"), behind)
         val unknown = StoryOutboxRules.bubble(
             listOf(
                 entry("a", StoryOutboxRules.Status.Uploading, 0.8f),
                 entry("b", StoryOutboxRules.Status.Preparing),
             ),
         )
-        assertEquals(StoryOutboxRules.Bubble.Posting(null, "a"), unknown)
+        assertEquals(StoryOutboxRules.Bubble.Posting(null, "b"), unknown)
     }
 
     // --- the number ---

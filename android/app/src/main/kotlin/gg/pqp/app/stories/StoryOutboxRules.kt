@@ -45,10 +45,10 @@ object StoryOutboxRules {
         entries.firstOrNull { it.status == Status.Failed }?.let { return Bubble.Failed(it.id) }
         val going = entries.filter { it.status != Status.Failed }
         if (going.isEmpty()) return Bubble.Idle
-        // Several at once (rare): the one furthest behind is the honest number.
-        val fractions = going.map { it.fraction }
-        val shown = if (fractions.any { it == null }) null else fractions.filterNotNull().minOrNull()
-        return Bubble.Posting(shown, going.first().id)
+        // Several at once (rare): the one furthest behind is the honest number, and a tap stops that same one.
+        val unknown = going.firstOrNull { it.fraction == null }
+        val behind = unknown ?: going.minBy { it.fraction ?: 0f }
+        return Bubble.Posting(behind.fraction, behind.id)
     }
 
     /** Bytes over total, held under [RING_CAP]; null when there is nothing to send. */

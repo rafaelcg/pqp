@@ -338,8 +338,12 @@ fun StoryComposer(
     // "Postar" hands the story to the outbox and closes the composer: the files, the request, the
     // upload and the publish all happen there, with the own ring showing how far along it is.
     val outbox = remember(session, context) { StoryOutbox.of(context, session, store) }
+    // A second tap before the composer has gone must not hand the same story over twice.
+    val handedOver = remember { booleanArrayOf(false) }
     val doPost: () -> Unit = post@{
         val userId = meId ?: return@post
+        if (handedOver[0]) return@post
+        handedOver[0] = true
         // Already ticked and shown (see above); this only keeps what is sent identical to what the sheet showed.
         val audience = StoriesRules.withSticker(targets, stickerServerId)
         outbox.enqueue(

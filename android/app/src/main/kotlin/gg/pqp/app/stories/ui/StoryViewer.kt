@@ -916,8 +916,10 @@ private fun ReplyFooter(session: SessionStore, story: Story, onFocus: (Boolean) 
         reaction = next
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         if (next != null) flash = StoriesRules.reactionGlyph(next)
-        onReacted(next)
-        scope.launch { runCatching { session.api.reactToStory(story.id, next) } }
+        scope.launch {
+            // The preload cache learns of it only when the server did.
+            if (runCatching { session.api.reactToStory(story.id, next) }.isSuccess) onReacted(next)
+        }
     }
     val sentLabel = stringResource(R.string.stories_viewer_sent)
 

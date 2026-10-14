@@ -30,6 +30,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.job
@@ -74,6 +76,13 @@ class StoryPreloader(
     private val wanted = ConcurrentHashMap<String, List<String>>()
     private var planning: Job? = null
 
+    /** Stories whose preload failed, and when: not tried again for a while, so a bad link is not a hot loop. */
+    private val failedAt = ConcurrentHashMap<String, Long>()
+
+    /** Set while the story on screen is still loading: nothing is started until the viewer says it is showing. */
+    @Volatile
+    private var paused = false
+
     /** While a viewer is open it is the only one that decides what is fetched: the tray is behind it. */
     @Volatile
     private var viewerOpen = false
@@ -102,10 +111,20 @@ class StoryPreloader(
             val now = System.currentTimeMillis()
             val missing = ids.filterNot { usable(it, now) }
             if (missing.isNotEmpty()) {
+                // What the server no longer returns (deleted, expired) must not be answered from an old copy.
+                missing.forEach { details.remove(it) }
                 session.api.stories(missing).forEach { details[it.id] = Cached(it, System.currentTimeMillis()) }
+                prune(now)
             }
         }
         return ids.mapNotNull { details[it]?.story }
+    }
+
+    /** Details nobody has looked at for a while are dropped, and the bookkeeping that names them with them. */
+    private fun prune(now: Long) {
+        details.entries.removeAll { now - it.value.at > DETAILS_KEEP_MS }
+        done.retainAll(details.keys)
+        failedAt.entries.removeAll { now - it.value > FAILED_RETRY_MS }
     }
 
     /** The viewer saw it: a deck opened again must start after it, not on it. */
@@ -122,6 +141,7 @@ class StoryPreloader(
     fun forget(storyId: String) {
         details.remove(storyId)
         done.remove(storyId)
+        failedAt.remove(storyId)
         running.remove(storyId)?.cancel()
     }
 
@@ -131,12 +151,14 @@ class StoryPreloader(
         running.clear()
         details.clear()
         done.clear()
+        failedAt.clear()
         wanted.clear()
     }
 
     /** A story is on screen: have the next ones ready. Called again on every story the viewer lands on. */
     fun onViewing(decks: List<StoryDeck>, deck: Int, index: Int) {
         viewerOpen = true
+        paused = false
         replan(VIEWER) { computeViewerWindow(decks, deck, index) }
     }
 
@@ -146,6 +168,7 @@ class StoryPreloader(
      */
     fun pause() {
         viewerOpen = true
+        paused = true
         planning?.cancel()
         running.values.forEach { it.cancel() }
         running.clear()
@@ -154,6 +177,7 @@ class StoryPreloader(
     /** The viewer closed: nothing it was waiting for matters now. */
     fun onViewerClosed() {
         viewerOpen = false
+        paused = false
         wanted.remove(VIEWER)
         replan(VIEWER) { emptyList() }
     }
@@ -162,9 +186,14 @@ class StoryPreloader(
     fun onTray(items: List<StoryStripItem>) {
         val rings = StoryPreloadRules.trayRings(items)
         replan(TRAY) {
-            rings.mapNotNull { ring ->
-                val list = runCatching { stories(ring.storyIds.take(MAX_IDS)) }.getOrNull().orEmpty()
-                list.getOrNull(StoriesRules.startIndex(list))?.id
+            // The rings' details are read together, not one round trip after another.
+            coroutineScope {
+                rings.map { ring ->
+                    async {
+                        val list = runCatching { stories(ring.storyIds.take(MAX_IDS)) }.getOrNull().orEmpty()
+                        list.getOrNull(StoriesRules.startIndex(list))?.id
+                    }
+                }.awaitAll().filterNotNull()
             }
         }
     }
@@ -202,8 +231,10 @@ class StoryPreloader(
     /** Make what is running match what is wanted by anybody (the tray and the viewer may both want a story). */
     @Synchronized
     private fun apply() {
+        if (paused) return
+        val now = System.currentTimeMillis()
         val all = (if (viewerOpen) wanted[VIEWER].orEmpty() else wanted[VIEWER].orEmpty() + wanted[TRAY].orEmpty())
-            .distinct().filter { it !in done }
+            .distinct().filter { it !in done && failedAt[it]?.let { at -> now - at < FAILED_RETRY_MS } != true }
         val plan = StoryPreloadRules.plan(all, running.keys)
         plan.cancel.forEach { running.remove(it)?.cancel() }
         plan.start.forEach { id ->
@@ -219,6 +250,7 @@ class StoryPreloader(
                     // A cancelled preload surfaces from the blocking reads as an IO error, not as a cancellation.
                     currentCoroutineContext().ensureActive()
                     Log.w(TAG, "preload $id failed: ${e.message}")
+                    failedAt[id] = System.currentTimeMillis()
                 } finally {
                     // Only if it is still this run: the same story may have been cancelled and started again.
                     running.remove(id, currentCoroutineContext().job)
@@ -268,6 +300,8 @@ class StoryPreloader(
         private const val TRAY = "tray"
         private const val MAX_IDS = 20
         private const val MAX_DECKS_AHEAD = 3
+        private const val FAILED_RETRY_MS = 30_000L
+        private const val DETAILS_KEEP_MS = 30 * 60 * 1000L
 
         @Volatile
         private var instance: StoryPreloader? = null

@@ -129,10 +129,7 @@ suspend fun ApiClient.uploadStoryFile(
     if (upload.headers.keys.none { it.equals("Content-Type", ignoreCase = true) }) {
         builder.header("Content-Type", contentType)
     }
-    // A client of its own for the PUT, sharing the pool and the dispatcher: the socket's send buffer is kept
-    // small so the count the ring draws follows the wire and not the kernel's buffer, which on a slow link
-    // would swallow a whole photo and show "done" long before it is.
-    val call = http.newBuilder().socketFactory(SmallSendBuffers(UPLOAD_SEND_BUFFER)).build().newCall(builder.build())
+    val call = http.newCall(builder.build())
     suspendCancellableCoroutine { continuation ->
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
@@ -152,23 +149,6 @@ suspend fun ApiClient.uploadStoryFile(
             }
         })
     }
-}
-
-private const val UPLOAD_SEND_BUFFER = 96 * 1024
-
-/** Sockets with a bounded send buffer (set before connecting, which is when the kernel honours it). */
-private class SmallSendBuffers(private val bytes: Int) : javax.net.SocketFactory() {
-    private val delegate = getDefault()
-
-    private fun <T : java.net.Socket> T.bounded(): T = apply { sendBufferSize = bytes }
-
-    override fun createSocket(): java.net.Socket = delegate.createSocket().bounded()
-    override fun createSocket(host: String, port: Int): java.net.Socket = delegate.createSocket(host, port).bounded()
-    override fun createSocket(host: String, port: Int, local: java.net.InetAddress, localPort: Int): java.net.Socket =
-        delegate.createSocket(host, port, local, localPort).bounded()
-    override fun createSocket(host: java.net.InetAddress, port: Int): java.net.Socket = delegate.createSocket(host, port).bounded()
-    override fun createSocket(host: java.net.InetAddress, port: Int, local: java.net.InetAddress, localPort: Int): java.net.Socket =
-        delegate.createSocket(host, port, local, localPort).bounded()
 }
 
 /** A file as a request body that says how much of it has gone out. */

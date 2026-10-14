@@ -25,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -117,15 +119,24 @@ class StoryOutbox(
             } else {
                 drafts.list().firstOrNull { it.id == id } ?: return@launch removeEntry(id)
             }
+            // A draft is posted only as the person who made it: never as whoever signed in since.
+            if (draft.userId != (session.phase.value as? SessionPhase.Ready)?.me?.id) {
+                withContext(Dispatchers.IO) { drafts.delete(id) }
+                return@launch removeEntry(id)
+            }
             upload(draft)
         }
     }
 
     /** The person gave up on it: stop sending, forget the draft and its files. */
     fun discard(id: String) {
-        jobs.remove(id)?.cancel()
+        val job = jobs.remove(id)
         pendingInputs.remove(id)
-        scope.launch(Dispatchers.IO) { drafts.delete(id) }
+        // After the job has stopped, so a draft still being written cannot come back after the delete.
+        scope.launch(Dispatchers.IO) {
+            job?.cancelAndJoin()
+            drafts.delete(id)
+        }
         minted.remove(id)?.let { storyId -> scope.launch { runCatching { session.api.deleteStory(storyId) } } }
         removeEntry(id)
     }
@@ -237,7 +248,13 @@ class StoryOutbox(
     private suspend fun finish(draft: StoryDraft) {
         setEntry(draft.id, StoryOutboxRules.Status.Uploading, 1f)
         // The store keeps its strips on the main thread.
-        withContext(Dispatchers.Main) { draft.refreshKeys.distinct().forEach { store.refreshNow(it) } }
+        withContext(Dispatchers.Main) {
+            draft.refreshKeys.distinct().forEach { key ->
+                // A strip that could not be read is asked again a couple of times; the story is live either way.
+                var attempts = 0
+                while (!store.refreshNow(key) && ++attempts < REFRESH_ATTEMPTS) delay(REFRESH_RETRY_MS)
+            }
+        }
         withContext(Dispatchers.IO) { drafts.delete(draft.id) }
         minted.remove(draft.id)
         jobs.remove(draft.id)
@@ -263,6 +280,9 @@ class StoryOutbox(
 
         /** Files are PUT this many at once. */
         private const val UPLOADS_AT_ONCE = 3
+
+        private const val REFRESH_ATTEMPTS = 3
+        private const val REFRESH_RETRY_MS = 1_500L
 
         @Volatile
         private var instance: StoryOutbox? = null

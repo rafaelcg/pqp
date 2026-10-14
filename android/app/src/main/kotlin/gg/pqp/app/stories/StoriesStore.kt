@@ -82,7 +82,7 @@ class StoriesStore(
     }
 
     /** [refresh], for a caller that has to know the strip is current before it goes on. */
-    suspend fun refreshNow(key: String) {
+    suspend fun refreshNow(key: String): Boolean {
         val strip = runCatching {
             if (key == FRIENDS) {
                 session.api.friendsStoryStrip()
@@ -93,11 +93,12 @@ class StoriesStore(
             // 404: the friends routes while the global flag is off. A
             // closed door, not an error worth a log line every refetch.
             Log.w(TAG, "strip $key failed: ${it.message}")
-            return
+            return false
         }
         raw[key] = strip
         publish()
         if (strip.enabled && !noticesAsked) askNotices()
+        return true
     }
 
     private suspend fun askNotices() {
