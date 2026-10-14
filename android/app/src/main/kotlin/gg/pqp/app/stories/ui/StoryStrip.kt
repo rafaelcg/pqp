@@ -48,6 +48,16 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -196,21 +206,49 @@ private fun OwnBubble(
         failed != null -> stringResource(R.string.stories_outbox_failed_title)
         else -> yours
     }
+    val primary: () -> Unit = when {
+        failed != null -> ({ onFailedTap(failed.id) })
+        waiting != null -> ({ onWaitingTap(waiting.id) })
+        // Mid-post there is nothing to compose: a tap is the way to stop it.
+        posting != null -> ({ onPostingTap(posting.id) })
+        own != null -> onOpen
+        else -> onCompose
+    }
+    // The "+" is drawn small, but it is a 48 dp target: a tap in it makes a story, wherever the ring would have opened one.
+    val showsBadge = canPost && posting == null && waiting == null && failed == null
+    val newStory = stringResource(R.string.stories_compose_title)
+    val density = LocalDensity.current
+    val haptics = LocalHapticFeedback.current
+    val latestPrimary by rememberUpdatedState(primary)
+    val latestCompose by rememberUpdatedState(onCompose)
+    val latestBadge by rememberUpdatedState(showsBadge)
+    val latestCanPost by rememberUpdatedState(canPost)
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
             .width(68.dp)
-            .clickable(
-                onClick = when {
-                    failed != null -> ({ onFailedTap(failed.id) })
-                    waiting != null -> ({ onWaitingTap(waiting.id) })
-                    // Mid-post there is nothing to compose: a tap is the way to stop it.
-                    posting != null -> ({ onPostingTap(posting.id) })
-                    own != null -> onOpen
-                    else -> onCompose
-                },
-            )
-            .semantics { contentDescription = spoken }
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { at ->
+                        val x = at.x / density.density
+                        val y = at.y / density.density
+                        if (latestBadge && StoryStripRules.inBadge(x, y)) latestCompose() else latestPrimary()
+                    },
+                    // Holding the ring is the other way to a new story, whatever the ring is showing.
+                    onLongPress = {
+                        if (latestCanPost) {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            latestCompose()
+                        }
+                    },
+                )
+            }
+            .semantics(mergeDescendants = true) {
+                contentDescription = spoken
+                role = Role.Button
+                onClick { primary(); true }
+                if (canPost) onLongClick(label = newStory) { onCompose(); true }
+            }
             .testTag("stories.own"),
     ) {
         Box {
@@ -268,7 +306,6 @@ private fun OwnBubble(
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primary)
                         .border(2.dp, MaterialTheme.colorScheme.background, CircleShape)
-                        .clickable(onClick = onCompose)
                         .testTag("stories.compose"),
                 ) {
                     Icon(
@@ -479,4 +516,15 @@ fun StoryComposeLink(onPost: () -> Unit, modifier: Modifier = Modifier) {
         Spacer(Modifier.width(Spacing.xs))
         Text(stringResource(R.string.stories_empty_compact_cta))
     }
+}
+
+/** Where the own bubble is touched, in dp from its top-left corner (the bubble is 68 dp wide, its ring 64 dp tall). */
+object StoryStripRules {
+    /** The "+" badge sits at the ring's bottom-right: its 48 dp target is the square around it, kept inside the bubble. */
+    const val BADGE_LEFT = 20f
+    const val BADGE_RIGHT = 68f
+    const val BADGE_TOP = 31f
+    const val BADGE_BOTTOM = 79f
+
+    fun inBadge(xDp: Float, yDp: Float): Boolean = xDp in BADGE_LEFT..BADGE_RIGHT && yDp in BADGE_TOP..BADGE_BOTTOM
 }

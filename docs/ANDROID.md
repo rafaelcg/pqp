@@ -2378,6 +2378,10 @@ does with it.
   the process died still claims them. A clip posted
   muted is a different file from the one sent ahead: that one is thrown away and
   the muted clip is sent at "Postar".
+- **The "+" on the own ring** is drawn at 22 dp and touched at 48 dp
+  (`StoryStripRules.inBadge`, kept inside the 68 dp bubble): a tap in that square
+  makes a story, wherever the ring would have opened the stories, and holding the
+  ring is the other way to "Novo story" (also a TalkBack custom action).
 - **Preload.** `StoryPreloader` has the next story ready before the tap: with a
   story open, the next two of the queue (across authors, from where the viewer
   would open each deck) and the first of the next author; with the tray
