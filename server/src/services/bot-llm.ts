@@ -142,25 +142,36 @@ export function botCostMicros(usage: {
 
 // ---------------------------------------------------------------- Anthropic
 
-function toAnthropicMessages(messages: BotMessage[]): Anthropic.MessageParam[] {
-  return messages.map((message): Anthropic.MessageParam => {
+/**
+ * The last two user-side messages carry a cache breakpoint. Every tool turn
+ * sends the whole conversation again plus one assistant turn and its results,
+ * so the newest breakpoint writes the prefix and the one before it reads what
+ * the previous turn wrote. Without them the transcript, the largest part of a
+ * request after the tools, was billed in full on every turn. Two here, plus
+ * the system prompt and the tools, is Anthropic's limit of four.
+ */
+export function toAnthropicMessages(messages: BotMessage[]): Anthropic.MessageParam[] {
+  const cached = new Set(
+    messages
+      .map((message, index) => (message.role === "assistant" ? -1 : index))
+      .filter((index) => index >= 0)
+      .slice(-2),
+  );
+  const cache = (index: number) =>
+    cached.has(index) ? { cache_control: { type: "ephemeral" as const } } : {};
+  return messages.map((message, index): Anthropic.MessageParam => {
     switch (message.role) {
       case "user":
-        if (!message.images?.length) {
-          return { role: "user", content: message.text };
-        }
-        // The images ride in the first message, which every tool turn sends
-        // again: the breakpoint after the text makes those turns cache reads.
         return {
           role: "user",
           content: [
-            ...message.images.map(
+            ...(message.images ?? []).map(
               (image): Anthropic.ImageBlockParam => ({
                 type: "image",
                 source: { type: "base64", media_type: image.mediaType, data: image.data },
               }),
             ),
-            { type: "text", text: message.text, cache_control: { type: "ephemeral" } },
+            { type: "text", text: message.text, ...cache(index) },
           ],
         };
       case "assistant":
@@ -171,11 +182,12 @@ function toAnthropicMessages(messages: BotMessage[]): Anthropic.MessageParam[] {
       case "tool":
         return {
           role: "user",
-          content: message.results.map((result) => ({
+          content: message.results.map((result, resultIndex, all) => ({
             type: "tool_result" as const,
             tool_use_id: result.id,
             content: result.content,
             ...(result.isError ? { is_error: true } : {}),
+            ...(resultIndex === all.length - 1 ? cache(index) : {}),
           })),
         };
     }
