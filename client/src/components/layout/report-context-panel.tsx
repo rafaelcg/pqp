@@ -383,6 +383,9 @@ export function ReportContextPanel({ report, note }: ReportContextPanelProps) {
       } else {
         setActionError(messageOf(err, t("reports.ctx.actions.failed")));
       }
+      // A failure can be ambiguous (the write committed and the response was
+      // lost), so reconcile with the server before offering the action again.
+      await load();
     } finally {
       setBusy(false);
     }
@@ -703,7 +706,10 @@ export function ReportContextPanel({ report, note }: ReportContextPanelProps) {
                 </section>
               )}
 
+              {/* Not while the context is stale (a failed refresh): the
+                  actions it offers may already have happened. */}
               {account &&
+                error === null &&
                 (context.actions.canTerminate ||
                   (serverAction &&
                     (serverAction.canBan || serverAction.canTimeout))) && (

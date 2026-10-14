@@ -46,13 +46,12 @@ import { canAccessChannel, channelVisibleSql } from "./users.js";
  */
 
 const SERVER_MESSAGE_LIMIT = 20;
-/** Candidates read before the server-channel filter: bounds the scan. */
-const SERVER_MESSAGE_SCAN = 200;
+/** How far back the server-message read looks. Bounds the index walk. */
+const SERVER_MESSAGE_WINDOW_DAYS = 90;
 const CONVERSATION_LIMIT = 20;
 const SURROUNDING = 5;
 const OTHER_REPORTS_LIMIT = 20;
 const CONTACT_TIMES_LIMIT = 100;
-const FIRST_HOUR_MS = 60 * 60 * 1000;
 
 export interface ContextViewer {
   id: string;
@@ -118,55 +117,76 @@ async function loadAccount(userId: string, instance: boolean) {
   };
 }
 
-function contactCount(times: Date[], accountCreatedAt: Date) {
-  const limit = accountCreatedAt.getTime() + FIRST_HOUR_MS;
+interface ContactRow {
+  created_at: Date;
+  total: string;
+  first_hour: string;
+}
+
+/**
+ * Totals come from window counts over the WHOLE match, computed before the
+ * LIMIT, so only the returned timestamp samples are capped, never the totals.
+ */
+function contactCount(rows: ContactRow[]) {
   return {
-    total: times.length,
-    firstHour: times.filter((at) => at.getTime() <= limit).length,
-    times: times.slice(0, CONTACT_TIMES_LIMIT).map(iso),
+    total: Number(rows[0]?.total ?? 0),
+    firstHour: Number(rows[0]?.first_hour ?? 0),
+    times: rows.map((row) => iso(row.created_at)),
   };
 }
 
+/**
+ * Conversations the account BEGAN with somebody who is not an accepted friend:
+ * the first message of a 1:1 thread is theirs. Both signals below are scoped
+ * to these, so a call record in a thread somebody else started is not counted
+ * as outreach.
+ */
+const STARTED_CONVERSATIONS_SQL = `started AS (
+  SELECT dp.channel_id, f.created_at AS first_at
+  FROM dm_pairs dp
+  CROSS JOIN LATERAL (
+    SELECT m.author_id, m.created_at FROM messages m
+    WHERE m.channel_id = dp.channel_id
+    ORDER BY m.created_at, m.id LIMIT 1
+  ) f
+  WHERE (dp.low_user_id = $1 OR dp.high_user_id = $1)
+    AND f.author_id = $1
+    AND ${NOT_FRIENDS_SQL(
+      "$1",
+      "CASE WHEN dp.low_user_id = $1 THEN dp.high_user_id ELSE dp.low_user_id END",
+    )}
+)`;
+
+/** The end of the account's first hour, in SQL so no precision is lost. */
+const FIRST_HOUR_END_SQL = `(SELECT created_at + interval '1 hour' FROM users WHERE id = $1)`;
+
 /** Instance lens only. Counts and times, never a name and never a body. */
-async function loadSignals(
-  userId: string,
-  reporterId: string | null,
-  accountCreatedAt: Date,
-) {
+async function loadSignals(userId: string, reporterId: string | null) {
   const pool = getPool();
   const [dms, calls, blocks, reporterBlock] = await Promise.all([
-    // Conversations they began: the first message of a 1:1 thread is theirs.
-    pool.query<{ created_at: Date }>(
-      `SELECT f.created_at
-       FROM dm_pairs dp
-       CROSS JOIN LATERAL (
-         SELECT m.author_id, m.created_at FROM messages m
-         WHERE m.channel_id = dp.channel_id
-         ORDER BY m.created_at, m.id LIMIT 1
-       ) f
-       WHERE (dp.low_user_id = $1 OR dp.high_user_id = $1)
-         AND f.author_id = $1
-         AND ${NOT_FRIENDS_SQL(
-           "$1",
-           "CASE WHEN dp.low_user_id = $1 THEN dp.high_user_id ELSE dp.low_user_id END",
-         )}
-       ORDER BY f.created_at DESC
-       LIMIT 500`,
+    pool.query<ContactRow>(
+      `WITH ${STARTED_CONVERSATIONS_SQL}
+       SELECT first_at AS created_at,
+              COUNT(*) OVER ()::text AS total,
+              (COUNT(*) FILTER (WHERE first_at <= ${FIRST_HOUR_END_SQL}) OVER ())::text AS first_hour
+       FROM started
+       ORDER BY first_at DESC
+       LIMIT ${CONTACT_TIMES_LIMIT}`,
       [userId],
     ),
-    // Missed-call records they left. An answered call leaves nothing.
-    pool.query<{ created_at: Date }>(
-      `SELECT m.created_at
-       FROM dm_pairs dp
-       JOIN messages m ON m.channel_id = dp.channel_id
+    // Missed-call records they left in those conversations. An answered call
+    // leaves nothing. The read is bounded by the account's OWN started
+    // conversations (each walked by the channel index), not by its history.
+    pool.query<ContactRow>(
+      `WITH ${STARTED_CONVERSATIONS_SQL}
+       SELECT m.created_at,
+              COUNT(*) OVER ()::text AS total,
+              (COUNT(*) FILTER (WHERE m.created_at <= ${FIRST_HOUR_END_SQL}) OVER ())::text AS first_hour
+       FROM started s
+       JOIN messages m ON m.channel_id = s.channel_id
         AND m.author_id = $1 AND m.body = $2
-       WHERE (dp.low_user_id = $1 OR dp.high_user_id = $1)
-         AND ${NOT_FRIENDS_SQL(
-           "$1",
-           "CASE WHEN dp.low_user_id = $1 THEN dp.high_user_id ELSE dp.low_user_id END",
-         )}
        ORDER BY m.created_at DESC
-       LIMIT 500`,
+       LIMIT ${CONTACT_TIMES_LIMIT}`,
       [userId, MISSED_CALL_BODY],
     ),
     pool.query<{ n: string }>(
@@ -182,14 +202,8 @@ async function loadSignals(
       : Promise.resolve({ rows: [] as { created_at: Date }[] }),
   ]);
   return {
-    dmsStarted: contactCount(
-      dms.rows.map((r) => r.created_at),
-      accountCreatedAt,
-    ),
-    callsPlaced: contactCount(
-      calls.rows.map((r) => r.created_at),
-      accountCreatedAt,
-    ),
+    dmsStarted: contactCount(dms.rows),
+    callsPlaced: contactCount(calls.rows),
     blockedByCount: Number(blocks.rows[0]?.n ?? 0),
     reporterBlockedAt: reporterBlock.rows[0]
       ? iso(reporterBlock.rows[0].created_at)
@@ -347,9 +361,11 @@ async function loadServerMessages(
   viewerId: string,
   serverId: string | null,
 ): Promise<ReportContextServerMessage[]> {
-  // Candidates first, by the (author_id, created_at, id) index, so a prolific
-  // account costs SERVER_MESSAGE_SCAN rows and not its whole history; the
-  // server-channel filter and the server scope apply to those.
+  // The server-channel filter and the server scope apply BEFORE the limit, so
+  // DM or other-server activity can never crowd out what the lens is for. The
+  // read is bounded by TIME instead of by a pre-filter sample: the
+  // (author_id, created_at, id) index walks only the last
+  // SERVER_MESSAGE_WINDOW_DAYS days of this one account's messages.
   //
   // The scoped (server lens) form reads the server through the SAME visibility
   // predicate as everybody else: a channel the viewer cannot see is not theirs
@@ -359,28 +375,28 @@ async function loadServerMessages(
               c.is_private, s.id AS server_id, s.name AS server_name,
               (SELECT COUNT(*) FROM message_attachments a
                WHERE a.message_id = m.id)::int AS attachment_count
-       FROM (
-         SELECT id, channel_id, body, created_at FROM messages
-         WHERE author_id = $1
-         ORDER BY created_at DESC, id DESC LIMIT $2
-       ) m
+       FROM messages m
        JOIN channels c ON c.id = m.channel_id AND c.kind = 'server'
        JOIN servers s ON s.id = c.server_id`;
+  const windowSql = `m.author_id = $1
+         AND m.created_at > NOW() - make_interval(days => ${SERVER_MESSAGE_WINDOW_DAYS})`;
   const result = serverId
     ? await getPool().query<ServerMessageRow>(
         `${base}
          LEFT JOIN server_members sm
-           ON sm.server_id = c.server_id AND sm.user_id = $4
-         WHERE c.server_id = $3 AND ${channelVisibleSql("$4")}
-         ORDER BY m.created_at DESC
+           ON sm.server_id = c.server_id AND sm.user_id = $3
+         WHERE ${windowSql}
+           AND c.server_id = $2 AND ${channelVisibleSql("$3")}
+         ORDER BY m.created_at DESC, m.id DESC
          LIMIT ${SERVER_MESSAGE_LIMIT}`,
-        [userId, SERVER_MESSAGE_SCAN, serverId, viewerId],
+        [userId, serverId, viewerId],
       )
     : await getPool().query<ServerMessageRow>(
         `${base}
-         ORDER BY m.created_at DESC
+         WHERE ${windowSql}
+         ORDER BY m.created_at DESC, m.id DESC
          LIMIT ${SERVER_MESSAGE_LIMIT}`,
-        [userId, SERVER_MESSAGE_SCAN],
+        [userId],
       );
   return result.rows.map((row) => ({
     id: row.id,
@@ -619,7 +635,7 @@ export async function getReportContext(
     actions,
   ] = await Promise.all([
     viewer.instance
-      ? loadSignals(userId, report.reporter_id, loaded.createdAtDate)
+      ? loadSignals(userId, report.reporter_id)
       : Promise.resolve(null),
     loadOtherReports(report.id, userId, scopeServer),
     loadSanctions(userId, scopeServer),

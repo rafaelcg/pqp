@@ -11623,8 +11623,13 @@ router.get("/api/reports/:report/context", async ({ user }, { report }) => {
         Permission.BAN_MEMBERS,
         Permission.MODERATE_MEMBERS,
       ]);
-    } catch {
-      throw new NotFound("Report not found");
+    } catch (error) {
+      // Only the expected refusals are the opaque 404. A failed dependency
+      // (the database, say) is an outage and must read as one.
+      if (error instanceof Forbidden || error instanceof NotFound) {
+        throw new NotFound("Report not found");
+      }
+      throw error;
     }
   }
   const context = await getReportContext(reportId, { id: user.id, instance });

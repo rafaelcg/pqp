@@ -210,6 +210,13 @@ describeDb("report context", () => {
     const friendConvo = await openConversation(nuisance.id, [friend.id]);
     await say(friendConvo.channelId, nuisance, MISSED_CALL_BODY);
 
+    // Somebody ELSE began this conversation and the account only called back:
+    // not outreach, so neither signal counts it.
+    const inbound = (await openConversation(bystander.id, [nuisance.id]))
+      .channelId;
+    await say(inbound, bystander, "hi, who is this?");
+    await say(inbound, nuisance, MISSED_CALL_BODY);
+
     // The reporter talked to them too, then blocked them.
     const reporterConvo = (await openConversation(reporter.id, [nuisance.id]))
       .channelId;
