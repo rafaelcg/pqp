@@ -1994,6 +1994,9 @@ async function prepareEagerUploads(
         return new StoryError("not_verified", "Upload size does not match");
       }
       const destination = destinations.get(entry.id)!;
+      // Counted as attempted BEFORE the copy: a copy whose answer is lost (a timeout) may still have
+      // made the object, so it is deleted like the others, and forgotten only if that delete works.
+      // Only a destination never reached (a HEAD that found nothing) is "never made".
       copied.push(destination);
       try {
         await copyObject(row.storage_key, destination);
@@ -2179,9 +2182,20 @@ export async function createStory(user: DbUser, input: CreateStoryParsed): Promi
     }
     await client.query("COMMIT");
   } catch (error) {
-    await client.query("ROLLBACK");
-    // The copies made for this attempt belong to no story now.
-    await discardKeys(eager.pairs.map((pair) => pair.key), { forgetFrom: eager.pairs.map((pair) => pair.id) });
+    await client.query("ROLLBACK").catch(() => undefined);
+    // The copies made for this attempt belong to no story now, UNLESS the failure was a COMMIT whose
+    // answer was lost on the wire and the story is in fact there: then they are its files. Only a
+    // story that is certainly absent lets them go; if that cannot be told, they stay, named by the
+    // upload rows for the sweep.
+    if (eager.pairs.length > 0) {
+      const absent = await getPool()
+        .query(`SELECT 1 FROM stories WHERE id = $1`, [storyId])
+        .then((found) => (found.rowCount ?? 0) === 0)
+        .catch(() => false);
+      if (absent) {
+        await discardKeys(eager.pairs.map((pair) => pair.key), { forgetFrom: eager.pairs.map((pair) => pair.id) });
+      }
+    }
     // Two attempts with one key raced: the other one won, answer its story.
     if (
       input.requestId &&
