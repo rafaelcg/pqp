@@ -697,12 +697,19 @@ final class StoryPostQueue {
     private func waitUntilLive(_ id: String, storyId: String) async {
         var delay = processingPoll
         var waited: Duration = .zero
+        var confirmedLive = false
         while waited < processingPoll * 90 {
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
             waited += delay
             do {
-                if try await backend.storyStatus(id: storyId) != "processing" { break }
+                let status = try await backend.storyStatus(id: storyId)
+                // Gone (the server has no such story): nothing to wait for.
+                guard let status else { break }
+                if status != "processing", status != "pending" {
+                    confirmedLive = true
+                    break
+                }
             } catch {
                 // The ask failed: not an answer. Again, a little later.
             }
@@ -711,7 +718,11 @@ final class StoryPostQueue {
         guard !Task.isCancelled, job(id: id) != nil else { return }
         watchers[id] = nil
         jobs.removeAll { $0.id == id }
-        publishedCount += 1
+        // Only a confirmed live story is counted (which re-reads the strip).
+        // Anything else (gone, or still unknown at the deadline) just ends the
+        // ring: the server's own `stories-update` puts the story on the strip
+        // whenever it does go live.
+        if confirmedLive { publishedCount += 1 }
     }
 
     private func fail(_ id: String, _ error: any Error) {

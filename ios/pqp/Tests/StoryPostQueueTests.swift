@@ -411,6 +411,18 @@ final class StoryPostQueueTests: XCTestCase {
         try await waitUntil("the story to go live", timeout: 8) { posts.publishedCount == 1 }
     }
 
+    /// Still unknown at the deadline: the ring ends, and nothing is reported as
+    /// published (the strip learns of the story from the server when it is live).
+    func testAStoryThatNeverReportsLiveEndsTheRingWithoutCountingAsPublished() async throws {
+        let backend = FakeBackend(storyId: storyId)
+        backend.setProcessing(checks: 1_000_000)
+        let posts = StoryPostQueue(backend: backend, store: store, usesBackgroundTime: false, processingPoll: .milliseconds(2))
+        let id = try posts.enqueue(request: try photoRequest(), base: photo, layers: [:], userId: me)
+        try await waitUntil("the job to be processing") { posts.job(id: id)?.phase == .processing }
+        try await waitUntil("the ring to end", timeout: 8) { posts.job(id: id) == nil }
+        XCTAssertEqual(posts.publishedCount, 0)
+    }
+
     func testDiscardingWhileProcessingDeletesTheStory() async throws {
         let backend = FakeBackend(storyId: storyId)
         backend.setProcessing(checks: 1_000)
