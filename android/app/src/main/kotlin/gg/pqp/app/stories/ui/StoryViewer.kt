@@ -485,7 +485,7 @@ private fun DeckPage(
                         .then(if (typing) Modifier.navigationBarsPadding().imePadding() else Modifier.toolsBottom(gap))
                         .padding(Spacing.md),
                 ) {
-                    story.caption?.takeIf { it.isNotBlank() && story.kind != "text" }?.let {
+                    StoriesRules.legacyCaption(story)?.let {
                         Text(
                             it,
                             color = Color.White,

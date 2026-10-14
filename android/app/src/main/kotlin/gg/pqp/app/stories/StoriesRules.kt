@@ -60,6 +60,20 @@ object StoriesRules {
     }
 
     /**
+     * The caption pill of a story from before layers, or null when it is not
+     * drawn. A story with text layers has those words twice (the author's build
+     * copies them into `caption` for older builds): the layers draw them where
+     * the author put them, so the pill is not drawn. A text card never has one.
+     * Same rule as the web viewer (`showLegacyText`) and iOS (`legacyCaption`).
+     */
+    fun legacyCaption(story: Story): String? {
+        if (story.kind == "text") return null
+        val caption = story.caption?.takeIf { it.isNotBlank() } ?: return null
+        if (story.layers.any { it is TextStoryLayer }) return null
+        return caption
+    }
+
+    /**
      * How long a story stays on screen before the next one. A video runs its
      * own length; a call card gets 8 s so somebody can read who is in the room;
      * anything with words scales with what there is to read (5 s plus 50 ms a
