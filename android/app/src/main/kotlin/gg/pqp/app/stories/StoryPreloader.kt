@@ -30,8 +30,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.job
@@ -186,14 +184,12 @@ class StoryPreloader(
     fun onTray(items: List<StoryStripItem>) {
         val rings = StoryPreloadRules.trayRings(items)
         replan(TRAY) {
-            // The rings' details are read together, not one round trip after another.
-            coroutineScope {
-                rings.map { ring ->
-                    async {
-                        val list = runCatching { stories(ring.storyIds.take(MAX_IDS)) }.getOrNull().orEmpty()
-                        list.getOrNull(StoriesRules.startIndex(list))?.id
-                    }
-                }.awaitAll().filterNotNull()
+            // One request for every ring's first few stories (the API takes up to 20 ids), not a round trip per ring.
+            val byId = runCatching { stories(rings.flatMap { it.storyIds.take(TRAY_IDS_PER_RING) }) }
+                .getOrNull().orEmpty().associateBy { it.id }
+            rings.mapNotNull { ring ->
+                val list = ring.storyIds.take(TRAY_IDS_PER_RING).mapNotNull { byId[it] }
+                list.getOrNull(StoriesRules.startIndex(list))?.id
             }
         }
     }
@@ -287,7 +283,9 @@ class StoryPreloader(
 
     /** Fetch and decode into Coil's caches, the way the viewer will ask for it. */
     private suspend fun image(url: String, key: String?) {
-        SingletonImageLoader.get(appContext).execute(storyImageRequest(appContext, url, key))
+        val screen = appContext.resources.displayMetrics
+        val size = coil3.size.Size(screen.widthPixels, screen.heightPixels)
+        SingletonImageLoader.get(appContext).execute(storyImageRequest(appContext, url, key, size))
     }
 
     private fun restrictBackgroundStatus(): Int =
@@ -300,6 +298,9 @@ class StoryPreloader(
         private const val TRAY = "tray"
         private const val MAX_IDS = 20
         private const val MAX_DECKS_AHEAD = 3
+
+        /** Three rings of this many make the 18 ids one request may carry. */
+        private const val TRAY_IDS_PER_RING = 6
         private const val FAILED_RETRY_MS = 30_000L
         private const val DETAILS_KEEP_MS = 30 * 60 * 1000L
 
@@ -322,12 +323,14 @@ class StoryPreloader(
  * cache key, so the same picture behind a freshly signed link is still a hit.
  * [key] null keeps Coil's own (the link), for things that are not story media.
  */
-fun storyImageRequest(context: Context, url: String, key: String?): ImageRequest =
+fun storyImageRequest(context: Context, url: String, key: String?, size: coil3.size.Size? = null): ImageRequest =
     ImageRequest.Builder(context).data(url).apply {
         if (key != null) {
             memoryCacheKey(key)
             diskCacheKey(key)
         }
+        // A preload has no view to measure: the screen is the most any story is drawn at.
+        if (size != null) size(size)
     }.build()
 
 /**

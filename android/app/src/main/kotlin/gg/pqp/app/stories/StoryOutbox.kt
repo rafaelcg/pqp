@@ -37,6 +37,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Everything the composer hands over at "Postar": the state of the editor, not a request yet. */
 class StoryPostInput(
@@ -101,7 +102,8 @@ class StoryOutbox(
         pendingInputs[id] = input
         setEntry(id, StoryOutboxRules.Status.Preparing, null)
         launch(id) {
-            val draft = withContext(Dispatchers.IO) { prepare(id, input) }
+            // Read from the map, not captured: once the draft is on disk the editor's buffers can go.
+            val draft = withContext(Dispatchers.IO) { prepare(id, pendingInputs.getValue(id)) }
             pendingInputs.remove(id)
             upload(draft)
         }
@@ -118,11 +120,6 @@ class StoryOutbox(
                 withContext(Dispatchers.IO) { prepare(id, input) }.also { pendingInputs.remove(id) }
             } else {
                 drafts.list().firstOrNull { it.id == id } ?: return@launch removeEntry(id)
-            }
-            // A draft is posted only as the person who made it: never as whoever signed in since.
-            if (draft.userId != (session.phase.value as? SessionPhase.Ready)?.me?.id) {
-                withContext(Dispatchers.IO) { drafts.delete(id) }
-                return@launch removeEntry(id)
             }
             upload(draft)
         }
@@ -190,11 +187,25 @@ class StoryOutbox(
 
     private suspend fun upload(draft: StoryDraft) {
         val id = draft.id
+        // A draft is posted only as the person who made it: never as whoever signed in since.
+        if (draft.userId != (session.phase.value as? SessionPhase.Ready)?.me?.id) {
+            withContext(Dispatchers.IO) { drafts.delete(id) }
+            jobs.remove(id)
+            return removeEntry(id)
+        }
         val total = draft.files.sumOf { it.size }
         val pace = StoryPerf.uploadPaceMs(appContext.filesDir)
         val tally = StoryOutboxRules.Tally(total)
         setEntry(id, StoryOutboxRules.Status.Uploading, tally.fraction)
-        val tick = { setEntry(id, StoryOutboxRules.Status.Uploading, tally.fraction) }
+        // The ring moves a percent at a time: a 16 KB chunk is not worth a state change.
+        var shownPercent = -1
+        val tick = {
+            val percent = ((tally.fraction ?: 0f) * 100).toInt()
+            if (percent != shownPercent) {
+                shownPercent = percent
+                setEntry(id, StoryOutboxRules.Status.Uploading, tally.fraction)
+            }
+        }
 
         val created = session.api.createStory(draft.request)
         minted[id] = created.story.id
@@ -249,10 +260,16 @@ class StoryOutbox(
         setEntry(draft.id, StoryOutboxRules.Status.Uploading, 1f)
         // The store keeps its strips on the main thread.
         withContext(Dispatchers.Main) {
-            draft.refreshKeys.distinct().forEach { key ->
-                // A strip that could not be read is asked again a couple of times; the story is live either way.
-                var attempts = 0
-                while (!store.refreshNow(key) && ++attempts < REFRESH_ATTEMPTS) delay(REFRESH_RETRY_MS)
+            // Together, and for a few seconds at most: the story is live whether or not a strip could be read.
+            withTimeoutOrNull(REFRESH_BUDGET_MS) {
+                coroutineScope {
+                    draft.refreshKeys.distinct().map { key ->
+                        async {
+                            var attempts = 0
+                            while (!store.refreshNow(key) && ++attempts < REFRESH_ATTEMPTS) delay(REFRESH_RETRY_MS)
+                        }
+                    }.awaitAll()
+                }
             }
         }
         withContext(Dispatchers.IO) { drafts.delete(draft.id) }
@@ -282,6 +299,7 @@ class StoryOutbox(
         private const val UPLOADS_AT_ONCE = 3
 
         private const val REFRESH_ATTEMPTS = 3
+        private const val REFRESH_BUDGET_MS = 6_000L
         private const val REFRESH_RETRY_MS = 1_500L
 
         @Volatile

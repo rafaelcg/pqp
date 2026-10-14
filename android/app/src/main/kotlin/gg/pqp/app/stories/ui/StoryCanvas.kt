@@ -311,6 +311,7 @@ private fun StoryBase(
                 gg.pqp.app.stories.StoryPerf.frameReady(story.id, "image")
                 onReady()
             },
+            onFailed = onReady,
             )
         }
         else -> Box(Modifier.fillMaxSize().background(Color.Black))

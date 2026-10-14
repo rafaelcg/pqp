@@ -46,6 +46,8 @@ fun StoryBaseImage(
     modifier: Modifier = Modifier,
     description: String? = null,
     onFirstFrame: (() -> Unit)? = null,
+    /** The picture could not be loaded: nothing will be drawn, and whoever waits for a first frame should stop. */
+    onFailed: (() -> Unit)? = null,
 ) {
     Box(modifier.fillMaxSize().background(Color.Black)) {
         if (BaseFit.fills(width, height)) {
@@ -54,6 +56,7 @@ fun StoryBaseImage(
                 contentDescription = description,
                 contentScale = ContentScale.Crop,
                 onSuccess = onFirstFrame?.let { cb -> { _ -> cb() } },
+                onError = onFailed?.let { cb -> { _ -> cb() } },
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
@@ -72,6 +75,7 @@ fun StoryBaseImage(
                 contentDescription = description,
                 contentScale = ContentScale.Fit,
                 onSuccess = onFirstFrame?.let { cb -> { _ -> cb() } },
+                onError = onFailed?.let { cb -> { _ -> cb() } },
                 modifier = Modifier.fillMaxSize(),
             )
         }
