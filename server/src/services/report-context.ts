@@ -170,27 +170,34 @@ async function loadSignals(userId: string, reporterId: string | null) {
     // call leaves nothing. The read is bounded by the account's OWN started
     // conversations (each walked by the channel index), not by its history.
     pool.query<ContactRow & { kind: "dm" | "call" }>(
-      `WITH ${STARTED_CONVERSATIONS_SQL},
-       events AS (
-         SELECT first_at AS at, 'dm'::text AS kind FROM started
-         UNION ALL
-         SELECT m.created_at AS at, 'call'::text AS kind
+      // MATERIALIZED so the started set is built once and read twice. Each
+      // kind keeps its own bounded top-N (ORDER BY ... LIMIT), with the
+      // totals as window counts over the whole set, so nothing is ranked or
+      // sorted beyond the 100 rows that are returned.
+      `WITH ${STARTED_CONVERSATIONS_SQL.replace("started AS (", "started AS MATERIALIZED (")},
+       dm AS (
+         SELECT first_at AS at,
+                COUNT(*) OVER () AS total,
+                COUNT(*) FILTER (WHERE first_at <= ${FIRST_HOUR_END_SQL}) OVER () AS first_hour
+         FROM started
+         ORDER BY first_at DESC
+         LIMIT ${CONTACT_TIMES_LIMIT}
+       ),
+       calls AS (
+         SELECT m.created_at AS at,
+                COUNT(*) OVER () AS total,
+                COUNT(*) FILTER (WHERE m.created_at <= ${FIRST_HOUR_END_SQL}) OVER () AS first_hour
          FROM started s
          JOIN messages m ON m.channel_id = s.channel_id
           AND m.author_id = $1 AND m.body = $2
+         ORDER BY m.created_at DESC
+         LIMIT ${CONTACT_TIMES_LIMIT}
        )
-       SELECT at AS created_at, kind, total::text AS total,
-              first_hour::text AS first_hour
-       FROM (
-         SELECT at, kind,
-                COUNT(*) OVER (PARTITION BY kind) AS total,
-                COUNT(*) FILTER (WHERE at <= ${FIRST_HOUR_END_SQL})
-                  OVER (PARTITION BY kind) AS first_hour,
-                ROW_NUMBER() OVER (PARTITION BY kind ORDER BY at DESC) AS rn
-         FROM events
-       ) ranked
-       WHERE rn <= ${CONTACT_TIMES_LIMIT}
-       ORDER BY at DESC`,
+       SELECT at AS created_at, 'dm'::text AS kind, total::text AS total,
+              first_hour::text AS first_hour FROM dm
+       UNION ALL
+       SELECT at, 'call'::text, total::text, first_hour::text FROM calls
+       ORDER BY created_at DESC`,
       [userId, MISSED_CALL_BODY],
     ),
     pool.query<{ n: string }>(
