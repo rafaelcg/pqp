@@ -6,7 +6,7 @@ import {
 } from "@pqp/shared";
 import { ApiError } from "@/lib/api";
 import type { MessageKey, MessageVars } from "@/lib/i18n";
-import { createStory, fetchStories, publishStory } from "./api";
+import { createStory, deleteStory, fetchStories, publishStory } from "./api";
 import type { EagerUpload } from "./eager-upload";
 import { emitStoriesRefresh, onStoriesSignal } from "./events";
 import { mediaInputFor, putStoryMedia, type PreparedStoryMedia } from "./upload";
@@ -43,6 +43,11 @@ export interface StoryDraft {
    * the blob kept above. The draft owns them: `discard` throws them away.
    */
   eager?: { base?: EagerUpload | null; layers?: ReadonlyMap<string, EagerUpload> };
+  /**
+   * The story the server made for this draft once the create answered. A post that failed after that
+   * point (the publish) left it pending there, so discarding the draft deletes it too.
+   */
+  createdStoryId?: string;
 }
 
 export type PostOutcome = "live" | "processing" | "failed" | "busy";
@@ -176,6 +181,11 @@ function releasePreview(draft: StoryDraft): void {
 /** Put the draft away: stop its uploads, delete what was stored, free its picture, clear the ring. */
 function discardDraft(draft: StoryDraft, id: string): void {
   cancelDraftUploads(draft);
+  if (draft.createdStoryId) {
+    // Fire and forget: the server's sweep takes a pending story nobody publishes within the hour.
+    void deleteStory(draft.createdStoryId).catch(() => undefined);
+    draft.createdStoryId = undefined;
+  }
   releasePreview(draft);
   if (getStoriesUi().posting?.id === id) {
     setPosting(null);
@@ -267,6 +277,7 @@ export async function postStory(draft: StoryDraft): Promise<PostOutcome> {
       }
     }
     let storyId = created.story.id;
+    draft.createdStoryId = storyId;
     let status = created.story.own?.status ?? "live";
     if (status === "pending") {
       const uploads: { upload: StoryUpload; blob: Blob }[] = [];

@@ -5,6 +5,7 @@ const api = vi.hoisted(() => ({
   createStory: vi.fn(),
   publishStory: vi.fn(),
   fetchStories: vi.fn(),
+  deleteStory: vi.fn(async () => undefined),
 }));
 const upload = vi.hoisted(() => ({
   putStoryMedia: vi.fn(),
@@ -228,6 +229,22 @@ describe("postStory with eager uploads", () => {
 
     expect(base.cancel).toHaveBeenCalledTimes(1);
     expect(layer.cancel).toHaveBeenCalledTimes(1);
+    expect(getStoriesUi().posting).toBeNull();
+  });
+
+  it("discarding a post that failed after the story was created deletes that story too", async () => {
+    api.createStory.mockResolvedValue({
+      story: { id: "s-pending", own: { status: "pending" } },
+      upload: null,
+      layerUploads: [],
+    });
+    api.publishStory.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    api.deleteStory.mockClear();
+    const story = draft();
+    story.eager = { base: fakeHandle({ id: "base-up" }) as never };
+    await postStory(story);
+    getStoriesUi().posting!.discard!();
+    expect(api.deleteStory).toHaveBeenCalledWith("s-pending");
     expect(getStoriesUi().posting).toBeNull();
   });
 

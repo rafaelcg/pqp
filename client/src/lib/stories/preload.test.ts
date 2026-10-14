@@ -233,6 +233,21 @@ describe("StoryPreloader", () => {
     expect(images.map((image) => image.src)).toContain("next");
   });
 
+  it("keeps no more finished pictures than its cap, even when every one is still wanted", async () => {
+    const { preloader, images } = harness();
+    const many = Array.from({ length: 70 }, (_, index) => img(`p${index}`));
+    preloader.setSource("viewer", 0, many);
+    for (let round = 0; round < 70; round += 1) {
+      const running = images.filter((image) => image.src !== "" && image.onload);
+      for (const image of running) {
+        image.finish();
+      }
+      await flush();
+    }
+    const kept = many.filter((asset) => preloader.isReady(asset.key)).length;
+    expect(kept).toBeLessThanOrEqual(48);
+  });
+
   it("a failed asset is not tried again and does not block the rest", async () => {
     const { preloader, images } = harness();
     preloader.setSource("viewer", 0, [img("bad"), img("ok")]);

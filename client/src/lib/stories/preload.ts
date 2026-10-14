@@ -30,9 +30,9 @@ import type { Story } from "@pqp/shared";
 
 export const MAX_CONCURRENT = 2;
 /** Finished pictures kept alive so the browser does not forget them. */
-const READY_IMAGES_MAX = 16;
+const READY_IMAGES_MAX = 48;
 /** Finished clips kept, a clip being heavier. */
-const READY_VIDEOS_MAX = 3;
+const READY_VIDEOS_MAX = 4;
 /** A download that has not finished in this long frees its slot (the next story waits behind it otherwise). */
 const JOB_TIMEOUT_MS = 20_000;
 /** How long a story read for warming may be reused by the viewer: its presigned URLs are what was warmed. */
@@ -263,14 +263,15 @@ export class StoryPreloader {
   private trim(wantedKeys: ReadonlySet<string>): void {
     const keep = (kind: AssetKind, max: number) => {
       const keys = [...this.ready.entries()].filter(([, entry]) => entry.asset.kind === kind).map(([key]) => key);
-      for (const key of keys) {
+      // Oldest first, what nobody wants any more before what is still wanted. The cap is absolute: a
+      // wanted file dropped here is simply fetched again if it is still wanted when its turn comes.
+      const order = [...keys.filter((key) => !wantedKeys.has(key)), ...keys.filter((key) => wantedKeys.has(key))];
+      for (const key of order) {
         if (keys.length <= max) {
           break;
         }
-        if (!wantedKeys.has(key)) {
-          this.drop(key);
-          keys.splice(keys.indexOf(key), 1);
-        }
+        this.drop(key);
+        keys.splice(keys.indexOf(key), 1);
       }
     };
     keep("image", READY_IMAGES_MAX);
