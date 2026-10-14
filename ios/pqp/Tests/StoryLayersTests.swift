@@ -423,6 +423,34 @@ final class StoryLayersTests: XCTestCase {
         XCTAssertTrue(model.files.isEmpty)
     }
 
+    /// The rule web and Android share: layer order is creation order, and a
+    /// second drawing session moves the drawing to the top, so the stroke made
+    /// now stays over what the finger sees after Pronto.
+    func testASecondDrawingSessionBringsTheDrawingToTheTop() {
+        let model = editor()
+        let file = StoryLayerFile(data: Data([1]), contentType: "image/png", width: 810, height: 1440)
+        var strokes = PKDrawing()
+        strokes.strokes.append(PKStroke(ink: PKInk(.pen, color: .white), path: PKStrokePath(controlPoints: [
+            PKStrokePoint(location: .zero, timeOffset: 0, size: CGSize(width: 4, height: 4), opacity: 1, force: 1, azimuth: 0, altitude: 0),
+            PKStrokePoint(location: CGPoint(x: 20, y: 20), timeOffset: 0.1, size: CGSize(width: 4, height: 4), opacity: 1, force: 1, azimuth: 0, altitude: 0),
+        ], creationDate: Date())))
+        model.beginDrawing()
+        XCTAssertFalse(model.canUndo, "No drawing yet: nothing to move")
+        model.setDrawing(strokes, file: file, preview: UIImage())
+        model.addText(StoryTextData(text: "por cima"))
+        XCTAssertEqual(model.layers.map(\.typeName), ["drawing", "text"])
+        model.beginDrawing()
+        XCTAssertEqual(model.layers.map(\.typeName), ["text", "drawing"], "The pen goes down over the text")
+        model.setDrawing(strokes, file: file, preview: UIImage())
+        XCTAssertEqual(model.layers.map(\.typeName), ["text", "drawing"], "Pronto keeps it there")
+        model.undo()
+        model.undo()
+        XCTAssertEqual(model.layers.map(\.typeName), ["drawing", "text"], "Undo puts the order back")
+        model.beginDrawing()
+        model.beginDrawing()
+        XCTAssertEqual(model.layers.map(\.typeName), ["text", "drawing"], "Already on top: no second step")
+    }
+
     func testDeletingALayerDropsItsBytesAndUndoBringsThemBack() {
         let model = editor()
         let file = StoryLayerFile(data: Data([1]), contentType: "image/jpeg", width: 10, height: 10)

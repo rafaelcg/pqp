@@ -72,7 +72,11 @@ struct StoryEditorView: View {
                     .onAppear { model.canvas = canvas }
                     .onChange(of: canvas) { _, value in model.canvas = value }
 
+                // The buttons live INSIDE the picture, in its corners, never
+                // across its edge: the chrome is laid out in the canvas' own box.
                 chrome(canvas)
+                    .frame(width: canvas.width, height: canvas.height)
+                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
 
                 textOverlay(canvas, in: proxy.size)
                 drawOverlay(canvas, in: proxy.size)
@@ -403,7 +407,12 @@ struct StoryEditorView: View {
             roundButton("scribble.variable", String(localized: "Draw"), id: "editor.draw") {
                 // A new drawing is a layer like the others and counts against
                 // the ceiling; redrawing the one that exists does not.
-                if model.isFull, model.drawingLayer == nil { show(Self.fullNotice) } else { drawing = true }
+                if model.isFull, model.drawingLayer == nil {
+                    show(Self.fullNotice)
+                } else {
+                    model.beginDrawing()
+                    drawing = true
+                }
             }
             roundButton("photo.badge.plus", String(localized: "Add a photo"), id: "editor.photo") {
                 if model.isFull {
