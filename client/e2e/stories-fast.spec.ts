@@ -212,6 +212,13 @@ async function discardComposer(page: Page, composer: Locator) {
 
 // ------------------------------------------------------------------ with the network stubbed: runs everywhere
 
+/** What a bucket answers a browser's preflight and PUT with, so the page may read the result. */
+const STUB_CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "*",
+};
+
 test("stubbed storage: the file starts at capture, Post closes at once and is one create-and-publish request", async ({ page }) => {
   const ctx = await setup();
   // The composer needs media on; the answers below are all the "server" there is.
@@ -235,8 +242,12 @@ test("stubbed storage: the file starts at capture, Post closes at once and is on
     });
   });
   await page.route("http://stub.pqp.test/**", async (route) => {
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers: STUB_CORS });
+      return;
+    }
     stored.push(route.request().method());
-    await route.fulfill({ status: 200, body: "" });
+    await route.fulfill({ status: 200, headers: STUB_CORS, body: "" });
   });
   await page.route("**/api/stories", async (route) => {
     if (route.request().method() !== "POST") {
@@ -300,10 +311,12 @@ test("stubbed storage: discarding the draft aborts the upload and asks the serve
   // The bytes never finish: the PUT is still in flight when the author gives up.
   let aborted = false;
   await page.route("http://stub.pqp.test/**", async (route) => {
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers: STUB_CORS });
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 20_000));
-    await route.abort().catch(() => {
-      aborted = true;
-    });
+    await route.abort().catch(() => undefined);
   });
   page.on("requestfailed", (request) => {
     if (request.url().startsWith("http://stub.pqp.test/")) aborted = true;
