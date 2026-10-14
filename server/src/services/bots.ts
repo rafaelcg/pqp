@@ -14,6 +14,8 @@ import {
   type BotNoticeReason,
   SERVER_BOT_DEFAULT_TOOLS,
   SERVER_BOT_TOOLS,
+  SERVER_BOT_WELCOME_DEFAULT,
+  SERVER_BOT_WELCOMES_PER_HOUR,
   SERVER_BOTS_MAX,
   type ServerBotDto,
   type ServerBotTool,
@@ -21,6 +23,7 @@ import {
 import type { PoolClient } from "pg";
 import { getPool, type DbUser } from "../db.js";
 import { isEnabled } from "../lib/flags.js";
+import { logEvent } from "../lib/log.js";
 import { deriveHandle, slugifyUsername } from "./users.js";
 import { invalidateServerAudience } from "./servers.js";
 import { botDay } from "./bot-stats.js";
@@ -80,11 +83,15 @@ interface BotRow {
   username: string;
   avatar_url: string | null;
   custom_status: string | null;
+  welcome_enabled: boolean;
+  welcome_channel_id: string | null;
+  welcome_message: string | null;
 }
 
 const BOT_SELECT = `
   SELECT b.id, b.server_id, b.user_id, b.persona, b.knowledge, b.channel_ids,
          b.enabled, b.answer_to_name, b.model, b.tools, b.role_id, b.color, b.face, b.created_at,
+         b.welcome_enabled, b.welcome_channel_id, b.welcome_message,
          u.display_name, u.username, u.avatar_url, u.custom_status
     FROM server_bots b
     JOIN users u ON u.id = b.user_id`;
@@ -111,6 +118,9 @@ function toDto(row: BotRow, repliesToday: number): ServerBotDto {
     roleId: row.role_id,
     repliesToday,
     repliesPerDay: botRepliesPerDay(),
+    welcomeEnabled: row.welcome_enabled,
+    welcomeChannelId: row.welcome_channel_id,
+    welcomeMessage: row.welcome_message,
   };
 }
 
@@ -344,6 +354,10 @@ export async function updateServerBot(input: {
   face?: BotBaseFace;
   /** `null` clears it; absent leaves it. */
   tagline?: string | null;
+  welcomeEnabled?: boolean;
+  /** `null` clears these two; absent leaves them. */
+  welcomeChannelId?: string | null;
+  welcomeMessage?: string | null;
 }): Promise<{ bot: ServerBotDto; before: ServerBotDto; renamed: boolean; restyled: boolean } | null> {
   const before = await getServerBot(input.serverId, input.botId);
   if (!before) {
@@ -353,6 +367,9 @@ export async function updateServerBot(input: {
     input.channelIds === undefined
       ? undefined
       : await requireServerChannels(input.serverId, input.channelIds);
+  if (input.welcomeChannelId) {
+    await requireServerChannels(input.serverId, [input.welcomeChannelId]);
+  }
   // A rename moves the handle too: people call the bot by the name they see,
   // so "Julius" answers to @julius_bot. The old handle stops working, which
   // for a bot is the expected outcome of renaming it. Picked before the
@@ -385,6 +402,9 @@ export async function updateServerBot(input: {
               tools = COALESCE($10::text[], tools),
               color = COALESCE($11, color),
               face = COALESCE($12, face),
+              welcome_enabled = COALESCE($13, welcome_enabled),
+              welcome_channel_id = CASE WHEN $14::boolean THEN $15::uuid ELSE welcome_channel_id END,
+              welcome_message = CASE WHEN $16::boolean THEN $17 ELSE welcome_message END,
               updated_at = NOW()
         WHERE server_id = $1 AND id = $2`,
       [
@@ -400,6 +420,11 @@ export async function updateServerBot(input: {
         input.tools ?? null,
         input.color ?? null,
         input.face ?? null,
+        input.welcomeEnabled ?? null,
+        input.welcomeChannelId !== undefined,
+        input.welcomeChannelId ?? null,
+        input.welcomeMessage !== undefined,
+        input.welcomeMessage ?? null,
       ],
     );
     if (restyled || renamed) {
@@ -571,6 +596,70 @@ export function saysName(body: string, foldedName: string): boolean {
       return true;
     }
     from = at + 1;
+  }
+}
+
+/**
+ * The bot's fixed welcome, when somebody joins a server whose bot has it on.
+ * No model is called: the text is what staff wrote, with `{membro}` as an
+ * @mention of the new member and `{servidor}` as the server's name. Called
+ * after the join committed, never inside it, and never throws into it.
+ *
+ * Once per person per server, ever: the claim is a row, so it holds across
+ * machines and a leave-and-join loop is welcomed once. And a few an hour at
+ * most, so a raid does not turn the bot into a flood.
+ */
+export async function welcomeNewMember(serverId: string, userId: string): Promise<void> {
+  try {
+    if (!isEnabled("custom_bots", { serverId })) {
+      return;
+    }
+    const found = await getPool().query<{
+      bot_user_id: string;
+      channel_id: string;
+      message: string | null;
+      server_name: string;
+      username: string | null;
+      display_name: string;
+      is_character: boolean;
+    }>(
+      `SELECT b.user_id AS bot_user_id, b.welcome_channel_id AS channel_id, b.welcome_message AS message,
+              s.name AS server_name, u.username, u.display_name, u.is_character
+         FROM server_bots b
+         JOIN servers s ON s.id = b.server_id
+         JOIN users u ON u.id = $2
+        WHERE b.server_id = $1 AND b.enabled AND b.welcome_enabled AND b.welcome_channel_id IS NOT NULL
+        LIMIT 1`,
+      [serverId, userId],
+    );
+    const row = found.rows[0];
+    if (!row || row.is_character || row.bot_user_id === userId) {
+      return;
+    }
+    const claimed = await getPool().query(
+      `INSERT INTO server_bot_welcomes (server_id, user_id)
+       SELECT $1, $2
+        WHERE (SELECT COUNT(*) FROM server_bot_welcomes
+                WHERE server_id = $1 AND welcomed_at > NOW() - INTERVAL '1 hour') < $3
+       ON CONFLICT DO NOTHING`,
+      [serverId, userId, SERVER_BOT_WELCOMES_PER_HOUR],
+    );
+    if ((claimed.rowCount ?? 0) === 0) {
+      return;
+    }
+    const { sanitizeBotReply } = await import("./bot-runner.js");
+    const { postChannelMessage } = await import("../ws/chat.js");
+    const member = row.username ? `@${row.username}` : row.display_name;
+    // Staff's text first, made safe (no @everyone, few mentions); then the
+    // new member's mention, which is the one mention it is for.
+    const body = sanitizeBotReply(
+      (row.message ?? SERVER_BOT_WELCOME_DEFAULT).replaceAll("{servidor}", row.server_name),
+    ).replaceAll("{membro}", member);
+    const bot = await getPool().query<DbUser>(`SELECT * FROM users WHERE id = $1`, [row.bot_user_id]);
+    const posted = await postChannelMessage({ author: bot.rows[0]!, channelId: row.channel_id, body });
+    logEvent("bots.welcome", { serverId, ok: posted.ok, ...(posted.ok ? {} : { reason: posted.reason }) });
+  } catch (error) {
+    logEvent("bots.welcomeError", { serverId, message: error instanceof Error ? error.message.slice(0, 200) : String(error) });
   }
 }
 

@@ -18,8 +18,10 @@ const { upsertUser } = await import("./users.js");
 const { createServer: createPqpServer } = await import("./servers.js");
 const { assignRole, createRole, getRole, parsePermissions } = await import("./roles.js");
 const { Permission, SERVER_BOT_DEFAULT_TOOLS, SERVER_BOT_TOOLS } = await import("@pqp/shared");
-const { createServerBot, deleteServerBot, resetBotTriggerCacheForTests, updateServerBot } =
+const { createServerBot, deleteServerBot, resetBotTriggerCacheForTests, updateServerBot, welcomeNewMember } =
   await import("./bots.js");
+const { createInviteWith, redeemInvite } = await import("./invites.js");
+const { SERVER_BOT_WELCOMES_PER_HOUR } = await import("@pqp/shared");
 const { botToolPermissions } = await import("./bot-actions.js");
 const { deleteBotRole, renameBotRole, syncBotRole } = await import("./bot-role.js");
 const { botDay, bumpBotStats, nextBotDayStart, readBotOverview } = await import("./bot-stats.js");
@@ -458,6 +460,61 @@ describeDb("server bot foundations", () => {
     const untouched = await updateServerBot({ serverId: server.id, botId: bot.id, persona: "Zoeiro" });
     expect(untouched!.restyled).toBe(false);
     expect(untouched!.bot.tagline).toBe("Pergunte qualquer coisa");
+  });
+
+  describe("the welcome", () => {
+    const welcomes = async (channelId: string, botUserId: string) =>
+      (
+        await getPool().query<{ body: string }>(
+          `SELECT body FROM messages WHERE channel_id = $1 AND author_id = $2 ORDER BY created_at`,
+          [channelId, botUserId],
+        )
+      ).rows.map((row) => row.body);
+
+    it("greets a new member once, with staff's text, and never for a bot that has it off", async () => {
+      const { owner, server, channelId, bot } = await setup();
+      const ana = await upsertUser({ clerkId: "ana", displayName: "Ana", avatarUrl: null });
+      const invite = await createInviteWith(getPool(), server.id, owner.id);
+
+      // Off by default: joining posts nothing.
+      await redeemInvite(invite.code, ana.id);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(await welcomes(channelId, bot.userId)).toEqual([]);
+
+      await updateServerBot({
+        serverId: server.id,
+        botId: bot.id,
+        welcomeEnabled: true,
+        welcomeChannelId: channelId,
+        welcomeMessage: "Chegou {membro} no {servidor}! Avisa @everyone",
+      });
+      const bia = await upsertUser({ clerkId: "bia", displayName: "Bia", avatarUrl: null });
+      await redeemInvite(invite.code, bia.id);
+      await expect.poll(() => welcomes(channelId, bot.userId)).toHaveLength(1);
+      const [body] = await welcomes(channelId, bot.userId);
+      expect(body).toMatch(/^Chegou @\S+ no QG! Avisa ＠everyone$/);
+
+      // Leaving and joining again is not a second welcome.
+      await getPool().query(`DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`, [server.id, bia.id]);
+      await welcomeNewMember(server.id, bia.id);
+      expect(await welcomes(channelId, bot.userId)).toHaveLength(1);
+    });
+
+    it("stops after a few an hour, so a raid is not a flood", async () => {
+      const { server, channelId, bot } = await setup();
+      await updateServerBot({ serverId: server.id, botId: bot.id, welcomeEnabled: true, welcomeChannelId: channelId });
+      for (let i = 0; i < SERVER_BOT_WELCOMES_PER_HOUR + 3; i += 1) {
+        const user = await upsertUser({ clerkId: `raid${i}`, displayName: `Raid ${i}`, avatarUrl: null });
+        await getPool().query(`INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`, [
+          server.id,
+          user.id,
+        ]);
+        await welcomeNewMember(server.id, user.id);
+      }
+      const posted = await welcomes(channelId, bot.userId);
+      expect(posted).toHaveLength(SERVER_BOT_WELCOMES_PER_HOUR);
+      expect(posted[0]).toMatch(/^Bem-vindo\(a\), @\S+! 👋$/);
+    });
   });
 
   it("serves the face PNGs and nothing else", async () => {

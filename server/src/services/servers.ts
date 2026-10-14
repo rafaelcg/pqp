@@ -1297,6 +1297,9 @@ export async function joinServerBySso(
       // get for a few seconds rather than one they should not have. Done
       // anyway: "you joined and the server went quiet" is a bad first minute.
       invalidateServerAudience(serverId, { joinedUserId: userId });
+      // The server bot's welcome, when it has one on. Not awaited: a post in a
+      // channel is no reason for the join to wait, and it never throws.
+      void import("./bots.js").then((bots) => bots.welcomeNewMember(serverId, userId)).catch(() => {});
       // Funnel step `first_join`, after the commit and on the pool.
       await recordActivationStep(userId, "first_join");
     }

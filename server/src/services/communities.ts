@@ -542,6 +542,9 @@ export async function joinCommunity(
       // it costs a few silent seconds rather than a leak — and "you joined and
       // the room went quiet" is a bad first minute.
       invalidateServerAudience(serverId, { joinedUserId: userId });
+      // The server bot's welcome, when it has one on. Not awaited: a post in a
+      // channel is no reason for the join to wait, and it never throws.
+      void import("./bots.js").then((bots) => bots.welcomeNewMember(serverId, userId)).catch(() => {});
       // Funnel step `first_join`, after the commit and on the pool, not inside
       // the transaction. This is also the default-community landing path
       // (services/default-community.ts calls joinCommunity), so a first-run

@@ -4,6 +4,8 @@ import {
   SERVER_BOT_KNOWLEDGE_MAX,
   SERVER_BOT_NAME_MAX,
   SERVER_BOT_PERSONA_MAX,
+  SERVER_BOT_WELCOME_DEFAULT,
+  SERVER_BOT_WELCOME_MAX,
   parsePermissions,
   type Channel,
   type ServerBotDto,
@@ -67,7 +69,20 @@ function errorKey(err: unknown): MessageKey {
 interface Draft extends BotDraft {
   /** Empty string is "the default model". */
   model: string;
+  welcomeEnabled: boolean;
+  /** Empty string is "no channel picked". */
+  welcomeChannelId: string;
+  /** Empty string is the default text. */
+  welcomeMessage: string;
 }
+
+const EMPTY_DRAFT: Draft = {
+  ...EMPTY_BOT_DRAFT,
+  model: "",
+  welcomeEnabled: false,
+  welcomeChannelId: "",
+  welcomeMessage: "",
+};
 
 function draftOf(bot: ServerBotDto): Draft {
   return {
@@ -81,6 +96,9 @@ function draftOf(bot: ServerBotDto): Draft {
     answerToName: bot.answerToName,
     model: bot.model ?? "",
     tools: bot.tools,
+    welcomeEnabled: bot.welcomeEnabled,
+    welcomeChannelId: bot.welcomeChannelId ?? "",
+    welcomeMessage: bot.welcomeMessage ?? "",
   };
 }
 
@@ -101,7 +119,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
   const [bot, setBot] = useState<ServerBotDto | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [draft, setDraft] = useState<Draft>({ ...EMPTY_BOT_DRAFT, model: "" });
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<MessageKey | null>(null);
@@ -164,8 +182,12 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
       !sameSet(draft.channelIds, bot.channelIds) ||
       draft.answerToName !== bot.answerToName ||
       draft.model !== (bot.model ?? "") ||
-      !sameSet(draft.tools, bot.tools));
+      !sameSet(draft.tools, bot.tools) ||
+      draft.welcomeEnabled !== bot.welcomeEnabled ||
+      draft.welcomeChannelId !== (bot.welcomeChannelId ?? "") ||
+      draft.welcomeMessage !== (bot.welcomeMessage ?? ""));
   const nameOk = draft.name.trim().length >= 2;
+  const textChannels = channels.filter((channel) => channel.type === "text");
 
   function edit(patch: Partial<Draft>) {
     setSaved(false);
@@ -189,6 +211,9 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
         answerToName: draft.answerToName,
         model: draft.model || null,
         tools: draft.tools,
+        welcomeEnabled: draft.welcomeEnabled,
+        welcomeChannelId: draft.welcomeChannelId || null,
+        welcomeMessage: draft.welcomeMessage.trim() || null,
       });
       setBot(result.bot);
       setDraft(draftOf(result.bot));
@@ -218,7 +243,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
     try {
       await deleteServerBot(serverId, bot.id);
       setBot(null);
-      setDraft({ ...EMPTY_BOT_DRAFT, model: "" });
+      setDraft(EMPTY_DRAFT);
     } catch (err) {
       setError(errorKey(err));
     }
@@ -466,6 +491,53 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
               })}
             />
           </div>
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup title={t("bots.welcome.title")} description={t("bots.welcome.hint")}>
+        <div className="space-y-3 p-4">
+          <Switch
+            checked={draft.welcomeEnabled}
+            onCheckedChange={(on) =>
+              edit({
+                welcomeEnabled: on,
+                // Turning it on picks a channel, so it is never on and silent.
+                ...(on && !draft.welcomeChannelId
+                  ? { welcomeChannelId: textChannels.find((channel) => channel.id === draft.channelIds[0])?.id ?? textChannels[0]?.id ?? "" }
+                  : {}),
+              })
+            }
+            label={t("bots.welcome.toggle")}
+            description={t("bots.welcome.free")}
+          />
+          {draft.welcomeEnabled && (
+            <>
+              <label className="block space-y-1.5">
+                <span className="text-xs font-semibold text-text-secondary">{t("bots.welcome.channel")}</span>
+                <select
+                  value={draft.welcomeChannelId}
+                  className="h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]"
+                  onChange={(e) => edit({ welcomeChannelId: e.target.value })}
+                >
+                  {textChannels.map((channel) => (
+                    <option key={channel.id} value={channel.id}>
+                      #{channel.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-xs font-semibold text-text-secondary">{t("bots.welcome.message")}</span>
+                <Textarea
+                  value={draft.welcomeMessage}
+                  maxLength={SERVER_BOT_WELCOME_MAX}
+                  placeholder={SERVER_BOT_WELCOME_DEFAULT}
+                  onChange={(e) => edit({ welcomeMessage: e.target.value })}
+                />
+                <span className="block text-xs text-text-tertiary">{t("bots.welcome.slots", { membro: "{membro}", servidor: "{servidor}" })}</span>
+              </label>
+            </>
+          )}
         </div>
       </SettingsGroup>
 

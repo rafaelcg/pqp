@@ -6580,6 +6580,21 @@ ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cost_micros BIGINT NOT NULL
 ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cache_read_tokens BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT NOT NULL DEFAULT 0;
 
+-- A fixed welcome the bot posts when somebody joins (no model call, costs
+-- nothing): on or off, where, and the text staff wrote (null is the default).
+-- `server_bot_welcomes` remembers who was welcomed, so leaving and joining
+-- again is not welcomed twice, and caps a raid to a few posts an hour.
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS welcome_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS welcome_channel_id UUID REFERENCES channels(id) ON DELETE SET NULL;
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS welcome_message TEXT;
+CREATE TABLE IF NOT EXISTS server_bot_welcomes (
+  server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  welcomed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (server_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_welcomes_recent ON server_bot_welcomes (server_id, welcomed_at);
+
 -- The operator's history of bots (services/bot-stats.ts), per São Paulo day.
 -- No foreign keys on purpose: a deleted bot or server keeps its past here,
 -- while its runs, plans and actions cascade away with it.

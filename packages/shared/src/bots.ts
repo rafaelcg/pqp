@@ -18,6 +18,16 @@ export const SERVER_BOT_KNOWLEDGE_MAX = 20000;
 export const SERVER_BOT_CHANNELS_MAX = 50;
 
 /**
+ * The welcome a bot posts when somebody joins, written by staff. `{membro}`
+ * becomes an @mention of the new member and `{servidor}` the server's name.
+ * Posted as written: no model is called.
+ */
+export const SERVER_BOT_WELCOME_DEFAULT = "Bem-vindo(a), {membro}! 👋";
+export const SERVER_BOT_WELCOME_MAX = 500;
+/** At most this many welcomes per server per hour, so a raid is not a flood. */
+export const SERVER_BOT_WELCOMES_PER_HOUR = 20;
+
+/**
  * What a bot may do, grouped the way the settings page shows them. Each one is
  * a switch staff turn on or off per bot; the bot still needs the permission
  * on its role, and so does the member asking. Moderation starts off.
@@ -133,6 +143,13 @@ export const updateServerBotSchema = z.object({
   face: z.enum(BOT_BASE_FACES).optional(),
   /** `null` clears it. */
   tagline: botTagline,
+  /** The fixed welcome for new members: on or off, where, and its text (`null` is the default text). */
+  welcomeEnabled: z.boolean().optional(),
+  welcomeChannelId: z.string().uuid().nullable().optional(),
+  welcomeMessage: safeText(SERVER_BOT_WELCOME_MAX)
+    .transform((value) => value.trim() || null)
+    .nullable()
+    .optional(),
 });
 export type UpdateServerBotRequest = z.input<typeof updateServerBotSchema>;
 
@@ -168,6 +185,10 @@ export interface ServerBotDto {
   /** Replies posted today (São Paulo day) and today's cap, for the settings page. */
   repliesToday: number;
   repliesPerDay: number;
+  /** The fixed welcome for new members. `welcomeMessage` null is `SERVER_BOT_WELCOME_DEFAULT`. */
+  welcomeEnabled: boolean;
+  welcomeChannelId: string | null;
+  welcomeMessage: string | null;
 }
 
 /** One line of a bot's recent activity, for its settings overview. */
