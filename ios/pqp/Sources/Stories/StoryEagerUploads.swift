@@ -30,6 +30,8 @@ final class StoryEagerFile: @unchecked Sendable {
     private var sent: Int64 = 0
     private var minted: String?
     private var succeeded = false
+    /// A DELETE was sent for it on purpose (the file was thrown away).
+    private var deleteSent = false
     private var sink: (@Sendable (Int64) -> Void)?
     private(set) var task: Task<String, any Error>?
 
@@ -58,7 +60,7 @@ final class StoryEagerFile: @unchecked Sendable {
             // Thrown away while the server was answering: it is already
             // minted, so it goes straight back.
             if Task.isCancelled {
-                await backend.deleteUpload(id: ticket.uploadId)
+                sendDelete(backend: backend, unlessAlreadySent: true)
                 throw CancellationError()
             }
             do {
@@ -67,17 +69,33 @@ final class StoryEagerFile: @unchecked Sendable {
                 }
             } catch {
                 // Never claimed: it would only sit in storage until the sweep.
-                await backend.deleteUpload(id: ticket.uploadId)
+                // (A file thrown away is deleted by `abandon`, which is what
+                // cancelled this.)
+                if !Task.isCancelled { sendDelete(backend: backend, unlessAlreadySent: false) }
                 throw error
             }
             // Thrown away just as the last byte landed.
             if Task.isCancelled {
-                await backend.deleteUpload(id: ticket.uploadId)
+                sendDelete(backend: backend, unlessAlreadySent: true)
                 throw CancellationError()
             }
             markSucceeded()
             return ticket.uploadId
         }
+    }
+
+    /// The DELETE goes out from its own task, never from inside the one that
+    /// was cancelled: a request made by a cancelled task is cancelled with it
+    /// and never leaves the phone.
+    private func sendDelete(backend: any StoryPostBackend, unlessAlreadySent: Bool) {
+        lock.lock()
+        guard let id = minted, !(unlessAlreadySent && deleteSent) else {
+            lock.unlock()
+            return
+        }
+        deleteSent = true
+        lock.unlock()
+        Task.detached { await backend.deleteUpload(id: id) }
     }
 
     private func markSucceeded() {
@@ -109,17 +127,13 @@ final class StoryEagerFile: @unchecked Sendable {
         if current > 0 { sink(current) }
     }
 
-    /// Stops it and deletes what the server holds for it. An upload still going
-    /// deletes itself as it stops; one that is already up is deleted here.
+    /// Stops it and deletes what the server holds for it: the PUT is aborted
+    /// and the DELETE goes out beside it, from a task of its own. An upload
+    /// that has no id yet (the server is still answering the mint) deletes
+    /// itself the moment it has one.
     func abandon(backend: any StoryPostBackend) {
-        lock.lock()
-        let done = succeeded
-        lock.unlock()
-        if done, let id = uploadId {
-            Task.detached { await backend.deleteUpload(id: id) }
-        } else {
-            task?.cancel()
-        }
+        task?.cancel()
+        sendDelete(backend: backend, unlessAlreadySent: false)
     }
 }
 

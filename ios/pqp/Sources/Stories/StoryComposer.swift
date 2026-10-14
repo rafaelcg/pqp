@@ -855,6 +855,62 @@ struct StoryCallPicker: View {
     }
 }
 
+/// Where this account last posted a story, and the list it was offered, kept
+/// so that Post still works with no connection: the list cannot load, so the
+/// last one stands in, and the story waits in the queue for a connection.
+enum StoryAudienceMemory {
+    struct Choice: Codable, Equatable {
+        var serverIds: [String]
+        var friends: Bool
+        var repliesEnabled: Bool
+    }
+
+    private static func key(_ name: String, _ userId: String?) -> String {
+        "pqp.stories.\(name).\(userId ?? "anon")"
+    }
+
+    static func save(options: StoryAudienceOptions, userId: String?) {
+        if let data = try? JSONEncoder().encode(options) {
+            UserDefaults.standard.set(data, forKey: key("audienceOptions", userId))
+        }
+    }
+
+    static func options(_ userId: String?) -> StoryAudienceOptions? {
+        UserDefaults.standard.data(forKey: key("audienceOptions", userId))
+            .flatMap { try? JSONDecoder().decode(StoryAudienceOptions.self, from: $0) }
+    }
+
+    static func save(choice: Choice, userId: String?) {
+        if let data = try? JSONEncoder().encode(choice) {
+            UserDefaults.standard.set(data, forKey: key("lastAudience", userId))
+        }
+    }
+
+    static func lastChoice(_ userId: String?) -> Choice? {
+        UserDefaults.standard.data(forKey: key("lastAudience", userId))
+            .flatMap { try? JSONDecoder().decode(Choice.self, from: $0) }
+    }
+
+    /// What to tick when the list is the remembered one: where it was last
+    /// posted, as far as that is still on offer; else where the composer was
+    /// opened from.
+    static func selection(
+        last: Choice?, options: StoryAudienceOptions?, preselectedServerId: String?, preselectsFriends: Bool
+    ) -> (servers: Set<String>, friends: Bool) {
+        var servers = Set(last?.serverIds ?? [])
+        var friends = last?.friends ?? false
+        if let options {
+            servers = servers.intersection(options.servers.filter(\.canPost).map(\.serverId))
+            if !(options.friends.enabled && options.friends.canPost) { friends = false }
+        }
+        if servers.isEmpty, !friends {
+            if let preselectedServerId { servers.insert(preselectedServerId) }
+            friends = preselectsFriends
+        }
+        return (servers, friends)
+    }
+}
+
 /// "Quem vê": every server with stories on where this account may post,
 /// plus Amigos, pre-ticked where the composer opened; replies on or off;
 /// and the post itself, with real upload progress.
@@ -875,6 +931,8 @@ struct StoryAudienceSheet: View {
     @State private var friends = false
     @State private var repliesEnabled = true
     @State private var posting = false
+    /// The list on screen is the remembered one: there was no connection.
+    @State private var offline = false
     @State private var error: String?
     /// One per story this sheet posts, kept in the post's record, so a retry
     /// after a lost answer is the same story and not a second one.
@@ -937,9 +995,9 @@ struct StoryAudienceSheet: View {
             if let error {
                 Text(verbatim: error)
                     .font(Typography.callout)
-                    .foregroundStyle(Palette.danger)
+                    .foregroundStyle(offline ? Palette.paperMuted : Palette.danger)
                     .accessibilityIdentifier("audience.error")
-                if options == nil {
+                if options == nil || offline {
                     Button("Try again") { Task { await load() } }
                         .font(Typography.bodyMedium)
                         .foregroundStyle(Palette.signal)
@@ -1003,9 +1061,11 @@ struct StoryAudienceSheet: View {
     private func load() async {
         error = nil
         guard let loaded = try? await session.api.storyAudiences() else {
-            error = String(localized: "Couldn't load where you can post.")
+            useRememberedAudience()
             return
         }
+        offline = false
+        StoryAudienceMemory.save(options: loaded, userId: session.currentUser?.id)
         options = loaded
         let postable = Set(loaded.servers.filter(\.canPost).map(\.serverId))
         if let preselectedServerId, postable.contains(preselectedServerId) {
@@ -1017,6 +1077,27 @@ struct StoryAudienceSheet: View {
         if preselectsFriends, loaded.friends.enabled, loaded.friends.canPost {
             friends = true
         }
+    }
+
+    /// No connection: the list from the last time stands in, with where the
+    /// last story went ticked, so Post still works and the story waits in the
+    /// queue for a connection. With nothing remembered, the place the composer
+    /// was opened from.
+    private func useRememberedAudience() {
+        let user = session.currentUser?.id
+        let last = StoryAudienceMemory.lastChoice(user)
+        let remembered = StoryAudienceMemory.options(user)
+        let chosen = StoryAudienceMemory.selection(
+            last: last, options: remembered, preselectedServerId: preselectedServerId, preselectsFriends: preselectsFriends
+        )
+        if let remembered { options = remembered }
+        servers = chosen.servers
+        friends = chosen.friends
+        if let last { repliesEnabled = last.repliesEnabled }
+        offline = true
+        error = remembered != nil
+            ? String(localized: "No connection. This is the list from last time, and the story posts when you're back online.")
+            : String(localized: "Couldn't load where you can post.")
     }
 
     /// Hands the story to the posting queue and closes: the create, the PUTs and
@@ -1047,6 +1128,10 @@ struct StoryAudienceSheet: View {
             let base = media.map { StoryPostBytes(contentType: $0.contentType, data: $0.data, fileURL: $0.fileURL) }
             let layers = request.layerFiles.mapValues { StoryPostBytes(contentType: $0.contentType, data: $0.data) }
             try session.storyPosts.enqueue(request: body, base: base, layers: layers, userId: session.currentUser?.id, eager: eager)
+            StoryAudienceMemory.save(
+                choice: .init(serverIds: Array(servers), friends: friends, repliesEnabled: repliesEnabled),
+                userId: session.currentUser?.id
+            )
             onPosted()
         } catch {
             posting = false

@@ -35,6 +35,9 @@ struct StoryStageBase: View {
     let player: AVPlayer?
     @Binding var muted: Bool
     let size: CGSize
+    /// The base is on screen (a picture drawn, a video's first frame): the
+    /// story's timer starts here.
+    var onFirstFrame: (() -> Void)?
 
     var body: some View {
         let canvas = StoryStage.canvas(in: size)
@@ -95,7 +98,7 @@ struct StoryStageBase: View {
                     StoryCachedImage(url: poster, contentMode: fills ? .fill : .fit, metric: "poster") { _ in Color.clear }
                 }
                 if let player {
-                    StoryVideoSurface(player: player, fills: fills)
+                    StoryVideoSurface(player: player, fills: fills, onReady: onFirstFrame)
                         .overlay(alignment: .topTrailing) {
                             Button {
                                 muted.toggle()
@@ -113,11 +116,13 @@ struct StoryStageBase: View {
                         }
                 }
             } else if let url = Avatar.resolve(media.url) ?? URL(string: media.url) {
-                StoryCachedImage(url: url, contentMode: fills ? .fill : .fit, metric: "base") { failed in
+                // Under the blurred backdrop while it loads; the viewer adds a
+                // spinner if it is late.
+                StoryCachedImage(url: url, contentMode: fills ? .fill : .fit, metric: "base", onSettled: onFirstFrame) { failed in
                     if failed {
                         Image(systemName: "photo").foregroundStyle(Palette.paperMuted)
                     } else {
-                        ProgressView().tint(.white)
+                        Color.clear
                     }
                 }
             }

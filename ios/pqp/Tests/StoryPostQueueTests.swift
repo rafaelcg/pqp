@@ -36,6 +36,10 @@ final class StoryPostQueueTests: XCTestCase {
         var failPuts = false
         var holdPuts = false
         var holdCreates = false
+        /// What publish answers (`processing` for a video whose frames are being made).
+        var publishStatus: String? = "live"
+        var processingChecks = 0
+        private var statusChecks = 0
         /// This many creates fail like a dead connection, then they work.
         var failCreatesLeft = 0
         var withUploads = true
@@ -112,7 +116,22 @@ final class StoryPostQueueTests: XCTestCase {
 
         func deleteUpload(id: String) async { locked { deletedUploads.append(id) } }
 
-        func publish(storyId: String) async throws { locked { published.append(storyId) } }
+        func publish(storyId: String) async throws -> String? {
+            locked {
+                published.append(storyId)
+                return publishStatus
+            }
+        }
+
+        func storyStatus(id: String) async -> String? {
+            locked {
+                if statusChecks < processingChecks {
+                    statusChecks += 1
+                    return "processing"
+                }
+                return "live"
+            }
+        }
         func delete(storyId: String) async { locked { deleted.append(storyId) } }
 
         func put(file: URL, to upload: StoryUpload, progress: @escaping @Sendable (Int64) -> Void) async throws {
@@ -136,6 +155,7 @@ final class StoryPostQueueTests: XCTestCase {
         func snapshot() -> (requests: [CreateStoryRequest], published: [String], deleted: [String], puts: Int) {
             locked { (requests, published, deleted, putCount) }
         }
+        func setProcessing(checks: Int) { locked { publishStatus = "processing"; processingChecks = checks } }
         func failNextCreates(_ count: Int) { locked { failCreatesLeft = count } }
         func setRefuseClaims(_ status: Int?, times: Int = .max) { locked { refuseClaims = status; refusals = times } }
         func uploads() -> (minted: [(kind: String, contentType: String, byteLength: Int)], deleted: [String]) {
@@ -349,6 +369,33 @@ final class StoryPostQueueTests: XCTestCase {
         XCTAssertEqual(backend.snapshot().published, [])
         XCTAssertEqual(posts.publishedCount, 0)
         XCTAssertEqual(backend.snapshot().puts, 0)
+    }
+
+    /// A video is published but its frames are still being made: the story is
+    /// not on the strip yet, so the own ring stays (a post that vanished from
+    /// the ring would look lost) until it is live.
+    func testTheRingStaysWhileAPublishedVideoIsStillProcessing() async throws {
+        let backend = FakeBackend(storyId: storyId)
+        backend.setProcessing(checks: 2)
+        let posts = StoryPostQueue(backend: backend, store: store, usesBackgroundTime: false, processingPoll: .milliseconds(30))
+        let id = try posts.enqueue(request: try photoRequest(), base: photo, layers: [:], userId: me)
+        try await waitUntil("the job to be processing") { posts.job(id: id)?.phase == .processing }
+        XCTAssertNotNil(posts.job(for: .server(id: server, name: "QG")), "The strip still draws the ring")
+        XCTAssertEqual(posts.publishedCount, 0, "Not live yet: the strip has nothing to read")
+        XCTAssertTrue(store.loadAll().isEmpty, "Nothing left to send, so nothing on disk")
+        try await waitUntil("the story to go live") { posts.publishedCount == 1 }
+        XCTAssertTrue(posts.jobs.isEmpty)
+    }
+
+    func testDiscardingWhileProcessingDeletesTheStory() async throws {
+        let backend = FakeBackend(storyId: storyId)
+        backend.setProcessing(checks: 1_000)
+        let posts = StoryPostQueue(backend: backend, store: store, usesBackgroundTime: false, processingPoll: .milliseconds(30))
+        let id = try posts.enqueue(request: try photoRequest(), base: photo, layers: [:], userId: me)
+        try await waitUntil("the job to be processing") { posts.job(id: id)?.phase == .processing }
+        posts.discard(id)
+        try await waitUntil("the story to be deleted") { backend.snapshot().deleted == [self.storyId] }
+        XCTAssertTrue(posts.jobs.isEmpty)
     }
 
     func testAPostIsShownOnTheStripsItIsGoingTo() throws {

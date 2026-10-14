@@ -164,7 +164,11 @@ struct StoryPostStore: Sendable {
 /// What posting needs from the network, so the queue is tested without one.
 protocol StoryPostBackend: Sendable {
     func create(_ request: CreateStoryRequest) async throws -> CreateStoryResponse
-    func publish(storyId: String) async throws
+    /// Publishes; answers the story's status (`live`, or `processing` for a
+    /// video whose frames are still being made).
+    func publish(storyId: String) async throws -> String?
+    /// Where a published story stands now; nil when it is gone or unknown.
+    func storyStatus(id: String) async -> String?
     /// Best effort: the server's own sweep is the backstop.
     func delete(storyId: String) async
     /// PUT a file, reporting the bytes sent so far.
@@ -203,8 +207,12 @@ struct LiveStoryPostBackend: StoryPostBackend {
     }
     #endif
 
-    func publish(storyId: String) async throws {
-        _ = try await api.publishStory(id: storyId)
+    func publish(storyId: String) async throws -> String? {
+        try await api.publishStory(id: storyId).own?.status
+    }
+
+    func storyStatus(id: String) async -> String? {
+        try? await api.stories(ids: [id]).first?.own?.status
     }
 
     func delete(storyId: String) async {
@@ -298,6 +306,9 @@ final class StoryPostProgress: @unchecked Sendable {
 final class StoryPostQueue {
     enum Phase: Equatable, Sendable {
         case posting
+        /// Published; a video's frames are still being made, and the story is
+        /// not on the strip yet. The ring stays until it is.
+        case processing
         case failed(String)
     }
 
@@ -344,11 +355,18 @@ final class StoryPostQueue {
     @ObservationIgnored private var early: [String: [String: StoryEagerFile]] = [:]
     @ObservationIgnored private var ownerId: String?
     @ObservationIgnored private let usesBackgroundTime: Bool
+    /// Watchers of stories that are published but not yet live.
+    @ObservationIgnored private var watchers: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private let processingPoll: Duration
 
-    init(backend: any StoryPostBackend, store: StoryPostStore = .standard, usesBackgroundTime: Bool = true) {
+    init(
+        backend: any StoryPostBackend, store: StoryPostStore = .standard, usesBackgroundTime: Bool = true,
+        processingPoll: Duration = .seconds(2)
+    ) {
         self.backend = backend
         self.store = store
         self.usesBackgroundTime = usesBackgroundTime
+        self.processingPoll = processingPoll
     }
 
     /// What a strip draws on the person's own ring: a post in flight to that
@@ -401,6 +419,7 @@ final class StoryPostQueue {
     func discard(_ id: String) {
         tasks[id]?.cancel()
         tasks[id] = nil
+        watchers.removeValue(forKey: id)?.cancel()
         waiting.removeAll { $0 == id }
         endBackgroundTime(id)
         let record = job(id: id)?.record
@@ -432,6 +451,8 @@ final class StoryPostQueue {
     /// Signing out: nothing of this account's stays on the phone.
     func clear() {
         for id in jobs.map(\.id) { tasks[id]?.cancel(); endBackgroundTime(id) }
+        for watcher in watchers.values { watcher.cancel() }
+        watchers.removeAll()
         for files in early.values { for file in files.values { file.abandon(backend: backend) } }
         early.removeAll()
         tasks.removeAll()
@@ -492,7 +513,11 @@ final class StoryPostQueue {
     /// would sit pending with nobody holding its id, so it goes now.
     private func settleDiscard(_ created: CreateStoryResponse) async throws {
         if Task.isCancelled {
-            await backend.delete(storyId: created.story.id)
+            // From a task of its own: a request made by this cancelled one
+            // would be cancelled with it.
+            let backend = backend
+            let storyId = created.story.id
+            Task.detached { await backend.delete(storyId: storyId) }
             throw CancellationError()
         }
     }
@@ -538,12 +563,13 @@ final class StoryPostQueue {
         try Task.checkCancellation()
         // A story with nothing to upload (text, a call, a mention) is live
         // on the create answer and has nothing to publish.
+        var status = created.story.own?.status
         if created.upload != nil || !created.layerUploads.isEmpty {
-            try await backend.publish(storyId: created.story.id)
+            status = try await backend.publish(storyId: created.story.id)
         }
         update(id) { $0.progress = 1 }
         StoryMetrics.mark("post.live")
-        finish(id)
+        finish(id, storyStatus: status)
     }
 
     /// Every file is an upload by id (most already up, from the composer),
@@ -584,12 +610,13 @@ final class StoryPostQueue {
         update(id) { $0.record.storyId = created.story.id }
         // Answered published when it was one call; a replay can land a story
         // still pending.
-        if created.story.own?.status == "pending" || created.upload != nil || !created.layerUploads.isEmpty {
-            try await backend.publish(storyId: created.story.id)
+        var status = created.story.own?.status
+        if status == "pending" || created.upload != nil || !created.layerUploads.isEmpty {
+            status = try await backend.publish(storyId: created.story.id)
         }
         update(id) { $0.progress = 1 }
         StoryMetrics.mark("post.live")
-        finish(id)
+        finish(id, storyStatus: status)
     }
 
     /// The create that claims the uploads. A 409 says an object is not there
@@ -632,23 +659,48 @@ final class StoryPostQueue {
         do {
             try await backend.put(file: store.fileURL(record, item.file), to: ticket.upload, progress: report)
         } catch {
-            await backend.deleteUpload(id: ticket.uploadId)
+            let backend = backend
+            let minted = ticket.uploadId
+            Task.detached { await backend.deleteUpload(id: minted) }
             throw error
         }
         finished()
         return ticket.uploadId
     }
 
-    private func finish(_ id: String) {
+    private func finish(_ id: String, storyStatus: String? = nil) {
         tasks[id] = nil
         endBackgroundTime(id)
         // Discarded while the last request was in flight: nothing went live
         // that the person still means to be there.
-        guard jobs.contains(where: { $0.id == id }) else { pump(); return }
-        jobs.removeAll { $0.id == id }
+        guard let record = job(id: id)?.record else { pump(); return }
         store.remove(id)
-        publishedCount += 1
+        early[id] = nil
+        if storyStatus == "processing", let storyId = record.storyId {
+            // Published, but a video's frames are still being made: the story
+            // is not on the strip yet. The ring stays (it looks like the post
+            // vanished otherwise) until the story is live.
+            update(id) { $0.phase = .processing }
+            watchers[id] = Task { [weak self] in await self?.waitUntilLive(id, storyId: storyId) }
+        } else {
+            jobs.removeAll { $0.id == id }
+            publishedCount += 1
+        }
         pump()
+    }
+
+    private func waitUntilLive(_ id: String, storyId: String) async {
+        // Up to about three minutes; a story that will not go live is the
+        // server's to say, not a ring that spins for ever.
+        for _ in 0..<90 {
+            try? await Task.sleep(for: processingPoll)
+            guard !Task.isCancelled else { return }
+            if await backend.storyStatus(id: storyId) != "processing" { break }
+        }
+        guard !Task.isCancelled, job(id: id) != nil else { return }
+        watchers[id] = nil
+        jobs.removeAll { $0.id == id }
+        publishedCount += 1
     }
 
     private func fail(_ id: String, _ error: any Error) {

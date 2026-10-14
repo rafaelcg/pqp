@@ -388,6 +388,9 @@ struct StoryCachedImage<Placeholder: View>: View {
     var contentMode: ContentMode = .fill
     /// Names the `StoryMetrics` mark made when this picture is on screen.
     var metric: String?
+    /// Called once the picture is on screen, or has failed to be: the point a
+    /// story's timer may start.
+    var onSettled: (() -> Void)?
     @ViewBuilder var placeholder: (_ failed: Bool) -> Placeholder
 
     @State private var loaded: (url: URL, image: UIImage)?
@@ -406,14 +409,17 @@ struct StoryCachedImage<Placeholder: View>: View {
         }
         .onAppear {
             if let metric, image != nil { StoryMetrics.mark("frame." + metric) }
+            if image != nil { onSettled?() }
         }
         .task(id: url) {
             guard StoryPreloader.shared.image(for: url) == nil else { return }
             if let fetched = await StoryPreloader.shared.imageForDisplay(url) {
                 loaded = (url, fetched)
                 if let metric { StoryMetrics.mark("frame." + metric) }
+                onSettled?()
             } else if !Task.isCancelled {
                 failedUrl = url
+                onSettled?()
             }
         }
     }

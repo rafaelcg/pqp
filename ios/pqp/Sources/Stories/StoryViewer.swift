@@ -47,6 +47,15 @@ struct StoryViewer: View {
     @State private var watched: Set<String> = []
     @State private var pendingViews: Set<String> = []
     @State private var player: AVPlayer?
+    /// The story `player` plays. A video's bar only follows a player that
+    /// belongs to the story on screen.
+    @State private var playerStoryId: String?
+    /// Stories whose first frame has been shown: the timer runs from there.
+    @State private var readyIds: Set<String> = []
+    /// The story whose first frame is late (a blurred placeholder and a spinner).
+    @State private var waitingId: String?
+    /// Set once the viewer is going away: nothing advances any more.
+    @State private var closing = false
     @State private var muted = true
     @State private var error: String?
     @State private var handlerKey = "story-viewer-" + UUID().uuidString
@@ -132,6 +141,7 @@ struct StoryViewer: View {
         .task(id: current?.id) {
             if let story = current { await loadServersIfNeeded(for: story) }
         }
+        .task(id: current?.id) { await watchFirstFrame() }
         // The call card is a live roster: it follows the room while the story
         // is open, held or not.
         .task(id: callWatchId) { await watchCall() }
@@ -163,6 +173,12 @@ struct StoryViewer: View {
                 .id(playback.currentId)
                 .transition(.opacity)
                 .ignoresSafeArea(.keyboard)
+
+            // A first frame that is late: the blurred picture stays, with a spinner.
+            if let story = current, waitingId == story.id, !readyIds.contains(story.id) {
+                ProgressView().tint(.white)
+                    .accessibilityIdentifier("story.loading")
+            }
 
             // Tap zones and the hold, under the chrome so its buttons win.
             HStack(spacing: 0) {
@@ -256,7 +272,7 @@ struct StoryViewer: View {
     @ViewBuilder
     private func content(size: CGSize) -> some View {
         if let story = current {
-            StoryStageBase(story: story, player: player, muted: $muted, size: size)
+            StoryStageBase(story: story, player: player, muted: $muted, size: size, onFirstFrame: { readyIds.insert(story.id) })
                 .accessibilityElement(children: story.isVideo ? .contain : .ignore)
                 .accessibilityLabel(Text(verbatim: story.spokenDescription ?? (story.isText ? "" : String(localized: "Photo"))))
         } else if let id = playback.currentId, gone.contains(id) {
@@ -675,8 +691,29 @@ struct StoryViewer: View {
     }
 
     private func close() {
+        guard !closing else { return }
+        closing = true
         player?.pause()
         dismiss()
+    }
+
+    /// A story with no picture to wait for is ready at once; one that has, is
+    /// ready when its first frame is on screen. Late by 300 ms, a spinner; a
+    /// clip that cannot load does not hold the queue for ever.
+    private func watchFirstFrame() async {
+        guard let story = current else { return }
+        waitingId = nil
+        if story.isText || story.media == nil || (story.isVideo && videoURL(story) == nil) {
+            readyIds.insert(story.id)
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(300))
+        guard !Task.isCancelled, !readyIds.contains(story.id) else { return }
+        waitingId = story.id
+        while !Task.isCancelled, !readyIds.contains(story.id) {
+            if story.isVideo, player?.currentItem?.status == .failed { readyIds.insert(story.id) }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
     }
 
     // MARK: - Loading and the clock
@@ -723,6 +760,7 @@ struct StoryViewer: View {
         progress = 0
         player?.pause()
         player = nil
+        playerStoryId = nil
         guard let story = current else { return }
         if story.isVideo, let url = videoURL(story) {
             // A player that was already buffering this clip, when the preload
@@ -736,7 +774,10 @@ struct StoryViewer: View {
             if adopted == nil { adopted = preloader.takePlayer(for: url) }
             let next = adopted ?? AVPlayer(url: url)
             next.isMuted = muted
+            // A story seen before has a new player: its first frame is to come.
+            readyIds.remove(story.id)
             player = next
+            playerStoryId = story.id
             next.play()
         }
         updatePreloadWindow()
@@ -757,20 +798,21 @@ struct StoryViewer: View {
         preloader.setWindow(StoryPreloadPlan.window(current: current, ahead: ahead, lowData: false))
     }
 
-    /// Linear, because it is a clock. A video's bar follows the video.
+    /// Linear, because it is a clock. A video's bar follows the video. It runs
+    /// from the story's first frame (`StoryClockRules`).
     private func clock() async {
         let tick: Double = 1.0 / 30
         while !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(Int(tick * 1000)))
             guard let story = current, !paused else { continue }
-            if story.isVideo, let player, let item = player.currentItem {
-                let duration = item.duration.seconds
-                if duration.isFinite, duration > 0 {
-                    progress = min(1, player.currentTime().seconds / duration)
-                }
-            } else {
-                progress += tick / (Double(story.displayMs) / 1000)
-            }
+            let item = player?.currentItem
+            guard let value = StoryClockRules.nextProgress(
+                current: progress, isVideo: story.isVideo, ready: readyIds.contains(story.id), closing: closing,
+                playerIsForThisStory: playerStoryId == story.id && player != nil,
+                videoSeconds: player?.currentTime().seconds, videoDuration: item?.duration.seconds,
+                tick: tick, displayMs: story.displayMs
+            ) else { continue }
+            progress = value
             // A second on screen counts as seen.
             if progress * Double(story.displayMs) / 1000 >= 1, !story.isMine, !watched.contains(story.id) {
                 watched.insert(story.id)
@@ -1010,17 +1052,21 @@ struct StoryVideoSurface: UIViewRepresentable {
     let player: AVPlayer
     /// A video shaped like the canvas fills it; any other is shown whole.
     var fills = false
+    /// The layer has its first frame.
+    var onReady: (() -> Void)?
 
     func makeUIView(context: Context) -> StoryPlayerView {
         let view = StoryPlayerView()
+        view.onReady = onReady
         view.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
         view.playerLayer.player = player
         return view
     }
 
     func updateUIView(_ view: StoryPlayerView, context: Context) {
+        view.onReady = onReady
         view.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
-        view.playerLayer.player = player
+        if view.playerLayer.player !== player { view.playerLayer.player = player }
     }
 }
 
@@ -1028,12 +1074,15 @@ final class StoryPlayerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
     private var readiness: NSKeyValueObservation?
+    var onReady: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        // Debug measurement only: when the first video frame is on the layer.
-        readiness = playerLayer.observe(\.isReadyForDisplay, options: [.new]) { _, change in
-            if change.newValue == true { StoryMetrics.mark("frame.video") }
+        // When the first video frame is on the layer: the story's timer starts.
+        readiness = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+            guard layer.isReadyForDisplay else { return }
+            StoryMetrics.mark("frame.video")
+            DispatchQueue.main.async { self?.onReady?() }
         }
     }
 

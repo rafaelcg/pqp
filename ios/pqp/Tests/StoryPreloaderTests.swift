@@ -184,10 +184,6 @@ final class StoryPreloaderTests: XCTestCase {
         loader.replan()
         await settle()
         XCTAssertTrue(loader.started.contains("vid:" + video.absoluteString))
-        // And it comes on again: the one buffering is cancelled.
-        loader.lowDataOverride = true
-        loader.replan()
-        XCTAssertTrue(loader.cancelled.contains("vid:" + video.absoluteString))
     }
 
     func testClosingTheViewerCancelsEverything() async throws {

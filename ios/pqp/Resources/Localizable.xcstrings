@@ -621,6 +621,16 @@
         }
       }
     },
+    "No connection. This is the list from last time, and the story posts when you're back online." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem conexão. É a lista da última vez, e o story posta quando tu voltar a ficar online."
+          }
+        }
+      }
+    },
     "Posting" : {
       "localizations" : {
         "pt-BR" : {
