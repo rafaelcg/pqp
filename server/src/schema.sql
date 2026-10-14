@@ -6415,3 +6415,54 @@ CREATE TABLE IF NOT EXISTS server_emoji_quarantine (
 
 CREATE INDEX IF NOT EXISTS idx_server_emoji_quarantine_at
   ON server_emoji_quarantine (quarantined_at);
+
+-- ============================================================ story uploads
+--
+-- Eager story uploads (`POST /api/stories/uploads`): a photo, a video or a
+-- layer image is put in storage the moment the author has it, before any story
+-- row exists, so Post only has to create and publish. A row is one object
+-- under `stories/<user>/uploads/<id>.<ext>`, never client chosen.
+--
+-- CLAIM: `POST /api/stories` with the id copies the object (server side) to
+-- the new story's own prefix and stamps `claimed_story_id` in the same
+-- transaction as the story insert, so an upload backs one story, once. The
+-- story owns the copy from then on; the source is deleted at once and again
+-- by the sweep (a claimed row is a one hour tombstone).
+--
+-- SWEEP (`sweepStories`): an UNCLAIMED upload older than
+-- `STORY_UPLOAD_UNCLAIMED_HOURS` (6) loses its object and its row, as does one
+-- whose account is gone (`user_id` is nulled, never cascaded, because the row
+-- is the only thing that names the object).
+CREATE TABLE IF NOT EXISTS story_uploads (
+  id                UUID PRIMARY KEY,
+  user_id           UUID REFERENCES users(id) ON DELETE SET NULL,
+  kind              TEXT NOT NULL CHECK (kind IN ('base', 'layer')),
+  storage_key       TEXT NOT NULL,
+  content_type      TEXT NOT NULL,
+  byte_size         INTEGER NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  claimed_story_id  UUID,
+  claimed_at        TIMESTAMPTZ,
+  -- The story-side key the claim copied this object to.
+  claimed_key       TEXT,
+  -- Lease for the sweep's delete, same idea as `stories.media_delete_claimed_at`.
+  delete_claimed_at TIMESTAMPTZ,
+  -- The author threw it away (`DELETE /api/stories/uploads/:id`). Nothing may
+  -- claim it from here on. The row outlives the object by two hours so the
+  -- sweep can delete the object once more, after the presigned PUT URL has
+  -- expired: an aborted browser PUT can still land after the first delete.
+  discarded_at      TIMESTAMPTZ,
+  -- Every story-prefix key a create attempt MEANT to copy this object to,
+  -- written BEFORE the copy: a copy made ahead of the story's transaction has
+  -- no story row yet, so this row is what lets the sweep find it if the
+  -- process dies or the cleanup fails. The key the claim kept is `claimed_key`
+  -- and belongs to the story; the others are leftovers of refused attempts.
+  copy_keys         TEXT[] NOT NULL DEFAULT '{}'
+);
+ALTER TABLE story_uploads ADD COLUMN IF NOT EXISTS discarded_at TIMESTAMPTZ;
+ALTER TABLE story_uploads ADD COLUMN IF NOT EXISTS copy_keys TEXT[] NOT NULL DEFAULT '{}';
+
+CREATE INDEX IF NOT EXISTS idx_story_uploads_user_open
+  ON story_uploads (user_id) WHERE claimed_story_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_story_uploads_created
+  ON story_uploads (created_at);

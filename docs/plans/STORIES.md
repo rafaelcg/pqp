@@ -1336,6 +1336,57 @@ duration. Pinned by `story-media.test.ts`.
    (capture and sources, then editor and layers, then viewer and call sticker),
    each with tests and a hands-on QA section.
 
+## 18. Fast stories: eager uploads (2026-10-14)
+
+Posting felt slow because nothing started until Post. The file now goes up the
+moment the author has it, and Post only creates and publishes.
+
+- `POST /api/stories/uploads` `{ kind: "base" | "layer", contentType, byteLength }`
+  answers 201 `{ uploadId, url, method, headers, expiresAt }`. Same types and
+  limits as the old path (a layer is a photo or the drawing, 8 MB; a base is a
+  photo or an H.264 MP4, 25 MB), refused the same way (video off, stories off, house
+  cast). 20 mints in a burst and 30 a minute per process, and at most
+  `STORY_UPLOADS_OUTSTANDING_MAX` (24) unclaimed uploads per account.
+- `DELETE /api/stories/uploads/:uploadId` answers 204: the upload is marked
+  discarded (nothing can claim it any more) and the object goes now, best effort.
+  The row stays discarded for two hours and the sweep deletes the object once
+  more before it drops the row, because an aborted browser PUT can still land
+  after the DELETE and a row-less object would never be named again. Another
+  account's id and an unknown one are the same 404; a repeat and a claimed
+  upload are a harmless 204.
+- `POST /api/stories` takes `media.uploadId` and, per photo or drawing layer,
+  `upload.uploadId`. The declared type and size must be the upload's. Before the
+  transaction (CLAUDE.md: nothing between BEGIN and COMMIT touches the network)
+  the server HEADs each object (size and type exactly) and copies it, server
+  side, to a key under the new story's prefix, which no URL was ever signed for.
+  Inside the transaction the claim is one row-locked `UPDATE`, so an upload backs
+  one story: a second claim is a 409 and rolls the story back. A refused create
+  deletes the copies it made and leaves the upload usable. Publish is unchanged
+  and judges the copy (real type from the bytes, scan, video job).
+- Every copy is recorded on the upload row (`copy_keys`) BEFORE it is made. A copy
+  made ahead of the story's transaction has no story row to be swept by, so a
+  crash mid-copy or a failed cleanup would leak it; the row names it, and the
+  sweep deletes it (never the key the story kept). A claimed row is also kept
+  while its story is still pending, so a replayed create always knows which of
+  its files were eager and never hands out a PUT URL for one.
+- The response has no `upload` for an eager base and no `layerUploads` entry for
+  an eager layer, so a client can mix: eager where it had time, the old URLs for
+  the rest. A client that sends no `uploadId` gets exactly the old behaviour.
+- `publish: true` on the create, allowed only when every file is eager (else 400),
+  creates and publishes in one call and answers the published story: one round
+  trip instead of two. A failure after the story exists answers as publish would,
+  and a retry with the same `requestId` finds the pending story and publishes it.
+- Sweep: unclaimed uploads older than `STORY_UPLOAD_UNCLAIMED_HOURS` (6), and
+  those of a deleted account, lose object and row; a claimed row is a one hour
+  tombstone that retries the source delete.
+- Counters on `GET /api/admin/metrics` `stories.process`: `uploadsMinted`,
+  `uploadsClaimed`, `uploadsDiscarded`, `uploadsSwept`.
+- RUNTIME KILL SWITCH: the flag `stories_eager_uploads` (global, on by default,
+  flipped from the dashboard). Off, `POST /api/stories/uploads` answers the 404 a
+  server that predates it gives, and `GET /api/stories/config` says
+  `eagerUploads: false` (absent on an older server, which reads as off). Every
+  client then uses the plain flow, which is the whole fallback.
+
 ## Research sources
 
 - **Instagram:**

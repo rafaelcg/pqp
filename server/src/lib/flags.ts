@@ -741,6 +741,21 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/stories/config + GET /api/stories/friends",
   },
+  stories_eager_uploads: {
+    description:
+      "Stories: o arquivo começa a subir assim que a pessoa o tem, antes do Postar, e o Postar só cria e publica. Ligado por padrão; é o interruptor de emergência: desligado, a rota de upload adiantado responde 404 e o app cai no fluxo de sempre (criar, subir, publicar).",
+    env: "STORIES_EAGER_UPLOADS",
+    parseEnv: onUnlessOff,
+    // On: a kill switch, not a rollout. The plain flow is the whole fallback.
+    codeDefault: true,
+    // About the deployment's storage and traffic, not a server.
+    perServer: false,
+    // Web and the phones read `eagerUploads` from the stories config; a client
+    // that never asks still gets a 404 from the route and falls back by itself.
+    // No `(field)`: the contract test would ask for a client reader, and the
+    // clients that read it land after the server.
+    clientVia: "GET /api/stories/config + POST /api/stories/uploads",
+  },
   mixed_channel_list: {
     description:
       "Lista de canais só com categorias: tipos misturados em cada categoria, a ordem que o gerente escolher, e um servidor novo nasce com a categoria Canais.",
