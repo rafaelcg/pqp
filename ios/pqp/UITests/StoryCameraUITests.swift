@@ -81,6 +81,66 @@ final class StoryCameraUITests: XCTestCase {
         XCTAssertTrue(app.buttons["stories.own"].waitForExistence(timeout: 20), "Back on the list with the photo up")
     }
 
+    /// Post closes the composer at once; when the connection fails the draft is
+    /// kept on the own ring, with "Try again" and "Discard", and a retry posts it.
+    func testAFailedPostKeepsItsDraftUntilItIsRetried() throws {
+        let (app, serverId) = try launch(["PQP_STORY_CAMERA": "mock", "PQP_STORY_POST_FAIL": "once"])
+        openComposer(app, serverId: serverId)
+        app.buttons["camera.shutter"].tap()
+        XCTAssertTrue(app.buttons["composer.next"].waitForExistence(timeout: 15))
+        app.buttons["composer.next"].tap()
+        let post = app.buttons["audience.post"]
+        XCTAssertTrue(post.waitForExistence(timeout: 10))
+        post.tap()
+        XCTAssertTrue(post.waitForNonExistence(timeout: 5), "The composer is gone as soon as Post is tapped")
+        XCTAssertFalse(app.buttons["camera.shutter"].exists)
+        let own = app.buttons["stories.own"]
+        XCTAssertTrue(own.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS[c] \"didn't post\" OR label CONTAINS[c] 'não postou'")).firstMatch.waitForExistence(timeout: 10),
+            "The failure shows on the own ring"
+        )
+        snap(app, "post-failed-ring")
+        own.tap()
+        let retry = app.buttons["Try again"].exists ? app.buttons["Try again"] : app.buttons["Tentar de novo"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5), "Tentar de novo is offered")
+        XCTAssertTrue((app.buttons["Discard"].exists ? app.buttons["Discard"] : app.buttons["Descartar"]).exists, "So is Descartar")
+        retry.tap()
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label == 'Your story' OR label == 'Teu story'")).firstMatch.waitForExistence(timeout: 30),
+            "The retry posts the same draft"
+        )
+    }
+
+    /// No connection is not a refusal: the ring waits (grey, "waiting for a
+    /// connection") and the post goes by itself when the app is back on screen
+    /// with a network.
+    func testAPostWithNoConnectionWaitsAndPostsByItself() throws {
+        let (app, serverId) = try launch(["PQP_STORY_CAMERA": "mock", "PQP_STORY_POST_FAIL": "offline"])
+        openComposer(app, serverId: serverId)
+        app.buttons["camera.shutter"].tap()
+        XCTAssertTrue(app.buttons["composer.next"].waitForExistence(timeout: 15))
+        app.buttons["composer.next"].tap()
+        let post = app.buttons["audience.post"]
+        XCTAssertTrue(post.waitForExistence(timeout: 10))
+        post.tap()
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'waiting for a connection' OR label CONTAINS[c] 'esperando conexão'")).firstMatch.waitForExistence(timeout: 10),
+            "The ring waits instead of turning red"
+        )
+        XCTAssertFalse(
+            app.buttons.matching(NSPredicate(format: "label CONTAINS[c] \"didn't post\" OR label CONTAINS[c] 'não postou'")).firstMatch.exists
+        )
+        snap(app, "post-waiting-ring")
+        // The app comes back on screen: the waiting post tries again.
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "label == 'Your story' OR label == 'Teu story'")).firstMatch.waitForExistence(timeout: 30),
+            "It posted by itself"
+        )
+    }
+
     /// The X over a draft goes back to the camera, not out of the composer.
     func testDiscardingAShotGoesBackToTheCamera() throws {
         let (app, serverId) = try launch()

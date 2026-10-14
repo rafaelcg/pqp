@@ -53,7 +53,12 @@ final class StoryEditorModel {
     var canvas: CGSize = .zero
 
     /// Bytes and a preview for every picture layer that is still a draft.
-    private(set) var files: [String: StoryLayerFile] = [:]
+    private(set) var files: [String: StoryLayerFile] = [:] {
+        didSet { filesRevision += 1 }
+    }
+    /// Bumped whenever `files` changes, so the composer can start an upload for
+    /// a photo the moment it is added and drop one the moment it is removed.
+    private(set) var filesRevision = 0
     private(set) var previews: [String: UIImage] = [:]
     /// What the call layer's card shows before it is posted.
     private(set) var callInfo: StoryCallLayerInfo?

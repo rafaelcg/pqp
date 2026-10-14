@@ -47,8 +47,13 @@ struct StoriesConfig: Codable, Hashable, Sendable {
     /// predates layers: the editor is hidden, because that server would
     /// silently drop what was placed.
     var layersMax: Int? = nil
+    /// Whether `POST /api/stories/uploads` is on. Absent on a server that
+    /// predates eager uploads, which reads as off: a file then goes up the
+    /// old way, after Post.
+    var eagerUploads: Bool? = nil
 
     var layersEnabled: Bool { (layersMax ?? 0) > 0 }
+    var eagerUploadsEnabled: Bool { eagerUploads == true }
 
     static let off = StoriesConfig(
         enabled: false, friendsEnabled: false, mediaEnabled: false,
@@ -318,6 +323,9 @@ struct StoryMediaInput: Codable, Hashable, Sendable {
     let width: Int
     let height: Int
     var durationMs: Int? = nil
+    /// An eager upload (`POST /api/stories/uploads`) that already holds these
+    /// bytes: the create then hands back no URL for the file.
+    var uploadId: String? = nil
 }
 
 struct StoryAudienceTargets: Codable, Hashable, Sendable {
@@ -327,7 +335,7 @@ struct StoryAudienceTargets: Codable, Hashable, Sendable {
 
 /// `POST /api/stories`. Optional keys are left out of the JSON, which is what
 /// the server's `superRefine` expects (a text story must not carry `media`).
-struct CreateStoryRequest: Encodable, Sendable {
+struct CreateStoryRequest: Codable, Sendable {
     /// Made once per story the person means to post and sent again on a
     /// retry: a second create with it answers the first story (with a fresh
     /// upload URL) instead of posting a second one.
@@ -340,8 +348,24 @@ struct CreateStoryRequest: Encodable, Sendable {
     var repliesEnabled: Bool = true
     let audiences: StoryAudienceTargets
     var media: StoryMediaInput? = nil
-    var layers: [StoryLayerInput]? = nil
+    /// Each layer as the wire JSON (`StoryLayerInput` encoded): a request is
+    /// kept on disk while a post waits for a connection, and a layer's
+    /// declaration has to be patched once its upload is known.
+    var layers: [JSONValue]? = nil
     var altText: String? = nil
+    /// Create AND publish in one call. Only when every file is an eager upload.
+    var publish: Bool? = nil
+}
+
+/// `POST /api/stories/uploads`: a URL for a file before its story exists.
+struct StoryUploadTicket: Codable, Sendable {
+    let uploadId: String
+    let url: String
+    let method: String
+    let headers: [String: String]
+    let expiresAt: String?
+
+    var upload: StoryUpload { StoryUpload(url: url, method: method, headers: headers) }
 }
 
 struct StoryUpload: Codable, Hashable, Sendable {

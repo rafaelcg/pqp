@@ -105,8 +105,34 @@ final class StoryStripModel {
         await session?.api.acknowledgeStoryNotice(id: notice.id)
     }
 
+    /// Warms what opening one of the first three unseen rings will show: the
+    /// story is read (so the viewer needs no round trip) and its picture or the
+    /// start of its video is fetched. Not while the viewer is open: it keeps
+    /// its own window.
+    func preloadTray() async {
+        guard let session, viewing == nil else { return }
+        let ids = StoryPreloadPlan.trayStoryIds(strip)
+        guard !ids.isEmpty else { return }
+        let preloader = StoryPreloader.shared
+        var known = ids.compactMap { preloader.cachedStory($0) }
+        let missing = ids.filter { id in !known.contains { $0.id == id } }
+        if !missing.isEmpty, let fetched = try? await session.api.stories(ids: missing) {
+            preloader.remember(fetched)
+            known += fetched
+        }
+        guard !Task.isCancelled, viewing == nil else { return }
+        let ordered = ids.compactMap { id in known.first { $0.id == id } }
+        preloader.setWindow(StoryPreloadPlan.items(for: ordered, lowData: false))
+    }
+
+    /// What `preloadTray` depends on: the ring order and whether the viewer is up.
+    var trayPreloadKey: [String] {
+        StoryPreloadPlan.trayStoryIds(strip) + [viewing == nil ? "tray" : "viewer"]
+    }
+
     /// Open the viewer on this ring, with every ring after it queued.
     func open(_ item: StoryStripItem) {
+        StoryMetrics.mark("ring.tap")
         let people = strip.items.map(\.storyIds)
         let start = strip.items.firstIndex { $0.id == item.id } ?? 0
         viewing = StoryViewerLaunch(people: people, startPerson: start, scope: scope)
@@ -143,6 +169,9 @@ struct StoryStripView: View {
     var onPosted: () -> Void = {}
 
     @AppStorage private var hintDismissed: Bool
+    /// The post whose options are open: retry or discard when it failed,
+    /// discard or carry on while it is still going up.
+    @State private var askingAboutPost: String?
 
     init(model: StoryStripModel, showsOwnBubbleAlone: Bool = false, server: Server? = nil, onPosted: @escaping () -> Void = {}) {
         self.model = model
@@ -155,8 +184,18 @@ struct StoryStripView: View {
 
     private var strip: StoryStrip { model.strip }
 
+    /// The post this strip draws on the person's own ring, while it is on the
+    /// way up or after it failed.
+    private var posting: StoryPostQueue.Job? {
+        session.storyPosts.job(for: model.scope)
+    }
+
+    private var askedJob: StoryPostQueue.Job? {
+        askingAboutPost.flatMap { session.storyPosts.job(id: $0) }
+    }
+
     private var showsRings: Bool {
-        model.showsStrip || (strip.enabled && strip.canPost && showsOwnBubbleAlone)
+        model.showsStrip || (strip.enabled && strip.canPost && showsOwnBubbleAlone) || (strip.enabled && posting != nil)
     }
 
     private var showsHint: Bool {
@@ -184,6 +223,27 @@ struct StoryStripView: View {
             }
         }
         .animation(reduceMotion ? .easeOut(duration: 0.15) : Motion.standard, value: strip.items.map(\.id))
+        .task(id: model.trayPreloadKey) { await model.preloadTray() }
+        .onChange(of: session.storyPosts.publishedCount) { _, _ in
+            Task { await model.load() }
+        }
+        .confirmationDialog(
+            askedJob?.failed == true ? "Couldn't post your story" : (askedJob?.waiting == true ? "Waiting for connection" : "Posting your story"),
+            isPresented: Binding(get: { askedJob != nil }, set: { if !$0 { askingAboutPost = nil } }),
+            titleVisibility: .visible, presenting: askedJob
+        ) { job in
+            if job.failed || job.waiting {
+                Button("Try again") { session.storyPosts.retry(job.id) }
+            }
+            Button("Discard", role: .destructive) { session.storyPosts.discard(job.id) }
+            Button(job.failed ? "Cancel" : "Keep posting", role: .cancel) {}
+        } message: { job in
+            if let message = job.failureMessage {
+                Text(verbatim: message)
+            } else if job.waiting {
+                Text("It posts by itself when you're back online.")
+            }
+        }
         .fullScreenCover(item: $model.viewing) { launch in
             StoryViewer(launch: launch) { seen in
                 model.viewerClosed(seen: seen, reduceMotion: reduceMotion)
@@ -229,15 +289,23 @@ struct StoryStripView: View {
     private var ownBubble: some View {
         let me = session.currentUser
         let author = StoryAuthor(id: me?.id ?? "me", displayName: me?.displayName ?? "?", avatarUrl: me?.avatarUrl)
+        let job = posting
         return Button {
-            if strip.own != nil { model.openOwn() } else { model.composing = true }
+            if let job {
+                askingAboutPost = job.id
+            } else if strip.own != nil {
+                model.openOwn()
+            } else {
+                model.composing = true
+            }
         } label: {
             StoryRingCell(
                 author: author,
                 unseen: strip.own != nil,
                 hasCall: strip.own?.hasCall ?? false,
-                label: String(localized: "Your story"),
-                showsPlus: strip.canPost
+                label: label(for: job),
+                showsPlus: strip.canPost && job == nil,
+                posting: job.map { StoryRingPosting(progress: $0.progress, failed: $0.failed, waiting: $0.waiting) }
             )
         }
         .buttonStyle(.plain)
@@ -250,9 +318,38 @@ struct StoryStripView: View {
                 }
             }
         }
-        .accessibilityLabel(strip.own != nil ? Text("Your story") : Text("Your story, post"))
+        .accessibilityLabel(accessibilityLabel(for: job))
+        .accessibilityValue(progressValue(for: job))
         .accessibilityIdentifier("stories.own")
     }
+
+    private func label(for job: StoryPostQueue.Job?) -> String {
+        guard let job else { return String(localized: "Your story") }
+        if job.waiting { return String(localized: "No connection") }
+        return job.failed ? String(localized: "Didn't post") : String(localized: "Posting")
+    }
+
+    private func progressValue(for job: StoryPostQueue.Job?) -> Text {
+        guard let job, !job.failed, !job.waiting else { return Text(verbatim: "") }
+        return Text("\(Int(job.progress * 100)) percent")
+    }
+
+    private func accessibilityLabel(for job: StoryPostQueue.Job?) -> Text {
+        if let job {
+            if job.waiting { return Text("Your story is waiting for a connection. Double tap for options") }
+            return job.failed ? Text("Your story didn't post. Double tap for options") : Text("Posting your story")
+        }
+        return strip.own != nil ? Text("Your story") : Text("Your story, post")
+    }
+}
+
+/// What the own ring shows while a story is on its way up.
+struct StoryRingPosting: Equatable {
+    /// 0...1 of the bytes sent.
+    let progress: Double
+    let failed: Bool
+    /// No connection: a grey ring that posts by itself when one is back.
+    var waiting = false
 }
 
 /// A ring and the name under it.
@@ -262,14 +359,33 @@ struct StoryRingCell: View {
     let hasCall: Bool
     let label: String
     var showsPlus = false
+    var posting: StoryRingPosting?
 
     var body: some View {
         VStack(spacing: 6) {
-            StoryRing(unseen: unseen) {
+            StoryRing(unseen: unseen && posting == nil, posting: posting) {
                 Avatar(name: author.displayName, seed: author.id, size: 56, url: author.avatarUrl)
             }
             .overlay(alignment: .bottomTrailing) {
-                if showsPlus {
+                if posting?.failed == true {
+                    Image(systemName: "exclamationmark")
+                        .font(.system(size: 11, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(Palette.danger))
+                        .overlay(Circle().strokeBorder(Palette.ink, lineWidth: 2))
+                        .offset(x: 2, y: 2)
+                        .accessibilityHidden(true)
+                } else if posting?.waiting == true {
+                    Image(systemName: "wifi.slash")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Palette.paper)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(Palette.surfaceRaised))
+                        .overlay(Circle().strokeBorder(Palette.ink, lineWidth: 2))
+                        .offset(x: 2, y: 2)
+                        .accessibilityHidden(true)
+                } else if showsPlus {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .heavy))
                         .foregroundStyle(Palette.inkDeep)
@@ -290,8 +406,9 @@ struct StoryRingCell: View {
             }
             Text(verbatim: label)
                 .font(.system(size: 11, weight: unseen ? .semibold : .regular))
-                .foregroundStyle(unseen ? Palette.paper : Palette.paperMuted)
+                .foregroundStyle(posting?.failed == true ? Palette.danger : (unseen ? Palette.paper : Palette.paperMuted))
                 .lineLimit(1)
+                .minimumScaleFactor(0.7)
                 .frame(width: 66)
         }
     }
@@ -300,13 +417,17 @@ struct StoryRingCell: View {
 /// Unseen: a lime to amber sweep. Seen: a thin grey line. Two stacked layers
 /// that crossfade, never an animated gradient.
 struct StoryRing<Content: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let unseen: Bool
+    /// A post on its way up: the ring fills as the bytes go, or turns red when
+    /// it did not make it.
+    var posting: StoryRingPosting?
     @ViewBuilder var content: Content
 
     var body: some View {
         ZStack {
             Circle()
-                .strokeBorder(Palette.border, lineWidth: 1.5)
+                .strokeBorder(posting?.failed == true ? Palette.danger : Palette.border, lineWidth: posting?.failed == true ? 2.5 : 1.5)
             Circle()
                 .strokeBorder(
                     AngularGradient(
@@ -316,9 +437,38 @@ struct StoryRing<Content: View>: View {
                     lineWidth: 2.5
                 )
                 .opacity(unseen ? 1 : 0)
+            if let posting, posting.waiting {
+                // Nothing is wrong with the story: a dim ring, still.
+                Circle()
+                    .strokeBorder(Palette.paperMuted.opacity(0.7), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [5, 4]))
+                    .accessibilityIdentifier("stories.own.waiting")
+            } else if let posting, !posting.failed {
+                postingArc(posting)
+            }
             content
         }
         .frame(width: 64, height: 64)
+    }
+
+    /// Starts at 12 o'clock and never shows less than a sliver, so the ring is
+    /// on the moment the story is: the create has no bytes to count yet. Once
+    /// every byte is handed over and the server has yet to answer, the arc
+    /// turns, so a ring that cannot fill further still reads as working (held
+    /// still under Reduce Motion).
+    private func postingArc(_ posting: StoryRingPosting) -> some View {
+        let waiting = posting.progress >= StoryPostProgress.heldBack
+        return TimelineView(.animation(paused: !waiting || reduceMotion)) { context in
+            let turn = waiting && !reduceMotion
+                ? context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.1) / 1.1 * 360
+                : 0
+            Circle()
+                .trim(from: 0, to: max(0.04, min(1, posting.progress)))
+                .stroke(Palette.signal, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90 + turn))
+                .padding(1.5)
+                .animation(reduceMotion ? nil : .linear(duration: 0.2), value: posting.progress)
+        }
+        .accessibilityIdentifier("stories.own.progress")
     }
 }
 

@@ -35,6 +35,9 @@ struct StoryStageBase: View {
     let player: AVPlayer?
     @Binding var muted: Bool
     let size: CGSize
+    /// The base is on screen (a picture drawn, a video's first frame): the
+    /// story's timer starts here.
+    var onFirstFrame: (() -> Void)?
 
     var body: some View {
         let canvas = StoryStage.canvas(in: size)
@@ -72,11 +75,8 @@ struct StoryStageBase: View {
             ZStack {
                 Color.black
                 if let url = source.flatMap({ Avatar.resolve($0) ?? URL(string: $0) }) {
-                    AsyncImage(url: url) { phase in
-                        if case .success(let image) = phase {
-                            image.resizable().scaledToFill().blur(radius: 32).scaleEffect(1.12).overlay(Color.black.opacity(0.28))
-                        }
-                    }
+                    StoryCachedImage(url: url, contentMode: .fill) { _ in Color.clear }
+                        .blur(radius: 32).scaleEffect(1.12).overlay(Color.black.opacity(0.28))
                 }
             }
         } else {
@@ -88,35 +88,41 @@ struct StoryStageBase: View {
     private func mediaView(_ media: StoryMedia) -> some View {
         let fills = StoryStage.fillsCanvas(width: media.width, height: media.height)
         ZStack {
-            // A video that does not fill the canvas sits on black, as it did
-            // in the editor.
-            if media.isVideo, !fills { Color.black }
-            if media.isVideo, let player {
-                StoryVideoSurface(player: player, fills: fills)
-                    .overlay(alignment: .topTrailing) {
-                        Button {
-                            muted.toggle()
-                            player.isMuted = muted
-                        } label: {
-                            Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(10)
-                                .background(Circle().fill(.black.opacity(0.4)))
+            if media.isVideo {
+                // A video that does not fill the canvas sits on black, as it did
+                // in the editor.
+                if !fills { Color.black }
+                // The poster is under the player: there is a picture from the
+                // first frame, and the video replaces it when it has its own.
+                if let poster = Avatar.resolve(media.posterUrl) ?? media.posterUrl.flatMap(URL.init(string:)) {
+                    StoryCachedImage(url: poster, contentMode: fills ? .fill : .fit, metric: "poster") { _ in Color.clear }
+                }
+                if let player {
+                    StoryVideoSurface(player: player, fills: fills, onReady: onFirstFrame)
+                        .overlay(alignment: .topTrailing) {
+                            Button {
+                                muted.toggle()
+                                player.isMuted = muted
+                            } label: {
+                                Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(10)
+                                    .background(Circle().fill(.black.opacity(0.4)))
+                            }
+                            .padding(.top, 90)
+                            .padding(.trailing, 14)
+                            .accessibilityLabel(Text(muted ? "Turn the sound on" : "Turn the sound off"))
                         }
-                        .padding(.top, 90)
-                        .padding(.trailing, 14)
-                        .accessibilityLabel(Text(muted ? "Turn the sound on" : "Turn the sound off"))
-                    }
+                }
             } else if let url = Avatar.resolve(media.url) ?? URL(string: media.url) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().aspectRatio(contentMode: fills ? .fill : .fit)
-                    case .failure:
+                // Under the blurred backdrop while it loads; the viewer adds a
+                // spinner if it is late.
+                StoryCachedImage(url: url, contentMode: fills ? .fill : .fit, metric: "base", onSettled: onFirstFrame) { failed in
+                    if failed {
                         Image(systemName: "photo").foregroundStyle(Palette.paperMuted)
-                    default:
-                        ProgressView().tint(.white)
+                    } else {
+                        Color.clear
                     }
                 }
             }
