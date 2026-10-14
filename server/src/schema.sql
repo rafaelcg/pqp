@@ -6595,6 +6595,31 @@ CREATE TABLE IF NOT EXISTS server_bot_welcomes (
 );
 CREATE INDEX IF NOT EXISTS idx_server_bot_welcomes_recent ON server_bot_welcomes (server_id, welcomed_at);
 
+-- Reminders a server bot keeps (services/bot-reminders.ts): a member's own
+-- ("me lembra amanhã às 20h", kind 'me') and staff's repeating channel
+-- announcements (kind 'channel'). Posted by a job with no model call.
+-- `next_nonce` is the nonce of the next post, so a claim that ran out after
+-- posting finds its message instead of posting twice.
+CREATE TABLE IF NOT EXISTS server_bot_reminders (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bot_id       UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
+  server_id    UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  channel_id   UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  requester_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text         TEXT NOT NULL,
+  kind         TEXT NOT NULL CHECK (kind IN ('me', 'channel')),
+  due_at       TIMESTAMPTZ NOT NULL,
+  repeat       TEXT CHECK (repeat IN ('daily', 'weekly')),
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'cancelled')),
+  next_nonce   TEXT NOT NULL DEFAULT gen_random_uuid()::text,
+  sent_count   INTEGER NOT NULL DEFAULT 0,
+  lease_until  TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_reminders_due ON server_bot_reminders (due_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_server_bot_reminders_open ON server_bot_reminders (server_id, requester_id) WHERE status = 'pending';
+
 -- The operator's history of bots (services/bot-stats.ts), per São Paulo day.
 -- No foreign keys on purpose: a deleted bot or server keeps its past here,
 -- while its runs, plans and actions cascade away with it.

@@ -19,6 +19,7 @@ import {
 } from "@pqp/shared";
 import { useEffect, useId, useRef, useState } from "react";
 import {
+  AlarmClock,
   ArrowLeft,
   ArrowRight,
   Ban,
@@ -1009,6 +1010,7 @@ const GROUP_ICON: Record<ServerBotToolGroup, LucideIcon> = {
   senses: ImageIcon,
   lookup: Search,
   channels: Hash,
+  reminders: AlarmClock,
   posting: Send,
   moderation: Ban,
 };

@@ -54,6 +54,7 @@ import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.j
 import { startSpeechJobPoller } from "./services/speech-worker.js";
 import { startBotRunPoller } from "./services/bot-runner.js";
 import { pruneBotPeopleDaily } from "./services/bot-stats.js";
+import { BOT_REMINDERS_INTERVAL_MS, deliverDueReminders } from "./services/bot-reminders.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -442,6 +443,7 @@ export function startColdJobs(): ColdJobs {
       pruneDeliveredOutgoingWebhooks,
     ),
     every(BOT_PEOPLE_PRUNE_INTERVAL_MS, "bot-people", pruneBotPeopleDaily),
+    every(BOT_REMINDERS_INTERVAL_MS, "bot-reminders", deliverDueReminders),
     every(
       CHANNEL_SESSION_REMINDER_INTERVAL_MS,
       "channel-sessions",

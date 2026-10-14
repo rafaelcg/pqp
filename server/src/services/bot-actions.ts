@@ -17,7 +17,20 @@ import {
 import { getPool, type DbUser } from "../db.js";
 import { logEvent } from "../lib/log.js";
 import { runWithBotRequester } from "./audit.js";
-import { bumpBotStats, bumpBotTool } from "./bot-stats.js";
+import { bumpBotStats, bumpBotTool, saoPauloInstant, saoPauloLabel } from "./bot-stats.js";
+import {
+  cancelReminder,
+  createReminder,
+  getReminder,
+  listReminders,
+  REMINDER_MAX_DAYS,
+  REMINDER_MIN_LEAD_MS,
+  REMINDER_REPEATS,
+  REMINDER_TEXT_MAX,
+  REMINDERS_PER_MEMBER,
+  REMINDERS_PER_SERVER,
+  type ReminderRepeat,
+} from "./bot-reminders.js";
 import type { BotToolSpec } from "./bot-llm.js";
 import type { PollRequest } from "@pqp/shared";
 import { forumChannelsEnabled } from "../lib/forum-config.js";
@@ -988,6 +1001,164 @@ const TOOLS: ToolDef[] = [
         body: String(action.input.text),
       });
       return posted.ok ? { ok: true, line: action.label } : { ok: false, line: `${action.label}: ${posted.reason}` };
+    },
+  },
+  // ------------------------------------------------------------ reminders
+  {
+    kind: "write",
+    spec: {
+      name: "create_reminder",
+      description:
+        `Set a reminder you post later, with no model call when it fires. For anybody: "me lembra amanhã às 20h de X" posts here mentioning them. For staff only (Manage Messages): a channel announcement (announce true, no mention), in another text channel, or repeating daily or weekly ("avisa todo sábado às 19h"). Times are São Paulo wall clock, YYYY-MM-DDTHH:MM, from the current time you were given; at least a minute ahead and at most ${REMINDER_MAX_DAYS} days. At most ${REMINDERS_PER_MEMBER} open per member and ${REMINDERS_PER_SERVER} per server.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          at: { type: "string", description: "When, as São Paulo local time: YYYY-MM-DDTHH:MM." },
+          text: { type: "string", maxLength: REMINDER_TEXT_MAX, description: "What to say, in the member's words." },
+          repeat: { type: "string", enum: [...REMINDER_REPEATS], description: "Staff only: daily or weekly from `at`." },
+          announce: { type: "boolean", description: "Staff only: an announcement for the channel, mentioning nobody." },
+          channelId: { type: "string", description: "Staff only: another text channel, an id from list_channels." },
+        },
+        required: ["at", "text"],
+        additionalProperties: false,
+      },
+    },
+    async stage(session, input) {
+      const text = typeof input.text === "string" ? cleanBody(input.text).slice(0, REMINDER_TEXT_MAX) : "";
+      if (!text) {
+        throw new ToolRefusal("text is empty.");
+      }
+      const due = typeof input.at === "string" ? saoPauloInstant(input.at) : null;
+      if (!due) {
+        throw new ToolRefusal("at must be a São Paulo date and time, YYYY-MM-DDTHH:MM.");
+      }
+      const now = Date.now();
+      if (due.getTime() < now + REMINDER_MIN_LEAD_MS) {
+        throw new ToolRefusal("That time has passed or is less than a minute away. Check the current time you were given.");
+      }
+      if (due.getTime() > now + REMINDER_MAX_DAYS * 86_400_000) {
+        throw new ToolRefusal(`At most ${REMINDER_MAX_DAYS} days ahead.`);
+      }
+      const repeat = REMINDER_REPEATS.includes(input.repeat as ReminderRepeat) ? (input.repeat as ReminderRepeat) : null;
+      const elsewhere = typeof input.channelId === "string" && input.channelId !== session.ctx.channelId;
+      const channel = await existingChannel(session, elsewhere ? input.channelId : session.ctx.channelId, "channelId");
+      if (channel.type !== "text" && channel.type !== "thread") {
+        throw new ToolRefusal("Reminders go in text channels only.");
+      }
+      const staffOnly = !!repeat || input.announce === true || elsewhere;
+      const perms = await computeMemberPermissions(session.ctx.serverId, session.ctx.requesterId, channel.id);
+      if (!hasPermission(perms, Permission.VIEW_CHANNEL) || !hasPermission(perms, Permission.SEND_MESSAGES)) {
+        throw new ToolRefusal("The member who asked cannot post in that channel.");
+      }
+      if (staffOnly && !hasPermission(perms, Permission.MANAGE_MESSAGES)) {
+        throw new ToolRefusal(
+          "Repeating reminders, announcements and reminders in another channel are for staff (Manage Messages). Offer a one-off reminder for them here instead.",
+        );
+      }
+      const kind = input.announce === true || elsewhere ? "channel" : "me";
+      const preview = text.length > 60 ? `${text.slice(0, 59)}…` : text;
+      const when = saoPauloLabel(due);
+      const every = repeat === "daily" ? "todo dia" : repeat === "weekly" ? "toda semana" : null;
+      const label =
+        kind === "me"
+          ? `Lembrete pra ${session.ctx.requesterTag}${every ? ` ${every}, a partir de` : ""} ${when}: "${preview}"`
+          : `Aviso em #${channel.name}${every ? ` ${every}, a partir de` : ""} ${when}: "${preview}"`;
+      return {
+        tool: "create_reminder",
+        input: { channelId: channel.id, text, dueAt: due.toISOString(), repeat, kind },
+        label: label.replace(/\s+/g, " "),
+        destructive: false,
+      };
+    },
+    async execute(env, action) {
+      const made = await createReminder({
+        botId: env.ctx.botId,
+        serverId: env.ctx.serverId,
+        channelId: String(action.input.channelId),
+        requesterId: env.ctx.requesterId,
+        text: String(action.input.text),
+        kind: action.input.kind === "channel" ? "channel" : "me",
+        dueAt: new Date(String(action.input.dueAt)),
+        repeat: (action.input.repeat as ReminderRepeat | null) ?? null,
+      });
+      if ("refused" in made) {
+        return {
+          ok: false,
+          line:
+            made.refused === "member"
+              ? `${action.label}: já tem ${REMINDERS_PER_MEMBER} lembretes abertos, cancele um antes`
+              : `${action.label}: o servidor já tem ${REMINDERS_PER_SERVER} lembretes abertos`,
+        };
+      }
+      return { ok: true, line: action.label };
+    },
+  },
+  {
+    kind: "read",
+    spec: {
+      name: "list_reminders",
+      description:
+        "The member's open reminders on this server, soonest first (id, when in São Paulo time, channel, text, repeat). Staff also see every channel announcement. cancel_reminder takes an id from here.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    async read(session) {
+      const staff = hasPermission(await session.requesterServerPerms(), Permission.MANAGE_MESSAGES);
+      const rows = await listReminders({
+        serverId: session.ctx.serverId,
+        requesterId: session.ctx.requesterId,
+        withAnnouncements: staff,
+      });
+      return {
+        count: rows.length,
+        reminders: rows.map((row) => ({
+          id: row.id,
+          when: saoPauloLabel(row.due_at),
+          channel: `#${row.channel_name}`,
+          text: row.text,
+          repeat: row.repeat,
+          kind: row.kind === "me" ? "reminder for the member" : "channel announcement",
+          setBy: row.requester_name,
+        })),
+      };
+    },
+  },
+  {
+    kind: "write",
+    spec: {
+      name: "cancel_reminder",
+      description:
+        "Cancel a reminder by its id from list_reminders. A member cancels their own; staff (Manage Messages) also cancel channel announcements.",
+      inputSchema: {
+        type: "object",
+        properties: { reminderId: { type: "string", description: "An id from list_reminders." } },
+        required: ["reminderId"],
+        additionalProperties: false,
+      },
+    },
+    async stage(session, input) {
+      const id = typeof input.reminderId === "string" && UUID_RE.test(input.reminderId) ? input.reminderId : null;
+      const reminder = id ? await getReminder(session.ctx.serverId, id) : null;
+      if (!reminder) {
+        throw new ToolRefusal("No open reminder with that id. Call list_reminders.");
+      }
+      if (reminder.requester_id !== session.ctx.requesterId) {
+        const perms = await computeMemberPermissions(session.ctx.serverId, session.ctx.requesterId, reminder.channel_id);
+        if (reminder.kind !== "channel" || !hasPermission(perms, Permission.MANAGE_MESSAGES)) {
+          throw new ToolRefusal("That reminder is somebody else's.");
+        }
+      }
+      const preview = reminder.text.length > 60 ? `${reminder.text.slice(0, 59)}…` : reminder.text;
+      return {
+        tool: "cancel_reminder",
+        input: { reminderId: reminder.id },
+        label: `Cancelar o lembrete de ${saoPauloLabel(reminder.due_at)}: "${preview}"`.replace(/\s+/g, " "),
+        destructive: false,
+      };
+    },
+    async execute(env, action) {
+      return (await cancelReminder(env.ctx.serverId, String(action.input.reminderId)))
+        ? { ok: true, line: action.label }
+        : { ok: false, line: `${action.label}: já tinha saído ou sido cancelado` };
     },
   },
   // ------------------------------------------------- messages and threads

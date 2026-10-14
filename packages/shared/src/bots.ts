@@ -46,6 +46,7 @@ export const SERVER_BOT_TOOL_GROUPS = {
     "read_poll",
   ],
   channels: ["create_channel", "edit_channel", "move_channel", "delete_channel"],
+  reminders: ["create_reminder", "list_reminders", "cancel_reminder"],
   posting: [
     "post_message",
     "pin_message",

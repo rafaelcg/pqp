@@ -42,6 +42,54 @@ function offsetMinutes(at: number): number {
   return match[1] === "-" ? -minutes : minutes;
 }
 
+/**
+ * "2026-10-15T20:00" read as a São Paulo wall clock, as an instant. Null when
+ * it is not a real date and time. The offset is read for that instant, not
+ * assumed, so it stays right if the zone ever changes its rules again.
+ */
+export function saoPauloInstant(local: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::00)?$/.exec(local.trim());
+  if (!match) {
+    return null;
+  }
+  const [year, month, day, hour, minute] = match.slice(1).map(Number) as [number, number, number, number, number];
+  const wall = Date.UTC(year, month - 1, day, hour, minute);
+  const check = new Date(wall);
+  if (check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day || hour > 23 || minute > 59) {
+    return null;
+  }
+  const first = wall - offsetMinutes(wall) * 60_000;
+  return new Date(wall - offsetMinutes(first) * 60_000);
+}
+
+const labelFormatter = new Intl.DateTimeFormat("pt-BR", {
+  timeZone: ACTIVITY_TIMEZONE,
+  weekday: "short",
+  day: "2-digit",
+  month: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+const nowFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: ACTIVITY_TIMEZONE,
+  weekday: "long",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+/** An instant as people in São Paulo read it, for a card: "qui., 15/10, 20:00". */
+export function saoPauloLabel(at: Date): string {
+  return labelFormatter.format(at);
+}
+
+/** Now in São Paulo, for the model: "Wednesday, 14/10/2026, 19:30". */
+export function saoPauloNow(at: number = Date.now()): string {
+  return nowFormatter.format(new Date(at));
+}
+
 /** How long the per-person rows live. They only exist to count distinct people. */
 export const BOT_PEOPLE_RETENTION_DAYS = 90;
 

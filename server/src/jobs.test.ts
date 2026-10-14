@@ -123,6 +123,10 @@ vi.mock("./services/server-emoji-scan.js", () => ({
 }));
 // `bot-foundations.test.ts` pins what the bot tables hold; here only the
 // cadence of the per-person prune.
+vi.mock("./services/bot-reminders.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./services/bot-reminders.js")>()),
+  deliverDueReminders: vi.fn(async () => 0),
+}));
 vi.mock("./services/bot-stats.js", () => ({
   pruneBotPeopleDaily: vi.fn(async () => 0),
 }));
@@ -150,6 +154,7 @@ import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { processStoryVideos, sweepStories } from "./services/story-media.js";
 import { runChannelLayoutMigrations } from "./services/channel-layout.js";
 import { pruneBotPeopleDaily } from "./services/bot-stats.js";
+import { deliverDueReminders } from "./services/bot-reminders.js";
 import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
@@ -245,11 +250,11 @@ describe("cold jobs", () => {
     // with the Retrospectiva's seat sampler (a minute) and watched-party copy
     // (15 minutes), both asserted below; 30 with the server bot run poller
     // (adaptive, like the speech poller); 31 with the bot people prune
-    // (six hours, asserted below).
+    // (six hours, asserted below); 32 with the bot reminders (30 s, below).
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(31);
+    expect(jobs.count).toBe(32);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -285,6 +290,8 @@ describe("cold jobs", () => {
     expect(processStoryVideos).toHaveBeenCalledTimes(48);
     // The soundboard upload sweep: a minute, so four, and none at boot.
     expect(sweepSoundboardUploads).toHaveBeenCalledTimes(4);
+    // The bot reminders: every 30 s, no boot run, so eight in four minutes.
+    expect(deliverDueReminders).toHaveBeenCalledTimes(8);
 
     await vi.advanceTimersByTimeAsync(PENDING_DELETION_SWEEP_INTERVAL_MS);
     expect(sweepPendingAccountDeletions).toHaveBeenCalledTimes(1);

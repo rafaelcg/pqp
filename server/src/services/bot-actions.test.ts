@@ -403,7 +403,7 @@ describeDb("server bot actions", () => {
       );
       const { lines, items } = await executePlan(plan!, ctx);
       expect(lines.slice(0, -1)).toEqual(steps.slice(0, -1).map(([tool]) => `✓ ${tool}`));
-      expect(lines.at(-1)).toMatch(/^✓ create_invite: https?:\/\/\S+\/app\/invite\/\w+/);
+      expect(lines.at(-1)).toMatch(/^✓ create_invite: https?:\/\/\S+\/app\/invite\/[\w-]+/);
       expect(items.at(-1)?.detail).toMatch(/\/app\/invite\//);
       const left = await getPool().query(
         `SELECT (SELECT COUNT(*)::int FROM member_timeouts WHERE server_id = $1 AND user_id = $2 AND expires_at > NOW()) AS timeouts,

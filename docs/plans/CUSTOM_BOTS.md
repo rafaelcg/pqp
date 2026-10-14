@@ -53,6 +53,10 @@ The bot acts through tools. Each write tool calls the same API route a member's 
 |---|---|---|
 | `list_channels`, `list_members` | (read) | No |
 | `read_channel` | View Channel and Read Message History on that channel | No |
+| `catch_up` | As `read_channel`; up to 150 messages over 72 hours, since the requester last read the channel | No |
+| `search_messages` | (read); the requester's own search, then only channels the bot can read too | No |
+| `create_reminder` | Send Messages there; repeating, announcing or another channel also need Manage Messages | Only past three actions |
+| `list_reminders`, `cancel_reminder` | (read); a member cancels their own, staff also cancel announcements | Only past three actions |
 | `list_bans` | Ban Members | No |
 | `ask_member` | (always offered, no switch) | No |
 | `create_channel`, `edit_channel`, `move_channel` | Manage Channels | Only past three actions |
@@ -82,7 +86,7 @@ Rules:
 6. The route's audit row has the bot as the actor and "pedido por @x" as the reason.
 7. Messages are named by their `[mN]` number in the conversation, never by id.
 8. Never: roles, permissions, making a channel private, events, web search, DMs. The model never touches a role. The bot's own role is made by code when staff save its tools (see below).
-9. The reply carries a card (`messages.bot_card`, `botCard` on the message): the plan waiting for "sim", or each step with its outcome. Only server code writes it, and the web client draws it only for a bot author. The body keeps a plain-text copy for clients that do not draw cards.
+9. The reply carries a card (`messages.bot_card`, `botCard` on the message): the plan waiting for "sim", or each step with its outcome. A confirmed plan finishes on its own card: each step's mark lands as it runs, and the card and its text copy end as the result, with no second message. A settled card is drawn as one line, with its steps behind a toggle. Only server code writes it, and the web client draws it only for a bot author. The body keeps a plain-text copy for clients that do not draw cards.
 10. While the bot works, its typing frames carry `activity: { tool }`. The web client shows "Julius está criando um canal…" with a shimmer instead of "digitando".
 
 ### The bot's role
@@ -94,7 +98,7 @@ A bot with no role holds only @everyone's permissions, so its key fails every wr
 3. A bit a more powerful staff member granted stays while its tool stays on. Turning the tool off removes it.
 4. Only somebody with Manage Roles makes or changes it. An existing role changes only when it ranks below the person saving. Otherwise the save still works and the role is left alone.
 5. Each change is in the audit log under the person who saved. Deleting the bot deletes its role. If somebody deletes the role, the next save makes a new one.
-11. `ask_member` asks the requester one question with two to four answers, instead of guessing. It ends the request: any write staged in the same turn is dropped. The question is posted with an `ask` card that lasts ten minutes. Only the requester gets buttons (`POST /api/bots/asks/:messageId/answer`). A press claims the card with a conditional `UPDATE`, then posts the chosen answer as the requester's own reply to the question, which starts a new run. Typing an answer also works.
+11. `ask_member` asks the requester one question with two to four answers, instead of guessing. It ends the request: any write staged in the same turn is dropped. The question is posted with an `ask` card that lasts ten minutes. Only the requester gets buttons (`POST /api/bots/asks/:messageId/answer`). A press claims the card with a conditional `UPDATE` and queues a run on the question itself (trigger `answer`), under the same per-member limits and access checks as a typed reply. Nothing is posted for the member: the card shows what they picked, and the transcript gives the model the buttons and the pick. Typing an answer also works.
 
 12. A tool behind a feature that is off is not offered, and the prompt says why: `create_forum_post` and the forum type of `create_channel` need `forum_channels` on for the server, and `create_bau_post` needs Baú on.
 13. When a step fails, one short model call (at most 200 output tokens) writes the sentence above the result, knowing what failed and why. A request where everything works costs nothing more. Without a provider, budget or answer, a fixed "Não deu certo: …" line is used. Route error codes are shown in words (`forum_channels_off` reads "os fóruns estão desligados neste servidor").
@@ -102,6 +106,21 @@ A bot with no role holds only @everyone's permissions, so its key fails every wr
 15. A poll in the conversation reads `[poll: "question"; read_poll shows the votes]`. Options are numbered from 1 for `read_poll` and `vote_poll`; without a message number both use the newest poll in the conversation.
 
 The model learns the tools from the request itself: each tool goes to the API with a name, a description and a JSON input schema. The system prompt holds only the general rules (ids come from the list tools, writes are staged, ask instead of guessing, never mention the requester).
+
+## Welcome
+
+Staff can turn on a fixed welcome in the bot's settings: a channel and a text, with `{membro}` (an @mention of who joined) and `{servidor}` (the server's name). No model is called, so it costs nothing. `welcomeNewMember` in `server/src/services/bots.ts` runs after the join commits, on the invite, community and SSO paths. Each person is welcomed once per server (`server_bot_welcomes`), so leaving and joining again is not welcomed twice, and a server gets at most 20 welcomes an hour. The text is cleaned like a reply: no `@everyone`.
+
+## Reminders
+
+`create_reminder` stores a reminder in `server_bot_reminders`; the `bot-reminders` job (every 30 seconds, `server/src/services/bot-reminders.ts`) posts it when due, with no model call.
+
+1. Anybody may set a one-off reminder in the channel they ask from. It mentions them when it fires.
+2. A repeating reminder (daily or weekly), an announcement that mentions nobody, or a reminder in another channel needs Manage Messages, checked when it is set and again when it fires.
+3. Times are São Paulo wall clock. Each request tells the model the current São Paulo time in the user message, not the system prompt, so the cached prefix does not change every minute.
+4. At least a minute ahead, at most 30 days. At most 5 open per member and 50 per server.
+5. Delivery claims with a lease and `SKIP LOCKED`, and posts with a stored nonce that is checked first, so a retry never posts twice. A repeat moves to its next slot on its own schedule and skips what it missed while the API was down.
+6. A reminder whose member left, lost access, is timed out, or whose bot is off is cancelled when it comes due.
 
 ## Images and voice notes
 

@@ -12,7 +12,7 @@ import { isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
 import { broadcastToChannel, postChannelMessage } from "../ws/chat.js";
 import { BOT_RUNS_CHANNEL, botRepliesPerDay, sendBotNotice } from "./bots.js";
-import { botDay, bumpBotPerson, bumpBotStats, nextBotDayStart } from "./bot-stats.js";
+import { botDay, bumpBotPerson, bumpBotStats, nextBotDayStart, saoPauloNow } from "./bot-stats.js";
 import {
   findMessageByNonce,
   getHydratedMessage,
@@ -753,6 +753,9 @@ async function runOne(run: ClaimedRun): Promise<void> {
     transcript.text,
     "</conversation>",
     "",
+    // Here and not in the system prompt: a clock there would change the
+    // cached prefix every minute. Reminders need it to read "amanhã às 20h".
+    `Now in São Paulo: ${saoPauloNow()}.`,
     run.trigger === "answer"
       ? `${asker} answered your question ${target} by pressing "${ctx.trigger.body}". Carry on from their choice.`
       : run.follow_up
