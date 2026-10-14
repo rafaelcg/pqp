@@ -1,6 +1,7 @@
 import type { Channel, ServerBotActivityItem, ServerBotDto, ServerBotOverview } from "@pqp/shared";
 import type { KeyboardEvent } from "react";
 import {
+  AlarmClock,
   BarChart3,
   Hash,
   Link2,
@@ -74,6 +75,8 @@ const ACTIVITY_ICON: Record<string, LucideIcon> = {
   reply_forum_post: MessageSquarePlus,
   create_poll: BarChart3,
   create_invite: Link2,
+  create_reminder: AlarmClock,
+  cancel_reminder: AlarmClock,
   timeout_member: Timer,
   kick_member: UserMinus,
   ban_member: UserMinus,
