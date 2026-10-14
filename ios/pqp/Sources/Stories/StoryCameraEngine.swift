@@ -129,11 +129,14 @@ final class StoryCaptureCore: @unchecked Sendable {
         let hasMultipleCameras: Bool
     }
 
+    /// Whether the phone has both cameras: asked of the daemon once per session
+    /// object, not on every flip.
+    private var hasBothCameras: Bool?
+
     func snapshot() -> Snapshot {
-        Snapshot(
-            hasFlash: hasFlash, zoomRange: zoomRange, device: device,
-            hasMultipleCameras: discovery(.back) != nil && discovery(.front) != nil
-        )
+        let both = hasBothCameras ?? (discovery(.back) != nil && discovery(.front) != nil)
+        hasBothCameras = both
+        return Snapshot(hasFlash: hasFlash, zoomRange: zoomRange, device: device, hasMultipleCameras: both)
     }
 
     func hasDevice(_ position: StoryCameraPosition) -> Bool { discovery(position) != nil }
@@ -145,6 +148,9 @@ final class StoryCaptureCore: @unchecked Sendable {
     private(set) var device: AVCaptureDevice?
     private var photoDelegates: [Int64: PhotoDelegate] = [:]
     private var recordingDelegate: RecordingDelegate?
+    /// Which recording `recordingDelegate` is, so a finished one can only ever
+    /// clear its own bookkeeping, never a newer clip's.
+    private var recordingToken: UUID?
     private var observers: [NSObjectProtocol] = []
 
     /// 1.0 on a wide-only phone; the ultra-wide's switch-over factor on a
@@ -353,17 +359,28 @@ final class StoryCaptureCore: @unchecked Sendable {
         }
         if torch { setTorch(true) }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("story-shot-\(UUID().uuidString).mov")
+        let token = UUID()
         let delegate = RecordingDelegate { [weak self] result in
-            // The answer goes out first; the torch and the bookkeeping are
-            // device work and run on the queue, not on whatever thread
-            // AVFoundation called the delegate on (it can be the main one).
-            completion(result)
-            self?.queue.async {
-                self?.setTorch(false)
-                self?.recordingDelegate = nil
+            // The delegate can be called on any thread (the main one among
+            // them). The queue owns the recording state, so it is cleaned up
+            // there BEFORE the answer goes out: a stop processed after this
+            // sees no clip rather than a finished one, and a clip that starts
+            // after the answer cannot have its state cleared by this one.
+            guard let self else {
+                completion(result)
+                return
+            }
+            self.queue.async {
+                if self.recordingToken == token {
+                    self.recordingDelegate = nil
+                    self.recordingToken = nil
+                    self.setTorch(false)
+                }
+                completion(result)
             }
         }
         recordingDelegate = delegate
+        recordingToken = token
         movieOutput.startRecording(to: url, recordingDelegate: delegate)
     }
 
