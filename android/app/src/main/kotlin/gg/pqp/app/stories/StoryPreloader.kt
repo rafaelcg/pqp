@@ -72,7 +72,9 @@ class StoryPreloader(
     /** Stories that finished, so one that is still in the window is not fetched twice. */
     private val done = ConcurrentHashMap.newKeySet<String>()
     private val wanted = ConcurrentHashMap<String, List<String>>()
-    private var planning: Job? = null
+
+    /** One plan being worked out per source, so the tray replanning cannot cancel the viewer's. */
+    private val planning = ConcurrentHashMap<String, Job>()
 
     /** Stories whose preload failed, and when: not tried again for a while, so a bad link is not a hot loop. */
     private val failedAt = ConcurrentHashMap<String, Long>()
@@ -144,7 +146,7 @@ class StoryPreloader(
     }
 
     private fun forgetEverything() {
-        planning?.cancel()
+        planning.values.forEach { it.cancel() }
         running.values.forEach { it.cancel() }
         running.clear()
         details.clear()
@@ -167,7 +169,7 @@ class StoryPreloader(
     fun pause() {
         viewerOpen = true
         paused = true
-        planning?.cancel()
+        planning.values.forEach { it.cancel() }
         running.values.forEach { it.cancel() }
         running.clear()
     }
@@ -216,8 +218,10 @@ class StoryPreloader(
     private fun replan(source: String, compute: suspend () -> List<String>) {
         // Debug builds only: a marker file turns the preload off, to measure the same build without it.
         if (StoryPerf.preloadOff(appContext.filesDir)) return
-        planning?.cancel()
-        planning = scope.launch {
+        // While a viewer is open the tray is behind it and has no say.
+        if (source == TRAY && viewerOpen) return
+        planning[source]?.cancel()
+        planning[source] = scope.launch {
             val list = compute()
             // A plan that was replaced while it was being worked out must not commit.
             ensureActive()
@@ -274,11 +278,14 @@ class StoryPreloader(
             }
             media != null -> image(absolute(media.url), StoryPreloadRules.baseKey(story.id))
         }
-        story.layers.forEach { layer ->
-            when (layer) {
-                is ImageStoryLayer -> image(absolute(layer.url), StoryPreloadRules.layerKey(story.id, layer.id))
-                is DrawingStoryLayer -> image(absolute(layer.url), StoryPreloadRules.layerKey(story.id, layer.id))
-                else -> Unit
+        // A story's layer pictures are independent: fetched together, not one round trip after another.
+        coroutineScope {
+            story.layers.forEach { layer ->
+                when (layer) {
+                    is ImageStoryLayer -> launch { image(absolute(layer.url), StoryPreloadRules.layerKey(story.id, layer.id)) }
+                    is DrawingStoryLayer -> launch { image(absolute(layer.url), StoryPreloadRules.layerKey(story.id, layer.id)) }
+                    else -> Unit
+                }
             }
         }
     }

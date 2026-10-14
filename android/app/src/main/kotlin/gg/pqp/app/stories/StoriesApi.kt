@@ -141,7 +141,7 @@ suspend fun ApiClient.uploadStoryBytes(
     bytes: ByteArray,
     paceMs: Long = 0L,
     onSent: (Long) -> Unit,
-) = putStoryBody(upload, contentType, ProgressBody(bytes.size.toLong(), contentType.toMediaTypeOrNull(), paceMs, onSent) { Buffer().write(bytes) })
+) = putStoryBody(upload, contentType, ProgressBody(bytes.size.toLong(), contentType.toMediaTypeOrNull(), paceMs, onSent) { bytes.inputStream().source() })
 
 private suspend fun ApiClient.putStoryBody(upload: StoryUpload, contentType: String, body: RequestBody) {
     val builder = Request.Builder().url(upload.url).put(body)

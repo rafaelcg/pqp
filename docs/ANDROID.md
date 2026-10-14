@@ -2346,7 +2346,10 @@ does with it.
   app; a draft found on disk after the process died comes back as a failed ring
   and posts only when the person taps retry. Signing out wipes drafts. There is
   no foreground service: a post is a few seconds of upload, and one that loses
-  its process is a draft, not a loss.
+  its process is a draft, not a loss. The one gap is the moment between "Postar"
+  and the draft reaching disk (the files being made ready: milliseconds for a
+  photo, seconds for a clip whose sound is taken out): a process that dies in it
+  loses that post.
 - **Files go ahead of the story (eager uploads).** Where the server says
   `eagerUploads` in `GET /api/stories/config`, `EagerSession` (one per composer)
   starts each file the moment its bytes are final: the base when the composer

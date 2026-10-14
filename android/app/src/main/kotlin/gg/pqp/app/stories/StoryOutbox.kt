@@ -84,6 +84,7 @@ class StoryOutbox(
     root: File,
 ) {
     private val drafts = StoryDraftStore(root)
+    private val gate = Semaphore(UPLOADS_AT_ONCE)
     private val jobs = ConcurrentHashMap<String, Job>()
 
     /** Eager uploads, shared with the composer that starts them and the outbox that claims them. */
@@ -109,7 +110,7 @@ class StoryOutbox(
     fun enqueue(input: StoryPostInput): String {
         val id = UUID.randomUUID().toString()
         pendingInputs[id] = input
-        eagers[id] = input.eager
+        eagers[id] = matching(input)
         setEntry(id, StoryOutboxRules.Status.Preparing, null)
         launch(id) {
             // Read from the map, not captured: once the draft is on disk the editor's buffers can go.
@@ -118,6 +119,22 @@ class StoryOutbox(
             upload(draft)
         }
         return id
+    }
+
+    /**
+     * Of the uploads handed over, the ones that are exactly what this post sends: the base the person picked (not a
+     * clip made over since), the photo layer's own file, the drawing as it is now. The rest are thrown away here.
+     */
+    private fun matching(input: StoryPostInput): Map<String, EagerUpload> {
+        val strokes = input.layers.filterIsInstance<InkLayer>().associate { it.id to it.strokes }
+        val keep = input.eager.filter { (key, handle) ->
+            when {
+                key == DraftFile.BASE -> input.media != null && handle.tag === input.media && !(input.muted && input.media.isVideo)
+                else -> handle.tag === input.layerFiles[key] || (strokes[key] != null && handle.tag == strokes[key])
+            }
+        }
+        input.eager.filterKeys { it !in keep }.values.forEach(eager::discard)
+        return keep
     }
 
     /** Send a failed draft again, the same request. */
@@ -264,8 +281,7 @@ class StoryOutbox(
             val layerFiles = remaining.filter { it.key != DraftFile.BASE }
             val slots = created.layerUploads.associateBy { it.layerId }
             if (slots.keys != layerFiles.map { it.key }.toSet()) error("The server and the phone disagree about which layer files to upload")
-            // A few independent signed PUTs at a time; publish only when every one is up.
-            val gate = Semaphore(UPLOADS_AT_ONCE)
+            // A few independent signed PUTs at a time, across every post; publish only when every one is up.
             coroutineScope {
                 val sends = buildList {
                     if (base != null) {

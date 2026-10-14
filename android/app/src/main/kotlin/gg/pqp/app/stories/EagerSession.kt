@@ -6,6 +6,8 @@ import gg.pqp.app.stories.editor.InkRenderer
 import gg.pqp.app.stories.editor.LayerFile
 import gg.pqp.app.stories.editor.PhotoLayer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /**
@@ -85,6 +87,8 @@ class EagerSession(private val uploads: StoryEagerUploads) {
         for ((key, source) in wanted) {
             if (synchronized(this) { handles.containsKey(key) }) continue
             val file = source.second() ?: continue
+            // Replaced while the drawing was being rendered: the newer sync owns what is on the canvas now.
+            currentCoroutineContext().ensureActive()
             synchronized(this) {
                 if (!closed && !handles.containsKey(key)) {
                     handles[key] = uploads.start(key, "layer", file.contentType, file.bytes, tag = source.first, file = file)

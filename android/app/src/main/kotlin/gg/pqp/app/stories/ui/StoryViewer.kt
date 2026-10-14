@@ -911,14 +911,17 @@ private fun ReplyFooter(session: SessionStore, story: Story, onFocus: (Boolean) 
             flash = null
         }
     }
+    // The newest reaction wins: an answer that arrives after a later tap must not overwrite it.
+    val latest = remember(story.id) { intArrayOf(0) }
     val react: (String) -> Unit = { value ->
         val next = if (reaction == value) null else value
+        val mine = ++latest[0]
         reaction = next
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         if (next != null) flash = StoriesRules.reactionGlyph(next)
         scope.launch {
             // The preload cache learns of it only when the server did.
-            if (runCatching { session.api.reactToStory(story.id, next) }.isSuccess) onReacted(next)
+            if (runCatching { session.api.reactToStory(story.id, next) }.isSuccess && mine == latest[0]) onReacted(next)
         }
     }
     val sentLabel = stringResource(R.string.stories_viewer_sent)

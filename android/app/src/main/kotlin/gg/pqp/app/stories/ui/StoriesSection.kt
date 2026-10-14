@@ -75,9 +75,8 @@ fun StoriesSection(
     val preloader = remember(session) { StoryPreloader.of(context, session) }
     val trayRings = if (strip?.enabled == true) StoryPreloadRules.trayRings(strip.items) else emptyList()
     val trayKey = trayRings.map { it.author.id to it.storyIds }
-    LaunchedEffect(trayKey) {
-        if (trayRings.isNotEmpty()) preloader.onTray(trayRings)
-    }
+    // Also when there is nothing to preload any more: that is how the old wishes are dropped.
+    LaunchedEffect(trayKey) { preloader.onTray(trayRings) }
     if (strip != null && strip.enabled) {
         val nothingLive = strip.items.isEmpty() && strip.own == null
         Column(modifier) {

@@ -8,6 +8,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -30,6 +32,8 @@ class StoryEagerUploads(
     private val session: SessionStore,
     private val scope: CoroutineScope,
 ) {
+    private val gate = Semaphore(AT_ONCE)
+
     /**
      * Start sending [bytes]. [tag] names what they were made from (the picked media, a layer file, a
      * drawing's strokes), so a caller can tell later whether the upload still matches what is on the canvas.
@@ -39,11 +43,14 @@ class StoryEagerUploads(
         val pace = StoryPerf.uploadPaceMs(appContext.filesDir)
         upload.job = scope.launch {
             try {
-                val minted = session.api.createStoryUpload(kind, contentType, bytes.size.toLong())
-                upload.mintedId = minted.uploadId
-                session.api.uploadStoryBytes(minted.asUpload(), contentType, bytes, pace) { upload.sent = it }
-                upload.sent = bytes.size.toLong()
-                upload.completed = true
+                // A few at a time, however many files a story has: a story can carry a base and seven layers.
+                gate.withPermit {
+                    val minted = session.api.createStoryUpload(kind, contentType, bytes.size.toLong())
+                    upload.mintedId = minted.uploadId
+                    session.api.uploadStoryBytes(minted.asUpload(), contentType, bytes, pace) { upload.sent = it }
+                    upload.sent = bytes.size.toLong()
+                    upload.completed = true
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -79,6 +86,7 @@ class StoryEagerUploads(
 
     private companion object {
         const val TAG = "pqp.stories"
+        const val AT_ONCE = 3
     }
 }
 
