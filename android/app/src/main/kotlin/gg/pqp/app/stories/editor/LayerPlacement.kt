@@ -46,3 +46,34 @@ fun PlacedLayer(
         },
     ) { content() }
 }
+
+/**
+ * [PlacedLayer] for words and cards, drawn crisp at any scale: the content is laid out at its final size (the canvas
+ * width times [scale], which [content] receives) and only turned, never scaled. A layer that is scaled after it is
+ * laid out is a picture of a layer stretched; this is the layer itself.
+ */
+@Composable
+fun CrispLayer(
+    x: Float,
+    y: Float,
+    scale: Float,
+    rotation: Float,
+    canvas: LayerMath.Canvas,
+    modifier: Modifier = Modifier,
+    content: @Composable (canvasWidthPx: Float) -> Unit,
+) {
+    Box(
+        modifier.layout { measurable, constraints ->
+            val placeable = measurable.measure(Constraints())
+            layout(constraints.maxWidth, constraints.maxHeight) {
+                placeable.placeWithLayer(
+                    (x * canvas.width - placeable.width / 2f).roundToInt(),
+                    (y * canvas.height - placeable.height / 2f).roundToInt(),
+                ) {
+                    rotationZ = Math.toDegrees(rotation.toDouble()).toFloat()
+                    transformOrigin = TransformOrigin.Center
+                }
+            }
+        },
+    ) { content(canvas.width * scale) }
+}

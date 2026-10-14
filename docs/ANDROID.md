@@ -2331,6 +2331,88 @@ does with it.
   - **TalkBack.** The base carries the story's `altText` (its text layers, in
     order, else its caption) as its description, and the text layers are hidden
     from the reader when it is there, so nothing is read twice.
+- **Posting is the outbox's, not the composer's.** "Postar" hands the story to
+  `StoryOutbox` (app-scoped) and the composer closes at once. The outbox makes
+  the files and the request ready, writes them as a draft under
+  `files/story-outbox/<id>/` (`StoryDraftStore`), creates the story, PUTs every
+  file streamed from disk with a running byte count, and publishes. The own
+  ring on every strip draws that count as a progress ring (`PostingRing`,
+  capped at 96% until the story is live; no number for a card of only words;
+  a fixed arc, not a spinning one, with "Remove animations" on). A failure
+  turns the ring red ("Não postou"); tapping it offers "Tentar de novo" (same
+  request id, so a lost answer never posts twice) or "Descartar". Red is for a
+  real answer from the server, or for a link error that a second try (two
+  seconds later, with a connection) did not fix. A post that stopped because
+  there is **no connection** is not a failure: its ring is grey ("Esperando
+  conexão", `StoryOutboxRules.outcome`), and it goes on by itself when the
+  system reports a validated network (a `NetworkCallback` in the outbox) and
+  whenever the app comes to the front; tapping it offers "Tentar agora" or
+  "Descartar". Tapping a ring that is still posting offers "Descartar" too,
+  which stops the upload and deletes the story the server had already made.
+  The draft survives leaving the composer and the app; a draft found on disk
+  after the process died comes back waiting and is sent again by itself (red
+  only if that fails). Signing out wipes drafts. There is
+  no foreground service: a post is a few seconds of upload, and one that loses
+  its process is a draft, not a loss. The one gap is the moment between "Postar"
+  and the draft reaching disk (the files being made ready: milliseconds for a
+  photo, seconds for a clip whose sound is taken out): a process that dies in it
+  loses that post.
+- **Files go ahead of the story (eager uploads).** Where the server says
+  `eagerUploads` in `GET /api/stories/config`, `EagerSession` (one per composer)
+  starts each file the moment its bytes are final: the base when the composer
+  holds the picked, taken or trimmed-and-cut media, a photo layer when it is
+  placed, a drawing when its tool closes ("Pronto"; not stroke by stroke). Each
+  is `POST /api/stories/uploads` then a PUT from memory (`StoryEagerUploads`,
+  app-scoped, so it outlives the composer). Backing out, removing a layer,
+  redrawing or re-trimming stops that PUT and `DELETE`s the upload; closing the
+  composer does the same for everything it started. At "Postar" the outbox waits
+  for any still going (the ring follows them), names the finished ones by
+  `uploadId` in the create (`EagerRequest`), and asks for `publish: true` when
+  every file is eager, which is one round trip. A mix works: eager where the
+  bytes were ready, the old per-file URLs for the rest. A file whose eager
+  upload failed (link down, no budget) simply goes the old way. A create that
+  answers 409 or 404/400 for an upload (not finished, gone, a mismatch) is sent
+  once more after a short wait and then every file goes the old way: each create
+  counts against the story budget, so it is not hammered. The ids are kept on
+  the draft the moment it is made (those finished by then), so a retry after
+  the process died still claims them. A clip posted
+  muted is a different file from the one sent ahead: that one is thrown away and
+  the muted clip is sent at "Postar".
+- **The "+" on the own ring** is drawn at 22 dp and touched at 48 dp
+  (`StoryStripRules.inBadge`, kept inside the 68 dp bubble): a tap in that square
+  makes a story, wherever the ring would have opened the stories, and holding the
+  ring is the other way to "Novo story" (also a TalkBack custom action).
+- **Preload.** `StoryPreloader` has the next story ready before the tap: with a
+  story open, the next two of the queue (across authors, from where the viewer
+  would open each deck) and the first of the next author; with the tray
+  showing, the first unseen story of its first three rings. Pictures go through
+  Coil (memory and disk) and clips through a Media3 cache writer into
+  `StoryVideoCache` (first 1 MB and last 256 KB, so a clip with its index at
+  the end starts too), all under stable per-story keys (`StoryPreloadRules`),
+  which is what lets a freshly signed link for the same picture still hit. At
+  most two stories at a time, cancelled when they leave the window, clips
+  skipped with Data Saver on, and everything pauses while the story on screen is
+  still loading, so a slow link is that story's alone. Debug builds log the
+  numbers under `adb logcat -s pqp.perf` (`StoryPerf`) and `files/no-preload`
+  turns the preloader off to measure the same build without it.
+  - **One finished picture.** A story is held behind the veil until everything
+    it is drawn from is decoded (`StoryAssets`: the base, each photo layer, the
+    drawing, the faces and icon of a call card, the author's face), then the base
+    and every layer go on the canvas together and the veil fades in one frame.
+    The preloader fetches the same list, so a preloaded story appears at once. A
+    clip starts buffering straight away and its layers wait for the assets.
+    Words, mentions and call cards are laid out at their final size (`CrispLayer`:
+    canvas width times scale) and only turned, never scaled, so they are crisp at
+    any scale.
+  - **The clock waits for the picture.** A story's bar, its "seen" count and the
+    preloader all start at its first frame, not at the tap: while it has none the
+    viewer shows the author's colour over black, and a small spinner after 300
+    ms (`stories.viewer.waiting`), so a 5 s photo that arrives 3 s late is still
+    5 s on screen. A clip keeps its bar with its position (a stall pauses both)
+    and shows the player's own spinner mid-clip. A clip also holds the preloader
+    while it is still loading, buffers at most 10 s ahead, and a preloaded clip
+    keeps only its first megabyte when its index is up front (`indexFirst`),
+    its end too only when the index is last.
 - **Composer.** TEXTO / CÂMERA / CALL, then "Quem vê". CÂMERA opens on a live
   camera (`stories/camera/`, CameraX), not on buttons: a 9:16 preview, a
   shutter that takes a photo on a tap and records while it is held (a ring

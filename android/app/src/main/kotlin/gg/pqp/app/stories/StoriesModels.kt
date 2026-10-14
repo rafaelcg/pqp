@@ -28,6 +28,11 @@ data class StoriesConfig(
      * hides its layer tools against it.
      */
     val layersMax: Int = 0,
+    /**
+     * `POST /api/stories/uploads` is on (a runtime kill switch server side) and storage is configured. Absent
+     * from a server that predates it, which reads as off: files then go the old way, at "Postar".
+     */
+    val eagerUploads: Boolean = false,
 )
 
 @Serializable
@@ -175,6 +180,8 @@ data class StoryMediaInput(
     val width: Int,
     val height: Int,
     val durationMs: Long? = null,
+    /** An eager upload (`POST /api/stories/uploads`) this file was already sent through. */
+    val uploadId: String? = null,
 )
 
 @Serializable
@@ -203,7 +210,33 @@ data class CreateStoryRequest(
      * posting a second one.
      */
     val requestId: String? = null,
+    /**
+     * Create and publish in one call. Only when every file is an eager upload; the server
+     * refuses it otherwise. The answer is the published story, with no upload slots.
+     */
+    val publish: Boolean? = null,
 )
+
+/** `createStoryUploadSchema`: start a file before the story exists. */
+@Serializable
+data class CreateStoryUploadRequest(
+    /** `base` or `layer`. */
+    val kind: String,
+    val contentType: String,
+    val byteLength: Long,
+)
+
+/** `createStoryUploadResponseSchema`: the signed PUT, and the id the create will name. */
+@Serializable
+data class CreateStoryUploadResponse(
+    val uploadId: String,
+    val url: String,
+    val method: String = "PUT",
+    val headers: Map<String, String> = emptyMap(),
+    val expiresAt: String? = null,
+) {
+    fun asUpload(): StoryUpload = StoryUpload(url = url, method = method, headers = headers, expiresAt = expiresAt)
+}
 
 @Serializable
 data class StoryUpload(

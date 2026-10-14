@@ -36,7 +36,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -44,6 +43,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -106,7 +106,6 @@ data class EditorEnv(
     val cardBackground: String?,
     val audienceLabel: String,
     val canPost: Boolean,
-    val posting: Boolean,
     val occupancy: Map<String, List<VoiceParticipant>>,
     /** False for a clip with no audio track (shot without the microphone): there is nothing to mute. */
     val hasAudio: Boolean = true,
@@ -157,6 +156,9 @@ fun StoryEditor(
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
     var drawing by remember { mutableStateOf(false) }
+    // The composer sends a finished drawing ahead of the story, so it needs to know when the tool closes.
+    LaunchedEffect(drawing) { session.drawingOpen = drawing }
+    DisposableEffect(session) { onDispose { session.drawingOpen = false } }
     var sheet by remember { mutableStateOf(if (openCallSheetAtStart) Sheet.Call else Sheet.None) }
     var textTarget by remember { mutableStateOf<TextTarget?>(null) }
     var menu by remember { mutableStateOf<LayerMenu?>(null) }
@@ -495,18 +497,12 @@ fun StoryEditor(
                     }
                     Button(
                         onClick = onPost,
-                        enabled = env.canPost && !env.posting,
+                        enabled = env.canPost,
                         shape = RoundedCornerShape(50),
                         colors = ButtonDefaults.buttonColors(containerColor = Palette.Signal, contentColor = Palette.Ink),
                         modifier = Modifier.testTag("stories.editor.post"),
                     ) {
-                        if (env.posting) {
-                            CircularProgressIndicator(Modifier.size(18.dp), color = Palette.Ink, strokeWidth = 2.dp)
-                            Spacer(Modifier.width(Spacing.sm))
-                            Text(stringResource(R.string.stories_upload_posting))
-                        } else {
-                            Text(stringResource(R.string.stories_editor_post))
-                        }
+                        Text(stringResource(R.string.stories_editor_post))
                     }
                 }
             }

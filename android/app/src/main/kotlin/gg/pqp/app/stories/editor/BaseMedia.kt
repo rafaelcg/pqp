@@ -39,10 +39,26 @@ object BaseFit {
 
 /** A photo base: filled when it is near 9:16, else shown whole over a blurred copy of itself. */
 @Composable
-fun StoryBaseImage(model: Any?, width: Int, height: Int, modifier: Modifier = Modifier, description: String? = null) {
+fun StoryBaseImage(
+    model: Any?,
+    width: Int,
+    height: Int,
+    modifier: Modifier = Modifier,
+    description: String? = null,
+    onFirstFrame: (() -> Unit)? = null,
+    /** The picture could not be loaded: nothing will be drawn, and whoever waits for a first frame should stop. */
+    onFailed: (() -> Unit)? = null,
+) {
     Box(modifier.fillMaxSize().background(Color.Black)) {
         if (BaseFit.fills(width, height)) {
-            AsyncImage(model = model, contentDescription = description, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            AsyncImage(
+                model = model,
+                contentDescription = description,
+                contentScale = ContentScale.Crop,
+                onSuccess = onFirstFrame?.let { cb -> { _ -> cb() } },
+                onError = onFailed?.let { cb -> { _ -> cb() } },
+                modifier = Modifier.fillMaxSize(),
+            )
         } else {
             // Under the picture: the same picture, cropped to fill and blurred. Below Android 12
             // there is no blur modifier, so it is dimmed instead of left sharp and distracting.
@@ -54,7 +70,14 @@ fun StoryBaseImage(model: Any?, width: Int, height: Int, modifier: Modifier = Mo
                     .fillMaxSize()
                     .then(if (Build.VERSION.SDK_INT >= 31) Modifier.blur(36.dp) else Modifier.alpha(0.35f)),
             )
-            AsyncImage(model = model, contentDescription = description, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            AsyncImage(
+                model = model,
+                contentDescription = description,
+                contentScale = ContentScale.Fit,
+                onSuccess = onFirstFrame?.let { cb -> { _ -> cb() } },
+                onError = onFailed?.let { cb -> { _ -> cb() } },
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }

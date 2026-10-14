@@ -78,23 +78,27 @@ class StoriesStore(
 
     /** Re-read one strip. A failure keeps what is on screen. */
     fun refresh(key: String) {
-        scope.launch {
-            val strip = runCatching {
-                if (key == FRIENDS) {
-                    session.api.friendsStoryStrip()
-                } else {
-                    session.api.serverStoryStrip(key.removePrefix("server:"))
-                }
-            }.getOrElse {
-                // 404: the friends routes while the global flag is off. A
-                // closed door, not an error worth a log line every refetch.
-                Log.w(TAG, "strip $key failed: ${it.message}")
-                return@launch
+        scope.launch { refreshNow(key) }
+    }
+
+    /** [refresh], for a caller that has to know the strip is current before it goes on. */
+    suspend fun refreshNow(key: String): Boolean {
+        val strip = runCatching {
+            if (key == FRIENDS) {
+                session.api.friendsStoryStrip()
+            } else {
+                session.api.serverStoryStrip(key.removePrefix("server:"))
             }
-            raw[key] = strip
-            publish()
-            if (strip.enabled && !noticesAsked) askNotices()
+        }.getOrElse {
+            // 404: the friends routes while the global flag is off. A
+            // closed door, not an error worth a log line every refetch.
+            Log.w(TAG, "strip $key failed: ${it.message}")
+            return false
         }
+        raw[key] = strip
+        publish()
+        if (strip.enabled && !noticesAsked) askNotices()
+        return true
     }
 
     private suspend fun askNotices() {

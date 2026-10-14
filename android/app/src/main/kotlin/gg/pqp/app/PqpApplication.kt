@@ -115,6 +115,8 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
 
         http = gg.pqp.app.core.ApiClient.defaultHttpClient()
         session = SessionStore(appScope, http)
+        // The socket reconnects the moment a network is back, not when its backoff next wakes up.
+        gg.pqp.app.core.NetworkReconnect.register(this, session)
         voice = gg.pqp.app.voice.VoiceController(this, session, appScope)
         push = gg.pqp.app.push.PushController(this, session, appScope)
         calls = gg.pqp.app.voice.CallController(this, session, voice, appScope)

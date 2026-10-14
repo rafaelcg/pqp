@@ -41,6 +41,9 @@ class EditorSession {
     var canUndo by mutableStateOf(false)
         private set
 
+    /** The draw tool is open: a drawing is still being made, and is not worth sending ahead of the story yet. */
+    var drawingOpen by mutableStateOf(false)
+
     /** The layer a finger is on right now. */
     var activeId by mutableStateOf<String?>(null)
 

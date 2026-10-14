@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -36,12 +39,16 @@ import gg.pqp.app.stories.DrawingStoryLayer
 import gg.pqp.app.stories.ImageStoryLayer
 import gg.pqp.app.stories.MentionStoryLayer
 import gg.pqp.app.stories.Story
+import gg.pqp.app.stories.StoryAssets
+import gg.pqp.app.stories.StoryPreloadRules
+import gg.pqp.app.stories.storyImageRequest
 import gg.pqp.app.stories.StoryAuthor
 import gg.pqp.app.stories.StoryCallLive
 import gg.pqp.app.stories.StoryLayer
 import gg.pqp.app.stories.TextStoryLayer
 import gg.pqp.app.stories.editor.BaseFit
 import gg.pqp.app.stories.editor.CallFace
+import gg.pqp.app.stories.editor.CrispLayer
 import gg.pqp.app.stories.editor.LayerMath
 import gg.pqp.app.stories.editor.MentionLayerContent
 import gg.pqp.app.stories.editor.PhotoLayerContent
@@ -75,6 +82,10 @@ fun StoryCanvas(
     onVideoProgress: (Float) -> Unit,
     onVideoEnded: () -> Unit,
     onHasAudio: (Boolean) -> Unit = {},
+    /** The story's first frame is on screen (a picture decoded, a clip rendering); at once for a story with no media. */
+    onReady: () -> Unit = {},
+    /** A clip is still loading bytes. */
+    onLoading: (Boolean) -> Unit = {},
     onJoinCall: (StoryCallLive) -> Unit,
     onOpenMention: (StoryAuthor) -> Unit,
     modifier: Modifier = Modifier,
@@ -82,6 +93,39 @@ fun StoryCanvas(
     val density = LocalDensity.current
     val servers by session.servers.collectAsStateWithLifecycle()
     val spoken = story.altText?.takeIf { it.isNotBlank() } ?: story.caption?.takeIf { it.isNotBlank() }
+    // A card of words has nothing to wait for; a picture or a clip says so itself.
+    val hasMedia = story.kind != "text" && story.media != null &&
+        story.own?.status != "processing" && story.own?.status != "pending"
+    val context = LocalContext.current
+
+    // The story is shown as one finished picture: everything it is drawn from is fetched and decoded first, then the
+    // base and every layer are put on the canvas together and the viewer lifts its veil in one go.
+    val assets = remember(story.id, servers) { StoryAssets.of(story, servers) }
+    var assetsReady by remember(story.id) { mutableStateOf(assets.isEmpty()) }
+    androidx.compose.runtime.LaunchedEffect(story.id) {
+        if (!assetsReady) {
+            // Whatever happens to a picture, the story is shown: one that failed simply draws the way it always did.
+            try {
+                StoryAssets.load(context, assets)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Nothing here may stop the story from being shown.
+            } finally {
+                assetsReady = true
+            }
+        }
+    }
+    // The base is there when its first frame is (a picture decoded, a clip rendering); a card of words has none.
+    var baseReady by remember(story.id) { mutableStateOf(!hasMedia) }
+    androidx.compose.runtime.LaunchedEffect(story.id, assetsReady, baseReady) {
+        if (assetsReady && baseReady) {
+            // Two frames: the layers have been composed and drawn before anybody is told it is all there.
+            androidx.compose.runtime.withFrameNanos { }
+            androidx.compose.runtime.withFrameNanos { }
+            onReady()
+        }
+    }
 
     BoxWithConstraints(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val width = minOf(maxWidth, maxHeight * 9f / 16f)
@@ -95,7 +139,8 @@ fun StoryCanvas(
         }
 
         Box(Modifier.size(width, height).clipToBounds().testTag("stories.viewer.canvas")) {
-            StoryBase(
+            // A picture is put on the canvas with the layers, not before them; a clip starts at once (it has to buffer).
+            if (assetsReady || story.kind == "video") StoryBase(
                 story = story,
                 spoken = spoken,
                 active = active,
@@ -104,33 +149,35 @@ fun StoryCanvas(
                 onVideoProgress = onVideoProgress,
                 onVideoEnded = onVideoEnded,
                 onHasAudio = onHasAudio,
+                onReady = { baseReady = true },
+                onLoading = onLoading,
             )
             // The words are on the base's description when there are any; reading them
             // again from each text layer would say everything twice.
             val hideText = story.altText?.isNotBlank() == true
 
-            visibleLayers(story).forEach { layer ->
+            if (assetsReady) visibleLayers(story).forEach { layer ->
                 androidx.compose.runtime.key(layer.id) {
                     when (layer) {
                         is DrawingStoryLayer -> AsyncImage(
-                            model = absolute(layer.url),
+                            model = rememberStoryImage(absolute(layer.url), StoryPreloadRules.layerKey(story.id, layer.id)),
                             contentDescription = null,
                             contentScale = ContentScale.FillBounds,
                             modifier = Modifier.fillMaxSize(),
                         )
-                        is TextStoryLayer -> PlacedLayer(layer.x, layer.y, layer.scale, layer.rotation, canvas) {
+                        is TextStoryLayer -> CrispLayer(layer.x, layer.y, layer.scale, layer.rotation, canvas) { crispWidth ->
                             Box(if (hideText) Modifier.clearAndSetSemantics { } else Modifier) {
-                                TextLayerContent(layer.text, layer.font, layer.color, layer.background, layer.align, layer.size, canvas.width)
+                                TextLayerContent(layer.text, layer.font, layer.color, layer.background, layer.align, layer.size, crispWidth)
                             }
                         }
                         is ImageStoryLayer -> PlacedLayer(layer.x, layer.y, layer.scale, layer.rotation, canvas) {
-                            PhotoLayerContent(absolute(layer.url), layer.shape, layer.width, layer.height, canvas.width, description = null)
+                            PhotoLayerContent(rememberStoryImage(absolute(layer.url), StoryPreloadRules.layerKey(story.id, layer.id)), layer.shape, layer.width, layer.height, canvas.width, description = null)
                         }
                         is MentionStoryLayer -> {
                             val person = layer.user
                             if (person != null && person.displayName.isNotBlank()) {
                                 val label = stringResource(R.string.stories_viewer_mention, person.displayName)
-                                PlacedLayer(layer.x, layer.y, layer.scale, layer.rotation, canvas) {
+                                CrispLayer(layer.x, layer.y, layer.scale, layer.rotation, canvas) { crispWidth ->
                                     Box(
                                         Modifier
                                             .semantics {
@@ -139,7 +186,7 @@ fun StoryCanvas(
                                             }
                                             .clickable { onOpenMention(person) }
                                             .testTag("stories.viewer.mention"),
-                                    ) { MentionLayerContent(person.displayName, canvas.width) }
+                                    ) { MentionLayerContent(person.displayName, crispWidth) }
                                 }
                             }
                         }
@@ -147,7 +194,7 @@ fun StoryCanvas(
                             val live = story.call?.takeIf { it.channelId == layer.channelId }
                             if (live != null) {
                                 val server = servers.firstOrNull { it.id == layer.serverId }
-                                PlacedLayer(layer.x, layer.y, layer.scale, layer.rotation, canvas) {
+                                CrispLayer(layer.x, layer.y, layer.scale, layer.rotation, canvas) { crispWidth ->
                                     StoryCallCard(
                                         state = callCardState(live.state, live.count, live.joinable),
                                         roomName = live.channelName,
@@ -156,7 +203,7 @@ fun StoryCanvas(
                                         serverIconUrl = server?.iconUrl,
                                         faces = live.participants.map { CallFace(it.id, it.displayName, it.avatarUrl) },
                                         count = live.count,
-                                        canvasWidthPx = canvas.width,
+                                        canvasWidthPx = crispWidth,
                                         onJoin = if (live.joinable && live.state == "live") ({ onJoinCall(live) }) else null,
                                     )
                                 }
@@ -167,6 +214,13 @@ fun StoryCanvas(
             }
         }
     }
+}
+
+/** The request for a story's picture, under the key the preloader fills (see [StoryPreloadRules.baseKey]). */
+@Composable
+internal fun rememberStoryImage(url: String, key: String): ImageRequest {
+    val context = LocalContext.current
+    return remember(url, key) { storyImageRequest(context, url, key) }
 }
 
 /**
@@ -209,14 +263,22 @@ private fun StoryBackdrop(story: Story, barShare: Float, modifier: Modifier = Mo
         }
         media != null -> {
             val model = if (story.kind == "video") media.posterUrl?.let(::absolute) else absolute(media.url)
+            val key = if (story.kind == "video") StoryPreloadRules.posterKey(story.id) else StoryPreloadRules.baseKey(story.id)
             Box(modifier.background(Color.Black)) {
                 if (model != null) {
                     // Decoded at thumbnail size and stretched, which is a blur that costs nothing: no
                     // full-screen render effect behind every story, and the same on every Android version.
-                    val request = ImageRequest.Builder(LocalContext.current)
-                        .data(model)
-                        .size(Size(BACKDROP_EDGE, BACKDROP_EDGE * 16 / 9))
-                        .build()
+                    // The picture's own disk key, so nothing is fetched twice, but a memory key of its own: this small decode
+                    // must not replace the full-size one the canvas is drawing from.
+                    val context = LocalContext.current
+                    val request = remember(model, key) {
+                        ImageRequest.Builder(context)
+                            .data(model)
+                            .memoryCacheKey("$key:thumb")
+                            .diskCacheKey(key)
+                            .size(Size(BACKDROP_EDGE, BACKDROP_EDGE * 16 / 9))
+                            .build()
+                    }
                     AsyncImage(
                         model = request,
                         contentDescription = null,
@@ -241,6 +303,8 @@ private fun StoryBase(
     onVideoProgress: (Float) -> Unit,
     onVideoEnded: () -> Unit,
     onHasAudio: (Boolean) -> Unit,
+    onReady: () -> Unit,
+    onLoading: (Boolean) -> Unit,
 ) {
     val media = story.media
     val describe = if (spoken != null) Modifier.semantics { contentDescription = spoken } else Modifier
@@ -263,6 +327,7 @@ private fun StoryBase(
         }
         story.kind == "video" && media != null -> Box(Modifier.fillMaxSize().background(Color.Black).then(describe)) {
             StoryVideo(
+                storyId = story.id,
                 url = absolute(media.url),
                 posterUrl = media.posterUrl?.let(::absolute),
                 active = active,
@@ -272,14 +337,23 @@ private fun StoryBase(
                 onProgress = onVideoProgress,
                 onEnded = onVideoEnded,
                 onHasAudio = onHasAudio,
+                onReady = onReady,
+                onLoading = onLoading,
             )
         }
-        media != null -> StoryBaseImage(
-            model = absolute(media.url),
+        media != null -> {
+            StoryBaseImage(
+            model = rememberStoryImage(absolute(media.url), StoryPreloadRules.baseKey(story.id)),
             width = media.width,
             height = media.height,
             description = spoken,
-        )
+            onFirstFrame = {
+                gg.pqp.app.stories.StoryPerf.frameReady(story.id, "image")
+                onReady()
+            },
+            onFailed = onReady,
+            )
+        }
         else -> Box(Modifier.fillMaxSize().background(Color.Black))
     }
 }
