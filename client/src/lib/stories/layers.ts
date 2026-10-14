@@ -131,10 +131,21 @@ export function clampGeometry<T extends LayerGeometry>(layer: T): T {
   };
 }
 
-/** Where and how a layer sits on the canvas. Shared by the editor and the viewer. */
+/**
+ * Where and how a layer sits on the canvas. Shared by the editor and the viewer.
+ *
+ * `width: max-content` is load-bearing. The box is absolute at `left: x%`, and an absolute box
+ * with an auto width shrinks to fit the room left BEFORE the container's right edge. Anything
+ * inside that resolves a width against its parent (a photo's `max-width: 100%` from the reset, a
+ * chip's `max-width`) then follows that leftover room: a photo at x = 0.8 drew at half size, and
+ * one at x = 0.95 at a tenth. A layer's width is its own content's (a photo is 40cqw, a call
+ * card 82cqw, text wraps at 84cqw), never a function of where it was put, so the box takes it
+ * from the content and the position cannot squeeze it.
+ */
 export function layerStyle(geometry: LayerGeometry): CSSProperties {
   return {
     position: "absolute",
+    width: "max-content",
     left: `${geometry.x * 100}%`,
     top: `${geometry.y * 100}%`,
     transform: `translate(-50%, -50%) rotate(${geometry.rotation}rad) scale(${geometry.scale})`,

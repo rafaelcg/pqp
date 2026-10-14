@@ -87,6 +87,8 @@ function ImageLayerView({ layer }: { layer: Extract<DisplayLayer, { type: "image
       className="block select-none"
       style={{
         width: `${IMAGE_BASE_CQW}cqw`,
+        // The reset caps an img at 100% of its parent; the parent is as wide as this, so no cap.
+        maxWidth: "none",
         // A circle crops to a square; the others keep the picture's own shape.
         aspectRatio: circle ? "1 / 1" : `${layer.width} / ${layer.height}`,
         objectFit: "cover",
