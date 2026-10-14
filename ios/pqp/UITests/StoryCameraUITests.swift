@@ -87,7 +87,8 @@ final class StoryCameraUITests: XCTestCase {
         openComposer(app, serverId: serverId)
         app.buttons["camera.shutter"].tap()
         XCTAssertTrue(app.buttons["composer.next"].waitForExistence(timeout: 15))
-        app.buttons["composer.close"].tap()
+        // The editor's X (the composer's own X is under the camera).
+        (app.buttons["editor.close"].exists ? app.buttons["editor.close"] : app.buttons["composer.close"]).tap()
         XCTAssertTrue(app.buttons["camera.shutter"].waitForExistence(timeout: 10), "Back on the camera")
         XCTAssertFalse(app.buttons["composer.next"].exists)
     }

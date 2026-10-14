@@ -301,6 +301,16 @@
         }
       }
     },
+    "%lld in the call" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld na call"
+          }
+        }
+      }
+    },
     "%lld in this channel" : {
       "localizations" : {
         "pt-BR" : {
@@ -931,6 +941,16 @@
         }
       }
     },
+    "A story can have one call." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cada story só pode ter uma call."
+          }
+        }
+      }
+    },
     "Activity" : {
       "localizations" : {
         "pt-BR" : {
@@ -951,6 +971,16 @@
         }
       }
     },
+    "Add a photo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar uma foto"
+          }
+        }
+      }
+    },
     "Add photos" : {
       "localizations" : {
         "pt-BR" : {
@@ -967,6 +997,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escreve alguma coisa ou anexa um arquivo."
+          }
+        }
+      }
+    },
+    "Add text" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar texto"
+          }
+        }
+      }
+    },
+    "Add to story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Colocar no story"
+          }
+        }
+      }
+    },
+    "Alignment" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alinhamento"
           }
         }
       }
@@ -1441,12 +1501,72 @@
         }
       }
     },
+    "Bigger" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Maior"
+          }
+        }
+      }
+    },
+    "Black" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preto"
+          }
+        }
+      }
+    },
+    "Blue" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Azul"
+          }
+        }
+      }
+    },
+    "Bold" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Negrito"
+          }
+        }
+      }
+    },
+    "Bring people into a room" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chama o pessoal pra uma sala"
+          }
+        }
+      }
+    },
     "Bring someone to pqp" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Chamar alguém pro pqp"
+          }
+        }
+      }
+    },
+    "Bring to front" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trazer pra frente"
           }
         }
       }
@@ -1571,12 +1691,42 @@
         }
       }
     },
+    "Call in %@, %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Call em %1$@, %2$@"
+          }
+        }
+      }
+    },
     "Call people in" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Chama pra call"
+          }
+        }
+      }
+    },
+    "Call sticker" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Figurinha de call"
+          }
+        }
+      }
+    },
+    "Call: %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Call: %@"
           }
         }
       }
@@ -1711,6 +1861,16 @@
         }
       }
     },
+    "Change shape" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mudar o formato"
+          }
+        }
+      }
+    },
     "Channel name" : {
       "localizations" : {
         "pt-BR" : {
@@ -1807,6 +1967,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Garantir seu link"
+          }
+        }
+      }
+    },
+    "Classic" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clássica"
           }
         }
       }
@@ -2221,6 +2391,16 @@
         }
       }
     },
+    "Couldn't load everyone." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar todo mundo."
+          }
+        }
+      }
+    },
     "Couldn't load posts." : {
       "localizations" : {
         "pt-BR" : {
@@ -2267,6 +2447,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Não deu pra publicar. O rascunho continua aqui, tenta de novo."
+          }
+        }
+      }
+    },
+    "Couldn't reach pqp. Check your connection." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra falar com o pqp. Vê a tua conexão."
+          }
+        }
+      }
+    },
+    "Couldn't save the drawing." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra salvar o desenho."
           }
         }
       }
@@ -2447,6 +2647,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Criando…"
+          }
+        }
+      }
+    },
+    "Cyan" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ciano"
           }
         }
       }
@@ -2721,6 +2931,16 @@
         }
       }
     },
+    "Discard this story?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descartar esse story?"
+          }
+        }
+      }
+    },
     "Dismiss" : {
       "localizations" : {
         "pt-BR" : {
@@ -2771,6 +2991,16 @@
         }
       }
     },
+    "Double tap to edit" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toca duas vezes pra editar"
+          }
+        }
+      }
+    },
     "Download my data" : {
       "localizations" : {
         "pt-BR" : {
@@ -2797,6 +3027,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Rascunho salvo"
+          }
+        }
+      }
+    },
+    "Draw" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desenhar"
+          }
+        }
+      }
+    },
+    "Drawing" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desenho"
+          }
+        }
+      }
+    },
+    "Drawing canvas" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Área do desenho"
           }
         }
       }
@@ -2897,6 +3157,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tirar do castigo"
+          }
+        }
+      }
+    },
+    "Eraser" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borracha"
           }
         }
       }
@@ -3441,6 +3711,26 @@
         }
       }
     },
+    "Gray" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cinza"
+          }
+        }
+      }
+    },
+    "Green" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verde"
+          }
+        }
+      }
+    },
     "Group call" : {
       "localizations" : {
         "pt-BR" : {
@@ -3527,6 +3817,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esconder isso"
+          }
+        }
+      }
+    },
+    "Highlighter" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marca-texto"
           }
         }
       }
@@ -3831,6 +4131,16 @@
         }
       }
     },
+    "Keep editing" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continuar editando"
+          }
+        }
+      }
+    },
     "Keep forever" : {
       "localizations" : {
         "pt-BR" : {
@@ -3981,6 +4291,16 @@
         }
       }
     },
+    "Live" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ao vivo"
+          }
+        }
+      }
+    },
     "Load earlier messages" : {
       "localizations" : {
         "pt-BR" : {
@@ -4111,6 +4431,16 @@
         }
       }
     },
+    "Marker" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Caneta grossa"
+          }
+        }
+      }
+    },
     "Media unavailable right now." : {
       "localizations" : {
         "pt-BR" : {
@@ -4127,6 +4457,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Membros"
+          }
+        }
+      }
+    },
+    "Mention" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Menção"
+          }
+        }
+      }
+    },
+    "Mention someone" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mencionar alguém"
           }
         }
       }
@@ -4261,6 +4611,26 @@
         }
       }
     },
+    "Move left" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover pra esquerda"
+          }
+        }
+      }
+    },
+    "Move right" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover pra direita"
+          }
+        }
+      }
+    },
     "Move to…" : {
       "localizations" : {
         "pt-BR" : {
@@ -4347,6 +4717,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nome"
+          }
+        }
+      }
+    },
+    "Neon" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neon"
           }
         }
       }
@@ -4841,6 +5221,16 @@
         }
       }
     },
+    "Nobody in the call right now" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguém na call agora"
+          }
+        }
+      }
+    },
     "Nobody is banned" : {
       "localizations" : {
         "pt-BR" : {
@@ -4857,6 +5247,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ninguém começou a transmitir ainda."
+          }
+        }
+      }
+    },
+    "Nobody to mention yet." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguém pra mencionar ainda."
           }
         }
       }
@@ -5091,6 +5491,16 @@
         }
       }
     },
+    "One call per story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uma call por story"
+          }
+        }
+      }
+    },
     "One choice for your camera and your screen share. Auto asks the camera for 720p and lets the connection decide from there. A fixed choice asks for that size and sends your screen at that size too. Your screen is captured at 720p on a phone whatever you pick, so 1080p and 720p send the same picture with more bits behind it. The picture still drops below your choice when the link cannot carry it." : {
       "localizations" : {
         "pt-BR" : {
@@ -5241,6 +5651,16 @@
         }
       }
     },
+    "Open the profile of %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir o perfil de %@"
+          }
+        }
+      }
+    },
     "Open thread" : {
       "localizations" : {
         "pt-BR" : {
@@ -5257,6 +5677,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ou entre em um com um código de convite."
+          }
+        }
+      }
+    },
+    "Orange" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Laranja"
           }
         }
       }
@@ -5321,6 +5751,16 @@
         }
       }
     },
+    "Pen" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Caneta"
+          }
+        }
+      }
+    },
     "Pending" : {
       "localizations" : {
         "pt-BR" : {
@@ -5337,6 +5777,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quem está numa comunidade comigo"
+          }
+        }
+      }
+    },
+    "People who are in the room show up here live." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem tiver na sala aparece aqui ao vivo."
           }
         }
       }
@@ -5427,6 +5877,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fixar post (%lld de %lld)"
+          }
+        }
+      }
+    },
+    "Pink" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rosa"
           }
         }
       }
@@ -5641,6 +6101,16 @@
         }
       }
     },
+    "Purple" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Roxo"
+          }
+        }
+      }
+    },
     "Put a face on it" : {
       "localizations" : {
         "pt-BR" : {
@@ -5757,6 +6227,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Gravar vídeo"
+          }
+        }
+      }
+    },
+    "Red" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vermelho"
           }
         }
       }
@@ -6191,6 +6671,16 @@
         }
       }
     },
+    "Search people" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buscar gente"
+          }
+        }
+      }
+    },
     "Search titles" : {
       "localizations" : {
         "pt-BR" : {
@@ -6237,6 +6727,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mandado ✓"
+          }
+        }
+      }
+    },
+    "Serif" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serifada"
           }
         }
       }
@@ -6291,6 +6791,16 @@
         }
       }
     },
+    "Smaller" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Menor"
+          }
+        }
+      }
+    },
     "Solution" : {
       "localizations" : {
         "pt-BR" : {
@@ -6307,6 +6817,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "SOLUÇÃO"
+          }
+        }
+      }
+    },
+    "someone" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "alguém"
           }
         }
       }
@@ -6931,6 +7451,16 @@
         }
       }
     },
+    "Stickers" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Figurinhas"
+          }
+        }
+      }
+    },
     "Still empty. When the staff posts, it shows up here." : {
       "localizations" : {
         "pt-BR" : {
@@ -7001,6 +7531,16 @@
         }
       }
     },
+    "Stroke size" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Espessura do traço"
+          }
+        }
+      }
+    },
     "Study" : {
       "localizations" : {
         "pt-BR" : {
@@ -7047,6 +7587,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tag"
+          }
+        }
+      }
+    },
+    "Tag someone" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marca alguém"
           }
         }
       }
@@ -7111,6 +7661,16 @@
         }
       }
     },
+    "Text size" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tamanho do texto"
+          }
+        }
+      }
+    },
     "Thanks. That helps." : {
       "localizations" : {
         "pt-BR" : {
@@ -7167,6 +7727,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Chegou no fim. 1 post."
+          }
+        }
+      }
+    },
+    "That's the most photos a story can hold." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse é o máximo de fotos que cabe num story."
+          }
+        }
+      }
+    },
+    "That's the most things a story can hold." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse é o máximo de coisas que cabe num story."
           }
         }
       }
@@ -7871,6 +8451,16 @@
         }
       }
     },
+    "Type something" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escreve alguma coisa"
+          }
+        }
+      }
+    },
     "Type the community name" : {
       "localizations" : {
         "pt-BR" : {
@@ -7887,6 +8477,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Digite seu identificador pra confirmar"
+          }
+        }
+      }
+    },
+    "Typewriter" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Máquina de escrever"
           }
         }
       }
@@ -8027,6 +8627,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Máximo de %lld tags."
+          }
+        }
+      }
+    },
+    "Up to 5 people" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Até 5 pessoas"
           }
         }
       }
@@ -8311,6 +8921,16 @@
         }
       }
     },
+    "White" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Branco"
+          }
+        }
+      }
+    },
     "Who can message you" : {
       "localizations" : {
         "pt-BR" : {
@@ -8431,6 +9051,16 @@
         }
       }
     },
+    "Yellow" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Amarelo"
+          }
+        }
+      }
+    },
     "Yesterday" : {
       "localizations" : {
         "pt-BR" : {
@@ -8517,6 +9147,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Agora você pode falar. Ligue o microfone quando quiser."
+          }
+        }
+      }
+    },
+    "You can't add that mention." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não dá pra adicionar essa menção."
           }
         }
       }
@@ -8627,16 +9267,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você está aqui"
-          }
-        }
-      }
-    },
-    "You're not in %@. The card only lets people in while you're in the call." : {
-      "localizations" : {
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tu não tá no %@. O card só deixa entrar enquanto tu tá na call."
           }
         }
       }

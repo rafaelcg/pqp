@@ -43,6 +43,12 @@ struct StoriesConfig: Codable, Hashable, Sendable {
     var videoEnabled: Bool
     var maxVideoMs: Int
     var maxBytes: Int
+    /// How many layers a story may carry. Absent or 0 on a server that
+    /// predates layers: the editor is hidden, because that server would
+    /// silently drop what was placed.
+    var layersMax: Int? = nil
+
+    var layersEnabled: Bool { (layersMax ?? 0) > 0 }
 
     static let off = StoriesConfig(
         enabled: false, friendsEnabled: false, mediaEnabled: false,
@@ -192,10 +198,15 @@ struct Story: Codable, Hashable, Identifiable, Sendable {
     let audiences: [StoryAudience]
     var viewer: StoryViewerState
     var own: StoryOwnState?
+    /// What the author placed on the canvas, back to front. Empty on a story
+    /// from before layers, and for a layer this build cannot draw.
+    let layers: [StoryLayer]
+    /// What a screen reader says for the story.
+    let altText: String?
 
     private enum CodingKeys: String, CodingKey {
         case id, author, kind, caption, text, background, media, sticker, call
-        case publishedAt, expiresAt, audiences, viewer, own
+        case publishedAt, expiresAt, audiences, viewer, own, layers, altText
     }
 
     init(from decoder: Decoder) throws {
@@ -216,6 +227,8 @@ struct Story: Codable, Hashable, Identifiable, Sendable {
         audiences = (try? c.decodeIfPresent([StoryAudience].self, forKey: .audiences)) ?? []
         viewer = try c.decode(StoryViewerState.self, forKey: .viewer)
         own = (try? c.decodeIfPresent(StoryOwnState.self, forKey: .own)) ?? nil
+        layers = ((try? c.decodeIfPresent(StoryLayerList.self, forKey: .layers)) ?? nil)?.layers ?? []
+        altText = (try? c.decodeIfPresent(String.self, forKey: .altText)) ?? nil
     }
 
     var isText: Bool { kind == "text" }
@@ -325,6 +338,8 @@ struct CreateStoryRequest: Encodable, Sendable {
     var repliesEnabled: Bool = true
     let audiences: StoryAudienceTargets
     var media: StoryMediaInput? = nil
+    var layers: [StoryLayerInput]? = nil
+    var altText: String? = nil
 }
 
 struct StoryUpload: Codable, Hashable, Sendable {
@@ -336,6 +351,19 @@ struct StoryUpload: Codable, Hashable, Sendable {
 struct CreateStoryResponse: Codable, Sendable {
     let story: Story
     let upload: StoryUpload?
+    /// One per picture layer (placed photo or drawing), empty for none.
+    let layerUploads: [StoryLayerUploadTarget]
+
+    private enum CodingKeys: String, CodingKey { case story, upload, layerUploads }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        story = try c.decode(Story.self, forKey: .story)
+        upload = try c.decodeIfPresent(StoryUpload.self, forKey: .upload)
+        // Absent is "no pictures"; present and unreadable is an error, so a
+        // story is never published without the files it declared.
+        layerUploads = try c.decodeIfPresent([StoryLayerUploadTarget].self, forKey: .layerUploads) ?? []
+    }
 }
 
 struct PublishStoryResponse: Codable, Sendable { let story: Story }
