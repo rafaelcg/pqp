@@ -236,7 +236,10 @@ export class StoryPreloader {
         this.running.has(asset.key) ||
         this.ready.has(asset.key) ||
         this.failed.has(asset.key) ||
-        (asset.kind === "video" && !allowVideo)
+        (asset.kind === "video" && !allowVideo) ||
+        // At the cap with everything kept still wanted: wait for room rather than evict one that
+        // would be fetched again at once.
+        this.readyCount(asset.kind) >= (asset.kind === "video" ? READY_VIDEOS_MAX : READY_IMAGES_MAX)
       ) {
         continue;
       }
@@ -258,6 +261,16 @@ export class StoryPreloader {
       }
       this.start(asset);
     }
+  }
+
+  private readyCount(kind: AssetKind): number {
+    let count = 0;
+    for (const entry of this.ready.values()) {
+      if (entry.asset.kind === kind) {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   private trim(wantedKeys: ReadonlySet<string>): void {

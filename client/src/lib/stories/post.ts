@@ -301,6 +301,8 @@ export async function postStory(draft: StoryDraft): Promise<PostOutcome> {
       storyId = published.story.id;
       status = published.story.own?.status ?? "live";
     }
+    // Published (or live at once): discarding the draft must never delete what the server now shows.
+    draft.createdStoryId = undefined;
     unsubscribe.forEach((off) => off());
     if (status === "processing" || status === "pending") {
       patchPosting(id, { status: "processing", progress: null });

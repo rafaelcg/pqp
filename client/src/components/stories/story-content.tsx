@@ -178,14 +178,17 @@ function prefersReducedMotion(): boolean {
 }
 
 /** An image in the page, loaded and decoded (a failed one counts: the story must not wait forever). */
-function imageSettled(image: HTMLImageElement): Promise<void> {
+function imageSettled(image: HTMLImageElement, signal: AbortSignal): Promise<void> {
   const decoded = () => (typeof image.decode === "function" ? image.decode().catch(() => undefined) : Promise.resolve());
   if (image.complete) {
     return image.naturalWidth > 0 ? decoded() : Promise.resolve();
   }
   return new Promise((resolve) => {
-    image.addEventListener("load", () => void decoded().then(resolve), { once: true });
-    image.addEventListener("error", () => resolve(), { once: true });
+    // The listeners go with the reveal (a story left or timed out), so none outlives its card.
+    const done = () => resolve();
+    image.addEventListener("load", () => void decoded().then(resolve), { once: true, signal });
+    image.addEventListener("error", done, { once: true, signal });
+    signal.addEventListener("abort", done, { once: true });
   });
 }
 
@@ -229,6 +232,7 @@ function useStoryReveal({
       return;
     }
     let cancelled = false;
+    const waits = new AbortController();
     const timer = window.setTimeout(() => setSpinner(true), SPINNER_AFTER_MS);
     const settle = async () => {
       const element = root.current;
@@ -238,22 +242,31 @@ function useStoryReveal({
       // A frame first, so the pictures and the text are in the page and the fonts they use have started.
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const first = [...element.querySelectorAll("img")];
-      await Promise.all(first.map(imageSettled));
+      await Promise.all(first.map((image) => imageSettled(image, waits.signal)));
       if (typeof document !== "undefined" && document.fonts) {
         await document.fonts.ready.catch(() => undefined);
       }
       // Whatever was added while those were loading (the faces on a call card).
       const later = [...element.querySelectorAll("img")].filter((image) => !first.includes(image));
-      await Promise.all(later.map(imageSettled));
+      await Promise.all(later.map((image) => imageSettled(image, waits.signal)));
     };
-    void Promise.race([settle(), new Promise<void>((resolve) => window.setTimeout(resolve, REVEAL_MAX_MS))]).then(() => {
+    const giveUp = window.setTimeout(() => {
+      // Too long: show the story as it is, whatever is still missing (a clip with no poster included).
+      if (!cancelled) {
+        setAssetsDone(true);
+        setRevealed(true);
+      }
+    }, REVEAL_MAX_MS);
+    void settle().then(() => {
       if (!cancelled) {
         setAssetsDone(true);
       }
     });
     return () => {
       cancelled = true;
+      waits.abort();
       window.clearTimeout(timer);
+      window.clearTimeout(giveUp);
     };
     // One reveal per story: the viewer keys the card by it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -332,7 +345,9 @@ export const StoryContent = forwardRef(function StoryContent(
     gated,
     storyId: story.id,
     needsVideoFrame: story.kind === "video" && playVideo && Boolean(story.mediaUrl),
-    waitsForVideo: story.kind === "video" && !story.posterUrl,
+    // Only a clip that is playing in the card can produce the frame the reveal waits for; with playback
+    // off (the card opening, a thumbnail) there is nothing to wait for.
+    waitsForVideo: story.kind === "video" && !story.posterUrl && playVideo && Boolean(story.mediaUrl),
     onReady,
   });
 
