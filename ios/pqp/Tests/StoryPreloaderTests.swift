@@ -183,6 +183,25 @@ final class StoryPreloaderTests: XCTestCase {
         XCTAssertEqual(loader.started.count, 1)
     }
 
+    /// Short-lived means it: what aged out is gone, the cache has a ceiling,
+    /// and the next account never sees the last one's.
+    func testTheStoryCacheEvictsAndIsBoundedAndForgetsOnAccountChange() throws {
+        let loader = StoryPreloader()
+        loader.remember([try story("old")])
+        XCTAssertNil(loader.cachedStory("old", now: Date().addingTimeInterval(StoryPreloader.storyTTL + 1)))
+        XCTAssertNil(loader.cachedStory("old"), "An expired entry is dropped when it is found out, not kept")
+
+        for index in 0..<(StoryPreloader.storyCap + 10) {
+            loader.remember([try story("s\(index)")])
+        }
+        let kept = (0..<(StoryPreloader.storyCap + 10)).filter { loader.cachedStory("s\($0)") != nil }.count
+        XCTAssertEqual(kept, StoryPreloader.storyCap)
+        XCTAssertNotNil(loader.cachedStory("s\(StoryPreloader.storyCap + 9)"), "The newest stay")
+
+        loader.reset()
+        XCTAssertNil(loader.cachedStory("s\(StoryPreloader.storyCap + 9)"))
+    }
+
     func testStoriesTheTrayReadAreKeptBrieflyForTheViewer() throws {
         let loader = StoryPreloader()
         let one = try story("a")

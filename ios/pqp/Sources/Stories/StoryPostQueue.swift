@@ -289,6 +289,10 @@ final class StoryPostQueue {
     @ObservationIgnored private let backend: any StoryPostBackend
     @ObservationIgnored private let store: StoryPostStore
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
+    /// Posts waiting for one of the running slots, oldest first.
+    @ObservationIgnored private var waiting: [String] = []
+    /// A phone's uplink is shared: two stories at a time, the rest in line.
+    static let maxRunning = 2
     @ObservationIgnored private var backgroundTasks: [String: UIBackgroundTaskIdentifier] = [:]
     @ObservationIgnored private var ownerId: String?
     @ObservationIgnored private let usesBackgroundTime: Bool
@@ -337,6 +341,7 @@ final class StoryPostQueue {
     func discard(_ id: String) {
         tasks[id]?.cancel()
         tasks[id] = nil
+        waiting.removeAll { $0 == id }
         endBackgroundTime(id)
         let storyId = job(id: id)?.record.storyId
         jobs.removeAll { $0.id == id }
@@ -345,6 +350,7 @@ final class StoryPostQueue {
             let backend = backend
             Task.detached { await backend.delete(storyId: storyId) }
         }
+        pump()
     }
 
     /// Posts left on disk by an earlier run come back as failed ones, with the
@@ -362,6 +368,7 @@ final class StoryPostQueue {
     func clear() {
         for id in jobs.map(\.id) { tasks[id]?.cancel(); endBackgroundTime(id) }
         tasks.removeAll()
+        waiting.removeAll()
         jobs.removeAll()
         try? FileManager.default.removeItem(at: store.root)
     }
@@ -370,8 +377,18 @@ final class StoryPostQueue {
 
     private func start(_ id: String) {
         beginBackgroundTime(id)
-        tasks[id] = Task { [weak self] in
-            await self?.execute(id)
+        waiting.append(id)
+        pump()
+    }
+
+    /// Starts waiting posts while there is a free slot.
+    private func pump() {
+        while tasks.count < Self.maxRunning, !waiting.isEmpty {
+            let id = waiting.removeFirst()
+            guard job(id: id) != nil else { continue }
+            tasks[id] = Task { [weak self] in
+                await self?.execute(id)
+            }
         }
     }
 
@@ -379,7 +396,7 @@ final class StoryPostQueue {
         guard var record = job(id: id)?.record else { return }
         do {
             let created = try await backend.create(record.request)
-            try Task.checkCancellation()
+            try await settleDiscard(created)
             record.storyId = created.story.id
             try? store.save(record)
             update(id) { $0.record.storyId = created.story.id }
@@ -429,18 +446,32 @@ final class StoryPostQueue {
         }
     }
 
+    /// A create that answered after the post was discarded: the story it made
+    /// would sit pending with nobody holding its id, so it goes now.
+    private func settleDiscard(_ created: CreateStoryResponse) async throws {
+        if Task.isCancelled {
+            await backend.delete(storyId: created.story.id)
+            throw CancellationError()
+        }
+    }
+
     private func finish(_ id: String) {
         tasks[id] = nil
         endBackgroundTime(id)
+        // Discarded while the last request was in flight: nothing went live
+        // that the person still means to be there.
+        guard jobs.contains(where: { $0.id == id }) else { pump(); return }
         jobs.removeAll { $0.id == id }
         store.remove(id)
         publishedCount += 1
+        pump()
     }
 
     private func fail(_ id: String, _ error: any Error) {
         tasks[id] = nil
         endBackgroundTime(id)
         update(id) { $0.phase = .failed(Self.message(for: error)) }
+        pump()
     }
 
     private func update(_ id: String, _ change: (inout Job) -> Void) {

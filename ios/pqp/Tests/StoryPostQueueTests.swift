@@ -33,6 +33,7 @@ final class StoryPostQueueTests: XCTestCase {
         private(set) var putCount = 0
         var failPuts = false
         var holdPuts = false
+        var holdCreates = false
         var withUploads = true
         let storyId: String
 
@@ -42,6 +43,11 @@ final class StoryPostQueueTests: XCTestCase {
 
         func create(_ request: CreateStoryRequest) async throws -> CreateStoryResponse {
             locked { requests.append(request) }
+            // Answers late, as a slow link does, and not even for a caller
+            // that was cancelled meanwhile.
+            while locked({ holdCreates }) {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
             let upload = withUploads
                 ? #","upload":{"url":"https://store.test/base","method":"PUT","headers":{"Content-Type":"image/jpeg"}}"#
                 : ""
@@ -71,10 +77,11 @@ final class StoryPostQueueTests: XCTestCase {
             progress(Int64(size))
         }
 
-        func set(fail: Bool? = nil, hold: Bool? = nil) {
+        func set(fail: Bool? = nil, hold: Bool? = nil, holdCreate: Bool? = nil) {
             locked {
                 if let fail { failPuts = fail }
                 if let hold { holdPuts = hold }
+                if let holdCreate { holdCreates = holdCreate }
             }
         }
         func snapshot() -> (requests: [CreateStoryRequest], published: [String], deleted: [String], puts: Int) {
@@ -255,6 +262,39 @@ final class StoryPostQueueTests: XCTestCase {
         let kept = store.fileURL(record, try XCTUnwrap(record.base))
         XCTAssertEqual(try Data(contentsOf: kept).count, 4096)
         XCTAssertEqual(record.base?.byteSize, 4096)
+    }
+
+    /// A phone's uplink is shared: three posts do not all start at once.
+    func testOnlyTwoPostsRunAtOnceAndTheNextStartsWhenOneEnds() async throws {
+        let backend = FakeBackend(storyId: storyId)
+        backend.set(holdCreate: true)
+        let posts = queue(backend)
+        for _ in 0..<3 {
+            try posts.enqueue(request: try photoRequest(), base: photo, layers: [:], userId: me)
+        }
+        try await waitUntil("two creates") { backend.snapshot().requests.count == 2 }
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(backend.snapshot().requests.count, 2, "The third waits for a slot")
+        backend.set(holdCreate: false)
+        try await waitUntil("all three to go live") { posts.publishedCount == 3 }
+        XCTAssertEqual(backend.snapshot().requests.count, 3)
+    }
+
+    /// Discarded while the create was still in the air: the story it made
+    /// has nobody holding its id, so it is deleted when the answer lands, and
+    /// nothing is published or counted.
+    func testADiscardDuringTheCreateDeletesWhatTheCreateMade() async throws {
+        let backend = FakeBackend(storyId: storyId)
+        backend.set(holdCreate: true)
+        let posts = queue(backend)
+        let id = try posts.enqueue(request: try photoRequest(), base: photo, layers: [:], userId: me)
+        try await waitUntil("the create to be sent") { backend.snapshot().requests.count == 1 }
+        posts.discard(id)
+        backend.set(holdCreate: false)
+        try await waitUntil("the minted story to be deleted") { backend.snapshot().deleted == [self.storyId] }
+        XCTAssertEqual(backend.snapshot().published, [])
+        XCTAssertEqual(posts.publishedCount, 0)
+        XCTAssertEqual(backend.snapshot().puts, 0)
     }
 
     func testAPostIsShownOnTheStripsItIsGoingTo() throws {

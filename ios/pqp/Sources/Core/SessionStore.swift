@@ -694,6 +694,7 @@ final class SessionStore {
         eventHandlers.removeValue(forKey: Self.occupancyHandlerKey)
         voiceOccupancy.clear()
         storyPosts.clear()
+        StoryPreloader.shared.reset()
         // Cached pages are one account's private messages sitting in
         // Application Support. The next person to sign in on this device must
         // not find them, so the whole directory goes.

@@ -135,6 +135,7 @@ final class StoryPreloader {
     /// viewer state and call roster move.
     private var stories: [String: (story: Story, at: Date)] = [:]
     static let storyTTL: TimeInterval = 60
+    static let storyCap = 60
 
     private var running: [String: Task<Void, Never>] = [:]
     private var pending: [StoryPreloadItem] = []
@@ -166,10 +167,30 @@ final class StoryPreloader {
     func remember(_ fetched: [Story]) {
         let now = Date()
         for story in fetched { stories[story.id] = (story, now) }
+        // Short-lived and bounded: what has aged out goes, and so does the
+        // oldest past the cap.
+        stories = stories.filter { now.timeIntervalSince($0.value.at) < Self.storyTTL }
+        if stories.count > Self.storyCap {
+            let keep = stories.sorted { $0.value.at > $1.value.at }.prefix(Self.storyCap)
+            stories = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
+        }
+    }
+
+    /// Another account, or none: nothing one person's viewer saw (a reaction,
+    /// what is seen) may initialise the next one's.
+    func reset() {
+        stories.removeAll()
+        warmed.removeAll()
+        setWindow([])
+        images.removeAllObjects()
     }
 
     func cachedStory(_ id: String, now: Date = Date()) -> Story? {
-        guard let hit = stories[id], now.timeIntervalSince(hit.at) < Self.storyTTL else { return nil }
+        guard let hit = stories[id] else { return nil }
+        guard now.timeIntervalSince(hit.at) < Self.storyTTL else {
+            stories[id] = nil
+            return nil
+        }
         return hit.story
     }
 
