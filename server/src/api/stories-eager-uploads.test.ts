@@ -438,6 +438,21 @@ describeDb("stories: eager uploads", () => {
       expect((await call("POST", "/api/stories", imageStory(id))).status).toBe(201);
     });
 
+    it("a client retrying while the upload is still going up never uses the upload up", async () => {
+      const id = (await mint("base", "image/jpeg")).body.uploadId as string;
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        resetApiRateLimits();
+        expect((await call("POST", "/api/stories", imageStory(id))).status).toBe(409);
+      }
+      // Nothing was copied, nothing is remembered, and the file arriving makes the same upload work.
+      expect(
+        (await getPool().query<{ copy_keys: string[] }>(`SELECT copy_keys FROM story_uploads WHERE id = $1`, [id])).rows[0]!
+          .copy_keys,
+      ).toEqual([]);
+      storage.objects.set(await keyOf(id), { contentLength: 4000, contentType: "image/jpeg", prefix: JPEG });
+      expect((await call("POST", "/api/stories", imageStory(id))).status).toBe(201);
+    });
+
     it("takes photo layers and the drawing from uploads and still mints URLs for the layers that have none", async () => {
       const base = await upload("base", "image/jpeg", JPEG);
       const photo = await upload("layer", "image/jpeg", JPEG);
