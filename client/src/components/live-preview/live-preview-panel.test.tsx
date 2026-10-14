@@ -153,12 +153,33 @@ function exitControl(): HTMLButtonElement | null {
   return document.querySelector<HTMLButtonElement>("[data-live-preview] header button[aria-label]");
 }
 
-/** jsdom runs a history traversal on a timer, then fires popstate. */
-async function goBack() {
+/**
+ * Runs `start` and resolves once the history traversal it began has landed.
+ * jsdom performs a traversal on a timer and then fires `popstate`, so the
+ * event is the signal: a fixed sleep here (it was 30 ms) is shorter than the
+ * timer on a loaded CI runner, and the next assertion then reads the entry
+ * from before the traversal.
+ */
+async function untilPopstate(start: () => void) {
   await act(async () => {
-    window.history.back();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    const landed = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        window.removeEventListener("popstate", onPop);
+        reject(new Error("the history traversal never fired popstate"));
+      }, 5_000);
+      const onPop = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      window.addEventListener("popstate", onPop, { once: true });
+    });
+    start();
+    await landed;
   });
+}
+
+async function goBack() {
+  await untilPopstate(() => window.history.back());
 }
 
 async function answerStart(index: number, result: LivePreviewStartResult) {
@@ -256,6 +277,11 @@ describe("LivePreviewPanel", () => {
 
   it("closes the page on the browser's Back and leaves no extra entry on the control", async () => {
     await mount();
+    // jsdom's history is shared by every test in the file. An earlier test that
+    // ended on Back leaves the cursor in the middle of the list, and a push from
+    // there drops the entries ahead of it, so the length would not grow by one.
+    // Push from the tip so "exactly one entry" is what is measured.
+    window.history.pushState(null, "");
     const before = window.history.length;
     await watchNow();
     await answerStart(0, okResult());
@@ -271,10 +297,7 @@ describe("LivePreviewPanel", () => {
     await watchNow();
     await answerStart(1, okResult());
     expect(window.history.state?.pqpLivePreview).not.toEqual(resting?.pqpLivePreview);
-    await act(async () => {
-      exitControl()!.click();
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    });
+    await untilPopstate(() => exitControl()!.click());
     expect(page()).toBeNull();
     // Back on the entry the visitor started from, not on the one the page pushed.
     expect(window.history.state).toEqual(resting);
