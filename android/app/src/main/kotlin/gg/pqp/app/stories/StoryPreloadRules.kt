@@ -79,6 +79,34 @@ object StoryPreloadRules {
     const val VIDEO_HEAD_BYTES = 1_048_576L
     const val VIDEO_TAIL_BYTES = 262_144L
 
+    /**
+     * Whether an MP4's index (`moov`) comes before its picture data (`mdat`) in [head], its first bytes: a clip with the
+     * index up front starts from its first megabyte alone, and only one with the index last needs its end fetched too.
+     * Unknown (the boxes run out, or are not readable) counts as "not up front", which is the safe side: the end is kept.
+     */
+    fun indexFirst(head: ByteArray): Boolean {
+        var offset = 0L
+        while (offset + 8 <= head.size) {
+            val at = offset.toInt()
+            var size = u32(head, at)
+            val type = String(head, at + 4, 4, Charsets.ISO_8859_1)
+            if (type == "moov") return true
+            if (type == "mdat") return false
+            if (size == 1L) {
+                if (at + 16 > head.size) return false
+                size = u32(head, at + 12)
+                if (u32(head, at + 8) != 0L) return false
+            }
+            if (size < 8) return false
+            offset += size
+        }
+        return false
+    }
+
+    private fun u32(bytes: ByteArray, at: Int): Long =
+        ((bytes[at].toLong() and 0xff) shl 24) or ((bytes[at + 1].toLong() and 0xff) shl 16) or
+            ((bytes[at + 2].toLong() and 0xff) shl 8) or (bytes[at + 3].toLong() and 0xff)
+
     /** The cache keys: stable per story, so a link that is signed again for the same picture still hits. */
     fun baseKey(storyId: String) = "story:$storyId:base"
     fun posterKey(storyId: String) = "story:$storyId:poster"

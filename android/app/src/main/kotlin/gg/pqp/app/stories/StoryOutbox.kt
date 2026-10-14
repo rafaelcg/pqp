@@ -213,8 +213,11 @@ class StoryOutbox(
     /** Make the files and the request, and keep them: from here the post survives anything. */
     private suspend fun prepare(id: String, input: StoryPostInput): StoryDraft {
         val built = StoryDraftBuilder.build(appContext, id, input)
-        drafts.write(built.draft, built.files)
-        return built.draft
+        // Uploads that already finished go on the draft from the start: a retry, even after the process died,
+        // claims them instead of sending the files again.
+        val draft = built.draft.copy(uploadIds = EagerRequest.finished(eagers[id].orEmpty().values))
+        drafts.write(draft, built.files)
+        return draft
     }
 
     private suspend fun upload(draft: StoryDraft) {

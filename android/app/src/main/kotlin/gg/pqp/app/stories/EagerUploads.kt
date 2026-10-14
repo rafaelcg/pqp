@@ -157,6 +157,10 @@ object EagerRequest {
         )
     }
 
+    /** The ids of the uploads that have finished: what a draft keeps so a retry can claim them instead of sending the file again. */
+    fun finished(uploads: Collection<EagerUpload>): Map<String, String> =
+        uploads.filter { it.completed }.mapNotNull { upload -> upload.mintedId?.let { upload.key to it } }.toMap()
+
     /** Every file the story has is eager, and it has at least one (a card of only words goes the old way). */
     fun allEager(files: List<DraftFile>, ids: Map<String, String>): Boolean =
         files.isNotEmpty() && files.all { ids.containsKey(it.key) }

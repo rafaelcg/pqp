@@ -35,6 +35,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -362,6 +363,9 @@ fun storyImageRequest(context: Context, url: String, key: String?, size: coil3.s
 object StoryVideoCache {
     private const val MAX_BYTES = 128L * 1024 * 1024
 
+    /** How much of a clip's start is read to find where its index is. */
+    private const val HEAD_PEEK = 4096L
+
     @Volatile
     private var cache: SimpleCache? = null
 
@@ -391,10 +395,33 @@ object StoryVideoCache {
     suspend fun prefetch(context: Context, key: String, url: String) {
         val factory = dataSourceFactory(context)
         write(factory, key, url, position = 0, length = StoryPreloadRules.VIDEO_HEAD_BYTES)
+        // A clip whose index is up front starts from its first megabyte alone: its end is not fetched against whatever
+        // is on screen. Only one that keeps its index last needs it.
+        if (StoryPreloadRules.indexFirst(readHead(factory, key, url))) return
         val total = ContentMetadata.getContentLength(cache(context).getContentMetadata(key))
         if (total > StoryPreloadRules.VIDEO_HEAD_BYTES) {
             val tail = minOf(StoryPreloadRules.VIDEO_TAIL_BYTES, total - StoryPreloadRules.VIDEO_HEAD_BYTES)
             write(factory, key, url, position = total - tail, length = tail)
+        }
+    }
+
+    /** The first bytes of the clip, from the cache the head was just written to. */
+    private suspend fun readHead(factory: CacheDataSource.Factory, key: String, url: String): ByteArray = withContext(Dispatchers.IO) {
+        val source = factory.createDataSource()
+        try {
+            source.open(DataSpec.Builder().setUri(url).setKey(key).setPosition(0).setLength(HEAD_PEEK).build())
+            val buffer = ByteArray(HEAD_PEEK.toInt())
+            var filled = 0
+            while (filled < buffer.size) {
+                val read = source.read(buffer, filled, buffer.size - filled)
+                if (read < 0) break
+                filled += read
+            }
+            buffer.copyOf(filled)
+        } catch (_: java.io.IOException) {
+            ByteArray(0)
+        } finally {
+            runCatching { source.close() }
         }
     }
 

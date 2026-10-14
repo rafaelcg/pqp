@@ -1185,6 +1185,7 @@
     <string name="stories_audience_replies_hint">Resposta chega nas tuas Conversas</string>
     <string name="stories_audience_post">Postar story</string>
     <string name="stories_audience_footer">Some em 24 h. A staff de cada servidor pode tirar.</string>
+    <string name="stories_viewer_loading">Carregando story</string>
     <string name="stories_upload_posted">Postado</string>
     <string name="stories_upload_posting">Postando…</string>
     <string name="stories_outbox_failed_label">Não subiu</string>

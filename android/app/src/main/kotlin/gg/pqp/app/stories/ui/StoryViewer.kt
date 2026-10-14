@@ -121,6 +121,7 @@ import gg.pqp.app.stories.reactToStory
 import gg.pqp.app.stories.removeStoryFromServer
 import gg.pqp.app.stories.replyToStory
 import gg.pqp.app.stories.stories
+import gg.pqp.app.ui.components.monogramColor
 import gg.pqp.app.ui.theme.Palette
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
@@ -128,6 +129,9 @@ import kotlin.math.absoluteValue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** How long a story may take to show before a spinner says it is on its way. */
+private const val SPINNER_AFTER_MS = 300L
 
 /** How long a story may take to show before the preloader steps aside for it. */
 private const val STILL_LOADING_MS = 250L
@@ -338,6 +342,11 @@ private fun DeckPage(
     val progress = remember(story?.id) { Animatable(0f) }
     LaunchedEffect(story?.id) { hasAudio = true }
     var videoProgress by remember(story?.id) { mutableFloatStateOf(0f) }
+    // The story's first frame is on screen. Nothing runs against the person's time before that: not the bar, not the
+    // "seen" count, and the preloader waits too, so the link is the story on screen's alone.
+    var shownReady by remember(story?.id) { mutableStateOf(false) }
+    // A clip is still pulling bytes (its buffer is not full): the next story is not fetched against it.
+    var mediaLoading by remember(story?.id) { mutableStateOf(false) }
 
     val advance: () -> Unit = {
         val list = stories.orEmpty()
@@ -349,9 +358,10 @@ private fun DeckPage(
 
     // The clock for a photo, a text card or a call sticker. Linear, because it
     // is a clock; it stops where it is when paused and resumes from there.
-    LaunchedEffect(story?.id, active, paused) {
+    LaunchedEffect(story?.id, active, paused, shownReady) {
         val current = story ?: return@LaunchedEffect
-        if (current.kind == "video" || !active || paused) {
+        // Not until the picture is there: a 5 s photo that arrives 3 s late is still 5 s on screen.
+        if (current.kind == "video" || !active || paused || !shownReady) {
             progress.stop()
             return@LaunchedEffect
         }
@@ -366,9 +376,9 @@ private fun DeckPage(
     }
 
     // Seen after a second on screen, never for the author's own.
-    LaunchedEffect(story?.id, active) {
+    LaunchedEffect(story?.id, active, shownReady) {
         val current = story ?: return@LaunchedEffect
-        if (!active || current.own != null) return@LaunchedEffect
+        if (!active || !shownReady || current.own != null) return@LaunchedEffect
         delay(StoriesRules.SEEN_AFTER_MS)
         store.markSeen(current.id, meId)
         preloader.markSeen(current.id)
@@ -376,7 +386,6 @@ private fun DeckPage(
 
     // Where the viewer is, so the preloader can have what comes next ready.
     // The preloader waits for the story on screen to be on screen: what is being looked at comes first, on a slow link.
-    var shownReady by remember(story?.id) { mutableStateOf(false) }
     LaunchedEffect(story?.id, active) {
         if (active && story != null) {
             gg.pqp.app.stories.StoryPerf.becameCurrent(story.id)
@@ -386,9 +395,26 @@ private fun DeckPage(
             if (!shownReady) preloader.pause()
         }
     }
-    LaunchedEffect(story?.id, active, shownReady) {
-        if (active && story != null && shownReady) onShown(index)
+    // A clip that is still buffering holds the preloader too: it is on the same link.
+    LaunchedEffect(story?.id, active, mediaLoading) {
+        if (active && story != null && mediaLoading) preloader.pause()
     }
+    LaunchedEffect(story?.id, active, shownReady, mediaLoading) {
+        if (active && story != null && shownReady && !mediaLoading) onShown(index)
+    }
+
+    // While the story on screen has no first frame: its author's colour over black, and a small spinner if it takes
+    // more than a moment. The bar does not move meanwhile.
+    val waiting = active && story != null && !shownReady
+    var spinnerOn by remember(story?.id) { mutableStateOf(false) }
+    LaunchedEffect(story?.id, waiting) {
+        spinnerOn = false
+        if (waiting) {
+            delay(SPINNER_AFTER_MS)
+            spinnerOn = true
+        }
+    }
+    val veil by animateFloatAsState(if (waiting) 1f else 0f, tween(150), label = "story-veil")
 
     val chromeAlpha by animateFloatAsState(if (holding) 0f else 1f, tween(200), label = "story-chrome")
     val nextLabel = stringResource(R.string.stories_viewer_next)
@@ -449,12 +475,31 @@ private fun DeckPage(
                         onVideoEnded = advance,
                         onHasAudio = { hasAudio = it },
                         onReady = { shownReady = true },
+                        onLoading = { mediaLoading = it },
                         onJoinCall = { call ->
                             onJoinCall(call.serverId, call.channelId, call.channelName)
                             onClose()
                         },
                         onOpenMention = { profile = it },
                     )
+                }
+
+                if (veil > 0f) {
+                    val loading = stringResource(R.string.stories_viewer_loading)
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { alpha = veil }
+                            .background(Color.Black)
+                            .background(monogramColor(story.author.id).copy(alpha = 0.3f))
+                            .semantics { contentDescription = loading }
+                            .testTag("stories.viewer.waiting"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (spinnerOn) {
+                            CircularProgressIndicator(Modifier.size(28.dp), color = Color.White.copy(alpha = 0.85f), strokeWidth = 2.dp)
+                        }
+                    }
                 }
 
                 // Writing a reply: the story pauses and steps back.
@@ -761,6 +806,8 @@ internal fun StoryVideo(
     onHasAudio: (Boolean) -> Unit = {},
     /** The first frame is on screen. */
     onReady: () -> Unit = {},
+    /** The player is still loading bytes (its buffer is not full). */
+    onLoading: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     var ready by remember(url) { mutableStateOf(false) }
@@ -768,6 +815,12 @@ internal fun StoryVideo(
         // Read through the clip cache: a clip the preloader already fetched starts from disk, with no wait.
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(StoryVideoCache.dataSourceFactory(context)))
+            // Never more than 10 s ahead: a clip does not keep pulling the whole file against whatever comes next.
+            .setLoadControl(
+                androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(5_000, 10_000, 2_500, 5_000)
+                    .build(),
+            )
             .build().apply {
             setMediaItem(StoryVideoCache.mediaItem(url, StoryPreloadRules.videoKey(storyId)))
             repeatMode = Player.REPEAT_MODE_OFF
@@ -779,6 +832,10 @@ internal fun StoryVideo(
             override fun onRenderedFirstFrame() {
                 gg.pqp.app.stories.StoryPerf.frameReady(storyId, "video")
                 onReady()
+            }
+
+            override fun onIsLoadingChanged(isLoading: Boolean) {
+                onLoading(isLoading)
             }
 
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
@@ -812,7 +869,14 @@ internal fun StoryVideo(
     }
     Box(Modifier.fillMaxSize()) {
         AndroidView(
-            factory = { PlayerView(it).apply { useController = false; this.player = player } },
+            // A stall in the middle of a clip shows the player's own spinner; the bar waits with the picture.
+            factory = {
+                PlayerView(it).apply {
+                    useController = false
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                    this.player = player
+                }
+            },
             update = {
                 it.resizeMode = if (fill) {
                     androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM

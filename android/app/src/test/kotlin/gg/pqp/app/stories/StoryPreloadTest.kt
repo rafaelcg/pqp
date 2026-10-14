@@ -116,6 +116,41 @@ class StoryPreloadTest {
         assertEquals(listOf("a", "b", "c"), StoryPreloadRules.trayRings(items).map { it.author.id })
     }
 
+    // --- where a clip keeps its index ---
+
+    private fun box(type: String, size: Int): ByteArray {
+        val out = ByteArray(size)
+        out[0] = (size ushr 24).toByte()
+        out[1] = (size ushr 16).toByte()
+        out[2] = (size ushr 8).toByte()
+        out[3] = size.toByte()
+        type.forEachIndexed { i, c -> out[4 + i] = c.code.toByte() }
+        return out
+    }
+
+    @Test
+    fun `an index before the picture data means the first megabyte is enough`() {
+        assertTrue(StoryPreloadRules.indexFirst(box("ftyp", 24) + box("moov", 400) + box("mdat", 900)))
+        // A free box in front does not hide it.
+        assertTrue(StoryPreloadRules.indexFirst(box("ftyp", 24) + box("free", 8) + box("moov", 100)))
+    }
+
+    @Test
+    fun `picture data first means the end has to be kept too`() {
+        assertFalse(StoryPreloadRules.indexFirst(box("ftyp", 24) + box("mdat", 900)))
+        assertFalse(StoryPreloadRules.indexFirst(box("ftyp", 24) + box("free", 8) + box("mdat", 900)))
+    }
+
+    @Test
+    fun `an unreadable start counts as not up front, the safe side`() {
+        assertFalse(StoryPreloadRules.indexFirst(ByteArray(0)))
+        assertFalse(StoryPreloadRules.indexFirst(ByteArray(5)))
+        // A box that claims to be smaller than its own header cannot be walked past.
+        assertFalse(StoryPreloadRules.indexFirst(box("ftyp", 24) + byteArrayOf(0, 0, 0, 4, 106, 117, 110, 107)))
+        // The boxes run out before an index or data appears.
+        assertFalse(StoryPreloadRules.indexFirst(box("ftyp", 24)))
+    }
+
     // --- the keys ---
 
     @Test

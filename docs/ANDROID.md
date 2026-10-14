@@ -2367,7 +2367,8 @@ does with it.
   answers 409 or 404/400 for an upload (not finished, gone, a mismatch) is sent
   once more after a short wait and then every file goes the old way: each create
   counts against the story budget, so it is not hammered. The ids are kept on
-  the draft, so a retry after the process died still claims them. A clip posted
+  the draft the moment it is made (those finished by then), so a retry after
+  the process died still claims them. A clip posted
   muted is a different file from the one sent ahead: that one is thrown away and
   the muted clip is sent at "Postar".
 - **Preload.** `StoryPreloader` has the next story ready before the tap: with a
@@ -2383,6 +2384,15 @@ does with it.
   still loading, so a slow link is that story's alone. Debug builds log the
   numbers under `adb logcat -s pqp.perf` (`StoryPerf`) and `files/no-preload`
   turns the preloader off to measure the same build without it.
+  - **The clock waits for the picture.** A story's bar, its "seen" count and the
+    preloader all start at its first frame, not at the tap: while it has none the
+    viewer shows the author's colour over black, and a small spinner after 300
+    ms (`stories.viewer.waiting`), so a 5 s photo that arrives 3 s late is still
+    5 s on screen. A clip keeps its bar with its position (a stall pauses both)
+    and shows the player's own spinner mid-clip. A clip also holds the preloader
+    while it is still loading, buffers at most 10 s ahead, and a preloaded clip
+    keeps only its first megabyte when its index is up front (`indexFirst`),
+    its end too only when the index is last.
 - **Composer.** TEXTO / CÂMERA / CALL, then "Quem vê". CÂMERA opens on a live
   camera (`stories/camera/`, CameraX), not on buttons: a 9:16 preview, a
   shutter that takes a photo on a tap and records while it is held (a ring

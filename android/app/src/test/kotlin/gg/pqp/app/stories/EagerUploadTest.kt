@@ -126,6 +126,14 @@ class EagerUploadTest {
     }
 
     @Test
+    fun `only finished uploads are kept on the draft`() {
+        val done = EagerUpload("base", "base", "image/jpeg", ByteArray(3), Any(), null).apply { completed = true; mintedId = "u-base" }
+        val going = EagerUpload("l1", "layer", "image/jpeg", ByteArray(3), Any(), null).apply { mintedId = "u-l1" }
+        val failed = EagerUpload("d1", "layer", "image/png", ByteArray(3), Any(), null).apply { failed = true }
+        assertEquals(mapOf("base" to "u-base"), EagerRequest.finished(listOf(done, going, failed)))
+    }
+
+    @Test
     fun `saved upload ids survive on the draft and can be replaced`() {
         val store = StoryDraftStore(folder.newFolder("outbox"))
         val draft = StoryDraft("d", "me", request(photoLayer), files.take(2), createdAt = 1L)

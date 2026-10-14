@@ -1192,6 +1192,7 @@
     <string name="stories_audience_replies_hint">Replies land in your Chats</string>
     <string name="stories_audience_post">Post story</string>
     <string name="stories_audience_footer">Gone in 24 h. Each server\'s staff can remove it.</string>
+    <string name="stories_viewer_loading">Loading story</string>
     <string name="stories_upload_posted">Posted</string>
     <string name="stories_upload_posting">Posting…</string>
     <string name="stories_outbox_failed_label">Didn\'t post</string>

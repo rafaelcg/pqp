@@ -80,6 +80,8 @@ fun StoryCanvas(
     onHasAudio: (Boolean) -> Unit = {},
     /** The story's first frame is on screen (a picture decoded, a clip rendering); at once for a story with no media. */
     onReady: () -> Unit = {},
+    /** A clip is still loading bytes. */
+    onLoading: (Boolean) -> Unit = {},
     onJoinCall: (StoryCallLive) -> Unit,
     onOpenMention: (StoryAuthor) -> Unit,
     modifier: Modifier = Modifier,
@@ -114,6 +116,7 @@ fun StoryCanvas(
                 onVideoEnded = onVideoEnded,
                 onHasAudio = onHasAudio,
                 onReady = onReady,
+                onLoading = onLoading,
             )
             // The words are on the base's description when there are any; reading them
             // again from each text layer would say everything twice.
@@ -267,6 +270,7 @@ private fun StoryBase(
     onVideoEnded: () -> Unit,
     onHasAudio: (Boolean) -> Unit,
     onReady: () -> Unit,
+    onLoading: (Boolean) -> Unit,
 ) {
     val media = story.media
     val describe = if (spoken != null) Modifier.semantics { contentDescription = spoken } else Modifier
@@ -300,6 +304,7 @@ private fun StoryBase(
                 onEnded = onVideoEnded,
                 onHasAudio = onHasAudio,
                 onReady = onReady,
+                onLoading = onLoading,
             )
         }
         media != null -> {
