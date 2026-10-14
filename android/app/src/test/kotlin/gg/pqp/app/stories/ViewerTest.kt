@@ -262,6 +262,22 @@ class ViewerTest {
     }
 
     @Test
+    fun `the caption pill is only for a story from before layers`() {
+        val mention = """{${geometry("mention", y = 0.3)},"userId":"u2"}"""
+        // A photo from before layers keeps its pill.
+        assertEquals("legenda velha", StoriesRules.legacyCaption(story("[]", ""","caption":"legenda velha"""")))
+        // Text layers draw those words once: no pill.
+        assertNull(StoriesRules.legacyCaption(story("[${textLayer("oi")}]", ""","caption":"oi"""")))
+        assertNull(StoriesRules.legacyCaption(story("[$mention,${textLayer("oi")}]", ""","caption":"oi"""")))
+        // Layers with no text layer (a mention, a call card) leave the caption alone.
+        assertEquals("oi", StoriesRules.legacyCaption(story("[$mention]", ""","caption":"oi"""")))
+        // No caption, a blank one, and a text card never draw it.
+        assertNull(StoriesRules.legacyCaption(story("[]")))
+        assertNull(StoriesRules.legacyCaption(story("[]", ""","caption":"  """")))
+        assertNull(StoriesRules.legacyCaption(story("[]", ""","caption":"x"""", kind = "text")))
+    }
+
+    @Test
     fun `a layer only asks for an address the API or storage could have given`() {
         fun image(url: String) = StoryLayerParser.parse(
             Json.parseToJsonElement("""{${geometry("image")},"url":"$url","width":10,"height":10}"""),
