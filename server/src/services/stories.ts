@@ -2018,7 +2018,7 @@ async function prepareEagerUploads(
   });
   const failure = outcomes.find((outcome) => outcome !== null);
   if (failure) {
-    await discardKeys(copied);
+    await discardKeys(copied, { forgetFrom: wanted.map((entry) => entry.id) });
     throw failure;
   }
   return eager;
@@ -2031,31 +2031,35 @@ async function prepareEagerUploads(
  */
 async function discardKeys(
   keys: readonly string[],
-  options: { forget: boolean } = { forget: true },
+  /** The uploads these copies were made from: the ones that deleted for certain are taken off their lists. */
+  options: { forgetFrom?: readonly string[] } = {},
 ): Promise<void> {
+  const gone: string[] = [];
   await Promise.all(
     keys.map(async (key) => {
       try {
         await deleteObject(key);
+        gone.push(key);
       } catch (error) {
         console.error(
           `[stories] leaked ${key}:`,
           error instanceof Error ? error.message : error,
         );
-        return;
-      }
-      if (options.forget) {
-        // Gone for certain: the upload row need not remember it for the sweep any more.
-        await getPool()
-          .query(
-            `UPDATE story_uploads SET copy_keys = array_remove(copy_keys, $1)
-              WHERE $1 = ANY(copy_keys) AND claimed_key IS DISTINCT FROM $1`,
-            [key],
-          )
-          .catch(() => undefined);
       }
     }),
   );
+  if (options.forgetFrom && options.forgetFrom.length > 0 && gone.length > 0) {
+    // ONE statement, on the uploads themselves (primary key): what is deleted for
+    // certain need not be remembered for the sweep any more.
+    await getPool()
+      .query(
+        `UPDATE story_uploads
+            SET copy_keys = ARRAY(SELECT k FROM unnest(copy_keys) AS k WHERE k <> ALL($2::text[]))
+          WHERE id = ANY($1::uuid[])`,
+        [options.forgetFrom, gone],
+      )
+      .catch(() => undefined);
+  }
 }
 
 /** Refused attempts one upload remembers at most (each is one key for the sweep to delete). */
@@ -2104,7 +2108,7 @@ export async function createStory(user: DbUser, input: CreateStoryParsed): Promi
   const client = await getPool()
     .connect()
     .catch(async (error: unknown) => {
-      await discardKeys(eager.pairs.map((pair) => pair.key));
+      await discardKeys(eager.pairs.map((pair) => pair.key), { forgetFrom: eager.pairs.map((pair) => pair.id) });
       throw error;
     });
   try {
@@ -2171,7 +2175,7 @@ export async function createStory(user: DbUser, input: CreateStoryParsed): Promi
   } catch (error) {
     await client.query("ROLLBACK");
     // The copies made for this attempt belong to no story now.
-    await discardKeys(eager.pairs.map((pair) => pair.key));
+    await discardKeys(eager.pairs.map((pair) => pair.key), { forgetFrom: eager.pairs.map((pair) => pair.id) });
     // Two attempts with one key raced: the other one won, answer its story.
     if (
       input.requestId &&
@@ -2213,7 +2217,7 @@ export async function createStory(user: DbUser, input: CreateStoryParsed): Promi
           .catch((cleanup: unknown) => {
             console.error(`[stories] could not release the uploads of ${storyId}:`, cleanup);
           });
-        await discardKeys(eager.pairs.map((pair) => pair.key));
+        await discardKeys(eager.pairs.map((pair) => pair.key), { forgetFrom: eager.pairs.map((pair) => pair.id) });
       }
     }
     throw error;
@@ -2225,7 +2229,7 @@ export async function createStory(user: DbUser, input: CreateStoryParsed): Promi
     bumpStoryStat("uploadsClaimed", eager.pairs.length);
     // The story owns its copy; the source has no further use. The sweep takes
     // what this misses (a claimed row is deleted with its object after an hour).
-    void discardKeys(eager.sources, { forget: false });
+    void discardKeys(eager.sources);
   }
   return {
     story,
