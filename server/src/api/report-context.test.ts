@@ -604,7 +604,11 @@ describeDb("report context", () => {
     const res = await call(operator, "GET", `/api/reports/${report.id}/context`);
     const ctx = reportContextSchema.parse(res.body);
     expect(ctx.conversation).toHaveLength(20);
-    expect(ctx.conversationCounts).toEqual({ fromReporter: 25, fromReported: 0 });
+    expect(ctx.conversationCounts).toEqual({
+      fromReporter: 25,
+      fromReported: 0,
+      capped: false,
+    });
     expect(ctx.conversation?.[0]?.authorName).toBe("reporter");
     expect(ctx.reporter).toMatchObject({
       displayName: "reporter",

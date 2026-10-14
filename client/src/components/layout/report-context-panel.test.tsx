@@ -84,7 +84,7 @@ function makeContext(overrides: Partial<ReportContext> = {}): ReportContext {
         isCall: true,
       },
     ],
-    conversationCounts: { fromReporter: 11, fromReported: 0 },
+    conversationCounts: { fromReporter: 11, fromReported: 0, capped: false },
     reporter: {
       displayName: "Niki",
       tag: "niki#0001",

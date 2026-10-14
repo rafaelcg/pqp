@@ -3521,6 +3521,7 @@
   "reports.ctx.convCounts_one": "{count} message from the reporter, {reported} from {name}.",
   "reports.ctx.convCounts_other": "{count} messages from the reporter, {reported} from {name}.",
   "reports.ctx.convNoReply": "{name} never replied.",
+  "reports.ctx.convCapped": "Only the newest 1000 messages were counted.",
   "reports.ctx.reporterLine": "Reporter: {name}, account created {when}. Reports filed: {filed} ({actioned} actioned, {dismissed} dismissed).",
   "reports.ctx.messageIn": "Message in #{channel}, server {server}.",
   "reports.ctx.serverMessages": "Latest messages in servers",
