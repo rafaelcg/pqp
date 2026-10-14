@@ -57,7 +57,7 @@ describe("CodeSigningPolicy", () => {
     expect(html).toContain("Rafael Cammarano Guglielmi");
     expect(html).toContain('href="https://github.com/rafaelcg"');
     expect(html).toContain("André");
-    expect(html).toContain('href="https://github.com/AndreCamm"');
+    expect(html).toContain('href="https://github.com/ndre-dev"');
   });
 
   it("links SignPath, its terms, the repository, the workflow and the privacy page", () => {
