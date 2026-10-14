@@ -747,6 +747,7 @@ import {
   ReportTargetNotVisibleError,
   resolveReport,
 } from "../services/reports.js";
+import { getReportContext } from "../services/report-context.js";
 import {
   ADMIN_FEEDBACK_PATH,
   ADMIN_FEEDBACK_RESOLVE_PATH,
@@ -11590,6 +11591,47 @@ router.get("/api/reports/all", async ({ url, user }) => {
     throw new NotFound("Not found");
   }
   return listAllReports(reportListOptions(url));
+});
+
+/**
+ * What a moderator needs to JUDGE one report: the reported account's age,
+ * behaviour, sanctions and recent words, and the neighbours of a reported
+ * message. See `services/report-context.ts` for what each lens holds.
+ *
+ * GATED EXACTLY LIKE THE QUEUE THE REPORT LIVES IN, and refusal is always the
+ * same 404 whatever the reason (no such report, not a moderator, not staff of
+ * that server): unlike the PATCH next door, which 403s a non-manager of a real
+ * report, this read hands back an account's history, so it must not confirm
+ * that a report id exists. An instance moderator gets the instance lens; a
+ * manager of the report's own server gets the server lens, which is narrowed
+ * to that server; anybody else gets nothing.
+ */
+router.get("/api/reports/:report/context", async ({ user }, { report }) => {
+  const reportId = reportIdParam(report);
+  const scope = await getReportScope(reportId);
+  if (!scope) {
+    throw new NotFound("Report not found");
+  }
+  const instance = isInstanceModerator(user);
+  if (!instance) {
+    if (!scope.serverId) {
+      throw new NotFound("Report not found");
+    }
+    try {
+      await requireAnyPermission(scope.serverId, user.id, [
+        Permission.KICK_MEMBERS,
+        Permission.BAN_MEMBERS,
+        Permission.MODERATE_MEMBERS,
+      ]);
+    } catch {
+      throw new NotFound("Report not found");
+    }
+  }
+  const context = await getReportContext(reportId, { id: user.id, instance });
+  if (!context) {
+    throw new NotFound("Report not found");
+  }
+  return context;
 });
 
 /**
