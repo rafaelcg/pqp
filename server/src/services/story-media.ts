@@ -258,9 +258,10 @@ async function sweepStoryUploads(): Promise<{ swept: number; failed: number }> {
               AND (user_id IS NULL
                    OR created_at < now() - make_interval(hours => $1)
                    -- Thrown away by the author: the object went at the DELETE, and
-                   -- once the 15 minute PUT URL is surely dead it goes again.
+                   -- once the 15 minute PUT URL is surely dead (and any PUT it began
+                   -- has had two hours to finish) it goes again.
                    OR (discarded_at IS NOT NULL
-                       AND discarded_at < now() - interval '30 minutes')))
+                       AND discarded_at < now() - interval '2 hours')))
              OR (claimed_story_id IS NOT NULL AND claimed_at < now() - interval '1 hour'
                  -- A story still waiting for a file keeps its record: replaying its
                  -- create must keep knowing which of its files came from an upload.

@@ -6448,7 +6448,7 @@ CREATE TABLE IF NOT EXISTS story_uploads (
   -- Lease for the sweep's delete, same idea as `stories.media_delete_claimed_at`.
   delete_claimed_at TIMESTAMPTZ,
   -- The author threw it away (`DELETE /api/stories/uploads/:id`). Nothing may
-  -- claim it from here on. The row outlives the object by half an hour so the
+  -- claim it from here on. The row outlives the object by two hours so the
   -- sweep can delete the object once more, after the presigned PUT URL has
   -- expired: an aborted browser PUT can still land after the first delete.
   discarded_at      TIMESTAMPTZ,

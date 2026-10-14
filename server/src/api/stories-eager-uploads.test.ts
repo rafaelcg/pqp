@@ -354,6 +354,20 @@ describeDb("stories: eager uploads", () => {
       expect((await mint("base", "image/jpeg")).status).toBe(201);
     });
 
+    it("has a runtime kill switch: off, the route is the 404 an older server gives and the config says so", async () => {
+      expect((await call("GET", `/api/stories/config?serverId=${serverId}`)).body.eagerUploads).toBe(true);
+      await setGlobalFlag("stories_eager_uploads", false, { kind: "dashboard" });
+      expect((await call("GET", `/api/stories/config?serverId=${serverId}`)).body.eagerUploads).toBe(false);
+      expect((await mint("base", "image/jpeg")).status).toBe(404);
+      expect(await getPool().query(`SELECT 1 FROM story_uploads`).then((r) => r.rowCount)).toBe(0);
+      // The plain flow is untouched by the switch.
+      const plain = await call("POST", "/api/stories", imageStory(undefined));
+      expect(plain.status).toBe(201);
+      expect(plain.body.upload).toMatchObject({ method: "PUT" });
+      await setGlobalFlag("stories_eager_uploads", null, { kind: "dashboard" });
+      expect((await mint("base", "image/jpeg")).status).toBe(201);
+    });
+
     it("is not for the house cast", async () => {
       await getPool().query(`UPDATE users SET is_character = TRUE WHERE id = $1`, [alice.id]);
       expect((await mint("base", "image/jpeg")).status).toBe(403);
@@ -789,10 +803,10 @@ describeDb("stories: eager uploads", () => {
       await call("DELETE", `/api/stories/uploads/${id}`);
       storage.objects.set(key, { contentLength: 4000, contentType: "image/jpeg", prefix: JPEG });
       storage.deleted.length = 0;
-      // Inside the half hour the row is still there to find the object by.
+      // Inside the two hours the row is still there to find the object by.
       expect((await sweepStories()).uploadsSwept).toBe(0);
       expect(await uploadRow(id)).toBeDefined();
-      await getPool().query(`UPDATE story_uploads SET discarded_at = now() - interval '31 minutes'`);
+      await getPool().query(`UPDATE story_uploads SET discarded_at = now() - interval '121 minutes'`);
       expect((await sweepStories()).uploadsSwept).toBe(1);
       expect(storage.deleted).toEqual([key]);
       expect(storage.objects.has(key)).toBe(false);
@@ -816,7 +830,7 @@ describeDb("stories: eager uploads", () => {
       expect(await discardedAt(id)).not.toBeNull();
       storage.failDeletes = false;
       const key = await keyOf(id);
-      await getPool().query(`UPDATE story_uploads SET discarded_at = now() - interval '31 minutes'`);
+      await getPool().query(`UPDATE story_uploads SET discarded_at = now() - interval '121 minutes'`);
       await sweepStories();
       expect(await uploadRow(id)).toBeUndefined();
       expect(storage.objects.has(key)).toBe(false);
@@ -935,6 +949,37 @@ describeDb("stories: eager uploads", () => {
       expect((await sweepStories()).uploadsSwept).toBe(1);
       expect([...storage.objects.keys()].filter((key) => key.includes(`/${alice.id}/`))).toEqual([]);
       expect(await uploadRow(id)).toBeUndefined();
+    });
+
+    it("a refused attempt that cleaned up after itself leaves nothing for the sweep to remember", async () => {
+      const id = await upload("base", "image/jpeg", JPEG);
+      await getPool().query(
+        `INSERT INTO stories (author_id, kind, status, text_body, background, created_at)
+         SELECT $1, 'text', 'deleted', 'x', 'lime', now() FROM generate_series(1, $2)`,
+        [alice.id, STORY_POSTS_PER_DAY],
+      );
+      expect((await call("POST", "/api/stories", imageStory(id))).status).toBe(429);
+      const copyKeys = (
+        await getPool().query<{ copy_keys: string[] }>(`SELECT copy_keys FROM story_uploads WHERE id = $1`, [id])
+      ).rows[0]!.copy_keys;
+      expect(copyKeys).toEqual([]);
+    });
+
+    it("refuses to record a copy against an upload the sweep already has, and caps how many attempts one upload keeps", async () => {
+      const held = await upload("base", "image/jpeg", JPEG);
+      // The sweep took the row (its lease is set) and has read the keys it will delete.
+      await getPool().query(`UPDATE story_uploads SET delete_claimed_at = now() WHERE id = $1`, [held]);
+      expect((await call("POST", "/api/stories", imageStory(held))).status).toBe(409);
+      expect(storage.copies).toEqual([]);
+      expect(await storyCount()).toBe(0);
+
+      const full = await upload("base", "image/jpeg", JPEG);
+      await getPool().query(
+        `UPDATE story_uploads SET copy_keys = ARRAY(SELECT 'stories/x/' || g FROM generate_series(1, 8) g) WHERE id = $1`,
+        [full],
+      );
+      expect((await call("POST", "/api/stories", imageStory(full))).status).toBe(409);
+      expect(storage.copies).toEqual([]);
     });
 
     it("leftover copies of a refused attempt go with the tombstone, never the one the story kept", async () => {
