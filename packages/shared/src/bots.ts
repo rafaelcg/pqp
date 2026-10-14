@@ -26,7 +26,7 @@ export const SERVER_BOT_TOOL_GROUPS = {
   // Not tools the model calls: what it may take in. Images cost input tokens;
   // a voice note is read through its transcript, when the server has those on.
   senses: ["see_images", "hear_voice_notes"],
-  lookup: ["list_channels", "list_members", "read_channel", "list_forum_posts", "read_poll"],
+  lookup: ["list_channels", "list_members", "read_channel", "search_messages", "list_forum_posts", "read_poll"],
   channels: ["create_channel", "edit_channel", "move_channel", "delete_channel"],
   posting: [
     "post_message",

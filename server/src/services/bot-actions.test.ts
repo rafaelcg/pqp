@@ -16,7 +16,7 @@ const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("./users.js");
 const { createServer: createPqpServer, createChannel } = await import("./servers.js");
 const { assignRole, createRole, listRoles, upsertChannelOverwrite } = await import("./roles.js");
-const { Permission, SERVER_BOT_DEFAULT_TOOLS, SERVER_BOT_TOOLS } = await import("@pqp/shared");
+const { Permission, SEARCH_HIGHLIGHT_OPEN, SERVER_BOT_DEFAULT_TOOLS, SERVER_BOT_TOOLS } = await import("@pqp/shared");
 const { createServerBot, resetBotTriggerCacheForTests, confirmationWord, updateServerBot } = await import("./bots.js");
 const { answerBotAsk, runBotRunsTick } = await import("./bot-runner.js");
 const { setBotProviderForTests } = await import("./bot-llm.js");
@@ -448,6 +448,48 @@ describeDb("server bot actions", () => {
     const hidden = await handleToolCall(new ActionSession(ctx(member.id)), "read_channel", { channelId: oldId });
     expect(hidden.isError).toBe(true);
     expect(hidden.content).not.toContain("placar");
+  });
+
+  it("searches the whole history, only where both the bot and the member can read", async () => {
+    const { owner, member, server, channelId, oldId, bot } = await setup();
+    await postChannelMessage({ author: owner, channelId: oldId, body: "o campeonato de xadrez começa sábado" });
+    await postChannelMessage({ author: owner, channelId, body: "alguém viu o placar do xadrez?" });
+    await postChannelMessage({ author: owner, channelId, body: "nada a ver" });
+    const botUser = (await getPool().query(`SELECT * FROM users WHERE id = $1`, [bot.userId])).rows[0];
+    const ctx = (requesterId: string) => ({
+      serverId: server.id,
+      channelId,
+      botId: bot.id,
+      bot: botUser,
+      requesterId,
+      requesterTag: "@x",
+      enabledTools: new Set<string>(SERVER_BOT_TOOLS),
+    });
+    const search = async (requesterId: string, input: Record<string, unknown>) =>
+      JSON.parse((await handleToolCall(new ActionSession(ctx(requesterId)), "search_messages", input)).content);
+
+    const all = await search(member.id, { query: "xadrez" });
+    expect(all.count).toBe(2);
+    expect(all.results.map((result: { excerpt: string }) => result.excerpt).join(" ")).toContain("campeonato");
+    expect(JSON.stringify(all)).not.toContain(JSON.stringify(SEARCH_HIGHLIGHT_OPEN).slice(1, -1));
+    const one = await search(member.id, { query: "xadrez", channelId: oldId });
+    expect(one.count).toBe(1);
+
+    // A channel the member cannot see is not searched for them.
+    const roles = await listRoles(server.id);
+    const everyone = roles.find((role) => role.is_everyone)!;
+    const staffRole = roles.find((role) => role.name === "bot_staff")!;
+    await upsertChannelOverwrite(oldId, server.id, "role", everyone.id, 0n, Permission.VIEW_CHANNEL);
+    await upsertChannelOverwrite(oldId, server.id, "role", staffRole.id, Permission.VIEW_CHANNEL, 0n);
+    const narrowed = await search(member.id, { query: "xadrez" });
+    expect(narrowed.count).toBe(1);
+    expect(JSON.stringify(narrowed)).not.toContain("campeonato");
+    // Nor one the bot cannot see, even for somebody who can.
+    await upsertChannelOverwrite(oldId, server.id, "member", bot.userId, 0n, Permission.VIEW_CHANNEL);
+    expect((await search(owner.id, { query: "campeonato" })).count).toBe(0);
+
+    const refused = await handleToolCall(new ActionSession(ctx(owner.id)), "search_messages", { query: "x" });
+    expect(refused.isError).toBe(true);
   });
 
   it("does not offer forums on a server where they are off", async () => {

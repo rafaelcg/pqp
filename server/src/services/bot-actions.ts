@@ -2,6 +2,9 @@ import {
   type BotActionItem,
   createChannelSchema,
   hasPermission,
+  messageSearchQuerySchema,
+  SEARCH_HIGHLIGHT_CLOSE,
+  SEARCH_HIGHLIGHT_OPEN,
   isPollClosed,
   POLL_DURATION_SECONDS,
   POLL_MAX_OPTIONS,
@@ -23,6 +26,7 @@ import { isCommunityHomeEnabled } from "./community-home.js";
 import { canActOnMember, computeMemberPermissions, getMemberHierarchy } from "./permissions.js";
 import { findTimeoutForRequest } from "./sanctions.js";
 import { listChannels } from "./servers.js";
+import { searchMessages } from "./search.js";
 
 /**
  * What a server bot can DO, as opposed to say. See docs/plans/CUSTOM_BOTS.md
@@ -64,6 +68,9 @@ const REF_RE = /^new:(\d{1,2})$/;
 const BODY_MAX = 1900;
 const READ_CHANNEL_DEFAULT = 20;
 const READ_CHANNEL_MAX = 40;
+/** What `search_messages` hands the model, and how many it asks search for to get there. */
+const SEARCH_RESULTS_MAX = 10;
+const SEARCH_FETCH = 30;
 
 /** Where invite links point. */
 function appUrl(): string {
@@ -486,6 +493,70 @@ const TOOLS: ToolDef[] = [
             .filter(Boolean)
             .join(" "),
         })),
+      };
+    },
+  },
+  {
+    kind: "read",
+    spec: {
+      name: "search_messages",
+      description:
+        `Search the server's whole message history by words, like the app's search box: the best matches first, at most ${SEARCH_RESULTS_MAX}, each with its channel, author, date and the matching excerpt. Use it for anything older than read_channel reaches ("what did X say about Y", "when did we decide Z"). Words only: a name in the query matches messages that mention it, not messages by that person. Only channels both you and the member can read.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", minLength: 2, maxLength: 200, description: "The words to look for." },
+          channelId: { type: "string", description: "Only this channel, an id from list_channels. Leave out to search them all." },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
+    async read(session, input) {
+      const parsed = messageSearchQuerySchema.safeParse(typeof input.query === "string" ? input.query.trim() : "");
+      if (!parsed.success) {
+        throw new ToolRefusal("Search needs 2 to 200 plain characters.");
+      }
+      const query = parsed.data;
+      const { serverId, bot, requesterId } = session.ctx;
+      const only = input.channelId ? await existingChannel(session, input.channelId, "channelId") : null;
+      // Searched as the member, so the results are what their own search box
+      // would show; then narrowed to channels the bot may read too.
+      const found = await searchMessages(serverId, requesterId, query, SEARCH_FETCH);
+      const readable = new Map<string, boolean>();
+      const canRead = async (channelId: string) => {
+        if (!readable.has(channelId)) {
+          const [botPerms, theirPerms] = await Promise.all([
+            computeMemberPermissions(serverId, bot.id, channelId),
+            computeMemberPermissions(serverId, requesterId, channelId),
+          ]);
+          const ok = (perms: bigint) =>
+            hasPermission(perms, Permission.VIEW_CHANNEL) && hasPermission(perms, Permission.READ_MESSAGE_HISTORY);
+          readable.set(channelId, ok(botPerms) && ok(theirPerms));
+        }
+        return readable.get(channelId)!;
+      };
+      const results = [];
+      for (const result of found.results) {
+        if (only && result.channelId !== only.id && result.parentChannelId !== only.id) continue;
+        if (!(await canRead(result.channelId))) continue;
+        results.push({
+          channel: `#${result.channelName}`,
+          from: result.authorName,
+          at: result.createdAt,
+          // The highlight marks are for the app's results panel, not the model.
+          excerpt: result.snippet.split(SEARCH_HIGHLIGHT_OPEN).join("").split(SEARCH_HIGHLIGHT_CLOSE).join("").slice(0, 300),
+        });
+        if (results.length >= SEARCH_RESULTS_MAX) break;
+      }
+      return {
+        query,
+        count: results.length,
+        note:
+          results.length === 0
+            ? "Nothing found that you both can read. Say so; do not guess."
+            : "Excerpts, not whole messages. Quote them as they are.",
+        results,
       };
     },
   },

@@ -2709,6 +2709,7 @@ const BOT_ACTIVITY_KEYS: Record<string, MessageKey> = {
   reply_forum_post: "chat.botActivity.reply_forum_post",
   create_poll: "chat.botActivity.create_poll",
   read_poll: "chat.botActivity.read_poll",
+  search_messages: "chat.botActivity.search_messages",
   vote_poll: "chat.botActivity.vote_poll",
 };
 
