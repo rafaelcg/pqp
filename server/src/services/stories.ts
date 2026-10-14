@@ -2018,7 +2018,13 @@ async function prepareEagerUploads(
   });
   const failure = outcomes.find((outcome) => outcome !== null);
   if (failure) {
-    await discardKeys(copied, { forgetFrom: wanted.map((entry) => entry.id) });
+    // The intents of copies that were never started (a HEAD that found nothing yet) name no object:
+    // they come off the list with the ones deleted for certain, or a client retrying while its
+    // upload finishes would fill the list and be refused for good.
+    await discardKeys(copied, {
+      forgetFrom: wanted.map((entry) => entry.id),
+      neverMade: [...destinations.values()].filter((key) => !copied.includes(key)),
+    });
     throw failure;
   }
   return eager;
@@ -2032,9 +2038,9 @@ async function prepareEagerUploads(
 async function discardKeys(
   keys: readonly string[],
   /** The uploads these copies were made from: the ones that deleted for certain are taken off their lists. */
-  options: { forgetFrom?: readonly string[] } = {},
+  options: { forgetFrom?: readonly string[]; neverMade?: readonly string[] } = {},
 ): Promise<void> {
-  const gone: string[] = [];
+  const gone: string[] = [...(options.neverMade ?? [])];
   await Promise.all(
     keys.map(async (key) => {
       try {
@@ -2050,7 +2056,7 @@ async function discardKeys(
   );
   if (options.forgetFrom && options.forgetFrom.length > 0 && gone.length > 0) {
     // ONE statement, on the uploads themselves (primary key): what is deleted for
-    // certain need not be remembered for the sweep any more.
+    // certain (or was never made) need not be remembered for the sweep any more.
     await getPool()
       .query(
         `UPDATE story_uploads
