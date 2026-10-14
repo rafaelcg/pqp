@@ -868,7 +868,6 @@ describeDb("stories: eager uploads", () => {
       const id = await upload("base", "image/jpeg", JPEG);
       const created = await call("POST", "/api/stories", imageStory(id));
       await settle();
-      const copy = (await rowOf(created.body.story.id)).media_storage_key!;
       // Even if the upload is older than 6 hours, a claim protects it from the unclaimed rule.
       await age(id, "7 hours");
       expect((await sweepStories()).uploadsSwept).toBe(0);
@@ -879,11 +878,87 @@ describeDb("stories: eager uploads", () => {
       const source = await keyOf(id);
       storage.objects.set(source, { contentLength: 4000, contentType: "image/jpeg", prefix: JPEG });
       storage.deleted.length = 0;
+      // The story is still pending (waiting for its publish): its record of where its files came from stays.
+      expect((await sweepStories()).uploadsSwept).toBe(0);
+      expect(await uploadRow(id)).toBeDefined();
+      expect((await call("POST", `/api/stories/${created.body.story.id}/publish`)).status).toBe(200);
+      await settle();
+      storage.deleted.length = 0;
+      storage.objects.set(source, { contentLength: 4000, contentType: "image/jpeg", prefix: JPEG });
       expect((await sweepStories()).uploadsSwept).toBe(1);
       expect(storage.deleted).toEqual([source]);
       expect(await uploadRow(id)).toBeUndefined();
-      expect(storage.objects.has(copy)).toBe(true);
-      expect((await rowOf(created.body.story.id)).media_storage_key).toBe(copy);
+      // The story's own (pinned) object is untouched.
+      const kept = (await rowOf(created.body.story.id)).media_storage_key!;
+      expect(storage.objects.has(kept)).toBe(true);
+      expect(storage.deleted).not.toContain(kept);
+    });
+
+    it("a replay long after the claim still gets no PUT URL for an eager file of a pending story", async () => {
+      const base = await upload("base", "image/jpeg", JPEG);
+      const lateLayer = photoLayer(undefined, { x: 0.2 });
+      const requestId = uuid();
+      const body = { ...imageStory(base), layers: [lateLayer], requestId };
+      const first = await call("POST", "/api/stories", body);
+      expect(first.status).toBe(201);
+      expect(first.body.layerUploads).toHaveLength(1);
+      await settle();
+      // Two hours on, the sweep has run: the record of the eager base must survive it.
+      await getPool().query(`UPDATE story_uploads SET claimed_at = now() - interval '2 hours'`);
+      await sweepStories();
+      const replay = await call("POST", "/api/stories", body);
+      expect(replay.status).toBe(201);
+      expect(replay.body.upload).toBeNull();
+      expect(replay.body.layerUploads.map((entry: { layerId: string }) => entry.layerId)).toEqual([lateLayer.id]);
+    });
+
+    it("records every copy it means to make before making it, so a cleanup that fails is swept later", async () => {
+      const id = await upload("base", "image/jpeg", JPEG);
+      await getPool().query(
+        `INSERT INTO stories (author_id, kind, status, text_body, background, created_at)
+         SELECT $1, 'text', 'deleted', 'x', 'lime', now() FROM generate_series(1, $2)`,
+        [alice.id, STORY_POSTS_PER_DAY],
+      );
+      // The create is refused at the budget after the copy was made, and the delete of that copy fails.
+      storage.failDeletes = true;
+      expect((await call("POST", "/api/stories", imageStory(id))).status).toBe(429);
+      storage.failDeletes = false;
+      const leaked = [...storage.objects.keys()].filter((key) => !key.includes("/uploads/"));
+      expect(leaked).toHaveLength(1);
+      const copyKeys = (
+        await getPool().query<{ copy_keys: string[] }>(`SELECT copy_keys FROM story_uploads WHERE id = $1`, [id])
+      ).rows[0]!.copy_keys;
+      expect(copyKeys).toEqual(leaked);
+
+      // Nothing in the row ever says it is done; the 6 hour sweep finds the copy by it.
+      await age(id, "7 hours");
+      expect((await sweepStories()).uploadsSwept).toBe(1);
+      expect([...storage.objects.keys()].filter((key) => key.includes(`/${alice.id}/`))).toEqual([]);
+      expect(await uploadRow(id)).toBeUndefined();
+    });
+
+    it("leftover copies of a refused attempt go with the tombstone, never the one the story kept", async () => {
+      const id = await upload("base", "image/jpeg", JPEG);
+      await getPool().query(
+        `INSERT INTO stories (author_id, kind, status, text_body, background, created_at)
+         SELECT $1, 'text', 'deleted', 'x', 'lime', now() FROM generate_series(1, $2)`,
+        [alice.id, STORY_POSTS_PER_DAY],
+      );
+      storage.failDeletes = true;
+      expect((await call("POST", "/api/stories", imageStory(id))).status).toBe(429);
+      storage.failDeletes = false;
+      const leftover = [...storage.objects.keys()].filter((key) => !key.includes("/uploads/"))[0]!;
+      await getPool().query(`DELETE FROM stories WHERE status = 'deleted'`);
+
+      const created = await call("POST", "/api/stories", imageStory(id));
+      expect(created.status).toBe(201);
+      expect((await call("POST", `/api/stories/${created.body.story.id}/publish`)).status).toBe(200);
+      await settle();
+      const kept = (await rowOf(created.body.story.id)).media_storage_key!;
+      await getPool().query(`UPDATE story_uploads SET claimed_at = now() - interval '61 minutes'`);
+      expect((await sweepStories()).uploadsSwept).toBe(1);
+      expect(storage.objects.has(leftover)).toBe(false);
+      expect(storage.objects.has(kept)).toBe(true);
     });
 
     it("takes an unclaimed upload of a deleted account at once", async () => {

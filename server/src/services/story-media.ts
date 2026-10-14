@@ -233,14 +233,21 @@ export async function sweepStories(): Promise<StorySweepResult> {
  * Eager uploads (`story_uploads`) nothing needs any more: UNCLAIMED ones past
  * `STORY_UPLOAD_UNCLAIMED_HOURS` (the author closed the tab, lost the network,
  * or the client's DELETE never arrived) or whose account is gone, and CLAIMED
- * ones an hour after the claim (the story holds its own copy; the source is
- * normally deleted at the claim, and this is the retry when that failed).
+ * ones an hour after the claim, unless their story is still pending (the story
+ * holds its own copy; the source is normally deleted at the claim, and this is
+ * the retry when that failed). Every copy an attempt meant to make
+ * (`copy_keys`, recorded before the copy) goes too, but never the one the story kept.
  * Claimed with a lease like the story sweep, so two processes sweeping at the
  * same moment delete each object once; the row goes only after its object.
  */
 async function sweepStoryUploads(): Promise<{ swept: number; failed: number }> {
   const pool = getPool();
-  const claimed = await pool.query<{ id: string; storage_key: string; claim: string }>(
+  const claimed = await pool.query<{
+    id: string;
+    storage_key: string;
+    claim: string;
+    leftover_keys: string[];
+  }>(
     `UPDATE story_uploads SET delete_claimed_at = now()
       WHERE id IN (
         SELECT id FROM story_uploads
@@ -254,13 +261,22 @@ async function sweepStoryUploads(): Promise<{ swept: number; failed: number }> {
                    -- once the 15 minute PUT URL is surely dead it goes again.
                    OR (discarded_at IS NOT NULL
                        AND discarded_at < now() - interval '30 minutes')))
-             OR (claimed_story_id IS NOT NULL AND claimed_at < now() - interval '1 hour')
+             OR (claimed_story_id IS NOT NULL AND claimed_at < now() - interval '1 hour'
+                 -- A story still waiting for a file keeps its record: replaying its
+                 -- create must keep knowing which of its files came from an upload.
+                 AND NOT EXISTS (SELECT 1 FROM stories s
+                                  WHERE s.id = story_uploads.claimed_story_id
+                                    AND s.status = 'pending'))
            )
          ORDER BY created_at ASC
          LIMIT ${SWEEP_BATCH}
          FOR UPDATE SKIP LOCKED
       )
-      RETURNING id, storage_key, delete_claimed_at::text AS claim`,
+      RETURNING id, storage_key, delete_claimed_at::text AS claim,
+                -- What to delete besides the upload's own object: every copy an
+                -- attempt meant to make, except the one a story kept.
+                ARRAY(SELECT k FROM unnest(copy_keys) AS k
+                       WHERE k IS DISTINCT FROM claimed_key) AS leftover_keys`,
     [STORY_UPLOAD_UNCLAIMED_HOURS],
   );
   let swept = 0;
@@ -268,6 +284,7 @@ async function sweepStoryUploads(): Promise<{ swept: number; failed: number }> {
   for (const row of claimed.rows) {
     try {
       await deleteObject(row.storage_key);
+      await Promise.all(row.leftover_keys.map((key) => deleteObject(key)));
       await pool.query(
         `DELETE FROM story_uploads WHERE id = $1 AND delete_claimed_at = $2::timestamptz`,
         [row.id, row.claim],

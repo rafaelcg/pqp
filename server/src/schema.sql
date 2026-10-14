@@ -6451,9 +6451,16 @@ CREATE TABLE IF NOT EXISTS story_uploads (
   -- claim it from here on. The row outlives the object by half an hour so the
   -- sweep can delete the object once more, after the presigned PUT URL has
   -- expired: an aborted browser PUT can still land after the first delete.
-  discarded_at      TIMESTAMPTZ
+  discarded_at      TIMESTAMPTZ,
+  -- Every story-prefix key a create attempt MEANT to copy this object to,
+  -- written BEFORE the copy: a copy made ahead of the story's transaction has
+  -- no story row yet, so this row is what lets the sweep find it if the
+  -- process dies or the cleanup fails. The key the claim kept is `claimed_key`
+  -- and belongs to the story; the others are leftovers of refused attempts.
+  copy_keys         TEXT[] NOT NULL DEFAULT '{}'
 );
 ALTER TABLE story_uploads ADD COLUMN IF NOT EXISTS discarded_at TIMESTAMPTZ;
+ALTER TABLE story_uploads ADD COLUMN IF NOT EXISTS copy_keys TEXT[] NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS idx_story_uploads_user_open
   ON story_uploads (user_id) WHERE claimed_story_id IS NULL;

@@ -1363,6 +1363,12 @@ moment the author has it, and Post only creates and publishes.
   one story: a second claim is a 409 and rolls the story back. A refused create
   deletes the copies it made and leaves the upload usable. Publish is unchanged
   and judges the copy (real type from the bytes, scan, video job).
+- Every copy is recorded on the upload row (`copy_keys`) BEFORE it is made. A copy
+  made ahead of the story's transaction has no story row to be swept by, so a
+  crash mid-copy or a failed cleanup would leak it; the row names it, and the
+  sweep deletes it (never the key the story kept). A claimed row is also kept
+  while its story is still pending, so a replayed create always knows which of
+  its files were eager and never hands out a PUT URL for one.
 - The response has no `upload` for an eager base and no `layerUploads` entry for
   an eager layer, so a client can mix: eager where it had time, the old URLs for
   the rest. A client that sends no `uploadId` gets exactly the old behaviour.

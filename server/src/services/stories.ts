@@ -1934,6 +1934,30 @@ async function prepareEagerUploads(
     pairs: [],
     sources: [],
   };
+  const destinations = new Map(
+    wanted.map((entry) => [
+      entry.id,
+      entry.kind === "base"
+        ? storyMediaKey(userId, storyId, entry.contentType)
+        : storyLayerKey(userId, storyId, entry.contentType),
+    ]),
+  );
+  // WRITE THE INTENT FIRST. A copy made before the story's transaction has no
+  // story row yet to be swept by, so each destination is recorded on the upload
+  // row before a byte is copied: a process that dies mid-copy, or a cleanup that
+  // fails, leaves a row that names every object it might have made, and the
+  // sweep deletes them with it. (A database write, never the network.) The same
+  // statement refuses an upload that was claimed, discarded or swept meanwhile.
+  const intents = await getPool().query(
+    `UPDATE story_uploads u SET copy_keys = array_append(u.copy_keys, c.key)
+       FROM unnest($1::uuid[], $2::text[]) AS c(id, key)
+      WHERE u.id = c.id AND u.user_id = $3
+        AND u.claimed_story_id IS NULL AND u.discarded_at IS NULL`,
+    [[...destinations.keys()], [...destinations.values()], userId],
+  );
+  if ((intents.rowCount ?? 0) !== wanted.length) {
+    throw new StoryError("claimed", "That upload is no longer available");
+  }
   const copied: string[] = [];
   const outcomes = await mapLimit(wanted, PER_REQUEST_CONCURRENCY, async (entry) => {
     const row = rows.get(entry.id)!;
@@ -1954,10 +1978,7 @@ async function prepareEagerUploads(
       if (head.contentLength !== row.byte_size || head.contentType !== row.content_type) {
         return new StoryError("not_verified", "Upload size does not match");
       }
-      const destination =
-        entry.kind === "base"
-          ? storyMediaKey(userId, storyId, entry.contentType)
-          : storyLayerKey(userId, storyId, entry.contentType);
+      const destination = destinations.get(entry.id)!;
       copied.push(destination);
       try {
         await copyObject(row.storage_key, destination);
@@ -1988,7 +2009,11 @@ async function prepareEagerUploads(
   return eager;
 }
 
-/** Best effort: a copy no story took has no row for the sweep to find, so say loudly when it leaks. */
+/**
+ * Best effort. A copy no story took is named by its upload row's `copy_keys`
+ * (written before the copy), which is what the sweep deletes it by if this
+ * fails or the process dies first; the log says so when it happens.
+ */
 async function discardKeys(keys: readonly string[]): Promise<void> {
   await Promise.all(
     keys.map((key) =>
