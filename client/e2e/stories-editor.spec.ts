@@ -60,10 +60,21 @@ async function setup() {
   return { owner, serverId: server.id, channelId: channels.channels.find((c) => c.type === "text")!.id };
 }
 
+/** On a phone the channel list (server menu, story strip) is a drawer behind "Open navigation". */
+async function openChannelList(page: Page) {
+  const drawer = page.getByRole("button", { name: "Open navigation" });
+  // The button exists only on a narrow screen, and only once the shell has laid out.
+  const narrow = (page.viewportSize()?.width ?? 1440) < 768;
+  if (narrow) {
+    await drawer.click();
+  }
+}
+
 async function openTextComposer(page: Page, ctx: Awaited<ReturnType<typeof setup>>) {
   await page.addInitScript((value) => localStorage.setItem("pqp:dev-user-suffix", value), ctx.owner);
   await page.goto(`/app/server/${ctx.serverId}/channel/${ctx.channelId}?lang=en`);
   await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+  await openChannelList(page);
   await page.locator("[data-server-menu-trigger]").first().click();
   await page.getByRole("menuitem", { name: "Post a story" }).click();
   const composer = page.getByRole("dialog", { name: "New story" });
@@ -492,3 +503,161 @@ test("layer order is creation order: a drawing is created on top, and drawing ag
   await composer.locator("[data-story-undo]").click();
   expect(await order()).toEqual(["text", "drawing", "text"]);
 });
+
+/**
+ * A layer has ONE natural width, wherever it sits. Every layer is an absolutely positioned box at
+ * `left: x%`, and a box with an auto width shrinks to the room left before the container's right
+ * edge: a photo at x = 0.8 came out at half size (0.20 of the canvas instead of 0.40) and a long
+ * text near the right edge wrapped far narrower than the 0.84 every client agrees on. Measured
+ * with real geometry, at a phone and at a desktop size, in the viewer and in the editor.
+ */
+const LAYER_XS = [0.1, 0.5, 0.8, 0.95];
+const SHOT_DIR = process.env.STORIES_SHOTS_DIR;
+const LONG_TEXT = "bora de cs hoje a noite com a galera toda junta no servidor";
+const PHOTO_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="810" viewBox="0 0 1080 810">' +
+  '<rect width="1080" height="810" fill="#d6262c"/><rect x="540" width="540" height="810" fill="#2457d6"/>' +
+  '<circle cx="540" cy="405" r="220" fill="#ffffff" fill-opacity="0.85"/></svg>';
+
+function layersAt(x: number) {
+  const geometry = { x, scale: 1, rotation: 0 };
+  return [
+    { ...geometry, id: "w-text", y: 0.17, type: "text", text: LONG_TEXT, font: "bold", color: "white", background: "none", align: "center", size: 1 },
+    {
+      ...geometry,
+      id: "w-photo",
+      y: 0.4,
+      type: "image",
+      shape: "rect",
+      url: "https://e2e-photo.test/photo.svg",
+      width: 1080,
+      height: 810,
+    },
+    {
+      ...geometry,
+      id: "w-mention",
+      y: 0.58,
+      type: "mention",
+      userId: "33333333-3333-4333-8333-333333333333",
+      user: { id: "33333333-3333-4333-8333-333333333333", displayName: "Bia Guest", avatarUrl: null, handle: null },
+    },
+    { ...geometry, id: "w-call", y: 0.74, type: "call", serverId: "44444444-4444-4444-8444-444444444444", channelId: "55555555-5555-4555-8555-555555555555" },
+  ];
+}
+
+for (const size of [
+  { width: 390, height: 844 },
+  { width: 1440, height: 900 },
+]) {
+  test(`every layer type keeps its canonical width at any x, in the viewer at ${size.width}x${size.height}`, async ({ page }) => {
+    const ctx = await setup();
+    await page.setViewportSize(size);
+    // One text story exists so the ring does; the layers the viewer draws are swapped in per open.
+    const created = await fetch(`${API}/api/stories`, {
+      method: "POST",
+      headers: headersFor(ctx.owner),
+      body: JSON.stringify({
+        kind: "text",
+        background: "night",
+        text: "layer widths",
+        layers: [],
+        audiences: { serverIds: [ctx.serverId], friends: false },
+      }),
+    });
+    expect(created.ok, `create story: ${created.status}`).toBe(true);
+
+    let x = 0.5;
+    await page.route("https://e2e-photo.test/**", (route) => route.fulfill({ status: 200, contentType: "image/svg+xml", body: PHOTO_SVG }));
+    await page.route("**/api/stories?ids=*", async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as { stories: { layers: unknown[] }[] };
+      for (const story of body.stories) {
+        story.layers = layersAt(x);
+      }
+      await route.fulfill({ response, json: body });
+    });
+    await page.addInitScript((value) => localStorage.setItem("pqp:dev-user-suffix", value), ctx.owner);
+
+    const measured: Record<string, number[]> = {};
+    for (const at of LAYER_XS) {
+      x = at;
+      await page.goto(`/app/server/${ctx.serverId}/channel/${ctx.channelId}?lang=en`);
+      await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+      await openChannelList(page);
+      await page.getByRole("button", { name: "Your story, view" }).click();
+      const viewer = page.locator("[data-story-viewer]");
+      await expect(viewer).toBeVisible();
+      const photo = viewer.locator('[data-story-layer="w-photo"] img');
+      await expect(photo).toBeVisible();
+      await expect.poll(async () => (await photo.boundingBox())?.width ?? 0).toBeGreaterThan(10);
+      // Every width as a fraction of the canvas, read in one go; the viewer eases in, so wait until
+      // two reads a frame apart agree (the fraction is what must not depend on x).
+      const read = () =>
+        viewer.evaluate((root) => {
+          const canvas = root.querySelector("[data-story-layer-canvas]")!.getBoundingClientRect();
+          const out: Record<string, number> = {};
+          for (const id of ["w-text", "w-photo", "w-mention", "w-call"]) {
+            out[id] = root.querySelector(`[data-story-layer="${id}"]`)!.getBoundingClientRect().width / canvas.width;
+          }
+          return out;
+        });
+      let last = JSON.stringify(await read());
+      await expect
+        .poll(async () => {
+          const now = JSON.stringify(await read());
+          const settled = now === last;
+          last = now;
+          return settled;
+        })
+        .toBe(true);
+      const fractions = JSON.parse(last) as Record<string, number>;
+      for (const id of Object.keys(fractions)) {
+        (measured[id] ??= []).push(fractions[id]);
+      }
+      if (SHOT_DIR && (at === 0.8 || at === 0.95)) {
+        // Past the viewer's ease-in, so the picture is the finished one.
+        await page.waitForTimeout(700);
+        await viewer.screenshot({ path: `${SHOT_DIR}/viewer-${size.width}x${size.height}-x${at}.png` });
+      }
+      await page.keyboard.press("Escape");
+      await expect(viewer).toBeHidden();
+    }
+
+    // Canonical fractions of the canvas width (STORY_LAYOUT): a photo 0.40, a call card 0.82, text
+    // wrapped at 0.84. A mention is as wide as its words, which is the same at every x.
+    const near = (value: number, digits: number) => expect.closeTo(value, digits);
+    expect(measured["w-photo"], "photo widths").toEqual(measured["w-photo"].map(() => near(0.4, 2)));
+    expect(measured["w-call"], "call card widths").toEqual(measured["w-call"].map(() => near(0.82, 2)));
+    expect(measured["w-text"], "text widths").toEqual(measured["w-text"].map(() => near(0.84, 2)));
+    expect(measured["w-mention"], "mention widths").toEqual(measured["w-mention"].map(() => near(measured["w-mention"][0], 3)));
+  });
+}
+
+for (const size of [
+  { width: 390, height: 844 },
+  { width: 1440, height: 900 },
+]) {
+test(`a text layer dragged to the right edge keeps its width in the editor at ${size.width}x${size.height}`, async ({ page }) => {
+  const ctx = await setup();
+  await page.setViewportSize(size);
+  const composer = await openTextComposer(page, ctx);
+  await addText(composer, LONG_TEXT);
+  const layer = composer.locator('[data-layer-type="text"]').first();
+  const surface = (await composer.locator("[data-story-surface]").boundingBox())!;
+  const centred = (await layer.boundingBox())!;
+  expect(centred.width / surface.width).toBeCloseTo(0.84, 2);
+
+  // Drag the middle of the words to 92 percent of the canvas width.
+  await page.mouse.move(centred.x + centred.width / 2, centred.y + centred.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(surface.x + surface.width * 0.92, centred.y + centred.height / 2, { steps: 8 });
+  await page.mouse.up();
+  expect((await geometry(layer)).left).toBeGreaterThan(85);
+  const moved = (await layer.boundingBox())!;
+  expect(moved.width / surface.width).toBeCloseTo(0.84, 2);
+  expect(moved.height).toBeCloseTo(centred.height, 0);
+  if (SHOT_DIR) {
+    await composer.screenshot({ path: `${SHOT_DIR}/editor-${size.width}x${size.height}.png` });
+  }
+});
+}
