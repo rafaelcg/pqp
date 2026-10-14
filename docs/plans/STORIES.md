@@ -1415,6 +1415,18 @@ moment the author has it, and Post only creates and publishes.
   download. Video preload is skipped under `navigator.connection.saveData`.
   The stories the strip read are remembered for three minutes so the viewer uses
   the very objects (and presigned URLs) that were warmed.
+- A story appears whole (`StoryContent` with `gate`, used by the viewer): the card
+  shows its own background and keeps everything else at opacity 0 until the base,
+  every photo layer, the drawing, the faces on call and mention cards (all
+  `img`s in the card, `decode()`d) and the fonts are in, then reveals in one
+  frame with a 140 ms fade (none under reduced motion); a spinner shows only
+  after 300 ms, and a story that never completes shows after 10 s as it is. The
+  preloader warms every one of those assets and the fonts, so a preloaded story
+  reveals on its first frame. Scaled text, mentions and call cards use CSS `zoom`
+  on an inner box instead of `transform: scale` (the viewer only; the editor
+  keeps the transform its gestures measure), so small text stays sharp at any scale.
+  The mute button was already in the top chrome for video stories; every header
+  icon now has the same 44 px hit box on desktop too.
 - The viewer's clock now starts at the first frame (`onReady`, pause reason
   `load`, given up on after 12 s), so a story on a slow link gets its full time
   instead of being skipped while it downloads.

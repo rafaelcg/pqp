@@ -1,5 +1,5 @@
 import { fetchStories } from "./api";
-import { assetsOfStory, rememberStories, rememberedStory, storyPreloader } from "./preload";
+import { assetsOfStory, rememberStories, rememberedStory, storyPreloader, warmStoryFonts } from "./preload";
 
 /**
  * While a strip is on screen, warm the first unseen story of its first three
@@ -15,6 +15,7 @@ export const TRAY_WARM_RINGS = 3;
 
 export function warmTray(source: string, storyIds: readonly string[]): () => void {
   let cancelled = false;
+  warmStoryFonts();
   if (storyIds.length === 0) {
     storyPreloader.clearSource(source);
     return () => undefined;

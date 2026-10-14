@@ -65,6 +65,16 @@ export function assetsOfStory(story: Story, options: { video: boolean }): Preloa
     }
   }
   push("image", story.author.avatarUrl);
+  // The faces on a call card and on a mention are part of the picture: the viewer reveals a story
+  // only when they are loaded too.
+  for (const person of story.call?.participants ?? []) {
+    push("image", person.avatarUrl);
+  }
+  for (const layer of story.layers ?? []) {
+    if (layer.type === "mention") {
+      push("image", layer.user.avatarUrl);
+    }
+  }
   if (story.kind === "video" && options.video) {
     push("video", story.media?.url);
   }
@@ -373,6 +383,21 @@ export class StoryPreloader {
       };
     }
     this.running.set(asset.key, job);
+  }
+}
+
+/**
+ * The faces the story cards draw their words in, asked for ahead of time so the first story shows
+ * its text in the right font on its first frame (the viewer reveals a story only once they are in).
+ */
+let fontsWarmed = false;
+export function warmStoryFonts(): void {
+  if (fontsWarmed || typeof document === "undefined" || !document.fonts) {
+    return;
+  }
+  fontsWarmed = true;
+  for (const face of ['700 16px "Instrument Sans"', '900 16px "Gabarito"', '800 16px "Gabarito"']) {
+    void document.fonts.load(face).catch(() => undefined);
   }
 }
 

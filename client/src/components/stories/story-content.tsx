@@ -1,6 +1,7 @@
-import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode, type Ref, type RefObject } from "react";
+import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Ref, type RefObject } from "react";
 import { storyBaseFit, type StoryBackground, type StoryCallLive, type StoryKind } from "@pqp/shared";
 import { giveBackVideo, takePreloadedVideo } from "@/lib/stories/preload";
+import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StoryCallCard, type CallCardServer } from "./story-call-card";
 import { LayerBox, LayerContent, type DisplayLayer, type MentionTarget } from "./story-layers";
@@ -62,6 +63,14 @@ interface StoryContentProps {
    * a story for its full time instead of spending that time on a blank card.
    */
   onReady?: () => void;
+  /**
+   * Draw the story only once it can be drawn WHOLE: the base picture, every photo and the drawing,
+   * the faces on a call card and the fonts decoded, then reveal it in one frame (a short fade, none
+   * under reduced motion). Until then the card shows its own background, and a small spinner after
+   * 300 ms. A story that appears piece by piece (the background, then the photo, then the words)
+   * looks broken; this is what the viewer asks for, with `onReady` called at the reveal.
+   */
+  gate?: boolean;
   /** Play again from the start (the composer's preview of a clip). */
   loop?: boolean;
   className?: string;
@@ -155,11 +164,117 @@ function LiftedBox({
     <LayerBox
       ref={box}
       layer={layer}
+      crisp
       style={{ pointerEvents: layer.type === "call" || layer.type === "mention" ? "auto" : "none" }}
     >
       {children}
     </LayerBox>
   );
+}
+
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/** An image in the page, loaded and decoded (a failed one counts: the story must not wait forever). */
+function imageSettled(image: HTMLImageElement): Promise<void> {
+  const decoded = () => (typeof image.decode === "function" ? image.decode().catch(() => undefined) : Promise.resolve());
+  if (image.complete) {
+    return image.naturalWidth > 0 ? decoded() : Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    image.addEventListener("load", () => void decoded().then(resolve), { once: true });
+    image.addEventListener("error", () => resolve(), { once: true });
+  });
+}
+
+/** How long a story may stay hidden waiting for its pieces before it is shown as it is. */
+const REVEAL_MAX_MS = 10_000;
+/** The spinner stays away for a story that is about to appear anyway. */
+const SPINNER_AFTER_MS = 300;
+
+/**
+ * The reveal of one gated story (see `StoryContent`'s `gate`). Waits for every picture in the card
+ * to be loaded and decoded, the fonts, and, for a clip with no poster, its first frame; then shows
+ * everything on the next frame and says `onReady`. For a clip playing in the card `onReady` also
+ * waits for the first frame, because that is when its time starts.
+ */
+function useStoryReveal({
+  root,
+  gated,
+  storyId,
+  needsVideoFrame,
+  waitsForVideo,
+  onReady,
+}: {
+  root: RefObject<HTMLDivElement | null>;
+  gated: boolean;
+  storyId: string;
+  needsVideoFrame: boolean;
+  /** No poster to show meanwhile: the picture IS the first frame, so the reveal waits for it. */
+  waitsForVideo: boolean;
+  onReady?: () => void;
+}) {
+  const [assetsDone, setAssetsDone] = useState(!gated);
+  const [revealed, setRevealed] = useState(!gated);
+  const [frame, setFrame] = useState(false);
+  const [spinner, setSpinner] = useState(false);
+  const ready = useRef(onReady);
+  ready.current = onReady;
+  const videoFrame = useCallback(() => setFrame(true), []);
+
+  useEffect(() => {
+    if (!gated) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => setSpinner(true), SPINNER_AFTER_MS);
+    const settle = async () => {
+      const element = root.current;
+      if (!element) {
+        return;
+      }
+      // A frame first, so the pictures and the text are in the page and the fonts they use have started.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const first = [...element.querySelectorAll("img")];
+      await Promise.all(first.map(imageSettled));
+      if (typeof document !== "undefined" && document.fonts) {
+        await document.fonts.ready.catch(() => undefined);
+      }
+      // Whatever was added while those were loading (the faces on a call card).
+      const later = [...element.querySelectorAll("img")].filter((image) => !first.includes(image));
+      await Promise.all(later.map(imageSettled));
+    };
+    void Promise.race([settle(), new Promise<void>((resolve) => window.setTimeout(resolve, REVEAL_MAX_MS))]).then(() => {
+      if (!cancelled) {
+        setAssetsDone(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // One reveal per story: the viewer keys the card by it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gated, storyId]);
+
+  useEffect(() => {
+    if (!gated || revealed || !assetsDone || (waitsForVideo && !frame)) {
+      return;
+    }
+    // Everything at once, on a frame of its own.
+    const handle = requestAnimationFrame(() => setRevealed(true));
+    return () => cancelAnimationFrame(handle);
+  }, [gated, revealed, assetsDone, waitsForVideo, frame]);
+
+  useEffect(() => {
+    if (gated && revealed && (!needsVideoFrame || frame)) {
+      ready.current?.();
+    }
+  }, [gated, revealed, needsVideoFrame, frame]);
+
+  return { revealed, spinner, videoFrame };
 }
 
 export const StoryContent = forwardRef(function StoryContent(
@@ -174,6 +289,7 @@ export const StoryContent = forwardRef(function StoryContent(
     onVideoTime,
     onVideoEnded,
     onReady,
+    gate = false,
     loop = false,
     className,
     still = false,
@@ -210,6 +326,16 @@ export const StoryContent = forwardRef(function StoryContent(
   const altText = story.altText?.trim() || null;
   const join = still ? undefined : onJoinCall;
 
+  const gated = gate && !still;
+  const reveal = useStoryReveal({
+    root,
+    gated,
+    storyId: story.id,
+    needsVideoFrame: story.kind === "video" && playVideo && Boolean(story.mediaUrl),
+    waitsForVideo: story.kind === "video" && !story.posterUrl,
+    onReady,
+  });
+
   const card = (
     <StoryCallCard
       call={story.call}
@@ -235,6 +361,14 @@ export const StoryContent = forwardRef(function StoryContent(
       className={cn("absolute inset-0 overflow-hidden [container-type:size]", className)}
       style={{ background: "var(--story-card)" }}
     >
+      {story.kind === "text" && (
+        <div className="story-text-card absolute inset-0" data-bg={story.background ?? "night"} />
+      )}
+      <div
+        data-story-reveal={gated ? (reveal.revealed ? "shown" : "hidden") : undefined}
+        className="absolute inset-0"
+        style={gated ? { opacity: reveal.revealed ? 1 : 0, transition: reveal.revealed && !prefersReducedMotion() ? "opacity 140ms ease-out" : "none" } : undefined}
+      >
       {backdropUrl && (
         <img
           src={backdropUrl}
@@ -247,9 +381,6 @@ export const StoryContent = forwardRef(function StoryContent(
           className="story-backdrop pointer-events-none absolute inset-0 h-full w-full scale-110 select-none object-cover blur-[28px]"
         />
       )}
-      {story.kind === "text" && (
-        <div className="story-text-card absolute inset-0" data-bg={story.background ?? "night"} />
-      )}
       <LayerCanvas>
         {story.kind === "image" && story.mediaUrl && (
           <img
@@ -257,8 +388,6 @@ export const StoryContent = forwardRef(function StoryContent(
             alt={altText ?? ""}
             draggable={false}
             decoding="async"
-            onLoad={still ? undefined : onReady}
-            onError={still ? undefined : onReady}
             className={cn(
               "absolute inset-0 h-full w-full select-none",
               contain ? "object-contain" : "object-cover",
@@ -275,7 +404,7 @@ export const StoryContent = forwardRef(function StoryContent(
               onDuration={onVideoDuration}
               onTime={onVideoTime}
               onEnded={onVideoEnded}
-              onReady={onReady}
+              onReady={gated ? reveal.videoFrame : onReady}
               loop={loop}
               contain={contain}
             />
@@ -340,6 +469,12 @@ export const StoryContent = forwardRef(function StoryContent(
           </p>
         )}
       </LayerCanvas>
+      </div>
+      {gated && !reveal.revealed && reveal.spinner && (
+        <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center" data-story-loading="">
+          <Loader2 className="h-7 w-7 animate-spin text-[color:var(--story-on-media-2)] motion-reduce:animate-none" />
+        </div>
+      )}
     </div>
   );
 });

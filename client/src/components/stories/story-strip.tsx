@@ -263,7 +263,8 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
               }
               if (own) {
                 openOwn(own, event);
-              } else if (strip.canPost) {
+              } else if (strip.canPost && !posting) {
+                // A ring that says "Postando..." is the story going up: a tap must not open a second composer.
                 compose();
               }
             }}

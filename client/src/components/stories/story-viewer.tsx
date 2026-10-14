@@ -60,7 +60,7 @@ import {
   STORY_REACTION_ORDER,
   formatStoryAge,
 } from "@/lib/stories/format";
-import { assetsOfStory, rememberStories, rememberedStory, storyPreloader } from "@/lib/stories/preload";
+import { assetsOfStory, rememberStories, rememberedStory, storyPreloader, warmStoryFonts } from "@/lib/stories/preload";
 import { commitSeenStories, noteStoriesSeen } from "@/lib/stories/seen-store";
 import { flushStoryViews, queueStoryViews } from "@/lib/stories/views-queue";
 import { useStoryCardSize } from "@/lib/stories/viewer-size";
@@ -376,7 +376,10 @@ export function StoryViewer({
     // `state` is read through idsToWarm; the indices and the queue are what move it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.personIndex, state.storyIndex, state.people, stories]);
-  useEffect(() => () => storyPreloader.clearSource("viewer"), []);
+  useEffect(() => {
+    warmStoryFonts();
+    return () => storyPreloader.clearSource("viewer");
+  }, []);
 
   // Clock for ages and local expiry.
   useEffect(() => {
@@ -1286,6 +1289,7 @@ export function StoryViewer({
                 onVideoTime={(ms) => dispatch({ type: "progress", elapsedMs: ms })}
                 onVideoEnded={() => dispatch({ type: "next" })}
                 onReady={() => setReadyId(display.id)}
+                gate
               />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center">
@@ -1818,12 +1822,12 @@ function ChromeButton({
 }
 
 /**
- * A header icon: 20 px drawn, a 32 px hit box on a desktop window and 44 px on
- * a phone (the negative margin keeps the header row as tall as the avatar, so
- * the bigger touch target costs no space).
+ * A header icon (mute, pause, more, close): 20 px drawn, the same 44 px hit box
+ * on a desktop window and on a phone (the negative margin keeps the header row
+ * as tall as the avatar, so the bigger touch target costs no space).
  */
 const CHROME_BUTTON =
-  "-my-1.5 flex h-11 w-11 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring sm:my-0 sm:h-8 sm:w-8";
+  "-my-1.5 flex h-11 w-11 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
 
 function ArrowButton({
   label,
