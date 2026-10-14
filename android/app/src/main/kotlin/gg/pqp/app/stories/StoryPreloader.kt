@@ -70,6 +70,10 @@ class StoryPreloader(
     private val details = ConcurrentHashMap<String, Cached>()
     private val detailsLock = Mutex()
 
+    /** Bumped when the account leaves: a request that started before it answers into nothing. */
+    @Volatile
+    private var generation = 0
+
     /** Pictures in flight at once, across stories: a story can carry many layers. */
     private val imageGate = Semaphore(IMAGES_AT_ONCE)
 
@@ -119,8 +123,13 @@ class StoryPreloader(
             if (missing.isNotEmpty()) {
                 // What the server no longer returns (deleted, expired) must not be answered from an old copy.
                 missing.forEach { details.remove(it) }
-                session.api.stories(missing).forEach { details[it.id] = Cached(it, System.currentTimeMillis()) }
-                prune(now)
+                val epoch = generation
+                val fetched = session.api.stories(missing)
+                // The account may have left while the request was out: its stories are not kept for the next one.
+                if (epoch == generation) {
+                    fetched.forEach { details[it.id] = Cached(it, System.currentTimeMillis()) }
+                    prune(now)
+                }
             }
         }
         return ids.mapNotNull { details[it]?.story }
@@ -152,6 +161,7 @@ class StoryPreloader(
     }
 
     private fun forgetEverything() {
+        generation += 1
         planning.values.forEach { it.cancel() }
         running.values.forEach { it.cancel() }
         running.clear()

@@ -56,14 +56,16 @@ class StoryDraftStore(private val root: File) {
 
     /** Write the draft folder, [files] by name. Replaces a folder of the same id. */
     fun write(draft: StoryDraft, files: Map<String, ByteArray>) {
+        // Built beside the real place under a hidden name and moved in whole: a draft is either there complete or not
+        // there, so a listing (the restore at launch, a retry) never meets one half written and cleans it away.
+        val building = File(root, "$BUILDING_PREFIX${draft.id}")
+        building.deleteRecursively()
+        check(building.mkdirs() || building.isDirectory) { "Cannot create ${building.path}" }
+        files.forEach { (name, bytes) -> File(building, name).writeBytes(bytes) }
+        File(building, MANIFEST).writeText(PqpJson.encodeToString(StoryDraft.serializer(), draft))
         val folder = dir(draft.id)
         folder.deleteRecursively()
-        check(folder.mkdirs() || folder.isDirectory) { "Cannot create ${folder.path}" }
-        files.forEach { (name, bytes) -> File(folder, name).writeBytes(bytes) }
-        // The manifest goes last and through a rename: a folder with a manifest is a complete draft.
-        val temp = File(folder, "draft.json.tmp")
-        temp.writeText(PqpJson.encodeToString(StoryDraft.serializer(), draft))
-        check(temp.renameTo(File(folder, MANIFEST))) { "Cannot finish ${draft.id}" }
+        check(building.renameTo(folder)) { "Cannot finish ${draft.id}" }
     }
 
     /** Replace the manifest of a draft that is already on disk (its files stay). */
@@ -82,7 +84,11 @@ class StoryDraftStore(private val root: File) {
      * one that cannot be read right now (an I/O error) is left alone and simply not listed this time.
      */
     fun list(): List<StoryDraft> {
-        val folders = root.listFiles { f -> f.isDirectory } ?: return emptyList()
+        val all = root.listFiles { f -> f.isDirectory } ?: return emptyList()
+        // A folder still being built is not a draft yet; one left behind by a process that died is cleared after a while.
+        all.filter { it.name.startsWith(BUILDING_PREFIX) && System.currentTimeMillis() - it.lastModified() > STALE_BUILD_MS }
+            .forEach { it.deleteRecursively() }
+        val folders = all.filterNot { it.name.startsWith(BUILDING_PREFIX) }
         return folders.mapNotNull { folder ->
             val manifest = File(folder, MANIFEST)
             val draft = if (manifest.isFile) {
@@ -106,5 +112,7 @@ class StoryDraftStore(private val root: File) {
 
     private companion object {
         const val MANIFEST = "draft.json"
+        const val BUILDING_PREFIX = ".building-"
+        const val STALE_BUILD_MS = 60 * 60 * 1000L
     }
 }

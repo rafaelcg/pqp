@@ -839,8 +839,9 @@ internal fun StoryVideo(
             }
 
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                // A clip that will not play has no first frame to wait for.
+                // A clip that will not play has no first frame to wait for, and nothing to stay on: on to the next.
                 onReady()
+                onEnded()
             }
 
             override fun onPlaybackStateChanged(state: Int) {

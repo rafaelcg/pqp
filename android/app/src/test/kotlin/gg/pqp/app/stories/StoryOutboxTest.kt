@@ -150,6 +150,20 @@ class StoryOutboxTest {
     }
 
     @Test
+    fun `a draft being built is not listed and not cleaned away`() {
+        val root = folder.newFolder("outbox")
+        val store = StoryDraftStore(root)
+        File(root, ".building-x").mkdirs()
+        File(root, ".building-x/base").writeBytes(byteArrayOf(1))
+        assertTrue(store.list().isEmpty())
+        assertTrue(File(root, ".building-x").exists())
+        // A finished write leaves nothing hidden behind.
+        store.write(draft("done"), mapOf("base" to byteArrayOf(1)))
+        assertFalse(File(root, ".building-done").exists())
+        assertEquals(listOf("done"), store.list().map { it.id })
+    }
+
+    @Test
     fun `an unreadable manifest is cleaned away too`() {
         val root = folder.newFolder("outbox")
         val store = StoryDraftStore(root)
