@@ -1336,6 +1336,38 @@ duration. Pinned by `story-media.test.ts`.
    (capture and sources, then editor and layers, then viewer and call sticker),
    each with tests and a hands-on QA section.
 
+## 18. Fast stories: eager uploads (2026-10-14)
+
+Posting felt slow because nothing started until Post. The file now goes up the
+moment the author has it, and Post only creates and publishes.
+
+- `POST /api/stories/uploads` `{ kind: "base" | "layer", contentType, byteLength }`
+  answers 201 `{ uploadId, url, method, headers, expiresAt }`. Same types and
+  limits as the old path (a layer is a photo or the drawing, 8 MB; a base is a
+  photo or an H.264 MP4, 25 MB), refused the same way (video off, stories off, house
+  cast). 20 mints in a burst and 30 a minute per process, and at most
+  `STORY_UPLOADS_OUTSTANDING_MAX` (24) unclaimed uploads per account.
+- `DELETE /api/stories/uploads/:uploadId` answers 204: the object goes now (best
+  effort), then the row. Another account's id and an unknown one are the same 404.
+  A claimed upload is a no-op.
+- `POST /api/stories` takes `media.uploadId` and, per photo or drawing layer,
+  `upload.uploadId`. The declared type and size must be the upload's. Before the
+  transaction (CLAUDE.md: nothing between BEGIN and COMMIT touches the network)
+  the server HEADs each object (size and type exactly) and copies it, server
+  side, to a key under the new story's prefix, which no URL was ever signed for.
+  Inside the transaction the claim is one row-locked `UPDATE`, so an upload backs
+  one story: a second claim is a 409 and rolls the story back. A refused create
+  deletes the copies it made and leaves the upload usable. Publish is unchanged
+  and judges the copy (real type from the bytes, scan, video job).
+- The response has no `upload` for an eager base and no `layerUploads` entry for
+  an eager layer, so a client can mix: eager where it had time, the old URLs for
+  the rest. A client that sends no `uploadId` gets exactly the old behaviour.
+- Sweep: unclaimed uploads older than `STORY_UPLOAD_UNCLAIMED_HOURS` (6), and
+  those of a deleted account, lose object and row; a claimed row is a one hour
+  tombstone that retries the source delete.
+- Counters on `GET /api/admin/metrics` `stories.process`: `uploadsMinted`,
+  `uploadsClaimed`, `uploadsDiscarded`, `uploadsSwept`.
+
 ## Research sources
 
 - **Instagram:**

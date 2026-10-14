@@ -29,6 +29,11 @@ const stats = {
   rowsDeleted: 0,
   orphansDeleted: 0,
   framesSent: 0,
+  /** Eager uploads (`POST /api/stories/uploads`): minted, claimed by a story, thrown away by the author, swept unclaimed. */
+  uploadsMinted: 0,
+  uploadsClaimed: 0,
+  uploadsDiscarded: 0,
+  uploadsSwept: 0,
 };
 
 export type StoryCounter = keyof typeof stats;

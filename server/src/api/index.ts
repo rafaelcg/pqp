@@ -3,6 +3,7 @@ import {
   STORY_IDS_MAX,
   STORY_POSTS_PER_MINUTE,
   createStorySchema,
+  createStoryUploadSchema,
   storyModRemoveSchema,
   storyReactionSchema,
   storyReplySchema,
@@ -475,7 +476,9 @@ import { pushPendingCommunityHomePosts } from "../services/community-home-push.j
 import {
   ackStoryNotice,
   createStory,
+  createStoryUpload,
   deleteStoryEverywhere,
+  deleteStoryUpload,
   getStoriesForViewer,
   getStoryCard,
   listFriendsStrip,
@@ -5754,8 +5757,16 @@ const storyPostLimiter = createRateLimiter({
 });
 const storyViewLimiter = createRateLimiter({ capacity: 60, refillPerSecond: 2 });
 const storyReactionLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
+/**
+ * Eager uploads: a story is a base plus up to seven layer files, and a
+ * re-trim or a removed photo mints another, so a burst of 20 and 30 a minute.
+ * The cap on unfinished uploads per account (and the 6 h sweep) bounds what a
+ * script could park in the bucket.
+ */
+const storyUploadLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 0.5 });
 
 export function resetStoryRateLimits(): void {
+  storyUploadLimiter.reset();
   storyPostLimiter.reset();
   storyViewLimiter.reset();
   storyReactionLimiter.reset();
@@ -5789,6 +5800,8 @@ function mapStoryError(error: unknown): never {
         throw new HttpError(413, error.message);
       case "budget":
         throw new HttpError(429, error.message);
+      case "claimed":
+        throw new HttpError(409, error.message);
       case "automod":
       case "refused":
         throw new HttpError(422, error.message);
@@ -5838,6 +5851,28 @@ router.get("/api/stories/friends", async ({ user }) => listFriendsStrip(user));
 router.get("/api/stories", async ({ url, user }) => ({
   stories: await getStoriesForViewer(user.id, storyIdsParam(url)),
 }));
+
+/**
+ * Eager upload: a PUT URL for a story's file before the story exists (see
+ * `createStoryUploadSchema`). `POST /api/stories` claims it by `uploadId`.
+ */
+router.post("/api/stories/uploads", async ({ req, res, user }) => {
+  takeStoryBudget(storyUploadLimiter, res, user.id);
+  const body = createStoryUploadSchema.parse(await readJsonBody(req));
+  try {
+    return created(await createStoryUpload(user, body));
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+/** Throw an upload away: the object now (best effort), the row, 204. */
+router.delete("/api/stories/uploads/:uploadId", async ({ user }, { uploadId }) => {
+  if (!isUuid(uploadId!) || !(await deleteStoryUpload(user.id, uploadId!))) {
+    throw new NotFound("Upload not found");
+  }
+  return noContent();
+});
 
 router.post("/api/stories", async ({ req, res, user }) => {
   takeStoryBudget(storyPostLimiter, res, user.id);

@@ -237,6 +237,13 @@ export const STORY_VIEWERS_PAGE_SIZE = 50;
 export const STORY_POSTS_PER_DAY = 20;
 /** Posting budget: per author, per minute, per API process. */
 export const STORY_POSTS_PER_MINUTE = 3;
+/**
+ * EAGER UPLOADS (`POST /api/stories/uploads`). An upload nobody claims with a
+ * story is deleted, bytes and row, by the stories sweep after this many hours.
+ */
+export const STORY_UPLOAD_UNCLAIMED_HOURS = 6;
+/** Unclaimed uploads one account may hold at once (a story is at most a base, 6 photos and a drawing, with room for retries). */
+export const STORY_UPLOADS_OUTSTANDING_MAX = 24;
 /** In a listed community, an account must be this old to post a story there. */
 export const STORY_COMMUNITY_MIN_ACCOUNT_AGE_HOURS = 72;
 
@@ -475,6 +482,14 @@ const mentionLayerFields = {
   userId: z.string().uuid(),
 };
 
+/**
+ * An id from `POST /api/stories/uploads`: the bytes are already in storage and
+ * the server need not mint a URL for this file. When it is present the
+ * declared `contentType` and `byteSize` must be the ones the upload was made
+ * with; the server checks the stored object against them before it accepts.
+ */
+const eagerUploadIdSchema = z.string().uuid().optional();
+
 const imageDims = {
   width: z.number().int().positive().max(STORY_MAX_DIMENSION),
   height: z.number().int().positive().max(STORY_MAX_DIMENSION),
@@ -489,6 +504,8 @@ export const storyLayerUploadInputSchema = z.object({
   contentType: z.enum(STORY_LAYER_IMAGE_TYPES),
   byteSize: z.number().int().positive().max(STORY_LAYER_MAX_BYTES),
   ...imageDims,
+  /** Eager upload (see `createStoryUploadSchema`): no `layerUploads` entry comes back for this layer. */
+  uploadId: eagerUploadIdSchema,
 });
 export type StoryLayerUploadInput = z.infer<typeof storyLayerUploadInputSchema>;
 
@@ -779,6 +796,8 @@ export const storyMediaInputSchema = z.object({
   height: z.number().int().positive().max(STORY_MAX_DIMENSION),
   /** Video only, required there. Read off the file by the client. */
   durationMs: z.number().int().positive().max(STORY_MAX_VIDEO_MS).optional(),
+  /** Eager upload (see `createStoryUploadSchema`): the response's `upload` is then null. */
+  uploadId: eagerUploadIdSchema,
 });
 export type StoryMediaInput = z.infer<typeof storyMediaInputSchema>;
 
@@ -816,6 +835,12 @@ export type StoryAudienceTargets = z.infer<typeof storyAudienceTargetsSchema>;
  * A call layer is mirrored by the server into the legacy `sticker` field, so
  * a build that knows only `sticker` still shows it. Sending `sticker` alone
  * (an old build) works too; sending both requires them to agree.
+ *
+ * EAGER UPLOADS. `media.uploadId` and a layer's `upload.uploadId` name files
+ * already stored through `POST /api/stories/uploads`. For those the response
+ * carries no `upload` / `layerUploads` entry, and the client calls
+ * `POST /api/stories/:storyId/publish` straight away. Without `uploadId`
+ * everything below is unchanged.
  *
  * UPLOADS. A story with media or with image/drawing layers answers `upload`
  * (the base) and `layerUploads` (one per image/drawing layer, `layerId` naming
@@ -877,6 +902,15 @@ export const createStorySchema = z
     if (new Set(value.layers.map((layer) => layer.id)).size !== value.layers.length) {
       fail("Layer ids must be unique", "layers");
     }
+    const uploadIds = [
+      value.media?.uploadId,
+      ...value.layers.map((layer) =>
+        layer.type === "image" || layer.type === "drawing" ? layer.upload.uploadId : undefined,
+      ),
+    ].filter((id): id is string => id !== undefined);
+    if (new Set(uploadIds).size !== uploadIds.length) {
+      fail("An upload can back one file only", "media");
+    }
     const count = (type: StoryLayerType) =>
       value.layers.filter((layer) => layer.type === type).length;
     if (count("image") > STORY_LAYER_IMAGES_MAX) fail("Too many photo layers", "layers");
@@ -922,6 +956,57 @@ export const storyLayerUploadSchema = storyUploadSchema.extend({
   layerId: z.string().uuid(),
 });
 export type StoryLayerUpload = z.infer<typeof storyLayerUploadSchema>;
+
+/**
+ * `POST /api/stories/uploads`: start a story's file BEFORE the story exists, so
+ * the bytes are already in storage when the author taps Post.
+ *
+ * - `kind: "base"`: the photo or video behind the story. Any `STORY_CONTENT_TYPES`
+ *   type up to `STORY_MAX_BYTES` (a video must still be H.264 MP4; the same
+ *   checks as a create run when the story is published).
+ * - `kind: "layer"`: a placed photo or the drawing. Image types up to
+ *   `STORY_LAYER_MAX_BYTES`.
+ *
+ * `byteLength` is signed into the PUT (`Content-Length`), so the client sends
+ * exactly that many bytes. Answers 201 with `createStoryUploadResponseSchema`;
+ * 404 when stories are off for this account, 400 for a type the kind does not
+ * take, 429 over the rate budget or with `STORY_UPLOADS_OUTSTANDING_MAX`
+ * unclaimed uploads already, 503 with no storage. An upload nobody claims is
+ * deleted after `STORY_UPLOAD_UNCLAIMED_HOURS`.
+ */
+export const createStoryUploadSchema = z
+  .object({
+    kind: z.enum(["base", "layer"]),
+    contentType: storyContentTypeSchema,
+    byteLength: z.number().int().positive().max(STORY_MAX_BYTES),
+  })
+  .superRefine((value, ctx) => {
+    if (value.kind !== "layer") {
+      return;
+    }
+    if (!(STORY_LAYER_IMAGE_TYPES as readonly string[]).includes(value.contentType)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "A layer is a photo or a drawing",
+        path: ["contentType"],
+      });
+    }
+    if (value.byteLength > STORY_LAYER_MAX_BYTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Layer image too large",
+        path: ["byteLength"],
+      });
+    }
+  });
+export type CreateStoryUploadRequest = z.input<typeof createStoryUploadSchema>;
+export type CreateStoryUploadParsed = z.output<typeof createStoryUploadSchema>;
+
+export const createStoryUploadResponseSchema = storyUploadSchema.extend({
+  /** Put this in `media.uploadId` or a layer's `upload.uploadId` when creating the story. */
+  uploadId: z.string().uuid(),
+});
+export type CreateStoryUploadResponse = z.infer<typeof createStoryUploadResponseSchema>;
 
 export const createStoryResponseSchema = z.object({
   story: storySchema,

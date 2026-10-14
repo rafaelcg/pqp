@@ -2,7 +2,11 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { STORY_MAX_BYTES, STORY_MAX_PROBED_VIDEO_MS } from "@pqp/shared";
+import {
+  STORY_MAX_BYTES,
+  STORY_MAX_PROBED_VIDEO_MS,
+  STORY_UPLOAD_UNCLAIMED_HOURS,
+} from "@pqp/shared";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
 import {
@@ -87,6 +91,9 @@ export interface StorySweepResult {
   mediaDeleted: number;
   mediaFailed: number;
   rowsDeleted: number;
+  /** Eager uploads nobody claimed (or already claimed) that were removed this tick. */
+  uploadsSwept: number;
+  uploadsFailed: number;
 }
 
 export async function sweepStories(): Promise<StorySweepResult> {
@@ -187,6 +194,8 @@ export async function sweepStories(): Promise<StorySweepResult> {
     bumpStoryStat("mediaDeleteFailures", mediaFailed);
   }
 
+  const uploads = isStorageConfigured() ? await sweepStoryUploads() : { swept: 0, failed: 0 };
+
   const rows = await pool.query(
     `DELETE FROM stories s
       WHERE s.status IN ('expired', 'deleted')
@@ -215,7 +224,66 @@ export async function sweepStories(): Promise<StorySweepResult> {
     mediaDeleted,
     mediaFailed,
     rowsDeleted: rows.rowCount ?? 0,
+    uploadsSwept: uploads.swept,
+    uploadsFailed: uploads.failed,
   };
+}
+
+/**
+ * Eager uploads (`story_uploads`) nothing needs any more: UNCLAIMED ones past
+ * `STORY_UPLOAD_UNCLAIMED_HOURS` (the author closed the tab, lost the network,
+ * or the client's DELETE never arrived) or whose account is gone, and CLAIMED
+ * ones an hour after the claim (the story holds its own copy; the source is
+ * normally deleted at the claim, and this is the retry when that failed).
+ * Claimed with a lease like the story sweep, so two processes sweeping at the
+ * same moment delete each object once; the row goes only after its object.
+ */
+async function sweepStoryUploads(): Promise<{ swept: number; failed: number }> {
+  const pool = getPool();
+  const claimed = await pool.query<{ id: string; storage_key: string; claim: string }>(
+    `UPDATE story_uploads SET delete_claimed_at = now()
+      WHERE id IN (
+        SELECT id FROM story_uploads
+         WHERE (delete_claimed_at IS NULL
+                OR delete_claimed_at < now() - interval '${DELETE_LEASE}')
+           AND (
+             (claimed_story_id IS NULL
+              AND (user_id IS NULL
+                   OR created_at < now() - make_interval(hours => $1)))
+             OR (claimed_story_id IS NOT NULL AND claimed_at < now() - interval '1 hour')
+           )
+         ORDER BY created_at ASC
+         LIMIT ${SWEEP_BATCH}
+         FOR UPDATE SKIP LOCKED
+      )
+      RETURNING id, storage_key, delete_claimed_at::text AS claim`,
+    [STORY_UPLOAD_UNCLAIMED_HOURS],
+  );
+  let swept = 0;
+  let failed = 0;
+  for (const row of claimed.rows) {
+    try {
+      await deleteObject(row.storage_key);
+      await pool.query(
+        `DELETE FROM story_uploads WHERE id = $1 AND delete_claimed_at = $2::timestamptz`,
+        [row.id, row.claim],
+      );
+      swept += 1;
+    } catch (error) {
+      failed += 1;
+      console.error(
+        `[stories] could not delete upload ${row.id}:`,
+        error instanceof Error ? error.message : error,
+      );
+      await pool.query(
+        `UPDATE story_uploads SET delete_claimed_at = NULL
+          WHERE id = $1 AND delete_claimed_at = $2::timestamptz`,
+        [row.id, row.claim],
+      );
+    }
+  }
+  bumpStoryStat("uploadsSwept", swept);
+  return { swept, failed };
 }
 
 // ------------------------------------------------------------------ ffmpeg seam
