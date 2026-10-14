@@ -47,6 +47,15 @@ struct StoryViewer: View {
     @State private var watched: Set<String> = []
     @State private var pendingViews: Set<String> = []
     @State private var player: AVPlayer?
+    /// The story `player` plays. A video's bar only follows a player that
+    /// belongs to the story on screen.
+    @State private var playerStoryId: String?
+    /// Stories whose first frame has been shown: the timer runs from there.
+    @State private var readyIds: Set<String> = []
+    /// The story whose first frame is late (a blurred placeholder and a spinner).
+    @State private var waitingId: String?
+    /// Set once the viewer is going away: nothing advances any more.
+    @State private var closing = false
     @State private var muted = true
     @State private var error: String?
     @State private var handlerKey = "story-viewer-" + UUID().uuidString
@@ -68,7 +77,14 @@ struct StoryViewer: View {
     init(launch: StoryViewerLaunch, onClose: @escaping (Set<String>) -> Void) {
         self.launch = launch
         self.onClose = onClose
-        _playback = State(initialValue: StoryPlayback(people: launch.people, startPerson: launch.startPerson))
+        let playback = StoryPlayback(people: launch.people, startPerson: launch.startPerson)
+        _playback = State(initialValue: playback)
+        // Stories the tray already read: the first one opens with no round trip.
+        var known: [String: Story] = [:]
+        for id in playback.prefetchIds + playback.windowIds {
+            if let story = StoryPreloader.shared.cachedStory(id) { known[id] = story }
+        }
+        _stories = State(initialValue: known)
     }
 
     private var current: Story? { playback.currentId.flatMap { stories[$0] } }
@@ -93,6 +109,7 @@ struct StoryViewer: View {
         // A story staff removed (or its author deleted) leaves an open viewer
         // at once: `removedStoryIds` rides the `stories-update` frame.
         .onAppear {
+            StoryMetrics.mark("viewer.open")
             session.eventHandlers[handlerKey] = { event in
                 guard case .storiesUpdate(let update) = event, !update.removedStoryIds.isEmpty else { return }
                 dropRemoved(Set(update.removedStoryIds))
@@ -102,6 +119,7 @@ struct StoryViewer: View {
             session.eventHandlers.removeValue(forKey: handlerKey)
             Task { await flushViews() }
             player?.pause()
+            StoryPreloader.shared.clearWindow()
             onClose(watched)
         }
         .sheet(isPresented: $showingViewers) {
@@ -123,6 +141,7 @@ struct StoryViewer: View {
         .task(id: current?.id) {
             if let story = current { await loadServersIfNeeded(for: story) }
         }
+        .task(id: current?.id) { await watchFirstFrame() }
         // The call card is a live roster: it follows the room while the story
         // is open, held or not.
         .task(id: callWatchId) { await watchCall() }
@@ -154,6 +173,12 @@ struct StoryViewer: View {
                 .id(playback.currentId)
                 .transition(.opacity)
                 .ignoresSafeArea(.keyboard)
+
+            // A first frame that is late: the blurred picture stays, with a spinner.
+            if let story = current, waitingId == story.id, !readyIds.contains(story.id) {
+                ProgressView().tint(.white)
+                    .accessibilityIdentifier("story.loading")
+            }
 
             // Tap zones and the hold, under the chrome so its buttons win.
             HStack(spacing: 0) {
@@ -247,7 +272,7 @@ struct StoryViewer: View {
     @ViewBuilder
     private func content(size: CGSize) -> some View {
         if let story = current {
-            StoryStageBase(story: story, player: player, muted: $muted, size: size)
+            StoryStageBase(story: story, player: player, muted: $muted, size: size, onFirstFrame: { readyIds.insert(story.id) })
                 .accessibilityElement(children: story.isVideo ? .contain : .ignore)
                 .accessibilityLabel(Text(verbatim: story.spokenDescription ?? (story.isText ? "" : String(localized: "Photo"))))
         } else if let id = playback.currentId, gone.contains(id) {
@@ -645,6 +670,7 @@ struct StoryViewer: View {
     }
 
     private func next() {
+        StoryMetrics.mark("next.tap")
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.1)) {
             if !playback.next() { close() }
             progress = 0
@@ -665,51 +691,138 @@ struct StoryViewer: View {
     }
 
     private func close() {
+        guard !closing else { return }
+        closing = true
         player?.pause()
         dismiss()
     }
 
+    /// A story with no picture to wait for is ready at once; one that has, is
+    /// ready when its first frame is on screen. Late by 300 ms, a spinner; a
+    /// clip that cannot load does not hold the queue for ever.
+    private static let firstFrameGiveUpMs = 20_000
+
+    private func watchFirstFrame() async {
+        guard let story = current else { return }
+        waitingId = nil
+        if story.isText || story.media == nil || (story.isVideo && videoURL(story) == nil) {
+            readyIds.insert(story.id)
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(300))
+        guard !Task.isCancelled, !readyIds.contains(story.id) else { return }
+        waitingId = story.id
+        var waited = 300
+        while !Task.isCancelled, !readyIds.contains(story.id) {
+            if story.isVideo, player?.currentItem?.status == .failed { readyIds.insert(story.id) }
+            try? await Task.sleep(for: .milliseconds(250))
+            waited += 250
+            // Nothing after twenty seconds (a request that stalls without
+            // failing): skip it rather than hold the queue for ever.
+            if waited >= Self.firstFrameGiveUpMs, !readyIds.contains(story.id), !Task.isCancelled, current?.id == story.id {
+                next()
+                return
+            }
+        }
+    }
+
     // MARK: - Loading and the clock
 
-    /// Fetches what is about to play, in batches the server takes.
+    /// Fetches what is about to play, in batches the server takes, and keeps
+    /// the next few stories' pictures and videos ready.
     private func storyChanged() async {
         error = nil
-        let wanted = playback.prefetchIds.filter { stories[$0] == nil && !gone.contains($0) }
-        if !wanted.isEmpty {
+        let preloader = StoryPreloader.shared
+        // A player already buffering this clip is taken BEFORE the window is
+        // set again: the window leaves the current video to the viewer, and
+        // would release it as no longer wanted.
+        var adopted = current.flatMap(videoURL).flatMap { preloader.takePlayer(for: $0) }
+        // The story on screen and the stories after it, in the order they
+        // are needed, then the rest of the person's.
+        var ids = playback.windowIds
+        for id in playback.prefetchIds where !ids.contains(id) { ids.append(id) }
+        let wanted = ids.filter { stories[$0] == nil && !gone.contains($0) }
+        for id in wanted {
+            if let known = preloader.cachedStory(id) { stories[id] = known }
+        }
+        // What is already known starts loading its media before the answer
+        // for the rest is back.
+        updatePreloadWindow()
+        let missing = wanted.filter { stories[$0] == nil }
+        if !missing.isEmpty {
             do {
-                let fetched = try await session.api.stories(ids: wanted)
+                let batch = Array(missing.prefix(StoryLimits.idsMax))
+                let fetched = try await session.api.stories(ids: batch)
+                preloader.remember(fetched)
                 for story in fetched { stories[story.id] = story }
-                for id in wanted where !fetched.contains(where: { $0.id == id }) { gone.insert(id) }
+                for id in batch where !fetched.contains(where: { $0.id == id }) { gone.insert(id) }
             } catch {
                 self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
         }
+        // Swiped on while the stories were being read: this task is over, and
+        // the player it took belongs to a story that is no longer on screen.
+        if Task.isCancelled {
+            adopted?.pause()
+            adopted?.replaceCurrentItem(with: nil)
+            return
+        }
         progress = 0
         player?.pause()
         player = nil
+        playerStoryId = nil
         guard let story = current else { return }
-        if story.isVideo, let raw = story.media?.url, let url = Avatar.resolve(raw) ?? URL(string: raw) {
-            let next = AVPlayer(url: url)
+        if story.isVideo, let url = videoURL(story) {
+            // A player that was already buffering this clip, when the preload
+            // got to it; else a fresh one. One taken for another clip is not
+            // this one's.
+            if let taken = adopted, (taken.currentItem?.asset as? AVURLAsset)?.url != url {
+                taken.pause()
+                taken.replaceCurrentItem(with: nil)
+                adopted = nil
+            }
+            if adopted == nil { adopted = preloader.takePlayer(for: url) }
+            let next = adopted ?? AVPlayer(url: url)
             next.isMuted = muted
+            // A story seen before has a new player: its first frame is to come.
+            readyIds.remove(story.id)
             player = next
+            playerStoryId = story.id
             next.play()
         }
+        updatePreloadWindow()
     }
 
-    /// Linear, because it is a clock. A video's bar follows the video.
+    private func videoURL(_ story: Story) -> URL? {
+        guard story.isVideo, let raw = story.media?.url else { return nil }
+        return Avatar.resolve(raw) ?? URL(string: raw)
+    }
+
+    /// What to have ready: the story on screen's pictures, and the next two
+    /// of the queue (across authors) and the next author's first, pictures and
+    /// buffered video. Skipped on Low Data Mode for video only.
+    private func updatePreloadWindow() {
+        let preloader = StoryPreloader.shared
+        let ids = playback.windowIds
+        let ahead = ids.dropFirst().compactMap { stories[$0] }
+        preloader.setWindow(StoryPreloadPlan.window(current: current, ahead: ahead, lowData: false))
+    }
+
+    /// Linear, because it is a clock. A video's bar follows the video. It runs
+    /// from the story's first frame (`StoryClockRules`).
     private func clock() async {
         let tick: Double = 1.0 / 30
         while !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(Int(tick * 1000)))
             guard let story = current, !paused else { continue }
-            if story.isVideo, let player, let item = player.currentItem {
-                let duration = item.duration.seconds
-                if duration.isFinite, duration > 0 {
-                    progress = min(1, player.currentTime().seconds / duration)
-                }
-            } else {
-                progress += tick / (Double(story.displayMs) / 1000)
-            }
+            let item = player?.currentItem
+            guard let value = StoryClockRules.nextProgress(
+                current: progress, isVideo: story.isVideo, ready: readyIds.contains(story.id), closing: closing,
+                playerIsForThisStory: playerStoryId == story.id && player != nil,
+                videoSeconds: player?.currentTime().seconds, videoDuration: item?.duration.seconds,
+                tick: tick, displayMs: story.displayMs
+            ) else { continue }
+            progress = value
             // A second on screen counts as seen.
             if progress * Double(story.displayMs) / 1000 >= 1, !story.isMine, !watched.contains(story.id) {
                 watched.insert(story.id)
@@ -949,21 +1062,39 @@ struct StoryVideoSurface: UIViewRepresentable {
     let player: AVPlayer
     /// A video shaped like the canvas fills it; any other is shown whole.
     var fills = false
+    /// The layer has its first frame.
+    var onReady: (() -> Void)?
 
     func makeUIView(context: Context) -> StoryPlayerView {
         let view = StoryPlayerView()
+        view.onReady = onReady
         view.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
         view.playerLayer.player = player
         return view
     }
 
     func updateUIView(_ view: StoryPlayerView, context: Context) {
+        view.onReady = onReady
         view.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
-        view.playerLayer.player = player
+        if view.playerLayer.player !== player { view.playerLayer.player = player }
     }
 }
 
 final class StoryPlayerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    private var readiness: NSKeyValueObservation?
+    var onReady: (() -> Void)?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        // When the first video frame is on the layer: the story's timer starts.
+        readiness = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+            guard layer.isReadyForDisplay else { return }
+            StoryMetrics.mark("frame.video")
+            DispatchQueue.main.async { self?.onReady?() }
+        }
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 }

@@ -181,6 +181,66 @@
         }
       }
     },
+    "Couldn't keep your story to post it. Check your free space." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra guardar teu story pra postar. Confere o espaço livre."
+          }
+        }
+      }
+    },
+    "Couldn't post your story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra postar teu story"
+          }
+        }
+      }
+    },
+    "Didn't post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não postou"
+          }
+        }
+      }
+    },
+    "Didn't post. Try again" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não postou. Tenta de novo."
+          }
+        }
+      }
+    },
+    "It posts by itself when you're back online." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Posta sozinho quando tu voltar a ficar online."
+          }
+        }
+      }
+    },
+    "Keep posting" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continuar postando"
+          }
+        }
+      }
+    },
     "%lld attachments" : {
       "localizations" : {
         "pt-BR" : {
@@ -491,6 +551,16 @@
         }
       }
     },
+    "%lld percent" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld por cento"
+          }
+        }
+      }
+    },
     "%lld posts" : {
       "localizations" : {
         "pt-BR" : {
@@ -561,12 +631,62 @@
         }
       }
     },
+    "No connection" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem conexão"
+          }
+        }
+      }
+    },
+    "No connection. This is the list from last time, and the story posts when you're back online." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem conexão. É a lista da última vez, e o story posta quando tu voltar a ficar online."
+          }
+        }
+      }
+    },
+    "Posting" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Postando"
+          }
+        }
+      }
+    },
+    "Posting your story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Postando teu story"
+          }
+        }
+      }
+    },
     "(that's you)" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "(tu)"
+          }
+        }
+      }
+    },
+    "Waiting for connection" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esperando conexão"
           }
         }
       }
@@ -9257,6 +9377,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você vai precisar de um novo convite para voltar."
+          }
+        }
+      }
+    },
+    "Your story didn't post. Double tap for options" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teu story não postou. Toca duas vezes pra ver as opções"
+          }
+        }
+      }
+    },
+    "Your story is waiting for a connection. Double tap for options" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teu story tá esperando conexão. Toca duas vezes pra ver as opções"
           }
         }
       }
