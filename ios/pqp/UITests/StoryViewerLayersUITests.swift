@@ -117,7 +117,9 @@ final class StoryViewerLayersUITests: XCTestCase {
     /// button is the same lime as a lime title, and the chrome is at the edges.
     private func box(of color: (r: Int, g: Int, b: Int), in image: UIImage, tolerance: Int = 14) -> CGRect? {
         guard let full = image.cgImage else { return nil }
-        let band = CGRect(x: 0, y: 130 * image.scale, width: CGFloat(full.width), height: 630 * image.scale)
+        // Ends above the editor's Avancar button (lime like the title, since it moved
+        // inside the canvas), which would otherwise stretch the title's box.
+        let band = CGRect(x: 0, y: 130 * image.scale, width: CGFloat(full.width), height: 612 * image.scale)
         guard let cg = full.cropping(to: band) else { return nil }
         let width = cg.width
         let height = cg.height

@@ -47,6 +47,7 @@ struct StoryTrimView: View {
                             .foregroundStyle(.white)
                             .frame(width: 40, height: 40)
                             .background(Circle().fill(.white.opacity(0.14)))
+                            .decorative()
                     }
                     .accessibilityLabel(Text("Close"))
                     .accessibilityIdentifier("trim.close")

@@ -423,17 +423,23 @@ final class StoryLayersTests: XCTestCase {
         XCTAssertTrue(model.files.isEmpty)
     }
 
-    /// The rule web and Android share: layer order is creation order, and a
-    /// second drawing session moves the drawing to the top, so the stroke made
-    /// now stays over what the finger sees after Pronto.
-    func testASecondDrawingSessionBringsTheDrawingToTheTop() {
-        let model = editor()
-        let file = StoryLayerFile(data: Data([1]), contentType: "image/png", width: 810, height: 1440)
+    private func oneStroke() -> PKDrawing {
         var strokes = PKDrawing()
         strokes.strokes.append(PKStroke(ink: PKInk(.pen, color: .white), path: PKStrokePath(controlPoints: [
             PKStrokePoint(location: .zero, timeOffset: 0, size: CGSize(width: 4, height: 4), opacity: 1, force: 1, azimuth: 0, altitude: 0),
             PKStrokePoint(location: CGPoint(x: 20, y: 20), timeOffset: 0.1, size: CGSize(width: 4, height: 4), opacity: 1, force: 1, azimuth: 0, altitude: 0),
         ], creationDate: Date())))
+        return strokes
+    }
+
+    /// The rule web and Android share: layer order is creation order, and a
+    /// second drawing session moves the drawing to the top, so the stroke made
+    /// now stays over what the finger sees after Pronto. The move is part of the
+    /// session's ONE undo entry: a single undo takes the stroke and the order back.
+    func testASecondDrawingSessionBringsTheDrawingToTheTop() {
+        let model = editor()
+        let file = StoryLayerFile(data: Data([1]), contentType: "image/png", width: 810, height: 1440)
+        let strokes = oneStroke()
         model.beginDrawing()
         XCTAssertFalse(model.canUndo, "No drawing yet: nothing to move")
         model.setDrawing(strokes, file: file, preview: UIImage())
@@ -444,11 +450,40 @@ final class StoryLayersTests: XCTestCase {
         model.setDrawing(strokes, file: file, preview: UIImage())
         XCTAssertEqual(model.layers.map(\.typeName), ["text", "drawing"], "Pronto keeps it there")
         model.undo()
+        XCTAssertEqual(model.layers.map(\.typeName), ["drawing", "text"], "ONE undo puts the order back: the move is not a step of its own")
         model.undo()
-        XCTAssertEqual(model.layers.map(\.typeName), ["drawing", "text"], "Undo puts the order back")
+        XCTAssertEqual(model.layers.map(\.typeName), ["drawing"], "The next undo is the text, not an invisible reorder")
+        model.undo()
+        XCTAssertTrue(model.layers.isEmpty)
+        XCTAssertFalse(model.canUndo)
+    }
+
+    func testAPenSessionWithNoStrokePutsTheOrderBackAndLeavesNoUndoStep() {
+        let model = editor()
+        let file = StoryLayerFile(data: Data([1]), contentType: "image/png", width: 810, height: 1440)
+        model.setDrawing(oneStroke(), file: file, preview: UIImage())
+        model.addText(StoryTextData(text: "por cima"))
+        model.beginDrawing()
+        XCTAssertEqual(model.layers.map(\.typeName), ["text", "drawing"])
+        model.endDrawingUnchanged()
+        XCTAssertEqual(model.layers.map(\.typeName), ["drawing", "text"], "Cancelled: the order the pen moved goes back")
+        model.undo()
+        XCTAssertEqual(model.layers.map(\.typeName), ["drawing"], "No entry was recorded for the cancelled session: this undo is the text")
+        model.undo()
+        XCTAssertTrue(model.layers.isEmpty)
+        XCTAssertFalse(model.canUndo)
+    }
+
+    func testBeginDrawingWhenAlreadyOnTopMovesNothing() {
+        let model = editor()
+        let file = StoryLayerFile(data: Data([1]), contentType: "image/png", width: 810, height: 1440)
+        model.addText(StoryTextData(text: "embaixo"))
+        model.setDrawing(oneStroke(), file: file, preview: UIImage())
         model.beginDrawing()
         model.beginDrawing()
-        XCTAssertEqual(model.layers.map(\.typeName), ["text", "drawing"], "Already on top: no second step")
+        XCTAssertEqual(model.layers.map(\.typeName), ["text", "drawing"], "Already on top: nothing moves")
+        model.endDrawingUnchanged()
+        XCTAssertEqual(model.layers.map(\.typeName), ["text", "drawing"])
     }
 
     func testDeletingALayerDropsItsBytesAndUndoBringsThemBack() {

@@ -97,7 +97,7 @@ struct StoryEditorView: View {
             )
             StoryTextEditView(
                 data: place.data, scale: place.scale, center: center,
-                rotation: place.rotation, canvasWidth: canvas.width
+                rotation: place.rotation, canvasWidth: canvas.width, canvasHeight: canvas.height
             ) { result in
                 finishText(target, result)
             }
@@ -251,12 +251,16 @@ struct StoryEditorView: View {
             canvas: canvas, previews: model.previews,
             call: { layer in
                 guard case .call(let serverId, let channelId) = layer.content, let info = model.callInfo else { return nil }
-                let live = callLive[channelId]
-                return StoryCallStickerData(
-                    roomName: live?.channelName ?? info.roomName, serverName: info.serverName, serverId: serverId,
-                    serverIconUrl: info.serverIconUrl, participants: live?.participants ?? [],
-                    count: live?.count ?? 0, state: .preview, joinable: true
+                // The room's own state when it is known (the same mapping the viewer
+                // uses), a live, empty room until the first read lands.
+                var data = callLive[channelId].map {
+                    StoryCallStickerData(live: $0, serverName: info.serverName, serverIconUrl: info.serverIconUrl)
+                } ?? StoryCallStickerData(
+                    roomName: info.roomName, serverName: info.serverName, serverId: serverId,
+                    serverIconUrl: info.serverIconUrl, participants: [], count: 0, state: .live, joinable: true
                 )
+                data.isPreview = true
+                return data
             },
             reduceMotion: reduceMotion
         )
@@ -294,7 +298,7 @@ struct StoryEditorView: View {
         .animation(reduceMotion ? .easeOut(duration: 0.1) : Motion.press, value: model.overTrash)
         .animation(.easeOut(duration: 0.15), value: model.isDragging)
         .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        .decorative()
     }
 
     @ViewBuilder
@@ -333,6 +337,7 @@ struct StoryEditorView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 36)
+                .decorative()
         }
         .accessibilityLabel(Text(verbatim: label))
         .accessibilityIdentifier(id)
@@ -372,7 +377,7 @@ struct StoryEditorView: View {
                 Button(action: onNext) {
                     HStack(spacing: 8) {
                         Text("Next")
-                        Image(systemName: "arrow.right")
+                        Image(systemName: "arrow.right").decorative()
                     }
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(Palette.inkDeep)
@@ -474,6 +479,7 @@ struct StoryEditorView: View {
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .background(Circle().fill(.black.opacity(0.55)).overlay(Circle().strokeBorder(.white.opacity(0.12), lineWidth: 1)))
+                .decorative()
         }
         .accessibilityLabel(Text(verbatim: label))
         .accessibilityIdentifier(id)
@@ -533,12 +539,18 @@ struct StoryEditorView: View {
 
     private func finishDrawing(_ strokes: PKDrawing?, canvas: CGSize) {
         drawing = false
-        guard let strokes else { return }
+        // Nothing drawn this time (cancelled, or Done on what the pen opened
+        // with): no undo entry, and the order the pen moved goes back.
+        guard let strokes else {
+            model.endDrawingUnchanged()
+            return
+        }
         if strokes.strokes.isEmpty {
             model.setDrawing(PKDrawing(), file: nil, preview: nil)
             return
         }
         guard let png = StoryDrawingExport.png(strokes, canvas: canvas) else {
+            model.endDrawingUnchanged()
             show(String(localized: "Couldn't save the drawing."))
             return
         }

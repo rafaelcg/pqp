@@ -38,7 +38,7 @@ struct StoryStickerTray: View {
                 Image(systemName: symbol)
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(enabled ? Palette.signal : Palette.paperMuted)
-                    .accessibilityHidden(true)
+                    .decorative()
                 Text(verbatim: title)
                     .font(Typography.bodyMedium)
                     .foregroundStyle(enabled ? Palette.paper : Palette.paperMuted)
@@ -165,7 +165,7 @@ struct StoryMentionSheet: View {
                         Button { onPick(person) } label: {
                             HStack(spacing: 12) {
                                 Avatar(name: person.displayName, seed: person.id, size: 36, url: person.avatarUrl)
-                                    .accessibilityHidden(true)
+                                    .decorative()
                                 Text(verbatim: person.displayName)
                                     .font(Typography.bodyMedium)
                                     .foregroundStyle(Palette.paper)

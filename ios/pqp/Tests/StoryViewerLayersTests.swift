@@ -171,6 +171,21 @@ final class StoryViewerLayersTests: XCTestCase {
         XCTAssertFalse(card.spokenDescription.contains(String(localized: "The call ended")))
     }
 
+    /// The editor's card is in the viewer's states with the viewer's words: an
+    /// empty room says so there too, instead of a "Live" it is not.
+    func testTheEditorsCardSaysTheSameThingForAnEmptyRoomAsTheViewer() {
+        let viewer = StoryCallStickerData(live: live(state: "live", count: 0, joinable: true, people: []), serverName: "QG", serverIconUrl: nil)
+        let editor = StoryCallStickerData(
+            roomName: viewer.roomName, serverName: "QG", serverId: viewer.serverId, serverIconUrl: nil,
+            participants: [], count: 0, state: .live, joinable: true, isPreview: true
+        )
+        XCTAssertEqual(
+            StoryCallStickerCard(data: editor, canvasWidth: 360).spokenDescription,
+            StoryCallStickerCard(data: viewer, canvasWidth: 360).spokenDescription
+        )
+        XCTAssertTrue(StoryCallStickerCard(data: editor, canvasWidth: 360).spokenDescription.contains(String(localized: "Nobody in the call right now")))
+    }
+
     /// A viewer without CONNECT sees the room live, with no door.
     func testAViewerWithoutConnectSeesItLiveWithNoDoor() {
         let data = StoryCallStickerData(live: live(state: "live", count: 2, joinable: false), serverName: "QG", serverIconUrl: nil)

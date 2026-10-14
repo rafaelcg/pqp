@@ -16,6 +16,9 @@ struct StoryTextEditView: View {
     /// Radians, as the layer has it.
     let rotation: Double
     let canvasWidth: CGFloat
+    /// The canvas' height: the top buttons sit INSIDE the picture (as the
+    /// editor's and the pen's do), never across its edge.
+    let canvasHeight: CGFloat
     /// The text and the scale it ended on; nil when it was cancelled.
     let onDone: ((StoryTextData, Double)?) -> Void
 
@@ -30,9 +33,14 @@ struct StoryTextEditView: View {
     @State private var typed = false
 
     /// Room the line may take: under the top bar, above the controls and the
-    /// keyboard.
-    static let topRoom: CGFloat = 56
+    /// keyboard. The bar sits in the canvas' top corner, so the room starts
+    /// below the canvas' own top edge, which is not the screen's.
+    static let topBarRoom: CGFloat = 56
     static let controlsRoom: CGFloat = 130
+
+    private func topRoom(in size: CGSize) -> CGFloat {
+        max(0, (size.height - canvasHeight) / 2) + Self.topBarRoom
+    }
 
     private var fontSize: CGFloat { StoryCanvas.fontSize(for: data, canvasWidth: canvasWidth) }
 
@@ -55,19 +63,22 @@ struct StoryTextEditView: View {
                     .onChange(of: keyboard) { _, _ in shrinkToFit(in: proxy.size) }
 
                 VStack(spacing: 0) {
-                    topBar
                     Spacer(minLength: 0)
                     // The editor ignores the keyboard (the canvas must not
                     // shrink under the line being typed), so the controls ride
                     // on top of it themselves.
                     controls.padding(.bottom, max(0, keyboard - proxy.safeAreaInsets.bottom))
                 }
+                // The buttons live in the canvas' own box, in its corner.
+                topBar
+                    .frame(width: canvasWidth, height: canvasHeight, alignment: .top)
+                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
                 // Centered in the room between the top bar and the controls,
                 // never under them.
                 StoryVerticalSlider(value: scaleFraction, range: 0...1)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                     .padding(.leading, 12)
-                    .padding(.top, 56)
+                    .padding(.top, topRoom(in: proxy.size))
                     .padding(.bottom, 130 + max(0, keyboard - proxy.safeAreaInsets.bottom))
             }
         }
@@ -89,7 +100,7 @@ struct StoryTextEditView: View {
         let half = max(fontSize * scale * 1.6, blockHeight * scale / 2)
         let y = center.y - lift(in: size, half: half)
         guard keyboard > 0 else { return y }
-        return max(y, Self.topRoom + blockHeight * scale / 2)
+        return max(y, topRoom(in: size) + blockHeight * scale / 2)
     }
 
     private func lift(in size: CGSize, half: CGFloat) -> CGFloat {
@@ -103,7 +114,7 @@ struct StoryTextEditView: View {
     /// to edit it never changes its size.
     private func shrinkToFit(in size: CGSize) {
         guard typed, blockHeight > 0 else { return }
-        let room = size.height - keyboard - Self.controlsRoom - Self.topRoom
+        let room = size.height - keyboard - Self.controlsRoom - topRoom(in: size)
         guard room > 80, blockHeight * scale > room else { return }
         scale = max(StoryLayerLimits.scaleMin, room / blockHeight)
     }
@@ -129,6 +140,7 @@ struct StoryTextEditView: View {
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
                     .background(Circle().fill(.white.opacity(0.14)))
+                    .decorative()
             }
             .accessibilityLabel(Text("Cancel"))
             .accessibilityIdentifier("text.cancel")
@@ -171,6 +183,7 @@ struct StoryTextEditView: View {
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .background(Circle().fill(.white.opacity(0.14)))
+                .decorative()
         }
         .accessibilityLabel(label)
         .accessibilityIdentifier(id)
