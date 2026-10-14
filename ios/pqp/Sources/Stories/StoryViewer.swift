@@ -295,13 +295,18 @@ struct StoryViewer: View {
     /// just waits for the next beat.
     private func watchCall() async {
         guard let id = callWatchId else { return }
+        var unchanged = 0
         while !Task.isCancelled {
-            try? await Task.sleep(for: StoryCallRefresh.interval)
+            try? await Task.sleep(for: StoryCallRefresh.delay(unchanged: unchanged))
             guard !Task.isCancelled else { return }
             guard scenePhase == .active else { continue }
             guard let fresh = try? await session.api.stories(ids: [id]).first,
-                  let old = stories[id], old.call != fresh.call else { continue }
+                  let old = stories[id], old.call != fresh.call else {
+                unchanged += 1
+                continue
+            }
             stories[id]?.call = fresh.call
+            unchanged = 0
         }
     }
 
@@ -847,9 +852,20 @@ struct StoryProgressBar: View {
     }
 }
 
-/// When and how often an open story re-reads its call.
+/// When and how often an open story re-reads its call: on a backing-off
+/// schedule, so a viewer who lingers costs a few requests a minute, not a steady drip.
 enum StoryCallRefresh {
-    static let interval: Duration = .seconds(8)
+    /// The wait before the n-th read of a card that has not changed since the
+    /// last one (0 is the first): 6, 10, 15, 25, then 40 s. Most stories are
+    /// gone before the first read, a held one is read a few times a minute and
+    /// then rarely, and any change starts the schedule over.
+    static let schedule: [Int] = [6, 10, 15, 25, 40]
+    static let jitter = 0.15
+
+    static func delay(unchanged: Int, random: Double = .random(in: -1...1)) -> Duration {
+        let base = Double(schedule[min(max(unchanged, 0), schedule.count - 1)])
+        return .milliseconds(Int(base * (1 + jitter * random) * 1000))
+    }
 
     /// Only a story with a room to follow: the live roster is on the story,
     /// and a story without a call has nothing to refresh.

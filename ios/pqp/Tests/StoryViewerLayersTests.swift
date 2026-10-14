@@ -133,7 +133,10 @@ final class StoryViewerLayersTests: XCTestCase {
         let withCall = try story(call: #"{"serverId":"\#(server)","channelId":"\#(room)","channelName":"Lobby","participants":[],"count":0,"state":"live","joinable":true}"#)
         XCTAssertTrue(StoryCallRefresh.watches(withCall))
         XCTAssertFalse(StoryCallRefresh.watches(try story(call: "null")))
-        XCTAssertLessThanOrEqual(StoryCallRefresh.interval, .seconds(10), "A card that stays on 'nobody' for long reads as broken")
+        XCTAssertLessThanOrEqual(StoryCallRefresh.delay(unchanged: 0, random: 1), .seconds(7), "A card that stays on 'nobody' for long reads as broken")
+        XCTAssertEqual(StoryCallRefresh.delay(unchanged: 0, random: 0), .seconds(6))
+        XCTAssertEqual(StoryCallRefresh.delay(unchanged: 99, random: 0), .seconds(40), "It backs off to a slow beat and stays there")
+        XCTAssertGreaterThan(StoryCallRefresh.delay(unchanged: 3, random: 0), StoryCallRefresh.delay(unchanged: 1, random: 0))
     }
 
     // MARK: - The call sticker
