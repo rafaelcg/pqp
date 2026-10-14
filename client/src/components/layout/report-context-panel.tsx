@@ -142,30 +142,41 @@ function Message({
   t,
 }: {
   message: ReportContextMessage;
+  /** The reported message itself: accent background and a label. */
   mark?: boolean;
   t: Translate;
 }) {
-  const who =
+  const chip =
     message.party === "reported"
       ? t("reports.ctx.party.reported")
       : message.party === "reporter"
         ? t("reports.ctx.party.reporter")
-        : message.authorName;
+        : null;
   return (
     <li
       className={cn(
         "flex gap-2 rounded px-1.5 py-1",
         mark && "bg-signal/10 ring-1 ring-signal/40",
       )}
+      aria-current={mark ? "true" : undefined}
     >
-      <span
-        className={cn(
-          "w-20 shrink-0 truncate text-[11px] font-semibold",
-          message.party === "reported" ? "text-danger" : "text-paper-muted",
+      <span className="w-28 shrink-0">
+        <span
+          className="block truncate text-[11px] font-semibold text-paper"
+          title={message.authorTag ?? message.authorName}
+        >
+          {message.authorName}
+        </span>
+        {chip && (
+          <span className="mt-0.5 inline-block rounded bg-ink-4 px-1 py-px text-[10px] leading-tight text-paper-muted">
+            {chip}
+          </span>
         )}
-        title={message.authorName}
-      >
-        {who}
+        {mark && (
+          <span className="mt-0.5 block text-[10px] font-semibold leading-tight text-signal">
+            {t("reports.ctx.reportedMessage")}
+          </span>
+        )}
       </span>
       <span className="min-w-0 flex-1 text-xs text-paper">
         {message.isCall ? (
@@ -504,6 +515,35 @@ export function ReportContextPanel({ report, note }: ReportContextPanelProps) {
                 </p>
               )}
 
+              {context.reporter && (
+                <p
+                  className={cn(
+                    "text-[11px]",
+                    context.reporter.filed >= 5 &&
+                      context.reporter.dismissed * 2 >= context.reporter.filed
+                      ? "text-warning"
+                      : "text-paper-muted",
+                  )}
+                >
+                  {t("reports.ctx.reporterLine", {
+                    name: context.reporter.displayName,
+                    when: formatRelativeShort(context.reporter.createdAt),
+                    filed: context.reporter.filed,
+                    actioned: context.reporter.actioned,
+                    dismissed: context.reporter.dismissed,
+                  })}
+                </p>
+              )}
+
+              {context.messageServer && (
+                <p className="text-[11px] text-paper-muted">
+                  {t("reports.ctx.messageIn", {
+                    channel: context.messageServer.channelName,
+                    server: context.messageServer.name,
+                  })}
+                </p>
+              )}
+
               {context.signals && (
                 <div>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -567,9 +607,13 @@ export function ReportContextPanel({ report, note }: ReportContextPanelProps) {
                       {context.surrounding.before.map((m) => (
                         <Message key={m.id} message={m} t={t} />
                       ))}
-                      <li className="px-1.5 py-0.5 text-[11px] font-semibold text-signal">
-                        {t("reports.ctx.reportedMessage")}
-                      </li>
+                      {context.surrounding.reported && (
+                        <Message
+                          message={context.surrounding.reported}
+                          mark
+                          t={t}
+                        />
+                      )}
                       {context.surrounding.after.map((m) => (
                         <Message key={m.id} message={m} t={t} />
                       ))}
@@ -581,6 +625,28 @@ export function ReportContextPanel({ report, note }: ReportContextPanelProps) {
               {context.conversation && (
                 <section className="space-y-1.5">
                   <SectionTitle>{t("reports.ctx.conversation")}</SectionTitle>
+                  {context.conversationCounts && (
+                    <p
+                      className={cn(
+                        "text-xs",
+                        context.conversationCounts.fromReported === 0 &&
+                          context.conversationCounts.fromReporter > 0
+                          ? "font-semibold text-warning"
+                          : "text-paper-muted",
+                      )}
+                    >
+                      {t("reports.ctx.convCounts", {
+                        count: context.conversationCounts.fromReporter,
+                        reported: context.conversationCounts.fromReported,
+                        name: account?.displayName ?? "",
+                      })}
+                      {context.conversationCounts.fromReported === 0 &&
+                        context.conversationCounts.fromReporter > 0 &&
+                        ` ${t("reports.ctx.convNoReply", {
+                          name: account?.displayName ?? "",
+                        })}`}
+                    </p>
+                  )}
                   <ul className="space-y-0.5">
                     {context.conversation.map((m) => (
                       <Message key={m.id} message={m} t={t} />

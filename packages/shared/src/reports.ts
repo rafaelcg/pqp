@@ -354,7 +354,9 @@ export const reportContextMessageSchema = z.object({
   id: z.string().uuid(),
   authorId: z.string().uuid(),
   authorName: z.string(),
-  /** Which side of the report wrote it, so the panel can colour the speaker. */
+  /** `name#1234`, for a tooltip. The name is never replaced by it. */
+  authorTag: z.string().nullable(),
+  /** Which side of the report wrote it, so the panel can chip the speaker. */
   party: z.enum(["reporter", "reported", "other"]),
   body: z.string(),
   createdAt: z.string(),
@@ -461,6 +463,46 @@ export const reportContextSchema = z.object({
    */
   conversation: z.array(reportContextMessageSchema).nullable(),
 
+  /**
+   * Whole-thread counts of TYPED messages (call records excluded) for that
+   * same conversation, not just the 20 shown. "11 from the reporter, 0 from
+   * the reported account" is the line that says a report may be in bad faith.
+   */
+  conversationCounts: z
+    .object({
+      fromReporter: z.number().int().nonnegative(),
+      fromReported: z.number().int().nonnegative(),
+    })
+    .nullable(),
+
+  /**
+   * Instance lens, human-filed report only: who filed it, to spot a serial
+   * reporter. Counts every report they have filed on the instance.
+   */
+  reporter: z
+    .object({
+      displayName: z.string(),
+      tag: z.string().nullable(),
+      createdAt: z.string(),
+      filed: z.number().int().nonnegative(),
+      actioned: z.number().int().nonnegative(),
+      dismissed: z.number().int().nonnegative(),
+    })
+    .nullable(),
+
+  /**
+   * Where a reported MESSAGE lives, whatever queue the report was routed to.
+   * A `minor_sexual` report goes to the instance queue by design, with no
+   * server on the row, but the message still belongs to one.
+   */
+  messageServer: z
+    .object({
+      id: z.string().uuid(),
+      name: z.string(),
+      channelName: z.string(),
+    })
+    .nullable(),
+
   /** Newest first. Every server for the instance lens, one for the server lens. */
   serverMessages: z.array(reportContextServerMessageSchema),
 
@@ -480,6 +522,8 @@ export const reportContextSchema = z.object({
    */
   surrounding: z
     .object({
+      /** The reported message itself, in its place between the two lists. */
+      reported: reportContextMessageSchema.nullable(),
       before: z.array(reportContextMessageSchema),
       after: z.array(reportContextMessageSchema),
       withheld: z.enum(["group", "no_access"]).nullable(),
