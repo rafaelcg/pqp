@@ -104,8 +104,12 @@ fun StoryCanvas(
     var assetsReady by remember(story.id) { mutableStateOf(assets.isEmpty()) }
     androidx.compose.runtime.LaunchedEffect(story.id) {
         if (!assetsReady) {
-            StoryAssets.load(context, assets)
-            assetsReady = true
+            // Whatever happens to a picture, the story is shown: one that failed simply draws the way it always did.
+            try {
+                StoryAssets.load(context, assets)
+            } finally {
+                assetsReady = true
+            }
         }
     }
     // The base is there when its first frame is (a picture decoded, a clip rendering); a card of words has none.

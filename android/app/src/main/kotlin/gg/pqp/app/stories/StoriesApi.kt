@@ -163,7 +163,8 @@ private suspend fun ApiClient.putStoryBody(upload: StoryUpload, contentType: Str
                     if (done.isSuccessful) {
                         continuation.resume(Unit)
                     } else {
-                        continuation.resumeWithException(IOException("Upload refused with HTTP ${done.code}"))
+                        // An answer from storage (an expired or refused signature) is a refusal, not a dropped link.
+                        continuation.resumeWithException(gg.pqp.app.core.ApiException(done.code, "Upload refused with HTTP ${done.code}"))
                     }
                 }
             }
