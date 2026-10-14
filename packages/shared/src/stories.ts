@@ -369,6 +369,13 @@ export const storiesConfigSchema = z.object({
    * editor instead. Image and drawing layers also need `mediaEnabled`.
    */
   layersMax: z.number().int().nonnegative().optional(),
+  /**
+   * Whether `POST /api/stories/uploads` is on (`stories_eager_uploads`, a runtime
+   * kill switch, on by default) and storage is configured. Absent from a server
+   * that predates eager uploads, which reads as off. With it off, or absent, a
+   * client uploads the way it always did: create, PUT, publish.
+   */
+  eagerUploads: z.boolean().optional(),
 });
 export type StoriesConfig = z.infer<typeof storiesConfigSchema>;
 

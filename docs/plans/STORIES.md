@@ -1349,7 +1349,7 @@ moment the author has it, and Post only creates and publishes.
   `STORY_UPLOADS_OUTSTANDING_MAX` (24) unclaimed uploads per account.
 - `DELETE /api/stories/uploads/:uploadId` answers 204: the upload is marked
   discarded (nothing can claim it any more) and the object goes now, best effort.
-  The row stays discarded for half an hour and the sweep deletes the object once
+  The row stays discarded for two hours and the sweep deletes the object once
   more before it drops the row, because an aborted browser PUT can still land
   after the DELETE and a row-less object would never be named again. Another
   account's id and an unknown one are the same 404; a repeat and a claimed
@@ -1381,6 +1381,11 @@ moment the author has it, and Post only creates and publishes.
   tombstone that retries the source delete.
 - Counters on `GET /api/admin/metrics` `stories.process`: `uploadsMinted`,
   `uploadsClaimed`, `uploadsDiscarded`, `uploadsSwept`.
+- RUNTIME KILL SWITCH: the flag `stories_eager_uploads` (global, on by default,
+  flipped from the dashboard). Off, `POST /api/stories/uploads` answers the 404 a
+  server that predates it gives, and `GET /api/stories/config` says
+  `eagerUploads: false` (absent on an older server, which reads as off). Every
+  client then uses the plain flow, which is the whole fallback.
 
 ## Research sources
 

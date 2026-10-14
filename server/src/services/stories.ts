@@ -295,6 +295,7 @@ export async function storiesConfig(serverId: string | null): Promise<StoriesCon
     maxBytes: STORY_MAX_BYTES,
     ttlHours: STORY_TTL_HOURS,
     layersMax: STORY_LAYERS_MAX,
+    eagerUploads: mediaEnabled && isEnabled("stories_eager_uploads"),
   };
 }
 
@@ -1725,6 +1726,11 @@ export async function createStoryUpload(
   if (!isStorageConfigured()) {
     throw new StoryError("storage_off", "Media uploads are not configured");
   }
+  // The kill switch: the same 404 a server that predates the route gives, which
+  // every client already answers with the plain flow (create, PUT, publish).
+  if (!isEnabled("stories_eager_uploads")) {
+    throw new StoryError("not_found", "Not found");
+  }
   const poster = await loadPoster(user.id);
   if (!poster) {
     throw new StoryError("not_found", "Not found");
@@ -1796,7 +1802,7 @@ async function storiesAvailableTo(userId: string): Promise<boolean> {
  * discarded FIRST, which is what stops a create from claiming it, and the
  * object goes now, best effort.
  *
- * The row stays, discarded, until the sweep removes it half an hour on. That is
+ * The row stays, discarded, until the sweep removes it two hours on. That is
  * deliberate: an aborted browser PUT can still land after this delete (the
  * presigned URL lives 15 minutes), and with the row gone nothing would ever
  * name that object again. The sweep deletes the object a second time, once the
@@ -1948,11 +1954,20 @@ async function prepareEagerUploads(
   // fails, leaves a row that names every object it might have made, and the
   // sweep deletes them with it. (A database write, never the network.) The same
   // statement refuses an upload that was claimed, discarded or swept meanwhile.
+  //
+  // Not while the sweep has the row (`delete_claimed_at`): it has already read
+  // the keys it will delete, and a destination added after that would never be
+  // found. The row lock makes the two statements strictly ordered, so whichever
+  // comes second sees the other. The list is bounded (refused attempts that
+  // cleaned up after themselves are taken out again, see `discardKeys`), so a
+  // loop of refused creates cannot grow what the sweep has to delete.
   const intents = await getPool().query(
     `UPDATE story_uploads u SET copy_keys = array_append(u.copy_keys, c.key)
        FROM unnest($1::uuid[], $2::text[]) AS c(id, key)
       WHERE u.id = c.id AND u.user_id = $3
-        AND u.claimed_story_id IS NULL AND u.discarded_at IS NULL`,
+        AND u.claimed_story_id IS NULL AND u.discarded_at IS NULL
+        AND u.delete_claimed_at IS NULL
+        AND cardinality(u.copy_keys) < ${COPY_KEYS_MAX}`,
     [[...destinations.keys()], [...destinations.values()], userId],
   );
   if ((intents.rowCount ?? 0) !== wanted.length) {
@@ -2014,18 +2029,37 @@ async function prepareEagerUploads(
  * (written before the copy), which is what the sweep deletes it by if this
  * fails or the process dies first; the log says so when it happens.
  */
-async function discardKeys(keys: readonly string[]): Promise<void> {
+async function discardKeys(
+  keys: readonly string[],
+  options: { forget: boolean } = { forget: true },
+): Promise<void> {
   await Promise.all(
-    keys.map((key) =>
-      deleteObject(key).catch((error: unknown) => {
+    keys.map(async (key) => {
+      try {
+        await deleteObject(key);
+      } catch (error) {
         console.error(
           `[stories] leaked ${key}:`,
           error instanceof Error ? error.message : error,
         );
-      }),
-    ),
+        return;
+      }
+      if (options.forget) {
+        // Gone for certain: the upload row need not remember it for the sweep any more.
+        await getPool()
+          .query(
+            `UPDATE story_uploads SET copy_keys = array_remove(copy_keys, $1)
+              WHERE $1 = ANY(copy_keys) AND claimed_key IS DISTINCT FROM $1`,
+            [key],
+          )
+          .catch(() => undefined);
+      }
+    }),
   );
 }
+
+/** Refused attempts one upload remembers at most (each is one key for the sweep to delete). */
+const COPY_KEYS_MAX = 8;
 
 export async function createStory(user: DbUser, input: CreateStoryParsed): Promise<CreatedStory> {
   if (input.requestId) {
@@ -2191,7 +2225,7 @@ export async function createStory(user: DbUser, input: CreateStoryParsed): Promi
     bumpStoryStat("uploadsClaimed", eager.pairs.length);
     // The story owns its copy; the source has no further use. The sweep takes
     // what this misses (a claimed row is deleted with its object after an hour).
-    void discardKeys(eager.sources);
+    void discardKeys(eager.sources, { forget: false });
   }
   return {
     story,
