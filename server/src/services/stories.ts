@@ -1753,7 +1753,7 @@ export async function createStoryUpload(
     ]);
     const open = await client.query<{ n: string }>(
       `SELECT COUNT(*)::text AS n FROM story_uploads
-        WHERE user_id = $1 AND claimed_story_id IS NULL`,
+        WHERE user_id = $1 AND claimed_story_id IS NULL AND discarded_at IS NULL`,
       [user.id],
     );
     if (Number(open.rows[0]?.n ?? 0) >= STORY_UPLOADS_OUTSTANDING_MAX) {
@@ -1792,23 +1792,35 @@ async function storiesAvailableTo(userId: string): Promise<boolean> {
 
 /**
  * `DELETE /api/stories/uploads/:uploadId`: the author threw the file away
- * (discarded the draft, removed the photo, re-trimmed). The object goes now,
- * best effort; when storage fails the row stays and the sweep finishes it.
+ * (discarded the draft, removed the photo, re-trimmed). The upload is marked
+ * discarded FIRST, which is what stops a create from claiming it, and the
+ * object goes now, best effort.
+ *
+ * The row stays, discarded, until the sweep removes it half an hour on. That is
+ * deliberate: an aborted browser PUT can still land after this delete (the
+ * presigned URL lives 15 minutes), and with the row gone nothing would ever
+ * name that object again. The sweep deletes the object a second time, once the
+ * URL has certainly expired, and only then the row.
+ *
  * Somebody else's upload and one that does not exist answer the same not
- * found. An upload a story already claimed is a no-op: that story owns its
- * own copy, and deleting a story is what removes it.
+ * found. A repeat is harmless. An upload a story already claimed is a no-op:
+ * that story owns its own copy, and deleting a story is what removes it.
  */
 export async function deleteStoryUpload(userId: string, uploadId: string): Promise<boolean> {
-  const found = await getPool().query<{ storage_key: string; claimed_story_id: string | null }>(
-    `SELECT storage_key, claimed_story_id FROM story_uploads WHERE id = $1 AND user_id = $2`,
+  const marked = await getPool().query<{ storage_key: string }>(
+    `UPDATE story_uploads SET discarded_at = COALESCE(discarded_at, now())
+      WHERE id = $1 AND user_id = $2 AND claimed_story_id IS NULL
+      RETURNING storage_key`,
     [uploadId, userId],
   );
-  const row = found.rows[0];
+  const row = marked.rows[0];
   if (!row) {
-    return false;
-  }
-  if (row.claimed_story_id) {
-    return true;
+    const exists = await getPool().query(
+      `SELECT 1 FROM story_uploads WHERE id = $1 AND user_id = $2`,
+      [uploadId, userId],
+    );
+    // Claimed by a story: nothing to throw away. Anything else: not found.
+    return (exists.rowCount ?? 0) > 0;
   }
   try {
     await deleteObject(row.storage_key);
@@ -1819,9 +1831,6 @@ export async function deleteStoryUpload(userId: string, uploadId: string): Promi
     );
     return true;
   }
-  await getPool().query(`DELETE FROM story_uploads WHERE id = $1 AND claimed_story_id IS NULL`, [
-    uploadId,
-  ]);
   bumpStoryStat("uploadsDiscarded");
   return true;
 }
@@ -1894,8 +1903,9 @@ async function prepareEagerUploads(
     content_type: string;
     byte_size: number;
     claimed_story_id: string | null;
+    discarded_at: Date | null;
   }>(
-    `SELECT id, user_id, kind, storage_key, content_type, byte_size, claimed_story_id
+    `SELECT id, user_id, kind, storage_key, content_type, byte_size, claimed_story_id, discarded_at
        FROM story_uploads WHERE id = ANY($1::uuid[])`,
     [wanted.map((entry) => entry.id)],
   );
@@ -1903,7 +1913,7 @@ async function prepareEagerUploads(
   for (const entry of wanted) {
     const row = rows.get(entry.id);
     // Not there and not yours are one answer: an id is never a probe.
-    if (!row || row.user_id !== userId) {
+    if (!row || row.user_id !== userId || row.discarded_at) {
       throw new StoryError("not_found", "Upload not found");
     }
     if (row.claimed_story_id) {
@@ -2090,7 +2100,8 @@ export async function createStory(user: DbUser, input: CreateStoryParsed): Promi
         `UPDATE story_uploads u
             SET claimed_story_id = $1, claimed_at = now(), claimed_key = c.key
            FROM unnest($2::uuid[], $3::text[]) AS c(id, key)
-          WHERE u.id = c.id AND u.user_id = $4 AND u.claimed_story_id IS NULL`,
+          WHERE u.id = c.id AND u.user_id = $4
+            AND u.claimed_story_id IS NULL AND u.discarded_at IS NULL`,
         [storyId, eager.pairs.map((pair) => pair.id), eager.pairs.map((pair) => pair.key), user.id],
       );
       if ((claimed.rowCount ?? 0) !== eager.pairs.length) {

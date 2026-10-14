@@ -249,7 +249,11 @@ async function sweepStoryUploads(): Promise<{ swept: number; failed: number }> {
            AND (
              (claimed_story_id IS NULL
               AND (user_id IS NULL
-                   OR created_at < now() - make_interval(hours => $1)))
+                   OR created_at < now() - make_interval(hours => $1)
+                   -- Thrown away by the author: the object went at the DELETE, and
+                   -- once the 15 minute PUT URL is surely dead it goes again.
+                   OR (discarded_at IS NOT NULL
+                       AND discarded_at < now() - interval '30 minutes')))
              OR (claimed_story_id IS NOT NULL AND claimed_at < now() - interval '1 hour')
            )
          ORDER BY created_at ASC

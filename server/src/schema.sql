@@ -6446,8 +6446,14 @@ CREATE TABLE IF NOT EXISTS story_uploads (
   -- The story-side key the claim copied this object to.
   claimed_key       TEXT,
   -- Lease for the sweep's delete, same idea as `stories.media_delete_claimed_at`.
-  delete_claimed_at TIMESTAMPTZ
+  delete_claimed_at TIMESTAMPTZ,
+  -- The author threw it away (`DELETE /api/stories/uploads/:id`). Nothing may
+  -- claim it from here on. The row outlives the object by half an hour so the
+  -- sweep can delete the object once more, after the presigned PUT URL has
+  -- expired: an aborted browser PUT can still land after the first delete.
+  discarded_at      TIMESTAMPTZ
 );
+ALTER TABLE story_uploads ADD COLUMN IF NOT EXISTS discarded_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_story_uploads_user_open
   ON story_uploads (user_id) WHERE claimed_story_id IS NULL;

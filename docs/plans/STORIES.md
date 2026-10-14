@@ -1347,9 +1347,13 @@ moment the author has it, and Post only creates and publishes.
   photo or an H.264 MP4, 25 MB), refused the same way (video off, stories off, house
   cast). 20 mints in a burst and 30 a minute per process, and at most
   `STORY_UPLOADS_OUTSTANDING_MAX` (24) unclaimed uploads per account.
-- `DELETE /api/stories/uploads/:uploadId` answers 204: the object goes now (best
-  effort), then the row. Another account's id and an unknown one are the same 404.
-  A claimed upload is a no-op.
+- `DELETE /api/stories/uploads/:uploadId` answers 204: the upload is marked
+  discarded (nothing can claim it any more) and the object goes now, best effort.
+  The row stays discarded for half an hour and the sweep deletes the object once
+  more before it drops the row, because an aborted browser PUT can still land
+  after the DELETE and a row-less object would never be named again. Another
+  account's id and an unknown one are the same 404; a repeat and a claimed
+  upload are a harmless 204.
 - `POST /api/stories` takes `media.uploadId` and, per photo or drawing layer,
   `upload.uploadId`. The declared type and size must be the upload's. Before the
   transaction (CLAUDE.md: nothing between BEGIN and COMMIT touches the network)

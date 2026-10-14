@@ -741,22 +741,62 @@ describeDb("stories: eager uploads", () => {
   // ------------------------------------------------------------------ delete
 
   describe("DELETE /api/stories/uploads/:uploadId", () => {
-    it("removes the object and the row, and answers 204", async () => {
+    const discardedAt = async (id: string) =>
+      (
+        await getPool().query<{ discarded_at: Date | null }>(
+          `SELECT discarded_at FROM story_uploads WHERE id = $1`,
+          [id],
+        )
+      ).rows[0]?.discarded_at ?? null;
+
+    it("deletes the object now, marks the row discarded, and answers 204 (a repeat too)", async () => {
       const id = await upload("base", "image/jpeg", JPEG);
       const key = await keyOf(id);
       expect((await call("DELETE", `/api/stories/uploads/${id}`)).status).toBe(204);
       expect(storage.deleted).toEqual([key]);
       expect(storage.objects.has(key)).toBe(false);
-      expect(await uploadRow(id)).toBeUndefined();
+      expect(await discardedAt(id)).not.toBeNull();
       expect((await storiesMetrics()).process.uploadsDiscarded).toBe(1);
-      // Gone is gone: a repeat is a 404 a fire-and-forget client ignores.
-      expect((await call("DELETE", `/api/stories/uploads/${id}`)).status).toBe(404);
+      // Idempotent: a retried or doubled DELETE is harmless.
+      expect((await call("DELETE", `/api/stories/uploads/${id}`)).status).toBe(204);
     });
 
     it("works for an upload whose PUT never finished (no object yet)", async () => {
       const minted = await mint("layer", "image/png");
       expect((await call("DELETE", `/api/stories/uploads/${minted.body.uploadId}`)).status).toBe(204);
-      expect(await uploadRow(minted.body.uploadId)).toBeUndefined();
+      expect(await discardedAt(minted.body.uploadId)).not.toBeNull();
+    });
+
+    it("a discarded upload can no longer be claimed, and no longer counts against the cap", async () => {
+      const id = await upload("base", "image/jpeg", JPEG);
+      expect((await call("DELETE", `/api/stories/uploads/${id}`)).status).toBe(204);
+      // A late PUT lands after the DELETE: the object is back, but nothing may claim it.
+      storage.objects.set(await keyOf(id), { contentLength: 4000, contentType: "image/jpeg", prefix: JPEG });
+      expect((await call("POST", "/api/stories", imageStory(id))).status).toBe(404);
+      expect(await storyCount()).toBe(0);
+      await getPool().query(
+        `INSERT INTO story_uploads (id, user_id, kind, storage_key, content_type, byte_size, discarded_at)
+         SELECT gen_random_uuid(), $1, 'layer', 'stories/x/uploads/' || g, 'image/png', 10, now()
+           FROM generate_series(1, $2) g`,
+        [alice.id, STORY_UPLOADS_OUTSTANDING_MAX],
+      );
+      expect((await mint("layer", "image/png")).status).toBe(201);
+    });
+
+    it("an object that lands after the DELETE is deleted again by the sweep, then the row goes", async () => {
+      const id = await upload("base", "image/jpeg", JPEG);
+      const key = await keyOf(id);
+      await call("DELETE", `/api/stories/uploads/${id}`);
+      storage.objects.set(key, { contentLength: 4000, contentType: "image/jpeg", prefix: JPEG });
+      storage.deleted.length = 0;
+      // Inside the half hour the row is still there to find the object by.
+      expect((await sweepStories()).uploadsSwept).toBe(0);
+      expect(await uploadRow(id)).toBeDefined();
+      await getPool().query(`UPDATE story_uploads SET discarded_at = now() - interval '31 minutes'`);
+      expect((await sweepStories()).uploadsSwept).toBe(1);
+      expect(storage.deleted).toEqual([key]);
+      expect(storage.objects.has(key)).toBe(false);
+      expect(await uploadRow(id)).toBeUndefined();
     });
 
     it("is not somebody else's to delete", async () => {
@@ -769,14 +809,14 @@ describeDb("stories: eager uploads", () => {
       expect(storage.objects.has(await keyOf(id))).toBe(true);
     });
 
-    it("a storage failure keeps the row, so the sweep finishes it", async () => {
+    it("a storage failure still discards the upload, and the sweep finishes the delete", async () => {
       const id = await upload("base", "image/jpeg", JPEG);
       storage.failDeletes = true;
       expect((await call("DELETE", `/api/stories/uploads/${id}`)).status).toBe(204);
-      expect(await uploadRow(id)).toBeDefined();
+      expect(await discardedAt(id)).not.toBeNull();
       storage.failDeletes = false;
       const key = await keyOf(id);
-      await getPool().query(`UPDATE story_uploads SET created_at = now() - interval '7 hours'`);
+      await getPool().query(`UPDATE story_uploads SET discarded_at = now() - interval '31 minutes'`);
       await sweepStories();
       expect(await uploadRow(id)).toBeUndefined();
       expect(storage.objects.has(key)).toBe(false);
