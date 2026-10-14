@@ -251,12 +251,16 @@ struct StoryEditorView: View {
             canvas: canvas, previews: model.previews,
             call: { layer in
                 guard case .call(let serverId, let channelId) = layer.content, let info = model.callInfo else { return nil }
-                let live = callLive[channelId]
-                return StoryCallStickerData(
-                    roomName: live?.channelName ?? info.roomName, serverName: info.serverName, serverId: serverId,
-                    serverIconUrl: info.serverIconUrl, participants: live?.participants ?? [],
-                    count: live?.count ?? 0, state: .live, joinable: true, isPreview: true
+                // The room's own state when it is known (the same mapping the viewer
+                // uses), a live, empty room until the first read lands.
+                var data = callLive[channelId].map {
+                    StoryCallStickerData(live: $0, serverName: info.serverName, serverIconUrl: info.serverIconUrl)
+                } ?? StoryCallStickerData(
+                    roomName: info.roomName, serverName: info.serverName, serverId: serverId,
+                    serverIconUrl: info.serverIconUrl, participants: [], count: 0, state: .live, joinable: true
                 )
+                data.isPreview = true
+                return data
             },
             reduceMotion: reduceMotion
         )
@@ -537,7 +541,7 @@ struct StoryEditorView: View {
         drawing = false
         // Nothing drawn this time (cancelled, or Done on what the pen opened
         // with): no undo entry, and the order the pen moved goes back.
-        guard let strokes, model.drawingLayer == nil || strokes.dataRepresentation() != model.drawing.dataRepresentation() else {
+        guard let strokes else {
             model.endDrawingUnchanged()
             return
         }

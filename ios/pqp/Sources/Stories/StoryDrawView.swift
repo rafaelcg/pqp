@@ -74,9 +74,13 @@ enum StoryDrawingExport {
 struct StoryDrawView: View {
     let canvas: CGSize
     let initial: PKDrawing
+    /// The strokes when the pen put something down, erased something or undid
+    /// it; nil when nothing was touched (cancelled, or Done with no stroke), so
+    /// the editor never has to compare two serialised drawings to know.
     let onDone: (PKDrawing?) -> Void
 
     @State private var drawing: PKDrawing
+    @State private var edited = false
     @State private var pen: StoryPen = .pen
     @State private var color: StoryTextColor = .white
     @State private var size = 0.35
@@ -100,7 +104,7 @@ struct StoryDrawView: View {
             // the strokes and the tools, in the same frame as the canvas. The
             // strokes are the BOTTOM of the stack, so the top bar and the tools
             // always win a touch that lands where they overlap it.
-            StoryPencilCanvas(drawing: $drawing, tool: tool, controller: controller)
+            StoryPencilCanvas(drawing: $drawing, tool: tool, controller: controller, onEdit: { edited = true })
                 .frame(width: canvas.width, height: canvas.height)
                 .accessibilityLabel(Text("Drawing canvas"))
                 .accessibilityIdentifier("draw.canvas")
@@ -149,7 +153,7 @@ struct StoryDrawView: View {
             .accessibilityLabel(Text("Undo"))
             .accessibilityIdentifier("draw.undo")
             Spacer()
-            Button { onDone(drawing) } label: {
+            Button { onDone(edited ? drawing : nil) } label: {
                 Text("Done")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(Palette.inkDeep)
@@ -233,6 +237,7 @@ private struct StoryPencilCanvas: UIViewRepresentable {
     @Binding var drawing: PKDrawing
     let tool: PKTool
     let controller: StoryDrawController
+    let onEdit: () -> Void
 
     func makeUIView(context: Context) -> PKCanvasView {
         let view = PKCanvasView()
@@ -264,6 +269,7 @@ private struct StoryPencilCanvas: UIViewRepresentable {
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             parent.drawing = canvasView.drawing
+            parent.onEdit()
         }
     }
 }
