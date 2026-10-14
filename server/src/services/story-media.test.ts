@@ -133,6 +133,52 @@ describe.skipIf(!hasFfmpeg)("the real ffmpeg seam", () => {
     }
   });
 
+  it("reads a QuickTime movie with H.264 and AAC, the way an iPhone's camera roll hands one over", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pqp-story-test-"));
+    try {
+      const path = join(dir, "clip.mov");
+      const made = spawnSync("ffmpeg", [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=320x240:rate=10",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440",
+        "-t",
+        "2",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-f",
+        "mov",
+        "-y",
+        path,
+      ]);
+      expect(made.status).toBe(0);
+      const head = new Uint8Array((await readFile(path)).subarray(0, 12));
+      // ffmpeg's `mov` writer brands it "qt  ": the server's sniffer takes it as video.
+      expect(String.fromCharCode(...head.subarray(8, 12))).toBe("qt  ");
+      expect(sniffStoryMediaType(head)).toBe("video/mp4");
+      const probed = await realStoryVideoTools.probe(path);
+      expect(probed.videoCodec).toBe("h264");
+      expect(probed.durationMs).toBeGreaterThan(1500);
+      expect([probed.width, probed.height]).toEqual([320, 240]);
+      const frame = join(dir, "frame.jpg");
+      await realStoryVideoTools.frame(path, 1, frame);
+      expect([...(await readFile(frame)).subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("a file that is not a video is refused by the probe", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pqp-story-test-"));
     try {

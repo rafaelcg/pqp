@@ -321,7 +321,8 @@ describe("sniffing and pacing", () => {
     expect(sniffStoryMediaType(ftyp("heic"))).toBeNull();
     expect(sniffStoryMediaType(ftyp("mif1"))).toBeNull();
     expect(sniffStoryMediaType(ftyp("avif"))).toBeNull();
-    expect(sniffStoryMediaType(ftyp("qt  "))).toBeNull();
+    // A QuickTime movie (.mov) is a video; the video job still refuses anything but H.264.
+    expect(sniffStoryMediaType(ftyp("qt  "))).toBe("video/mp4");
     expect(sniffStoryMediaType(new TextEncoder().encode("GIF89a......"))).toBeNull();
   });
 
