@@ -3,6 +3,7 @@ package gg.pqp.app.core
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Handler
 import android.os.Looper
 
@@ -31,7 +32,15 @@ object NetworkReconnect {
         val main = Handler(Looper.getMainLooper())
         runCatching {
             manager.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) {
+                override fun onAvailable(network: Network) = nudge()
+
+                // A network is often available a moment before the system has checked that it reaches the internet:
+                // the second cue is the check passing.
+                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                    if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) nudge()
+                }
+
+                private fun nudge() {
                     // The client keeps its state on the main thread.
                     main.post {
                         if (shouldRetry(session.realtime.state.value)) session.realtime.retryNow()

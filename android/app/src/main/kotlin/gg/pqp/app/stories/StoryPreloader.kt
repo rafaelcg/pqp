@@ -283,11 +283,11 @@ class StoryPreloader(
 
     private suspend fun preload(story: Story) {
         // The face first (it is on the screen at once), then the picture, then the rest.
-        story.author.avatarUrl?.let { image(absolute(it), null) }
+        story.author.avatarUrl?.let { ancillary { image(absolute(it), null) } }
         val media = story.media
         when {
             story.kind == "video" && media != null -> {
-                media.posterUrl?.let { image(absolute(it), StoryPreloadRules.posterKey(story.id)) }
+                media.posterUrl?.let { ancillary { image(absolute(it), StoryPreloadRules.posterKey(story.id)) } }
                 if (StoryPreloadRules.videoAllowed(restrictBackgroundStatus())) {
                     StoryVideoCache.prefetch(appContext, StoryPreloadRules.videoKey(story.id), absolute(media.url))
                 }
@@ -303,6 +303,17 @@ class StoryPreloader(
                     else -> Unit
                 }
             }
+        }
+    }
+
+    /** A face or a poster that cannot be fetched does not stop the story's own picture from being fetched. */
+    private suspend fun ancillary(block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "preload extra failed: ${e.message}")
         }
     }
 
