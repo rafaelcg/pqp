@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ForumPostSummary, ForumTag } from "@pqp/shared";
 import { loadLocale, setActiveCatalogue } from "@/lib/i18n";
-import { ForumPostCard } from "./forum-post-card";
+import { ForumPinnedTile, ForumPostCard } from "./forum-post-card";
 
 const tag = (n: number, name: string, moderated = false): ForumTag => ({
   id: `00000000-0000-4000-8000-00000000000${n}`,
@@ -77,26 +77,36 @@ describe("ForumPostCard", () => {
     expect(html).toContain("+5 new");
   });
 
-  it("draws a phone's pinned post as one line: pin, title, status glyphs", () => {
-    const html = render({ pinnedRow: true, narrow: true });
+  it("draws a pinned post as a small tile: pin, title, status glyphs", () => {
+    const html = renderToStaticMarkup(
+      <ForumPinnedTile
+        post={POST}
+        unread={{ kind: "read" }}
+        href="/app/server/s/channel/f/post/p"
+        tabIndex={0}
+        onOpen={() => {}}
+        onFocus={() => {}}
+      />,
+    );
     expect(html).toContain("data-forum-pinned-row");
     // Status still named, as glyphs; no preview, tags or numbers.
     expect(html).toContain('aria-label="Closed"');
     expect(html).toContain('aria-label="Resolved"');
     expect(html).not.toContain("Desde ontem");
     expect(html).not.toContain("+2");
-    expect(html).not.toContain("lari_gg:");
-    // The whole row is still the post's link, with the full accessible name.
+    // The whole tile is still the post's link, with the full accessible name.
     expect(html).toMatch(/<a [^>]*aria-label="Valorant fecha sozinho, /);
   });
 
   it("draws the tiny avatar's monogram on a disc", () => {
-    const html = render({ pinnedRow: true });
-    expect(html).toMatch(/rounded-full[^"]*bg-surface-3[^"]*">L</);
+    expect(render()).toMatch(/rounded-full[^"]*bg-surface-3[^"]*">L</);
   });
 
-  it("says Novo with a word, not only a colour", () => {
-    expect(render({ unread: { kind: "new" } })).toContain(">New<");
+  it("marks unread with a shape and a heavier title, and says so in the name", () => {
+    const html = render({ unread: { kind: "new" } });
+    expect(html).toContain("data-forum-unread-dot");
+    expect(html).toMatch(/aria-label="[^"]*, new"/);
+    expect(render({ unread: { kind: "read" } })).not.toContain("data-forum-unread-dot");
   });
 
   it("draws no thumbnail box when the opening message has no image", () => {
@@ -114,14 +124,24 @@ describe("ForumPostCard", () => {
 });
 
 describe("ForumPostCard, the three lines", () => {
-  it("keeps the author and the start of the post beside an open post, on one line", () => {
-    const full = render();
-    const compact = render({ compact: true });
-    expect(full).toContain("Desde ontem o jogo abre e fecha.");
-    expect(full).toContain("line-clamp-2");
-    expect(compact).toContain("lari_gg:");
-    expect(compact).toContain("Desde ontem o jogo abre e fecha.");
-    expect(compact).toContain("line-clamp-1");
+  it("draws a row as the title over one line of facts, without the preview", () => {
+    const card = render();
+    const row = render({ variant: "row" });
+    expect(card).toContain("Desde ontem o jogo abre e fecha.");
+    expect(card).toContain("line-clamp-2");
+    expect(row).toContain('data-forum-variant="row"');
+    expect(row).toContain(">lari_gg<");
+    expect(row).toContain("Bug, Games +3");
+    expect(row).not.toContain("Desde ontem o jogo abre e fecha.");
+    // The row keeps its status, as named glyphs.
+    expect(row).toContain('aria-label="Resolved"');
+  });
+
+  it("draws a gallery tile picture first, and the opening text when there is none", () => {
+    const withPicture = render({ variant: "tile", post: { ...POST, thumbnailUrl: "https://x/y.png" } });
+    expect(withPicture).toContain('data-forum-thumbnail="tile"');
+    const textOnly = render({ variant: "tile" });
+    expect(textOnly).toContain("Desde ontem o jogo abre e fecha.");
   });
 
   it("draws the title heavier than the rest of the card, read or not", () => {
@@ -131,12 +151,21 @@ describe("ForumPostCard, the three lines", () => {
 
   it("names a post that is one picture or one clip, and counts several files", () => {
     const filesOnly = { ...POST, preview: null, openingKind: "attachment" as const };
+    // One picture or one clip: the picture itself says it, no "Image" line.
+    const picture = render({
+      post: { ...filesOnly, attachmentCount: 1, thumbnailUrl: "https://x/y.png" },
+    });
+    expect(picture).toContain('data-forum-thumbnail="media"');
+    expect(picture).not.toContain(">Image<");
+    const clip = render({
+      post: { ...filesOnly, attachmentCount: 1, thumbnailVideoUrl: "https://x/y.mp4" },
+    });
+    expect(clip).toContain('data-forum-thumbnail="media"');
+    expect(clip).not.toContain(">Video<");
+    // Several pictures say how many on the picture.
     expect(
-      render({ post: { ...filesOnly, attachmentCount: 1, thumbnailUrl: "https://x/y.png" } }),
-    ).toMatch(/data-forum-preview-icon="image"[^>]*>.*<\/svg>Image</);
-    expect(
-      render({ post: { ...filesOnly, attachmentCount: 1, thumbnailVideoUrl: "https://x/y.mp4" } }),
-    ).toMatch(/data-forum-preview-icon="video"[^>]*>.*<\/svg>Video</);
+      render({ post: { ...filesOnly, attachmentCount: 4, thumbnailUrl: "https://x/y.png" } }),
+    ).toContain(">1/4<");
     expect(render({ post: { ...filesOnly, attachmentCount: 3 } })).toContain("3 files");
     // No emoji in the copy: the icon is drawn, and several files have none.
     expect(render({ post: { ...filesOnly, attachmentCount: 3 } })).not.toContain("data-forum-preview-icon");
