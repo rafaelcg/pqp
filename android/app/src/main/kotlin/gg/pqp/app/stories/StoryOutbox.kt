@@ -365,10 +365,9 @@ class StoryOutbox(
                     val refreshGate = Semaphore(REFRESHES_AT_ONCE)
                     draft.refreshKeys.distinct().map { key ->
                         async {
-                            refreshGate.withPermit {
-                                var attempts = 0
-                                while (!store.refreshNow(key) && ++attempts < REFRESH_ATTEMPTS) delay(REFRESH_RETRY_MS)
-                            }
+                            var attempts = 0
+                            // The permit is held for the request, not for the wait before the next try.
+                            while (!refreshGate.withPermit { store.refreshNow(key) } && ++attempts < REFRESH_ATTEMPTS) delay(REFRESH_RETRY_MS)
                         }
                     }.awaitAll()
                 }
