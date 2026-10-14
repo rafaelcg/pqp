@@ -472,6 +472,8 @@ export const reportContextSchema = z.object({
     .object({
       fromReporter: z.number().int().nonnegative(),
       fromReported: z.number().int().nonnegative(),
+      /** The newest 1000 messages were counted and the thread is longer. */
+      capped: z.boolean(),
     })
     .nullable(),
 

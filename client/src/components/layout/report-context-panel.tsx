@@ -645,6 +645,8 @@ export function ReportContextPanel({ report, note }: ReportContextPanelProps) {
                         ` ${t("reports.ctx.convNoReply", {
                           name: account?.displayName ?? "",
                         })}`}
+                      {context.conversationCounts.capped &&
+                        ` ${t("reports.ctx.convCapped")}`}
                     </p>
                   )}
                   <ul className="space-y-0.5">

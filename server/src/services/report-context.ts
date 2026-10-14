@@ -49,6 +49,8 @@ const SERVER_MESSAGE_LIMIT = 20;
 /** How far back the server-message read looks. Bounds the index walk. */
 const SERVER_MESSAGE_WINDOW_DAYS = 90;
 const CONVERSATION_LIMIT = 20;
+/** How many of a thread's newest messages the per-side counts look at. */
+const CONVERSATION_COUNT_WINDOW = 1000;
 const SURROUNDING = 5;
 const OTHER_REPORTS_LIMIT = 20;
 const CONTACT_TIMES_LIMIT = 100;
@@ -355,7 +357,7 @@ async function loadConversation(
   reportedId: string,
 ): Promise<{
   messages: ReportContextMessage[];
-  counts: { fromReporter: number; fromReported: number };
+  counts: { fromReporter: number; fromReported: number; capped: boolean };
 } | null> {
   const [low, high] =
     reporterId < reportedId ? [reporterId, reportedId] : [reportedId, reporterId];
@@ -373,12 +375,24 @@ async function loadConversation(
        LIMIT $3`,
       [low, high, CONVERSATION_LIMIT],
     ),
-    pool.query<{ from_reporter: string; from_reported: string }>(
-      `SELECT COUNT(*) FILTER (WHERE m.author_id = $3 AND m.body <> $5)::text AS from_reporter,
-              COUNT(*) FILTER (WHERE m.author_id = $4 AND m.body <> $5)::text AS from_reported
-       FROM dm_pairs dp
-       JOIN messages m ON m.channel_id = dp.channel_id
-       WHERE dp.low_user_id = $1 AND dp.high_user_id = $2`,
+    pool.query<{
+      from_reporter: string;
+      from_reported: string;
+      window_size: string;
+    }>(
+      // Bounded: the newest CONVERSATION_COUNT_WINDOW messages of the thread
+      // (an index range scan on the channel), never the whole history.
+      `SELECT COUNT(*) FILTER (WHERE r.author_id = $3 AND r.body <> $5)::text AS from_reporter,
+              COUNT(*) FILTER (WHERE r.author_id = $4 AND r.body <> $5)::text AS from_reported,
+              COUNT(*)::text AS window_size
+       FROM (
+         SELECT m.author_id, m.body
+         FROM dm_pairs dp
+         JOIN messages m ON m.channel_id = dp.channel_id
+         WHERE dp.low_user_id = $1 AND dp.high_user_id = $2
+         ORDER BY m.created_at DESC, m.id DESC
+         LIMIT ${CONVERSATION_COUNT_WINDOW}
+       ) r`,
       [low, high, reporterId, reportedId, MISSED_CALL_BODY],
     ),
   ]);
@@ -392,6 +406,8 @@ async function loadConversation(
     counts: {
       fromReporter: Number(counts.rows[0]?.from_reporter ?? 0),
       fromReported: Number(counts.rows[0]?.from_reported ?? 0),
+      // The window was full: the thread may be longer than what was counted.
+      capped: Number(counts.rows[0]?.window_size ?? 0) >= CONVERSATION_COUNT_WINDOW,
     },
   };
 }
@@ -747,6 +763,9 @@ export async function getReportContext(
     };
   }
 
+  // The actions only need the message's server, one cheap read, so they start
+  // as soon as it resolves and overlap everything else instead of following it.
+  const messageServerRead = loadMessageServer(report, viewer);
   const [
     signals,
     otherReports,
@@ -757,6 +776,7 @@ export async function getReportContext(
     surrounding,
     messageServer,
     reporter,
+    actions,
   ] = await Promise.all([
     viewer.instance
       ? loadSignals(userId, report.reporter_id)
@@ -769,17 +789,14 @@ export async function getReportContext(
     loadServerMessages(userId, viewer.id, scopeServer),
     loadOwnedServers(userId, scopeServer),
     loadSurrounding(report, viewer),
-    loadMessageServer(report, viewer),
+    messageServerRead,
     viewer.instance && report.reporter_id
       ? loadReporter(report.reporter_id)
       : Promise.resolve(null),
+    messageServerRead.then((found) =>
+      loadActions(report, viewer, true, report.server_id ?? found?.id ?? null),
+    ),
   ]);
-  const actions = await loadActions(
-    report,
-    viewer,
-    true,
-    report.server_id ?? messageServer?.id ?? null,
-  );
 
   return {
     reportId: report.id,

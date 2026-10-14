@@ -3521,6 +3521,7 @@
   "reports.ctx.convCounts_one": "{count} mensagem de quem denunciou, {reported} de {name}.",
   "reports.ctx.convCounts_other": "{count} mensagens de quem denunciou, {reported} de {name}.",
   "reports.ctx.convNoReply": "{name} não respondeu.",
+  "reports.ctx.convCapped": "Só as 1000 mensagens mais recentes entraram na conta.",
   "reports.ctx.reporterLine": "Quem denunciou: {name}, conta criada {when}. Denúncias feitas: {filed} ({actioned} resolvidas, {dismissed} descartadas).",
   "reports.ctx.messageIn": "Mensagem em #{channel}, servidor {server}.",
   "reports.ctx.serverMessages": "Últimas mensagens em servidores",
