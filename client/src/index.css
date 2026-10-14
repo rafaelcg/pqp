@@ -4356,7 +4356,7 @@ html[data-immersive-stage] [data-immersive-hide] {
 
 @media (prefers-reduced-motion: no-preference) {
   .bot-step-in {
-    animation: bot-step-in 0.28s var(--ease-emphasized) both;
+    animation: bot-step-in 0.28s var(--ease-emphasized) backwards;
   }
 
   .bot-step-pop {
@@ -4522,8 +4522,10 @@ html[data-immersive-stage] [data-immersive-hide] {
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  /* `backwards`, not `both`: once it has landed the row keeps no transform,
+     which would make it a stacking context and trap its hover toolbar. */
   .chat-msg-in {
-    animation: chat-msg-in 0.26s var(--ease-emphasized) both;
+    animation: chat-msg-in 0.26s var(--ease-emphasized) backwards;
   }
 
   .chat-reveal[data-state="open"] {
@@ -4536,7 +4538,7 @@ html[data-immersive-stage] [data-immersive-hide] {
 
   /* Swapped content (a label, a header) fades in where the old one was. */
   .chat-swap-in {
-    animation: fade-in var(--duration-base) var(--ease-standard) both;
+    animation: fade-in var(--duration-base) var(--ease-standard) backwards;
   }
 
   .chat-collapse {

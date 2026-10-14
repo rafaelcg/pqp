@@ -263,6 +263,21 @@ why these two are named for what they do.
 Every animation utility in `index.css` is switched off under
 `prefers-reduced-motion: reduce`. A new animation joins that block.
 
+Nothing in the conversation pops into place. Three pieces cover it:
+
+| Piece | What it does | Where |
+|---|---|---|
+| `.chat-msg-in` | A row that just arrived rises in, 6px and a fade. Only on a row younger than a few seconds when it mounts, so history and a remount stay still. | Message rows, the composer's reply bar and attachment chips, the bot practice chat |
+| `Reveal` (`components/ui/reveal.tsx`) | Something under the log that comes and goes opens and closes its own height, and keeps its last content while it shrinks away. | Typing, a bot at work, the bot notice |
+| `.chat-collapse` + `data-open` | A section of a card folds open or shut in place. | A bot card's steps and buttons, a question's answers |
+
+`.chat-swap-in` fades in content that replaces other content in the same spot,
+keyed so it remounts (a bot's activity label, a card header that settles).
+Entrances use `backwards`, not `both`: a landed row keeps no transform, which
+would make it a stacking context and trap its hover toolbar. The list stays
+pinned to the bottom while a `Reveal` grows, because its ResizeObserver re-pins
+on every size change. With reduced motion everything is simply there or not.
+
 ### Focus and states
 
 - **Focus.** `focus-visible:outline-none focus-visible:ring-2
