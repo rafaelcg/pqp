@@ -131,11 +131,7 @@ struct StoryPictureLabel: View {
         if let local {
             Image(uiImage: local).resizable().scaledToFill()
         } else if let url = picture.url.flatMap(URL.init(string:)) {
-            AsyncImage(url: url) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                Color.white.opacity(0.12)
-            }
+            StoryCachedImage(url: url, contentMode: .fill) { _ in Color.white.opacity(0.12) }
         } else {
             Color.white.opacity(0.12)
         }
@@ -262,7 +258,7 @@ struct StoryPlacedLayer: View {
             if let image = context.previews[layer.id] {
                 Image(uiImage: image).resizable().scaledToFill()
             } else if let url = picture.url.flatMap(URL.init(string:)) {
-                AsyncImage(url: url) { $0.resizable().scaledToFill() } placeholder: { Color.clear }
+                StoryCachedImage(url: url, contentMode: .fill) { _ in Color.clear }
             } else {
                 Color.clear
             }

@@ -181,6 +181,56 @@
         }
       }
     },
+    "Couldn't keep your story to post it. Check your free space." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra guardar teu story pra postar. Confere o espaço livre."
+          }
+        }
+      }
+    },
+    "Couldn't post your story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra postar teu story"
+          }
+        }
+      }
+    },
+    "Didn't post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não postou"
+          }
+        }
+      }
+    },
+    "Didn't post. Try again" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não postou. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Keep posting" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continuar postando"
+          }
+        }
+      }
+    },
     "%lld attachments" : {
       "localizations" : {
         "pt-BR" : {
@@ -491,6 +541,16 @@
         }
       }
     },
+    "%lld percent" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld por cento"
+          }
+        }
+      }
+    },
     "%lld posts" : {
       "localizations" : {
         "pt-BR" : {
@@ -557,6 +617,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld posts parecidos"
+          }
+        }
+      }
+    },
+    "Posting" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Postando"
+          }
+        }
+      }
+    },
+    "Posting your story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Postando teu story"
           }
         }
       }
@@ -9257,6 +9337,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você vai precisar de um novo convite para voltar."
+          }
+        }
+      }
+    },
+    "Your story didn't post. Double tap for options" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teu story não postou. Toca duas vezes pra ver as opções"
           }
         }
       }

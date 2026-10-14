@@ -48,6 +48,13 @@ final class MockStoryCameraEngine: StoryCameraEngine {
     func capturePhoto(flash: StoryFlash) async throws -> UIImage {
         photosTaken += 1
         lastFlash = flash
+        // A real picture of a real size, one per shot in turn, for measuring an
+        // upload (`PQP_STORY_MOCK_PHOTOS=/a.jpg,/b.jpg`).
+        if let list = ProcessInfo.processInfo.environment["PQP_STORY_MOCK_PHOTOS"]?.split(separator: ",").map(String.init),
+           !list.isEmpty,
+           let picture = UIImage(contentsOfFile: list[(photosTaken - 1) % list.count]) {
+            return picture
+        }
         let size = CGSize(width: 1080, height: 1920)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1

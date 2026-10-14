@@ -68,7 +68,14 @@ struct StoryViewer: View {
     init(launch: StoryViewerLaunch, onClose: @escaping (Set<String>) -> Void) {
         self.launch = launch
         self.onClose = onClose
-        _playback = State(initialValue: StoryPlayback(people: launch.people, startPerson: launch.startPerson))
+        let playback = StoryPlayback(people: launch.people, startPerson: launch.startPerson)
+        _playback = State(initialValue: playback)
+        // Stories the tray already read: the first one opens with no round trip.
+        var known: [String: Story] = [:]
+        for id in playback.prefetchIds + playback.windowIds {
+            if let story = StoryPreloader.shared.cachedStory(id) { known[id] = story }
+        }
+        _stories = State(initialValue: known)
     }
 
     private var current: Story? { playback.currentId.flatMap { stories[$0] } }
@@ -93,6 +100,7 @@ struct StoryViewer: View {
         // A story staff removed (or its author deleted) leaves an open viewer
         // at once: `removedStoryIds` rides the `stories-update` frame.
         .onAppear {
+            StoryMetrics.mark("viewer.open")
             session.eventHandlers[handlerKey] = { event in
                 guard case .storiesUpdate(let update) = event, !update.removedStoryIds.isEmpty else { return }
                 dropRemoved(Set(update.removedStoryIds))
@@ -102,6 +110,7 @@ struct StoryViewer: View {
             session.eventHandlers.removeValue(forKey: handlerKey)
             Task { await flushViews() }
             player?.pause()
+            StoryPreloader.shared.clearWindow()
             onClose(watched)
         }
         .sheet(isPresented: $showingViewers) {
@@ -645,6 +654,7 @@ struct StoryViewer: View {
     }
 
     private func next() {
+        StoryMetrics.mark("next.tap")
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.1)) {
             if !playback.next() { close() }
             progress = 0
@@ -671,15 +681,34 @@ struct StoryViewer: View {
 
     // MARK: - Loading and the clock
 
-    /// Fetches what is about to play, in batches the server takes.
+    /// Fetches what is about to play, in batches the server takes, and keeps
+    /// the next few stories' pictures and videos ready.
     private func storyChanged() async {
         error = nil
-        let wanted = playback.prefetchIds.filter { stories[$0] == nil && !gone.contains($0) }
-        if !wanted.isEmpty {
+        let preloader = StoryPreloader.shared
+        // A player already buffering this clip is taken BEFORE the window is
+        // set again: the window leaves the current video to the viewer, and
+        // would release it as no longer wanted.
+        var adopted = current.flatMap(videoURL).flatMap { preloader.takePlayer(for: $0) }
+        // The story on screen and the stories after it, in the order they
+        // are needed, then the rest of the person's.
+        var ids = playback.windowIds
+        for id in playback.prefetchIds where !ids.contains(id) { ids.append(id) }
+        let wanted = ids.filter { stories[$0] == nil && !gone.contains($0) }
+        for id in wanted {
+            if let known = preloader.cachedStory(id) { stories[id] = known }
+        }
+        // What is already known starts loading its media before the answer
+        // for the rest is back.
+        updatePreloadWindow()
+        let missing = wanted.filter { stories[$0] == nil }
+        if !missing.isEmpty {
             do {
-                let fetched = try await session.api.stories(ids: wanted)
+                let batch = Array(missing.prefix(StoryLimits.idsMax))
+                let fetched = try await session.api.stories(ids: batch)
+                preloader.remember(fetched)
                 for story in fetched { stories[story.id] = story }
-                for id in wanted where !fetched.contains(where: { $0.id == id }) { gone.insert(id) }
+                for id in batch where !fetched.contains(where: { $0.id == id }) { gone.insert(id) }
             } catch {
                 self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
@@ -688,12 +717,31 @@ struct StoryViewer: View {
         player?.pause()
         player = nil
         guard let story = current else { return }
-        if story.isVideo, let raw = story.media?.url, let url = Avatar.resolve(raw) ?? URL(string: raw) {
-            let next = AVPlayer(url: url)
+        if story.isVideo, let url = videoURL(story) {
+            // A player that was already buffering this clip, when the preload
+            // got to it; else a fresh one.
+            if adopted == nil { adopted = preloader.takePlayer(for: url) }
+            let next = adopted ?? AVPlayer(url: url)
             next.isMuted = muted
             player = next
             next.play()
         }
+        updatePreloadWindow()
+    }
+
+    private func videoURL(_ story: Story) -> URL? {
+        guard story.isVideo, let raw = story.media?.url else { return nil }
+        return Avatar.resolve(raw) ?? URL(string: raw)
+    }
+
+    /// What to have ready: the story on screen's pictures, and the next two
+    /// of the queue (across authors) and the next author's first, pictures and
+    /// buffered video. Skipped on Low Data Mode for video only.
+    private func updatePreloadWindow() {
+        let preloader = StoryPreloader.shared
+        let ids = playback.windowIds
+        let ahead = ids.dropFirst().compactMap { stories[$0] }
+        preloader.setWindow(StoryPreloadPlan.window(current: current, ahead: ahead, lowData: preloader.lowDataMode))
     }
 
     /// Linear, because it is a clock. A video's bar follows the video.
@@ -966,4 +1014,15 @@ struct StoryVideoSurface: UIViewRepresentable {
 final class StoryPlayerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    private var readiness: NSKeyValueObservation?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        // Debug measurement only: when the first video frame is on the layer.
+        readiness = playerLayer.observe(\.isReadyForDisplay, options: [.new]) { _, change in
+            if change.newValue == true { StoryMetrics.mark("frame.video") }
+        }
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 }

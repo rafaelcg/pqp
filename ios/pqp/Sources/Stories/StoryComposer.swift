@@ -77,6 +77,7 @@ struct StoryComposer: View {
                 cameraStep
             }
         }
+        .onDisappear { StoryMetrics.mark("composer.closed") }
         .task {
             await loadConfig()
             #if DEBUG
@@ -115,6 +116,14 @@ struct StoryComposer: View {
                let url = try? await StoryTestVideo.write(duration: seconds, size: CGSize(width: 180, height: 320), fps: 5) {
                 await accept(videoAt: url)
             }
+            // The same with a real file, for a clip of a realistic size: it is
+            // copied first, because the composer deletes what it was handed.
+            if let path = ProcessInfo.processInfo.environment["PQP_STORY_FIXTURE_VIDEO_FILE"] {
+                let copy = FileManager.default.temporaryDirectory.appendingPathComponent("story-\(UUID().uuidString).mp4")
+                if (try? FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: copy)) != nil {
+                    await accept(videoAt: copy)
+                }
+            }
             #endif
         }
         .photosPicker(isPresented: $showingPicker, selection: $pickerItem,
@@ -150,7 +159,7 @@ struct StoryComposer: View {
                 // Posted: the temporary exports are no longer needed.
                 StoryImport.remove(finalMedia?.fileURL)
                 StoryImport.remove(draft?.fileURL)
-                showingAudience = false
+                // Dismissing the composer takes the sheet with it: one animation, not two.
                 onPosted()
                 dismiss()
             }
@@ -827,9 +836,8 @@ struct StoryAudienceSheet: View {
     @State private var friends = false
     @State private var repliesEnabled = true
     @State private var posting = false
-    @State private var failed = false
     @State private var error: String?
-    /// One per story this sheet posts, reused by "Tentar de novo", so a retry
+    /// One per story this sheet posts, kept in the post's record, so a retry
     /// after a lost answer is the same story and not a second one.
     @State private var requestId = UUID().uuidString
 
@@ -901,9 +909,9 @@ struct StoryAudienceSheet: View {
             }
 
             Button {
-                Task { await post() }
+                post()
             } label: {
-                Text(posting ? String(localized: "Posting…") : (failed ? String(localized: "Didn't upload. Try again") : String(localized: "Post story")))
+                Text("Post story")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(PrimaryButtonStyle(isEnabled: canPost && !posting))
@@ -972,73 +980,38 @@ struct StoryAudienceSheet: View {
         }
     }
 
-    /// Create, PUT the bytes with exactly the signed headers, publish.
-    private func post() async {
+    /// Hands the story to the posting queue and closes: the create, the PUTs and
+    /// the publish run behind the person's own ring, with a progress fraction,
+    /// and a failure keeps the draft for "Tentar de novo" or "Descartar".
+    private func post() {
+        StoryMetrics.mark("post.tap")
+        guard canPost, !posting else { return }
         posting = true
-        failed = false
         error = nil
-        defer { posting = false }
-        let body = CreateStoryRequest(
-            requestId: requestId,
-            kind: request.kind,
-            caption: request.caption,
-            text: request.text,
-            background: request.background,
-            sticker: request.sticker,
-            repliesEnabled: repliesEnabled,
-            audiences: StoryAudienceTargets(serverIds: Array(servers), friends: friends),
-            media: media.map {
-                StoryMediaInput(contentType: $0.contentType, byteSize: $0.data.count,
-                                width: $0.width, height: $0.height, durationMs: $0.durationMs)
-            },
-            layers: request.layers.isEmpty ? nil : request.layers,
-            altText: request.altText
-        )
         do {
-            let created = try await session.api.createStory(body)
-            // Every file goes up before the story is published: the base photo
-            // or video, and each placed photo and the drawing, all at once (they
-            // are independent, and the post waits for the slowest, not the sum).
-            // A story with nothing to upload (text, a call, a mention) is live
-            // on the create answer and has nothing to publish.
-            var files: [(Data, StoryUpload)] = []
-            if let upload = created.upload, let media { files.append((media.data, upload)) }
-            for target in created.layerUploads {
-                guard let file = request.layerFiles[target.layerId] else { continue }
-                files.append((file.data, StoryUpload(url: target.url, method: target.method, headers: target.headers)))
-            }
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                for (data, upload) in files {
-                    group.addTask { try await StoryUploader.put(data, to: upload) }
-                }
-                try await group.waitForAll()
-            }
-            if created.upload != nil || !created.layerUploads.isEmpty {
-                _ = try await session.api.publishStory(id: created.story.id)
-            }
-            // A failed attempt is retried with the same `requestId`, which the
-            // server answers with the SAME pending story and fresh upload
-            // URLs; a story that is never published is deleted after an hour.
+            let body = CreateStoryRequest(
+                requestId: requestId,
+                kind: request.kind,
+                caption: request.caption,
+                text: request.text,
+                background: request.background,
+                sticker: request.sticker,
+                repliesEnabled: repliesEnabled,
+                audiences: StoryAudienceTargets(serverIds: Array(servers), friends: friends),
+                media: media.map {
+                    StoryMediaInput(contentType: $0.contentType, byteSize: $0.data.count,
+                                    width: $0.width, height: $0.height, durationMs: $0.durationMs)
+                },
+                layers: request.layers.isEmpty ? nil : try request.layers.map { try JSONValue(encoding: $0) },
+                altText: request.altText
+            )
+            let base = media.map { StoryPostBytes(contentType: $0.contentType, data: $0.data, fileURL: $0.fileURL) }
+            let layers = request.layerFiles.mapValues { StoryPostBytes(contentType: $0.contentType, data: $0.data) }
+            try session.storyPosts.enqueue(request: body, base: base, layers: layers, userId: session.currentUser?.id)
             onPosted()
         } catch {
-            failed = true
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-}
-
-/// The presigned PUT: exactly the headers the server signed, nothing else.
-enum StoryUploader {
-    static func put(_ data: Data, to upload: StoryUpload) async throws {
-        guard let url = URL(string: upload.url) else { throw APIError.transport("Bad upload URL") }
-        var request = URLRequest(url: url)
-        request.httpMethod = upload.method
-        for (name, value) in upload.headers {
-            request.setValue(value, forHTTPHeaderField: name)
-        }
-        let (_, response) = try await URLSession.shared.upload(for: request, from: data)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw APIError.transport(String(localized: "Didn't upload. Try again"))
+            posting = false
+            self.error = String(localized: "Couldn't keep your story to post it. Check your free space.")
         }
     }
 }

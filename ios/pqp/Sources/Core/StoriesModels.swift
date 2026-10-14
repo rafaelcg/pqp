@@ -327,7 +327,7 @@ struct StoryAudienceTargets: Codable, Hashable, Sendable {
 
 /// `POST /api/stories`. Optional keys are left out of the JSON, which is what
 /// the server's `superRefine` expects (a text story must not carry `media`).
-struct CreateStoryRequest: Encodable, Sendable {
+struct CreateStoryRequest: Codable, Sendable {
     /// Made once per story the person means to post and sent again on a
     /// retry: a second create with it answers the first story (with a fresh
     /// upload URL) instead of posting a second one.
@@ -340,7 +340,10 @@ struct CreateStoryRequest: Encodable, Sendable {
     var repliesEnabled: Bool = true
     let audiences: StoryAudienceTargets
     var media: StoryMediaInput? = nil
-    var layers: [StoryLayerInput]? = nil
+    /// Each layer as the wire JSON (`StoryLayerInput` encoded): a request is
+    /// kept on disk while a post waits for a connection, and a layer's
+    /// declaration has to be patched once its upload is known.
+    var layers: [JSONValue]? = nil
     var altText: String? = nil
 }
 
