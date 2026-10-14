@@ -1,4 +1,4 @@
-import { ChevronRight, RotateCw, Trash2, X } from "lucide-react";
+import { ChevronRight, Plus, RotateCw, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from "react";
 import type { StoryAuthor, StoryNotice, StoryStripItem } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -255,6 +255,11 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
             }
             arrive={Boolean(own)}
             failedActions={failedActions}
+            contextItems={
+              strip.canPost && !posting
+                ? [{ id: "new-story", label: t("stories.compose.title"), icon: Plus, onSelect: compose }]
+                : undefined
+            }
             onOpen={(event) => {
               if (posting?.status === "failed") {
                 // With actions the ring opens its menu instead; this is the one that can only be put away.

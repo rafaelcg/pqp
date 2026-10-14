@@ -1,6 +1,6 @@
 import { Headphones, Plus, RotateCw, X } from "lucide-react";
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
-import type { ContextMenuItemDef } from "@/components/ui/context-menu";
+import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Menu } from "@/components/ui/menu";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { cn } from "@/lib/utils";
@@ -49,6 +49,8 @@ interface StoryRingProps {
    * or re-sent by an accidental tap.
    */
   failedActions?: ContextMenuItemDef[];
+  /** Right-click or long-press on the ring: "Novo story" on the viewer's own ring. */
+  contextItems?: ContextMenuItemDef[];
   /** Only with `plus`: the badge itself is a second button that composes. */
   onPlus?: () => void;
   plusLabel?: string;
@@ -74,6 +76,7 @@ export function StoryRing({
   ringId,
   onOpen,
   failedActions,
+  contextItems,
   onPlus,
   plusLabel,
 }: StoryRingProps) {
@@ -136,9 +139,10 @@ export function StoryRing({
           event.stopPropagation();
           onPlus();
         }}
-        // On a touch screen the hit area grows to 44 px (the before: pseudo-element), outward only (down and
-        // right of the 24 px dot) so it never takes a tap that belongs to the ring itself.
-        className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-accent text-on-accent shadow-[0_0_0_2.5px_var(--story-ring-bg,var(--color-surface-1))] transition-transform duration-[var(--duration-fast)] before:absolute before:inset-0 before:content-[''] hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [@media(pointer:coarse)]:before:-bottom-5 [@media(pointer:coarse)]:before:-right-5"
+        // The dot is 24 px but the thing to hit is bigger: the before: pseudo-element is part of the button, so a
+        // click anywhere on it is the badge's, and it sits over the ring (the badge comes later in the box), so it
+        // wins over the ring's own click. 32 px square with a mouse (4 px out on every side), 44 px on a touch screen.
+        className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-accent text-on-accent shadow-[0_0_0_2.5px_var(--story-ring-bg,var(--color-surface-1))] transition-transform duration-[var(--duration-fast)] before:absolute before:-inset-1 before:content-[''] hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [@media(pointer:coarse)]:before:-inset-[10px]"
         style={{ width: badgeSize, height: badgeSize }}
       >
         <Plus className="h-3 w-3" strokeWidth={3.5} aria-hidden />
@@ -174,6 +178,8 @@ export function StoryRing({
           <Menu items={failedActions} align="start" side="bottom">
             {ringButton}
           </Menu>
+        ) : contextItems && contextItems.length > 0 && !failed ? (
+          <ContextMenu items={contextItems}>{ringButton}</ContextMenu>
         ) : (
           ringButton
         )}
