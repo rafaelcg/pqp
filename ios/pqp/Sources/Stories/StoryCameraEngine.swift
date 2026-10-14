@@ -57,12 +57,17 @@ enum StoryCameraEngineFactory {
         return AVStoryCameraEngine(recordsAudio: recordsAudio)
     }
 
-    /// Whether there is a camera at all, asked without opening it.
-    static var hasCameraDevice: Bool {
+    /// Whether there is a camera at all, asked without opening it. Device
+    /// discovery is a round trip to the camera daemon, and that daemon can be
+    /// busy finishing the previous session: it is asked off the main actor, so
+    /// a slow answer is a spinner and never a frozen screen.
+    static func hasCameraDevice() async -> Bool {
         #if DEBUG
         if ProcessInfo.processInfo.environment["PQP_STORY_CAMERA"] == "mock" { return true }
         #endif
-        return AVStoryCameraEngine.device(for: .back) != nil || AVStoryCameraEngine.device(for: .front) != nil
+        return await Task.detached(priority: .userInitiated) {
+            AVStoryCameraEngine.device(for: .back) != nil || AVStoryCameraEngine.device(for: .front) != nil
+        }.value
     }
 
     /// The camera permission as the screen should see it. The scripted camera
@@ -93,11 +98,45 @@ enum StoryCameraEngineFactory {
 // MARK: - The device camera
 
 /// `AVCaptureSession` behind a serial queue. Every AVFoundation call that can
-/// block (`startRunning`, a configuration commit) runs there; the main actor
-/// only asks and awaits. The class is `@unchecked Sendable` on exactly that
-/// rule: nothing touches `session` or the outputs off `queue`.
+/// block (`startRunning`, `stopRunning`, a configuration commit, device
+/// discovery) runs there; the main actor only asks and awaits, and NEVER waits
+/// on the queue (no `queue.sync`): what it needs to know comes back in the
+/// `Snapshot` the queue's own block returns. The class is `@unchecked Sendable`
+/// on exactly that rule: nothing touches `session` or the outputs off `queue`.
 final class StoryCaptureCore: @unchecked Sendable {
-    let queue = DispatchQueue(label: "gg.pqp.story-camera")
+    /// One queue for every capture session in the process, on purpose. Leaving
+    /// the editor opens a NEW camera while the old one is still being stopped
+    /// (`stopRunning` blocks until the hardware lets go), and two sessions
+    /// starting and stopping on the same device at once is what the camera
+    /// daemon answers slowly to. On one queue the new session's start simply
+    /// waits its turn behind the old one's stop, and nothing on the main actor
+    /// is in that line.
+    static let sharedQueue = DispatchQueue(label: "gg.pqp.story-camera", qos: .userInitiated)
+    let queue = StoryCaptureCore.sharedQueue
+    /// How the cameras are looked up: the real discovery, or a test's.
+    private let discovery: @Sendable (StoryCameraPosition) -> AVCaptureDevice?
+
+    init(discovery: @escaping @Sendable (StoryCameraPosition) -> AVCaptureDevice? = AVStoryCameraEngine.device(for:)) {
+        self.discovery = discovery
+    }
+
+    /// What the screen needs to know about a configured session, read ON the
+    /// queue and handed over by value.
+    struct Snapshot: @unchecked Sendable {
+        let hasFlash: Bool
+        let zoomRange: ClosedRange<Double>
+        let device: AVCaptureDevice?
+        let hasMultipleCameras: Bool
+    }
+
+    func snapshot() -> Snapshot {
+        Snapshot(
+            hasFlash: hasFlash, zoomRange: zoomRange, device: device,
+            hasMultipleCameras: discovery(.back) != nil && discovery(.front) != nil
+        )
+    }
+
+    func hasDevice(_ position: StoryCameraPosition) -> Bool { discovery(position) != nil }
     let session = AVCaptureSession()
     private let photoOutput = AVCapturePhotoOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
@@ -115,7 +154,7 @@ final class StoryCaptureCore: @unchecked Sendable {
 
     // Config, all on `queue`.
     func configure(position: StoryCameraPosition, wantsAudio: Bool) throws {
-        guard let device = AVStoryCameraEngine.device(for: position) else { throw StoryCameraFailure.noDevice }
+        guard let device = discovery(position) else { throw StoryCameraFailure.noDevice }
         let input = try AVCaptureDeviceInput(device: device)
         session.beginConfiguration()
         defer { session.commitConfiguration() }
@@ -315,16 +354,28 @@ final class StoryCaptureCore: @unchecked Sendable {
         if torch { setTorch(true) }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("story-shot-\(UUID().uuidString).mov")
         let delegate = RecordingDelegate { [weak self] result in
-            self?.setTorch(false)
-            self?.queue.async { self?.recordingDelegate = nil }
+            // The answer goes out first; the torch and the bookkeeping are
+            // device work and run on the queue, not on whatever thread
+            // AVFoundation called the delegate on (it can be the main one).
             completion(result)
+            self?.queue.async {
+                self?.setTorch(false)
+                self?.recordingDelegate = nil
+            }
         }
         recordingDelegate = delegate
         movieOutput.startRecording(to: url, recordingDelegate: delegate)
     }
 
-    func stopRecording() {
-        if movieOutput.isRecording { movieOutput.stopRecording() }
+    /// Stops the clip. `nothing` is called, on the queue, when there is no
+    /// clip to stop (it never started, or it is long over), so whoever is
+    /// waiting for one is not left waiting for a completion that cannot come.
+    func stopRecording(nothing: @Sendable () -> Void) {
+        if recordingDelegate != nil || movieOutput.isRecording {
+            if movieOutput.isRecording { movieOutput.stopRecording() }
+        } else {
+            nothing()
+        }
     }
 
     var isRecording: Bool { movieOutput.isRecording }
@@ -361,7 +412,7 @@ final class StoryCameraPreviewUIView: UIView {
 
 @MainActor
 final class AVStoryCameraEngine: StoryCameraEngine {
-    private let core = StoryCaptureCore()
+    private let core: StoryCaptureCore
     private weak var previewView: StoryCameraPreviewUIView?
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var previewObservation: NSKeyValueObservation?
@@ -374,12 +425,13 @@ final class AVStoryCameraEngine: StoryCameraEngine {
     private(set) var recordsAudio = false
     var onInterruption: (@MainActor (StoryCameraFailure) -> Void)?
 
-    /// Asked of the system once: device discovery is synchronous hardware work,
-    /// and the view reads this on every update.
-    let hasMultipleCameras: Bool
+    /// Known once the session has started: device discovery is a round trip to
+    /// the camera daemon, so it is asked on the capture queue (never in `init`,
+    /// which runs on the main actor in the middle of a screen transition).
+    private(set) var hasMultipleCameras = false
 
-    init(recordsAudio: Bool) {
-        hasMultipleCameras = Self.device(for: .back) != nil && Self.device(for: .front) != nil
+    init(recordsAudio: Bool, discovery: @escaping @Sendable (StoryCameraPosition) -> AVCaptureDevice? = AVStoryCameraEngine.device(for:)) {
+        core = StoryCaptureCore(discovery: discovery)
         wantsAudio = recordsAudio
     }
 
@@ -414,18 +466,18 @@ final class AVStoryCameraEngine: StoryCameraEngine {
         let hook: @Sendable (StoryCameraFailure) -> Void = { [weak self] failure in
             Task { @MainActor in self?.onInterruption?(failure) }
         }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        let snapshot: StoryCaptureCore.Snapshot = try await withCheckedThrowingContinuation { continuation in
             core.queue.async {
                 do {
                     try core.configure(position: position, wantsAudio: wantsAudio)
                     core.startRunning(onInterruption: hook)
-                    continuation.resume()
+                    continuation.resume(returning: core.snapshot())
                 } catch {
                     continuation.resume(throwing: error)
                 }
             }
         }
-        refreshAfterConfiguration()
+        refreshAfterConfiguration(snapshot)
     }
 
     func stop() {
@@ -438,30 +490,33 @@ final class AVStoryCameraEngine: StoryCameraEngine {
     func flip() async {
         let core = core
         let next = position.flipped
-        guard Self.device(for: next) != nil else { return }
         let wantsAudio = wantsAudio
-        let ok: Bool = await withCheckedContinuation { continuation in
+        let snapshot: StoryCaptureCore.Snapshot? = await withCheckedContinuation { continuation in
             core.queue.async {
+                guard core.hasDevice(next) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
                 do {
                     try core.configure(position: next, wantsAudio: wantsAudio)
-                    continuation.resume(returning: true)
+                    continuation.resume(returning: core.snapshot())
                 } catch {
-                    continuation.resume(returning: false)
+                    continuation.resume(returning: nil)
                 }
             }
         }
-        guard ok else { return }
+        guard let snapshot else { return }
         position = next
-        refreshAfterConfiguration()
+        refreshAfterConfiguration(snapshot)
     }
 
-    private func refreshAfterConfiguration() {
-        let core = core
-        hasFlash = core.queue.sync { core.hasFlash }
-        zoomRange = core.queue.sync { core.zoomRange }
+    private func refreshAfterConfiguration(_ snapshot: StoryCaptureCore.Snapshot) {
+        hasFlash = snapshot.hasFlash
+        zoomRange = snapshot.zoomRange
+        hasMultipleCameras = snapshot.hasMultipleCameras
         zoom = 1
         recordsAudio = wantsAudio && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        if let device = core.queue.sync(execute: { core.device }), let layer = previewView?.previewLayer {
+        if let device = snapshot.device, let layer = previewView?.previewLayer {
             let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: layer)
             rotationCoordinator = coordinator
             layer.connection?.videoRotationAngle = coordinator.videoRotationAngleForHorizonLevelPreview
@@ -556,7 +611,22 @@ final class AVStoryCameraEngine: StoryCameraEngine {
             }
             let first = recordingWaiters.isEmpty
             recordingWaiters.append(continuation)
-            if first { core.queue.async { core.stopRecording() } }
+            if first {
+                core.queue.async {
+                    core.stopRecording { [weak self] in
+                        Task { @MainActor in self?.nothingToStop() }
+                    }
+                }
+            }
         }
+    }
+
+    /// A stop that found no clip: whoever waits is answered with what the last
+    /// clip left (it may have just finished), or with a failure, never left
+    /// hanging. A hung wait here would keep the camera from ever being
+    /// released.
+    private func nothingToStop() {
+        guard !recordingWaiters.isEmpty else { return }
+        recordingFinished(recordingResult ?? .failure(StoryCameraFailure.captureFailed))
     }
 }

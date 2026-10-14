@@ -151,6 +151,69 @@ final class StoryCameraUITests: XCTestCase {
         snap(app, "camera-denied")
     }
 
+    // MARK: - Leaving a video (freeze reports)
+
+    /// A recorded clip, then the editor's X: back on a camera that answers a
+    /// touch, again and again.
+    func testDiscardingAVideoGoesBackToALiveCamera() throws {
+        let (app, serverId) = try launch()
+        openComposer(app, serverId: serverId)
+        let shutter = app.buttons["camera.shutter"]
+        XCTAssertTrue(shutter.waitForExistence(timeout: 15))
+        for round in 1...3 {
+            shutter.press(forDuration: 1.6)
+            XCTAssertTrue(app.buttons["composer.next"].waitForExistence(timeout: 20), "Round \(round): the clip is a draft")
+            snap(app, "freeze-draft-\(round)")
+            app.buttons["editor.close"].tap()
+            XCTAssertTrue(shutter.waitForExistence(timeout: 10), "Round \(round): back on the camera")
+            snap(app, "freeze-camera-\(round)")
+            XCTAssertTrue(preview(app).waitForExistence(timeout: 10), "Round \(round): the preview is up")
+            XCTAssertTrue(app.buttons["camera.flip"].isHittable, "Round \(round): the camera answers")
+        }
+        // And it still shoots.
+        shutter.tap()
+        XCTAssertTrue(app.buttons["composer.next"].waitForExistence(timeout: 15), "A photo after the clips")
+    }
+
+    /// The composer's own X, after a clip was shot and discarded: the list
+    /// answers, nothing is left over the screen.
+    func testClosingTheComposerAfterDiscardingAVideo() throws {
+        let (app, serverId) = try launch()
+        openComposer(app, serverId: serverId)
+        let shutter = app.buttons["camera.shutter"]
+        XCTAssertTrue(shutter.waitForExistence(timeout: 15))
+        shutter.press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["editor.close"].waitForExistence(timeout: 20))
+        app.buttons["editor.close"].tap()
+        XCTAssertTrue(shutter.waitForExistence(timeout: 10))
+        XCTAssertTrue(preview(app).waitForExistence(timeout: 10))
+        app.buttons["composer.close"].tap()
+        let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: shutter)
+        XCTAssertEqual(XCTWaiter().wait(for: [closed], timeout: 20), .completed, "The composer is gone")
+        snap(app, "freeze-closed-after-discard")
+        XCTAssertFalse(app.buttons["composer.close"].exists)
+        // What is underneath answers a touch again.
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'hub.server.'")).firstMatch.waitForExistence(timeout: 10)
+            || app.navigationBars.firstMatch.waitForExistence(timeout: 10))
+    }
+
+    /// X twice in a row on the editor, then a new clip.
+    func testDoubleTapOnTheEditorCloseThenRecordAgain() throws {
+        let (app, serverId) = try launch()
+        openComposer(app, serverId: serverId)
+        let shutter = app.buttons["camera.shutter"]
+        XCTAssertTrue(shutter.waitForExistence(timeout: 15))
+        shutter.press(forDuration: 1.6)
+        let close = app.buttons["editor.close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 20))
+        close.doubleTap()
+        XCTAssertTrue(shutter.waitForExistence(timeout: 10), "Back on the camera")
+        sleep(1)
+        snap(app, "freeze-after-double-x")
+        shutter.press(forDuration: 1.6)
+        XCTAssertTrue(app.buttons["composer.next"].waitForExistence(timeout: 20), "A second clip is a draft")
+    }
+
     // MARK: - Helpers
 
     private func waitForValue(_ element: XCUIElement, _ value: String, timeout: TimeInterval = 8) -> Bool {
