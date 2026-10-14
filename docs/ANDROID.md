@@ -2331,6 +2331,35 @@ does with it.
   - **TalkBack.** The base carries the story's `altText` (its text layers, in
     order, else its caption) as its description, and the text layers are hidden
     from the reader when it is there, so nothing is read twice.
+- **Posting is the outbox's, not the composer's.** "Postar" hands the story to
+  `StoryOutbox` (app-scoped) and the composer closes at once. The outbox makes
+  the files and the request ready, writes them as a draft under
+  `files/story-outbox/<id>/` (`StoryDraftStore`), creates the story, PUTs every
+  file streamed from disk with a running byte count, and publishes. The own
+  ring on every strip draws that count as a progress ring (`PostingRing`,
+  capped at 96% until the story is live; no number for a card of only words;
+  a fixed arc, not a spinning one, with "Remove animations" on). A failure
+  turns the ring red; tapping it offers "Tentar de novo" (same request id, so a
+  lost answer never posts twice) or "Descartar". Tapping a ring that is still
+  posting offers "Descartar" too, which stops the upload and deletes the story
+  the server had already made. The draft survives leaving the composer and the
+  app; a draft found on disk after the process died comes back as a failed ring
+  and posts only when the person taps retry. Signing out wipes drafts. There is
+  no foreground service: a post is a few seconds of upload, and one that loses
+  its process is a draft, not a loss.
+- **Preload.** `StoryPreloader` has the next story ready before the tap: with a
+  story open, the next two of the queue (across authors, from where the viewer
+  would open each deck) and the first of the next author; with the tray
+  showing, the first unseen story of its first three rings. Pictures go through
+  Coil (memory and disk) and clips through a Media3 cache writer into
+  `StoryVideoCache` (first 1 MB and last 256 KB, so a clip with its index at
+  the end starts too), all under stable per-story keys (`StoryPreloadRules`),
+  which is what lets a freshly signed link for the same picture still hit. At
+  most two stories at a time, cancelled when they leave the window, clips
+  skipped with Data Saver on, and everything pauses while the story on screen is
+  still loading, so a slow link is that story's alone. Debug builds log the
+  numbers under `adb logcat -s pqp.perf` (`StoryPerf`) and `files/no-preload`
+  turns the preloader off to measure the same build without it.
 - **Composer.** TEXTO / CÂMERA / CALL, then "Quem vê". CÂMERA opens on a live
   camera (`stories/camera/`, CameraX), not on buttons: a 9:16 preview, a
   shutter that takes a photo on a tap and records while it is held (a ring

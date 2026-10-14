@@ -1,6 +1,12 @@
 package gg.pqp.app.stories.ui
 
+import android.provider.Settings
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -29,6 +35,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,7 +43,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -48,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import gg.pqp.app.R
 import gg.pqp.app.core.Me
 import gg.pqp.app.stories.StoryAuthor
+import gg.pqp.app.stories.StoryOutboxRules
 import gg.pqp.app.stories.StoryStrip
 import gg.pqp.app.stories.StoryStripItem
 import gg.pqp.app.ui.components.Avatar
@@ -55,6 +65,7 @@ import gg.pqp.app.ui.theme.Motion
 import gg.pqp.app.ui.theme.Palette
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
+import kotlin.math.roundToInt
 
 /**
  * The ring around somebody who has a story. A lime-to-amber sweep while there
@@ -119,6 +130,10 @@ fun StoryStripRow(
     onOpenOwn: () -> Unit,
     onCompose: () -> Unit,
     modifier: Modifier = Modifier,
+    /** A story of mine on its way (or that did not make it): drawn on my own ring. */
+    bubble: StoryOutboxRules.Bubble = StoryOutboxRules.Bubble.Idle,
+    onFailedTap: (String) -> Unit = {},
+    onPostingTap: (String) -> Unit = {},
 ) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = Spacing.gutter),
@@ -133,8 +148,11 @@ fun StoryStripRow(
                     me = me,
                     own = strip.own,
                     canPost = strip.canPost,
+                    bubble = bubble,
                     onOpen = onOpenOwn,
                     onCompose = onCompose,
+                    onFailedTap = onFailedTap,
+                    onPostingTap = onPostingTap,
                     modifier = Modifier.animateItem(),
                 )
             }
@@ -150,30 +168,72 @@ private fun OwnBubble(
     me: Me?,
     own: StoryStripItem?,
     canPost: Boolean,
+    bubble: StoryOutboxRules.Bubble,
     onOpen: () -> Unit,
     onCompose: () -> Unit,
+    onFailedTap: (String) -> Unit,
+    onPostingTap: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val label = stringResource(R.string.stories_yours)
+    val yours = stringResource(R.string.stories_yours)
+    val posting = bubble as? StoryOutboxRules.Bubble.Posting
+    val failed = bubble as? StoryOutboxRules.Bubble.Failed
+    val label = when {
+        posting != null -> stringResource(R.string.stories_upload_posting)
+        failed != null -> stringResource(R.string.stories_outbox_failed_label)
+        else -> yours
+    }
+    val percent = posting?.fraction?.let { (it * 100).roundToInt() }
+    val spoken = when {
+        percent != null -> stringResource(R.string.stories_outbox_progress_desc, percent)
+        posting != null -> stringResource(R.string.stories_upload_posting)
+        failed != null -> stringResource(R.string.stories_outbox_failed_title)
+        else -> yours
+    }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
             .width(68.dp)
-            .clickable(onClick = if (own != null) onOpen else onCompose)
-            .semantics { contentDescription = label }
+            .clickable(
+                onClick = when {
+                    failed != null -> ({ onFailedTap(failed.id) })
+                    // Mid-post there is nothing to compose: a tap is the way to stop it.
+                    posting != null -> ({ onPostingTap(posting.id) })
+                    own != null -> onOpen
+                    else -> onCompose
+                },
+            )
+            .semantics { contentDescription = spoken }
             .testTag("stories.own"),
     ) {
         Box {
-            if (own != null) {
-                StoryRing(unseen = false, seenColor = MaterialTheme.colorScheme.onSurfaceVariant, seenWidth = 2.dp) {
+            when {
+                posting != null || failed != null -> PostingRing(fraction = posting?.fraction, failed = failed != null) {
+                    Avatar(name = me?.displayName.orEmpty(), url = me?.avatarUrl, size = 56.dp, seed = me?.id ?: "")
+                    // A veil while it is on its way, so the ring is the thing to read.
+                    if (posting != null) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)))
+                }
+                own != null -> StoryRing(unseen = false, seenColor = MaterialTheme.colorScheme.onSurfaceVariant, seenWidth = 2.dp) {
                     Avatar(name = me?.displayName.orEmpty(), url = me?.avatarUrl, size = 56.dp, seed = me?.id ?: "")
                 }
-            } else {
-                Box(Modifier.size(64.dp), contentAlignment = Alignment.Center) {
+                else -> Box(Modifier.size(64.dp), contentAlignment = Alignment.Center) {
                     Avatar(name = me?.displayName.orEmpty(), url = me?.avatarUrl, size = 56.dp, seed = me?.id ?: "")
                 }
             }
-            if (canPost) {
+            if (failed != null) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 2.dp, y = 2.dp)
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(Palette.Danger)
+                        .border(2.dp, MaterialTheme.colorScheme.background, CircleShape),
+                ) {
+                    Icon(PqpIcons.Warning, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                }
+            } else if (canPost && posting == null) {
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
@@ -196,7 +256,66 @@ private fun OwnBubble(
             }
         }
         Spacer(Modifier.size(4.dp))
-        BubbleLabel(label, strong = false)
+        BubbleLabel(label, strong = failed != null)
+    }
+}
+
+/**
+ * The ring of a story still being posted: a track, and an arc over it for the
+ * bytes that have gone out. [fraction] null is "no number yet" (a card with
+ * only words, or the files still being made ready): a short arc turns around
+ * the avatar. With "Remove animations" on, nothing turns: the arc is a fixed
+ * quarter, and the determinate one still grows (it is a number changing, not
+ * a motion). Failed is the whole ring in the danger colour, no arc.
+ */
+@Composable
+fun PostingRing(
+    fraction: Float?,
+    failed: Boolean,
+    modifier: Modifier = Modifier,
+    size: Dp = 64.dp,
+    content: @Composable () -> Unit,
+) {
+    val context = LocalContext.current
+    val animationsOn = remember {
+        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
+    }
+    val track = MaterialTheme.colorScheme.outline
+    val shown by animateFloatAsState(
+        targetValue = fraction ?: 0f,
+        animationSpec = tween(Motion.SETTLE_MILLIS),
+        label = "posting-ring",
+    )
+    val spin = if (fraction == null && !failed && animationsOn) {
+        val transition = rememberInfiniteTransition(label = "posting-spin")
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(1_100, easing = LinearEasing), RepeatMode.Restart),
+            label = "posting-spin-angle",
+        ).value
+    } else {
+        0f
+    }
+    Box(modifier = modifier.size(size), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val width = 3.dp.toPx()
+            val inset = width / 2
+            val arcSize = androidx.compose.ui.geometry.Size(this.size.width - width, this.size.height - width)
+            val topLeft = Offset(inset, inset)
+            if (failed) {
+                drawArc(Palette.Danger, 0f, 360f, false, topLeft, arcSize, style = Stroke(width))
+            } else {
+                drawArc(track, 0f, 360f, false, topLeft, arcSize, style = Stroke(width))
+                val sweep = if (fraction == null) 90f else 360f * shown
+                drawArc(Palette.Signal, -90f + spin, sweep, false, topLeft, arcSize, style = Stroke(width, cap = StrokeCap.Round))
+            }
+        }
+        Box(
+            Modifier
+                .size(size - 8.dp)
+                .clip(CircleShape),
+        ) { content() }
     }
 }
 

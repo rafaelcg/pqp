@@ -98,6 +98,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import gg.pqp.app.R
@@ -109,6 +110,9 @@ import gg.pqp.app.reports.ui.ReportSheet
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.stories.StoriesRules
 import gg.pqp.app.stories.StoriesStore
+import gg.pqp.app.stories.StoryPreloadRules
+import gg.pqp.app.stories.StoryPreloader
+import gg.pqp.app.stories.StoryVideoCache
 import gg.pqp.app.stories.Story
 import gg.pqp.app.stories.StoryAuthor
 import gg.pqp.app.stories.deleteStory
@@ -124,6 +128,12 @@ import kotlin.math.absoluteValue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** How long a story may take to show before the preloader steps aside for it. */
+private const val STILL_LOADING_MS = 250L
+
+/** How stale a story's details may be when a deck opens: the preloader read them moments ago for the same viewer. */
+private const val VIEWER_DETAILS_MAX_AGE_MS = 45_000L
 
 /** The story clock runs in real time whatever the animator duration scale says. */
 private object RealTimeClock : androidx.compose.ui.MotionDurationScale {
@@ -170,6 +180,9 @@ fun StoryViewer(
     val dragY = remember { Animatable(0f) }
     val density = LocalDensity.current
     val dismissPx = with(density) { 120.dp.toPx() }
+    val preloader = remember(session) { StoryPreloader.of(context, session) }
+    // The viewer's wishes end with the viewer: what it was still fetching is not worth the data.
+    DisposableEffect(preloader) { onDispose { preloader.onViewerClosed() } }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -217,6 +230,8 @@ fun StoryViewer(
                 DeckPage(
                     session = session,
                     store = store,
+                    preloader = preloader,
+                    onShown = { storyIndex -> preloader.onViewing(decks, page, storyIndex) },
                     deck = decks[page],
                     active = pager.currentPage == page && !pager.isScrollInProgress,
                     contextLabel = contextLabel,
@@ -258,6 +273,9 @@ fun StoryViewer(
 private fun DeckPage(
     session: SessionStore,
     store: StoriesStore,
+    preloader: StoryPreloader,
+    /** The story on screen changed (or this page became the one on screen): index in the deck. */
+    onShown: (Int) -> Unit,
     deck: StoryDeck,
     active: Boolean,
     contextLabel: String,
@@ -277,7 +295,8 @@ private fun DeckPage(
     var loaded by remember(deck) { mutableStateOf<List<Story>?>(null) }
     var failed by remember(deck) { mutableStateOf(false) }
     LaunchedEffect(deck) {
-        runCatching { session.api.stories(deck.storyIds) }
+        // Through the preloader: what it already read to plan the next stories is not asked for twice.
+        runCatching { preloader.stories(deck.storyIds, VIEWER_DETAILS_MAX_AGE_MS) }
             .onSuccess { list ->
                 val order = deck.storyIds.withIndex().associate { it.value to it.index }
                 loaded = list.sortedBy { order[it.id] ?: Int.MAX_VALUE }
@@ -352,6 +371,23 @@ private fun DeckPage(
         if (!active || current.own != null) return@LaunchedEffect
         delay(StoriesRules.SEEN_AFTER_MS)
         store.markSeen(current.id, meId)
+        preloader.markSeen(current.id)
+    }
+
+    // Where the viewer is, so the preloader can have what comes next ready.
+    // The preloader waits for the story on screen to be on screen: what is being looked at comes first, on a slow link.
+    var shownReady by remember(story?.id) { mutableStateOf(false) }
+    LaunchedEffect(story?.id, active) {
+        if (active && story != null) {
+            gg.pqp.app.stories.StoryPerf.becameCurrent(story.id)
+            // One that is already cached shows within a frame or two and keeps the preloads running; one
+            // that is really loading gets the link to itself.
+            delay(STILL_LOADING_MS)
+            if (!shownReady) preloader.pause()
+        }
+    }
+    LaunchedEffect(story?.id, active, shownReady) {
+        if (active && story != null && shownReady) onShown(index)
     }
 
     val chromeAlpha by animateFloatAsState(if (holding) 0f else 1f, tween(200), label = "story-chrome")
@@ -412,6 +448,7 @@ private fun DeckPage(
                         onVideoProgress = { videoProgress = it },
                         onVideoEnded = advance,
                         onHasAudio = { hasAudio = it },
+                        onReady = { shownReady = true },
                         onJoinCall = { call ->
                             onJoinCall(call.serverId, call.channelId, call.channelName)
                             onClose()
@@ -466,6 +503,7 @@ private fun DeckPage(
                                         val ok = runCatching { session.api.removeStoryFromServer(serverId, story.id) }.isSuccess
                                         if (ok) {
                                             store.forget(story.id)
+                                            preloader.forget(story.id)
                                             store.refresh(store.serverKey(serverId))
                                         }
                                     }
@@ -500,6 +538,7 @@ private fun DeckPage(
                             session = session,
                             story = story,
                             onFocus = { typing = it },
+                            onReacted = { preloader.setReaction(story.id, it) },
                         )
                     }
                 }
@@ -542,7 +581,10 @@ private fun DeckPage(
                         confirmingDelete = null
                         scope.launch {
                             val ok = runCatching { session.api.deleteStory(target.id) }.isSuccess
-                            if (ok) store.forget(target.id)
+                            if (ok) {
+                                store.forget(target.id)
+                                preloader.forget(target.id)
+                            }
                         }
                     },
                     modifier = Modifier.testTag("stories.delete.confirm"),
@@ -704,6 +746,8 @@ private fun StoryMenu(
 @OptIn(UnstableApi::class)
 @Composable
 internal fun StoryVideo(
+    /** The story's id: the key its clip is cached and preloaded under. */
+    storyId: String,
     url: String,
     posterUrl: String?,
     active: Boolean,
@@ -715,18 +759,28 @@ internal fun StoryVideo(
     onEnded: () -> Unit,
     /** Whether the clip has a sound track at all: a clip shot with no microphone has none, and the sound button has nothing to do. */
     onHasAudio: (Boolean) -> Unit = {},
+    /** The first frame is on screen. */
+    onReady: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var ready by remember(url) { mutableStateOf(false) }
     val player = remember(url) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(url))
+        // Read through the clip cache: a clip the preloader already fetched starts from disk, with no wait.
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(StoryVideoCache.dataSourceFactory(context)))
+            .build().apply {
+            setMediaItem(StoryVideoCache.mediaItem(url, StoryPreloadRules.videoKey(storyId)))
             repeatMode = Player.REPEAT_MODE_OFF
             prepare()
         }
     }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                gg.pqp.app.stories.StoryPerf.frameReady(storyId, "video")
+                onReady()
+            }
+
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) ready = true
                 if (state == Player.STATE_ENDED) onEnded()
@@ -765,7 +819,12 @@ internal fun StoryVideo(
         )
         // The poster until the first frame, so the open never flashes black.
         if (!ready && posterUrl != null) {
-            AsyncImage(model = posterUrl, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            AsyncImage(
+                model = rememberStoryImage(posterUrl, StoryPreloadRules.posterKey(storyId)),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }
@@ -836,7 +895,7 @@ private fun OwnFooter(story: Story, onOpenViewers: () -> Unit) {
  * pauses the story and raises the full reaction row.
  */
 @Composable
-private fun ReplyFooter(session: SessionStore, story: Story, onFocus: (Boolean) -> Unit) {
+private fun ReplyFooter(session: SessionStore, story: Story, onFocus: (Boolean) -> Unit, onReacted: (String?) -> Unit) {
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val focus = LocalFocusManager.current
@@ -857,6 +916,7 @@ private fun ReplyFooter(session: SessionStore, story: Story, onFocus: (Boolean) 
         reaction = next
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         if (next != null) flash = StoriesRules.reactionGlyph(next)
+        onReacted(next)
         scope.launch { runCatching { session.api.reactToStory(story.id, next) } }
     }
     val sentLabel = stringResource(R.string.stories_viewer_sent)
