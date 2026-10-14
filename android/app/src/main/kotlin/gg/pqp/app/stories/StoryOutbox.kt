@@ -225,10 +225,15 @@ class StoryOutbox(
     private suspend fun upload(draft: StoryDraft) {
         val id = draft.id
         // A draft is posted only as the person who made it: never as whoever signed in since.
-        if (draft.userId != (session.phase.value as? SessionPhase.Ready)?.me?.id) {
-            withContext(Dispatchers.IO) { drafts.delete(id) }
-            jobs.remove(id)
-            return removeEntry(id)
+        when (val phase = session.phase.value) {
+            is SessionPhase.Ready -> if (phase.me.id != draft.userId) {
+                withContext(Dispatchers.IO) { drafts.delete(id) }
+                jobs.remove(id)
+                return removeEntry(id)
+            }
+            // The session is not there right now (starting, refreshing, failed): not a reason to throw a post away.
+            // It stays, failed, and is tried again when the person taps it.
+            else -> error("The session is not ready")
         }
         val total = draft.files.sumOf { it.size }
         val pace = StoryPerf.uploadPaceMs(appContext.filesDir)

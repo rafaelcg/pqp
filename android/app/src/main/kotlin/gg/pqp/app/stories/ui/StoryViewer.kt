@@ -127,6 +127,7 @@ import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
 import kotlin.math.absoluteValue
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -391,8 +392,10 @@ private fun DeckPage(
             gg.pqp.app.stories.StoryPerf.becameCurrent(story.id)
             // One that is already cached shows within a frame or two and keeps the preloads running; one
             // that is really loading gets the link to itself.
-            delay(STILL_LOADING_MS)
-            if (!shownReady) preloader.pause()
+            val showed = kotlinx.coroutines.withTimeoutOrNull(STILL_LOADING_MS) {
+                androidx.compose.runtime.snapshotFlow { shownReady }.first { it }
+            }
+            if (showed == null) preloader.pause()
         }
     }
     // A clip that is still buffering holds the preloader too: it is on the same link.
@@ -997,8 +1000,10 @@ private fun ReplyFooter(session: SessionStore, story: Story, onFocus: (Boolean) 
             flash = null
         }
     }
-    // The newest reaction wins: an answer that arrives after a later tap must not overwrite it.
-    val latest = remember(story.id) { intArrayOf(0) }
+    // The newest reaction the server took wins: an answer that arrives after a later one must not overwrite it, and a later
+    // one that failed must not stop an earlier one that succeeded from being remembered. [0] counts taps, [1] is the
+    // newest tap the cache has been told about.
+    val latest = remember(story.id) { intArrayOf(0, 0) }
     val react: (String) -> Unit = { value ->
         val next = if (reaction == value) null else value
         val mine = ++latest[0]
@@ -1007,7 +1012,10 @@ private fun ReplyFooter(session: SessionStore, story: Story, onFocus: (Boolean) 
         if (next != null) flash = StoriesRules.reactionGlyph(next)
         scope.launch {
             // The preload cache learns of it only when the server did.
-            if (runCatching { session.api.reactToStory(story.id, next) }.isSuccess && mine == latest[0]) onReacted(next)
+            if (runCatching { session.api.reactToStory(story.id, next) }.isSuccess && mine > latest[1]) {
+                latest[1] = mine
+                onReacted(next)
+            }
         }
     }
     val sentLabel = stringResource(R.string.stories_viewer_sent)
