@@ -317,6 +317,8 @@ interface MessageRow {
   id: string;
   author_id: string;
   author_name: string;
+  author_username: string | null;
+  author_discriminator: string | null;
   body: string;
   created_at: Date;
 }
@@ -330,6 +332,7 @@ function toContextMessage(
     id: row.id,
     authorId: row.author_id,
     authorName: row.author_name,
+    authorTag: formatUserTag(row.author_username, row.author_discriminator),
     party:
       row.author_id === reportedId
         ? "reported"
@@ -342,29 +345,125 @@ function toContextMessage(
   };
 }
 
-/** The one 1:1 thread between reporter and reported, oldest first. */
+/**
+ * The one 1:1 thread between reporter and reported: the last messages, oldest
+ * first, and whole-thread counts of TYPED messages per side. The counts are
+ * what says "11 from the reporter, none back" when only 20 rows are shown.
+ */
 async function loadConversation(
   reporterId: string,
   reportedId: string,
-): Promise<ReportContextMessage[] | null> {
+): Promise<{
+  messages: ReportContextMessage[];
+  counts: { fromReporter: number; fromReported: number };
+} | null> {
   const [low, high] =
     reporterId < reportedId ? [reporterId, reportedId] : [reportedId, reporterId];
-  const result = await getPool().query<MessageRow>(
-    `SELECT m.id, m.author_id, u.display_name AS author_name, m.body, m.created_at
-     FROM dm_pairs dp
-     JOIN messages m ON m.channel_id = dp.channel_id
-     JOIN users u ON u.id = m.author_id
-     WHERE dp.low_user_id = $1 AND dp.high_user_id = $2
-     ORDER BY m.created_at DESC, m.id DESC
-     LIMIT $3`,
-    [low, high, CONVERSATION_LIMIT],
-  );
+  const pool = getPool();
+  const [result, counts] = await Promise.all([
+    pool.query<MessageRow>(
+      `SELECT m.id, m.author_id, u.display_name AS author_name,
+              u.username AS author_username,
+              u.discriminator AS author_discriminator, m.body, m.created_at
+       FROM dm_pairs dp
+       JOIN messages m ON m.channel_id = dp.channel_id
+       JOIN users u ON u.id = m.author_id
+       WHERE dp.low_user_id = $1 AND dp.high_user_id = $2
+       ORDER BY m.created_at DESC, m.id DESC
+       LIMIT $3`,
+      [low, high, CONVERSATION_LIMIT],
+    ),
+    pool.query<{ from_reporter: string; from_reported: string }>(
+      `SELECT COUNT(*) FILTER (WHERE m.author_id = $3 AND m.body <> $5)::text AS from_reporter,
+              COUNT(*) FILTER (WHERE m.author_id = $4 AND m.body <> $5)::text AS from_reported
+       FROM dm_pairs dp
+       JOIN messages m ON m.channel_id = dp.channel_id
+       WHERE dp.low_user_id = $1 AND dp.high_user_id = $2`,
+      [low, high, reporterId, reportedId, MISSED_CALL_BODY],
+    ),
+  ]);
   if (result.rows.length === 0) {
     return null;
   }
-  return result.rows
-    .reverse()
-    .map((row) => toContextMessage(row, reporterId, reportedId));
+  return {
+    messages: result.rows
+      .reverse()
+      .map((row) => toContextMessage(row, reporterId, reportedId)),
+    counts: {
+      fromReporter: Number(counts.rows[0]?.from_reporter ?? 0),
+      fromReported: Number(counts.rows[0]?.from_reported ?? 0),
+    },
+  };
+}
+
+/** The reporter, for spotting a serial one. Instance lens only. */
+async function loadReporter(
+  reporterId: string,
+): Promise<ReportContext["reporter"]> {
+  const result = await getPool().query<{
+    display_name: string;
+    username: string | null;
+    discriminator: string | null;
+    created_at: Date;
+    filed: string;
+    actioned: string;
+    dismissed: string;
+  }>(
+    `SELECT u.display_name, u.username, u.discriminator, u.created_at,
+            COUNT(r.id)::text AS filed,
+            COUNT(r.id) FILTER (WHERE r.status = 'actioned')::text AS actioned,
+            COUNT(r.id) FILTER (WHERE r.status = 'dismissed')::text AS dismissed
+     FROM users u
+     LEFT JOIN reports r ON r.reporter_id = u.id
+     WHERE u.id = $1
+     GROUP BY u.id`,
+    [reporterId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    displayName: row.display_name,
+    tag: formatUserTag(row.username, row.discriminator),
+    createdAt: iso(row.created_at),
+    filed: Number(row.filed),
+    actioned: Number(row.actioned),
+    dismissed: Number(row.dismissed),
+  };
+}
+
+/**
+ * Where a reported message lives, whatever queue the report went to: a
+ * `minor_sexual` report is filed to the instance queue by design (no server on
+ * the row), but the message still belongs to a server and its staff can still
+ * be acted on.
+ */
+async function loadMessageServer(
+  report: ReportRow,
+  viewer: ContextViewer,
+): Promise<ReportContext["messageServer"]> {
+  if (report.subject_type !== "message" || !report.reported_message_id) {
+    return null;
+  }
+  const result = await getPool().query<{
+    server_id: string;
+    server_name: string;
+    channel_name: string;
+  }>(
+    `SELECT s.id AS server_id, s.name AS server_name, c.name AS channel_name
+     FROM messages m
+     JOIN channels c ON c.id = m.channel_id AND c.kind = 'server'
+     JOIN servers s ON s.id = c.server_id
+     WHERE m.id = $1`,
+    [report.reported_message_id],
+  );
+  const row = result.rows[0];
+  // A server's staff only ever learn about their own server.
+  if (!row || (!viewer.instance && row.server_id !== report.server_id)) {
+    return null;
+  }
+  return { id: row.server_id, name: row.server_name, channelName: row.channel_name };
 }
 
 async function loadServerMessages(
@@ -473,14 +572,20 @@ async function loadSurrounding(
   // The neighbours below are found by comparing to the anchor INSIDE SQL: a JS
   // Date carries milliseconds and a timestamptz carries microseconds, so a
   // round trip through `Date` would let the anchor itself match `>`.
-  const anchor = await pool.query<{
-    channel_id: string;
-    id: string;
-    kind: "server" | "dm" | "group";
-    server_id: string | null;
-  }>(
-    `SELECT m.id, m.channel_id, c.kind, c.server_id
-     FROM messages m JOIN channels c ON c.id = m.channel_id
+  const anchor = await pool.query<
+    MessageRow & {
+      channel_id: string;
+      kind: "server" | "dm" | "group";
+      server_id: string | null;
+    }
+  >(
+    `SELECT m.id, m.channel_id, c.kind, c.server_id, m.author_id, m.body,
+            m.created_at, u.display_name AS author_name,
+            u.username AS author_username,
+            u.discriminator AS author_discriminator
+     FROM messages m
+     JOIN channels c ON c.id = m.channel_id
+     JOIN users u ON u.id = m.author_id
      WHERE m.id = $1`,
     [report.reported_message_id],
   );
@@ -489,13 +594,13 @@ async function loadSurrounding(
     return null;
   }
   if (row.kind === "group") {
-    return { before: [], after: [], withheld: "group" };
+    return { reported: null, before: [], after: [], withheld: "group" };
   }
   if (row.kind === "dm") {
     // A 1:1 thread: the reporter is one of its two people, and only an
     // instance moderator can hold a report about one (no server queue can).
     if (!viewer.instance || !report.reporter_id) {
-      return { before: [], after: [], withheld: "no_access" };
+      return { reported: null, before: [], after: [], withheld: "no_access" };
     }
   } else {
     // A server channel must belong to the report's own server, and a server's
@@ -505,11 +610,13 @@ async function loadSurrounding(
         row.server_id !== report.server_id ||
         !(await canAccessChannel(row.channel_id, viewer.id))
       ) {
-        return { before: [], after: [], withheld: "no_access" };
+        return { reported: null, before: [], after: [], withheld: "no_access" };
       }
     }
   }
   const select = `SELECT m.id, m.author_id, u.display_name AS author_name,
+                         u.username AS author_username,
+                         u.discriminator AS author_discriminator,
                          m.body, m.created_at
                   FROM messages m JOIN users u ON u.id = m.author_id`;
   const [before, after] = await Promise.all([
@@ -531,6 +638,7 @@ async function loadSurrounding(
   const map = (r: MessageRow) =>
     toContextMessage(r, report.reporter_id, report.reported_user_id);
   return {
+    reported: map(row),
     before: before.rows.reverse().map(map),
     after: after.rows.map(map),
     withheld: null,
@@ -542,14 +650,15 @@ async function loadActions(
   report: ReportRow,
   viewer: ContextViewer,
   accountExists: boolean,
+  /** The row's own server, or the one the reported message lives in. */
+  serverId: string | null,
 ): Promise<ReportContext["actions"]> {
   const targetId = report.reported_user_id;
   const notSelf = Boolean(targetId) && targetId !== viewer.id;
   const canTerminate = viewer.instance && accountExists && notSelf;
-  if (!report.server_id || !targetId || !notSelf || !accountExists) {
+  if (!serverId || !targetId || !notSelf || !accountExists) {
     return { canTerminate, server: null };
   }
-  const serverId = report.server_id;
   const [server, canBanBit, canTimeoutBit, banned, targetHier, viewerHier] =
     await Promise.all([
       getPool().query<{ name: string }>(
@@ -628,6 +737,9 @@ export async function getReportContext(
       otherReports: [],
       sanctions: { bans: [], timeouts: [] },
       conversation: null,
+      conversationCounts: null,
+      reporter: null,
+      messageServer: await loadMessageServer(report, viewer),
       serverMessages: [],
       ownedServers: [],
       surrounding: await loadSurrounding(report, viewer),
@@ -643,7 +755,8 @@ export async function getReportContext(
     serverMessages,
     ownedServers,
     surrounding,
-    actions,
+    messageServer,
+    reporter,
   ] = await Promise.all([
     viewer.instance
       ? loadSignals(userId, report.reporter_id)
@@ -656,8 +769,17 @@ export async function getReportContext(
     loadServerMessages(userId, viewer.id, scopeServer),
     loadOwnedServers(userId, scopeServer),
     loadSurrounding(report, viewer),
-    loadActions(report, viewer, true),
+    loadMessageServer(report, viewer),
+    viewer.instance && report.reporter_id
+      ? loadReporter(report.reporter_id)
+      : Promise.resolve(null),
   ]);
+  const actions = await loadActions(
+    report,
+    viewer,
+    true,
+    report.server_id ?? messageServer?.id ?? null,
+  );
 
   return {
     reportId: report.id,
@@ -666,7 +788,10 @@ export async function getReportContext(
     signals,
     otherReports,
     sanctions,
-    conversation,
+    conversation: conversation?.messages ?? null,
+    conversationCounts: conversation?.counts ?? null,
+    reporter,
+    messageServer,
     serverMessages,
     ownedServers,
     surrounding,

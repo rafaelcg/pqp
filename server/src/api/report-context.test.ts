@@ -489,6 +489,14 @@ describeDb("report context", () => {
       expect(res.status).toBe(200);
       const ctx = reportContextSchema.parse(res.body);
       expect(ctx.surrounding?.withheld).toBeNull();
+      // The reported message itself, in its place, with its author's name and tag.
+      expect(ctx.surrounding?.reported).toMatchObject({
+        id: reportedId,
+        body: "the bad one",
+        authorName: "nuisance",
+        party: "reported",
+      });
+      expect(ctx.surrounding?.reported?.authorTag).toMatch(/^nuisance#\d{4}$/);
       expect(ctx.surrounding?.before.map((m) => m.body)).toEqual([
         "before 3",
         "before 4",
@@ -559,11 +567,115 @@ describeDb("report context", () => {
     );
     const groupCtx = reportContextSchema.parse(groupRes.body);
     expect(groupCtx.surrounding).toEqual({
+      reported: null,
       before: [],
       after: [],
       withheld: "group",
     });
     expect(JSON.stringify(groupRes.body)).not.toContain("SECRET-GROUP-THIRD-PARTY");
+  });
+
+  // ------------------------------------------- the reporter, and the thread
+
+  it("counts the whole thread so an unanswered reporter is visible", async () => {
+    const convo = (await openConversation(reporter.id, [nuisance.id])).channelId;
+    // 25 messages from the reporter (more than the 20 shown), none back.
+    for (let i = 1; i <= 25; i += 1) {
+      await say(convo, reporter, `are you there ${i}`);
+    }
+    const { report } = await createReport({
+      subjectType: "user",
+      reporterId: reporter.id,
+      userId: nuisance.id,
+      reason: "harassment",
+    });
+    // Reports this reporter filed before, one dismissed.
+    const earlier = await createReport({
+      subjectType: "user",
+      reporterId: reporter.id,
+      userId: stranger1.id,
+      reason: "spam",
+    });
+    await getPool().query(
+      `UPDATE reports SET status = 'dismissed', resolved_by = $2, resolved_at = NOW()
+       WHERE id = $1::bigint`,
+      [earlier.report.id, operator.id],
+    );
+    const res = await call(operator, "GET", `/api/reports/${report.id}/context`);
+    const ctx = reportContextSchema.parse(res.body);
+    expect(ctx.conversation).toHaveLength(20);
+    expect(ctx.conversationCounts).toEqual({ fromReporter: 25, fromReported: 0 });
+    expect(ctx.conversation?.[0]?.authorName).toBe("reporter");
+    expect(ctx.reporter).toMatchObject({
+      displayName: "reporter",
+      filed: 2,
+      actioned: 0,
+      dismissed: 1,
+    });
+
+    // A server's staff get neither the reporter's history nor the thread.
+    const { report: serverReport } = await createReport({
+      subjectType: "user",
+      reporterId: reporter.id,
+      userId: nuisance.id,
+      serverId: alphaId,
+      reason: "harassment",
+    });
+    const staff = reportContextSchema.parse(
+      (await call(admin, "GET", `/api/reports/${serverReport.id}/context`)).body,
+    );
+    expect(staff.reporter).toBeNull();
+    expect(staff.conversationCounts).toBeNull();
+  });
+
+  // ------------------------------------------- where a reported message goes
+
+  it("files a message reported from a voice channel's chat into that server's queue", async () => {
+    const lobby = (await createChannel(alphaId, "Lobby", "voice")).id;
+    const reportedId = await say(lobby, nuisance, "Citrus");
+    const { report } = await createReport({
+      subjectType: "message",
+      reporterId: reporter.id,
+      messageId: reportedId,
+      reason: "spam",
+    });
+    // Derived server-side from the message's channel, never from the client.
+    expect(report.contextKind).toBe("server");
+    const row = await getPool().query(
+      `SELECT server_id FROM reports WHERE id = $1::bigint`,
+      [report.id],
+    );
+    expect(row.rows[0].server_id).toBe(alphaId);
+
+    const ctx = reportContextSchema.parse(
+      (await call(admin, "GET", `/api/reports/${report.id}/context`)).body,
+    );
+    expect(ctx.messageServer).toMatchObject({ id: alphaId, channelName: "Lobby" });
+    expect(ctx.surrounding?.reported?.body).toBe("Citrus");
+  });
+
+  it("keeps a minor_sexual report in the instance queue by design, but still knows the server", async () => {
+    const lobby = (await createChannel(alphaId, "Lobby", "voice")).id;
+    const reportedId = await say(lobby, nuisance, "Citrus");
+    const { report } = await createReport({
+      subjectType: "message",
+      reporterId: reporter.id,
+      messageId: reportedId,
+      reason: "minor_sexual",
+    });
+    // The ONE reason that moves a server-channel message out of its server's
+    // queue (`routeByReason`), so the server's own staff never hold it.
+    expect(report.contextKind).toBe("none");
+    expect((await call(admin, "GET", `/api/reports/${report.id}/context`)).status).toBe(404);
+
+    const ctx = reportContextSchema.parse(
+      (await call(operator, "GET", `/api/reports/${report.id}/context`)).body,
+    );
+    // The row carries no server, but the context says where the message lives
+    // and offers the server actions the moderator really has there (none here).
+    expect(ctx.messageServer).toMatchObject({ id: alphaId, name: "Alpha", channelName: "Lobby" });
+    expect(ctx.actions.server).toMatchObject({ id: alphaId, canBan: false, canTimeout: false });
+    expect(ctx.surrounding?.reported?.body).toBe("Citrus");
   });
 
   it("agrees with the call record the voice server writes", async () => {

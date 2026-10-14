@@ -77,12 +77,23 @@ function makeContext(overrides: Partial<ReportContext> = {}): ReportContext {
         id: "22222222-2222-4222-8222-222222222222",
         authorId: "11111111-1111-4111-8111-111111111111",
         authorName: "Cold Caller",
+        authorTag: "coldcaller#0042",
         party: "reported",
         body: "\u{1F4DE} Missed call",
         createdAt: at(23),
         isCall: true,
       },
     ],
+    conversationCounts: { fromReporter: 11, fromReported: 0 },
+    reporter: {
+      displayName: "Niki",
+      tag: "niki#0001",
+      createdAt: at(-60 * 24 * 3),
+      filed: 7,
+      actioned: 1,
+      dismissed: 5,
+    },
+    messageServer: null,
     serverMessages: [],
     ownedServers: [
       {
@@ -196,12 +207,81 @@ describe("ReportContextPanel", () => {
     expect(text).toContain("Only unanswered calls leave a record");
   });
 
+  it("shows the reported message in its place, and names every author with a neutral chip", async () => {
+    const msg = (
+      id: string,
+      name: string,
+      party: "reporter" | "reported" | "other",
+      body: string,
+    ) => ({
+      id,
+      authorId: "11111111-1111-4111-8111-111111111111",
+      authorName: name,
+      authorTag: `${name.toLowerCase()}#0001`,
+      party,
+      body,
+      createdAt: at(1),
+      isCall: false,
+    });
+    fetchMock.mockResolvedValue(
+      makeContext({
+        signals: null,
+        conversation: null,
+        conversationCounts: null,
+        reporter: null,
+        messageServer: { id: "44444444-4444-4444-8444-444444444444", name: "Pedro's room", channelName: "Lobby" },
+        surrounding: {
+          reported: msg("55555555-5555-4555-8555-555555555555", "Niki", "reported", "Citrus"),
+          before: [msg("66666666-6666-4666-8666-666666666666", "Bia", "other", "before")],
+          after: [msg("77777777-7777-4777-8777-777777777777", "Caio", "reporter", "after")],
+          withheld: null,
+        },
+      }),
+    );
+    await mount();
+    await expand();
+    const rows = Array.from(
+      host!.querySelectorAll("section ul > li"),
+    ).filter((li) => ["before", "Citrus", "after"].some((b) => li.textContent?.includes(b)));
+    // before, THE REPORTED MESSAGE, after: in that order, nothing missing.
+    expect(rows.map((r) => r.textContent)).toEqual([
+      expect.stringContaining("before"),
+      expect.stringContaining("Citrus"),
+      expect.stringContaining("after"),
+    ]);
+    const marked = host!.querySelector('[aria-current="true"]');
+    expect(marked?.textContent).toContain("Citrus");
+    expect(marked?.textContent).toContain("Reported message");
+    // The NAME is always shown; the role is a chip beside it, never instead.
+    expect(marked?.textContent).toContain("Niki");
+    expect(marked?.textContent).toContain("reported account");
+    expect(host!.textContent).toContain("Caio");
+    expect(host!.textContent).toContain("who reported");
+    // Where the message lives, even if the report row has no server.
+    expect(host!.textContent).toContain("Message in #Lobby, server Pedro's room.");
+  });
+
+  it("says plainly when the reported account never answered the reporter", async () => {
+    fetchMock.mockResolvedValue(makeContext());
+    await mount();
+    await expand();
+    const text = host!.textContent ?? "";
+    expect(text).toContain("11 messages from the reporter, 0 from Cold Caller.");
+    expect(text).toContain("Cold Caller never replied.");
+    // And the reporter's own record, to spot a serial reporter.
+    expect(text).toContain(
+      "Reporter: Niki, account created 3 days ago. Reports filed: 7 (1 actioned, 5 dismissed).",
+    );
+  });
+
   it("renders what the server sent for a server lens and nothing it did not", async () => {
     fetchMock.mockResolvedValue(
       makeContext({
         lens: "server",
         signals: null,
         conversation: null,
+        conversationCounts: null,
+        reporter: null,
         ownedServers: [],
         account: { ...makeContext().account!, lastCountry: null },
         actions: { canTerminate: false, server: null },
