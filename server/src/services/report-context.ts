@@ -163,30 +163,34 @@ const FIRST_HOUR_END_SQL = `(SELECT created_at + interval '1 hour' FROM users WH
 /** Instance lens only. Counts and times, never a name and never a body. */
 async function loadSignals(userId: string, reporterId: string | null) {
   const pool = getPool();
-  const [dms, calls, blocks, reporterBlock] = await Promise.all([
-    pool.query<ContactRow>(
-      `WITH ${STARTED_CONVERSATIONS_SQL}
-       SELECT first_at AS created_at,
-              COUNT(*) OVER ()::text AS total,
-              (COUNT(*) FILTER (WHERE first_at <= ${FIRST_HOUR_END_SQL}) OVER ())::text AS first_hour
-       FROM started
-       ORDER BY first_at DESC
-       LIMIT ${CONTACT_TIMES_LIMIT}`,
-      [userId],
-    ),
-    // Missed-call records they left in those conversations. An answered call
-    // leaves nothing. The read is bounded by the account's OWN started
+  const [contacts, blocks, reporterBlock] = await Promise.all([
+    // ONE statement for both signals, so the started-conversation set (a
+    // first-message lookup per DM pair) is built once. Missed-call records
+    // are those the account left in the conversations it began; an answered
+    // call leaves nothing. The read is bounded by the account's OWN started
     // conversations (each walked by the channel index), not by its history.
-    pool.query<ContactRow>(
-      `WITH ${STARTED_CONVERSATIONS_SQL}
-       SELECT m.created_at,
-              COUNT(*) OVER ()::text AS total,
-              (COUNT(*) FILTER (WHERE m.created_at <= ${FIRST_HOUR_END_SQL}) OVER ())::text AS first_hour
-       FROM started s
-       JOIN messages m ON m.channel_id = s.channel_id
-        AND m.author_id = $1 AND m.body = $2
-       ORDER BY m.created_at DESC
-       LIMIT ${CONTACT_TIMES_LIMIT}`,
+    pool.query<ContactRow & { kind: "dm" | "call" }>(
+      `WITH ${STARTED_CONVERSATIONS_SQL},
+       events AS (
+         SELECT first_at AS at, 'dm'::text AS kind FROM started
+         UNION ALL
+         SELECT m.created_at AS at, 'call'::text AS kind
+         FROM started s
+         JOIN messages m ON m.channel_id = s.channel_id
+          AND m.author_id = $1 AND m.body = $2
+       )
+       SELECT at AS created_at, kind, total::text AS total,
+              first_hour::text AS first_hour
+       FROM (
+         SELECT at, kind,
+                COUNT(*) OVER (PARTITION BY kind) AS total,
+                COUNT(*) FILTER (WHERE at <= ${FIRST_HOUR_END_SQL})
+                  OVER (PARTITION BY kind) AS first_hour,
+                ROW_NUMBER() OVER (PARTITION BY kind ORDER BY at DESC) AS rn
+         FROM events
+       ) ranked
+       WHERE rn <= ${CONTACT_TIMES_LIMIT}
+       ORDER BY at DESC`,
       [userId, MISSED_CALL_BODY],
     ),
     pool.query<{ n: string }>(
@@ -202,8 +206,8 @@ async function loadSignals(userId: string, reporterId: string | null) {
       : Promise.resolve({ rows: [] as { created_at: Date }[] }),
   ]);
   return {
-    dmsStarted: contactCount(dms.rows),
-    callsPlaced: contactCount(calls.rows),
+    dmsStarted: contactCount(contacts.rows.filter((r) => r.kind === "dm")),
+    callsPlaced: contactCount(contacts.rows.filter((r) => r.kind === "call")),
     blockedByCount: Number(blocks.rows[0]?.n ?? 0),
     reporterBlockedAt: reporterBlock.rows[0]
       ? iso(reporterBlock.rows[0].created_at)
