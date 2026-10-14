@@ -187,6 +187,16 @@ extension StoryCallStickerData {
 }
 
 extension Story {
+    /// The caption pill of a story from before layers. A story with text layers
+    /// has those words twice (the author's build copies them into `caption` for
+    /// older builds): the layers draw them where the author put them, so the
+    /// pill is not drawn. Same rule as the web viewer (`showLegacyText`).
+    var legacyCaption: String? {
+        guard !isText, let caption, !caption.isEmpty else { return nil }
+        if layers.contains(where: { $0.isText }) { return nil }
+        return caption
+    }
+
     /// What a screen reader says for the story: the alt text the author's app
     /// wrote, else the caption, else the text of a card.
     var spokenDescription: String? {

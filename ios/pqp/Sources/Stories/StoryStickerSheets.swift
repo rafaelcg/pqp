@@ -25,6 +25,7 @@ struct StoryStickerTray: View {
                          : (canAddMention ? String(localized: "Tag someone") : String(localized: "Up to 5 people")),
                      enabled: canAddMention, id: "tray.mention", action: onMention)
             }
+            .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .padding(Metrics.hPadding)
@@ -37,6 +38,7 @@ struct StoryStickerTray: View {
                 Image(systemName: symbol)
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(enabled ? Palette.signal : Palette.paperMuted)
+                    .accessibilityHidden(true)
                 Text(verbatim: title)
                     .font(Typography.bodyMedium)
                     .foregroundStyle(enabled ? Palette.paper : Palette.paperMuted)
@@ -46,7 +48,8 @@ struct StoryStickerTray: View {
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Both tiles are as tall as the taller one and start at the same line.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(14)
             .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.surfaceRaised))
         }
@@ -162,6 +165,7 @@ struct StoryMentionSheet: View {
                         Button { onPick(person) } label: {
                             HStack(spacing: 12) {
                                 Avatar(name: person.displayName, seed: person.id, size: 36, url: person.avatarUrl)
+                                    .accessibilityHidden(true)
                                 Text(verbatim: person.displayName)
                                     .font(Typography.bodyMedium)
                                     .foregroundStyle(Palette.paper)

@@ -18,6 +18,7 @@ struct StoryViewer: View {
     @Environment(CallRatingModel.self) private var ratings
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     let launch: StoryViewerLaunch
     /// The stories watched (ids), so the strip can turn rings seen on close.
@@ -122,6 +123,9 @@ struct StoryViewer: View {
         .task(id: current?.id) {
             if let story = current { await loadServersIfNeeded(for: story) }
         }
+        // The call card is a live roster: it follows the room while the story
+        // is open, held or not.
+        .task(id: callWatchId) { await watchCall() }
         .confirmationDialog(
             confirmTitle,
             isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
@@ -206,7 +210,7 @@ struct StoryViewer: View {
                         .padding(.bottom, 18)
                         .opacity(chromeHidden ? 0 : 1)
                 }
-                if let caption = current?.caption, !caption.isEmpty, current?.isText == false {
+                if let caption = current?.legacyCaption {
                     Text(verbatim: caption)
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(.white)
@@ -277,6 +281,27 @@ struct StoryViewer: View {
                 profileSubject = ProfileSubject(id: user.id, displayName: user.displayName, tag: nil, avatarUrl: user.avatarUrl)
                 return
             }
+        }
+    }
+
+    /// The story whose card is being kept fresh: the one on screen, when it
+    /// carries a call.
+    private var callWatchId: String? {
+        current.flatMap { StoryCallRefresh.watches($0) ? $0.id : nil }
+    }
+
+    /// Re-reads the open story on a slow beat and swaps in the roster when it
+    /// changed. Nothing else about the story is touched, and a failed read
+    /// just waits for the next beat.
+    private func watchCall() async {
+        guard let id = callWatchId else { return }
+        while !Task.isCancelled {
+            try? await Task.sleep(for: StoryCallRefresh.interval)
+            guard !Task.isCancelled else { return }
+            guard scenePhase == .active else { continue }
+            guard let fresh = try? await session.api.stories(ids: [id]).first,
+                  let old = stories[id], old.call != fresh.call else { continue }
+            stories[id]?.call = fresh.call
         }
     }
 
@@ -819,6 +844,17 @@ struct StoryProgressBar: View {
                 .scaleEffect(x: max(0, min(1, fill)), y: 1, anchor: .leading)
         }
         .frame(height: 2.5)
+    }
+}
+
+/// When and how often an open story re-reads its call.
+enum StoryCallRefresh {
+    static let interval: Duration = .seconds(8)
+
+    /// Only a story with a room to follow: the live roster is on the story,
+    /// and a story without a call has nothing to refresh.
+    static func watches(_ story: Story) -> Bool {
+        story.call != nil
     }
 }
 

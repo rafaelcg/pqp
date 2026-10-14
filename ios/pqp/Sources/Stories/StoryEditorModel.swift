@@ -232,6 +232,17 @@ final class StoryEditorModel {
         return layer.id
     }
 
+    /// The pen is about to go down. A story has one drawing, and layer order is
+    /// creation order for every type (web and Android say the same), so a second
+    /// session that starts with layers above the drawing brings it back to the
+    /// top: the new stroke stays over what the finger sees, never under a photo
+    /// or a line of text placed since. One undo step, nothing when it is
+    /// already topmost or there is no drawing yet.
+    func beginDrawing() {
+        guard let existing = drawingLayer, layers.last?.id != existing.id else { return }
+        bringToFront(id: existing.id)
+    }
+
     /// The drawing is one layer covering the canvas, replaced as a whole each
     /// time the pen is put down. An empty drawing removes it.
     func setDrawing(_ strokes: PKDrawing, file: StoryLayerFile?, preview: UIImage?) {

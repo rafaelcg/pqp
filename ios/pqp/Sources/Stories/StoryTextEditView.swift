@@ -23,6 +23,16 @@ struct StoryTextEditView: View {
     @State private var tick = 0
     @State private var colorTick = 0
     @State private var keyboard: CGFloat = 0
+    /// The typed block at scale 1, as laid out; what the type is shrunk by to fit.
+    @State private var blockHeight: CGFloat = 0
+    /// Set by the first keystroke: a line opened to be edited keeps the scale
+    /// the author chose until they actually type something that no longer fits.
+    @State private var typed = false
+
+    /// Room the line may take: under the top bar, above the controls and the
+    /// keyboard.
+    static let topRoom: CGFloat = 56
+    static let controlsRoom: CGFloat = 130
 
     private var fontSize: CGFloat { StoryCanvas.fontSize(for: data, canvasWidth: canvasWidth) }
 
@@ -35,9 +45,14 @@ struct StoryTextEditView: View {
                     .accessibilityHidden(true)
 
                 editor
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                        blockHeight = height
+                        shrinkToFit(in: proxy.size)
+                    }
                     .scaleEffect(scale)
                     .rotationEffect(.radians(rotation))
-                    .position(x: center.x, y: center.y - lift(in: proxy.size))
+                    .position(x: center.x, y: lifted(in: proxy.size))
+                    .onChange(of: keyboard) { _, _ in shrinkToFit(in: proxy.size) }
 
                 VStack(spacing: 0) {
                     topBar
@@ -68,12 +83,29 @@ struct StoryTextEditView: View {
 
     /// The line stays where it is. Only when the keyboard and the controls
     /// above it would cover it is it lifted, by exactly as much as it takes,
-    /// and only on screen: the layer itself never moves.
-    private func lift(in size: CGSize) -> CGFloat {
-        let controlsHeight: CGFloat = 130
-        let bottom = center.y + fontSize * scale * 1.6
-        let free = size.height - keyboard - controlsHeight
+    /// and only on screen: the layer itself never moves. A tall block is also
+    /// kept under the top bar.
+    private func lifted(in size: CGSize) -> CGFloat {
+        let half = max(fontSize * scale * 1.6, blockHeight * scale / 2)
+        let y = center.y - lift(in: size, half: half)
+        guard keyboard > 0 else { return y }
+        return max(y, Self.topRoom + blockHeight * scale / 2)
+    }
+
+    private func lift(in size: CGSize, half: CGFloat) -> CGFloat {
+        let bottom = center.y + half
+        let free = size.height - keyboard - Self.controlsRoom
         return keyboard > 0 ? max(0, bottom - free) : 0
+    }
+
+    /// Typing past what fits shrinks the type to fit, the way Instagram does,
+    /// and the slider follows. Only after the first keystroke, so opening a line
+    /// to edit it never changes its size.
+    private func shrinkToFit(in size: CGSize) {
+        guard typed, blockHeight > 0 else { return }
+        let room = size.height - keyboard - Self.controlsRoom - Self.topRoom
+        guard room > 80, blockHeight * scale > room else { return }
+        scale = max(StoryLayerLimits.scaleMin, room / blockHeight)
     }
 
     /// The slider's 0...1 is the layer's scale on a log scale, so the same
@@ -161,6 +193,7 @@ struct StoryTextEditView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: data.background)
         .accessibilityIdentifier("text.input")
         .onChange(of: data.text) { _, value in
+            typed = true
             if value.count > StoryLimits.textMax { data.text = String(value.prefix(StoryLimits.textMax)) }
         }
     }

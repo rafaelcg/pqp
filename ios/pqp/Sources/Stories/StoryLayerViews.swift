@@ -301,9 +301,12 @@ struct StoryCallStickerData: Equatable, Sendable {
     var joinable: Bool
 }
 
-/// The "chama pra call" card: the room and the server it is in, who is there
-/// right now (up to three faces and a "+n"), a live dot while there are
-/// people, and the door. Empty, full and ended each say so in words.
+/// The "chama pra call" card: ONE compact row, the same card web and Android
+/// draw. The server's tile, a kicker (the state, with a live dot and the count)
+/// over the room and the server, up to three live faces, and the door. Empty,
+/// full and ended each say so in words. Every length is a share of the canvas
+/// width (`cq` is 1 cqw), so it is the same picture at any size and hides
+/// about a tenth of the story.
 struct StoryCallStickerCard: View {
     let data: StoryCallStickerData
     let canvasWidth: CGFloat
@@ -311,144 +314,146 @@ struct StoryCallStickerCard: View {
     var onJoin: (() -> Void)?
 
     private var width: CGFloat { canvasWidth * StoryCanvas.stickerWidthFraction }
-    private var unit: CGFloat { width / 300 }
+    /// One container-query-width unit: 1% of the canvas width.
+    private var cq: CGFloat { canvasWidth / 100 }
     private var isLive: Bool { data.state == .live && data.count > 0 }
     private var isEnded: Bool { data.state == .ended }
+    private var extra: Int { max(0, data.count - min(3, data.participants.count)) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12 * unit) {
-            header
-            people
-            footer
-        }
-        .padding(16 * unit)
-        .frame(width: width, alignment: .leading)
-        .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: 24 * unit, style: .continuous).fill(.ultraThinMaterial)
-                RoundedRectangle(cornerRadius: 24 * unit, style: .continuous)
-                    .fill(Palette.inkDeep.opacity(isEnded ? 0.82 : 0.6))
+        HStack(spacing: 0) {
+            serverTile
+            VStack(alignment: .leading, spacing: 0) {
+                kicker
+                Text(verbatim: data.roomName)
+                    .font(.system(size: 5 * cq, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if !data.serverName.isEmpty {
+                    Text(verbatim: data.serverName)
+                        .font(.system(size: 2.9 * cq, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                }
             }
+            .padding(.horizontal, 2.8 * cq)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            faces
+            door
+        }
+        .padding(3 * cq)
+        .frame(width: width)
+        .background(
+            RoundedRectangle(cornerRadius: 5 * cq, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5 * cq, style: .continuous)
+                        .fill(Palette.inkDeep.opacity(isEnded ? 0.5 : 0.66))
+                )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 24 * unit, style: .continuous)
-                .strokeBorder(isLive ? Palette.signal.opacity(0.75) : Color.white.opacity(0.14), lineWidth: isLive ? 1.5 : 1)
+            RoundedRectangle(cornerRadius: 5 * cq, style: .continuous)
+                .strokeBorder(isEnded ? Color.white.opacity(0.25) : Palette.signal.opacity(0.75), lineWidth: max(1, 0.4 * cq))
         )
-        .shadow(color: .black.opacity(0.35), radius: 14 * unit, y: 4)
-        .saturation(isEnded ? 0.4 : 1)
+        .shadow(color: .black.opacity(0.35), radius: 3.5 * cq, y: 1 * cq)
+        .opacity(isEnded ? 0.72 : 1)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text(verbatim: spokenDescription))
         .accessibilityAddTraits(onJoin != nil && data.joinable ? .isButton : [])
         .accessibilityIdentifier("story.call.sticker")
     }
 
-    private var header: some View {
-        HStack(spacing: 10 * unit) {
-            Avatar(name: data.serverName, seed: data.serverId, size: 34 * unit, url: data.serverIconUrl)
-            VStack(alignment: .leading, spacing: 1 * unit) {
-                HStack(spacing: 5 * unit) {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .font(.system(size: 12 * unit, weight: .bold))
-                    Text(verbatim: data.roomName)
-                        .font(.system(size: 17 * unit, weight: .heavy, design: .rounded))
-                        .lineLimit(1)
-                }
+    /// The server's picture on a rounded square, its first letter without one.
+    private var serverTile: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 2.8 * cq, style: .continuous).fill(.white.opacity(0.14))
+            Text(verbatim: String((data.serverName.isEmpty ? data.roomName : data.serverName).prefix(1)).uppercased())
+                .font(.system(size: 5 * cq, weight: .heavy, design: .rounded))
                 .foregroundStyle(.white)
-                Text(verbatim: data.serverName)
-                    .font(.system(size: 12 * unit, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .lineLimit(1)
+            if let url = Avatar.resolve(data.serverIconUrl) {
+                AsyncImage(url: url) { $0.resizable().scaledToFill() } placeholder: { Color.clear }
             }
-            Spacer(minLength: 4 * unit)
-            if isLive { liveBadge }
+        }
+        .frame(width: 11 * cq, height: 11 * cq)
+        .clipShape(RoundedRectangle(cornerRadius: 2.8 * cq, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 2.8 * cq, style: .continuous).strokeBorder(.white.opacity(0.14), lineWidth: 1))
+        .accessibilityHidden(true)
+    }
+
+    private var kickerText: String {
+        switch data.state {
+        case .ended: return String(localized: "The call ended")
+        case .full: return String(localized: "The room is full")
+        case .preview: return String(localized: "Live")
+        case .live:
+            if data.count == 0 { return String(localized: "Nobody in the call right now") }
+            return String(localized: "Live") + " · \(data.count)"
         }
     }
 
-    private var liveBadge: some View {
-        HStack(spacing: 5 * unit) {
-            LiveDot(size: 8 * unit, reduceMotion: reduceMotion)
-            Text("Live")
-                .font(.system(size: 11 * unit, weight: .heavy))
+    private var kicker: some View {
+        HStack(spacing: 1.2 * cq) {
+            if isLive {
+                LiveDot(size: 1.8 * cq, reduceMotion: reduceMotion)
+            } else {
+                Circle().fill(Color.white.opacity(0.6)).frame(width: 1.8 * cq, height: 1.8 * cq)
+            }
+            Text(verbatim: kickerText)
+                .font(.system(size: 2.7 * cq, weight: .bold))
                 .textCase(.uppercase)
-                .foregroundStyle(Palette.signal)
+                .tracking(0.04 * 2.7 * cq)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
-        .padding(.horizontal, 8 * unit)
-        .padding(.vertical, 4 * unit)
-        .background(Capsule().fill(Palette.signal.opacity(0.16)))
+        .foregroundStyle(isLive || data.state == .preview ? Palette.signal : Color.white.opacity(0.7))
     }
 
+    /// Up to three live faces and a "+n", overlapping.
     @ViewBuilder
-    private var people: some View {
-        if data.state == .preview {
-            Text("People who are in the room show up here live.")
-                .font(.system(size: 13 * unit, weight: .medium))
-                .foregroundStyle(.white.opacity(0.75))
-                .fixedSize(horizontal: false, vertical: true)
-        } else if isEnded {
-            Text("The call ended")
-                .font(.system(size: 14 * unit, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.7))
-        } else if data.count == 0 {
-            Text("Nobody in the call right now")
-                .font(.system(size: 14 * unit, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.8))
-        } else {
-            HStack(spacing: 10 * unit) {
-                HStack(spacing: -10 * unit) {
-                    ForEach(Array(data.participants.prefix(3).enumerated()), id: \.element.id) { index, person in
-                        Avatar(name: person.displayName, seed: person.id, size: 34 * unit, url: person.avatarUrl)
-                            .overlay(Circle().strokeBorder(Palette.inkDeep, lineWidth: 2.5 * unit))
-                            .zIndex(Double(3 - index))
-                    }
-                    let extra = data.count - min(3, data.participants.count)
-                    if extra > 0 {
-                        Text(verbatim: "+\(extra)")
-                            .font(.system(size: 12 * unit, weight: .heavy))
-                            .foregroundStyle(.white)
-                            .frame(width: 34 * unit, height: 34 * unit)
-                            .background(Circle().fill(Palette.surfaceRaised))
-                            .overlay(Circle().strokeBorder(Palette.inkDeep, lineWidth: 2.5 * unit))
-                    }
+    private var faces: some View {
+        if !isEnded, !data.participants.isEmpty, data.state != .preview {
+            HStack(spacing: -1.4 * cq) {
+                ForEach(Array(data.participants.prefix(3).enumerated()), id: \.element.id) { index, person in
+                    Avatar(name: person.displayName, seed: person.id, size: 7 * cq, url: person.avatarUrl)
+                        .overlay(Circle().strokeBorder(Palette.inkDeep, lineWidth: max(1, 0.4 * cq)))
+                        .zIndex(Double(3 - index))
                 }
-                Text(verbatim: String(localized: "\(data.count) in the call"))
-                    .font(.system(size: 14 * unit, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
+                if extra > 0 {
+                    Text(verbatim: "+\(extra)")
+                        .font(.system(size: 2.8 * cq, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(width: 7 * cq, height: 7 * cq)
+                        .background(Circle().fill(Color.white.opacity(0.22)))
+                        .overlay(Circle().strokeBorder(Palette.inkDeep, lineWidth: max(1, 0.4 * cq)))
+                }
             }
+            .padding(.trailing, 2.8 * cq)
+            .accessibilityHidden(true)
         }
     }
 
+    /// The lime "Entrar": the real door in the viewer, the same look inert in
+    /// the editor's preview, nothing when the room is full or over.
     @ViewBuilder
-    private var footer: some View {
-        if data.state == .full {
-            Text("The room is full")
-                .font(.system(size: 13 * unit, weight: .semibold))
-                .foregroundStyle(Palette.warning)
-        } else if let onJoin, data.joinable, !isEnded {
-            Button(action: onJoin) {
-                HStack(spacing: 6 * unit) {
-                    Image(systemName: "headphones")
-                    Text("Join")
-                }
-                .font(.system(size: 15 * unit, weight: .heavy))
-                .foregroundStyle(Palette.inkDeep)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10 * unit)
-                .background(Capsule().fill(Palette.signal))
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("story.call.join")
+    private var door: some View {
+        if let onJoin, data.joinable, !isEnded, data.state != .full {
+            Button(action: onJoin) { joinLabel }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("story.call.join")
         } else if data.state == .preview {
-            HStack(spacing: 6 * unit) {
-                Image(systemName: "headphones")
-                Text("Join")
-            }
-            .font(.system(size: 15 * unit, weight: .heavy))
-            .foregroundStyle(Palette.inkDeep)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10 * unit)
-            .background(Capsule().fill(Palette.signal))
+            joinLabel
         }
+    }
+
+    private var joinLabel: some View {
+        Text("Join")
+            .font(.system(size: 3.6 * cq, weight: .heavy, design: .rounded))
+            .foregroundStyle(Palette.inkDeep)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 3 * cq)
+            .padding(.vertical, 1.7 * cq)
+            .background(Capsule().fill(Palette.signal))
     }
 
     var spokenDescription: String {

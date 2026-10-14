@@ -101,6 +101,41 @@ final class StoryViewerLayersTests: XCTestCase {
         XCTAssertTrue(StoryStage.usesLayers(try story(#"[{"id":"a","type":"text","x":0.5,"y":0.5,"scale":1,"rotation":0,"text":"novo"}]"#)))
     }
 
+    /// The caption is the old builds' copy of the text layers. A story with text
+    /// layers speaks through them once: the pill is not drawn (web's rule).
+    func testTheCaptionPillIsOnlyForAStoryWithoutTextLayers() throws {
+        func story(kind: String = "image", caption: String?, layers: String) throws -> Story {
+            let captionJSON = caption.map { "\"\($0)\"" } ?? "null"
+            return try Coding.decoder.decode(Story.self, from: Data("""
+            {"id":"\(room)","author":{"id":"u","displayName":"Bia","avatarUrl":null},"kind":"\(kind)","caption":\(captionJSON),"text":null,"background":null,"media":null,
+             "sticker":null,"call":null,"publishedAt":null,"expiresAt":null,"audiences":[],
+             "viewer":{"seen":false,"reaction":null,"canReply":true,"replyBlockedReason":null,"canModerate":[]},"own":null,"layers":\(layers)}
+            """.utf8))
+        }
+        let text = #"{"id":"a","type":"text","x":0.5,"y":0.5,"scale":1,"rotation":0,"text":"oi"}"#
+        let mention = #"{"id":"b","type":"mention","x":0.5,"y":0.3,"scale":1,"rotation":0,"userId":"u2"}"#
+        XCTAssertEqual(try story(caption: "legenda velha", layers: "[]").legacyCaption, "legenda velha", "A photo from before layers keeps its pill")
+        XCTAssertNil(try story(caption: "oi", layers: "[\(text)]").legacyCaption, "Text layers draw those words once")
+        XCTAssertNil(try story(caption: "oi", layers: "[\(mention),\(text)]").legacyCaption)
+        XCTAssertNil(try story(caption: nil, layers: "[]").legacyCaption)
+        XCTAssertNil(try story(caption: "", layers: "[]").legacyCaption)
+        XCTAssertNil(try story(kind: "text", caption: "x", layers: "[]").legacyCaption, "A text card never draws it")
+    }
+
+    func testOnlyAStoryWithACallIsKeptFresh() throws {
+        func story(call: String) throws -> Story {
+            try Coding.decoder.decode(Story.self, from: Data("""
+            {"id":"\(room)","author":{"id":"u","displayName":"Bia","avatarUrl":null},"kind":"text","caption":null,"text":"x","background":"night","media":null,
+             "sticker":null,"call":\(call),"publishedAt":null,"expiresAt":null,"audiences":[],
+             "viewer":{"seen":false,"reaction":null,"canReply":true,"replyBlockedReason":null,"canModerate":[]},"own":null,"layers":[]}
+            """.utf8))
+        }
+        let withCall = try story(call: #"{"serverId":"\#(server)","channelId":"\#(room)","channelName":"Lobby","participants":[],"count":0,"state":"live","joinable":true}"#)
+        XCTAssertTrue(StoryCallRefresh.watches(withCall))
+        XCTAssertFalse(StoryCallRefresh.watches(try story(call: "null")))
+        XCTAssertLessThanOrEqual(StoryCallRefresh.interval, .seconds(10), "A card that stays on 'nobody' for long reads as broken")
+    }
+
     // MARK: - The call sticker
 
     func testALiveCallShowsTheRoomTheServerAndWhoIsIn() {

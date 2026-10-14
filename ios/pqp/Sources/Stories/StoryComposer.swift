@@ -229,9 +229,9 @@ struct StoryComposer: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 6)
                 Spacer(minLength: 0)
-                if let error { errorPill(error).padding(.bottom, 10) }
-                // Above the zoom pill and the shutter row, which sit over the
-                // mode bar.
+                // Both banners sit ABOVE the zoom pill and the shutter row, which
+                // sit over the mode bar: an error never covers the shutter.
+                if let error { errorPill(error).padding(.horizontal, 12).padding(.bottom, configFailed ? 8 : 262) }
                 if configFailed { configFailedBanner.padding(.horizontal, 12).padding(.bottom, 262) }
                 modeBar
             }
@@ -263,7 +263,9 @@ struct StoryComposer: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(Capsule().fill(Palette.danger.opacity(0.85)))
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Palette.danger.opacity(0.85)))
             .accessibilityIdentifier("composer.error")
     }
 
@@ -720,10 +722,12 @@ struct StoryCallPicker: View {
                         Button { selection = room } label: {
                             HStack(spacing: 12) {
                                 Avatar(name: room.serverName, seed: room.serverId, size: 38, url: room.serverIconUrl)
+                                    .accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 5) {
                                         Image(systemName: "speaker.wave.2.fill")
                                             .font(.system(size: 11, weight: .bold))
+                                            .accessibilityHidden(true)
                                         Text(verbatim: room.channelName)
                                             .font(Typography.bodyMedium)
                                             .lineLimit(1)
@@ -745,6 +749,7 @@ struct StoryCallPicker: View {
                                         ForEach(inside.prefix(3), id: \.userId) { person in
                                             Avatar(name: person.displayName, seed: person.userId, size: 24)
                                                 .overlay(Circle().strokeBorder(Palette.ink, lineWidth: 2))
+                                                .accessibilityHidden(true)
                                         }
                                     }
                                     Text(verbatim: "\(inside.count)")
@@ -754,12 +759,14 @@ struct StoryCallPicker: View {
                                 }
                                 Image(systemName: selection == room ? "largecircle.fill.circle" : "circle")
                                     .foregroundStyle(selection == room ? Palette.signal : .white.opacity(0.6))
+                                    .accessibilityHidden(true)
                             }
                             .padding(10)
                             .background(RoundedRectangle(cornerRadius: 12).fill(.black.opacity(selection == room ? 0.55 : 0.35)))
                             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(selection == room ? Palette.signal : .clear, lineWidth: 1.5))
                         }
                         .buttonStyle(.plain)
+                        .accessibilityAddTraits(selection == room ? .isSelected : [])
                         .accessibilityIdentifier("composer.call.\(room.channelId)")
                     }
                 }
@@ -921,6 +928,7 @@ struct StoryAudienceSheet: View {
                 Image(systemName: checked ? "checkmark.square.fill" : "square")
                     .font(.system(size: 20))
                     .foregroundStyle(checked ? Palette.signal : Palette.border)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(verbatim: title)
                         .font(Typography.bodyMedium)
@@ -938,6 +946,7 @@ struct StoryAudienceSheet: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityAddTraits(checked ? .isSelected : [])
     }
 
     private func load() async {

@@ -104,17 +104,22 @@ struct StoryDrawView: View {
                 .frame(width: canvas.width, height: canvas.height)
                 .accessibilityLabel(Text("Drawing canvas"))
                 .accessibilityIdentifier("draw.canvas")
-            VStack(spacing: 0) {
-                topBar
-                Spacer(minLength: 0)
+            // The tools sit inside the picture, in its corners, never across its
+            // edge.
+            ZStack {
+                VStack(spacing: 0) {
+                    topBar
+                    Spacer(minLength: 0)
+                }
+                VStack(spacing: 12) {
+                    Spacer()
+                    sizeRow
+                    colorRow
+                    penRow
+                }
+                .padding(.bottom, 10)
             }
-            VStack(spacing: 12) {
-                Spacer()
-                sizeRow
-                colorRow
-                penRow
-            }
-            .padding(.bottom, 10)
+            .frame(width: canvas.width, height: canvas.height)
         }
         .sensoryFeedback(.selection, trigger: tick)
         .accessibilityElement(children: .contain)

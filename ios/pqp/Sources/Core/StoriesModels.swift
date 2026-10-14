@@ -192,7 +192,9 @@ struct Story: Codable, Hashable, Identifiable, Sendable {
     let background: String?
     let media: StoryMedia?
     let sticker: StoryCallSticker?
-    let call: StoryCallLive?
+    /// The live roster of the story's room, as the server read it. A var: an
+    /// open viewer swaps in a fresher one while the card is on screen.
+    var call: StoryCallLive?
     let publishedAt: Date?
     let expiresAt: Date?
     let audiences: [StoryAudience]
