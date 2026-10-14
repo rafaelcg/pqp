@@ -146,7 +146,9 @@ class StoryOutbox(
             val draft = if (input != null) {
                 withContext(Dispatchers.IO) { prepare(id, input) }.also { pendingInputs.remove(id) }
             } else {
-                drafts.list().firstOrNull { it.id == id } ?: return@launch removeEntry(id)
+                drafts.list().firstOrNull { it.id == id }
+                    // Not listed but still on disk (a read that failed for now): it stays, failed, to be tried again.
+                    ?: return@launch if (drafts.exists(id)) setEntry(id, StoryOutboxRules.Status.Failed, null) else removeEntry(id)
             }
             upload(draft)
         }

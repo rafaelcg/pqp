@@ -106,6 +106,9 @@ class StoryDraftStore(private val root: File) {
         }.sortedBy { it.createdAt }
     }
 
+    /** Whether a draft folder is on disk, listable or not: a read that failed for now is not a draft that is gone. */
+    fun exists(id: String): Boolean = File(dir(id), MANIFEST).isFile
+
     fun delete(id: String) {
         dir(id).deleteRecursively()
     }

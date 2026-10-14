@@ -813,6 +813,8 @@ internal fun StoryVideo(
     var ready by remember(storyId, url) { mutableStateOf(false) }
     // The listener outlives a recomposition: it asks for the current answer, not the one it was made with.
     val isActive by androidx.compose.runtime.rememberUpdatedState(active)
+    // A failed clip moves the deck once, whichever of the two paths below meets the failure first.
+    val failureHandled = remember(storyId, url) { booleanArrayOf(false) }
     val player = remember(storyId, url) {
         // Read through the clip cache: a clip the preloader already fetched starts from disk, with no wait.
         ExoPlayer.Builder(context)
@@ -844,7 +846,10 @@ internal fun StoryVideo(
                 // A clip that will not play has no first frame to wait for, and nothing to stay on: on to the next.
                 // Only the one on screen moves the deck; one beside it waits to be looked at (see below).
                 onReady()
-                if (isActive) onEnded()
+                if (isActive && !failureHandled[0]) {
+                    failureHandled[0] = true
+                    onEnded()
+                }
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -865,7 +870,8 @@ internal fun StoryVideo(
     LaunchedEffect(active, paused) { player.playWhenReady = active && !paused }
     // A clip that failed while it was beside the one on screen is already dead when its turn comes: on to the next.
     LaunchedEffect(player, active) {
-        if (active && player.playerError != null) {
+        if (active && player.playerError != null && !failureHandled[0]) {
+            failureHandled[0] = true
             onReady()
             onEnded()
         }
