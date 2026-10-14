@@ -209,8 +209,20 @@ struct StoryPlacedLayer: View {
     /// photos): a screen reader hears the story once, not twice.
     var spoken = true
 
+    /// Text, a mention and the call card are laid out at their final size (the
+    /// canvas width times the layer's scale: every length in them is a share
+    /// of it), not drawn small and scaled up, which is what made a pinched
+    /// layer soft. Pictures are bitmaps either way and keep the transform.
+    private var laysOutAtScale: Bool {
+        switch layer.content {
+        case .text, .mention, .call: true
+        case .image, .drawing: false
+        }
+    }
+
     var body: some View {
-        let width = context.canvas.width
+        let scale = laysOutAtScale ? CGFloat(layer.scale) : 1
+        let width = context.canvas.width * scale
         Group {
             switch layer.content {
             case .text(let data):
@@ -232,7 +244,11 @@ struct StoryPlacedLayer: View {
         }
         .background(
             GeometryReader { proxy in
-                Color.clear.preference(key: StoryLayerSizesKey.self, value: [layer.id: proxy.size])
+                // Natural size: before the layer's scale, whichever way it is applied.
+                Color.clear.preference(
+                    key: StoryLayerSizesKey.self,
+                    value: [layer.id: CGSize(width: proxy.size.width / scale, height: proxy.size.height / scale)]
+                )
             }
         )
         .overlay {
@@ -243,7 +259,7 @@ struct StoryPlacedLayer: View {
                     .allowsHitTesting(false)
             }
         }
-        .scaleEffect(layer.scale)
+        .scaleEffect(laysOutAtScale ? 1 : layer.scale)
         .rotationEffect(.radians(layer.rotation))
         .position(x: CGFloat(layer.x) * context.canvas.width, y: CGFloat(layer.y) * context.canvas.height)
         .accessibilityElement(children: layer.isDrawing ? .ignore : .contain)
@@ -371,7 +387,7 @@ struct StoryCallStickerCard: View {
                 .font(.system(size: 5 * cq, weight: .heavy, design: .rounded))
                 .foregroundStyle(.white)
             if let url = Avatar.resolve(data.serverIconUrl) {
-                AsyncImage(url: url) { $0.resizable().scaledToFill() } placeholder: { Color.clear }
+                StoryCachedImage(url: url, contentMode: .fill) { _ in Color.clear }
             }
         }
         .frame(width: 11 * cq, height: 11 * cq)
@@ -413,7 +429,7 @@ struct StoryCallStickerCard: View {
         if !isEnded, !data.participants.isEmpty {
             HStack(spacing: -1.4 * cq) {
                 ForEach(Array(data.participants.prefix(3).enumerated()), id: \.element.id) { index, person in
-                    Avatar(name: person.displayName, seed: person.id, size: 7 * cq, url: person.avatarUrl)
+                    StoryAvatar(name: person.displayName, seed: person.id, size: 7 * cq, url: person.avatarUrl)
                         .overlay(Circle().strokeBorder(Palette.inkDeep, lineWidth: max(1, 0.4 * cq)))
                         .zIndex(Double(3 - index))
                 }

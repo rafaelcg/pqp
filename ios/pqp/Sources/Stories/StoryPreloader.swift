@@ -48,7 +48,7 @@ enum StoryPreloadPlan {
     /// one its picture (a video's poster and the video itself), then the
     /// pictures its layers place, then its author's avatar. A story's first
     /// frame comes before the next story's anything.
-    static func items(for stories: [Story], lowData: Bool) -> [StoryPreloadItem] {
+    static func items(for stories: [Story], lowData: Bool, serverIcon: (String) -> String? = { _ in nil }) -> [StoryPreloadItem] {
         var items: [StoryPreloadItem] = []
         func add(_ item: StoryPreloadItem) {
             if !items.contains(item) { items.append(item) }
@@ -66,6 +66,8 @@ enum StoryPreloadPlan {
                 switch layer.content {
                 case .image(let picture), .drawing(let picture):
                     if let layerUrl = url(picture.url) { add(.image(layerUrl)) }
+                case .call(let serverId, _):
+                    for asset in callAssets(story: story, serverId: serverId, serverIcon: serverIcon) { add(.image(asset)) }
                 default: break
                 }
             }
@@ -74,12 +76,52 @@ enum StoryPreloadPlan {
         return items
     }
 
+    /// The pictures a call card draws: the server's tile and the faces in the
+    /// room. A card with them still to come is a story arriving in pieces.
+    static func callAssets(story: Story, serverId: String, serverIcon: (String) -> String?) -> [URL] {
+        var urls: [URL] = []
+        if let icon = url(serverIcon(serverId)) { urls.append(icon) }
+        for person in (story.call?.participants ?? []).prefix(3) {
+            if let face = url(person.avatarUrl) { urls.append(face) }
+        }
+        return urls
+    }
+
+    /// EVERYTHING a story draws that has to be fetched: its base (a photo, or a
+    /// video's poster), every placed photo and the drawing, and the call card's
+    /// pictures. The story is shown when all of it is in memory, decoded: one
+    /// finished picture, never the background and then the photo and then the
+    /// rest. (Text, mentions and fonts are drawn from the system: nothing to
+    /// wait for.)
+    static func assets(of story: Story, serverIcon: (String) -> String? = { _ in nil }) -> [URL] {
+        var urls: [URL] = []
+        func add(_ url: URL?) {
+            if let url, !urls.contains(url) { urls.append(url) }
+        }
+        if let media = story.media { add(url(media.isVideo ? media.posterUrl : media.url)) }
+        for layer in story.layers {
+            switch layer.content {
+            case .image(let picture), .drawing(let picture): add(url(picture.url))
+            case .call(let serverId, _):
+                for asset in callAssets(story: story, serverId: serverId, serverIcon: serverIcon) { add(asset) }
+            default: break
+            }
+        }
+        return urls
+    }
+
+    static func hasCallLayer(_ story: Story) -> Bool {
+        story.layers.contains { if case .call = $0.content { true } else { false } }
+    }
+
     /// The viewer's window: the story on screen (its pictures only, its player
     /// is the viewer's own) and the stories ahead of it, in the order they will
     /// be needed.
-    static func window(current: Story?, ahead: [Story], lowData: Bool) -> [StoryPreloadItem] {
-        var result = current.map { items(for: [$0], lowData: lowData).filter { !$0.isVideo } } ?? []
-        for item in items(for: ahead, lowData: lowData) where !result.contains(item) { result.append(item) }
+    static func window(
+        current: Story?, ahead: [Story], lowData: Bool, serverIcon: (String) -> String? = { _ in nil }
+    ) -> [StoryPreloadItem] {
+        var result = current.map { items(for: [$0], lowData: lowData, serverIcon: serverIcon).filter { !$0.isVideo } } ?? []
+        for item in items(for: ahead, lowData: lowData, serverIcon: serverIcon) where !result.contains(item) { result.append(item) }
         return result
     }
 
@@ -146,6 +188,7 @@ final class StoryPreloader {
     static let storyCap = 60
 
     private var running: [String: Task<Void, Never>] = [:]
+    private var inflight: [URL: Task<UIImage?, Never>] = [:]
     private var pending: [StoryPreloadItem] = []
     private var wanted: Set<String> = []
     private var warmed: Set<String> = []
@@ -228,9 +271,27 @@ final class StoryPreloader {
             await job.value
             if let hit = image(for: url) { return hit }
         }
-        let fetched = await fetch(url)
+        // Whoever else wants it at this moment (the story's own pictures all
+        // ask at once) shares one fetch.
+        if let shared = inflight[url] { return await shared.value }
+        let fetching = Task { await fetch(url) }
+        inflight[url] = fetching
+        let fetched = await fetching.value
+        inflight[url] = nil
         if let fetched { store(fetched, for: url) }
         return fetched
+    }
+
+    /// Returns when every one of `urls` is in memory, decoded (or has failed,
+    /// which is not a reason to hold a story back for ever). All at once.
+    func ensure(_ urls: [URL]) async {
+        let missing = urls.filter { image(for: $0) == nil }
+        guard !missing.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            for url in missing {
+                group.addTask { [self] in _ = await imageForDisplay(url) }
+            }
+        }
     }
 
     private func fetch(_ url: URL) async -> UIImage? {
@@ -422,5 +483,27 @@ struct StoryCachedImage<Placeholder: View>: View {
                 onSettled?()
             }
         }
+    }
+}
+
+/// A face drawn from the preloader's memory: the monogram under it, the
+/// picture over it the instant it is there. The call card uses this so its
+/// faces are part of the story's one reveal, not pictures that pop in later.
+struct StoryAvatar: View {
+    let name: String
+    let seed: String
+    let size: CGFloat
+    let url: String?
+
+    var body: some View {
+        ZStack {
+            Avatar(name: name, seed: seed, size: size, url: nil)
+            if let resolved = Avatar.resolve(url) {
+                StoryCachedImage(url: resolved, contentMode: .fill) { _ in Color.clear }
+                    .frame(width: size, height: size)
+                    .clipShape(Circle())
+            }
+        }
+        .frame(width: size, height: size)
     }
 }
