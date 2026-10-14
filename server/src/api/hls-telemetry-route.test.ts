@@ -143,6 +143,10 @@ async function driveOneSessionUntilLimited(userPrefix: string): Promise<{
       accepted += 1;
     } else if (result.status === 429) {
       rejected += 1;
+    } else {
+      // Not the limiter's doing (a 400, 401, 500): more of the same proves
+      // nothing, so hand it back for the assertions to name.
+      break;
     }
   }
   return { total, accepted, rejected, lastStatus, elapsedMs: performance.now() - startedAt };

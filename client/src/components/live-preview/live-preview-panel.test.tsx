@@ -162,19 +162,25 @@ function exitControl(): HTMLButtonElement | null {
  */
 async function untilPopstate(start: () => void) {
   await act(async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onPop: (() => void) | undefined;
     const landed = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        window.removeEventListener("popstate", onPop);
-        reject(new Error("the history traversal never fired popstate"));
-      }, 5_000);
-      const onPop = () => {
-        clearTimeout(timer);
-        resolve();
-      };
+      timer = setTimeout(
+        () => reject(new Error("the history traversal never fired popstate")),
+        5_000,
+      );
+      onPop = () => resolve();
       window.addEventListener("popstate", onPop, { once: true });
     });
-    start();
-    await landed;
+    try {
+      start();
+      await landed;
+    } finally {
+      clearTimeout(timer);
+      window.removeEventListener("popstate", onPop!);
+      // `landed` may still reject later if `start` threw; it is not awaited then.
+      landed.catch(() => {});
+    }
   });
 }
 
