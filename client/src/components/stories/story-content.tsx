@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode, type Ref, type RefObject } from "react";
 import { storyBaseFit, type StoryBackground, type StoryCallLive, type StoryKind } from "@pqp/shared";
+import { giveBackVideo, takePreloadedVideo } from "@/lib/stories/preload";
 import { cn } from "@/lib/utils";
 import { StoryCallCard, type CallCardServer } from "./story-call-card";
 import { LayerBox, LayerContent, type DisplayLayer, type MentionTarget } from "./story-layers";
@@ -55,6 +56,12 @@ interface StoryContentProps {
   onVideoDuration?: (ms: number) => void;
   onVideoTime?: (ms: number) => void;
   onVideoEnded?: () => void;
+  /**
+   * The picture is decoded, or the clip has its first frame (or either could not be loaded: the
+   * caller must not wait forever). The viewer holds its clock until then, so a slow connection shows
+   * a story for its full time instead of spending that time on a blank card.
+   */
+  onReady?: () => void;
   /** Play again from the start (the composer's preview of a clip). */
   loop?: boolean;
   className?: string;
@@ -166,6 +173,7 @@ export const StoryContent = forwardRef(function StoryContent(
     onVideoDuration,
     onVideoTime,
     onVideoEnded,
+    onReady,
     loop = false,
     className,
     still = false,
@@ -249,6 +257,8 @@ export const StoryContent = forwardRef(function StoryContent(
             alt={altText ?? ""}
             draggable={false}
             decoding="async"
+            onLoad={still ? undefined : onReady}
+            onError={still ? undefined : onReady}
             className={cn(
               "absolute inset-0 h-full w-full select-none",
               contain ? "object-contain" : "object-cover",
@@ -265,6 +275,7 @@ export const StoryContent = forwardRef(function StoryContent(
               onDuration={onVideoDuration}
               onTime={onVideoTime}
               onEnded={onVideoEnded}
+              onReady={onReady}
               loop={loop}
               contain={contain}
             />
@@ -341,6 +352,7 @@ function StoryVideo({
   onDuration,
   onTime,
   onEnded,
+  onReady,
   loop,
   contain = false,
 }: {
@@ -351,12 +363,82 @@ function StoryVideo({
   onDuration?: (ms: number) => void;
   onTime?: (ms: number) => void;
   onEnded?: () => void;
+  onReady?: () => void;
   loop: boolean;
   contain?: boolean;
 }) {
-  const video = useRef<HTMLVideoElement>(null);
-  const callbacks = useRef({ onDuration, onTime, onEnded });
-  callbacks.current = { onDuration, onTime, onEnded };
+  const host = useRef<HTMLDivElement>(null);
+  const video = useRef<HTMLVideoElement | null>(null);
+  const callbacks = useRef({ onDuration, onTime, onEnded, onReady });
+  callbacks.current = { onDuration, onTime, onEnded, onReady };
+
+  // The element is made here, not by React, so a clip the preloader already buffered (the viewer warms
+  // the next stories) is moved in WHOLE: its first frame is ready and nothing is requested again.
+  // Anything else starts as a plain element. Either way it goes back to the preloader when this
+  // story is left, so coming back to it, or React remounting it, finds the buffer.
+  useLayoutEffect(() => {
+    const container = host.current;
+    if (!container) {
+      return;
+    }
+    const warmed = takePreloadedVideo(src) as HTMLVideoElement | null;
+    const element = warmed ?? document.createElement("video");
+    element.playsInline = true;
+    element.preload = "auto";
+    if (!warmed) {
+      element.src = src;
+    }
+    if (poster) {
+      element.poster = poster;
+    }
+    container.appendChild(element);
+    video.current = element;
+    const onMetadata = () => {
+      const seconds = element.duration;
+      if (Number.isFinite(seconds) && seconds > 0) {
+        callbacks.current.onDuration?.(seconds * 1000);
+      }
+    };
+    const onEnd = () => callbacks.current.onEnded?.();
+    // The first frame is there (or the clip cannot be played): the viewer's clock may start.
+    const onFrame = () => callbacks.current.onReady?.();
+    element.addEventListener("loadedmetadata", onMetadata);
+    element.addEventListener("loadeddata", onFrame);
+    element.addEventListener("error", onFrame);
+    element.addEventListener("ended", onEnd);
+    if (element.readyState >= 1) {
+      // A warmed clip had its metadata long ago: the event is not coming again.
+      onMetadata();
+    }
+    if (element.readyState >= 2) {
+      onFrame();
+    }
+    return () => {
+      element.removeEventListener("loadedmetadata", onMetadata);
+      element.removeEventListener("loadeddata", onFrame);
+      element.removeEventListener("error", onFrame);
+      element.removeEventListener("ended", onEnd);
+      video.current = null;
+      element.pause();
+      try {
+        element.currentTime = 0;
+      } catch {
+        // Not seekable yet: it starts from the top anyway.
+      }
+      element.remove();
+      giveBackVideo(src, element);
+    };
+  }, [src, poster]);
+
+  useEffect(() => {
+    const element = video.current;
+    if (!element) {
+      return;
+    }
+    element.muted = muted;
+    element.loop = loop;
+    element.className = cn("absolute inset-0 h-full w-full", contain ? "object-contain" : "object-cover");
+  }, [muted, loop, contain, src, poster]);
 
   useEffect(() => {
     const element = video.current;
@@ -384,22 +466,18 @@ function StoryVideo({
   }, []);
 
   return (
-    <video
-      ref={video}
-      src={src}
-      poster={poster ?? undefined}
-      muted={muted}
-      loop={loop}
-      playsInline
-      preload="auto"
-      className={cn("absolute inset-0 h-full w-full", contain ? "object-contain" : "object-cover")}
-      onLoadedMetadata={(event) => {
-        const seconds = event.currentTarget.duration;
-        if (Number.isFinite(seconds) && seconds > 0) {
-          callbacks.current.onDuration?.(seconds * 1000);
-        }
-      }}
-      onEnded={() => callbacks.current.onEnded?.()}
-    />
+    <div ref={host} data-story-video-host="" className="absolute inset-0">
+      {/* The poster is on screen from the first paint (and in server markup); the video, added to this
+          box after it, draws over it the moment it has a frame. */}
+      {poster && (
+        <img
+          src={poster}
+          alt=""
+          aria-hidden
+          draggable={false}
+          className={cn("absolute inset-0 h-full w-full select-none", contain ? "object-contain" : "object-cover")}
+        />
+      )}
+    </div>
   );
 }

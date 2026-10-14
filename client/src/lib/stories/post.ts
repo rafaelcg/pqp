@@ -1,7 +1,13 @@
-import { STORY_POSTS_PER_DAY, type CreateStoryRequest, type StoryUpload } from "@pqp/shared";
+import {
+  STORY_POSTS_PER_DAY,
+  type CreateStoryRequest,
+  type StoryLayerInput,
+  type StoryUpload,
+} from "@pqp/shared";
 import { ApiError } from "@/lib/api";
 import type { MessageKey, MessageVars } from "@/lib/i18n";
 import { createStory, fetchStories, publishStory } from "./api";
+import type { EagerUpload } from "./eager-upload";
 import { emitStoriesRefresh, onStoriesSignal } from "./events";
 import { mediaInputFor, putStoryMedia, type PreparedStoryMedia } from "./upload";
 import { getStoriesUi, patchPosting, setPosting } from "./ui-store";
@@ -29,6 +35,14 @@ export interface StoryDraft {
    * instead of posting it twice.
    */
   requestId?: string;
+  /**
+   * Files already on their way to storage (`eager-upload.ts`), started when the
+   * bytes were final: the base, and each photo or drawing layer by layer id.
+   * Posting waits for them instead of uploading anything itself, and a file
+   * whose eager upload failed (or never started) goes up the plain way with
+   * the blob kept above. The draft owns them: `discard` throws them away.
+   */
+  eager?: { base?: EagerUpload | null; layers?: ReadonlyMap<string, EagerUpload> };
 }
 
 export type PostOutcome = "live" | "processing" | "failed" | "busy";
@@ -104,55 +118,187 @@ export function audienceKeysFor(request: Pick<CreateStoryRequest, "audiences">):
   ];
 }
 
+/** The files of a draft with the handle that is uploading each, if any. */
+function eagerFiles(draft: StoryDraft): { layerId: string | null; handle: EagerUpload }[] {
+  const files: { layerId: string | null; handle: EagerUpload }[] = [];
+  if (draft.eager?.base) {
+    files.push({ layerId: null, handle: draft.eager.base });
+  }
+  for (const [layerId, handle] of draft.eager?.layers ?? []) {
+    files.push({ layerId, handle });
+  }
+  return files;
+}
+
+/** Bytes of every file this story uploads: the arc is bytes sent over this. */
+function totalBytes(draft: StoryDraft): number {
+  let total = draft.media?.blob.size ?? 0;
+  for (const blob of draft.layerFiles?.values() ?? []) {
+    total += blob.size;
+  }
+  return total || 1;
+}
+
+function sentFraction(handle: EagerUpload | null | undefined, plain: number): number {
+  return handle && handle.state !== "failed" && handle.state !== "cancelled" ? handle.fraction : plain;
+}
+
+/**
+ * How far every file is, 0..1: an eager upload by what it has sent, a plain one
+ * by what `putAll` reports in `plainSent`, which is keyed `base` or the layer id.
+ */
+function overallProgress(draft: StoryDraft, plainSent: ReadonlyMap<string, number>): number {
+  let sent = 0;
+  if (draft.media) {
+    sent += sentFraction(draft.eager?.base, plainSent.get("base") ?? 0) * draft.media.blob.size;
+  }
+  for (const [layerId, blob] of draft.layerFiles ?? []) {
+    sent += sentFraction(draft.eager?.layers?.get(layerId), plainSent.get(layerId) ?? 0) * blob.size;
+  }
+  return Math.min(1, sent / totalBytes(draft));
+}
+
+/** The draft's eager uploads, thrown away: the PUTs abort and the server is told to delete the objects. */
+export function cancelDraftUploads(draft: Pick<StoryDraft, "eager">): void {
+  for (const { handle } of eagerFiles(draft as StoryDraft)) {
+    handle.cancel();
+  }
+}
+
+function releasePreview(draft: StoryDraft): void {
+  if (draft.media?.previewUrl) {
+    URL.revokeObjectURL(draft.media.previewUrl);
+  }
+}
+
+/** Put the draft away: stop its uploads, delete what was stored, free its picture, clear the ring. */
+function discardDraft(draft: StoryDraft, id: string): void {
+  cancelDraftUploads(draft);
+  releasePreview(draft);
+  if (getStoriesUi().posting?.id === id) {
+    setPosting(null);
+  }
+}
+
+/**
+ * Posting, from the moment "Postar" is pressed. It runs outside the composer,
+ * which closes at once; every file is either already stored (its eager upload
+ * finished while the author was still editing) or still on its way, and this
+ * waits for those and uploads nothing a handle already has.
+ *
+ * With every file stored the whole story is ONE request: create and publish
+ * together (`publish: true`), which is why the ring completes almost at once.
+ * A file with no stored copy (no eager upload, a failed one, a server without
+ * the route) goes the plain way: the create hands back a URL, the bytes are
+ * PUT, then publish.
+ *
+ * The draft, its files and its audience, stays in memory until the story is up
+ * or the author discards it from the ring: a failed post keeps everything.
+ */
 export async function postStory(draft: StoryDraft): Promise<PostOutcome> {
   const id = `post-${Date.now()}-${++counter}`;
   draft.requestId ??= crypto.randomUUID();
   const audienceKeys = audienceKeysFor(draft.request);
   const hasFiles = Boolean(draft.media) || (draft.layerFiles?.size ?? 0) > 0;
+  const plainSent = new Map<string, number>();
+  const showProgress = () => {
+    if (hasFiles) {
+      patchPosting(id, { progress: overallProgress(draft, plainSent) });
+    }
+  };
   setPosting({
     id,
     audienceKeys,
-    progress: hasFiles ? 0 : null,
+    progress: hasFiles ? overallProgress(draft, plainSent) : null,
     status: "uploading",
     failure: null,
     retry: null,
+    discard: () => discardDraft(draft, id),
   });
+  const unsubscribe = eagerFiles(draft).map(({ handle }) => handle.subscribe(showProgress));
   try {
-    const body: CreateStoryRequest = draft.media
-      ? { ...draft.request, requestId: draft.requestId, media: mediaInputFor(draft.media) }
-      : ({ ...draft.request, requestId: draft.requestId } as CreateStoryRequest);
+    // Wait for the files already on their way. A null is a file the plain flow takes over.
+    const stored = await Promise.all(
+      eagerFiles(draft).map(async ({ layerId, handle }) => ({ layerId, uploadId: await handle.ensure() })),
+    );
+    const baseUploadId = stored.find((entry) => entry.layerId === null)?.uploadId ?? null;
+    const layerUploadIds = new Map<string, string>();
+    for (const entry of stored) {
+      if (entry.layerId !== null && entry.uploadId) {
+        layerUploadIds.set(entry.layerId, entry.uploadId);
+      }
+    }
+    const layers = draft.request.layers?.map((layer): StoryLayerInput => {
+      const uploadId = layerUploadIds.get(layer.id);
+      if (!uploadId) {
+        return layer;
+      }
+      if (layer.type === "image") {
+        return { ...layer, upload: { ...layer.upload, uploadId } };
+      }
+      if (layer.type === "drawing") {
+        return { ...layer, upload: { ...layer.upload, uploadId } };
+      }
+      return layer;
+    });
+    const everyFileStored =
+      hasFiles &&
+      (!draft.media || baseUploadId !== null) &&
+      [...(draft.layerFiles?.keys() ?? [])].every((layerId) => layerUploadIds.has(layerId));
+    const body = {
+      ...draft.request,
+      ...(layers ? { layers } : {}),
+      requestId: draft.requestId,
+      ...(draft.media
+        ? { media: { ...mediaInputFor(draft.media), ...(baseUploadId ? { uploadId: baseUploadId } : {}) } }
+        : {}),
+      // One round trip when nothing is left to upload.
+      ...(everyFileStored ? { publish: true } : {}),
+    } as CreateStoryRequest;
+    if (everyFileStored) {
+      patchPosting(id, { progress: 1 });
+    }
     const created = await createStory(body);
+    for (const { handle } of eagerFiles(draft)) {
+      if (handle.uploadId) {
+        handle.markClaimed();
+      }
+    }
     let storyId = created.story.id;
     let status = created.story.own?.status ?? "live";
-    const uploads: { upload: StoryUpload; blob: Blob }[] = [];
-    if (created.upload && draft.media) {
-      uploads.push({ upload: created.upload, blob: draft.media.blob });
-    }
-    for (const layerUpload of created.layerUploads ?? []) {
-      const blob = draft.layerFiles?.get(layerUpload.layerId);
-      if (!blob) {
-        // The server minted an upload for a file this draft does not have: posting on would
-        // publish a story with a layer missing, or none at all and call it live.
-        throw new Error(`No file for layer ${layerUpload.layerId}`);
+    if (status === "pending") {
+      const uploads: { upload: StoryUpload; blob: Blob }[] = [];
+      if (created.upload && draft.media) {
+        uploads.push({ upload: created.upload, blob: draft.media.blob });
       }
-      uploads.push({ upload: layerUpload, blob });
-    }
-    if (uploads.length > 0) {
-      await putAll(uploads, (fraction) => patchPosting(id, { progress: fraction }));
-      patchPosting(id, { progress: null });
+      for (const layerUpload of created.layerUploads ?? []) {
+        const blob = draft.layerFiles?.get(layerUpload.layerId);
+        if (!blob) {
+          // The server minted an upload for a file this draft does not have: posting on would
+          // publish a story with a layer missing, or none at all and call it live.
+          throw new Error(`No file for layer ${layerUpload.layerId}`);
+        }
+        uploads.push({ upload: layerUpload, blob });
+      }
+      if (uploads.length > 0) {
+        await putAll(uploads, (fraction) => patchPosting(id, { progress: fraction }));
+        patchPosting(id, { progress: null });
+      }
       const published = await publishStory(storyId);
       storyId = published.story.id;
       status = published.story.own?.status ?? "live";
     }
+    unsubscribe.forEach((off) => off());
     if (status === "processing" || status === "pending") {
       patchPosting(id, { status: "processing", progress: null });
-      waitUntilLive(id, storyId);
+      waitUntilLive(id, storyId, draft);
       emitStoriesRefresh();
       return "processing";
     }
-    finish(id);
+    finish(id, draft);
     return "live";
   } catch (error) {
+    unsubscribe.forEach((off) => off());
     const failure = classifyPostFailure(error);
     const retryable = failure === "failed" || failure === "busy";
     if (!retryable) {
@@ -208,8 +354,11 @@ async function putAll(
   }
 }
 
-function finish(id: string): void {
+function finish(id: string, draft?: StoryDraft): void {
   patchPosting(id, { status: "done", progress: null });
+  if (draft) {
+    releasePreview(draft);
+  }
   emitStoriesRefresh();
   // Let the arc complete and the ring sweep into the gradient first.
   window.setTimeout(() => {
@@ -230,7 +379,7 @@ const PROCESSING_GIVE_UP_MS = 10 * 60_000;
  * After ten minutes the ring stops waiting; the strip shows the story
  * whenever it does go live.
  */
-function waitUntilLive(id: string, storyId: string): void {
+function waitUntilLive(id: string, storyId: string, draft: StoryDraft): void {
   let done = false;
   let checking = false;
   const startedAt = Date.now();
@@ -266,7 +415,7 @@ function waitUntilLive(id: string, storyId: string): void {
         }
         if (story.own?.status === "live") {
           stop();
-          finish(id);
+          finish(id, draft);
         }
       })
       .catch(() => undefined)

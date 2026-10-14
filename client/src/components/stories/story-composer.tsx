@@ -45,6 +45,7 @@ import { fetchStoryAudiences } from "@/lib/stories/api";
 import { STORIES_CONFIG_OFF, loadStoriesConfig } from "@/lib/stories/config";
 import { captureStill } from "@/lib/stories/camera";
 import { colorFromTokens, hasInk, renderDrawingBlob, type Stroke } from "@/lib/stories/drawing";
+import { startEagerUpload, type EagerUpload } from "@/lib/stories/eager-upload";
 import {
   DEFAULT_TEXT,
   altTextFor,
@@ -58,7 +59,7 @@ import {
   type TextLayerFields,
 } from "@/lib/stories/layers";
 import { loadMentionPeople, type MentionPerson } from "@/lib/stories/mention-people";
-import { postStory } from "@/lib/stories/post";
+import { postStory, type StoryDraft } from "@/lib/stories/post";
 import {
   preparedFromStill,
   prepareLayerImage,
@@ -195,6 +196,36 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const layersRef = useRef(layers);
   layersRef.current = layers;
 
+  // Eager uploads (`eager-upload.ts`): each file starts going to storage the moment it is final, while
+  // the author is still editing, so Post only has to create and publish. They live in refs because
+  // they are side effects of the draft, not things to render; whatever is still here when the
+  // composer goes away was never posted, and is thrown away (aborted, and deleted on the server).
+  const baseUpload = useRef<EagerUpload | null>(null);
+  const layerUploads = useRef(new Map<string, EagerUpload>());
+  // The drawing is only final when the pen is put down: rendered and sent then, and again if it changes.
+  const drawingUpload = useRef<{ strokes: unknown; file: { blob: Blob; width: number; height: number }; handle: EagerUpload | null } | null>(null);
+  // Set when Post hands the uploads to the draft: from then on they are no longer this component's to cancel.
+  const handedOver = useRef(false);
+
+  const cancelUploads = useCallback(() => {
+    baseUpload.current?.cancel();
+    baseUpload.current = null;
+    for (const handle of layerUploads.current.values()) {
+      handle.cancel();
+    }
+    layerUploads.current.clear();
+    drawingUpload.current?.handle?.cancel();
+    drawingUpload.current = null;
+  }, []);
+  useEffect(
+    () => () => {
+      if (!handedOver.current) {
+        cancelUploads();
+      }
+    },
+    [cancelUploads],
+  );
+
   const loadOptions = () => {
     setOptionsFailed(false);
     fetchStoryAudiences()
@@ -263,6 +294,69 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     [],
   );
 
+  // A placed photo goes up as soon as it is on the canvas and is thrown away when it is taken off (the
+  // delete button, or an undo of its adding). Undoing a removal puts the layer back, and it goes up again.
+  useEffect(() => {
+    if (handedOver.current) {
+      return;
+    }
+    const wanted = new Map<string, Extract<EditorLayer, { type: "image" }>>();
+    for (const layer of layers) {
+      if (layer.type === "image") {
+        wanted.set(layer.id, layer);
+      }
+    }
+    for (const [id, handle] of layerUploads.current) {
+      if (!wanted.has(id)) {
+        handle.cancel();
+        layerUploads.current.delete(id);
+      }
+    }
+    for (const [id, layer] of wanted) {
+      if (!layerUploads.current.has(id)) {
+        const handle = startEagerUpload({ kind: "layer", blob: layer.blob, contentType: layer.contentType });
+        if (handle) {
+          layerUploads.current.set(id, handle);
+        }
+      }
+    }
+  }, [layers]);
+
+  // The drawing, once the pen is up: rendered to its picture and sent, so Post does not wait for it. Any
+  // change to the strokes (another stroke, an undo) throws that copy away and sends the new one.
+  const drawingLayerNow = layers.find((layer): layer is Extract<EditorLayer, { type: "drawing" }> => layer.type === "drawing");
+  const drawingStrokes = drawingLayerNow?.strokes;
+  useEffect(() => {
+    if (handedOver.current || drawing) {
+      return;
+    }
+    const known = drawingUpload.current;
+    if (known && known.strokes === drawingStrokes) {
+      return;
+    }
+    if (known) {
+      known.handle?.cancel();
+      drawingUpload.current = null;
+    }
+    if (!drawingStrokes || !hasInk(drawingStrokes as Stroke[])) {
+      return;
+    }
+    let stale = false;
+    void renderDrawingBlob(drawingStrokes as Stroke[], colorFromTokens).then((file) => {
+      if (stale || !file || handedOver.current) {
+        return;
+      }
+      drawingUpload.current = {
+        strokes: drawingStrokes,
+        file,
+        handle: startEagerUpload({ kind: "layer", blob: file.blob, contentType: "image/png" }),
+      };
+    });
+    return () => {
+      stale = true;
+    };
+  }, [drawing, drawingStrokes]);
+
   // The camera light goes out the moment the tab is not looked at.
   useEffect(() => {
     const onVisibility = () => setTabHidden(document.visibilityState === "hidden");
@@ -294,6 +388,10 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     }
     setProblem(null);
     setMedia(next);
+    // The bytes are final (a photo is already cropped and encoded, a clip is recorded): start sending
+    // them now. A newer file replaces an older one, and the older one's upload is thrown away.
+    baseUpload.current?.cancel();
+    baseUpload.current = startEagerUpload({ kind: "base", blob: next.blob, contentType: next.contentType });
     setMode("camera");
     // Whatever was being typed or drawn on the way here is over: the picture is the base now.
     setEditing(null);
@@ -488,6 +586,9 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     fileTicket.current += 1;
     setPreparing(false);
     setMedia(null);
+    // The picture is being thrown away, and so is its upload.
+    baseUpload.current?.cancel();
+    baseUpload.current = null;
     setProblem(null);
     setDrawing(false);
     setEditing(null);
@@ -567,7 +668,14 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     const audiences = { serverIds: effectiveServerIds, friends };
     const current = layersRef.current;
     const drawingLayer = current.find((layer): layer is Extract<EditorLayer, { type: "drawing" }> => layer.type === "drawing");
-    const drawingFile = drawingLayer ? await renderDrawingBlob(drawingLayer.strokes as Stroke[], colorFromTokens) : null;
+    // Normally the drawing was rendered and is already on its way (the pen went up); only a drawing
+    // changed in the last moments is drawn again here.
+    const preDrawn = drawingLayer && drawingUpload.current?.strokes === drawingLayer.strokes ? drawingUpload.current : null;
+    const drawingFile = preDrawn
+      ? preDrawn.file
+      : drawingLayer
+        ? await renderDrawingBlob(drawingLayer.strokes as Stroke[], colorFromTokens)
+        : null;
     if (drawingLayer && hasInk(drawingLayer.strokes) && !drawingFile) {
       // The drawing could not be turned into a picture: posting without it would drop what was drawn.
       setProblem(t("stories.compose.unreadable"));
@@ -612,10 +720,41 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
             media: null,
             layerFiles,
           };
+    // The uploads that are on their way now belong to the draft, which waits for them and, if the
+    // author discards it from the ring, throws them away. A base from the other tab is not part of it.
+    const eagerLayers = new Map<string, EagerUpload>();
+    for (const layer of current) {
+      const handle =
+        layer.type === "image"
+          ? layerUploads.current.get(layer.id)
+          : layer.type === "drawing"
+            ? preDrawn?.handle
+            : null;
+      if (handle) {
+        eagerLayers.set(layer.id, handle);
+      }
+    }
+    const eagerBase = mode === "camera" && media ? baseUpload.current : null;
+    const unused = [
+      ...(eagerBase ? [] : [baseUpload.current]),
+      ...[...layerUploads.current.entries()].filter(([id]) => !eagerLayers.has(id)).map(([, handle]) => handle),
+      ...(drawingUpload.current && drawingUpload.current !== preDrawn ? [drawingUpload.current.handle] : []),
+    ];
+    for (const handle of unused) {
+      handle?.cancel();
+    }
+    handedOver.current = true;
+    baseUpload.current = null;
+    layerUploads.current = new Map();
+    drawingUpload.current = null;
+    const posted: StoryDraft = {
+      ...draft,
+      eager: { base: eagerBase, layers: eagerLayers },
+    };
     onPosted?.(previewRef.current);
     // The media's object URL now belongs to the post; do not revoke it here.
     setMedia(null);
-    void postStory(draft);
+    void postStory(posted);
     onClose();
   }
 

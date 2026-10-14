@@ -1,5 +1,7 @@
 import { Headphones, Plus, RotateCw, X } from "lucide-react";
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
+import type { ContextMenuItemDef } from "@/components/ui/context-menu";
+import { Menu } from "@/components/ui/menu";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { cn } from "@/lib/utils";
 
@@ -41,6 +43,12 @@ interface StoryRingProps {
   arrive?: boolean;
   ringId?: string;
   onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
+  /**
+   * A failed post that can be tried again: a tap opens these (Tentar de novo,
+   * Descartar) instead of calling `onOpen`, so the draft is never thrown away
+   * or re-sent by an accidental tap.
+   */
+  failedActions?: ContextMenuItemDef[];
   /** Only with `plus`: the badge itself is a second button that composes. */
   onPlus?: () => void;
   plusLabel?: string;
@@ -65,6 +73,7 @@ export function StoryRing({
   arrive = false,
   ringId,
   onOpen,
+  failedActions,
   onPlus,
   plusLabel,
 }: StoryRingProps) {
@@ -79,6 +88,42 @@ export function StoryRing({
   // 24 px at the least (the web strip's ring is 48): a plus smaller than that is not a button anyone can hit.
   const badgeSize = size === 64 ? 26 : 24;
   const failed = upload?.status === "failed";
+  const ringButton = (
+    <button
+      type="button"
+      data-story-ring={ringId}
+      aria-label={ariaLabel}
+      // A failed ring with actions lets the menu take the tap.
+      onClick={failed && failedActions ? undefined : onOpen}
+      className="rounded-full [-webkit-tap-highlight-color:transparent] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset"
+    >
+      <span
+        className={cn("story-ring", arrive && "story-ring-in")}
+        data-ring={failed ? "seen" : state}
+        style={style}
+      >
+        <span data-ring-layer="grad" />
+        <span data-ring-layer="seen" />
+        <span data-ring-layer="gap" />
+        <span
+          className="absolute overflow-hidden rounded-full"
+          style={state === "none" ? { inset: 0 } : { inset }}
+        >
+          <UserAvatar
+            name={name}
+            avatarUrl={avatarUrl}
+            rounded="full"
+            className="h-full w-full"
+            fallbackClassName={cn(
+              "bg-surface-3 text-text",
+              size === 64 ? "text-xl" : "text-base",
+            )}
+          />
+        </span>
+        {upload && upload.status !== "done" && <UploadArc size={size} upload={upload} />}
+      </span>
+    </button>
+  );
 
   let badge: ReactNode = null;
   if (plus) {
@@ -125,41 +170,13 @@ export function StoryRing({
       style={size === 64 ? { width: 68 } : undefined}
     >
       <div className="relative" style={{ width: size, height: size }}>
-        <button
-          type="button"
-          data-story-ring={ringId}
-          aria-label={ariaLabel}
-          onClick={onOpen}
-          className="rounded-full [-webkit-tap-highlight-color:transparent] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset"
-        >
-          <span
-            className={cn("story-ring", arrive && "story-ring-in")}
-            data-ring={failed ? "seen" : state}
-            style={style}
-          >
-            <span data-ring-layer="grad" />
-            <span data-ring-layer="seen" />
-            <span data-ring-layer="gap" />
-            <span
-              className="absolute overflow-hidden rounded-full"
-              style={state === "none" ? { inset: 0 } : { inset }}
-            >
-              <UserAvatar
-                name={name}
-                avatarUrl={avatarUrl}
-                rounded="full"
-                className="h-full w-full"
-                fallbackClassName={cn(
-                  "bg-surface-3 text-text",
-                  size === 64 ? "text-xl" : "text-base",
-                )}
-              />
-            </span>
-            {upload && upload.status !== "done" && (
-              <UploadArc size={size} upload={upload} />
-            )}
-          </span>
-        </button>
+        {failed && failedActions ? (
+          <Menu items={failedActions} align="start" side="bottom">
+            {ringButton}
+          </Menu>
+        ) : (
+          ringButton
+        )}
         {failed ? (
           <span
             aria-hidden
@@ -232,7 +249,7 @@ function UploadArc({ size, upload }: { size: number; upload: RingUpload }) {
         strokeLinecap="round"
         strokeDasharray={circumference}
         strokeDashoffset={circumference * (1 - fraction)}
-        style={{ transition: "stroke-dashoffset var(--duration-base) linear" }}
+        className="story-upload-arc"
       />
     </svg>
   );

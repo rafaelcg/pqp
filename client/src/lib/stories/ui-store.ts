@@ -52,6 +52,12 @@ export interface PostingState {
   failure: PostFailure | null;
   /** Post again; null when posting again cannot work and a tap only dismisses. */
   retry: (() => void) | null;
+  /**
+   * Throw the draft away: its uploads abort and the objects already stored are
+   * deleted on the server, and the ring goes back to what it was. Always there
+   * while the post is on screen; a failed ring offers it beside "Tentar de novo".
+   */
+  discard: (() => void) | null;
 }
 
 /**
