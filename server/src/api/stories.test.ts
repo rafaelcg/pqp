@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { writeFile } from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { Permission, STORY_POSTS_PER_DAY, type Story, type StoryStrip } from "@pqp/shared";
+import { MESH_VOICE_LIMIT, Permission, STORY_POSTS_PER_DAY, type Story, type StoryStrip } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 
 /**
@@ -37,6 +37,24 @@ const scan = vi.hoisted(() => ({
   }>,
   calls: 0,
 }));
+
+/** Who is in which voice room, as the story's call card reads it (`musicRoomSeats`). */
+const roster = vi.hoisted(() => ({
+  seated: new Map<string, string[]>(),
+  transport: new Map<string, "mesh" | "livekit">(),
+}));
+
+vi.mock("../ws/voice.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../ws/voice.js")>();
+  return {
+    ...actual,
+    musicRoomSeats: async (channelId: string) => {
+      const seatedUserIds = roster.seated.get(channelId) ?? [];
+      return { roomSize: seatedUserIds.length, seatedUserIds };
+    },
+    getRoomTransport: (channelId: string) => roster.transport.get(channelId) ?? "livekit",
+  };
+});
 
 vi.mock("../lib/s3.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/s3.js")>();
@@ -143,6 +161,10 @@ const { deleteAccount } = await import("../services/account.js");
 const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0]);
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 const MP4 = Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+/** The start of a QuickTime movie: `ftyp` with the major brand "qt  ". */
+const MOV = Uint8Array.from([0, 0, 0, 0x14, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20]);
+/** The start of a HEIC photo: `ftyp` with the major brand "heic". */
+const HEIC = Uint8Array.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]);
 
 describeDb("stories", () => {
   let http: Server;
@@ -174,6 +196,8 @@ describeDb("stories", () => {
   });
 
   beforeEach(async () => {
+    roster.seated.clear();
+    roster.transport.clear();
     storage.objects.clear();
     storage.deleted.length = 0;
     storage.put.length = 0;
@@ -564,13 +588,14 @@ describeDb("stories", () => {
         sticker: { type: "call", serverId, channelId: lobbyId },
       });
       expect(ok.status).toBe(201);
-      expect((await strip(alice)).own?.hasCall).toBe(true);
+      // Nobody is in the Lobby: the ring says nothing about a call, and the card is an EMPTY room,
+      // not an ended one (joining an empty room is fine).
+      expect((await strip(alice)).own?.hasCall).toBe(false);
       as(alice);
-      // Nobody is in the Lobby: the sticker reads as ended.
       expect((ok.body.story as Story).call).toMatchObject({
         channelName: "Lobby",
-        state: "ended",
-        joinable: false,
+        state: "live",
+        joinable: true,
         count: 0,
       });
       const text = (
@@ -583,6 +608,103 @@ describeDb("stories", () => {
         sticker: { type: "call", serverId, channelId: text },
       });
       expect(bad.status).toBe(400);
+    });
+  });
+
+  // ------------------------------------------------------------------ the call card's state
+
+  describe("the call card's state", () => {
+    beforeEach(async () => {
+      await storiesOn();
+    });
+
+    /** Bob posts a call card for the Lobby; alice reads it. */
+    async function bobsCall() {
+      as(bob);
+      const posted = await postText("bora", { serverIds: [serverId] }, {
+        sticker: { type: "call", serverId, channelId: lobbyId },
+      });
+      expect(posted.status).toBe(201);
+      return (posted.body.story as Story).id;
+    }
+    const callOf = async (viewer: DbUser, id: string) => (await read(viewer, [id]))[0]!.call;
+    const deny = async (userId: string) => {
+      await getPool().query(
+        `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+         VALUES ($1, 'member', $2, 0, $3)`,
+        [lobbyId, userId, Permission.CONNECT.toString()],
+      );
+      invalidateServerMemberRoles(serverId);
+    };
+
+    it("an empty room is live with nobody in it, offers the way in, and does not light the ring", async () => {
+      const id = await bobsCall();
+      expect(await callOf(alice, id)).toMatchObject({
+        channelName: "Lobby",
+        state: "live",
+        count: 0,
+        participants: [],
+        joinable: true,
+      });
+      expect((await strip(alice)).items[0]!.hasCall).toBe(false);
+    });
+
+    it("people in the room make it live whether or not its author is one of them", async () => {
+      const id = await bobsCall();
+      roster.seated.set(lobbyId, [alice.id]);
+      const call = await callOf(alice, id);
+      expect(call).toMatchObject({ state: "live", count: 1, joinable: true });
+      expect(call!.participants.map((person) => person.id)).toEqual([alice.id]);
+      // The ring lights up only while somebody is in the room.
+      expect((await strip(alice)).items[0]!.hasCall).toBe(true);
+      roster.seated.set(lobbyId, []);
+      expect((await strip(alice)).items[0]!.hasCall).toBe(false);
+    });
+
+    it("a peer-to-peer room at its limit is full: faces, no way in", async () => {
+      const id = await bobsCall();
+      roster.transport.set(lobbyId, "mesh");
+      roster.seated.set(
+        lobbyId,
+        Array.from({ length: MESH_VOICE_LIMIT }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`),
+      );
+      expect(await callOf(alice, id)).toMatchObject({ state: "full", count: MESH_VOICE_LIMIT, joinable: false });
+    });
+
+    it("ends only when the channel is gone", async () => {
+      const id = await bobsCall();
+      await getPool().query(`DELETE FROM channels WHERE id = $1`, [lobbyId]);
+      expect(await callOf(alice, id)).toMatchObject({
+        state: "ended",
+        channelName: "",
+        count: 0,
+        participants: [],
+        joinable: false,
+      });
+      roster.seated.set(lobbyId, [alice.id]);
+      expect((await strip(alice)).items[0]!.hasCall).toBe(false);
+    });
+
+    it("ends when the author can no longer connect to the room", async () => {
+      const id = await bobsCall();
+      roster.seated.set(lobbyId, [alice.id]);
+      expect(await callOf(alice, id)).toMatchObject({ state: "live", count: 1 });
+      await deny(bob.id);
+      expect(await callOf(alice, id)).toMatchObject({ state: "ended", count: 0, participants: [], joinable: false });
+      expect((await strip(alice)).items[0]!.hasCall).toBe(false);
+    });
+
+    it("a viewer who cannot connect is not told it ended, and sees no roster", async () => {
+      const id = await bobsCall();
+      roster.seated.set(lobbyId, [bob.id]);
+      await deny(carol.id);
+      await getPool().query(
+        `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`,
+        [serverId, carol.id],
+      );
+      invalidateServerMemberRoles(serverId);
+      expect(await callOf(carol, id)).toMatchObject({ state: "live", count: 0, participants: [], joinable: false });
+      expect((await strip(carol)).items[0]!.hasCall).toBe(false);
     });
   });
 
@@ -780,7 +902,7 @@ describeDb("stories", () => {
       resetStoryProcessorCacheForTests();
     });
 
-    async function mintVideo() {
+    async function mintVideo(prefix: Uint8Array = MP4) {
       as(alice);
       const created = await call("POST", "/api/stories", {
         kind: "video",
@@ -796,7 +918,7 @@ describeDb("stories", () => {
           [id],
         )
       ).rows[0]!.media_storage_key;
-      storage.objects.set(key, { contentLength: 8000, contentType: "video/mp4", prefix: MP4 });
+      storage.objects.set(key, { contentLength: 8000, contentType: "video/mp4", prefix });
       const published = await call("POST", `/api/stories/${id}/publish`);
       expect(published.status).toBe(200);
       expect(published.body.story.own.status).toBe("processing");
@@ -819,6 +941,37 @@ describeDb("stories", () => {
       expect(seen!.media).toMatchObject({ contentType: "video/mp4", durationMs: 20_000 });
       expect(seen!.media!.posterUrl).toContain("poster.jpg");
       expect((await processStoryVideos()).outcome).toBe("idle");
+    });
+
+    it("takes a QuickTime movie (.mov) as it is: same boxes, same codecs, stored and served as video/mp4", async () => {
+      probe.mockResolvedValue({ durationMs: 12_000, videoCodec: "h264", width: 1080, height: 1920 });
+      const id = await mintVideo(MOV);
+      expect(await processStoryVideos()).toMatchObject({ storyId: id, outcome: "live", wentLive: true });
+      const [seen] = await read(bob, [id]);
+      expect(seen!.media).toMatchObject({ contentType: "video/mp4", durationMs: 12_000 });
+    });
+
+    it("still refuses a QuickTime movie that is not H.264 (an iPhone's default HEVC, ProRes)", async () => {
+      probe.mockResolvedValue({ durationMs: 12_000, videoCodec: "hevc", width: 1080, height: 1920 });
+      const id = await mintVideo(MOV);
+      expect((await processStoryVideos()).outcome).toBe("refused");
+      expect(await read(bob, [id])).toEqual([]);
+    });
+
+    it("still refuses a HEIC photo that says it is a video", async () => {
+      as(alice);
+      const created = await call("POST", "/api/stories", {
+        kind: "video",
+        caption: "foto",
+        audiences: { serverIds: [serverId] },
+        media: { contentType: "video/mp4", byteSize: 8000, width: 720, height: 1280, durationMs: 5_000 },
+      });
+      const id = created.body.story.id as string;
+      const key = (
+        await getPool().query<{ media_storage_key: string }>(`SELECT media_storage_key FROM stories WHERE id = $1`, [id])
+      ).rows[0]!.media_storage_key;
+      storage.objects.set(key, { contentLength: 8000, contentType: "video/mp4", prefix: HEIC });
+      expect((await call("POST", `/api/stories/${id}/publish`)).status).toBe(409);
     });
 
     it("refuses a video over 31 s, whatever the client said", async () => {

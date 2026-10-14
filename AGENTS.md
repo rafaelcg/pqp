@@ -78,6 +78,8 @@ Read [`docs/CONNECTIONS.md`](./docs/CONNECTIONS.md) before adding a provider. St
 
 The sparkle in the app and `/blog` are the same markdown. Mechanics: the header of `client/src/lib/blog/posts.ts`.
 
+The update popover ("Nova versão pronta") lists what changed from the commit messages of merged client work. A change gets a line only if a commit body has `Update note (pt-BR): <one sentence a player would read, tu, no dev words>` (also `(en)` and `(es)`, any subset); without one it is only counted. Optional, for changes a person would notice. See `docs/PWA.md`.
+
 Do **not** write a What's New post in a feature PR. Notes are a weekly catch-up, not a per-PR duty. When Andre asks to catch up, follow [`.cursor/skills/whats-new/SKILL.md`](.cursor/skills/whats-new/SKILL.md). Never edit a post already on `main`.
 
 ## How we ship

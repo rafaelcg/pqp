@@ -83,9 +83,6 @@ describe("the listing nudge in the corner queue", () => {
         whatsNew: true,
       }),
     ).toBe("listingNudge");
-    expect(winningCornerHint({ update: true, listingNudge: true })).toBe(
-      "update",
-    );
   });
 });
 

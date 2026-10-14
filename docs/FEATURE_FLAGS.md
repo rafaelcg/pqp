@@ -231,17 +231,23 @@ on `GET /api/fun/config`; a client reads anything but `false` as on. Off, the
 look falls back to the default on the next config refresh.
 
 `CLIENT_FORCE_UPDATE` (`client_force_update`, default off, global), born as a flag:
-every web or desktop client that is not on the latest build puts up the blocking
-"atualização necessária" screen, served by `GET /api/client-update/config`
-(`forceUpdate`). The client only asks when it already knows it is stale. Leave it on
-only while the good build is the one deployed. Its sibling `CLIENT_MIN_BUILT_AT`
-(ISO date or epoch ms) forces bundles built before a moment and is environment-only.
-See `docs/PWA.md` §"Nobody stays on an old bundle".
+"announce this build now". A web or desktop client that is not on the latest build
+normally hears about a new build once a day, at 09:00 UTC, through a small indicator;
+with this on it hears at once and the indicator is drawn with emphasis. **It does not
+block anybody's screen** (until 2026-10-13 it put up the blocking "atualização
+necessária" screen, on every deploy for everybody, and a user wrote that it came "de
+10 em 10 segundos") and it never reloads anyone in a call. Served by
+`GET /api/client-update/config` (`forceUpdate`); the client only asks when it already
+knows it is stale. Turn it off once the rollout is done. Its sibling
+`CLIENT_MIN_BUILT_AT` (ISO date or epoch ms) does the same for bundles built before a
+moment and is environment-only. See `docs/PWA.md` §"Nobody stays on an old bundle".
 
 `CLIENT_FORCE_UPDATE_IN_CALL` (`client_force_update_in_call`, default off, global),
-born as a flag: with a force on (the flag above or `CLIENT_MIN_BUILT_AT`), the
-forced bundles reload even in a call, which ends the call. For a critical fix only.
-Served as `interruptCalls` by the same endpoint. Its environment-only sibling
+born as a flag: makes the update CRITICAL. With a force on (the flag above or
+`CLIENT_MIN_BUILT_AT`), the forced bundles reload by themselves even in a call, which
+ends the call, and a small blocking "atualização necessária" dialog is up. It is the
+only thing that blocks a screen or reloads a call. For a critical fix only. Served as
+`interruptCalls` by the same endpoint. Its environment-only sibling
 `CLIENT_CRITICAL_MIN_BUILT_AT` (same format as `CLIENT_MIN_BUILT_AT`) does the same
 for bundles built before a moment, served as `criticalMinBuiltAt`.
 

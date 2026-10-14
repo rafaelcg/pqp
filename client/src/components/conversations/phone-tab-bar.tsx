@@ -8,6 +8,7 @@ import { conversationsWithUnread } from "@/lib/conversation-list";
 import { resolveNotificationLevel } from "@/lib/notifications";
 import { useTranslation } from "@/lib/i18n";
 import type { PhoneTab } from "@/lib/phone-tabs";
+import { useUpdateOffered } from "@/lib/update-prompt-state";
 import { cn } from "@/lib/utils";
 
 interface PhoneTabBarProps {
@@ -39,6 +40,9 @@ export function PhoneTabBar({
 }: PhoneTabBarProps) {
   const { t } = useTranslation();
   const notifications = useNotificationState();
+  // A dot on "tu", where the update indicator lives on a phone. Not a count:
+  // an update is not a message.
+  const updateOffered = useUpdateOffered();
   const conversationsWaiting = conversationsWithUnread(conversations, unread, {
     openChannelId: openConversationId,
     isMuted: (channelId) =>
@@ -78,7 +82,14 @@ export function PhoneTabBar({
         >
           <LayoutGrid className="h-5 w-5" aria-hidden="true" />
         </TabButton>
-        <TabButton id="tu" active={tab === "tu"} label={t("phoneTabs.tu")} badge={0} onSelect={onSelect}>
+        <TabButton
+          id="tu"
+          active={tab === "tu"}
+          label={t("phoneTabs.tu")}
+          badge={0}
+          pip={updateOffered}
+          onSelect={onSelect}
+        >
           <UserAvatar
             name={me.displayName}
             avatarUrl={me.avatarUrl}
@@ -97,6 +108,7 @@ function TabButton({
   active,
   label,
   badge,
+  pip = false,
   onSelect,
   children,
 }: {
@@ -104,6 +116,7 @@ function TabButton({
   active: boolean;
   label: string;
   badge: number;
+  pip?: boolean;
   onSelect: (tab: PhoneTab) => void;
   children: ReactNode;
 }) {
@@ -122,6 +135,13 @@ function TabButton({
     >
       <span className="relative flex h-6 items-center justify-center">
         {children}
+        {pip && badge === 0 && (
+          <span
+            data-phone-tab-pip=""
+            aria-hidden="true"
+            className="absolute -right-1.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-accent ring-2 ring-surface-1"
+          />
+        )}
         {badge > 0 && (
           <span
             key={badge}

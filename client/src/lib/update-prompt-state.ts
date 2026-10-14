@@ -1,31 +1,27 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { isAnnounced } from "@/lib/client-version";
 
 /**
  * The one place that knows a new build is waiting.
  *
- * `UpdatePrompt` is mounted in `main.tsx`, outside `App`, because a waiting
- * service worker matters on every route. The corner-hint queue and the server
- * rail live inside `App`. This module is the seam between them:
+ * `BuildWatcher`, `UpdatePrompt` and the forced screen are mounted in
+ * `main.tsx`, outside `App`, because a stale bundle matters on every route. The
+ * rail and the phone's "tu" tab live inside `App` and draw the quiet update
+ * indicator (`components/layout/update-indicator.tsx`). This module is the seam
+ * between them.
  *
- *  - `waiting` is the durable fact: a build is precached and has not been
- *    taken yet. The rail draws its "update" affordance from this, and that
- *    affordance is the WAY BACK: it survives a snooze, a call, and every
- *    onboarding card, because none of them can write to it.
- *  - `showing` is whether the corner card is on screen right now, so
- *    `winningCornerHint` can yield the corner to it.
- *  - `requestedAt` is somebody asking for the card back. The rail bumps it;
- *    the card treats it as "show, whatever you were snoozed or muted for".
+ *  - `waiting` is the durable fact from the service worker: a build is
+ *    precached and has not been taken yet. With `skipWaiting` on it is rare (a
+ *    new worker takes over on install), and it only counts for a page that the
+ *    version poll has not said otherwise about.
+ *  - `build` is what `lib/version-watch.ts` learned by reading `/version.json`.
+ *    It is the main signal, and it carries WHEN the build may be announced
+ *    (`announceAt`, `lib/client-version.ts`): most deploys are not announced the
+ *    minute they land, only once a day.
  *
- * WHY THIS EXISTS RATHER THAN THE CARD OWNING ALL OF IT. On 9 Sep 2026 a user
- * reported being stranded on an old bundle: the card had gone and nothing in
- * the product could bring it back. A single Escape did it. Every corner card
- * listens for Escape on `document`, the update card registered first, so one
- * keypress aimed at an onboarding card snoozed the update instead and left the
- * onboarding card up. Twenty minutes later the card is due again, but the card
- * also hides during a call, and a watch party is hours of call. A waiting build
- * is the only prompt in the product the person cannot act on later by other
- * means, and it gates every other fix, so it now has a home that outlives its
- * own card.
+ * There is no card any more, and so no snooze and no "show me again": the
+ * indicator is always there while there is something to take, and it never
+ * opens by itself. See `docs/PWA.md` §"Nobody stays on an old bundle".
  */
 
 /**
@@ -36,17 +32,29 @@ import { useSyncExternalStore } from "react";
  */
 export interface BuildStaleness {
   stale: boolean;
-  /** The operator made the update mandatory (`/api/client-update/config`). */
+  /**
+   * The operator pushed this one (`client_force_update`, or a bundle built
+   * before `CLIENT_MIN_BUILT_AT`): announced at once, and the indicator is drawn
+   * with emphasis. It never blocks; only `critical` does.
+   */
   forced: boolean;
   /**
-   * The operator made it CRITICAL: the page reloads even in a call
-   * (`isCriticalBuild` in `client-version.ts`). Implies `forced` in practice.
+   * The operator made it CRITICAL: the page reloads even in a call, and the
+   * blocking screen is up (`isCriticalBuild` in `client-version.ts`).
    */
   critical?: boolean;
   /** The deployed build's id, for the loop guard and for support. */
   latestBuild: string | null;
-  /** When the deployed build was built, or when this page first saw it. */
+  /** When the deployed build was announced, or built, or first seen: how long this page has been behind. */
   since: number | null;
+  /** When the deployed build was built, for "published" in the popover. Null when it did not say. */
+  builtAt?: number | null;
+  /**
+   * When this build may first be announced (`announceAtFor`). Null or absent:
+   * now. A stale page that is not yet announced shows nothing and reloads
+   * nothing; `isAnnounced` is the question.
+   */
+  announceAt?: number | null;
 }
 
 export const FRESH_BUILD: BuildStaleness = {
@@ -58,27 +66,18 @@ export const FRESH_BUILD: BuildStaleness = {
 
 interface UpdateState {
   waiting: boolean;
-  showing: boolean;
-  requestedAt: number | null;
   build: BuildStaleness;
 }
 
 let state: UpdateState = {
   waiting: false,
-  showing: false,
-  requestedAt: null,
   build: FRESH_BUILD,
 };
 const listeners = new Set<() => void>();
 
 function set(next: Partial<UpdateState>): void {
   const merged = { ...state, ...next };
-  if (
-    merged.waiting === state.waiting &&
-    merged.showing === state.showing &&
-    merged.requestedAt === state.requestedAt &&
-    merged.build === state.build
-  ) {
+  if (merged.waiting === state.waiting && merged.build === state.build) {
     return;
   }
   state = merged;
@@ -89,7 +88,7 @@ function set(next: Partial<UpdateState>): void {
 
 /** The service worker has a new build precached and ready to take over. */
 export function setUpdateWaiting(next: boolean): void {
-  set({ waiting: next, ...(next ? {} : { requestedAt: null }) });
+  set({ waiting: next });
 }
 
 /**
@@ -101,8 +100,11 @@ export function setBuildStaleness(next: BuildStaleness): void {
   if (
     current.stale === next.stale &&
     current.forced === next.forced &&
+    Boolean(current.critical) === Boolean(next.critical) &&
     current.latestBuild === next.latestBuild &&
-    current.since === next.since
+    current.since === next.since &&
+    (current.builtAt ?? null) === (next.builtAt ?? null) &&
+    (current.announceAt ?? null) === (next.announceAt ?? null)
   ) {
     return;
   }
@@ -117,39 +119,14 @@ export function useBuildStaleness(): BuildStaleness {
   return useSyncExternalStore(subscribe, getBuildStaleness, () => FRESH_BUILD);
 }
 
-export function setUpdatePromptShowing(next: boolean): void {
-  set({ showing: next });
-}
-
-/**
- * "Show me that update notice again."
- *
- * The rail calls this. It clears any snooze and overrides the in-call hush,
- * because the person just asked for it on purpose, and a card they went looking
- * for is not an interruption.
- */
-export function requestUpdatePrompt(now: number = Date.now()): void {
-  set({ requestedAt: now });
-}
-
-export function isUpdatePromptShowing(): boolean {
-  return state.showing;
-}
-
 export function isUpdateWaiting(): boolean {
   return state.waiting;
-}
-
-export function updateRequestedAt(): number | null {
-  return state.requestedAt;
 }
 
 /** Test seam. Nothing in the app resets a module singleton. */
 export function resetUpdateState(): void {
   state = {
     waiting: false,
-    showing: false,
-    requestedAt: null,
     build: FRESH_BUILD,
   };
   for (const listener of listeners) {
@@ -164,51 +141,54 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-export function useUpdatePromptShowing(): boolean {
-  return useSyncExternalStore(subscribe, isUpdatePromptShowing, () => false);
-}
-
 export function useUpdateWaiting(): boolean {
   return useSyncExternalStore(subscribe, isUpdateWaiting, () => false);
 }
 
-export function useUpdateRequestedAt(): number | null {
-  return useSyncExternalStore(subscribe, updateRequestedAt, () => null);
+/**
+ * Whether there is an update to OFFER right now.
+ *
+ * Pure, and the whole visibility rule in one place:
+ *
+ *  - the version poll says the page is behind AND the build is announced (the
+ *    daily gate has opened, or the operator pushed it): yes;
+ *  - the version poll says the page is behind but the gate is still closed: no,
+ *    and not because the worker says one is waiting either, which would make
+ *    the gate a way to be told a minute later than before and nothing more;
+ *  - otherwise a service worker with a waiting build, for a page the poll has
+ *    not spoken about yet: yes.
+ */
+export function isUpdateOffered(
+  input: { build: BuildStaleness; waiting: boolean },
+  now: number,
+): boolean {
+  if (input.build.stale) {
+    return isAnnounced(input.build.announceAt, now);
+  }
+  return input.waiting;
 }
 
 /**
- * Whether the corner card should be on screen.
- *
- * Pure, and the whole visibility rule in one place, because every branch here
- * is a way the card can vanish on somebody and each one has cost a user an
- * update at least once:
- *
- *  - nothing is waiting: nothing to say;
- *  - the person asked for it back (rail) AFTER the last snooze: show it, even
- *    mid-call. They went and found the button;
- *  - snoozed and the snooze has not run out: stay quiet;
- *  - in a call: stay quiet, because reloading ends their screen share and
- *    drops them out of the room. The rail affordance is still there, so this
- *    is a hush and not a disappearance;
- *  - otherwise: show it.
+ * `isUpdateOffered`, kept true to the clock: it re-renders at the moment a held
+ * back build becomes announced, which no state change announces by itself.
  */
-export function shouldShowUpdateCard(input: {
-  waiting: boolean;
-  snoozedAt: number | null;
-  requestedAt: number | null;
-  inCall: boolean;
-}): boolean {
-  if (!input.waiting) {
-    return false;
-  }
-  if (
-    input.requestedAt !== null &&
-    (input.snoozedAt === null || input.requestedAt >= input.snoozedAt)
-  ) {
-    return true;
-  }
-  if (input.snoozedAt !== null) {
-    return false;
-  }
-  return !input.inCall;
+export function useUpdateOffered(): boolean {
+  const build = useBuildStaleness();
+  const waiting = useUpdateWaiting();
+  const [now, setNow] = useState(() => Date.now());
+  const announceAt = build.stale ? (build.announceAt ?? null) : null;
+  useEffect(() => {
+    setNow(Date.now());
+    if (announceAt === null) {
+      return;
+    }
+    const wait = announceAt - Date.now();
+    if (wait <= 0) {
+      return;
+    }
+    // A timer past 24 days would overflow; the poll republishes long before.
+    const timer = setTimeout(() => setNow(Date.now()), Math.min(wait, 2 ** 31 - 1));
+    return () => clearTimeout(timer);
+  }, [announceAt]);
+  return isUpdateOffered({ build, waiting }, now);
 }

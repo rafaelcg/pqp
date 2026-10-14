@@ -66,7 +66,6 @@ import gg.pqp.app.stories.StoriesRules
 import gg.pqp.app.stories.StoriesStore
 import gg.pqp.app.stories.StoryAudienceOptions
 import gg.pqp.app.stories.StoryAudienceTargets
-import gg.pqp.app.stories.StoryCallRoom
 import gg.pqp.app.stories.StoryMediaInput
 import gg.pqp.app.stories.StorySticker
 import gg.pqp.app.stories.StoryMediaPrep
@@ -154,15 +153,14 @@ fun StoryComposer(
     var cardBackground by remember { mutableStateOf("night") }
     var muted by remember { mutableStateOf(false) }
     var openCallAtStart by remember { mutableStateOf(false) }
-    // Who sits in which voice room, for the call card: it is live only
-    // while its author is in the room.
+    // Who sits in which voice room, for the call card's preview and for the
+    // room the picker starts on. An empty room is fine to post.
     val phase by session.phase.collectAsStateWithLifecycle()
     val meId = (phase as? SessionPhase.Ready)?.me?.id
     val voice = (context.applicationContext as? gg.pqp.app.PqpApplication)?.voice
     val occupancy by (voice?.rooms?.rooms ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap()) })
         .collectAsStateWithLifecycle()
     var choosingAudience by remember { mutableStateOf(false) }
-    var confirmCallNotIn by remember { mutableStateOf(false) }
 
     var options by remember { mutableStateOf<StoryAudienceOptions?>(null) }
     var targets by remember { mutableStateOf(StoryAudienceTargets()) }
@@ -463,8 +461,6 @@ fun StoryComposer(
                             hasAudio = current?.hasAudio != false,
                             canPost = ready && options != null,
                             posting = post == PostState.Posting,
-                            callWarning = callLayer?.takeIf { !StoryCallRoom.authorIn(it.channelId, meId, occupancy) }
-                                ?.let { stringResource(R.string.stories_call_not_in_room, it.roomName) },
                             occupancy = occupancy,
                         ),
                         base = {
@@ -495,8 +491,6 @@ fun StoryComposer(
                         onRetryAudience = { audienceAttempt += 1 },
                         onPost = {
                             when {
-                                // A call card for a room its author is not in reads "A call acabou" to everybody until they join.
-                                callLayer != null && !StoryCallRoom.authorIn(callLayer.channelId, meId, occupancy) -> confirmCallNotIn = true
                                 StoriesRules.canPost(targets) -> doPost()
                                 else -> choosingAudience = true
                             }
@@ -596,29 +590,6 @@ fun StoryComposer(
             StoryVideoWorking(progress = progress, onCancel = { workJob?.cancel() })
         }
 
-        if (confirmCallNotIn) {
-            val room = callLayer?.roomName.orEmpty()
-            androidx.compose.material3.AlertDialog(
-                onDismissRequest = { confirmCallNotIn = false },
-                title = { Text(stringResource(R.string.stories_call_confirm_title)) },
-                text = { Text(stringResource(R.string.stories_call_confirm_body, room)) },
-                confirmButton = {
-                    androidx.compose.material3.TextButton(
-                        onClick = {
-                            confirmCallNotIn = false
-                            if (StoriesRules.canPost(targets)) doPost() else choosingAudience = true
-                        },
-                        modifier = Modifier.testTag("stories.composer.callConfirm"),
-                    ) { Text(stringResource(R.string.stories_call_confirm_yes)) }
-                },
-                dismissButton = {
-                    androidx.compose.material3.TextButton(onClick = { confirmCallNotIn = false }) {
-                        Text(stringResource(R.string.stories_call_confirm_no))
-                    }
-                },
-            )
-        }
-
         if (choosingAudience) {
             AudienceSheet(
                 options = options ?: StoryAudienceOptions(),
@@ -628,8 +599,7 @@ fun StoryComposer(
                 replies = replies,
                 onReplies = { replies = it },
                 post = post,
-                // The same question as the editor's Postar: a call card for a room its author is not in.
-                onPost = { if (callLayer != null && !StoryCallRoom.authorIn(callLayer.channelId, meId, occupancy)) confirmCallNotIn = true else doPost() },
+                onPost = { doPost() },
                 onDismiss = { if (post != PostState.Posting) choosingAudience = false },
             )
         }

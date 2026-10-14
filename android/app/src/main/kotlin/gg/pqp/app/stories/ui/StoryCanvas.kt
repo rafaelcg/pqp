@@ -149,7 +149,7 @@ fun StoryCanvas(
                                 val server = servers.firstOrNull { it.id == layer.serverId }
                                 PlacedLayer(layer.x, layer.y, layer.scale, layer.rotation, canvas) {
                                     StoryCallCard(
-                                        state = callCardState(live.state, live.count),
+                                        state = callCardState(live.state, live.count, live.joinable),
                                         roomName = live.channelName,
                                         serverName = server?.name.orEmpty(),
                                         serverId = layer.serverId,
@@ -157,7 +157,7 @@ fun StoryCanvas(
                                         faces = live.participants.map { CallFace(it.id, it.displayName, it.avatarUrl) },
                                         count = live.count,
                                         canvasWidthPx = canvas.width,
-                                        onJoin = if (live.joinable) ({ onJoinCall(live) }) else null,
+                                        onJoin = if (live.joinable && live.state == "live") ({ onJoinCall(live) }) else null,
                                     )
                                 }
                             }

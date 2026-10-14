@@ -107,8 +107,6 @@ data class EditorEnv(
     val audienceLabel: String,
     val canPost: Boolean,
     val posting: Boolean,
-    /** "You're not in that room": shown while a call card is placed and its author is not in the room. */
-    val callWarning: String?,
     val occupancy: Map<String, List<VoiceParticipant>>,
     /** False for a clip with no audio track (shot without the microphone): there is nothing to mute. */
     val hasAudio: Boolean = true,
@@ -428,12 +426,12 @@ fun StoryEditor(
                         }
                     }
                 }
-                // A notice: a limit hit, or "you are not in that call".
-                val notice = message ?: env.callWarning
+                // A notice: a limit hit.
+                val notice = message
                 if (notice != null) {
                     Text(
                         notice,
-                        color = if (message != null) Color.White else Palette.Warning,
+                        color = Color.White,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier
                             .align(Alignment.CenterHorizontally)

@@ -20,7 +20,7 @@ const CLIENT_DIR = path.resolve(import.meta.dirname, "../..");
 export function buildFixture(
   name: string,
   buildId: string,
-  options: { legacyWorker?: boolean } = {},
+  options: { legacyWorker?: boolean; announceHourUtc?: string } = {},
 ): string {
   const out = path.join(os.tmpdir(), "pqp-stale-bundle", name);
   mkdirSync(path.dirname(out), { recursive: true });
@@ -34,6 +34,10 @@ export function buildFixture(
         VITE_PQP_BUILD_ID: buildId,
         PQP_TEST_LEGACY_WORKER: options.legacyWorker ? "1" : "",
         VITE_DEV_AUTH_BYPASS: "true",
+        // The daily announcement is OFF in these fixtures unless a spec asks for
+        // it: nearly every spec here is about what happens when a build is
+        // known, and none of them wants to wait for 09:00 UTC to find out.
+        VITE_UPDATE_ANNOUNCE_HOUR_UTC: options.announceHourUtc ?? "off",
         // Never inherited from a developer's shell: the fixtures must be the
         // same tree apart from the id.
         VITE_FARO_URL: "",
