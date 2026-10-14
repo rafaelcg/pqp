@@ -1,13 +1,15 @@
-import { ChevronRight, X } from "lucide-react";
-import { useMemo, useState, type CSSProperties, type MouseEvent } from "react";
+import { ChevronRight, Plus, RotateCw, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from "react";
 import type { StoryAuthor, StoryNotice, StoryStripItem } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import { isHintSeen, rememberHint } from "@/lib/hints";
 import { ringLabel } from "@/lib/stories/format";
 import { failedRingLabel } from "@/lib/stories/post";
 import { useSeenStories } from "@/lib/stories/seen-store";
+import { trayWarmIds, warmTray } from "@/lib/stories/warm-tray";
 import { stripView } from "@/lib/stories/strip-state";
 import {
   openStoryComposer,
@@ -80,6 +82,15 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
   const view = strip
     ? stripView(strip, { now, seenIds: seen, firstRunDismissed: dismissed, ownSlot })
     : ({ kind: "hidden" } as const);
+
+  // Warm the first unseen story of the first three rings while the strip is up, so opening one shows
+  // it with no wait. Keyed by the ids, not the strip object, so a refetch that changed nothing is free.
+  const warmIds = strip?.enabled ? trayWarmIds(strip.items, seen) : [];
+  const warmKey = warmIds.join(",");
+  useEffect(
+    () => warmTray(`strip:${audienceKey}`, warmKey ? warmKey.split(",") : []),
+    [audienceKey, warmKey],
+  );
 
   const myNotices =
     audience.kind === "server"
@@ -162,6 +173,32 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
   const ownSeen = own ? own.storyIds.every((id) => seen.has(id)) : false;
   const failedLabel =
     posting?.status === "failed" ? failedRingLabel(posting.failure, Boolean(posting.retry)) : null;
+  // A failed post that can be sent again keeps its draft until the author chooses: try again or discard
+  // (which also deletes whatever was already uploaded). One that cannot is only put away.
+  const discardPost = () => {
+    if (posting?.discard) {
+      posting.discard();
+    } else {
+      setPosting(null);
+    }
+  };
+  const failedActions: ContextMenuItemDef[] | undefined =
+    (posting?.status === "failed" || posting?.status === "waiting") && posting.retry
+      ? [
+          { id: "retry", label: t("stories.upload.retryAction"), icon: RotateCw, onSelect: posting.retry },
+          { id: "discard", label: t("stories.upload.discardAction"), icon: Trash2, danger: true, onSelect: discardPost },
+        ]
+      : undefined;
+  const ownLabel =
+    posting && posting.status !== "done"
+      ? t(
+          posting.status === "failed"
+            ? "stories.ring.failed"
+            : posting.status === "waiting"
+              ? "stories.ring.offline"
+              : "stories.ring.posting",
+        )
+      : t("stories.strip.yours");
   const showOwn = Boolean(own) || strip.canPost || Boolean(posting);
 
   return (
@@ -200,17 +237,25 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
             ringId={`${audienceKey}:own`}
             name={me.displayName}
             avatarUrl={me.avatarUrl}
-            label={t("stories.strip.yours")}
+            label={ownLabel}
             ariaLabel={
               failedLabel
                 ? t(failedLabel.key, failedLabel.vars)
                 : posting
-                  ? t(posting.status === "processing" ? "stories.upload.processing" : "stories.upload.posting")
+                  ? t(
+                      posting.status === "processing"
+                        ? "stories.upload.processing"
+                        : posting.status === "waiting"
+                          ? "stories.upload.offline"
+                          : "stories.upload.posting",
+                    )
                   : own
                     ? t("stories.strip.ownView")
                     : t("stories.strip.ownPost")
             }
-            state={own ? (ownSeen ? "seen" : "unseen") : posting ? "seen" : "none"}
+            // A story just posted that the strip has not read back yet is still a new story: the gradient
+            // ring, not a grey one and not a bare face (that was a flash on a first-ever story).
+            state={own ? (ownSeen ? "seen" : "unseen") : posting ? (posting.status === "done" ? "unseen" : "seen") : "none"}
             plus={strip.canPost}
             plusLabel={t("stories.strip.post")}
             onPlus={own ? compose : undefined}
@@ -224,18 +269,22 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
                 : null
             }
             arrive={Boolean(own)}
+            failedActions={failedActions}
+            contextItems={
+              strip.canPost && !posting
+                ? [{ id: "new-story", label: t("stories.compose.title"), icon: Plus, onSelect: compose }]
+                : undefined
+            }
             onOpen={(event) => {
               if (posting?.status === "failed") {
-                if (posting.retry) {
-                  posting.retry();
-                } else {
-                  setPosting(null);
-                }
+                // With actions the ring opens its menu instead; this is the one that can only be put away.
+                discardPost();
                 return;
               }
               if (own) {
                 openOwn(own, event);
-              } else if (strip.canPost) {
+              } else if (strip.canPost && !posting) {
+                // A ring that says "Postando..." is the story going up: a tap must not open a second composer.
                 compose();
               }
             }}

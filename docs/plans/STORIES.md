@@ -1387,6 +1387,50 @@ moment the author has it, and Post only creates and publishes.
   `eagerUploads: false` (absent on an older server, which reads as off). Every
   client then uses the plain flow, which is the whole fallback.
 
+### 18.1 The web client
+
+- `lib/stories/eager-upload.ts`: one `EagerUpload` per file (mint, PUT with
+  progress, state `uploading | done | failed | cancelled`). The composer starts
+  one when the base is captured or imported, one per placed photo as soon as it is
+  on the canvas, and one for the drawing once the pen is up (re-sent if the
+  strokes change). Taking a photo off the canvas, a retake, a replaced base or a
+  discard cancels it: the PUT aborts and `DELETE /api/stories/uploads/:id` is
+  fired and forgotten. There is no trim step on the web, so a re-trim is a new
+  base.
+- Post (`lib/stories/post.ts`) closes the composer at once and waits for the
+  handles. With every file stored it is ONE request, create with `publish: true`.
+  A file with no stored copy (failed, or a server without the route) goes the
+  plain way beside the stored ones. A draft kept for more than five hours
+  uploads again before it is used, because the server sweeps at six.
+- The own ring carries bytes over bytes across every file (a stored file counts
+  whole), the label reads "Postando...", and a failed post keeps the whole draft:
+  tapping the ring opens "Tentar de novo" / "Descartar" (a refusal that cannot be
+  retried only offers to put it away). Discard cancels every upload.
+- Preload (`lib/stories/preload.ts`): at most two downloads, viewer before strips,
+  a lower priority one is preempted. The viewer warms the next two stories of
+  the queue across authors and the first story of the next author (pictures
+  decoded, the poster and layer photos, the author's face, a clip buffered on a
+  hidden element that the viewer then takes over whole); each strip warms the
+  first unseen story of its first three rings. Leaving the window cancels the
+  download. Video preload is skipped under `navigator.connection.saveData`.
+  The stories the strip read are remembered for three minutes so the viewer uses
+  the very objects (and presigned URLs) that were warmed.
+- A story appears whole (`StoryContent` with `gate`, used by the viewer): the card
+  shows its own background and keeps everything else at opacity 0 until the base,
+  every photo layer, the drawing, the faces on call and mention cards (all
+  `img`s in the card, `decode()`d) and the fonts are in, then reveals in one
+  frame with a 140 ms fade (none under reduced motion); a spinner shows only
+  after 300 ms, and a story that never completes shows after 10 s as it is. The
+  preloader warms every one of those assets and the fonts, so a preloaded story
+  reveals on its first frame. Scaled text, mentions and call cards use CSS `zoom`
+  on an inner box instead of `transform: scale` (the viewer only; the editor
+  keeps the transform its gestures measure), so small text stays sharp at any scale.
+  The mute button was already in the top chrome for video stories; every header
+  icon now has the same 44 px hit box on desktop too.
+- The viewer's clock now starts at the first frame (`onReady`, pause reason
+  `load`, given up on after 12 s), so a story on a slow link gets its full time
+  instead of being skipped while it downloads.
+
 ## Research sources
 
 - **Instagram:**

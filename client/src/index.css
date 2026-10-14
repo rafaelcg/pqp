@@ -3712,6 +3712,10 @@ html[data-immersive-stage] [data-immersive-hide] {
   animation: story-upload-spin 1.4s linear infinite;
   transform-origin: center;
 }
+/* The arc follows the real upload progress; the small linear ease just joins the steps. */
+.story-upload-arc {
+  transition: stroke-dashoffset var(--duration-base) linear;
+}
 
 /* The viewer. */
 .story-text-card[data-bg="lime"] {
@@ -3883,7 +3887,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   .story-react-fly {
     animation: none;
   }
-  .story-ring > [data-ring-layer="gap"] {
+  .story-ring > [data-ring-layer="gap"],
+  .story-upload-arc {
     transition: none;
   }
   .story-tray-up,
