@@ -231,12 +231,13 @@ private fun StoryBackdrop(story: Story, barShare: Float, modifier: Modifier = Mo
                 if (model != null) {
                     // Decoded at thumbnail size and stretched, which is a blur that costs nothing: no
                     // full-screen render effect behind every story, and the same on every Android version.
-                    // The same cache key as the picture itself: this is a small decode of what the preload already fetched.
+                    // The picture's own disk key, so nothing is fetched twice, but a memory key of its own: this small decode
+                    // must not replace the full-size one the canvas is drawing from.
                     val context = LocalContext.current
                     val request = remember(model, key) {
                         ImageRequest.Builder(context)
                             .data(model)
-                            .memoryCacheKey(key)
+                            .memoryCacheKey("$key:thumb")
                             .diskCacheKey(key)
                             .size(Size(BACKDROP_EDGE, BACKDROP_EDGE * 16 / 9))
                             .build()

@@ -219,6 +219,8 @@ class StoryPreloader(
         planning?.cancel()
         planning = scope.launch {
             val list = compute()
+            // A plan that was replaced while it was being worked out must not commit.
+            ensureActive()
             wanted[source] = list
             apply()
         }
