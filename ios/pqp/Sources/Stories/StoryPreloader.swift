@@ -283,13 +283,22 @@ final class StoryPreloader {
     }
 
     /// Returns when every one of `urls` is in memory, decoded (or has failed,
-    /// which is not a reason to hold a story back for ever). All at once.
-    func ensure(_ urls: [URL]) async {
+    /// which is not a reason to hold a story back for ever). A few at a time:
+    /// a story has a handful of pictures, and they should not become a burst of
+    /// requests and decodes beside everything else the app is doing.
+    func ensure(_ urls: [URL], width: Int = 4) async {
         let missing = urls.filter { image(for: $0) == nil }
         guard !missing.isEmpty else { return }
         await withTaskGroup(of: Void.self) { group in
-            for url in missing {
+            var rest = missing.makeIterator()
+            for _ in 0..<width {
+                guard let url = rest.next() else { break }
                 group.addTask { [self] in _ = await imageForDisplay(url) }
+            }
+            while await group.next() != nil {
+                if let url = rest.next() {
+                    group.addTask { [self] in _ = await imageForDisplay(url) }
+                }
             }
         }
     }

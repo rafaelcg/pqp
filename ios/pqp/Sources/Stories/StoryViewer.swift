@@ -762,8 +762,12 @@ struct StoryViewer: View {
     /// photo story whose every picture is in memory (preloaded), so that its
     /// very first frame is the finished story and not a placeholder for one.
     private func isShown(_ story: Story) -> Bool {
-        if revealedIds.contains(story.id) { return true }
-        guard !story.isVideo, !StoryPreloadPlan.hasCallLayer(story) || serversLoaded else { return false }
+        // A video is shown once revealed (its player is its own memory).
+        if story.isVideo { return revealedIds.contains(story.id) }
+        // A photo story is shown when everything it draws is in memory NOW: one
+        // whose pictures were evicted since (memory pressure) is not, and goes
+        // back through the placeholder instead of filling in piece by piece.
+        guard !StoryPreloadPlan.hasCallLayer(story) || serversLoaded else { return false }
         return StoryPreloadPlan.assets(of: story, serverIcon: { serversById[$0]?.iconUrl })
             .allSatisfy { StoryPreloader.shared.image(for: $0) != nil }
     }
@@ -779,10 +783,15 @@ struct StoryViewer: View {
     private func prepareReveal() async {
         guard let story = current else { return }
         waitingId = nil
-        // Seen before and still in memory: straight back.
+        // Seen before: straight back if it is all still in memory, otherwise it
+        // is made whole again from the start.
         if revealedIds.contains(story.id), !story.isVideo {
-            revealOpacity = 1
-            return
+            if isShown(story) {
+                revealOpacity = 1
+                return
+            }
+            revealedIds.remove(story.id)
+            assetIds.remove(story.id)
         }
         let id = story.id
         let known = StoryPreloadPlan.assets(of: story, serverIcon: { serversById[$0]?.iconUrl })

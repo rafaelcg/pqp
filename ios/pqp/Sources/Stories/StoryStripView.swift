@@ -321,6 +321,28 @@ struct StoryStripView: View {
         .accessibilityLabel(accessibilityLabel(for: job))
         .accessibilityValue(progressValue(for: job))
         .accessibilityIdentifier("stories.own")
+        // The "+" on the ring is 20 pt: too small to press on a phone, so the
+        // ring's own tap (which plays the story) kept winning. A 48 pt target
+        // (44 pt that must work, with a margin) centred on it, drawn over the ring, takes those taps and starts a
+        // new story. The badge keeps its size.
+        .overlay(alignment: .topLeading) {
+            if strip.canPost, job == nil {
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    model.composing = true
+                } label: {
+                    // 48 pt around the badge, so the 44 pt of it that has to
+                    // work does at its very edges too.
+                    Color.clear
+                        .frame(width: 48, height: 48)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .offset(x: 33, y: 32)
+                .accessibilityLabel("Add a story")
+                .accessibilityIdentifier("stories.own.plus")
+            }
+        }
     }
 
     private func label(for job: StoryPostQueue.Job?) -> String {

@@ -149,13 +149,60 @@ final class StoriesUITests: XCTestCase {
         app.buttons["hub.server.\(serverId)"].tap()
         let own = app.buttons["stories.own"]
         XCTAssertTrue(own.waitForExistence(timeout: 15))
-        own.tap()
+        own.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.3)).tap()
         let viewers = app.buttons["story.viewers"]
         XCTAssertTrue(viewers.waitForExistence(timeout: 10), "Your own story says who saw it")
         snap(app, "stories-own")
         viewers.tap()
         sleep(2)
         snap(app, "stories-viewers-sheet")
+    }
+
+    /// The "+" on the own ring is a 44 pt target that wins over the ring's own
+    /// tap (which plays the story): coordinate taps all over its area open the
+    /// composer, a tap in the middle of the avatar still plays the story, and a
+    /// long press on the ring offers a new story as a second way in.
+    func testThePlusOnTheOwnRingIsEasyToHit() throws {
+        try XCTSkipUnless(enabled(), "STORIES is off on the dev server.")
+        guard let servers = request("GET", "/api/servers")?["servers"] as? [[String: Any]],
+              let serverId = servers.first?["id"] as? String else { return XCTFail("No server") }
+        request("POST", "/api/stories", body: [
+            "kind": "text", "text": "mira no mais", "background": "night",
+            "audiences": ["serverIds": [serverId], "friends": false],
+        ])
+        let app = XCUIApplication()
+        app.launchEnvironment.merge(TestSeed.launchEnvironment) { _, new in new }
+        app.launchEnvironment["PQP_STORY_CAMERA"] = "mock"
+        app.launchArguments += ["-pqp.hasCompletedOnboarding", "YES", "-pqp.lastVisited", ""]
+        app.launch()
+        TestSeed.passAgeGate(self)
+        app.buttons["hub.server.\(serverId)"].tap()
+        let plus = app.buttons["stories.own.plus"]
+        XCTAssertTrue(plus.waitForExistence(timeout: 20), "The own ring has its + target")
+        XCTAssertGreaterThanOrEqual(plus.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(plus.frame.height, 44)
+        snap(app, "plus-target")
+        // Corners (a few points inside), edge middles and the centre of the area.
+        let points: [(CGFloat, CGFloat)] = [(0.1, 0.1), (0.9, 0.1), (0.1, 0.9), (0.9, 0.9), (0.5, 0.1), (0.5, 0.9), (0.1, 0.5), (0.9, 0.5), (0.5, 0.5)]
+        for (x, y) in points {
+            plus.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)).tap()
+            let close = app.buttons["composer.close"]
+            XCTAssertTrue(close.waitForExistence(timeout: 10), "A tap at (\(x), \(y)) of the + area opens the composer")
+            XCTAssertFalse(app.buttons["story.close"].exists, "...and not the viewer")
+            close.tap()
+            XCTAssertTrue(plus.waitForExistence(timeout: 10))
+        }
+        // The middle of the ring still plays the story.
+        app.buttons["stories.own"].coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.3)).tap()
+        XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10), "The ring itself plays the story")
+        app.buttons["story.close"].tap()
+        // Long press: Novo story as a second route.
+        app.buttons["stories.own"].coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.3)).press(forDuration: 1.2)
+        let newStory = app.buttons["Novo story"].exists ? app.buttons["Novo story"] : app.buttons["New story"]
+        XCTAssertTrue(newStory.waitForExistence(timeout: 5), "A long press offers a new story")
+        snap(app, "plus-long-press")
+        newStory.tap()
+        XCTAssertTrue(app.buttons["composer.close"].waitForExistence(timeout: 10))
     }
 
     func testComposerPostsATextStory() throws {
