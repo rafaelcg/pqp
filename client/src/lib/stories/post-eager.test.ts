@@ -248,6 +248,100 @@ describe("postStory with eager uploads", () => {
     expect(getStoriesUi().posting).toBeNull();
   });
 
+  it("no connection is a waiting state that posts by itself when the connection is back", async () => {
+    const listeners = new Map<string, () => void>();
+    const online = { value: false };
+    vi.stubGlobal("navigator", {
+      get onLine() {
+        return online.value;
+      },
+    });
+    vi.stubGlobal("window", {
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      addEventListener: (type: string, listener: () => void) => listeners.set(`w:${type}`, listener),
+      removeEventListener: (type: string) => listeners.delete(`w:${type}`),
+    });
+    vi.stubGlobal("document", {
+      visibilityState: "hidden",
+      addEventListener: (type: string, listener: () => void) => listeners.set(`d:${type}`, listener),
+      removeEventListener: (type: string) => listeners.delete(`d:${type}`),
+    });
+    api.createStory.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const story = draft();
+    const base = fakeHandle({ id: "base-up" });
+    story.eager = { base: base as never };
+
+    await postStory(story);
+    const waiting = getStoriesUi().posting!;
+    // Not a failure: no red ring, nothing thrown away, and a way to try right now.
+    expect(waiting.status).toBe("waiting");
+    expect(waiting.failure).toBeNull();
+    expect(base.cancel).not.toHaveBeenCalled();
+    expect(waiting.retry).not.toBeNull();
+    expect(listeners.has("w:online")).toBe(true);
+
+    // Still offline: the event wakes nothing.
+    listeners.get("w:online")!();
+    expect(api.createStory).toHaveBeenCalledTimes(1);
+
+    api.createStory.mockResolvedValueOnce(live);
+    online.value = true;
+    listeners.get("w:online")!();
+    await vi.waitFor(() => expect(getStoriesUi().posting?.status).toBe("done"));
+    expect(api.createStory).toHaveBeenCalledTimes(2);
+    // The listeners went with the retry.
+    expect(listeners.size).toBe(0);
+  });
+
+  it("the tab becoming visible again also wakes a waiting post, and discarding stops the wait", async () => {
+    const listeners = new Map<string, () => void>();
+    const online = { value: false };
+    vi.stubGlobal("navigator", {
+      get onLine() {
+        return online.value;
+      },
+    });
+    const doc = {
+      visibilityState: "hidden",
+      addEventListener: (type: string, listener: () => void) => listeners.set(`d:${type}`, listener),
+      removeEventListener: (type: string) => listeners.delete(`d:${type}`),
+    };
+    vi.stubGlobal("window", {
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      addEventListener: (type: string, listener: () => void) => listeners.set(`w:${type}`, listener),
+      removeEventListener: (type: string) => listeners.delete(`w:${type}`),
+    });
+    vi.stubGlobal("document", doc);
+    api.createStory.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await postStory(draft());
+    online.value = true;
+    doc.visibilityState = "visible";
+    api.createStory.mockResolvedValueOnce(live);
+    listeners.get("d:visibilitychange")!();
+    await vi.waitFor(() => expect(getStoriesUi().posting?.status).toBe("done"));
+
+    // Offline again, then discarded: nothing is left listening.
+    online.value = false;
+    api.createStory.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await postStory(draft());
+    expect(listeners.size).toBeGreaterThan(0);
+    getStoriesUi().posting!.discard!();
+    expect(listeners.size).toBe(0);
+  });
+
+  it("with a connection, the same failure is a real failure (red, with Try again)", async () => {
+    vi.stubGlobal("navigator", { onLine: true });
+    api.createStory.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await postStory(draft());
+    expect(getStoriesUi().posting?.status).toBe("failed");
+  });
+
   it("a refused post can only be discarded", async () => {
     api.createStory.mockRejectedValueOnce(new ApiError(422, "refused"));
     const story = draft();

@@ -183,15 +183,22 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
     }
   };
   const failedActions: ContextMenuItemDef[] | undefined =
-    posting?.status === "failed" && posting.retry
+    (posting?.status === "failed" || posting?.status === "waiting") && posting.retry
       ? [
           { id: "retry", label: t("stories.upload.retryAction"), icon: RotateCw, onSelect: posting.retry },
           { id: "discard", label: t("stories.upload.discardAction"), icon: Trash2, danger: true, onSelect: discardPost },
         ]
       : undefined;
-  const ownLabel = posting
-    ? t(posting.status === "failed" ? "stories.ring.failed" : "stories.ring.posting")
-    : t("stories.strip.yours");
+  const ownLabel =
+    posting && posting.status !== "done"
+      ? t(
+          posting.status === "failed"
+            ? "stories.ring.failed"
+            : posting.status === "waiting"
+              ? "stories.ring.offline"
+              : "stories.ring.posting",
+        )
+      : t("stories.strip.yours");
   const showOwn = Boolean(own) || strip.canPost || Boolean(posting);
 
   return (
@@ -235,12 +242,20 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
               failedLabel
                 ? t(failedLabel.key, failedLabel.vars)
                 : posting
-                  ? t(posting.status === "processing" ? "stories.upload.processing" : "stories.upload.posting")
+                  ? t(
+                      posting.status === "processing"
+                        ? "stories.upload.processing"
+                        : posting.status === "waiting"
+                          ? "stories.upload.offline"
+                          : "stories.upload.posting",
+                    )
                   : own
                     ? t("stories.strip.ownView")
                     : t("stories.strip.ownPost")
             }
-            state={own ? (ownSeen ? "seen" : "unseen") : posting ? "seen" : "none"}
+            // A story just posted that the strip has not read back yet is still a new story: the gradient
+            // ring, not a grey one and not a bare face (that was a flash on a first-ever story).
+            state={own ? (ownSeen ? "seen" : "unseen") : posting ? (posting.status === "done" ? "unseen" : "seen") : "none"}
             plus={strip.canPost}
             plusLabel={t("stories.strip.post")}
             onPlus={own ? compose : undefined}

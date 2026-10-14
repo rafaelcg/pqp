@@ -142,6 +142,19 @@ export class StoryPreloader {
 
   constructor(private readonly env: PreloadEnv = browserEnv) {}
 
+  private paused = false;
+
+  /**
+   * While paused nothing new starts and what is going is cancelled: the viewer pauses it while the story
+   * on screen is still loading, so warming never competes with it.
+   */
+  setPaused(paused: boolean): void {
+    if (this.paused !== paused) {
+      this.paused = paused;
+      this.reconcile();
+    }
+  }
+
   /** Replace what `source` wants warmed. Lower `priority` goes first. */
   setSource(source: string, priority: number, assets: readonly PreloadAsset[]): void {
     this.sources.set(source, { priority, assets: [...assets] });
@@ -217,7 +230,7 @@ export class StoryPreloader {
   }
 
   private reconcile(): void {
-    const wanted = this.desired();
+    const wanted = this.paused ? [] : this.desired();
     const wantedKeys = new Set(wanted.map((asset) => asset.key));
     // Leaving the window cancels what is still downloading.
     for (const [key, job] of [...this.running]) {

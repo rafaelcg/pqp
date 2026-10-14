@@ -48,6 +48,8 @@ export interface StoryDraft {
    * point (the publish) left it pending there, so discarding the draft deletes it too.
    */
   createdStoryId?: string;
+  /** Stops watching for the connection to come back (a post that is waiting for it). */
+  stopWaiting?: () => void;
 }
 
 export type PostOutcome = "live" | "processing" | "failed" | "busy";
@@ -180,6 +182,7 @@ function releasePreview(draft: StoryDraft): void {
 
 /** Put the draft away: stop its uploads, delete what was stored, free its picture, clear the ring. */
 function discardDraft(draft: StoryDraft, id: string): void {
+  draft.stopWaiting?.();
   cancelDraftUploads(draft);
   if (draft.createdStoryId) {
     // Fire and forget: the server's sweep takes a pending story nobody publishes within the hour.
@@ -207,7 +210,49 @@ function discardDraft(draft: StoryDraft, id: string): void {
  * The draft, its files and its audience, stays in memory until the story is up
  * or the author discards it from the ring: a failed post keeps everything.
  */
+/** A failure that is only "there is no connection": no answer at all, and the browser says it is offline. */
+export function isOfflineError(error: unknown): boolean {
+  if (error instanceof ApiError && error.status !== 0) {
+    return false;
+  }
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+/**
+ * Post again by itself when the connection comes back: the window's `online` event, and the tab
+ * becoming visible again (a phone that slept offline). Whichever comes first, once.
+ */
+function postWhenOnline(draft: StoryDraft): () => void {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return () => undefined;
+  }
+  const stop = () => {
+    window.removeEventListener("online", wake);
+    document.removeEventListener("visibilitychange", onVisible);
+    if (draft.stopWaiting === stop) {
+      draft.stopWaiting = undefined;
+    }
+  };
+  const wake = () => {
+    if (navigator.onLine === false) {
+      return;
+    }
+    stop();
+    void postStory(draft);
+  };
+  const onVisible = () => {
+    if (document.visibilityState === "visible") {
+      wake();
+    }
+  };
+  window.addEventListener("online", wake);
+  document.addEventListener("visibilitychange", onVisible);
+  draft.stopWaiting = stop;
+  return stop;
+}
+
 export async function postStory(draft: StoryDraft): Promise<PostOutcome> {
+  draft.stopWaiting?.();
   const id = `post-${Date.now()}-${++counter}`;
   draft.requestId ??= crypto.randomUUID();
   const audienceKeys = audienceKeysFor(draft.request);
@@ -314,6 +359,20 @@ export async function postStory(draft: StoryDraft): Promise<PostOutcome> {
     return "live";
   } catch (error) {
     unsubscribe.forEach((off) => off());
+    if (isOfflineError(error)) {
+      // No connection is not a failure: the draft waits, and goes by itself when it is back.
+      postWhenOnline(draft);
+      patchPosting(id, {
+        status: "waiting",
+        progress: null,
+        failure: null,
+        retry: () => {
+          draft.stopWaiting?.();
+          void postStory(draft);
+        },
+      });
+      return "failed";
+    }
     const failure = classifyPostFailure(error);
     const retryable = failure === "failed" || failure === "busy";
     if (!retryable) {
@@ -376,11 +435,13 @@ function finish(id: string, draft?: StoryDraft): void {
   }
   emitStoriesRefresh();
   // Let the arc complete and the ring sweep into the gradient first.
+  // Long enough for the strip to read the new story back: the ring stays a ring until then, instead of
+  // dropping to a bare face between "done" and the story appearing.
   window.setTimeout(() => {
     if (getStoriesUi().posting?.id === id) {
       setPosting(null);
     }
-  }, 600);
+  }, 3500);
 }
 
 /** Re-read a processing video this often even without a frame, for so long. */

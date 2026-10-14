@@ -1,4 +1,4 @@
-import { Headphones, Plus, RotateCw, X } from "lucide-react";
+import { Headphones, Plus, RotateCw, WifiOff, X } from "lucide-react";
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Menu } from "@/components/ui/menu";
@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 export type RingState = "unseen" | "seen" | "none";
 
 export interface RingUpload {
-  status: "uploading" | "processing" | "failed" | "done";
+  status: "uploading" | "processing" | "waiting" | "failed" | "done";
   progress: number | null;
   /** Only with "failed": whether a tap posts again (else it dismisses). */
   retryable?: boolean;
@@ -91,13 +91,15 @@ export function StoryRing({
   // 24 px at the least (the web strip's ring is 48): a plus smaller than that is not a button anyone can hit.
   const badgeSize = size === 64 ? 26 : 24;
   const failed = upload?.status === "failed";
+  const waiting = upload?.status === "waiting";
+  const menuOn = (failed || waiting) && Boolean(failedActions);
   const ringButton = (
     <button
       type="button"
       data-story-ring={ringId}
       aria-label={ariaLabel}
       // A failed ring with actions lets the menu take the tap.
-      onClick={failed && failedActions ? undefined : onOpen}
+      onClick={menuOn ? undefined : onOpen}
       className="rounded-full [-webkit-tap-highlight-color:transparent] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset"
     >
       <span
@@ -176,7 +178,7 @@ export function StoryRing({
       style={size === 64 ? { width: 68 } : undefined}
     >
       <div className="relative" style={{ width: size, height: size }}>
-        {failed && failedActions ? (
+        {menuOn && failedActions ? (
           <Menu items={failedActions} align="start" side="bottom">
             {ringButton}
           </Menu>
@@ -185,7 +187,15 @@ export function StoryRing({
         ) : (
           ringButton
         )}
-        {failed ? (
+        {waiting ? (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-surface-3 text-text-secondary shadow-[0_0_0_2.5px_var(--story-ring-bg,var(--color-surface-1))]"
+            style={{ width: badgeSize, height: badgeSize }}
+          >
+            <WifiOff className="h-2.5 w-2.5" strokeWidth={3} />
+          </span>
+        ) : failed ? (
           <span
             aria-hidden
             className="pointer-events-none absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-danger text-on-accent shadow-[0_0_0_2.5px_var(--story-ring-bg,var(--color-surface-1))]"
@@ -222,7 +232,7 @@ function UploadArc({ size, upload }: { size: number; upload: RingUpload }) {
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
   const fraction =
-    upload.status === "failed"
+    upload.status === "failed" || upload.status === "waiting"
       ? 1
       : upload.status === "processing" || upload.progress === null
         ? 0.3
@@ -252,7 +262,13 @@ function UploadArc({ size, upload }: { size: number; upload: RingUpload }) {
         cy={size / 2}
         r={radius}
         fill="none"
-        stroke={upload.status === "failed" ? "var(--color-danger)" : "var(--color-accent)"}
+        stroke={
+          upload.status === "failed"
+            ? "var(--color-danger)"
+            : upload.status === "waiting"
+              ? "var(--color-border-strong)"
+              : "var(--color-accent)"
+        }
         strokeWidth={stroke}
         strokeLinecap="round"
         strokeDasharray={circumference}

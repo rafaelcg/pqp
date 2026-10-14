@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState, 
 import { storyBaseFit, type StoryBackground, type StoryCallLive, type StoryKind } from "@pqp/shared";
 import { giveBackVideo, takePreloadedVideo } from "@/lib/stories/preload";
 import { Loader2 } from "lucide-react";
+import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { StoryCallCard, type CallCardServer } from "./story-call-card";
 import { LayerBox, LayerContent, type DisplayLayer, type MentionTarget } from "./story-layers";
@@ -177,31 +178,38 @@ function prefersReducedMotion(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-/** An image in the page, loaded and decoded (a failed one counts: the story must not wait forever). */
-function imageSettled(image: HTMLImageElement, signal: AbortSignal): Promise<void> {
-  const decoded = () => (typeof image.decode === "function" ? image.decode().catch(() => undefined) : Promise.resolve());
+/**
+ * An image in the page, loaded AND decoded. Resolves false for a picture that failed (a network error,
+ * bytes that do not decode): such a story is never revealed with it missing or half drawn.
+ */
+function imageSettled(image: HTMLImageElement, signal: AbortSignal): Promise<boolean> {
+  const decoded = () =>
+    typeof image.decode === "function" ? image.decode().then(() => true, () => false) : Promise.resolve(true);
   if (image.complete) {
-    return image.naturalWidth > 0 ? decoded() : Promise.resolve();
+    return image.naturalWidth > 0 ? decoded() : Promise.resolve(false);
   }
   return new Promise((resolve) => {
-    // The listeners go with the reveal (a story left or timed out), so none outlives its card.
-    const done = () => resolve();
+    // The listeners go with the reveal (a story left, a retry), so none outlives its attempt.
     image.addEventListener("load", () => void decoded().then(resolve), { once: true, signal });
-    image.addEventListener("error", done, { once: true, signal });
-    signal.addEventListener("abort", done, { once: true });
+    image.addEventListener("error", () => resolve(false), { once: true, signal });
+    signal.addEventListener("abort", () => resolve(false), { once: true });
   });
 }
 
-/** How long a story may stay hidden waiting for its pieces before it is shown as it is. */
-const REVEAL_MAX_MS = 10_000;
+/** After this long without the whole picture, the card says so and offers a retry (it still reveals the moment everything is in). */
+const REVEAL_STALL_MS = 10_000;
 /** The spinner stays away for a story that is about to appear anyway. */
 const SPINNER_AFTER_MS = 300;
 
 /**
  * The reveal of one gated story (see `StoryContent`'s `gate`). Waits for every picture in the card
- * to be loaded and decoded, the fonts, and, for a clip with no poster, its first frame; then shows
- * everything on the next frame and says `onReady`. For a clip playing in the card `onReady` also
- * waits for the first frame, because that is when its time starts.
+ * to be loaded and decoded (`img.decode()` resolved), the fonts, and, for a clip with no poster, its
+ * first frame; then shows everything on the next frame and says `onReady`. A story is NEVER shown
+ * with a picture missing or half drawn: when pieces are slow the card keeps its placeholder, the
+ * spinner turns into "Não carregou" with a retry after `REVEAL_STALL_MS`, and the story still
+ * appears, whole, if the pieces do arrive. A picture that failed outright stalls it at once.
+ * Leaving the story (the card unmounts) aborts its downloads, so skipped stories never starve the one
+ * on screen.
  */
 function useStoryReveal({
   root,
@@ -223,9 +231,15 @@ function useStoryReveal({
   const [revealed, setRevealed] = useState(!gated);
   const [frame, setFrame] = useState(false);
   const [spinner, setSpinner] = useState(false);
+  const [stalled, setStalled] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const ready = useRef(onReady);
   ready.current = onReady;
   const videoFrame = useCallback(() => setFrame(true), []);
+  const retry = useCallback(() => {
+    setStalled(false);
+    setAttempt((value) => value + 1);
+  }, []);
 
   useEffect(() => {
     if (!gated) {
@@ -233,51 +247,78 @@ function useStoryReveal({
     }
     let cancelled = false;
     const waits = new AbortController();
-    const timer = window.setTimeout(() => setSpinner(true), SPINNER_AFTER_MS);
-    const settle = async () => {
+    const spinnerTimer = window.setTimeout(() => setSpinner(true), SPINNER_AFTER_MS);
+    const stallTimer = window.setTimeout(() => setStalled(true), REVEAL_STALL_MS);
+    const settle = async (): Promise<boolean> => {
       const element = root.current;
       if (!element) {
-        return;
+        return false;
       }
       // A frame first, so the pictures and the text are in the page and the fonts they use have started.
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const first = [...element.querySelectorAll("img")];
-      await Promise.all(first.map((image) => imageSettled(image, waits.signal)));
+      if (attempt > 0) {
+        // A retry: start again the pictures that failed or were still going.
+        for (const image of first) {
+          if (!image.complete || image.naturalWidth === 0) {
+            const source = image.currentSrc || image.src;
+            image.removeAttribute("src");
+            image.src = source;
+          }
+        }
+      }
+      const results = await Promise.all(first.map((image) => imageSettled(image, waits.signal)));
       if (typeof document !== "undefined" && document.fonts) {
         await document.fonts.ready.catch(() => undefined);
       }
       // Whatever was added while those were loading (the faces on a call card).
       const later = [...element.querySelectorAll("img")].filter((image) => !first.includes(image));
-      await Promise.all(later.map((image) => imageSettled(image, waits.signal)));
+      const more = await Promise.all(later.map((image) => imageSettled(image, waits.signal)));
+      return [...results, ...more].every(Boolean);
     };
-    const giveUp = window.setTimeout(() => {
-      // Too long: show the story as it is, whatever is still missing (a clip with no poster included).
-      if (!cancelled) {
-        setAssetsDone(true);
-        setRevealed(true);
+    void settle().then((ok) => {
+      if (cancelled) {
+        return;
       }
-    }, REVEAL_MAX_MS);
-    void settle().then(() => {
-      if (!cancelled) {
+      if (ok) {
         setAssetsDone(true);
+      } else {
+        // A picture failed outright: say so now rather than after the wait.
+        setStalled(true);
       }
     });
     return () => {
       cancelled = true;
       waits.abort();
-      window.clearTimeout(timer);
-      window.clearTimeout(giveUp);
+      window.clearTimeout(spinnerTimer);
+      window.clearTimeout(stallTimer);
     };
-    // One reveal per story: the viewer keys the card by it.
+    // One reveal per story and attempt: the viewer keys the card by the story.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gated, storyId]);
+  }, [gated, storyId, attempt]);
+
+  // Leaving the story for good (the card is gone from the page) stops what it was still downloading.
+  // Checked on `isConnected` so a development double mount, where the card stays, does not.
+  useEffect(() => {
+    const element = root.current;
+    return () => {
+      if (gated && element && !element.isConnected) {
+        for (const image of element.querySelectorAll("img")) {
+          image.removeAttribute("src");
+        }
+      }
+    };
+  }, [gated, root]);
 
   useEffect(() => {
     if (!gated || revealed || !assetsDone || (waitsForVideo && !frame)) {
       return;
     }
     // Everything at once, on a frame of its own.
-    const handle = requestAnimationFrame(() => setRevealed(true));
+    const handle = requestAnimationFrame(() => {
+      setStalled(false);
+      setRevealed(true);
+    });
     return () => cancelAnimationFrame(handle);
   }, [gated, revealed, assetsDone, waitsForVideo, frame]);
 
@@ -287,7 +328,7 @@ function useStoryReveal({
     }
   }, [gated, revealed, needsVideoFrame, frame]);
 
-  return { revealed, spinner, videoFrame };
+  return { revealed, spinner, stalled, retry, videoFrame };
 }
 
 export const StoryContent = forwardRef(function StoryContent(
@@ -339,6 +380,7 @@ export const StoryContent = forwardRef(function StoryContent(
   const altText = story.altText?.trim() || null;
   const join = still ? undefined : onJoinCall;
 
+  const { t } = useTranslation();
   const gated = gate && !still;
   const reveal = useStoryReveal({
     root,
@@ -485,9 +527,31 @@ export const StoryContent = forwardRef(function StoryContent(
         )}
       </LayerCanvas>
       </div>
-      {gated && !reveal.revealed && reveal.spinner && (
+      {gated && !reveal.revealed && reveal.spinner && !reveal.stalled && (
         <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center" data-story-loading="">
           <Loader2 className="h-7 w-7 animate-spin text-[color:var(--story-on-media-2)] motion-reduce:animate-none" />
+        </div>
+      )}
+      {gated && !reveal.revealed && reveal.stalled && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3" data-story-stalled="" role="status">
+          <p className="text-sm font-semibold" style={{ color: "var(--story-on-media)" }}>
+            {t("stories.viewer.loadFailed")}
+          </p>
+          <button
+            type="button"
+            data-story-load-retry=""
+            // A tap on the stage moves the walk on; this one is the retry and nothing else.
+            onPointerDown={(event) => event.stopPropagation()}
+            onPointerUp={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              reveal.retry();
+            }}
+            className="flex min-h-11 items-center rounded-full px-5 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            style={{ background: "var(--story-on-media)", color: "var(--story-card)" }}
+          >
+            {t("stories.upload.retryAction")}
+          </button>
         </div>
       )}
     </div>

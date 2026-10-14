@@ -47,7 +47,12 @@ export interface PostingState {
   audienceKeys: string[];
   /** 0..1 while the bytes go up; null for a text card or once they are up. */
   progress: number | null;
-  status: "uploading" | "processing" | "failed" | "done";
+  /**
+   * `waiting`: there is no connection. Nothing is wrong with the story: it posts by itself when the
+   * connection is back (the window's `online`, or the tab becoming visible), and a tap on the ring
+   * offers "try now" or discard. `failed` is for a real refusal, or an automatic retry that failed.
+   */
+  status: "uploading" | "processing" | "waiting" | "failed" | "done";
   /** Why it failed, while `status` is "failed" (see `PostFailure`). */
   failure: PostFailure | null;
   /** Post again; null when posting again cannot work and a tap only dismisses. */

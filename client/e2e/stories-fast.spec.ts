@@ -469,7 +469,7 @@ test("real storage: taking a placed photo off the story deletes its upload", asy
   await expect.poll(() => objectExists(layerUpload.url), { timeout: 10_000 }).toBe(false);
 });
 
-test("real storage: offline while posting fails with Try again and Discard; online, Try again posts it", async ({ page }) => {
+test("real storage: offline while posting waits (No connection, grey), posts by itself when back online, and Discard stays possible", async ({ page }) => {
   const ctx = await setup();
   test.skip(!ctx.storage || !s3(), "object storage is off: no uploads to watch");
   const composer = await openComposer(page, ctx);
@@ -483,15 +483,18 @@ test("real storage: offline while posting fails with Try again and Discard; onli
 
   const ring = ownRing(page, ctx);
   await expect(ring).toBeVisible();
-  await expect(strip(page, ctx)).toContainText("Didn't post", { timeout: 30_000 });
-  // Tapping the failed ring offers the two choices; nothing was thrown away yet.
-  await realClick(page, ring, "failed ring");
+  // Not a failure: a waiting state with the connection named, never the red "Didn't post".
+  await expect(strip(page, ctx)).toContainText("Offline", { timeout: 30_000 });
+  await expect(page.getByText("Didn't post")).toHaveCount(0);
+  // The ring still offers Try again (now) and Discard; nothing was thrown away.
+  await realClick(page, ring, "waiting ring");
   const menu = page.getByRole("menu");
   await expect(menu.getByRole("menuitem", { name: "Try again" })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Discard" })).toBeVisible();
+  await page.keyboard.press("Escape");
 
+  // Back online: it posts by itself, no tap.
   await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
-  await menu.getByRole("menuitem", { name: "Try again" }).click();
   await expect.poll(() => ownStoryIds(ctx), { timeout: 40_000 }).toHaveLength(1);
 });
 

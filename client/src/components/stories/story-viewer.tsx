@@ -138,8 +138,6 @@ const CLOCK_STEP_MS = 100;
 /** A story that could not be fetched still moves the walk on after this. */
 const FAILED_STORY_MS = 4_000;
 const FETCH_RETRY_MS = 3_000;
-/** A picture or clip that has not shown a frame in this long is given up on, and the walk goes on. */
-const MEDIA_WAIT_MAX_MS = 12_000;
 const DRAG_DECIDE_PX = 8;
 
 function readToken(name: string, fallback: string): string {
@@ -464,8 +462,8 @@ export function StoryViewer({
 
   // A picture or clip is not "on" until it shows its first frame: its time does not start before that,
   // so a slow connection gives a story its full time instead of spending it on a blank card (and a
-  // story whose clock ran out while it was still downloading was skipped unseen). A story that can
-  // never load still moves on after a while.
+  // story whose clock ran out while it was still downloading was skipped unseen). One that does not
+  // load says so on its card, with a retry; the person can also tap on to the next.
   const [readyId, setReadyId] = useState<string | null>(null);
   const waitingForMedia = Boolean(
     story &&
@@ -477,13 +475,12 @@ export function StoryViewer({
   useEffect(() => {
     dispatch({ type: waitingForMedia ? "pause" : "resume", reason: "load" });
   }, [waitingForMedia]);
+  // The story on screen comes first: while it is still loading, nothing is warmed (what was going is
+  // cancelled), so the stories ahead cannot starve it. Warming resumes the moment it is revealed.
   useEffect(() => {
-    if (!waitingForMedia || !storyId) {
-      return;
-    }
-    const timer = window.setTimeout(() => setReadyId(storyId), MEDIA_WAIT_MAX_MS);
-    return () => window.clearTimeout(timer);
-  }, [waitingForMedia, storyId]);
+    storyPreloader.setPaused(waitingForMedia);
+    return () => storyPreloader.setPaused(false);
+  }, [waitingForMedia]);
 
   // Reset per story: the reply line, the sheet stays only on our own.
   useEffect(() => {
@@ -1824,10 +1821,12 @@ function ChromeButton({
 /**
  * A header icon (mute, pause, more, close): 20 px drawn, the same 44 px hit box
  * on a desktop window and on a phone (the negative margin keeps the header row
- * as tall as the avatar, so the bigger touch target costs no space).
+ * as tall as the avatar, so the bigger touch target costs no space). The round look is the button's
+ * radius, which a pointer also respects, so a square pseudo-element makes the WHOLE 44 px box the
+ * target: a tap in its corner is the button's, never the stage's "next story".
  */
 const CHROME_BUTTON =
-  "-my-1.5 flex h-11 w-11 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
+  "relative -my-1.5 flex h-11 w-11 items-center justify-center rounded-full before:absolute before:inset-0 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
 
 function ArrowButton({
   label,
