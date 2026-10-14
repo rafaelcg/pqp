@@ -83,6 +83,7 @@ import type {
   PublicUser,
   AllReportPage,
   Report,
+  ReportContext,
   ReportPage,
   ReportStatus,
   ReportSummaryPage,
@@ -2593,6 +2594,23 @@ export const resolveReport = (
 export const fetchAllReports = (
   options: { before?: string; status?: ReportStatus } = {},
 ) => apiFetch<AllReportPage>(`/api/reports/all${reportQuery(options)}`);
+
+/**
+ * What a moderator needs to judge one report (the card's "Contexto" panel).
+ * 404 for anybody who may not read the queue the report lives in, the same
+ * answer as a report that does not exist.
+ */
+export const fetchReportContext = (reportId: string) =>
+  apiFetch<ReportContext>(`/api/reports/${reportId}/context`);
+
+/**
+ * Terminate somebody else's account (instance moderators only). This is the
+ * ONLY instance-level sanction there is: the same deletion as
+ * `DELETE /api/me`, aimed at another person. 409 `owned_servers` when the
+ * account owns a server other people are in; `details.servers` names them.
+ */
+export const terminateAccount = (userId: string) =>
+  del<{ ok: true }>(`/api/admin/users/${userId}`);
 
 /** Deletes the reported message. 400 when there is nothing live to remove. */
 export const removeReportedMessage = (reportId: string) =>
