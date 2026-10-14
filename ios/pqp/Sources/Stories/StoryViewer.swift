@@ -50,8 +50,22 @@ struct StoryViewer: View {
     /// The story `player` plays. A video's bar only follows a player that
     /// belongs to the story on screen.
     @State private var playerStoryId: String?
-    /// Stories whose first frame has been shown: the timer runs from there.
-    @State private var readyIds: Set<String> = []
+    /// A story's video has its first frame (a photo has none to wait for).
+    @State private var frameIds: Set<String> = []
+    /// Every picture a story draws is in memory, decoded.
+    @State private var assetIds: Set<String> = []
+    /// Stories shown, whole: all their assets (and a video's first frame) were
+    /// ready, and they appeared in ONE frame. The timer runs from there.
+    @State private var revealedIds: Set<String> = []
+    /// The servers list is in (a call card needs the server's picture).
+    @State private var serversLoaded = false
+    /// The whole story's opacity: 0 for the instant it is revealed, then up in
+    /// a short fade (the base, the layers and the card together, as one
+    /// picture). 1 the rest of the time, so moving between stories that are
+    /// ready is a cut in a single frame.
+    @State private var revealOpacity = 1.0
+    /// The story fading in: its placeholder stays under it until it is whole.
+    @State private var fadingId: String?
     /// The story whose first frame is late (a blurred placeholder and a spinner).
     @State private var waitingId: String?
     /// Set once the viewer is going away: nothing advances any more.
@@ -138,10 +152,7 @@ struct StoryViewer: View {
         .sheet(item: $profileSubject) { subject in
             UserProfileSheet(subject: subject, onOpenConversation: { _, _ in }, server: nil)
         }
-        .task(id: current?.id) {
-            if let story = current { await loadServersIfNeeded(for: story) }
-        }
-        .task(id: current?.id) { await watchFirstFrame() }
+        .task(id: current?.id) { await prepareReveal() }
         // The call card is a live roster: it follows the room while the story
         // is open, held or not.
         .task(id: callWatchId) { await watchCall() }
@@ -169,13 +180,23 @@ struct StoryViewer: View {
         ZStack {
             // The story stays where it is when the keyboard comes up for a
             // reply; only the footer rides the keyboard.
+            // Until the story is whole, its place: the author's colour, never
+            // a half-drawn picture.
+            if let story = current, !isShown(story) || fadingId == story.id {
+                placeholder(for: story)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .transition(.identity)
+            }
+
             content(size: size)
                 .id(playback.currentId)
-                .transition(.opacity)
+                .opacity(revealOpacity)
+                .transition(.identity)
                 .ignoresSafeArea(.keyboard)
 
-            // A first frame that is late: the blurred picture stays, with a spinner.
-            if let story = current, waitingId == story.id, !readyIds.contains(story.id) {
+            // Late (past 300 ms): a spinner on the placeholder.
+            if let story = current, waitingId == story.id, !revealedIds.contains(story.id) {
                 ProgressView().tint(.white)
                     .accessibilityIdentifier("story.loading")
             }
@@ -210,7 +231,7 @@ struct StoryViewer: View {
 
             // The author's layers, over the tap zones: only the call's door and
             // a mention take touches, everything else falls through to them.
-            if let story = current, !story.layers.isEmpty {
+            if let story = current, !story.layers.isEmpty, isShown(story) {
                 StoryLayersOverlay(
                     story: story, size: size, callData: callSticker, reduceMotion: reduceMotion,
                     onJoin: { _ in
@@ -221,6 +242,8 @@ struct StoryViewer: View {
                 .id(story.id)
                 .ignoresSafeArea(.keyboard)
                 .opacity(replyFocused ? 0.35 : 1)
+                .opacity(revealOpacity)
+                .transition(.identity)
             }
 
             VStack(spacing: 0) {
@@ -229,13 +252,14 @@ struct StoryViewer: View {
                 Spacer(minLength: 0)
                 // A server that predates layers has no call layer: the card
                 // keeps its old place at the bottom.
-                if let call = current?.call, !(current?.layers.contains { if case .call = $0.content { true } else { false } } ?? false) {
+                if let call = current?.call, current.map(isShown) == true,
+                   !(current?.layers.contains { if case .call = $0.content { true } else { false } } ?? false) {
                     StoryCallCard(call: call) { Task { await join(call) } }
                         .padding(.horizontal, 24)
                         .padding(.bottom, 18)
                         .opacity(chromeHidden ? 0 : 1)
                 }
-                if let caption = current?.legacyCaption {
+                if let caption = current?.legacyCaption, current.map(isShown) == true {
                     Text(verbatim: caption)
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(.white)
@@ -272,7 +296,13 @@ struct StoryViewer: View {
     @ViewBuilder
     private func content(size: CGSize) -> some View {
         if let story = current {
-            StoryStageBase(story: story, player: player, muted: $muted, size: size, onFirstFrame: { readyIds.insert(story.id) })
+            StoryStageBase(
+                story: story, player: player, size: size, revealed: isShown(story),
+                onFirstFrame: {
+                    frameIds.insert(story.id)
+                    maybeReveal(story)
+                }
+            )
                 .accessibilityElement(children: story.isVideo ? .contain : .ignore)
                 .accessibilityLabel(Text(verbatim: story.spokenDescription ?? (story.isText ? "" : String(localized: "Photo"))))
         } else if let id = playback.currentId, gone.contains(id) {
@@ -335,11 +365,22 @@ struct StoryViewer: View {
         }
     }
 
-    private func loadServersIfNeeded(for story: Story) async {
-        guard serversById.isEmpty, story.layers.contains(where: { if case .call = $0.content { true } else { false } }) else { return }
+    /// The server list, once: a call card draws the server's picture and name.
+    private func loadServers() async {
+        guard !serversLoaded else { return }
         if let list = try? await session.api.servers() {
             serversById = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
         }
+        serversLoaded = true
+    }
+
+    private func placeholder(for story: Story) -> some View {
+        let hue = Avatar.hue(seed: story.author.id)
+        return LinearGradient(
+            colors: [Color(hue: hue, saturation: 0.45, brightness: 0.30), Color(hue: hue, saturation: 0.55, brightness: 0.12)],
+            startPoint: .top, endPoint: .bottom
+        )
+        .accessibilityHidden(true)
     }
 
     private var header: some View {
@@ -370,11 +411,30 @@ struct StoryViewer: View {
                     }
                 }
                 Spacer()
+                // The sound, with the other controls (and only for a video):
+                // a 44 pt target in the bar, not a button floating over the
+                // picture. Above the tap zones, so it never moves the story.
+                if current?.isVideo == true, let player {
+                    Button {
+                        muted.toggle()
+                        player.isMuted = muted
+                    } label: {
+                        Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                            .decorative()
+                    }
+                    .accessibilityLabel(Text(muted ? "Turn the sound on" : "Turn the sound off"))
+                    .accessibilityIdentifier("story.mute")
+                }
                 Button { showingMenu = true } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                         .decorative()
                 }
                 .accessibilityLabel("More")
@@ -383,7 +443,8 @@ struct StoryViewer: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                         .decorative()
                 }
                 .accessibilityLabel("Close")
@@ -697,32 +758,112 @@ struct StoryViewer: View {
         dismiss()
     }
 
-    /// A story with no picture to wait for is ready at once; one that has, is
-    /// ready when its first frame is on screen. Late by 300 ms, a spinner; a
-    /// clip that cannot load does not hold the queue for ever.
-    private static let firstFrameGiveUpMs = 20_000
+    /// Whether the story can be drawn right now, whole: revealed already, or a
+    /// photo story whose every picture is in memory (preloaded), so that its
+    /// very first frame is the finished story and not a placeholder for one.
+    private func isShown(_ story: Story) -> Bool {
+        // A video is shown once revealed (its player is its own memory).
+        if story.isVideo { return revealedIds.contains(story.id) }
+        // A photo story is shown when everything it draws is in memory NOW: one
+        // whose pictures were evicted since (memory pressure) is not, and goes
+        // back through the placeholder instead of filling in piece by piece.
+        guard !StoryPreloadPlan.hasCallLayer(story) || serversLoaded else { return false }
+        return StoryPreloadPlan.assets(of: story, serverIcon: { serversById[$0]?.iconUrl })
+            .allSatisfy { StoryPreloader.shared.image(for: $0) != nil }
+    }
 
-    private func watchFirstFrame() async {
+    /// A story is shown WHOLE: its base, every placed photo and the drawing,
+    /// the call card's pictures, and a video's first frame are all in memory,
+    /// decoded, and then everything appears in one frame (a short fade). Until
+    /// then there is only the placeholder, and a spinner once it is late. The
+    /// timer starts at the reveal. A story that cannot be made whole in twenty
+    /// seconds is skipped rather than holding the queue.
+    private static let revealGiveUpMs = 20_000
+
+    private func prepareReveal() async {
         guard let story = current else { return }
         waitingId = nil
-        if story.isText || story.media == nil || (story.isVideo && videoURL(story) == nil) {
-            readyIds.insert(story.id)
-            return
-        }
-        try? await Task.sleep(for: .milliseconds(300))
-        guard !Task.isCancelled, !readyIds.contains(story.id) else { return }
-        waitingId = story.id
-        var waited = 300
-        while !Task.isCancelled, !readyIds.contains(story.id) {
-            if story.isVideo, player?.currentItem?.status == .failed { readyIds.insert(story.id) }
-            try? await Task.sleep(for: .milliseconds(250))
-            waited += 250
-            // Nothing after twenty seconds (a request that stalls without
-            // failing): skip it rather than hold the queue for ever.
-            if waited >= Self.firstFrameGiveUpMs, !readyIds.contains(story.id), !Task.isCancelled, current?.id == story.id {
-                next()
+        // Seen before: straight back if it is all still in memory, otherwise it
+        // is made whole again from the start.
+        if revealedIds.contains(story.id), !story.isVideo {
+            if isShown(story) {
+                revealOpacity = 1
                 return
             }
+            revealedIds.remove(story.id)
+            assetIds.remove(story.id)
+        }
+        let id = story.id
+        let known = StoryPreloadPlan.assets(of: story, serverIcon: { serversById[$0]?.iconUrl })
+        if !story.isVideo, known.allSatisfy({ StoryPreloader.shared.image(for: $0) != nil }),
+           !StoryPreloadPlan.hasCallLayer(story) || serversLoaded {
+            assetIds.insert(id)
+            maybeReveal(story, fade: false)
+            return
+        }
+        let spinner = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            if !Task.isCancelled, !revealedIds.contains(id) { waitingId = id }
+        }
+        let skipper = Task {
+            try? await Task.sleep(for: .milliseconds(Self.revealGiveUpMs))
+            if !Task.isCancelled, !revealedIds.contains(id), current?.id == id { next() }
+        }
+        defer {
+            spinner.cancel()
+            skipper.cancel()
+        }
+        if StoryPreloadPlan.hasCallLayer(story) { await ensureServers() }
+        await StoryPreloader.shared.ensure(StoryPreloadPlan.assets(of: story, serverIcon: { serversById[$0]?.iconUrl }))
+        guard !Task.isCancelled else { return }
+        assetIds.insert(id)
+        if story.isVideo, videoURL(story) == nil { frameIds.insert(id) }
+        maybeReveal(story)
+        // A clip that fails never gets a first frame: it does not hold the story.
+        while !Task.isCancelled, !revealedIds.contains(id) {
+            if story.isVideo, player?.currentItem?.status == .failed {
+                frameIds.insert(id)
+                maybeReveal(story)
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
+    private func maybeReveal(_ story: Story, fade: Bool = true) {
+        guard !revealedIds.contains(story.id), assetIds.contains(story.id),
+              !story.isVideo || frameIds.contains(story.id) else { return }
+        waitingId = nil
+        // Already in memory when the story came up (preloaded): no placeholder
+        // to fade from, the story is simply there.
+        guard fade, !reduceMotion else {
+            revealOpacity = 1
+            revealedIds.insert(story.id)
+            return
+        }
+        // Everything appears in the same frame, at 0, and rises together.
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) {
+            revealOpacity = 0
+            fadingId = story.id
+            revealedIds.insert(story.id)
+        }
+        Task { @MainActor in
+            withAnimation(.easeOut(duration: 0.2)) { revealOpacity = 1 }
+            try? await Task.sleep(for: .milliseconds(260))
+            if fadingId == story.id { fadingId = nil }
+        }
+    }
+
+    /// The server list, for at most three seconds: a call card without the
+    /// server's picture is better than no story.
+    private func ensureServers() async {
+        guard !serversLoaded else { return }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await loadServers() }
+            group.addTask { try? await Task.sleep(for: .seconds(3)) }
+            await group.next()
+            group.cancelAll()
         }
     }
 
@@ -784,8 +925,10 @@ struct StoryViewer: View {
             if adopted == nil { adopted = preloader.takePlayer(for: url) }
             let next = adopted ?? AVPlayer(url: url)
             next.isMuted = muted
-            // A story seen before has a new player: its first frame is to come.
-            readyIds.remove(story.id)
+            // A story seen before has a new player: its first frame is to come,
+            // and it is shown whole again when it is here.
+            frameIds.remove(story.id)
+            revealedIds.remove(story.id)
             player = next
             playerStoryId = story.id
             next.play()
@@ -805,7 +948,14 @@ struct StoryViewer: View {
         let preloader = StoryPreloader.shared
         let ids = playback.windowIds
         let ahead = ids.dropFirst().compactMap { stories[$0] }
-        preloader.setWindow(StoryPreloadPlan.window(current: current, ahead: ahead, lowData: false))
+        // A call card's server picture needs the server list: asked for as soon
+        // as a call is anywhere in the window, so it is in memory when it shows.
+        if !serversLoaded, ([current].compactMap { $0 } + ahead).contains(where: StoryPreloadPlan.hasCallLayer) {
+            Task { await loadServers() }
+        }
+        preloader.setWindow(StoryPreloadPlan.window(
+            current: current, ahead: ahead, lowData: false, serverIcon: { serversById[$0]?.iconUrl }
+        ))
     }
 
     /// Linear, because it is a clock. A video's bar follows the video. It runs
@@ -817,7 +967,7 @@ struct StoryViewer: View {
             guard let story = current, !paused else { continue }
             let item = player?.currentItem
             guard let value = StoryClockRules.nextProgress(
-                current: progress, isVideo: story.isVideo, ready: readyIds.contains(story.id), closing: closing,
+                current: progress, isVideo: story.isVideo, ready: revealedIds.contains(story.id), closing: closing,
                 playerIsForThisStory: playerStoryId == story.id && player != nil,
                 videoSeconds: player?.currentTime().seconds, videoDuration: item?.duration.seconds,
                 tick: tick, displayMs: story.displayMs

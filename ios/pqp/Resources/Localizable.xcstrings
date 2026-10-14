@@ -181,6 +181,16 @@
         }
       }
     },
+    "Add a story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar um story"
+          }
+        }
+      }
+    },
     "Couldn't keep your story to post it. Check your free space." : {
       "localizations" : {
         "pt-BR" : {

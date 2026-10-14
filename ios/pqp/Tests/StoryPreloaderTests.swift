@@ -1,3 +1,4 @@
+import os
 import UIKit
 import XCTest
 @testable import pqp
@@ -66,6 +67,101 @@ final class StoryPreloaderTests: XCTestCase {
         let strip = try Coding.decoder.decode(StoryStrip.self, from: Data(json.utf8))
         // Only the first three rings count; a seen one has nothing new to open.
         XCTAssertEqual(StoryPreloadPlan.trayStoryIds(strip), ["a-1", "c-1"])
+    }
+
+    // MARK: - A story is shown whole
+
+    private func layeredStory() throws -> Story {
+        try Coding.decoder.decode(Story.self, from: Data("""
+        {"id":"s1","author":{"id":"u1","displayName":"Dre","avatarUrl":"https://x.y/dre.jpg"},"kind":"image","caption":null,"text":null,"background":null,
+         "media":{"url":"https://x.y/base.jpg","posterUrl":null,"contentType":"image/jpeg","width":720,"height":1280,"durationMs":null},
+         "sticker":null,
+         "call":{"serverId":"srv","channelId":"ch","channelName":"Lobby","participants":[
+            {"id":"p1","displayName":"A","avatarUrl":"https://x.y/a.jpg"},{"id":"p2","displayName":"B","avatarUrl":null}],"count":2,"state":"live","joinable":true},
+         "publishedAt":null,"expiresAt":null,"audiences":[],
+         "viewer":{"seen":false,"reaction":null,"canReply":false,"replyBlockedReason":null,"canModerate":[]},"own":null,
+         "layers":[
+          {"id":"l1","type":"image","x":0.5,"y":0.5,"scale":1,"rotation":0,"shape":"rect","url":"https://x.y/photo.png","width":10,"height":10},
+          {"id":"l2","type":"drawing","x":0.5,"y":0.5,"scale":1,"rotation":0,"url":"https://x.y/ink.png","width":810,"height":1440},
+          {"id":"l3","type":"call","x":0.5,"y":0.8,"scale":1,"rotation":0,"serverId":"srv","channelId":"ch"},
+          {"id":"l4","type":"mention","x":0.3,"y":0.3,"scale":2,"rotation":0,"userId":"u9"}]}
+        """.utf8))
+    }
+
+    /// The reveal waits for exactly this list: the base, every placed photo,
+    /// the drawing and the call card's pictures. Text and mentions are drawn
+    /// from the system, so they are not on it.
+    func testWhatAStoryNeedsBeforeItIsShown() throws {
+        let story = try layeredStory()
+        let urls = StoryPreloadPlan.assets(of: story, serverIcon: { $0 == "srv" ? "https://x.y/srv.png" : nil })
+        XCTAssertEqual(urls.map(\.absoluteString), [
+            "https://x.y/base.jpg", "https://x.y/photo.png", "https://x.y/ink.png", "https://x.y/srv.png", "https://x.y/a.jpg",
+        ])
+        XCTAssertTrue(StoryPreloadPlan.hasCallLayer(story))
+    }
+
+    func testAVideoWaitsForItsPosterAndATextCardForNothing() throws {
+        let video = try story("v", kind: "video", poster: true, avatar: nil)
+        XCTAssertEqual(StoryPreloadPlan.assets(of: video).map(\.absoluteString), ["https://x.y/v-poster.jpg"])
+        let text = try Coding.decoder.decode(Story.self, from: Data("""
+        {"id":"t","author":{"id":"u","displayName":"B","avatarUrl":null},"kind":"text","caption":null,"text":"oi","background":"night","media":null,
+         "sticker":null,"call":null,"publishedAt":null,"expiresAt":null,"audiences":[],
+         "viewer":{"seen":false,"reaction":null,"canReply":false,"replyBlockedReason":null,"canModerate":[]},"own":null,"layers":[]}
+        """.utf8))
+        XCTAssertTrue(StoryPreloadPlan.assets(of: text).isEmpty)
+    }
+
+    /// Preloading covers the call card's faces and the server's picture too, so
+    /// a story that was preloaded reveals at once.
+    func testThePreloadWindowCoversTheCallCardToo() throws {
+        let story = try layeredStory()
+        let items = StoryPreloadPlan.items(for: [story], lowData: false, serverIcon: { _ in "https://x.y/srv.png" })
+        XCTAssertTrue(items.contains(.image(url("https://x.y/srv.png"))))
+        XCTAssertTrue(items.contains(.image(url("https://x.y/a.jpg"))))
+        XCTAssertTrue(items.contains(.image(url("https://x.y/ink.png"))))
+    }
+
+    /// `ensure` is the gate: it comes back only when every picture is in memory.
+    func testEnsureWaitsForEveryPicture() async throws {
+        let gate = Gate()
+        let loader = preloader(gate: gate)
+        let a = url("https://x.y/a.jpg"), b = url("https://x.y/b.jpg")
+        let finished = OSAllocatedUnfairLock(initialState: false)
+        let done = Task {
+            await loader.ensure([a, b])
+            finished.withLock { $0 = true }
+        }
+        await settle()
+        gate.open(a)
+        await settle()
+        XCTAssertNotNil(loader.image(for: a))
+        XCTAssertFalse(finished.withLock { $0 }, "One picture is still on its way")
+        gate.open(b)
+        await done.value
+        XCTAssertTrue(finished.withLock { $0 })
+        XCTAssertNotNil(loader.image(for: b))
+    }
+
+    /// The story's pictures all ask at the same moment: one fetch each.
+    func testPicturesAskedForTogetherAreFetchedOnce() async throws {
+        let gate = Gate()
+        let counter = OSAllocatedUnfairLock(initialState: 0)
+        let loader = StoryPreloader()
+        loader.imageFetcher = { url in
+            counter.withLock { $0 += 1 }
+            await gate.wait(url)
+            UIGraphicsBeginImageContext(CGSize(width: 2, height: 2))
+            defer { UIGraphicsEndImageContext() }
+            return UIGraphicsGetImageFromCurrentImageContext()
+        }
+        let a = url("https://x.y/a.jpg")
+        let first = Task { await loader.imageForDisplay(a) }
+        let second = Task { await loader.imageForDisplay(a) }
+        await settle()
+        gate.open(a)
+        _ = await first.value
+        _ = await second.value
+        XCTAssertEqual(counter.withLock { $0 }, 1)
     }
 
     // MARK: - The window of the queue

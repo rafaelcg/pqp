@@ -33,18 +33,21 @@ enum StoryStage {
 struct StoryStageBase: View {
     let story: Story
     let player: AVPlayer?
-    @Binding var muted: Bool
     let size: CGSize
-    /// The base is on screen (a picture drawn, a video's first frame): the
-    /// story's timer starts here.
+    /// Everything the story draws is in memory, decoded: now, and not before,
+    /// the story is drawn, all of it in one frame. Until then nothing of it
+    /// shows (a video's player is the one thing that exists, hidden, because
+    /// its first frame is part of what is waited for).
+    var revealed = true
+    /// A video's first frame is on its layer.
     var onFirstFrame: (() -> Void)?
 
     var body: some View {
         let canvas = StoryStage.canvas(in: size)
         ZStack {
-            backdrop
+            if revealed { backdrop }
             if story.isText {
-                if !StoryStage.usesLayers(story) {
+                if revealed, !StoryStage.usesLayers(story) {
                     // From before layers: the line in the middle, as it was.
                     Text(verbatim: story.text ?? "")
                         .font(.system(size: 34, weight: .heavy, design: .rounded))
@@ -91,34 +94,23 @@ struct StoryStageBase: View {
             if media.isVideo {
                 // A video that does not fill the canvas sits on black, as it did
                 // in the editor.
-                if !fills { Color.black }
+                if revealed, !fills { Color.black }
                 // The poster is under the player: there is a picture from the
                 // first frame, and the video replaces it when it has its own.
-                if let poster = Avatar.resolve(media.posterUrl) ?? media.posterUrl.flatMap(URL.init(string:)) {
+                if revealed, let poster = Avatar.resolve(media.posterUrl) ?? media.posterUrl.flatMap(URL.init(string:)) {
                     StoryCachedImage(url: poster, contentMode: fills ? .fill : .fit, metric: "poster") { _ in Color.clear }
                 }
+                // Always there (its first frame is what the reveal waits for),
+                // and seen only with the rest. The sound button lives in the
+                // viewer's top bar, with the other controls.
                 if let player {
                     StoryVideoSurface(player: player, fills: fills, onReady: onFirstFrame)
-                        .overlay(alignment: .topTrailing) {
-                            Button {
-                                muted.toggle()
-                                player.isMuted = muted
-                            } label: {
-                                Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                    .padding(10)
-                                    .background(Circle().fill(.black.opacity(0.4)))
-                            }
-                            .padding(.top, 90)
-                            .padding(.trailing, 14)
-                            .accessibilityLabel(Text(muted ? "Turn the sound on" : "Turn the sound off"))
-                        }
+                        .opacity(revealed ? 1 : 0)
                 }
-            } else if let url = Avatar.resolve(media.url) ?? URL(string: media.url) {
+            } else if revealed, let url = Avatar.resolve(media.url) ?? URL(string: media.url) {
                 // Under the blurred backdrop while it loads; the viewer adds a
                 // spinner if it is late.
-                StoryCachedImage(url: url, contentMode: fills ? .fill : .fit, metric: "base", onSettled: onFirstFrame) { failed in
+                StoryCachedImage(url: url, contentMode: fills ? .fill : .fit, metric: "base") { failed in
                     if failed {
                         Image(systemName: "photo").foregroundStyle(Palette.paperMuted)
                     } else {
