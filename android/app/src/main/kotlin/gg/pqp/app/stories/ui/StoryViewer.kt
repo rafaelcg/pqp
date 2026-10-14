@@ -408,11 +408,12 @@ private fun DeckPage(
 
     // While the story on screen has no first frame: its author's colour over black, and a small spinner if it takes
     // more than a moment. The bar does not move meanwhile.
-    val waiting = active && story != null && !shownReady
+    // Over a page beside the one on screen too, so what arrives piece by piece is never seen piece by piece.
+    val waiting = story != null && !shownReady
     var spinnerOn by remember(story?.id) { mutableStateOf(false) }
-    LaunchedEffect(story?.id, waiting) {
+    LaunchedEffect(story?.id, waiting, active) {
         spinnerOn = false
-        if (waiting) {
+        if (waiting && active) {
             delay(SPINNER_AFTER_MS)
             spinnerOn = true
         }

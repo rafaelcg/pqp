@@ -282,27 +282,12 @@ class StoryPreloader(
     }
 
     private suspend fun preload(story: Story) {
-        // The face first (it is on the screen at once), then the picture, then the rest.
-        story.author.avatarUrl?.let { ancillary { image(absolute(it), null) } }
+        // Everything the viewer waits for before it shows the story (the base, every layer, faces and icons), so a
+        // preloaded story is all there at once. A clip's bytes follow, when the link and Data Saver allow.
+        StoryAssets.load(appContext, StoryAssets.of(story, session.servers.value))
         val media = story.media
-        when {
-            story.kind == "video" && media != null -> {
-                media.posterUrl?.let { ancillary { image(absolute(it), StoryPreloadRules.posterKey(story.id)) } }
-                if (StoryPreloadRules.videoAllowed(restrictBackgroundStatus())) {
-                    StoryVideoCache.prefetch(appContext, StoryPreloadRules.videoKey(story.id), absolute(media.url))
-                }
-            }
-            media != null -> image(absolute(media.url), StoryPreloadRules.baseKey(story.id))
-        }
-        // A story's layer pictures are independent: fetched together, not one round trip after another.
-        coroutineScope {
-            story.layers.forEach { layer ->
-                when (layer) {
-                    is ImageStoryLayer -> launch { image(absolute(layer.url), StoryPreloadRules.layerKey(story.id, layer.id)) }
-                    is DrawingStoryLayer -> launch { image(absolute(layer.url), StoryPreloadRules.layerKey(story.id, layer.id)) }
-                    else -> Unit
-                }
-            }
+        if (story.kind == "video" && media != null && StoryPreloadRules.videoAllowed(restrictBackgroundStatus())) {
+            StoryVideoCache.prefetch(appContext, StoryPreloadRules.videoKey(story.id), absolute(media.url))
         }
     }
 

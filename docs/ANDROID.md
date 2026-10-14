@@ -2391,6 +2391,15 @@ does with it.
   still loading, so a slow link is that story's alone. Debug builds log the
   numbers under `adb logcat -s pqp.perf` (`StoryPerf`) and `files/no-preload`
   turns the preloader off to measure the same build without it.
+  - **One finished picture.** A story is held behind the veil until everything
+    it is drawn from is decoded (`StoryAssets`: the base, each photo layer, the
+    drawing, the faces and icon of a call card, the author's face), then the base
+    and every layer go on the canvas together and the veil fades in one frame.
+    The preloader fetches the same list, so a preloaded story appears at once. A
+    clip starts buffering straight away and its layers wait for the assets.
+    Words, mentions and call cards are laid out at their final size (`CrispLayer`:
+    canvas width times scale) and only turned, never scaled, so they are crisp at
+    any scale.
   - **The clock waits for the picture.** A story's bar, its "seen" count and the
     preloader all start at its first frame, not at the tap: while it has none the
     viewer shows the author's colour over black, and a small spinner after 300
