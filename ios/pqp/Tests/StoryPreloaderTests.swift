@@ -84,6 +84,17 @@ final class StoryPreloaderTests: XCTestCase {
         XCTAssertEqual(playback.windowIds, ["c1"])
     }
 
+    func testTheWindowWalksForwardWithoutNeedingTheWholeQueue() {
+        var playback = StoryPlayback(people: [["a1"], [], ["b1", "b2"], ["c1"]])
+        XCTAssertEqual(playback.people.count, 3, "An empty person is not a stop")
+        XCTAssertEqual(playback.windowIds, ["a1", "b1", "b2"])
+        _ = playback.next()
+        XCTAssertEqual(playback.windowIds, ["b1", "b2", "c1"])
+        _ = playback.next()
+        _ = playback.next()
+        XCTAssertEqual(playback.windowIds, ["c1"])
+    }
+
     // MARK: - Running it
 
     /// A fetch the test lets go of by hand.

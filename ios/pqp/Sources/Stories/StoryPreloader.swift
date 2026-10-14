@@ -102,12 +102,20 @@ extension StoryPlayback {
     /// across authors, and the next author's first. The order is the order
     /// they will be needed in.
     var windowIds: [String] {
-        let flat = people.flatMap { $0 }
-        var start = 0
-        for (index, ids) in people.enumerated() where index < person { start += ids.count }
-        start += index
+        // Walks forward from where the viewer is, three stories, without
+        // building the whole queue.
         var ids: [String] = []
-        for position in start..<min(flat.count, start + 3) { ids.append(flat[position]) }
+        var p = person
+        var i = index
+        while ids.count < 3, people.indices.contains(p) {
+            if people[p].indices.contains(i) {
+                ids.append(people[p][i])
+                i += 1
+            } else {
+                p += 1
+                i = 0
+            }
+        }
         if people.indices.contains(person + 1), let first = people[person + 1].first, !ids.contains(first) {
             ids.append(first)
         }
@@ -155,7 +163,15 @@ final class StoryPreloader {
 
     init() {
         monitor.pathUpdateHandler = { [constrained] path in
-            constrained.withLock { $0 = path.isConstrained }
+            let wasConstrained = constrained.withLock { value -> Bool in
+                let before = value
+                value = path.isConstrained
+                return before
+            }
+            // Low Data Mode just came on: what is buffering a video stops.
+            if path.isConstrained, !wasConstrained {
+                Task { @MainActor in StoryPreloader.shared.replan() }
+            }
         }
         monitor.start(queue: DispatchQueue.global(qos: .utility))
     }
@@ -248,7 +264,17 @@ final class StoryPreloader {
     /// Sets what is worth having. Whatever was being fetched and is not in
     /// `items` any more is cancelled (a swipe past it, a closed viewer); the
     /// rest is started, two at a time, in order.
+    /// The window as last set, to be re-planned when the connection changes.
+    private var lastWindow: [StoryPreloadItem] = []
+
+    /// Low Data Mode came on while videos were scheduled or buffering: they go.
+    func replan() {
+        guard lowDataMode else { return }
+        setWindow(lastWindow.filter { !$0.isVideo })
+    }
+
     func setWindow(_ items: [StoryPreloadItem]) {
+        lastWindow = items
         wanted = Set(items.map(\.key))
         for (key, task) in running where !wanted.contains(key) {
             task.cancel()

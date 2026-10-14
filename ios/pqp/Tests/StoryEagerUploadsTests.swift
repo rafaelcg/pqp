@@ -264,6 +264,30 @@ final class StoryEagerUploadsTests: XCTestCase {
         XCTAssertEqual(seen.puts, 1)
     }
 
+    /// The create fails after the uploads are up: the job remembers them, so
+    /// "Tentar de novo" claims the same uploads instead of sending the bytes
+    /// again, and a discard would delete them.
+    func testARetryAfterAFailedCreateReusesTheUploads() async throws {
+        let backend = Backend(storyId: storyId)
+        backend.failNextCreates(1)
+        let uploads = StoryEagerUploads(backend: backend, enabled: true)
+        uploads.sync([photoWant()])
+        await settle(uploads)
+        let posts = StoryPostQueue(backend: backend, store: store, usesBackgroundTime: false)
+        let id = try posts.enqueue(
+            request: try request(),
+            base: StoryPostBytes(contentType: "image/jpeg", data: Data(repeating: 7, count: 1000)),
+            layers: [:], userId: "me", eager: uploads
+        )
+        try await waitUntil("the failure") { posts.job(id: id)?.failed == true }
+        XCTAssertEqual(posts.job(id: id)?.record.uploadIds, [StoryEagerWant.baseKey(): "up-1"])
+        posts.retry(id)
+        try await waitUntil("the retry to go live") { posts.publishedCount == 1 }
+        XCTAssertEqual(backend.uploads().minted.count, 1, "Nothing was uploaded again")
+        XCTAssertEqual(backend.snapshot().puts, 1)
+        XCTAssertEqual(backend.snapshot().requests.last?.media?.uploadId, "up-1")
+    }
+
     func testDiscardingAPostDeletesItsUploads() async throws {
         let backend = Backend(storyId: storyId)
         backend.set(hold: true)

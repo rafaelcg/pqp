@@ -36,6 +36,8 @@ final class StoryPostQueueTests: XCTestCase {
         var failPuts = false
         var holdPuts = false
         var holdCreates = false
+        /// This many creates fail like a dead connection, then they work.
+        var failCreatesLeft = 0
         var withUploads = true
         /// A create that names an upload is refused with this status.
         var refuseClaims: Int?
@@ -52,6 +54,13 @@ final class StoryPostQueueTests: XCTestCase {
             // that was cancelled meanwhile.
             while locked({ holdCreates }) {
                 try? await Task.sleep(for: .milliseconds(10))
+            }
+            if locked({ () -> Bool in
+                guard failCreatesLeft > 0 else { return false }
+                failCreatesLeft -= 1
+                return true
+            }) {
+                throw APIError.transport("offline")
             }
             let claims = request.media?.uploadId != nil
                 || (request.layers ?? []).contains { $0["upload"]?["uploadId"] != nil }
@@ -127,6 +136,7 @@ final class StoryPostQueueTests: XCTestCase {
         func snapshot() -> (requests: [CreateStoryRequest], published: [String], deleted: [String], puts: Int) {
             locked { (requests, published, deleted, putCount) }
         }
+        func failNextCreates(_ count: Int) { locked { failCreatesLeft = count } }
         func setRefuseClaims(_ status: Int?, times: Int = .max) { locked { refuseClaims = status; refusals = times } }
         func uploads() -> (minted: [(kind: String, contentType: String, byteLength: Int)], deleted: [String]) {
             locked { (minted: minted, deleted: deletedUploads) }

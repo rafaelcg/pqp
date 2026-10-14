@@ -713,13 +713,26 @@ struct StoryViewer: View {
                 self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
             }
         }
+        // Swiped on while the stories were being read: this task is over, and
+        // the player it took belongs to a story that is no longer on screen.
+        if Task.isCancelled {
+            adopted?.pause()
+            adopted?.replaceCurrentItem(with: nil)
+            return
+        }
         progress = 0
         player?.pause()
         player = nil
         guard let story = current else { return }
         if story.isVideo, let url = videoURL(story) {
             // A player that was already buffering this clip, when the preload
-            // got to it; else a fresh one.
+            // got to it; else a fresh one. One taken for another clip is not
+            // this one's.
+            if let taken = adopted, (taken.currentItem?.asset as? AVURLAsset)?.url != url {
+                taken.pause()
+                taken.replaceCurrentItem(with: nil)
+                adopted = nil
+            }
             if adopted == nil { adopted = preloader.takePlayer(for: url) }
             let next = adopted ?? AVPlayer(url: url)
             next.isMuted = muted

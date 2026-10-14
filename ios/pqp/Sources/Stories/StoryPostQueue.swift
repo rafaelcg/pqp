@@ -569,6 +569,9 @@ final class StoryPostQueue {
                 ids[key] = uploadId
                 record.uploadIds = ids
                 try? store.save(record)
+                // The job holds them too: a retry reuses these uploads and a
+                // discard deletes them.
+                update(id) { $0.record.uploadIds = ids }
             }
         }
         try Task.checkCancellation()
