@@ -348,6 +348,8 @@ class StoryOutbox(
             watcher.cancel()
         }
         ids.keys.forEach { key -> draft.files.firstOrNull { it.key == key }?.let { tally.report(key, it.size) } }
+        // The draft has its own copy on disk: the uploads no longer need to hold theirs.
+        handles.values.forEach { it.release() }
         tick()
         return ids
     }
@@ -360,10 +362,13 @@ class StoryOutbox(
             // Together, and for a few seconds at most: the story is live whether or not a strip could be read.
             withTimeoutOrNull(REFRESH_BUDGET_MS) {
                 coroutineScope {
+                    val refreshGate = Semaphore(REFRESHES_AT_ONCE)
                     draft.refreshKeys.distinct().map { key ->
                         async {
-                            var attempts = 0
-                            while (!store.refreshNow(key) && ++attempts < REFRESH_ATTEMPTS) delay(REFRESH_RETRY_MS)
+                            refreshGate.withPermit {
+                                var attempts = 0
+                                while (!store.refreshNow(key) && ++attempts < REFRESH_ATTEMPTS) delay(REFRESH_RETRY_MS)
+                            }
                         }
                     }.awaitAll()
                 }
@@ -398,6 +403,7 @@ class StoryOutbox(
 
         private const val PROGRESS_POLL_MS = 150L
         private const val REFRESH_ATTEMPTS = 3
+        private const val REFRESHES_AT_ONCE = 3
         private const val REFRESH_BUDGET_MS = 6_000L
         private const val REFRESH_RETRY_MS = 1_500L
 

@@ -95,11 +95,18 @@ class EagerUpload internal constructor(
     val key: String,
     val kind: String,
     val contentType: String,
-    val bytes: ByteArray,
+    bytes: ByteArray,
     val tag: Any,
     /** A layer's file as the create declares it (type, size, dimensions): what the upload was made from. */
-    val file: LayerFile?,
+    file: LayerFile?,
 ) {
+    /** What was sent, held only until nobody needs it any more ([release]). */
+    @Volatile
+    var file: LayerFile? = file
+        private set
+
+    val size: Long = bytes.size.toLong()
+
     internal lateinit var job: Job
 
     @Volatile
@@ -118,7 +125,10 @@ class EagerUpload internal constructor(
     var failed: Boolean = false
         internal set
 
-    val size: Long get() = bytes.size.toLong()
+    /** The post has what it needs from this upload (its id, and a copy of the file on disk): drop the buffers. */
+    fun release() {
+        file = null
+    }
 
     /** Waits for the upload to end: its id when the PUT finished, null when it did not. */
     suspend fun await(): String? {

@@ -77,13 +77,21 @@ class StoryDraftStore(private val root: File) {
 
     fun file(id: String, name: String): File = File(dir(id), name)
 
-    /** Every complete draft; a half-written folder (no manifest) or an unreadable one is cleaned away. */
+    /**
+     * Every complete draft. A half-written folder (no manifest) or one whose manifest is not a draft is cleaned away;
+     * one that cannot be read right now (an I/O error) is left alone and simply not listed this time.
+     */
     fun list(): List<StoryDraft> {
         val folders = root.listFiles { f -> f.isDirectory } ?: return emptyList()
         return folders.mapNotNull { folder ->
             val manifest = File(folder, MANIFEST)
             val draft = if (manifest.isFile) {
-                runCatching { PqpJson.decodeFromString(StoryDraft.serializer(), manifest.readText()) }.getOrNull()
+                val text = try {
+                    manifest.readText()
+                } catch (_: java.io.IOException) {
+                    return@mapNotNull null
+                }
+                runCatching { PqpJson.decodeFromString(StoryDraft.serializer(), text) }.getOrNull()
             } else {
                 null
             }

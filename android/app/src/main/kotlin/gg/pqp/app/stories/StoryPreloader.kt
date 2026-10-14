@@ -36,6 +36,8 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 
 /**
@@ -66,6 +68,9 @@ class StoryPreloader(
 
     private val details = ConcurrentHashMap<String, Cached>()
     private val detailsLock = Mutex()
+
+    /** Pictures in flight at once, across stories: a story can carry many layers. */
+    private val imageGate = Semaphore(IMAGES_AT_ONCE)
 
     private val running = ConcurrentHashMap<String, Job>()
 
@@ -294,7 +299,11 @@ class StoryPreloader(
     private suspend fun image(url: String, key: String?) {
         val screen = appContext.resources.displayMetrics
         val size = coil3.size.Size(screen.widthPixels, screen.heightPixels)
-        SingletonImageLoader.get(appContext).execute(storyImageRequest(appContext, url, key, size))
+        // `execute` answers an error as a value, not an exception: a failed fetch must not count as a finished preload.
+        val result = imageGate.withPermit {
+            SingletonImageLoader.get(appContext).execute(storyImageRequest(appContext, url, key, size))
+        }
+        if (result is coil3.request.ErrorResult) throw result.throwable
     }
 
     private fun restrictBackgroundStatus(): Int =
@@ -311,6 +320,7 @@ class StoryPreloader(
         /** Three rings of this many make the 18 ids one request may carry. */
         private const val TRAY_IDS_PER_RING = 6
         private const val FAILED_RETRY_MS = 30_000L
+        private const val IMAGES_AT_ONCE = 3
         private const val DETAILS_KEEP_MS = 30 * 60 * 1000L
 
         @Volatile
