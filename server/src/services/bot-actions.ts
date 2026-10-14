@@ -1740,6 +1740,8 @@ export async function executePlan(
   ctx: BotActionContext,
   /** Told before each step runs, for the "is working" indicator. */
   onStep?: (action: StagedAction) => void,
+  /** Told after each step that ran now, with its card row. */
+  onDone?: (step: number, item: BotActionItem) => Promise<void>,
 ): Promise<{ lines: string[]; items: BotActionItem[] }> {
   const { invokeApiAsUser } = await import("../api/index.js");
   const done = await getPool().query<{ step: number; status: string; result: ExecResult | null }>(
@@ -1782,7 +1784,9 @@ export async function executePlan(
     }
     if (result.createdId && action.ref) refs.set(action.ref, result.createdId);
     lines.push(mark(result));
-    items.push(itemOf(action, result));
+    const item = itemOf(action, result);
+    items.push(item);
+    await onDone?.(step, item).catch(() => {});
   }
   await getPool().query(
     `UPDATE server_bot_plans SET status = 'done', finished_at = NOW() WHERE id = $1`,

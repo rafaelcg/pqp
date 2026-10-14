@@ -883,13 +883,24 @@ describeDb("server bot actions", () => {
       expect(await answer(owner, 0)).toBe("decided");
       expect((await askCard(bot.userId)).bot_card).toMatchObject({ state: "answered", answer: 1 });
 
-      const posted = await getPool().query(
-        `SELECT body FROM messages WHERE author_id = $1 AND reply_to_id = $2`,
-        [owner.id, asked.id],
+      // Nothing is posted for the member: the card says what they picked.
+      const posted = await getPool().query(`SELECT body FROM messages WHERE author_id = $1`, [owner.id]);
+      expect(posted.rows).toEqual([{ body: "@caio_bot cria um canal" }]);
+      const run = await getPool().query<{ trigger: string; requester_id: string }>(
+        `SELECT trigger, requester_id FROM server_bot_runs WHERE message_id = $1`,
+        [asked.id],
       );
-      expect(posted.rows).toEqual([{ body: "Voz" }]);
+      expect(run.rows).toEqual([{ trigger: "answer", requester_id: owner.id }]);
       await runBotRunsTick();
-      expect((await botReplies(bot.userId)).at(-1)).toBe("Beleza, voz então.");
+      // The model learns the answer from the card, in the transcript and the ask.
+      const prompt = (seen.at(-1)!.messages[0] as { text: string }).text;
+      expect(prompt).toMatch(/\[buttons: "Texto" \| "Voz"; @\S+ picked "Voz"\]/);
+      expect(prompt).toContain('by pressing "Voz"');
+      const reply = await getPool().query<{ body: string; reply_to_id: string }>(
+        `SELECT body, reply_to_id FROM messages WHERE author_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [bot.userId],
+      );
+      expect(reply.rows[0]).toEqual({ body: "Beleza, voz então.", reply_to_id: asked.id });
     });
 
     it("refuses an answer after the question ran out", async () => {
@@ -1005,7 +1016,9 @@ describeDb("server bot actions", () => {
       return { ...ctx, planId: plan.rows[0]!.id, planMessageId: plan.rows[0]!.message_id };
     }
     const cardOf = async (messageId: string) =>
-      (await getPool().query<{ bot_card: { state: string | null; planId: string | null } }>(
+      (await getPool().query<{
+        bot_card: { state: string | null; planId: string | null; items: Array<{ status: string }> };
+      }>(
         `SELECT bot_card FROM messages WHERE id = $1`,
         [messageId],
       )).rows[0]!.bot_card;
@@ -1021,13 +1034,16 @@ describeDb("server bot actions", () => {
       await runBotRunsTick();
 
       expect(await channelNamed(server.id, "velho")).toBe(0);
-      expect((await cardOf(planMessageId)).state).toBe("confirmed");
-      const result = await getPool().query<{ reply_to_id: string; bot_card: { kind: string } }>(
-        `SELECT reply_to_id, bot_card FROM messages WHERE author_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      // The plan finishes on its own card: no second message from the bot.
+      const card = await cardOf(planMessageId);
+      expect(card.state).toBe("confirmed");
+      expect(card.items.map((item) => item.status)).toEqual(["ok"]);
+      const latest = await getPool().query<{ id: string; body: string }>(
+        `SELECT id, body FROM messages WHERE author_id = $1 ORDER BY created_at DESC LIMIT 1`,
         [bot.userId],
       );
-      expect(result.rows[0]!.reply_to_id).toBe(planMessageId);
-      expect(result.rows[0]!.bot_card.kind).toBe("result");
+      expect(latest.rows[0]!.id).toBe(planMessageId);
+      expect(latest.rows[0]!.body).toContain("Resultado:");
       expect(await queuePlanDecision({ planId, userId: owner.id, decision: "yes" })).toBe("decided");
     });
 

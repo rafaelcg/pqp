@@ -138,21 +138,32 @@ interface ClaimedRun {
   plan_id: string | null;
   follow_up: boolean;
   decision: "yes" | "no" | null;
+  /** `answer` is a question card's button; the rest are in `bots.ts`. */
+  trigger: string | null;
   attempts: number;
   created_at: Date;
 }
 
 async function claimRuns(limit: number): Promise<ClaimedRun[]> {
-  const exhausted = await getPool().query<{ bot_id: string; requester_id: string }>(
-    `UPDATE server_bot_runs
+  const exhausted = await getPool().query<{
+    bot_id: string;
+    requester_id: string;
+    channel_id: string;
+    plan_message_id: string | null;
+  }>(
+    `UPDATE server_bot_runs r
         SET status = 'failed', outcome = 'attempts', finished_at = NOW()
-      WHERE status = 'running' AND lease_expires_at < NOW() AND attempts >= $1
-      RETURNING bot_id, requester_id`,
+      WHERE r.status = 'running' AND r.lease_expires_at < NOW() AND r.attempts >= $1
+      RETURNING r.bot_id, r.requester_id, r.channel_id,
+                (SELECT p.message_id FROM server_bot_plans p WHERE p.id = r.plan_id) AS plan_message_id`,
     [MAX_ATTEMPTS],
   );
   for (const run of exhausted.rows) {
     await bumpBotStats(run.bot_id, { runs: 1, failed: 1 });
     await bumpBotPerson(run.bot_id, run.requester_id);
+    if (run.plan_message_id) {
+      await abandonPlanCard(run.channel_id, run.plan_message_id).catch(() => {});
+    }
   }
   const claimed = await getPool().query<ClaimedRun>(
     `WITH due AS (
@@ -175,7 +186,7 @@ async function claimRuns(limit: number): Promise<ClaimedRun[]> {
             lease_expires_at = NOW() + make_interval(secs => $4)
        FROM due WHERE r.id = due.id
      RETURNING r.id, r.bot_id, r.channel_id, r.message_id, r.requester_id,
-               r.plan_id, r.follow_up, r.decision, r.attempts, r.created_at`,
+               r.plan_id, r.follow_up, r.decision, r.trigger, r.attempts, r.created_at`,
     [limit, MAX_ATTEMPTS, INSTANCE_ID, LEASE_SECONDS],
   );
   return claimed.rows;
@@ -421,7 +432,22 @@ async function loadContext(run: ClaimedRun): Promise<RunContext | null> {
       WHERE m.id = $1`,
     [run.message_id],
   );
-  const t = trigger.rows[0];
+  let t: (typeof trigger.rows)[number] | undefined = trigger.rows[0];
+  // A question card's button: the trigger row is the bot's own question, so
+  // the member and their choice come from the card and the run instead.
+  if (t && run.trigger === "answer") {
+    const picked = await getPool().query<{ display_name: string; username: string | null; choice: string | null }>(
+      `SELECT u.display_name, u.username,
+              m.bot_card->'options'->>((m.bot_card->>'answer')::int) AS choice
+         FROM users u, messages m
+        WHERE u.id = $1 AND m.id = $2`,
+      [run.requester_id, run.message_id],
+    );
+    const who = picked.rows[0];
+    t = who
+      ? { ...t, body: who.choice ?? "", display_name: who.display_name, username: who.username, reply_to_id: null }
+      : undefined;
+  }
   return {
     serverId: row.server_id,
     serverName: row.server_name,
@@ -482,8 +508,10 @@ async function loadTranscript(
     username: string | null;
     webhook_username: string | null;
     reply_to_id: string | null;
+    bot_card: BotActionCard | null;
   }>(
-    `SELECT m.id, m.body, m.author_id, u.display_name, u.username, m.webhook_username, m.reply_to_id
+    `SELECT m.id, m.body, m.author_id, u.display_name, u.username, m.webhook_username, m.reply_to_id,
+            CASE WHEN m.bot_card->>'kind' = 'ask' THEN m.bot_card END AS bot_card
        FROM messages m JOIN users u ON u.id = m.author_id
       WHERE m.channel_id = $1
         AND ((m.created_at, m.id) <= (SELECT created_at, id FROM messages WHERE id = $2)
@@ -520,6 +548,7 @@ async function loadTranscript(
       const poll = polls.get(row.id);
       const carried = [
         poll ? `[poll: "${poll.slice(0, 300)}"; read_poll shows the votes]` : "",
+        askNote(row.bot_card),
         describeMedia(media.get(row.id), { hearVoice: senses.hearVoice, imageNumbers }),
       ]
         .filter(Boolean)
@@ -724,7 +753,9 @@ async function runOne(run: ClaimedRun): Promise<void> {
     transcript.text,
     "</conversation>",
     "",
-    run.follow_up
+    run.trigger === "answer"
+      ? `${asker} answered your question ${target} by pressing "${ctx.trigger.body}". Carry on from their choice.`
+      : run.follow_up
       ? `The message ${target}, from ${asker}, did not mention you: it came right after you answered them. If it continues the talk with you, reply to it. If it is clearly meant for somebody else, or needs no answer (a thanks, an emoji), reply with exactly ${SKIP} and nothing else.`
       : `Reply to the message ${target}, from ${asker}.`,
   ].join("\n");
@@ -917,6 +948,22 @@ function readAsk(
   return text && unique.length >= 2 ? { text: text.slice(0, 300), options: unique } : null;
 }
 
+/**
+ * A question card in the transcript: its buttons, and the one the member
+ * pressed. A pressed button posts nothing, so this is the only place the
+ * model learns the answer.
+ */
+function askNote(card: BotActionCard | null): string {
+  if (card?.kind !== "ask" || !card.options) {
+    return "";
+  }
+  const buttons = card.options.map((option) => `"${option}"`).join(" | ");
+  const picked = card.state === "answered" && card.answer !== null ? card.options[card.answer] : null;
+  return picked
+    ? `[buttons: ${buttons}; ${card.confirmBy ?? "the member"} picked "${picked}"]`
+    : `[buttons: ${buttons}; not answered]`;
+}
+
 /** A card with every field it does not use left empty. */
 function makeCard(card: Pick<BotActionCard, "kind" | "items"> & Partial<BotActionCard>): BotActionCard {
   return {
@@ -967,9 +1014,10 @@ async function markPlanCard(
 
 /**
  * A question card's button. The card is claimed first, so a second press (or
- * a second tab) answers nothing; then the member's choice is posted as their
- * own reply to the question, which is what wakes the bot, exactly as if they
- * had typed it. A send that is refused puts the card back.
+ * a second tab) answers nothing; then a run is queued on the question itself,
+ * under the same limits as a typed reply. Nothing is posted for the member:
+ * the card already shows what they picked. A refused or limited answer puts
+ * the card back.
  */
 export async function answerBotAsk(input: {
   messageId: string;
@@ -979,9 +1027,10 @@ export async function answerBotAsk(input: {
   const found = await getPool().query<{
     channel_id: string;
     server_id: string | null;
+    author_id: string;
     bot_card: BotActionCard | null;
   }>(
-    `SELECT m.channel_id, c.server_id, m.bot_card
+    `SELECT m.channel_id, c.server_id, m.author_id, m.bot_card
        FROM messages m
        JOIN users u ON u.id = m.author_id AND u.is_character
        JOIN channels c ON c.id = m.channel_id
@@ -1019,13 +1068,15 @@ export async function answerBotAsk(input: {
     return "decided";
   }
   await refreshCard(row.channel_id, input.messageId);
-  const posted = await postChannelMessage({
-    author: input.user,
+  const { queueAskAnswer } = await import("./bots.js");
+  const queued = await queueAskAnswer({
+    serverId: row.server_id,
     channelId: row.channel_id,
-    body: choice,
-    replyToId: input.messageId,
-  });
-  if (posted.ok) {
+    messageId: input.messageId,
+    botUserId: row.author_id,
+    userId: input.user.id,
+  }).catch(() => "refused" as const);
+  if (queued === "queued") {
     return "answered";
   }
   await getPool().query(
@@ -1249,8 +1300,10 @@ async function answerConfirmation(
     return finishRun(run, "skipped", "plan-not-pending");
   }
   let claimed = await claimPlan(plan.id, run.requester_id);
-  // This run's own earlier attempt took the plan and then lost its lease.
-  if (!claimed && run.attempts > 1 && plan.status === "executing") {
+  // This run's own earlier attempt took the plan and then lost its lease,
+  // maybe after the last step and before the card was finished. The steps
+  // already run are not run again.
+  if (!claimed && run.attempts > 1 && (plan.status === "executing" || plan.status === "done")) {
     claimed = plan;
   }
   if (!claimed) {
@@ -1263,17 +1316,83 @@ async function answerConfirmation(
     return finishRun(run, "skipped", "plan-taken");
   }
   await markPlanCard(run.channel_id, plan.message_id, "confirmed");
-  const { lines, items } = await executePlan(claimed, actionCtx, (action) =>
-    broadcastActivity(run.channel_id, actionCtx.bot, action.tool),
+  const messageId = plan.message_id;
+  if (!messageId) {
+    // The plan's message is gone: there is no card to finish, so the result
+    // is a reply of its own, as before.
+    const { lines, items } = await executePlan(claimed, actionCtx);
+    const said = await explainFailures(run, actionCtx, null, items);
+    return postReply(
+      run,
+      actionCtx.bot,
+      composeReply(said, ["Resultado:", ...lines].join("\n")),
+      "plan-done",
+      makeCard({ kind: "result", lead: said, items }),
+    );
+  }
+  // The plan's own card counts up as each step lands and ends as the result:
+  // one message for the whole request, and no activity row under it, since
+  // the card already shows the work.
+  const progress: BotActionItem[] = claimed.actions.map((action) => ({
+    tool: action.tool,
+    label: action.label,
+    status: "pending",
+    detail: null,
+  }));
+  const { lines, items } = await executePlan(claimed, actionCtx, undefined, async (step, item) => {
+    progress[step] = item;
+    await writePlanCard(run.channel_id, messageId, { items: progress });
+  });
+  const lead = await cardLead(messageId);
+  const said = (await explainFailures(run, actionCtx, lead, items)) ?? lead;
+  await writePlanCard(run.channel_id, messageId, {
+    items,
+    lead: said,
+    body: composeReply(said, ["Resultado:", ...lines].join("\n")),
+  });
+  return finishRun(run, "done", "plan-done");
+}
+
+/**
+ * Rewrite a plan card's steps, and at the end its sentence and text copy (the
+ * copy is what phones show). Not an edit by anybody: no "editado" mark.
+ */
+async function writePlanCard(
+  channelId: string,
+  messageId: string,
+  update: { items: BotActionItem[]; lead?: string | null; body?: string },
+): Promise<void> {
+  const patch: Record<string, unknown> = { items: update.items };
+  if (update.lead !== undefined) patch.lead = update.lead;
+  const updated = await getPool().query(
+    `UPDATE messages
+        SET bot_card = bot_card || $2::jsonb, body = COALESCE($3, body)
+      WHERE id = $1 AND bot_card->>'kind' = 'plan'`,
+    [messageId, JSON.stringify(patch), update.body ?? null],
   );
-  const said = await explainFailures(run, actionCtx, plan.message_id ? await cardLead(plan.message_id) : null, items);
-  return postReply(
-    run,
-    actionCtx.bot,
-    composeReply(said, ["Resultado:", ...lines].join("\n")),
-    "plan-done",
-    makeCard({ kind: "result", lead: said, items }),
+  if ((updated.rowCount ?? 0) > 0) {
+    await refreshCard(channelId, messageId);
+  }
+}
+
+/**
+ * A confirmed plan whose run gave up: the steps it never reported become
+ * "não sei se terminou", so the card stops counting instead of spinning.
+ */
+async function abandonPlanCard(channelId: string, messageId: string): Promise<void> {
+  const found = await getPool().query<{ bot_card: BotActionCard | null }>(
+    `SELECT bot_card FROM messages WHERE id = $1`,
+    [messageId],
   );
+  const card = found.rows[0]?.bot_card;
+  if (card?.kind !== "plan" || card.state !== "confirmed" || !card.items.some((item) => item.status === "pending")) {
+    return;
+  }
+  await writePlanCard(channelId, messageId, {
+    items: card.items.map((item) =>
+      item.status === "pending" ? { ...item, status: "unknown", detail: "não sei se terminou" } : item,
+    ),
+  });
 }
 
 export async function runBotRunsTick(): Promise<number> {

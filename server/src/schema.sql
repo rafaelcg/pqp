@@ -6567,7 +6567,8 @@ CREATE INDEX IF NOT EXISTS idx_server_bot_actions_hour
 ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS role_id UUID REFERENCES roles(id) ON DELETE SET NULL;
 
 -- What started a run and what it cost, written as each model call returns.
--- `trigger`: mention, reply, name, follow_up or decision (a plan's "sim").
+-- `trigger`: mention, reply, name, follow_up, decision (a plan's "sim") or
+-- answer (a question card's button, which posts no message).
 ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS trigger TEXT;
 ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS model TEXT;
 ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS turns INTEGER NOT NULL DEFAULT 0;

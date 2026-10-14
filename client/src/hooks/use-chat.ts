@@ -1858,6 +1858,11 @@ export function createChatController(
             return;
           }
           const updated = toChatMessage(message.message);
+          // A plan finishes on its own card, with no new message to end the
+          // bot's "working" row: the card's last update ends it.
+          if (updated.botCard?.kind === "plan" && typing.get(updated.authorId)?.activity) {
+            typing.delete(updated.authorId);
+          }
           messages = messages.map((entry) =>
             entry.id === updated.id ? { ...entry, ...updated } : entry,
           );

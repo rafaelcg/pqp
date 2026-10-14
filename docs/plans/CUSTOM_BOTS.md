@@ -127,7 +127,7 @@ Two switches in the "Imagens e voz" group, on by default: `see_images` and `hear
 
 Every day here is São Paulo's (`botDay` in `server/src/services/bot-stats.ts`), so a limit resets at midnight in Brazil.
 
-Usage is in `server_bot_usage_daily` (per server) and `server_bot_spend_daily` (deployment). Each run also stores its trigger (mention, reply, name, follow_up, decision), model, model calls, tokens and cost.
+Usage is in `server_bot_usage_daily` (per server) and `server_bot_spend_daily` (deployment). Each run also stores its trigger (mention, reply, name, follow_up, decision, answer), model, model calls, tokens and cost.
 
 The operator's history is in three tables with no foreign keys, so a deleted bot or server keeps its past:
 

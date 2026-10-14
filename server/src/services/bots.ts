@@ -749,16 +749,81 @@ export async function maybeQueueBotReply(input: BotTriggerInput): Promise<boolea
   if (!called && !followUp) {
     return false;
   }
+  return queueCappedRun({
+    bot,
+    channelId: channel.id,
+    serverId: channel.server_id,
+    messageId: input.messageId,
+    requesterId: input.author.id,
+    followUp,
+    trigger: followUp
+      ? "follow_up"
+      : input.repliedToUserId === bot.userId
+        ? "reply"
+        : mentioned.includes(bot.username)
+          ? "mention"
+          : "name",
+  });
+}
+
+/**
+ * A question card's button: the member's choice wakes the bot with no message
+ * of theirs in the channel, since the card already says what they picked. It
+ * goes through the same per-member limits as a typed reply, and only for a
+ * member who could have typed one.
+ */
+export async function queueAskAnswer(input: {
+  serverId: string;
+  channelId: string;
+  /** The question's own message: the run answers it. */
+  messageId: string;
+  botUserId: string;
+  userId: string;
+}): Promise<"queued" | "refused" | "limited"> {
+  const bot = await triggerBotFor(input.serverId);
+  if (!bot || bot.userId !== input.botUserId) {
+    return "refused";
+  }
+  const { findTimeoutForChannel } = await import("./sanctions.js");
+  const { computeMemberPermissions } = await import("./permissions.js");
+  const timedOut = (await findTimeoutForChannel(input.userId, input.channelId)) !== null;
+  const perms = await computeMemberPermissions(input.serverId, input.userId, input.channelId, { timedOut });
+  if (timedOut || !hasPermission(perms, Permission.VIEW_CHANNEL) || !hasPermission(perms, Permission.SEND_MESSAGES)) {
+    return "refused";
+  }
+  const queued = await queueCappedRun({
+    bot,
+    channelId: input.channelId,
+    serverId: input.serverId,
+    messageId: input.messageId,
+    requesterId: input.userId,
+    followUp: false,
+    trigger: "answer",
+  });
+  return queued ? "queued" : "limited";
+}
+
+async function queueCappedRun(input: {
+  bot: TriggerBot;
+  channelId: string;
+  serverId: string;
+  messageId: string;
+  requesterId: string;
+  followUp: boolean;
+  trigger: "follow_up" | "reply" | "mention" | "name" | "answer";
+}): Promise<boolean> {
+  const { bot, followUp } = input;
+  const channel = { id: input.channelId, server_id: input.serverId };
   // Two open questions per person (the second waits for the first), and a
   // few per hour: a member mashing the mention must not spend the server's
   // day, or flood the channel with answers. The server's owner and admins
   // have no hourly limit. One statement, so the limits hold across machines;
   // it also says which one stopped the question, for the notice.
-  const exempt = await bypassesMemberLimit(channel.server_id, input.author.id);
+  const exempt = await bypassesMemberLimit(channel.server_id, input.requesterId);
   // One statement checks the caps and inserts, but two of the same member's
   // messages arriving together would both read the same counts. A lock per
   // bot and member makes the second wait for the first.
-  const result = await withRequesterLock(bot.id, input.author.id, (db) => db.query<{
+  const result = await withRequesterLock(bot.id, input.requesterId, (db) => db.query<{
     queued: boolean;
     open_runs: number;
     hour_runs: number;
@@ -805,20 +870,14 @@ export async function maybeQueueBotReply(input: BotTriggerInput): Promise<boolea
       bot.id,
       channel.id,
       input.messageId,
-      input.author.id,
+      input.requesterId,
       BOT_RUNS_CHANNEL,
       botRunsPerRequesterHour(),
       followUp,
       BOT_FOLLOW_UP_SECONDS,
       BOT_OPEN_RUNS_PER_REQUESTER,
       exempt,
-      followUp
-        ? "follow_up"
-        : input.repliedToUserId === bot.userId
-          ? "reply"
-          : mentioned.includes(bot.username)
-            ? "mention"
-            : "name",
+      input.trigger,
     ],
   ));
   const row = result.rows[0];
@@ -831,10 +890,10 @@ export async function maybeQueueBotReply(input: BotTriggerInput): Promise<boolea
   }
   const limit = botRunsPerRequesterHour();
   if (row.open_runs >= BOT_OPEN_RUNS_PER_REQUESTER) {
-    await sendBotNotice(channel.id, bot, input.author.id, "busy", null, null);
+    await sendBotNotice(channel.id, bot, input.requesterId, "busy", null, null);
   } else if (!exempt && row.hour_runs >= limit) {
     const retryAt = row.hour_oldest ? new Date(row.hour_oldest.getTime() + 3_600_000) : null;
-    await sendBotNotice(channel.id, bot, input.author.id, "member-hour", limit, retryAt);
+    await sendBotNotice(channel.id, bot, input.requesterId, "member-hour", limit, retryAt);
   }
   return false;
 }
