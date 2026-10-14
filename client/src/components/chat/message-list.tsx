@@ -2710,6 +2710,7 @@ const BOT_ACTIVITY_KEYS: Record<string, MessageKey> = {
   create_poll: "chat.botActivity.create_poll",
   read_poll: "chat.botActivity.read_poll",
   search_messages: "chat.botActivity.search_messages",
+  catch_up: "chat.botActivity.catch_up",
   vote_poll: "chat.botActivity.vote_poll",
 };
 

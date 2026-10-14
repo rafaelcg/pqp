@@ -492,6 +492,51 @@ describeDb("server bot actions", () => {
     expect(refused.isError).toBe(true);
   });
 
+  it("catches a member up on what they missed, since their last visit or the last hours", async () => {
+    const { owner, member, server, channelId, oldId, bot } = await setup();
+    const botUser = (await getPool().query(`SELECT * FROM users WHERE id = $1`, [bot.userId])).rows[0];
+    const ctx = (requesterId: string) => ({
+      serverId: server.id,
+      channelId,
+      botId: bot.id,
+      bot: botUser,
+      requesterId,
+      requesterTag: "@x",
+      enabledTools: new Set<string>(SERVER_BOT_TOOLS),
+    });
+    const catchUp = async (requesterId: string, input: Record<string, unknown>) =>
+      JSON.parse((await handleToolCall(new ActionSession(ctx(requesterId)), "catch_up", input)).content);
+
+    await postChannelMessage({ author: owner, channelId: oldId, body: "antes de você ler" });
+    await getPool().query(
+      `UPDATE messages SET created_at = NOW() - INTERVAL '2 hours' WHERE channel_id = $1`,
+      [oldId],
+    );
+    await getPool().query(
+      `INSERT INTO channel_reads (channel_id, user_id, last_read_at) VALUES ($1, $2, NOW() - INTERVAL '1 hour')`,
+      [oldId, member.id],
+    );
+    await postChannelMessage({ author: owner, channelId: oldId, body: "depois que você saiu: " + "x".repeat(400) });
+    const missed = await catchUp(member.id, { channelId: oldId });
+    expect(missed.from).toBe("when they last read it");
+    expect(missed.count).toBe(1);
+    expect(missed.messages[0].text.length).toBeLessThanOrEqual(200);
+    expect(JSON.stringify(missed)).not.toContain("antes de você ler");
+
+    const hours = await catchUp(member.id, { channelId: oldId, hours: 3 });
+    expect(hours.count).toBe(2);
+    expect(hours.messages[0].text).toBe("antes de você ler");
+
+    // Here, the member's own previous message is where they left.
+    await postChannelMessage({ author: member, channelId, body: "fui jantar" });
+    await getPool().query(`UPDATE messages SET created_at = NOW() - INTERVAL '30 minutes' WHERE body = 'fui jantar'`);
+    await postChannelMessage({ author: owner, channelId, body: "voltou?" });
+    await postChannelMessage({ author: member, channelId, body: "@caio_bot o que rolou?" });
+    const here = await catchUp(member.id, { channelId });
+    expect(here.from).toBe("their previous message here");
+    expect(here.messages.map((message: { text: string }) => message.text)).toEqual(["voltou?", "@caio_bot o que rolou?"]);
+  });
+
   it("does not offer forums on a server where they are off", async () => {
     delete process.env.FORUM_CHANNELS;
     const { owner, channelId } = await setup();

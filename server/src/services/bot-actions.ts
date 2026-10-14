@@ -71,6 +71,11 @@ const READ_CHANNEL_MAX = 40;
 /** What `search_messages` hands the model, and how many it asks search for to get there. */
 const SEARCH_RESULTS_MAX = 10;
 const SEARCH_FETCH = 30;
+/** `catch_up`: how far back it may go, how many messages it hands over, and how much of each. */
+const CATCH_UP_MAX_HOURS = 72;
+const CATCH_UP_DEFAULT_HOURS = 24;
+const CATCH_UP_MAX_MESSAGES = 150;
+const CATCH_UP_MESSAGE_CHARS = 200;
 
 /** Where invite links point. */
 function appUrl(): string {
@@ -398,6 +403,8 @@ interface ToolDef {
   execute?(env: ExecEnv, action: StagedAction): Promise<ExecResult>;
   /** The route this tool writes through, for the bot's timeout check. */
   timeoutPath?(env: ExecEnv, action: StagedAction): { method: string; path: string };
+  /** How much of a read's answer the model gets, in characters. Default 8,000. */
+  resultMax?: number;
 }
 
 function resolveRef(env: ExecEnv, value: unknown): string | null {
@@ -493,6 +500,114 @@ const TOOLS: ToolDef[] = [
             .filter(Boolean)
             .join(" "),
         })),
+      };
+    },
+  },
+  {
+    kind: "read",
+    resultMax: 40_000,
+    spec: {
+      name: "catch_up",
+      description:
+        `Everything said in a text channel or thread over a stretch of time, oldest first, to tell a member what they missed. Leave out hours for "since they were last here": since they last read that channel, or since their own previous message when it is this channel. At most ${CATCH_UP_MAX_MESSAGES} messages over ${CATCH_UP_MAX_HOURS} hours, each shortened; the result says what stretch it covers and whether more was said. Summarise it, do not paste it. Only channels both you and the member can read.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          channelId: { type: "string", description: "A channel id from list_channels." },
+          hours: {
+            type: "integer",
+            minimum: 1,
+            maximum: CATCH_UP_MAX_HOURS,
+            description: "The last this many hours instead of since they were last here.",
+          },
+        },
+        required: ["channelId"],
+        additionalProperties: false,
+      },
+    },
+    async read(session, input) {
+      const channel = await existingChannel(session, input.channelId, "channelId");
+      const { serverId, bot, requesterId } = session.ctx;
+      const [botPerms, theirPerms] = await Promise.all([
+        computeMemberPermissions(serverId, bot.id, channel.id),
+        computeMemberPermissions(serverId, requesterId, channel.id),
+      ]);
+      const canRead = (perms: bigint) =>
+        hasPermission(perms, Permission.VIEW_CHANNEL) && hasPermission(perms, Permission.READ_MESSAGE_HISTORY);
+      if (!canRead(botPerms) || !canRead(theirPerms)) {
+        throw new ToolRefusal(`#${channel.name} is not readable by both of you.`);
+      }
+      const now = Date.now();
+      const floor = now - CATCH_UP_MAX_HOURS * 3_600_000;
+      const hours = Number(input.hours);
+      let since: number;
+      // The bound as Postgres wrote it, when it came from a row: a JS Date
+      // drops microseconds, and the message that set the mark would then
+      // count as after it.
+      let sinceExact: string | null = null;
+      let from: string;
+      if (Number.isFinite(hours) && hours >= 1) {
+        since = now - Math.min(CATCH_UP_MAX_HOURS, hours) * 3_600_000;
+        from = `the last ${Math.min(CATCH_UP_MAX_HOURS, Math.round(hours))} hours`;
+      } else {
+        // In the channel they are asking from, their read mark is "now": they
+        // are looking at it. Their own message before this request is the
+        // better "since you were here".
+        const mark = await getPool().query<{ at: Date | null; exact: string | null }>(
+          channel.id === session.ctx.channelId
+            ? `SELECT created_at AS at, created_at::text AS exact FROM messages
+                WHERE channel_id = $1 AND author_id = $2
+                ORDER BY created_at DESC OFFSET 1 LIMIT 1`
+            : `SELECT last_read_at AS at, last_read_at::text AS exact FROM channel_reads WHERE channel_id = $1 AND user_id = $2`,
+          [channel.id, requesterId],
+        );
+        const at = mark.rows[0]?.at?.getTime() ?? null;
+        if (at !== null && at > floor) {
+          since = at;
+          sinceExact = mark.rows[0]!.exact;
+          from = channel.id === session.ctx.channelId ? "their previous message here" : "when they last read it";
+        } else {
+          since = now - CATCH_UP_DEFAULT_HOURS * 3_600_000;
+          from = at === null ? `the last ${CATCH_UP_DEFAULT_HOURS} hours (no earlier visit known)` : `the last ${CATCH_UP_DEFAULT_HOURS} hours (their last visit was longer ago)`;
+        }
+      }
+      // The newest of the stretch, when it holds more than the cap: what was
+      // said last is what somebody coming back needs most.
+      const rows = await getPool().query<{ id: string; body: string; created_at: Date; author_id: string; display_name: string; webhook_username: string | null }>(
+        `SELECT m.id, m.body, m.created_at, m.author_id, u.display_name, m.webhook_username
+           FROM messages m JOIN users u ON u.id = m.author_id
+          WHERE m.channel_id = $1 AND m.created_at > $2::timestamptz
+          ORDER BY m.created_at DESC, m.id DESC
+          LIMIT $3`,
+        [channel.id, sinceExact ?? new Date(since).toISOString(), CATCH_UP_MAX_MESSAGES + 1],
+      );
+      const more = rows.rows.length > CATCH_UP_MAX_MESSAGES;
+      const page = rows.rows.slice(0, CATCH_UP_MAX_MESSAGES).reverse();
+      const media = await loadMessageMedia(page.map((row) => row.id), serverId);
+      const hearVoice = session.ctx.enabledTools.has("hear_voice_notes");
+      return {
+        channel: `#${channel.name}`,
+        from,
+        since: new Date(since).toISOString(),
+        count: page.length,
+        note: more
+          ? `More was said: these are only the newest ${page.length}. Say the summary covers the latest part.`
+          : page.length === 0
+            ? "Nothing was said in this stretch. Say so."
+            : "Everything said in this stretch.",
+        messages: page.map((row) => {
+          const text = [
+            row.body.replace(/\s+/g, " ").trim(),
+            describeMedia(media.get(row.id), { hearVoice, imageNumbers: new Map() }),
+          ]
+            .filter(Boolean)
+            .join(" ");
+          return {
+            at: row.created_at.toISOString(),
+            from: row.author_id === bot.id ? "you" : (row.webhook_username ?? row.display_name),
+            text: text.length > CATCH_UP_MESSAGE_CHARS ? `${text.slice(0, CATCH_UP_MESSAGE_CHARS - 1)}…` : text,
+          };
+        }),
       };
     },
   },
@@ -1651,7 +1766,8 @@ export async function handleToolCall(
     if (tool.kind === "read") {
       const result = await tool.read!(session, input);
       const json = JSON.stringify(result);
-      return { content: json.length > 8000 ? `${json.slice(0, 8000)}…(truncated)` : json, isError: false };
+      const max = tool.resultMax ?? 8000;
+      return { content: json.length > max ? `${json.slice(0, max)}…(truncated)` : json, isError: false };
     }
     if (tool.permission) {
       await requireRequesterServerPermission(session, tool.permission, permissionName(tool.permission));
