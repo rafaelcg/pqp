@@ -225,6 +225,20 @@ export function rememberForwardTargets(used: readonly string[]): void {
 
 // ------------------------------------------------------------ the picker
 
+/**
+ * The picker's one-line preview of what is being forwarded, as plain text:
+ * mention markup (`<@id>`, `<@&id>`, `<#id>`, even a malformed one) is dropped
+ * whole, so no raw id is ever shown. The card the recipient gets has the
+ * names resolved by the server; this line has no names to resolve and says
+ * only what is readable.
+ */
+export function plainPreviewText(text: string): string {
+  return text
+    .replace(/<(?:@&|@!|@|#)[^<>\s]*>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** The most places one forward goes. Shared with the server. */
 export const MAX_FORWARD_TARGETS = FORWARD_MAX_TARGETS;
 

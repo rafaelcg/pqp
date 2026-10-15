@@ -8,6 +8,7 @@ import {
   mergeRecentForwardTargets,
   FORWARD_RECENTS_MAX,
   isForwardEnabled,
+  plainPreviewText,
   isKnownNonMember,
   setForwardMemberServers,
   normalizeForSearch,
@@ -144,5 +145,14 @@ describe("opening a card from a server you are not in", () => {
     expect(isKnownNonMember(ID)).toBe(false);
     expect(isKnownNonMember("33333333-3333-4333-8333-333333333333")).toBe(true);
     setForwardMemberServers(null);
+  });
+});
+
+describe("plainPreviewText", () => {
+  it("drops mention markup whole, malformed ones too, and keeps the readable words", () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    expect(plainPreviewText(`Oi <@${id}> e <@&${id}> em <#${id}> <@123>  tchau`)).toBe("Oi e em tchau");
+    expect(plainPreviewText("Aviso @everyone: a < b")).toBe("Aviso @everyone: a < b");
+    expect(plainPreviewText(`<@${id}>`)).toBe("");
   });
 });

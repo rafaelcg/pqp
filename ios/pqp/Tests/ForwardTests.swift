@@ -182,6 +182,23 @@ final class ForwardTests: XCTestCase {
         _ = forward
     }
 
+    func testARoleMentionAboveTheFallbackIsTheCommentAndTheFallbackIsHidden() throws {
+        let forward = card()
+        let fallback = ForwardFallback.body(for: forward)
+        let pinged = "@Novidades\n\(fallback)"
+        XCTAssertEqual(ForwardFallback.comment(fallback, for: forward), "")
+        XCTAssertEqual(ForwardFallback.comment(pinged, for: forward), "@Novidades")
+        XCTAssertTrue(ForwardFallback.isFallback(pinged, for: forward))
+        // A mention on the same line, or anything else written by a person, is a comment.
+        XCTAssertEqual(ForwardFallback.comment("@Novidades \(fallback)", for: forward), "@Novidades \(fallback)")
+        XCTAssertEqual(ForwardFallback.comment("olha\n\(fallback)", for: forward), "olha\n\(fallback)")
+        XCTAssertFalse(ForwardFallback.isFallback("olha isso", for: forward))
+        var message = try Coding.decoder.decode(Message.self, from: messageJSON(forward: cardJSON))
+        message.body = "@Novidades\n\(ForwardFallback.body(for: try XCTUnwrap(message.forward)))"
+        XCTAssertEqual(message.forwardComment, "@Novidades")
+        XCTAssertTrue(message.hasForwardFallbackBody)
+    }
+
     func testAnOrdinaryMessageKeepsItsBody() throws {
         let message = try Coding.decoder.decode(Message.self, from: messageJSON(forward: nil, body: "Encaminhado: x"))
         XCTAssertEqual(message.forwardComment, "Encaminhado: x")
@@ -575,6 +592,26 @@ final class ForwardTests: XCTestCase {
         XCTAssertFalse(content.heading?.contains(id) ?? true)
         // Plain text is left exactly as it is, including a literal "@everyone".
         XCTAssertEqual(ForwardCardContent(card(excerpt: "@everyone <b> 3 < 4")).excerpt, "@everyone <b> 3 < 4")
+    }
+
+    /// The picker's source line is the same plain text the card is: no ids.
+    func testThePickersSourceLineCarriesNoChatMarkup() throws {
+        let id = "11111111-1111-4111-8111-111111111111"
+        let message = try Coding.decoder.decode(
+            Message.self, from: messageJSON(forward: nil, body: "Oi <@\(id)> e <#\(id)> @everyone")
+        )
+        let line = ForwardSource.message(message).summary
+        XCTAssertFalse(line.contains("<"))
+        XCTAssertFalse(line.contains(id))
+        XCTAssertTrue(line.contains("@everyone"), "literal text is left alone")
+
+        let post = try Coding.decoder.decode(CommunityHomePost.self, from: Data("""
+        {"id":"\(sourceId)","serverId":"\(serverId)","author":{"id":"\(id)","displayName":"Rafa"},
+         "title":"Aviso <@\(id)>","visibility":"free","media":null,"locked":false,
+         "createdAt":"2026-10-15T12:00:00.000Z"}
+        """.utf8))
+        XCTAssertFalse(ForwardSource.bauPost(post).summary.contains(id))
+        XCTAssertTrue(ForwardSource.bauPost(post).summary.hasPrefix("Aviso @"))
     }
 
     // MARK: - The request and its answer

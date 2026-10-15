@@ -48,6 +48,43 @@ every `pqp-deploy.sh` run rewrites it to the tag it just verified healthy,
 so a bare manual recreate with no tag in scope lands on the last deployed
 build, not a stale hand-written one.
 
+## Viewer address (what the API's limiters key on)
+
+The API keys its per-address limiters (anonymous routes, `/ws` sockets, every
+public route) on the one `X-Forwarded-For` hop `TRUST_PROXY=true` reads
+(`clientAddress`, `server/src/lib/rate-limit.ts`). Behind Cloudflare that hop
+must be the viewer, which the Caddyfile does with the global `servers` block
+(`trusted_proxies static <Cloudflare ranges>`, `client_ip_headers
+CF-Connecting-IP`) plus `header_up X-Forwarded-For {client_ip}` in the
+`(upstreams)` snippet. The reverse_proxy-level `trusted_proxies` the file used
+to carry is ignored since Caddy 2.7.
+
+**Applying it changes the keying for ALL traffic**: until now every viewer
+behind one Cloudflare colo shared one bucket (so the limiters almost never
+tripped through Cloudflare); afterwards each viewer has their own, and the
+limits start to mean what their numbers say. Apply it outside a party, with
+the reload note below.
+
+Verify on the box, from a second terminal, while one tagged request goes
+through Cloudflare from a known address:
+
+```bash
+# Caddy -> API traffic on the compose network. Expect the viewer's own
+# address in X-Forwarded-For, not a 172.64-71.x.x / 104.16-31.x.x edge IP.
+sudo tcpdump -l -A -i any "tcp dst port 3001" | grep -ai x-forwarded-for
+curl -s -o /dev/null "https://api.pqp.gg/status.json?probe=$(date +%s)"
+
+# Then prove the limiter sees people. Cloudflare caches /status.json, so use
+# unique query strings. A burst from ONE address trips 429, while a second
+# address still gets 200 at the same time.
+for i in $(seq 1 400); do curl -s -o /dev/null -w "%{http_code}\n" "https://api.pqp.gg/status.json?b=$i"; done | sort | uniq -c
+```
+
+Checked locally with Caddy 2.11.4 and an echo upstream: a trusted peer sending
+`CF-Connecting-IP: 198.51.100.9` and a spoofed `X-Forwarded-For: 1.2.3.4`
+reaches the upstream as `X-Forwarded-For: 198.51.100.9`; an untrusted peer's
+headers are ignored (the upstream sees the peer's own address).
+
 ## Apply a Caddyfile-only change by hand
 
 For a change that is only this `Caddyfile` (no new image to roll), on the

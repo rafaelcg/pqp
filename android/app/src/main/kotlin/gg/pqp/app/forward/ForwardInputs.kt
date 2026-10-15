@@ -66,7 +66,8 @@ object ForwardInputs {
         )
 
     private fun cut(text: String): String {
-        val flat = text.replace(Regex("\\s+"), " ").trim()
+        // The sheet's header is plain text like the card: raw mention markup is dropped.
+        val flat = ForwardText.plain(text).replace(Regex("\\s+"), " ").trim()
         return if (flat.length > PREVIEW_MAX) flat.take(PREVIEW_MAX - 1).trimEnd() + "…" else flat
     }
 }
