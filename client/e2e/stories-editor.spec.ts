@@ -196,6 +196,21 @@ test("text layers: place, drag, keyboard, pinch, trash, undo", async ({ page }) 
   await expect(layers).toHaveCount(1);
 });
 
+test("Ctrl+Z and Escape still reach the composer when the text editor has left focus on the page", async ({ page }) => {
+  const ctx = await setup();
+  const composer = await openTextComposer(page, ctx);
+  await addText(composer, "primeira");
+  await addText(composer, "segunda");
+  // Done removed the editor's field: nothing inside the composer has focus now.
+  expect(await page.evaluate(() => document.activeElement === document.body || !document.querySelector("[data-story-composer]")?.contains(document.activeElement))).toBe(true);
+  await expect(composer.locator('[data-layer-type="text"]')).toHaveCount(2);
+  await page.keyboard.press("Control+z");
+  await expect(composer.locator('[data-layer-type="text"]')).toHaveCount(1);
+  // Escape asks before anything is thrown away (undo took the selected layer, so there is no selection to clear first).
+  await page.keyboard.press("Escape");
+  await expect(composer.locator("[data-story-discard]")).toBeVisible();
+});
+
 test("posts a text card with layers and a mention; the server keeps them", async ({ page }) => {
   const ctx = await setup();
   const composer = await openTextComposer(page, ctx);

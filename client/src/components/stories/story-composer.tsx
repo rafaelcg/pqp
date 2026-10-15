@@ -25,7 +25,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -125,6 +124,10 @@ interface StoryComposerProps {
 }
 
 type Mode = "camera" | "text";
+/** What the key handler reads: a React key event on the root and a native one from the document both fit. */
+type RootKeyEvent = Pick<KeyboardEvent, "key" | "shiftKey" | "metaKey" | "ctrlKey" | "preventDefault" | "stopPropagation"> & {
+  target: EventTarget | null;
+};
 type Panel = "stickers" | "call" | "mention" | "audience" | null;
 
 const PROBLEM_KEY: Record<StoryFileProblem["kind"], MessageKey> = {
@@ -975,6 +978,43 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   }, [showingCamera, editing, drawing]);
 
   // ---------------------------------------------------------------- focus + keys
+  // Escape, Ctrl+Z and Tab are heard on the composer's own root, so focus has to be inside it. Two
+  // things took it away. The server menu hands focus back to its trigger (behind the modal) as it
+  // closes, after the composer has mounted; and the text editor, a sheet or a button that was just
+  // removed leaves focus on the page's body. Either way Escape did nothing and Tab walked the page
+  // behind. A key pressed with focus outside the composer (and not in a field) is therefore the
+  // composer's: focus comes back to the root and the key is handled as if it had been pressed there.
+  // This never moves focus on its own, so it cannot fight another focus trap (a menu closing).
+  // Declared BEFORE the opener-restoring effect below, so on close it stops listening before focus
+  // goes back to the opener.
+  const keyHandler = useRef(onRootKeyDown);
+  keyHandler.current = onRootKeyDown;
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (event.defaultPrevented || (target && root.contains(target))) {
+        return;
+      }
+      // Somebody typing in a field, or a menu or dialog above the composer, keeps its own keys.
+      if (
+        target &&
+        (target.isContentEditable ||
+          /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) ||
+          target.closest("[role='menu'], [role='listbox'], [role='dialog']"))
+      ) {
+        return;
+      }
+      root.focus({ preventScroll: true });
+      keyHandler.current(event);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // A field that took focus on its own (the text card's) keeps it.
@@ -988,7 +1028,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     };
   }, []);
 
-  function onRootKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+  function onRootKeyDown(event: RootKeyEvent) {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
