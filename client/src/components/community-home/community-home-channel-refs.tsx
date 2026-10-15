@@ -61,6 +61,47 @@ export function ChannelRefsProvider({
   );
 }
 
+/**
+ * Text with its `#channel` references drawn as NEUTRAL pills, for the public
+ * page, where nobody can open a channel: the name where the API sent one (a
+ * channel everybody in the community can see), and a plain "#canal" where it did
+ * not. Never an error: a mention of a staff-only channel is a perfectly good
+ * sentence and the visitor can do nothing about it, so it must not read as
+ * something that broke.
+ */
+export function PublicChannelText({
+  text,
+  channels,
+}: {
+  text: string;
+  /** `post.channels` of the public payload. */
+  channels: readonly { id: string; name: string }[];
+}) {
+  const { t } = useTranslation();
+  const known = useMemo<ChannelLike[]>(
+    () => channels.map((channel) => ({ ...channel, type: "text" })),
+    [channels],
+  );
+  const parts = useMemo(() => parseChannelParts(text, known), [text, known]);
+  return (
+    <>
+      {parts.map((part, index) =>
+        part.type === "text" ? (
+          <span key={index}>{part.value}</span>
+        ) : (
+          <span
+            key={index}
+            className="rounded bg-ink-4/60 px-1 text-paper"
+            data-home-channel-ref={part.type === "channel" ? "public-name" : "public-generic"}
+          >
+            #{part.type === "channel" ? part.name : t("bauPublic.channelGeneric")}
+          </span>
+        ),
+      )}
+    </>
+  );
+}
+
 /** Text with its `#channel` references drawn as links. */
 export function ChannelText({ text }: { text: string }) {
   const { t } = useTranslation();

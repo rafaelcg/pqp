@@ -78,6 +78,7 @@ import type {
   CreateFeedbackRequest,
   CreateReportRequest,
   FeedbackItem,
+  PublicBauPostResponse,
   PublicCommunity,
   PublicProfile,
   PublicUser,
@@ -124,6 +125,7 @@ import {
   type LivePreviewStartResponse,
 } from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
+import { takePublicPostEmbed } from "./community-home/public-post-embed";
 import { parseRetryAfterMs } from "./reconnect-jitter";
 
 const API_TIMEOUT_MS = 12_000;
@@ -423,6 +425,81 @@ export async function fetchPublicCommunity(
       return null;
     }
     throw error;
+  }
+}
+
+/**
+ * A Baú post's public page, by community slug and post id: the third read in
+ * this file that works with no session. `GET /api/public/communities/:slug/posts/:postId`.
+ *
+ * `null` is the 404, and the server answers one 404 for every reason there is
+ * (draft, members-only, deleted, no address, a flag off), so the page draws one
+ * "not here" for all of them. Every other failure throws, for the reason
+ * `fetchPublicCommunity` does: a network drop is not "this post is gone".
+ */
+export async function fetchPublicBauPost(
+  slug: string,
+  postId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<PublicBauPostResponse | null> {
+  // The edge already asked for this post to write its card and put the answer
+  // in the HTML: one API hit per page view instead of two. Only the first read
+  // of a document; anything unusable falls through to the network.
+  const embedded =
+    typeof document === "undefined"
+      ? null
+      : takePublicPostEmbed(document, slug, postId);
+  if (embedded) {
+    return embedded;
+  }
+  try {
+    return await apiFetch<PublicBauPostResponse>(
+      `/api/public/communities/${encodeURIComponent(slug)}/posts/${encodeURIComponent(postId)}`,
+      { signal: options.signal },
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Whether the signed-in person is already in a community, and its id, from a
+ * PUBLIC page (`/c/<slug>/p/<id>`).
+ *
+ * Its own request with the token passed in, not `apiFetch`: the app's token
+ * provider is installed by `App` (`setAuthTokenProvider`), which has not mounted
+ * on a public page, so `apiFetch` would send no credential and read a 401 as
+ * "not a member". Null on every failure (not signed in, banned, offline, the
+ * route off): the caller's join button is the honest fallback for all of them.
+ */
+export async function lookupCommunityMembership(
+  slug: string,
+  getToken: () => Promise<string | null>,
+): Promise<{ serverId: string; joined: boolean } | null> {
+  try {
+    const token = await getToken();
+    if (!token) {
+      return null;
+    }
+    const response = await fetch(
+      `${getApiBaseUrl()}/api/communities/by-slug/${encodeURIComponent(slug)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) {
+      return null;
+    }
+    const { community } = (await response.json()) as {
+      community?: { id?: unknown; joined?: unknown };
+    };
+    if (typeof community?.id !== "string") {
+      return null;
+    }
+    return { serverId: community.id, joined: community.joined === true };
+  } catch {
+    return null;
   }
 }
 

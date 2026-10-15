@@ -7,6 +7,12 @@ import {
   type BlogTarget,
 } from "../src/lib/blog-meta";
 import {
+  bauPostFromMetaPath,
+  injectBauPostHead,
+  type BauPostMeta,
+  type BauPostTarget,
+} from "../src/lib/bau-post-meta";
+import {
   communitySlugFromMetaPath,
   injectCommunityHead,
   type CommunityMeta,
@@ -37,7 +43,8 @@ import {
 } from "../src/lib/profile-meta";
 
 /**
- * Cloudflare Pages middleware: real Open Graph tags for `/@handle` and `/c/…`.
+ * Cloudflare Pages middleware: real Open Graph tags for `/@handle`, `/c/…` and
+ * `/c/…/p/…` (a public Baú post).
  *
  * WHY THIS FILE EXISTS. The site is a static SPA — every route is the same
  * `index.html`, and the head is fixed up in the browser by `Seo`. Crawlers and
@@ -412,6 +419,87 @@ async function fetchCommunity(
 }
 
 /**
+ * A public Baú post, for its card. `"missing"` is the API's 404 (the post is
+ * not public, for any of the reasons it does not say); `null` is "could not
+ * tell" (API down, timeout, malformed body, no origin), which serves the page
+ * untouched. The two are told apart on purpose: a down API must never make a
+ * live post look dead to a crawler, while a dead one should not stay indexed.
+ *
+ * Shape-checked rather than trusted, like `fetchCommunity`: these strings go
+ * into a document, `injectBauPostHead` escapes them, and a missing field would
+ * print "undefined" on the card.
+ */
+async function fetchBauPost(
+  apiOrigin: string,
+  target: BauPostTarget,
+): Promise<BauPostMeta | "missing" | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    const response = await fetch(
+      `${apiOrigin}/api/public/communities/${encodeURIComponent(target.slug)}/posts/${encodeURIComponent(target.postId)}`,
+      { signal: controller.signal, headers: { accept: "application/json" } },
+    );
+    if (response.status === 404) {
+      return "missing";
+    }
+    if (!response.ok) {
+      return null;
+    }
+    const body = (await response.json()) as {
+      post?: {
+        id?: unknown;
+        title?: unknown;
+        teaser?: unknown;
+        coverUrl?: unknown;
+        publishedAt?: unknown;
+      };
+      community?: CommunityMeta;
+    };
+    const post = body.post;
+    const community = body.community;
+    if (
+      !post ||
+      typeof post.id !== "string" ||
+      !community ||
+      typeof community.slug !== "string" ||
+      typeof community.name !== "string"
+    ) {
+      return null;
+    }
+    const text = (value: unknown): string | null =>
+      typeof value === "string" && value.trim() ? value : null;
+    return {
+      slug: target.slug,
+      postId: target.postId,
+      // The whole answer, so the page does not have to ask the API again.
+      embed: body,
+      title: text(post.title),
+      teaser: text(post.teaser),
+      coverUrl: text(post.coverUrl),
+      publishedAt: text(post.publishedAt),
+      community: {
+        slug: community.slug,
+        name: community.name,
+        tagline: typeof community.tagline === "string" ? community.tagline : null,
+        category: typeof community.category === "string" ? community.category : "geral",
+        memberCount:
+          typeof community.memberCount === "number" &&
+          Number.isFinite(community.memberCount)
+            ? community.memberCount
+            : 0,
+        iconUrl: typeof community.iconUrl === "string" ? community.iconUrl : null,
+        bannerUrl: typeof community.bannerUrl === "string" ? community.bannerUrl : null,
+      },
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * The rewritten response, with the caching a per-URL, per-language document
  * needs. Shared by both surfaces because the answer is the same for both:
  * anything in front of this must not reuse one page's bytes for another's URL.
@@ -547,19 +635,23 @@ async function handleRequest(context: PagesContext): Promise<Response> {
 
   const handle = handleFromMetaPath(url.pathname);
   const slug = handle ? null : communitySlugFromMetaPath(url.pathname);
+  const bauPost: BauPostTarget | null =
+    handle || slug ? null : bauPostFromMetaPath(url.pathname);
   const marketing =
-    handle || slug ? null : marketingPageFromMetaPath(url.pathname);
+    handle || slug || bauPost ? null : marketingPageFromMetaPath(url.pathname);
   const blog: BlogTarget | null =
-    handle || slug || marketing ? null : blogTargetFromMetaPath(url.pathname);
+    handle || slug || bauPost || marketing
+      ? null
+      : blogTargetFromMetaPath(url.pathname);
   const inviteCode =
-    handle || slug || marketing || blog
+    handle || slug || bauPost || marketing || blog
       ? null
       : inviteCodeFromMetaPath(url.pathname);
   // The overwhelmingly common case, and it must cost nothing: this middleware
   // is in front of every request the site serves, including every hashed
-  // asset. All five parsers are pure string checks — nothing is awaited
+  // asset. All six parsers are pure string checks — nothing is awaited
   // before this return.
-  if (!handle && !slug && !marketing && !blog && !inviteCode) {
+  if (!handle && !slug && !bauPost && !marketing && !blog && !inviteCode) {
     // Still a pure string check. Only a GET for a path the SPA has no route
     // for pays for the content-type look, and only to turn the shell's
     // 200 into a real 404. See `spa-routes.ts`.
@@ -657,6 +749,39 @@ async function handleRequest(context: PagesContext): Promise<Response> {
     return rewritten(
       response,
       injectCommunityHead(html, community, {
+        siteOrigin: url.origin,
+        apiOrigin,
+        locale: cardLocale,
+      }),
+    );
+  }
+
+  if (bauPost) {
+    const post = await fetchBauPost(apiOrigin, bauPost);
+    if (post === null) {
+      // Could not tell. The page is served as it was: a card that unfurls
+      // generically is a bad day, a live post that looks dead is worse.
+      return response;
+    }
+    if (post === "missing") {
+      // Not public, for a reason the API does not give. The SPA draws its own
+      // friendly 404 with the community's way in; what changes is what a
+      // crawler is told, so a taken-down post leaves the index. The status
+      // stays 200 on purpose: the person opening it deserves the page.
+      const headers = new Headers(response.headers);
+      headers.set("x-robots-tag", "noindex, nofollow");
+      headers.set("cache-control", "no-store");
+      headers.delete("content-length");
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    }
+    const html = await response.text();
+    return rewritten(
+      response,
+      injectBauPostHead(html, post, {
         siteOrigin: url.origin,
         apiOrigin,
         locale: cardLocale,
