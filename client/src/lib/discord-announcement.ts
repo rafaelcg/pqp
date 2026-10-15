@@ -44,17 +44,40 @@ export function announcementUrl(origin: string, code: string): string {
 }
 
 /**
+ * Anything with a scheme (`https://`, `http://`, `ftp://`, `discord://`).
+ * Discord links the bare invite forms too, so those are caught below with
+ * every other domain-looking word.
+ */
+const SCHEMED_LINK = /[a-z][a-z0-9+.-]*:\/\/\S*/giu;
+
+/** Invisible characters that can split a word without showing it. */
+const INVISIBLE = /[\u00ad\u200b-\u200f\u2060\ufeff]/gu;
+
+/**
+ * A word Discord would turn into a link: a dot between letters or digits and
+ * a top level domain of two letters or more, with an optional path. This is
+ * deliberately wider than `discord.gg/x`, `discord.com/invite/x` and
+ * `discordapp.com/invite/x` (any host can be somebody's phishing page), and
+ * wide enough to take out "Dr.Who" with it, which a name can live without.
+ * Version numbers ("v2.0") have no letters after the dot and stay.
+ */
+const LOOKS_LIKE_A_LINK = /[\p{L}\p{N}-]\.\p{L}{2,}/u;
+
+/**
  * The server name as it goes into the paste. It came from a Discord template,
  * so it is somebody else's text: no markdown that would break the bold line,
  * no `@everyone` / `@here` or role mention the owner did not choose, and no
- * link or masked link riding along with ours.
+ * link, masked link or bare invite (`discord.gg/x`) riding along with ours.
  */
 export function announcementServerName(server: string): string {
   return (
     server
-      .replace(/https?:\/\/\S*/gi, "")
+      .replace(INVISIBLE, "")
+      .replace(SCHEMED_LINK, "")
       .replace(/[*_~`|<>@#[\]()]/g, "")
-      .replace(/\s+/g, " ")
+      .split(/\s+/)
+      .filter((word) => !LOOKS_LIKE_A_LINK.test(word))
+      .join(" ")
       .trim()
       .slice(0, 100) || "pqp"
   );

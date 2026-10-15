@@ -266,6 +266,39 @@ describeDb("Traz tua galera: import arrivals", () => {
     expect(res.body).toMatchObject({ enabled: true, importedAt: null, phase: null });
   });
 
+  it("looks a server's import up in a partial index, not its whole audit log", async () => {
+    const { rows } = await getPool().query<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes
+        WHERE tablename = 'audit_log'
+          AND indexname = 'idx_audit_log_discord_import_server'`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.indexdef).toMatch(/\(server_id, id\)/);
+    expect(rows[0]!.indexdef).toContain("server.discord_import");
+
+    // And the planner takes it for the arrivals query once the table is big
+    // enough to matter (a tiny test table would seq scan whatever we ask).
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL enable_seqscan = off");
+      const plan = await client.query<{ "QUERY PLAN": string }>(
+        `EXPLAIN SELECT actor_id, created_at
+           FROM audit_log
+          WHERE server_id = $1 AND action = 'server.discord_import'
+          ORDER BY id ASC
+          LIMIT 1`,
+        ["00000000-0000-0000-0000-000000000000"],
+      );
+      const text = plan.rows.map((r) => r["QUERY PLAN"]).join("\n");
+      expect(text).toContain("idx_audit_log_discord_import_server");
+    } finally {
+      await client.query("ROLLBACK");
+      client.release();
+    }
+  });
+
   it("is silent with the flag off, on both routes", async () => {
     process.env.DISCORD_BRING_CREW = "";
     const { serverId, bringCrew } = await importServer();

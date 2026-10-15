@@ -3328,6 +3328,14 @@ CREATE INDEX IF NOT EXISTS idx_server_members_join_source_joined_at
 -- so it gets a partial index rather than a scan of the whole log.
 CREATE INDEX IF NOT EXISTS idx_audit_log_discord_import
   ON audit_log (created_at) WHERE action = 'server.discord_import';
+-- The same rows by server, for the owner's "did people come over" strip
+-- (`getDiscordImportArrivals`). It runs for every manager of every server
+-- once `discord_bring_crew` is on, and almost none were imported: without
+-- this the only way in is `idx_audit_log_server_id`, which walks every audit
+-- row of the server (up to the retention window) to find nothing. Imports are
+-- a handful a day, so this stays tiny.
+CREATE INDEX IF NOT EXISTS idx_audit_log_discord_import_server
+  ON audit_log (server_id, id) WHERE action = 'server.discord_import';
 
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS mention_everyone BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS mention_here BOOLEAN NOT NULL DEFAULT FALSE;

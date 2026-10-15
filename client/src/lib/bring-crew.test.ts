@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DiscordImportArrivals } from "@pqp/shared";
-import { bringCrewStrip } from "./bring-crew";
+import { bringCrewStrip, showsCrewAnnouncement } from "./bring-crew";
 
 const base: DiscordImportArrivals = {
   enabled: true,
@@ -42,5 +42,17 @@ describe("bringCrewStrip", () => {
 
   it("closing the first-day strip hides it for the first day", () => {
     expect(bringCrewStrip(base, "fresh")).toBeNull();
+  });
+});
+
+describe("showsCrewAnnouncement", () => {
+  it("is on only when Traz tua galera is on and the invite exists", () => {
+    const invite = { code: "AbC123" };
+    expect(showsCrewAnnouncement({ bringCrew: true, invite })).toBe(true);
+    // The invite mint failed: the panel shows its retry, and there is no
+    // announcement to point at yet.
+    expect(showsCrewAnnouncement({ bringCrew: true, invite: null })).toBe(false);
+    expect(showsCrewAnnouncement({ bringCrew: false, invite })).toBe(false);
+    expect(showsCrewAnnouncement({ bringCrew: false, invite: null })).toBe(false);
   });
 });

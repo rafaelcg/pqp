@@ -14,8 +14,9 @@ import type { Queryable } from "./invites.js";
  * again are not counted, because `server_members` forgets them: the strip
  * says who is here, which is what the owner wants to know.
  *
- * Three small reads, all on indexes the server already has:
- * `idx_audit_log_server_id`, the `server_members` primary key and
+ * Three small reads, all on indexes: `idx_audit_log_discord_import_server`
+ * (partial, so a server that was never imported answers from an empty index
+ * instead of walking its audit log), the `server_members` primary key and
  * `server_invites (server_id)`. Nothing is written.
  */
 

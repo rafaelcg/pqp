@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ANNOUNCEMENT_LANGS,
+  announcementServerName,
   announcementUrl,
   defaultAnnouncementLang,
   discordAnnouncement,
@@ -51,6 +52,45 @@ describe("discordAnnouncement", () => {
     expect(text).not.toContain("evil.example");
     expect(text).not.toContain("x.example");
     expect(text.match(/https?:\/\//g)).toHaveLength(1);
+  });
+
+  it("drops bare Discord invites and any other domain a name carries", () => {
+    const names = [
+      "Mesa discord.gg/freenitro",
+      "Mesa discord.com/invite/freenitro",
+      "Mesa discordapp.com/invite/freenitro",
+      "Mesa DISCORD.GG/freenitro",
+      "Mesa Discord.Com/Invite/freenitro",
+      "Mesa https://discord.gg/freenitro",
+      "Mesa HTTP://DISCORD.GG/freenitro",
+      "Mesa evil.example",
+      "Mesa evil.example/path?x=1",
+      "Mesa www.evil.xyz",
+      "Mesa disc\u200bord.gg/freenitro",
+      "Mesa <discord.gg/freenitro>",
+      "Mesa [discord.gg/freenitro](x)",
+      "Mesa dis*cord.gg/freenitro",
+    ];
+    for (const name of names) {
+      const bare = announcementServerName(name);
+      expect(bare, name).toBe("Mesa");
+      const text = discordAnnouncement("en", name, url);
+      expect(text, name).not.toMatch(/discord\.(gg|com)/i);
+      expect(text, name).not.toContain("evil");
+      expect(text, name).not.toContain("freenitro");
+    }
+  });
+
+  it("falls back to pqp when the whole name was a link", () => {
+    expect(announcementServerName("discord.gg/freenitro")).toBe("pqp");
+    expect(announcementServerName("https://x.example")).toBe("pqp");
+  });
+
+  it("keeps an ordinary name with dots and digits", () => {
+    expect(announcementServerName("Mesa do RPG v2.0")).toBe("Mesa do RPG v2.0");
+    expect(announcementServerName("Galera 2.5 & amigos")).toBe(
+      "Galera 2.5 & amigos",
+    );
   });
 
   it("picks the chip from the app's language", () => {

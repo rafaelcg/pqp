@@ -88,7 +88,11 @@ the only person who can do it, inside the app, the next day.
   replaces the owner's arrival strip on that server and yields to a live
   stream, like it. Counted: memberships created after the import by anybody
   but the owner, a webhook or a character, by any door. It refreshes every
-  30 s, on focus and when the member list changes.
+  30 s, on focus and when the member list changes (debounced 2 s, so a burst
+  of joins is one request). Losing Manage Server takes it down at once. The
+  server finds the import through the partial index
+  `idx_audit_log_discord_import_server`, so a server that was never imported
+  costs an empty index lookup rather than a walk of its audit log.
 - **One reminder a day later** if fewer than 3 people arrived: the same strip
   says "Só 1 pessoa chegou até agora" and suggests pasting again or pinning.
   In the app, not a push, because 3 of 116 importers could receive one.

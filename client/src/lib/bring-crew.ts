@@ -38,6 +38,19 @@ export function bringCrewStrip(
   return { kind: count === 0 ? "empty" : "arrived", count };
 }
 
+/**
+ * Whether the import's last screen may tell the owner to paste the
+ * announcement. It is drawn only once the invite exists, so while the invite
+ * mint is being retried the title and body must be the plain import ones:
+ * an instruction that points at nothing is worse than none.
+ */
+export function showsCrewAnnouncement(done: {
+  bringCrew: boolean;
+  invite: unknown | null;
+}): boolean {
+  return done.bringCrew && done.invite != null;
+}
+
 const KEY_PREFIX = "pqp:bring-crew-dismissed:";
 
 function storage(): Storage | null {
