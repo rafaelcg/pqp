@@ -688,6 +688,29 @@ describeDb("public Baú post", () => {
       expect(res.text.toLowerCase()).not.toContain(CHANNEL_ID);
     });
 
+    it("a failed channel lookup redacts the mentions and still serves the post", async () => {
+      const open = await createChatServerChannel("anuncios2", false);
+      const id = await seed({ body: `Passa em <#${open}> hoje` });
+      const pool = getPool();
+      const original = pool.query.bind(pool);
+      const spy = vi.spyOn(pool, "query").mockImplementation(((text: unknown, ...rest: unknown[]) =>
+        typeof text === "string" && text.includes("channel_overwrites")
+          ? Promise.reject(new Error("transient"))
+          : (original as (...args: unknown[]) => unknown)(text, ...rest)) as never);
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const res = await get(url(id));
+        expect(res.status).toBe(200);
+        const parsed = publicBauPostResponseSchema.parse(res.body);
+        expect(parsed.post.channels).toEqual([]);
+        expect(parsed.post.body).toBe(`Passa em <#${BAU_PUBLIC_REDACTED_CHANNEL_ID}> hoje`);
+        expect(parsed.post.teaser).toBe("Passa em um canal hoje");
+      } finally {
+        spy.mockRestore();
+        quiet.mockRestore();
+      }
+    });
+
     it("a channel that denies @everyone VIEW_CHANNEL is hidden even when it is not flagged private", async () => {
       const channel = await createChatServerChannel("restrito", false);
       const everyone = await getPool().query<{ id: string }>(

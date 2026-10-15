@@ -242,7 +242,19 @@ export async function getPublicBauPost(
   // Which of the mentioned channels everybody can see. One query, and only when
   // a mention exists at all.
   const ids = mentionedChannelIds([row.title, row.body, row.teaser]);
-  const visible = await everyoneVisibleChannels(row.server_id, ids);
+  // FAIL CLOSED, NOT DOWN: if the lookup fails, every mention is redacted (the
+  // safe answer for a page that publishes names) and the post is still served.
+  // A mention is garnish; a transient error on a second query must not turn a
+  // shared link into an API failure.
+  const visible = await everyoneVisibleChannels(row.server_id, ids).catch(
+    (error: unknown) => {
+      console.error(
+        "[bau-public] channel lookup failed, redacting mentions:",
+        error instanceof Error ? error.message : error,
+      );
+      return new Map<string, string>();
+    },
+  );
 
   // The teaser is cut from the body with markdown stripped, which eats the
   // brackets of a channel reference and the `#` of its name. So mentions are
