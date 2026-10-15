@@ -27,6 +27,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -74,6 +76,10 @@ import gg.pqp.app.bau.BauViewModel
 import gg.pqp.app.bau.YoutubeLinks
 import gg.pqp.app.core.Channel
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.follow.BauFollowViewModel
+import gg.pqp.app.follow.ui.BauFollowSheet
+import gg.pqp.app.follow.ui.BauFollowersSheet
+import gg.pqp.app.follow.ui.FollowButton
 import gg.pqp.app.forward.ForwardInputs
 import gg.pqp.app.forward.ui.LocalStartForward
 import gg.pqp.app.forward.ui.rememberForwardEnabled
@@ -136,6 +142,18 @@ private fun BauScreenContent(
     val state by model.state.collectAsStateWithLifecycle()
     val canPost = rememberCanPostToBau(session, serverId, state.config)
     var composing by rememberSaveable { mutableStateOf(false) }
+    // Seguir: the button is drawn only while the flag is on for THIS Baú. The
+    // staff's side (the follower list, "Permitir seguir") is read once the
+    // permissions say this person manages the server, which is `canPost`.
+    val follow: BauFollowViewModel = viewModel(
+        key = "bau-follow-$serverId",
+        factory = BauFollowViewModel.factory(session, serverId),
+    )
+    val followState by follow.state.collectAsStateWithLifecycle()
+    val managerFlagOn by follow.managerFlagOn.collectAsStateWithLifecycle()
+    LaunchedEffect(canPost) { follow.setCanManage(canPost) }
+    var followersOpen by rememberSaveable { mutableStateOf(false) }
+    var staffMenuOpen by remember { mutableStateOf(false) }
     // Encaminhar, from a post's own menu, while the runtime flag is on.
     val forwardEnabled = rememberForwardEnabled(session.api)
     val startForward = LocalStartForward.current
@@ -181,6 +199,20 @@ private fun BauScreenContent(
         )
     }
 
+    BauFollowSheet(model = follow, serverName = serverName)
+    if (followersOpen && canPost) {
+        BauFollowersSheet(
+            session = session,
+            serverId = serverId,
+            onChanged = follow::refreshAll,
+            onDismiss = {
+                followersOpen = false
+                // The owner may have moved the switch: the button follows it.
+                follow.refreshAll()
+            },
+        )
+    }
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
@@ -212,6 +244,31 @@ private fun BauScreenContent(
                         }
                     },
                     actions = {
+                        FollowButton(followState, onOpen = follow::openPicker)
+                        if (canPost && managerFlagOn) {
+                            Box {
+                                IconButton(
+                                    onClick = { staffMenuOpen = true },
+                                    modifier = Modifier.testTag("bau.follow.menu"),
+                                ) {
+                                    Icon(
+                                        imageVector = PqpIcons.More,
+                                        contentDescription = stringResource(R.string.follow_menu_description),
+                                        modifier = Modifier.size(Sizes.iconAction),
+                                    )
+                                }
+                                DropdownMenu(expanded = staffMenuOpen, onDismissRequest = { staffMenuOpen = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.follow_followers_menu)) },
+                                        onClick = {
+                                            staffMenuOpen = false
+                                            followersOpen = true
+                                        },
+                                        modifier = Modifier.testTag("bau.follow.followers"),
+                                    )
+                                }
+                            }
+                        }
                         if (canPost) {
                             IconButton(
                                 onClick = { composing = true },
