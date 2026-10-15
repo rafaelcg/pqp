@@ -6554,8 +6554,11 @@ CREATE TABLE IF NOT EXISTS bau_follow_deliveries (
   PRIMARY KEY (post_id, follow_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_due
-  ON bau_follow_deliveries (next_attempt_at) WHERE status IN ('pending', 'delivering');
+-- Serves the claim: the posts with something due (a skip scan on `post_id`) and,
+-- per post, its due rows in order.
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_due_by_post
+  ON bau_follow_deliveries (post_id, next_attempt_at, follow_id)
+  WHERE status IN ('pending', 'delivering');
 CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_follow
   ON bau_follow_deliveries (follow_id);
 CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_message

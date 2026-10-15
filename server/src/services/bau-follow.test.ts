@@ -805,4 +805,36 @@ describeDb("Seguir: following a Baú into a channel", () => {
     await tick();
     expect(await deliveredRows()).toBe(total);
   });
+
+  it("a post at its quota does not hold a later post back", async () => {
+    const cap = BAU_FOLLOW_MAX_DELIVERIES_PER_POST_PER_MINUTE;
+    const server = (await createChatServer("Dest fair", alice.id)).server.id;
+    for (let i = 0; i < cap + 5; i += 1) {
+      const ch = await createChannel(server, `fair-${i}`, "text", false);
+      await getPool().query(
+        `INSERT INTO bau_follows (source_server_id, target_server_id, target_channel_id, created_by)
+         VALUES ($1, $2, $3, $4)`,
+        [qgId, server, ch.id, alice.id],
+      );
+    }
+    const first = await publish({ title: "Primeiro" });
+    for (let i = 0; i < 4; i += 1) {
+      await tick();
+    }
+    const delivered = async (postId: string) =>
+      (
+        await getPool().query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM bau_follow_deliveries WHERE post_id = $1 AND status = 'delivered'`,
+          [postId],
+        )
+      ).rows[0]!.n;
+    expect(await delivered(first)).toBe(cap);
+    // The first post is at its quota with five rows still due; a second one
+    // arrives in the same minute and is served in full up to ITS quota.
+    const second = await publish({ title: "Segundo" });
+    for (let i = 0; i < 4; i += 1) {
+      await tick();
+    }
+    expect(await delivered(second)).toBe(cap);
+    expect(await delivered(first)).toBe(cap);  });
 });

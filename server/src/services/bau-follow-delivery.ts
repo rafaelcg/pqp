@@ -71,8 +71,8 @@ export const BAU_FOLLOW_CLAIM_BATCH = 50;
 const SWEEP_BATCH = 100;
 const ENQUEUE_BATCH = 500;
 const CONCURRENCY = 4;
-/** Due rows looked at per claim, before the per-post quota ranks them. */
-const CLAIM_CANDIDATES = 1000;
+/** Posts looked at per claim. Each offers at most its remaining quota. */
+const CLAIM_POSTS = 200;
 /** After the Nth failed attempt, wait this long. */
 export const BAU_FOLLOW_BACKOFF_MS = [5_000, 30_000, 120_000, 600_000, 3_600_000];
 /** Attempts a delivery gets before it is given up on (`dead`). */
@@ -498,38 +498,45 @@ interface Claimed {
 
 async function claimDue(serverId?: string): Promise<Claimed[]> {
   const claimId = randomUUID();
+  const due = (alias: string) =>
+    `((${alias}.status = 'pending' AND ${alias}.next_attempt_at <= NOW())
+      OR (${alias}.status = 'delivering' AND ${alias}.claimed_until < NOW()))
+      ${serverId ? `AND ${alias}.source_server_id = $4` : ""}`;
   const result = await getPool().query<Claimed>(
-    `WITH recent AS (
+    `WITH RECURSIVE recent AS (
        SELECT post_id, COUNT(*)::int AS n
          FROM bau_follow_deliveries
         WHERE delivered_at > NOW() - INTERVAL '1 minute'
         GROUP BY post_id
      ),
-     candidates AS (
-       -- Bounded BEFORE it is ranked: a burst that enqueued thousands of rows
-       -- must not make every tick rank the whole queue to claim fifty.
-       SELECT d.post_id, d.follow_id, d.next_attempt_at
-         FROM bau_follow_deliveries d
-        WHERE ((d.status = 'pending' AND d.next_attempt_at <= NOW())
-            OR (d.status = 'delivering' AND d.claimed_until < NOW()))
-          ${serverId ? "AND d.source_server_id = $4" : ""}
-        ORDER BY d.next_attempt_at
-        LIMIT ${CLAIM_CANDIDATES}
+     -- The posts that have something due, one index probe each (a skip scan
+     -- over the partial index on due rows), never a scan of the whole queue.
+     posts(post_id) AS (
+       (SELECT d.post_id FROM bau_follow_deliveries d
+         WHERE ${due("d")} ORDER BY d.post_id LIMIT 1)
+       UNION ALL
+       SELECT (SELECT d.post_id FROM bau_follow_deliveries d
+                WHERE d.post_id > p.post_id AND ${due("d")}
+                ORDER BY d.post_id LIMIT 1)
+         FROM posts p WHERE p.post_id IS NOT NULL
      ),
-     due AS (
-       SELECT c.post_id, c.follow_id, c.next_attempt_at,
-              ROW_NUMBER() OVER (
-                PARTITION BY c.post_id ORDER BY c.next_attempt_at, c.follow_id
-              ) AS rn
-         FROM candidates c
+     -- Each post offers at most the quota it has LEFT this minute. A post that
+     -- is at its quota offers nothing, so its leftovers can never crowd a
+     -- later post out of the window.
+     candidates AS (
+       SELECT x.post_id, x.follow_id, x.next_attempt_at
+         FROM (SELECT post_id FROM posts WHERE post_id IS NOT NULL LIMIT ${CLAIM_POSTS}) p
+         LEFT JOIN recent r ON r.post_id = p.post_id
+         CROSS JOIN LATERAL (
+           SELECT d.post_id, d.follow_id, d.next_attempt_at
+             FROM bau_follow_deliveries d
+            WHERE d.post_id = p.post_id AND ${due("d")}
+            ORDER BY d.next_attempt_at, d.follow_id
+            LIMIT GREATEST(0, $3 - COALESCE(r.n, 0))
+         ) x
      ),
      picked AS (
-       SELECT due.post_id, due.follow_id
-         FROM due
-         LEFT JOIN recent r ON r.post_id = due.post_id
-        WHERE due.rn <= $3 - COALESCE(r.n, 0)
-        ORDER BY due.next_attempt_at
-        LIMIT $2
+       SELECT post_id, follow_id FROM candidates ORDER BY next_attempt_at LIMIT $2
      )
      UPDATE bau_follow_deliveries d
         SET status = 'delivering', claim_id = $1,
@@ -537,8 +544,7 @@ async function claimDue(serverId?: string): Promise<Claimed[]> {
             attempts = d.attempts + 1
        FROM picked
       WHERE d.post_id = picked.post_id AND d.follow_id = picked.follow_id
-        AND ((d.status = 'pending' AND d.next_attempt_at <= NOW())
-          OR (d.status = 'delivering' AND d.claimed_until < NOW()))
+        AND ${due("d")}
       RETURNING d.post_id, d.follow_id, d.source_server_id, d.attempts, d.claim_id`,
     serverId
       ? [claimId, BAU_FOLLOW_CLAIM_BATCH, BAU_FOLLOW_MAX_DELIVERIES_PER_POST_PER_MINUTE, serverId]
