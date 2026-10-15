@@ -798,6 +798,15 @@ describeDb("Seguir: following a Baú into a channel", () => {
     }
   });
 
+  it("the service refuses a follow from somebody who is not a member of the source", async () => {
+    const outsider = await makeUser("outsider");
+    const dest2 = await createChatServer("Fora", outsider.id);
+    const channel = await textChannel(dest2.server.id);
+    await expect(
+      createBauFollow({ sourceServerId: qgId, channelId: channel, rolePingId: null, actorId: outsider.id }),
+    ).rejects.toThrow(/Not found/);
+  });
+
   // ----------------------------------------------- who may follow a source
 
   it("a plain member of an ordinary (private) server cannot follow it; its staff can, with the owner's switch on", async () => {
