@@ -4,6 +4,7 @@ import { useCallback, type MouseEvent } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { messageLinkState } from "@/lib/app-route";
+import { resolveUploadedImageUrl } from "@/lib/avatar";
 import {
   announceNotInServer,
   forwardUrlTarget,
@@ -48,7 +49,8 @@ export function ForwardCardView({
         ? `#${forward.sourceChannelName}`
         : null;
   const mediaKind = forward.mediaKind;
-  const thumb = forward.mediaThumbUrl ?? null;
+  // An https poster, or the API's own public cover as a root-relative path.
+  const thumb = resolveUploadedImageUrl(forward.mediaThumbUrl);
   const title = forward.title?.trim();
   const excerpt = forward.excerpt.trim();
   const label = t("forwardCard.ariaLabel", {

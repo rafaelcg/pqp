@@ -1,6 +1,6 @@
 import type { MessageForward } from "@pqp/shared";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
 import { ForwardCardView } from "./forward-card";
 
@@ -81,6 +81,28 @@ describe("ForwardCardView", () => {
     const noThumb = render(forward({ mediaKind: "image" }));
     expect(noThumb).not.toContain("data-forward-thumb");
     expect(noThumb).toContain("data-forward-media-chip");
+  });
+
+  it("a post's public cover is a root-relative path drawn against the API origin; a plain http url is not drawn", () => {
+    vi.stubEnv("VITE_API_URL", "https://api.test");
+    try {
+      const cover = render(
+        forward({
+          mediaKind: "image",
+          mediaThumbUrl: `/api/public/communities/mesa/posts/${ID}/cover`,
+        }),
+      );
+      expect(cover).toContain(`src="https://api.test/api/public/communities/mesa/posts/${ID}/cover"`);
+      expect(cover).not.toContain("data-forward-media-chip");
+
+      const plainHttp = render(
+        forward({ mediaKind: "image", mediaThumbUrl: "http://example.com/x.png" }),
+      );
+      expect(plainHttp).not.toContain("data-forward-thumb");
+      expect(plainHttp).toContain("data-forward-media-chip");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("an off-instance link opens a new tab with no opener", () => {
