@@ -324,3 +324,49 @@ export async function getPublicBauPostCoverTarget(
   }
   return null;
 }
+
+/**
+ * The public address of a post BY ID, or null when it has none: the helper for
+ * anything that wants to LINK the public page from the server side (a followed
+ * Baú's delivery card, a forward card) without reading the post's body. It asks
+ * the one predicate (`bauPublicUrlFor`) about the post as it is NOW, so a
+ * delivery made while the flag is on links the page and one made after a post
+ * went members-only, was unpublished or deleted does not. Null for every
+ * reason there is not to link, and never throws on a missing post.
+ *
+ * A caller that already holds the post row should call `bauPublicUrlFor`
+ * directly and skip the query.
+ */
+export async function getBauPublicUrl(
+  serverId: string,
+  postId: string,
+): Promise<string | null> {
+  // Ids from callers are uuids; anything else is "no page", not a database error.
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(serverId) || !uuid.test(postId)) {
+    return null;
+  }
+  const { rows } = await getPool().query<
+    Pick<
+      PostRow,
+      | "id"
+      | "server_id"
+      | "status"
+      | "visibility"
+      | "is_community"
+      | "is_community_suspended"
+      | "community_slug"
+      | "community_home_enabled"
+    >
+  >(
+    `SELECT p.id, p.server_id, p.status, p.visibility,
+            s.is_community, s.is_community_suspended, s.community_slug,
+            s.community_home_enabled
+       FROM community_home_posts p
+       JOIN servers s ON s.id = p.server_id
+      WHERE p.id = $1 AND p.server_id = $2`,
+    [postId, serverId],
+  );
+  const row = rows[0];
+  return row ? bauPublicUrlFor(row) : null;
+}

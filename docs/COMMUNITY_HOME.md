@@ -430,6 +430,13 @@ carries the visitor through sign-up into the community (`?join=<slug>`).
   first entry, else `https://pqp.gg`), **only** while the page would answer. A
   client shows Compartilhar when, and only when, it is a string, and never
   builds the URL itself.
+- **Linking the page from the server** (a followed Baú's delivery, a forward
+  card): `getBauPublicUrl(serverId, postId)` in
+  `server/src/services/community-home-public.ts` asks the same predicate about
+  the post as it is now and answers the address or null (never throws). A caller
+  that already holds the post row calls `bauPublicUrlFor(row)` and skips the
+  query. Link the public page only when it returns a string; otherwise link the
+  in-app permalink.
 - **Web.** `client/src/pages/public-bau-post-page.tsx` (route `/c/:slug/p/:postId`):
   the post drawn like the Baú (`UnlockedMedia`), then the CTA block (the community
   poster, the member count, "Entrar na comunidade" through the same join intent

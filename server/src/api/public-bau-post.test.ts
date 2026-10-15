@@ -71,6 +71,7 @@ const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { upsertUser } = await import("../services/users.js");
 const { createServer: createChatServer, createChannel } = await import("../services/servers.js");
 const flags = await import("../lib/flags.js");
+const { getBauPublicUrl } = await import("../services/community-home-public.js");
 const {
   publicBauPostResponseSchema,
   parseBauPublicPostPath,
@@ -734,6 +735,39 @@ describeDb("public Baú post", () => {
     actor = null;
     const res = await fetch(`${baseUrl}${url(id)}`, { method: "POST" });
     expect(res.status).not.toBe(200);
+  });
+
+  describe("getBauPublicUrl, the helper a delivery uses to link the page", () => {
+    it("answers the address while the post qualifies and null the moment it does not", async () => {
+      const id = await seed();
+      const want = `https://pqp.gg/c/${SLUG}/p/${id}`;
+      expect(await getBauPublicUrl(serverId, id)).toBe(want);
+      // The same address the page answers at.
+      expect((await get(url(id))).status).toBe(200);
+
+      await getPool().query(`UPDATE community_home_posts SET visibility = 'members' WHERE id = $1`, [id]);
+      expect(await getBauPublicUrl(serverId, id)).toBeNull();
+      await getPool().query(`UPDATE community_home_posts SET visibility = 'free' WHERE id = $1`, [id]);
+      expect(await getBauPublicUrl(serverId, id)).toBe(want);
+
+      delete process.env.BAU_PUBLIC_POSTS;
+      expect(await getBauPublicUrl(serverId, id)).toBeNull();
+      process.env.BAU_PUBLIC_POSTS = "true";
+      await getPool().query(`UPDATE servers SET is_community = FALSE WHERE id = $1`, [serverId]);
+      expect(await getBauPublicUrl(serverId, id)).toBeNull();
+    });
+
+    it("is null for a draft, a deleted post, another server's pair and non-ids, and never throws", async () => {
+      const draft = await seed({ status: "draft" });
+      expect(await getBauPublicUrl(serverId, draft)).toBeNull();
+      const gone = await seed();
+      await getPool().query(`DELETE FROM community_home_posts WHERE id = $1`, [gone]);
+      expect(await getBauPublicUrl(serverId, gone)).toBeNull();
+      const live = await seed();
+      expect(await getBauPublicUrl("11111111-2222-4333-8444-555555555555", live)).toBeNull();
+      expect(await getBauPublicUrl(serverId, "not-a-uuid")).toBeNull();
+      expect(await getBauPublicUrl("x", live)).toBeNull();
+    });
   });
 
   describe("publicUrl on the members' own payloads", () => {
