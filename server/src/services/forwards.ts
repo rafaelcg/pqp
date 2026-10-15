@@ -89,38 +89,20 @@ export async function listForwardDestinations(
   const channels = (await listChannels(serverId, userId)).filter(
     (channel) => channel.kind === "server" && FORWARD_CHANNEL_TYPES.has(channel.type),
   );
-  const candidates = await listForwardThreadCandidates(serverId, userId, channels);
-  // One membership read and one overwrite read for the channels AND the
-  // threads, not three queries each; `computeMemberPermissionsForChannels`
-  // gives the same bits `computeMemberPermissions` (the send's own call) would,
-  // and resolves a thread through its parent as the send does.
-  const bits = await computeMemberPermissionsForChannels(serverId, userId, [
-    ...channels,
-    ...candidates.map((thread) => ({
-      id: thread.channelId,
-      type: "thread",
-      parent_id: thread.parentChannelId,
-    })),
-  ]);
-  const canSend = (id: string) =>
-    hasPermission(bits.get(id) ?? 0n, Permission.SEND_MESSAGES);
-  const parentName = new Map(channels.map((channel) => [channel.id, channel.name]));
+  // One membership read and one overwrite read for the whole list, not three
+  // queries per channel; `computeMemberPermissionsForChannels` gives the same
+  // bits `computeMemberPermissions` (the send's own call) would.
+  const bits = await computeMemberPermissionsForChannels(serverId, userId, channels);
+  const canSend = (map: Map<string, bigint>, id: string) =>
+    hasPermission(map.get(id) ?? 0n, Permission.SEND_MESSAGES);
+  const sendable = channels.filter((channel) => canSend(bits, channel.id));
   return {
-    channels: channels
-      .filter((channel) => canSend(channel.id))
-      .map((channel) => ({
-        id: channel.id,
-        name: channel.name,
-        type: channel.type as "text" | "voice" | "watch_party",
-      })),
-    threads: candidates
-      .filter((thread) => canSend(thread.channelId))
-      .map((thread) => ({
-        id: thread.channelId,
-        name: thread.name,
-        parentId: thread.parentChannelId,
-        parentName: parentName.get(thread.parentChannelId) ?? "",
-      })),
+    channels: sendable.map((channel) => ({
+      id: channel.id,
+      name: channel.name,
+      type: channel.type as "text" | "voice" | "watch_party",
+    })),
+    threads: await listForwardThreads(serverId, userId, sendable),
   };
 }
 
@@ -129,18 +111,24 @@ const FORWARD_THREADS_PER_CHANNEL = 5;
 
 /**
  * The active threads this person is in (`listActiveThreadsByParent`: the set
- * their channel list nests, parents they can see only), most recently active
- * first, capped for the picker. Whether they may POST in each is the caller's
- * question, asked of the thread itself (the id the send asks about), so a
- * thread under a channel with an overwrite that takes SEND_MESSAGES away is
- * not offered.
+ * their channel list nests, archived ones already left out in SQL), most
+ * recently active first, capped for the picker, that they may post in.
+ *
+ * Only text channels the person can SPEAK in are asked about, so the caps
+ * (five per channel, thirty in all) count threads that can be offered and a
+ * read-only channel's busy threads never crowd out the rest. A thread has no
+ * overwrites of its own, it answers with its parent's, so that is also the
+ * thread's answer; it is still asked of the thread (the id the send asks about,
+ * resolved through its parent) before it is listed, which costs one more
+ * membership read and one more overwrite read, and keeps this list and the send
+ * from ever disagreeing.
  */
-async function listForwardThreadCandidates(
+async function listForwardThreads(
   serverId: string,
   userId: string,
-  visibleChannels: readonly { id: string; type: string }[],
-) {
-  const parents = visibleChannels.filter((channel) => channel.type === "text");
+  speakableChannels: readonly { id: string; name: string; type: string }[],
+): Promise<ForwardDestinations["threads"]> {
+  const parents = speakableChannels.filter((channel) => channel.type === "text");
   if (parents.length === 0) {
     return [];
   }
@@ -150,11 +138,31 @@ async function listForwardThreadCandidates(
     FORWARD_THREADS_PER_CHANNEL,
     userId,
   );
-  return [...byParent.values()]
+  const recent = [...byParent.values()]
     .flat()
-    .filter((thread) => !thread.archived)
     .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
     .slice(0, FORWARD_DESTINATION_THREADS_MAX);
+  if (recent.length === 0) {
+    return [];
+  }
+  const bits = await computeMemberPermissionsForChannels(
+    serverId,
+    userId,
+    recent.map((thread) => ({
+      id: thread.channelId,
+      type: "thread",
+      parent_id: thread.parentChannelId,
+    })),
+  );
+  const parentName = new Map(parents.map((channel) => [channel.id, channel.name]));
+  return recent
+    .filter((thread) => hasPermission(bits.get(thread.channelId) ?? 0n, Permission.SEND_MESSAGES))
+    .map((thread) => ({
+      id: thread.channelId,
+      name: thread.name,
+      parentId: thread.parentChannelId,
+      parentName: parentName.get(thread.parentChannelId) ?? "",
+    }));
 }
 
 export function forwardMessagesEnabled(): boolean {
