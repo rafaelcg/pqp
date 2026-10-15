@@ -952,7 +952,6 @@ fun ChatScreen(
                         ForwardInputs.forMessage(
                             message = message,
                             previewText = forwardPreviewText,
-                            channelServerId = serverId,
                         ),
                     )
                 }

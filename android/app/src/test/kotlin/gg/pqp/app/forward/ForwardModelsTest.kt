@@ -75,6 +75,19 @@ class ForwardModelsTest {
     }
 
     @Test
+    fun `a restricted card names the one server it may go to`() {
+        val other = "33333333-3333-4333-8333-333333333333"
+        val named = decode(message(card(",\"restricted\":true,\"restrictedToServerId\":\"$other\""))).forward!!
+        assertEquals(other, named.restrictedToServerId)
+        assertEquals(other, named.restrictedBoundary)
+        // From an older build, restricted with no server named: the source's own.
+        assertEquals(server, decode(message(card(",\"restricted\":true"))).forward!!.restrictedBoundary)
+        // Not restricted: no boundary, whatever else it carries.
+        assertNull(decode(message(card(",\"restrictedToServerId\":\"$other\""))).forward!!.restrictedBoundary)
+        assertNull(decode(message(card())).forward!!.restrictedBoundary)
+    }
+
+    @Test
     fun `mediaKind can be set with no thumbnail`() {
         val forward = decode(message(card().replace(Regex(""",\s*"mediaThumbUrl":"[^"]*""""), ""))).forward!!
         assertEquals("youtube", forward.mediaKind)

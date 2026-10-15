@@ -62,7 +62,21 @@ data class MessageForward(
     val createdAt: String = "",
     /** Members-only post or private-channel message. Absent reads as false. */
     val restricted: Boolean = false,
+    /**
+     * With [restricted]: the one server this card may be forwarded into, never a
+     * conversation. For a members-only post it is [sourceServerId]; for a card
+     * stamped inside a private channel it is that channel's server, which can
+     * differ from [sourceServerId]. Absent on a card from an older build.
+     */
+    val restrictedToServerId: String? = null,
 ) {
+    /**
+     * The only server a restricted card can go to again
+     * (`restrictedToServerId ?? sourceServerId`), or null when it is not restricted.
+     */
+    val restrictedBoundary: String?
+        get() = if (restricted) restrictedToServerId ?: sourceServerId else null
+
     val isBauPost: Boolean get() = kind == FORWARD_KIND_BAU_POST
     val isMessage: Boolean get() = kind == FORWARD_KIND_MESSAGE
 }

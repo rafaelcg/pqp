@@ -32,9 +32,15 @@ class ForwardActionTest {
         id = "a", filename = "f", contentType = type, url = "https://x/y", voice = voice,
     )
 
-    private fun card(restricted: Boolean = false, title: String? = "Sessao", excerpt: String = "texto") = MessageForward(
+    private fun card(
+        restricted: Boolean = false,
+        title: String? = "Sessao",
+        excerpt: String = "texto",
+        restrictedTo: String? = null,
+    ) = MessageForward(
         v = 1, kind = FORWARD_KIND_BAU_POST, sourceServerId = "s", sourceServerName = "QG",
         sourceId = "p", title = title, excerpt = excerpt, url = "https://pqp.gg/x", restricted = restricted,
+        restrictedToServerId = restrictedTo,
     )
 
     @Test
@@ -75,7 +81,7 @@ class ForwardActionTest {
 
     @Test
     fun `a message source carries its id and no server`() {
-        val input = ForwardInputs.forMessage(message(), "Mensagem de Ana: hello", channelServerId = "s")
+        val input = ForwardInputs.forMessage(message(), "Mensagem de Ana: hello")
         assertEquals(FORWARD_KIND_MESSAGE, input.source.kind)
         assertEquals("m1", input.source.id)
         assertNull(input.source.serverId)
@@ -84,10 +90,21 @@ class ForwardActionTest {
     }
 
     @Test
-    fun `forwarding on a restricted card keeps it in that server`() {
-        val input = ForwardInputs.forMessage(message(forward = card(restricted = true)), "p", channelServerId = "srv")
-        assertEquals("srv", input.restrictedToServerId)
-        assertNull(ForwardInputs.forMessage(message(forward = card(restricted = false)), "p", "srv").restrictedToServerId)
+    fun `forwarding on a restricted card keeps it in the server the card names`() {
+        // A members-only post's card: its own server.
+        assertEquals("s", ForwardInputs.forMessage(message(forward = card(restricted = true)), "p").restrictedToServerId)
+        // Stamped in a private channel of ANOTHER server: that one, not the source's.
+        assertEquals(
+            "other",
+            ForwardInputs.forMessage(message(forward = card(restricted = true, restrictedTo = "other")), "p")
+                .restrictedToServerId,
+        )
+        // An unrestricted card, even one that names a server, is free to go anywhere.
+        assertNull(
+            ForwardInputs.forMessage(message(forward = card(restricted = false, restrictedTo = "other")), "p")
+                .restrictedToServerId,
+        )
+        assertNull(ForwardInputs.forMessage(message(), "p").restrictedToServerId)
     }
 
     @Test

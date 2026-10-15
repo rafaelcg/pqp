@@ -22,14 +22,15 @@ object ForwardInputs {
         return cut(text)
     }
 
-    fun forMessage(message: Message, previewText: String, channelServerId: String?): ForwardInput =
+    fun forMessage(message: Message, previewText: String): ForwardInput =
         ForwardInput(
             source = ForwardSource(kind = FORWARD_KIND_MESSAGE, id = message.id),
             preview = previewText,
-            // A forward of a restricted card stays in the server it was sent
-            // in, as the server enforces. A private channel is not knowable
-            // here; the server's per-target answer says so.
-            restrictedToServerId = if (message.forward?.restricted == true) channelServerId else null,
+            // A forward of a restricted card stays inside the server the card names
+            // (`restrictedToServerId ?? sourceServerId`), which is not necessarily the
+            // channel it sits in. A private channel is not knowable here; the
+            // server's per-target answer says so.
+            restrictedToServerId = message.forward?.restrictedBoundary,
         )
 
     /** A Baú post is addressed with its server. A members-only post stays in it. */
