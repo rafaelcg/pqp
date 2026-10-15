@@ -80,6 +80,7 @@ struct ChatView: View {
     /// picker is up, and the message a jump landed on.
     @State private var forwardsEnabled = false
     @State private var forwardSource: ForwardSource?
+    @State private var forwardStart: Task<Void, Never>?
     @State private var jumpTarget: String?
     @State private var highlightedMessageId: String?
     /// This screen was opened on a message. Latched on for the screen's life
@@ -1112,9 +1113,13 @@ struct ChatView: View {
     /// DM or another server for a private channel's message.
     private func startForward(_ message: Message) {
         let serverId = server?.id ?? flagsServerId
-        Task {
+        // Only the latest tap may open the picker: a slow read for an earlier
+        // message must not land after, and replace, a later one.
+        forwardStart?.cancel()
+        forwardStart = Task {
             var channels: [Channel]?
             if let serverId { channels = try? await session.api.channels(serverId: serverId) }
+            guard !Task.isCancelled else { return }
             let stays = ForwardSource.messageStaysIn(message, serverId: serverId, channels: channels)
             forwardSource = ForwardSource.message(message, stayInServerId: stays)
         }
