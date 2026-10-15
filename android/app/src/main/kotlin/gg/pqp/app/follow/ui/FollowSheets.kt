@@ -61,11 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import gg.pqp.app.R
-import gg.pqp.app.core.Permission
 import gg.pqp.app.core.SessionStore
-import gg.pqp.app.core.channelBits
-import gg.pqp.app.core.hasPermission
-import gg.pqp.app.core.serverPermissions
 import gg.pqp.app.follow.BauFollow
 import gg.pqp.app.follow.BauFollowState
 import gg.pqp.app.follow.BauFollowViewModel
@@ -73,6 +69,7 @@ import gg.pqp.app.follow.BauFollower
 import gg.pqp.app.follow.BauFollowersViewModel
 import gg.pqp.app.follow.ChannelFollowsViewModel
 import gg.pqp.app.follow.FollowFailure
+import gg.pqp.app.follow.FollowPermissions
 import gg.pqp.app.follow.PickerLoadError
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.theme.PqpIcons
@@ -698,7 +695,7 @@ private fun FollowerRow(follower: BauFollower, busy: Boolean, onRemove: () -> Un
 @Composable
 fun ChannelFollowsAction(session: SessionStore, serverId: String, channelId: String) {
     val allowed by produceState(initialValue = false, serverId, channelId) {
-        value = mayManageFollows(session, serverId, channelId)
+        value = FollowPermissions.mayManage(session.api, serverId, channelId)
     }
     if (!allowed) return
     val model: ChannelFollowsViewModel = viewModel(
@@ -731,18 +728,6 @@ fun ChannelFollowsAction(session: SessionStore, serverId: String, channelId: Str
     if (open && state.visible) {
         ChannelFollowsSheet(model = model, onDismiss = { open = false })
     }
-}
-
-/**
- * The permission check, once per channel. Server-wide AND per-channel: the
- * snapshot's channel entry already folds roles and overwrites in, and the
- * server's `mayManageFollow` asks for MANAGE_WEBHOOKS or MANAGE_CHANNELS on the
- * channel itself.
- */
-private suspend fun mayManageFollows(session: SessionStore, serverId: String, channelId: String): Boolean {
-    val snapshot = runCatching { session.api.serverPermissions(serverId) }.getOrNull() ?: return false
-    val bits = snapshot.channelBits(channelId)
-    return hasPermission(bits, Permission.MANAGE_WEBHOOKS) || hasPermission(bits, Permission.MANAGE_CHANNELS)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -150,7 +150,7 @@ private fun BauScreenContent(
         factory = BauFollowViewModel.factory(session, serverId),
     )
     val followState by follow.state.collectAsStateWithLifecycle()
-    val managerFlagOn by follow.managerFlagOn.collectAsStateWithLifecycle()
+    val staffMenu by follow.staffMenu.collectAsStateWithLifecycle()
     LaunchedEffect(canPost) { follow.setCanManage(canPost) }
     var followersOpen by rememberSaveable { mutableStateOf(false) }
     var staffMenuOpen by remember { mutableStateOf(false) }
@@ -245,7 +245,7 @@ private fun BauScreenContent(
                     },
                     actions = {
                         FollowButton(followState, onOpen = follow::openPicker)
-                        if (canPost && managerFlagOn) {
+                        if (canPost && staffMenu) {
                             Box {
                                 IconButton(
                                     onClick = { staffMenuOpen = true },

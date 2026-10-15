@@ -2,6 +2,7 @@ package gg.pqp.app.follow
 
 import gg.pqp.app.core.ApiException
 import java.io.IOException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -92,8 +93,13 @@ class FollowViewModelsTest {
             )
         }
 
+        var channelReads = 0
+        var channelFollowsHook: (suspend (Int) -> List<BauFollow>)? = null
+
         override suspend fun channelFollows(channelId: String): List<BauFollow> {
+            channelReads += 1
             channelFollowsFail?.let { throw it }
+            channelFollowsHook?.let { return it(channelReads) }
             return channelFollows
         }
 
@@ -174,11 +180,11 @@ class FollowViewModelsTest {
         val backend = FakeBackend()
         val model = BauFollowViewModel(backend, "src")
         assertEquals(0, backend.followerReads)
-        assertFalse(model.managerFlagOn.value)
+        assertFalse(model.staffMenu.value)
 
         model.setCanManage(true)
         assertEquals(1, backend.followerReads)
-        assertTrue(model.managerFlagOn.value)
+        assertTrue(model.staffMenu.value)
     }
 
     @Test
@@ -188,7 +194,26 @@ class FollowViewModelsTest {
         model.setCanManage(true)
         backend.followersFail = IOException("offline")
         model.refreshAll()
-        assertTrue(model.managerFlagOn.value)
+        assertTrue(model.staffMenu.value)
+    }
+
+    @Test
+    fun `a failed first owner read still offers the way in, an answer of off hides it`() {
+        val backend = FakeBackend()
+        backend.followersFail = IOException("offline")
+        val model = BauFollowViewModel(backend, "src")
+        model.setCanManage(true)
+        assertTrue("the sheet has the retry, so the menu stays", model.staffMenu.value)
+
+        backend.followersFail = null
+        backend.followers = BauFollowers(flagOn = false)
+        model.refreshAll()
+        assertFalse(model.staffMenu.value)
+
+        // Off was a real answer: a later failure does not bring the menu back.
+        backend.followersFail = IOException("offline")
+        model.refreshAll()
+        assertFalse(model.staffMenu.value)
     }
 
     // ---- the picker
@@ -376,8 +401,10 @@ class FollowViewModelsTest {
         assertEquals(1, changed)
 
         backend.setAllowedFails = ApiException(403, "no")
+        val reads = backend.followerReads
         model.setAllowed(false)
         assertEquals(true, model.state.value.data?.allowed)
+        assertTrue("a lost answer re-reads what is true", backend.followerReads > reads)
         assertEquals(FollowFailure.Action, model.state.value.error)
         assertNull(model.state.value.busyKey)
     }
@@ -528,13 +555,42 @@ class FollowViewModelsTest {
     }
 
     @Test
-    fun `a failed unfollow from the channel keeps the row and says so`() {
+    fun `a failed unfollow from the channel says so and re-reads what is true`() {
         val backend = FakeBackend()
         backend.channelFollows = listOf(follow("f1"))
         val model = ChannelFollowsViewModel(backend, "c1")
         backend.deleteFails = ApiException(500, "boom")
+        // The write committed and its answer was lost: the next read says it is gone.
+        backend.channelFollows = emptyList()
         model.unfollow(model.state.value.follows[0])
-        assertEquals(1, model.state.value.follows.size)
         assertEquals(FollowFailure.Action, model.state.value.error)
+        assertTrue(model.state.value.follows.isEmpty())
+    }
+
+    @Test
+    fun `a read that left before an unfollow cannot bring the row back`() {
+        val gate = CompletableDeferred<List<BauFollow>>()
+        val backend = FakeBackend()
+        backend.channelFollows = listOf(follow("f1"))
+        // The first read answers at once; the second (a reload on opening the
+        // sheet) is held until after the unfollow.
+        backend.channelFollowsHook = { n -> if (n == 1) listOf(follow("f1")) else gate.await() }
+        val model = ChannelFollowsViewModel(backend, "c1")
+        model.load()
+        model.unfollow(model.state.value.follows[0])
+        assertTrue(model.state.value.follows.isEmpty())
+
+        gate.complete(listOf(follow("f1")))
+        assertTrue("the stale answer is ignored", model.state.value.follows.isEmpty())
+    }
+
+    @Test
+    fun `a channel that stops being manageable clears what it showed`() {
+        val backend = FakeBackend()
+        backend.channelFollows = listOf(follow("f1"))
+        val model = ChannelFollowsViewModel(backend, "c1")
+        backend.channelFollowsFail = ApiException(403, "no")
+        model.load()
+        assertFalse(model.state.value.visible)
     }
 }

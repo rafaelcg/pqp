@@ -106,14 +106,17 @@ class BauFollowViewModel(
     /** `null` until it answers, and after any failure. */
     val state: StateFlow<BauFollowState?> = _state.asStateFlow()
 
-    private val _managerFlagOn = MutableStateFlow(false)
+    private val _staffMenu = MutableStateFlow(false)
 
     /**
      * For somebody who manages the server: the flag is on for this Baú, so
      * "Permitir seguir" and the follower list are worth offering even while
-     * the owner's switch is still off (it is how it gets switched on).
+     * the owner's switch is still off (it is how it gets switched on). A read
+     * that FAILED also offers it, until an answer says the flag is off: the
+     * sheet has its own retry, and hiding the only way in on a hiccup would
+     * leave staff with no way to ask again short of leaving the screen.
      */
-    val managerFlagOn: StateFlow<Boolean> = _managerFlagOn.asStateFlow()
+    val staffMenu: StateFlow<Boolean> = _staffMenu.asStateFlow()
 
     private val _picker = MutableStateFlow(FollowPickerState())
     val picker: StateFlow<FollowPickerState> = _picker.asStateFlow()
@@ -124,6 +127,7 @@ class BauFollowViewModel(
     private var stateGeneration = 0
     private var pickerGeneration = 0
     private var canManage = false
+    private var managerKnown = false
 
     init {
         refresh()
@@ -158,8 +162,10 @@ class BauFollowViewModel(
     private fun refreshManager() {
         viewModelScope.launch {
             val next = runSuspendCatching { backend.followers(serverId) }.getOrNull()
-            // A failed read leaves what was known: only a real answer moves it.
-            if (next != null) _managerFlagOn.value = next.flagOn
+            // Only a real answer says the flag is off. A failed read leaves what
+            // was known, and offers the menu when nothing was known yet.
+            if (next != null) _staffMenu.value = next.flagOn else if (!managerKnown) _staffMenu.value = true
+            if (next != null) managerKnown = true
         }
     }
 
@@ -359,6 +365,7 @@ class BauFollowersViewModel(
     /** The owner's switch. The server answers the whole new picture. */
     fun setAllowed(next: Boolean) {
         if (_state.value.busyKey != null) return
+        generation += 1
         _state.update { it.copy(busyKey = FOLLOW_SWITCH_KEY, error = null) }
         viewModelScope.launch {
             runSuspendCatching { backend.setAllowed(serverId, next) }
@@ -368,6 +375,8 @@ class BauFollowersViewModel(
                 }
                 .onFailure { error ->
                     _state.update { it.copy(busyKey = null, error = FollowFailures.ofAction(error)) }
+                    // The write may have committed and lost its answer: say what is true.
+                    load()
                 }
         }
     }
@@ -415,6 +424,8 @@ class BauFollowersViewModel(
 
     private fun act(key: String, run: suspend () -> Unit, apply: (BauFollowers) -> BauFollowers) {
         if (_state.value.busyKey != null) return
+        // A read that left before this change must not land after it.
+        generation += 1
         _state.update { it.copy(busyKey = key, error = null) }
         viewModelScope.launch {
             runSuspendCatching { run() }
@@ -469,46 +480,70 @@ class ChannelFollowsViewModel(
     private val _state = MutableStateFlow(ChannelFollowsState())
     val state: StateFlow<ChannelFollowsState> = _state.asStateFlow()
 
+    /**
+     * A read answers only if nothing newer started after it, and a change counts
+     * as newer: a read that left before an unfollow and came back after it must
+     * not put the removed follow back.
+     */
+    private var generation = 0
+
     init {
         load()
     }
 
     fun load() {
+        generation += 1
+        val mine = generation
         _state.update { it.copy(failed = false) }
         viewModelScope.launch {
             runSuspendCatching { backend.channelFollows(channelId) }
-                .onSuccess { follows -> _state.update { it.copy(loaded = true, follows = follows) } }
+                .onSuccess { follows ->
+                    if (generation == mine) _state.update { it.copy(loaded = true, follows = follows) }
+                }
                 .onFailure { error ->
+                    if (generation != mine) return@onFailure
                     // 404 is a deployment with the feature off and 403 somebody who
-                    // may not manage the channel: both are "nothing to show".
+                    // may not manage the channel any more: both are "nothing to show".
                     val quiet = error is ApiException && (error.status == 404 || error.status == 403)
-                    _state.update { it.copy(loaded = true, failed = !quiet) }
+                    _state.update {
+                        it.copy(
+                            loaded = true,
+                            failed = !quiet,
+                            follows = if (quiet) emptyList() else it.follows,
+                        )
+                    }
                 }
         }
     }
 
     fun unfollow(follow: BauFollow) {
         if (_state.value.busyId != null) return
+        generation += 1
         _state.update { it.copy(busyId = follow.id, error = null) }
         viewModelScope.launch {
             runSuspendCatching { backend.delete(follow.id) }
                 .onSuccess {
+                    generation += 1
                     _state.update { s ->
                         s.copy(busyId = null, follows = s.follows.filterNot { it.id == follow.id })
                     }
                 }
                 .onFailure { error ->
                     _state.update { it.copy(busyId = null, error = FollowFailures.ofAction(error)) }
+                    // The change may have committed and lost its answer: say what is true.
+                    load()
                 }
         }
     }
 
     fun resume(follow: BauFollow) {
         if (_state.value.busyId != null) return
+        generation += 1
         _state.update { it.copy(busyId = follow.id, error = null) }
         viewModelScope.launch {
             runSuspendCatching { backend.update(follow.id, UpdateBauFollowRequest(resume = true)) }
                 .onSuccess { updated ->
+                    generation += 1
                     _state.update { s ->
                         s.copy(
                             busyId = null,
@@ -518,6 +553,7 @@ class ChannelFollowsViewModel(
                 }
                 .onFailure { error ->
                     _state.update { it.copy(busyId = null, error = FollowFailures.ofAction(error)) }
+                    load()
                 }
         }
     }
