@@ -92,7 +92,13 @@ ensure_caddy_layout() {
   if [[ ! -e "$CADDY_DIR/certs" ]]; then
     if [[ -d "$DEST/certs" ]]; then
       echo "caddy-layout: copying $DEST/certs to $CADDY_DIR/certs (the old directory is left in place)"
-      cp -a -- "$DEST/certs" "$CADDY_DIR/certs"
+      # Copy aside, then rename into place: a copy that dies halfway must not
+      # leave a half-filled certs/ that the `-e` test above would take for a
+      # finished migration on the next run. A leftover temp from a dead run
+      # is simply redone.
+      rm -rf -- "$CADDY_DIR/.certs.migrating"
+      cp -a -- "$DEST/certs" "$CADDY_DIR/.certs.migrating"
+      mv -- "$CADDY_DIR/.certs.migrating" "$CADDY_DIR/certs"
     else
       install -d -m 0755 -o pqp -g pqp "$CADDY_DIR/certs"
     fi
@@ -481,12 +487,29 @@ caddy_in_sync() {
   [[ -n "$host" && "$host" == "$cont" ]]
 }
 verify_caddyfile_in_sync() {
-  local tries=0
-  if caddy_in_sync; then
+  local tries=0 host cont=""
+  host="$(caddy_host_sum)"
+  if [[ -z "$host" ]]; then
+    echo "cannot read $CADDY_DIR/Caddyfile to compare it with what caddy runs; recreating caddy would not fix that" >&2
+    return 1
+  fi
+  # A failed `exec` reads as an empty sum, and a single transient Docker or
+  # exec error must not be taken for a stale file: recreating caddy cuts
+  # every open socket. So an EMPTY read is retried, and only a read that
+  # actually returned a different hash, or a container that never answers,
+  # leads to the recreate below.
+  while (( tries < ${CADDY_PROBE_TRIES:-5} )); do
+    cont="$(caddy_container_sum)"
+    [[ -n "$cont" ]] && break
+    tries=$((tries + 1))
+    sleep "${CADDY_SYNC_SLEEP:-2}"
+  done
+  if [[ "$cont" == "$host" ]]; then
     echo "caddyfile-sync=ok (host and container sha256 agree)"
     return 0
   fi
-  echo "warning: the Caddyfile caddy is running from differs from $CADDY_DIR/Caddyfile (host $(caddy_host_sum), container '$(caddy_container_sum)'); recreating the caddy container only" >&2
+  tries=0
+  echo "warning: the Caddyfile caddy is running from differs from $CADDY_DIR/Caddyfile (host $host, container '$cont'); recreating the caddy container only" >&2
   docker compose up -d --no-deps --force-recreate caddy
   # The container needs a moment before `exec` answers; an unanswered exec
   # reads as an empty sum, which is "not in sync", so this just polls.

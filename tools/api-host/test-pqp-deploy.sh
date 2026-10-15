@@ -51,7 +51,7 @@ check "compose.yaml has no single-file Caddyfile mount" \
 run_integrity() { # run_integrity <recreate-mode: fixes|noop|dead>
   (
     export CADDY_DIR="$WORK/caddy"
-    export CADDY_SYNC_TRIES=3 CADDY_SYNC_SLEEP=0
+    export CADDY_SYNC_TRIES=3 CADDY_SYNC_SLEEP=0 CADDY_PROBE_TRIES=3
     export RECREATE_MODE="$1"
     export CALLS="$WORK/calls"
     : >"$CALLS"
@@ -59,6 +59,15 @@ run_integrity() { # run_integrity <recreate-mode: fixes|noop|dead>
       echo "docker $*" >>"$CALLS"
       if [[ "$1 $2" == "compose exec" ]]; then
         # compose exec -T caddy sha256sum /etc/caddy/Caddyfile
+        # TRANSIENT_FAILS=N: the first N exec calls fail (a Docker blip).
+        if [[ -f "$WORK/transient" ]]; then
+          local left
+          left="$(<"$WORK/transient")"
+          if ((left > 0)); then
+            echo $((left - 1)) >"$WORK/transient"
+            return 1
+          fi
+        fi
         [[ -f "$WORK/container" ]] || return 1
         echo "$(sha256sum <"$WORK/container" | awk '{print $1}')  /etc/caddy/Caddyfile"
         return 0
@@ -115,13 +124,26 @@ run_integrity dead
 rc=$?
 check "unanswering container: returns non-zero, does not pass silently" test "$rc" -ne 0
 
-# 5. host file missing must never read as "in sync" with an empty container sum
+# 5. host file missing must never read as "in sync" with an empty container sum,
+# and a recreate would not fix it, so none is attempted
 mv "$WORK/caddy/Caddyfile" "$WORK/caddy/Caddyfile.gone"
 rm -f "$WORK/container"
 run_integrity dead
 rc=$?
-check "no host file and no container answer: not treated as in sync" test "$rc" -ne 0
+check "no host file: not treated as in sync" test "$rc" -ne 0
+check "no host file: does not recreate caddy" bash -c "! grep -q 'force-recreate' '$WORK/calls'"
 mv "$WORK/caddy/Caddyfile.gone" "$WORK/caddy/Caddyfile"
+
+# 6. a transient exec failure on a container that IS in sync must not recreate
+# caddy (that would cut every open socket over a Docker blip)
+cp "$WORK/caddy/Caddyfile" "$WORK/container"
+echo 2 >"$WORK/transient"
+run_integrity fixes
+rc=$?
+check "transient exec failures, file in sync: returns 0" test "$rc" -eq 0
+check "transient exec failures: never recreates caddy" bash -c "! grep -q 'force-recreate' '$WORK/calls'"
+check "transient exec failures: reports ok, not recreated" grep -q 'caddyfile-sync=ok' "$WORK/out"
+rm -f "$WORK/transient"
 
 # --- layout seeding ----------------------------------------------------------
 run_layout() {
@@ -161,6 +183,17 @@ echo newcert >"$WORK/opt/caddy/certs/origin.pem"
 run_layout
 check "migrated: existing caddy/Caddyfile not overwritten" grep -q already-new "$WORK/opt/caddy/Caddyfile"
 check "migrated: existing caddy/certs not overwritten" grep -q newcert "$WORK/opt/caddy/certs/origin.pem"
+
+# A certs copy that died halfway leaves only the temp directory; the next run
+# must redo it rather than take a half-filled certs/ for a finished migration.
+rm -rf "$WORK/opt"
+mkdir -p "$WORK/opt/certs" "$WORK/opt/caddy/.certs.migrating"
+echo cert >"$WORK/opt/certs/origin.pem"
+echo cert >"$WORK/opt/certs/origin.key"
+echo partial >"$WORK/opt/caddy/.certs.migrating/origin.pem"
+run_layout
+check "interrupted copy: certs/ is complete after the retry" test -f "$WORK/opt/caddy/certs/origin.key"
+check "interrupted copy: no temp directory left behind" test ! -e "$WORK/opt/caddy/.certs.migrating"
 
 # Fresh box, nothing at all: directory and an empty certs/ exist (Mode B).
 rm -rf "$WORK/opt"

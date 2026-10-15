@@ -209,7 +209,11 @@ chown pqp:pqp "$DEST" "$DEST/caddy"
 chmod 0750 "$DEST"
 if [[ ! -e "$DEST/caddy/certs" ]]; then
   if [[ -d "$DEST/certs" ]]; then
-    cp -a -- "$DEST/certs" "$DEST/caddy/certs"
+    # Copy aside and rename into place, so an interrupted copy is redone on
+    # the next run instead of being mistaken for a finished one.
+    rm -rf -- "$DEST/caddy/.certs.migrating"
+    cp -a -- "$DEST/certs" "$DEST/caddy/.certs.migrating"
+    mv -- "$DEST/caddy/.certs.migrating" "$DEST/caddy/certs"
   else
     install -d -m 0755 -o pqp -g pqp "$DEST/caddy/certs"
   fi

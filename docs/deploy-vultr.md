@@ -500,6 +500,11 @@ re-run. Afterwards, once `curl https://api.pqp.gg/health` is fine,
 `sudo rm -r /opt/pqp/certs` removes the old, no-longer-read certificate copy
 (`pqp-deploy.sh` leaves key material alone on purpose).
 
+**Reverting this layout** means shipping the old `compose.yaml` AND putting
+`/opt/pqp/Caddyfile` back first (`cp /opt/pqp/caddy/Caddyfile /opt/pqp/Caddyfile`):
+the old file mount of a path that does not exist makes Docker create a
+directory there, and Caddy would start with no config.
+
 **Check what is running.**
 ```bash
 ssh pqp@<ip> 'cd /opt/pqp && COMPOSE_PROFILES=replicas docker compose ps && docker compose logs --tail=100 api-a'
