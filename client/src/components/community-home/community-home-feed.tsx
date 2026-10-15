@@ -126,6 +126,7 @@ import {
 import { ComposeCover } from "./community-home-compose-cover";
 import { ComposeMobileRendition } from "./community-home-compose-mobile";
 import { UnlockedMedia } from "./community-home-media";
+import { BauShareButton } from "./community-home-share-public";
 import {
   ComposeTranslationNote,
   TranslationNote,
@@ -1147,6 +1148,14 @@ export function PostCard({
               <MessageCircle className="h-4 w-4" aria-hidden />
               <span className="tabular-nums">{post.commentCount}</span>
             </span>
+            {interactive && !locked && post.publicUrl && (
+              <BauShareButton
+                publicUrl={post.publicUrl}
+                title={view.title?.trim() || summary || ""}
+                surface="card"
+                className="ml-auto"
+              />
+            )}
           </footer>
         )}
 

@@ -133,6 +133,11 @@ const PublicCommunityPage = lazy(() =>
     default: m.PublicCommunityPage,
   })),
 );
+const PublicBauPostPage = lazy(() =>
+  import("./pages/public-bau-post-page").then((m) => ({
+    default: m.PublicBauPostPage,
+  })),
+);
 const DesktopLoginPage = lazy(() =>
   import("./pages/desktop-login-page").then((m) => ({
     default: m.DesktopLoginPage,
@@ -221,6 +226,19 @@ function PublicCommunityRoute() {
   return <PublicCommunityPage slug={slug.toLowerCase()} />;
 }
 
+/**
+ * `pqp.gg/c/valorant-brasil/p/<postId>`: one Baú post, public.
+ *
+ * Both halves lowercased so a shouted link is one page. Whether the post is
+ * public is the API's answer; a malformed id is a 404 there, not here.
+ */
+function PublicBauPostRoute() {
+  const { slug = "", postId = "" } = useParams();
+  return (
+    <PublicBauPostPage slug={slug.toLowerCase()} postId={postId.toLowerCase()} />
+  );
+}
+
 function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
   const { t } = useTranslation();
   return (
@@ -282,6 +300,7 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
               looking for "where do the public pages live" should find both in
               the same place. */}
           <Route path="/c/:slug" element={<PublicCommunityRoute />} />
+          <Route path="/c/:slug/p/:postId" element={<PublicBauPostRoute />} />
           {/* LAST among the single-segment routes, though the order does not
               actually decide it: React Router ranks a static segment above a
               dynamic one, so `/privacy` still wins even from here. Written last

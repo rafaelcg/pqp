@@ -13,6 +13,7 @@ export * from "./community-home.js";
 export * from "./community-home-channel-refs.js";
 export * from "./community-home-share.js";
 export * from "./bau-follow.js";
+export * from "./community-home-public.js";
 export * from "./connections.js";
 export * from "./depoimentos.js";
 export * from "./discord-import.js";

@@ -92,6 +92,77 @@ describe("PostCard share actions", () => {
   });
 });
 
+describe("PostCard public Compartilhar", () => {
+  const publicUrl =
+    "https://pqp.gg/c/mesa/p/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1";
+
+  it("every member sees it on a post that has a public page", () => {
+    const html = render(
+      <PostCard
+        post={post({ publicUrl })}
+        me={author}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+        onPatch={() => undefined}
+      />,
+    );
+    expect(html).toContain('data-bau-share="card"');
+  });
+
+  it("is absent when the API sent no publicUrl, however the post looks", () => {
+    for (const overrides of [{}, { publicUrl: null }] as const) {
+      const html = render(
+        <PostCard
+          post={post(overrides)}
+          me={author}
+          locked={false}
+          canManageServer
+          vipEnabled
+          onPatch={() => undefined}
+        />,
+      );
+      expect(html).not.toContain("data-bau-share");
+    }
+  });
+
+  it("is never drawn on a locked post, a draft or the composer's preview", () => {
+    const locked = render(
+      <PostCard
+        post={post({ publicUrl, locked: true, visibility: "members" })}
+        me={author}
+        locked
+        canManageServer={false}
+        vipEnabled
+        onPatch={() => undefined}
+      />,
+    );
+    expect(locked).not.toContain("data-bau-share");
+    const draft = render(
+      <PostCard
+        post={post({ publicUrl, status: "draft" })}
+        me={author}
+        locked={false}
+        canManageServer
+        vipEnabled={false}
+        mode="drafts"
+      />,
+    );
+    expect(draft).not.toContain("data-bau-share");
+    const preview = render(
+      <PostCard
+        post={post({ publicUrl })}
+        me={author}
+        locked={false}
+        canManageServer
+        vipEnabled={false}
+        mode="preview"
+      />,
+    );
+    expect(preview).not.toContain("data-bau-share");
+  });
+});
+
 describe("shareErrorKey", () => {
   it("names the reason the chat refused", () => {
     expect(shareErrorKey(new ApiError(403, "no"))).toBe("communityHome.share.error.cannotSend");
