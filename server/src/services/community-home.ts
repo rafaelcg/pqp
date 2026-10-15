@@ -400,6 +400,12 @@ function authorBadgeFor(
 export function buildMedia(
   row: PostRow,
   unlocked: boolean,
+  /**
+   * How long the signed GETs live. The members' feed keeps the long default;
+   * the public page asks for a short one (`PUBLIC_MEDIA_TTL_SECONDS`) so a post
+   * that stops being public stops being served soon after.
+   */
+  ttlSeconds: number = READ_URL_TTL_SECONDS,
 ): CommunityHomeMedia | null {
   if (!unlocked || !row.media_kind) {
     return null;
@@ -440,7 +446,7 @@ export function buildMedia(
   if (row.media_storage_key && isStorageConfigured()) {
     try {
       url = presignGet(row.media_storage_key, {
-        ttlSeconds: READ_URL_TTL_SECONDS,
+        ttlSeconds,
         // Same rule as attachments: anything that is not an inline image or
         // video is signed as a download, so a PDF never renders as a
         // top-level document on the bucket's origin.
@@ -460,8 +466,8 @@ export function buildMedia(
     url,
     youtubeUrl: null,
     twitchUrl: null,
-    mobile: buildMobileRendition(row),
-    posterUrl: buildPosterUrl(row),
+    mobile: buildMobileRendition(row, ttlSeconds),
+    posterUrl: buildPosterUrl(row, ttlSeconds),
   };
 }
 
@@ -470,7 +476,7 @@ export function buildMedia(
  * flag is on for the server: off (or no cover), null, and the player paints
  * the first frame as it always did.
  */
-function buildPosterUrl(row: PostRow): string | null {
+function buildPosterUrl(row: PostRow, ttlSeconds: number): string | null {
   if (
     row.media_kind !== "video" ||
     !row.poster_storage_key ||
@@ -480,9 +486,7 @@ function buildPosterUrl(row: PostRow): string | null {
     return null;
   }
   try {
-    return presignGet(row.poster_storage_key, {
-      ttlSeconds: READ_URL_TTL_SECONDS,
-    });
+    return presignGet(row.poster_storage_key, { ttlSeconds });
   } catch {
     return null;
   }
@@ -493,7 +497,10 @@ function buildPosterUrl(row: PostRow): string | null {
  * while the flag is on for the server: off, the field is null and every
  * client plays the main one.
  */
-function buildMobileRendition(row: PostRow): CommunityHomeMobileRendition | null {
+function buildMobileRendition(
+  row: PostRow,
+  ttlSeconds: number,
+): CommunityHomeMobileRendition | null {
   if (
     row.media_kind !== "video" ||
     !row.mobile_media_storage_key ||
@@ -504,9 +511,7 @@ function buildMobileRendition(row: PostRow): CommunityHomeMobileRendition | null
   let url: string | null = null;
   if (isStorageConfigured()) {
     try {
-      url = presignGet(row.mobile_media_storage_key, {
-        ttlSeconds: READ_URL_TTL_SECONDS,
-      });
+      url = presignGet(row.mobile_media_storage_key, { ttlSeconds });
     } catch {
       url = null;
     }

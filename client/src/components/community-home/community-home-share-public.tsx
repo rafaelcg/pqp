@@ -68,7 +68,11 @@ const ShareTrigger = forwardRef<
         "inline-flex items-center gap-1.5 transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
         surface === "page"
           ? "h-12 rounded-full border border-ink-4 px-5 text-sm font-medium text-paper hover:border-signal/50"
-          : "rounded-md px-2 py-1 text-xs text-paper-muted hover:bg-ink-4 hover:text-paper",
+          : // The footer stays as compact as the like button beside it, but the
+            // tap area is 44px tall (the pseudo-element reaches 10px past the
+            // button above and below, and 4px to each side): a thumb target
+            // the design guideline asks for, without a taller card.
+              "relative rounded-md px-2 py-1 text-xs text-paper-muted hover:bg-ink-4 hover:text-paper after:absolute after:-inset-x-1 after:-inset-y-2.5 after:content-['']",
         copied && "text-success",
         className,
       )}

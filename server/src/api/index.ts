@@ -1191,13 +1191,67 @@ const publicProfileLimiter = createRateLimiter({
 /**
  * The public Baú post page's reads (`servePublicBauPost`, its cover redirect).
  * Their own bucket, for the reason the two above have theirs: a post link going
- * around a group chat must not be starved by a crawler walking profiles, and
- * the cover is hit by every page view, so it gets the same budget as the page.
+ * around a group chat must not be starved by a crawler walking profiles.
+ *
+ * ROOMIER THAN ITS SIBLINGS, on purpose. This is the one public route whose
+ * traffic is a link going viral, and while the API still sees a Cloudflare
+ * edge address instead of the viewer (see the Caddy note in
+ * `tools/api-host/Caddyfile`) every viewer behind one edge shares this bucket.
+ * Three things keep that from becoming a 429 wall: a page view costs ONE hit
+ * (the Pages middleware embeds the answer it already fetched), Cloudflare
+ * absorbs repeats (`s-maxage`, below), and the budget itself is four times the
+ * poster's. A 404 costs the same as a 200, so the bucket is not an oracle.
  */
 const publicBauPostLimiter = createRateLimiter({
-  capacity: 60,
-  refillPerSecond: 2,
+  capacity: 240,
+  refillPerSecond: 8,
 });
+
+/**
+ * What the public post routes tell caches. `s-maxage` lets Cloudflare serve the
+ * repeat views of a shared link from the edge (it needs a Cache Rule for
+ * `/api/public/*`; a path with no file extension is not cached by default), and
+ * `max-age=0` keeps a browser asking, so the edge is the only place a stale copy
+ * can sit. The window a post flipped to private stays readable is therefore at
+ * most `s-maxage` + `stale-while-revalidate` = two minutes at the edge, then
+ * the signed media URLs inside (10 minutes) run out. A refusal is cacheable for
+ * the same short time and with the SAME header on every kind of refusal, so a
+ * flood of guessed ids lands on Cloudflare too and the answers stay
+ * indistinguishable. The cost is the mirror image: a post published a moment
+ * after a miss is invisible for up to a minute.
+ */
+const PUBLIC_BAU_CACHE_HIT =
+  "public, max-age=0, s-maxage=60, stale-while-revalidate=60";
+const PUBLIC_BAU_CACHE_MISS = "public, max-age=0, s-maxage=60";
+
+/**
+ * Headers for a response a shared cache may keep: `Access-Control-Allow-Origin:
+ * *` and no `Vary: Origin`. The usual CORS helper echoes the caller's origin
+ * and varies on it, which Cloudflare does not honour, so the first origin to
+ * ask would be the only one a cached copy answers. The body is public and
+ * carries no credential, so `*` loses nothing.
+ */
+function publicBauHeaders(
+  req: IncomingMessage,
+  cacheControl: string,
+): Record<string, string> {
+  const { Vary: _vary, ...cors } = corsHeaders(req);
+  return {
+    "Cache-Control": cacheControl,
+    ...SECURITY_HEADERS,
+    ...cors,
+    "Access-Control-Allow-Origin": "*",
+  };
+}
+
+/** The one 404 every refusal on the public post routes sends. */
+function sendPublicBauNotFound(req: IncomingMessage, res: ServerResponse): void {
+  res.writeHead(404, {
+    "Content-Type": "application/json",
+    ...publicBauHeaders(req, PUBLIC_BAU_CACHE_MISS),
+  });
+  res.end(JSON.stringify({ error: "Not found" }));
+}
 /**
  * The public community page's read. Same posture as `publicProfileLimiter` and
  * deliberately its OWN bucket rather than a share of it: the two are reached
@@ -13133,7 +13187,7 @@ async function servePublicBauPost(
   }
 
   if (!isCommunitiesEnabled()) {
-    sendError(res, 404, "Not found", req);
+    sendPublicBauNotFound(req, res);
     return;
   }
 
@@ -13143,13 +13197,13 @@ async function servePublicBauPost(
     slug = decodeURIComponent(rawSlug).toLowerCase();
     postId = decodeURIComponent(rawPostId).toLowerCase();
   } catch {
-    sendError(res, 404, "Not found", req);
+    sendPublicBauNotFound(req, res);
     return;
   }
   // Shape-checked before Postgres, like the community read, and for the same
   // reason: both halves are path segments from the open internet.
   if (!COMMUNITY_SLUG_PATTERN.test(slug) || !BAU_POST_ID_PATTERN.test(postId)) {
-    sendError(res, 404, "Not found", req);
+    sendPublicBauNotFound(req, res);
     return;
   }
 
@@ -13163,15 +13217,15 @@ async function servePublicBauPost(
       return;
     }
     if (!target) {
-      sendError(res, 404, "Not found", req);
+      sendPublicBauNotFound(req, res);
       return;
     }
-    // A minute, like the page: a post taken down must not keep a cached
-    // redirect for longer than it keeps a cached page, and the target is signed
-    // for twelve hours.
+    // Cached like the page (see `PUBLIC_BAU_CACHE_MISS`): a post taken down
+    // must not keep a cached redirect for longer than it keeps a cached page,
+    // and the target is signed for ten minutes.
     res.writeHead(302, {
       location: target,
-      "cache-control": "public, max-age=60",
+      ...publicBauHeaders(req, PUBLIC_BAU_CACHE_MISS),
     });
     res.end();
     return;
@@ -13186,20 +13240,17 @@ async function servePublicBauPost(
     return;
   }
   if (!result) {
-    sendError(res, 404, "Not found", req);
+    sendPublicBauNotFound(req, res);
     return;
   }
 
-  // Cacheable for the minute its siblings get: identical for every caller by
-  // construction, obtained with no credential, and shaped like a link going
-  // around a group chat. The signed media URLs inside last twelve hours. The
-  // 404 stays `no-store`, so a post published a moment after a probe is never
-  // shadowed by a cached miss.
+  // Cacheable by a shared cache, for the reasons and the window written at
+  // `PUBLIC_BAU_CACHE_HIT`: identical for every caller by construction,
+  // obtained with no credential, and shaped like a link going around a group
+  // chat. The signed media URLs inside last ten minutes.
   res.writeHead(200, {
     "Content-Type": "application/json",
-    "Cache-Control": "public, max-age=60",
-    ...SECURITY_HEADERS,
-    ...corsHeaders(req),
+    ...publicBauHeaders(req, PUBLIC_BAU_CACHE_HIT),
   });
   res.end(JSON.stringify(result));
 }

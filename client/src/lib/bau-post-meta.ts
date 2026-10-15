@@ -64,6 +64,35 @@ export function bauPostFromMetaPath(pathname: string): BauPostTarget | null {
   return { slug, postId: match[2]!.toLowerCase() };
 }
 
+/** The id of the `<script type="application/json">` the edge puts the answer in. */
+export const BAU_POST_EMBED_ID = "pqp-bau-post";
+
+/**
+ * The public read's answer as an inert JSON block, for the page to read first.
+ *
+ * WHY. The middleware has already asked the API for this post to write the
+ * card. Without this the SPA asks again, so one page view costs the API two
+ * hits from the same few Cloudflare addresses, against a per-address bucket.
+ * With it the page view costs one, and the page paints from the HTML it was
+ * handed. `readPublicPostEmbed` (`lib/community-home/public-post-embed.ts`)
+ * validates it against the shared schema and the page falls back to the
+ * network on anything it does not like.
+ *
+ * `type="application/json"` is never executed, and the three characters that
+ * could end or confuse the block (`<`, `>`, `&`), plus the two line separators a
+ * script context treats as newlines, are written as escapes, so author-typed
+ * text in the payload cannot close it (`</script>`) whatever it says.
+ */
+export function renderBauPostEmbed(payload: unknown): string {
+  const json = JSON.stringify(payload)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+  return `<script type="application/json" id="${BAU_POST_EMBED_ID}">${json}</script>`;
+}
+
 export interface BauPostMeta extends BauPostTarget {
   title: string | null;
   teaser: string | null;
@@ -72,6 +101,8 @@ export interface BauPostMeta extends BauPostTarget {
   /** ISO instant, for the structured data. */
   publishedAt: string | null;
   community: CommunityMeta;
+  /** The API's whole answer, embedded for the page (`renderBauPostEmbed`). */
+  embed?: unknown;
 }
 
 export interface BauPostMetaOptions {
@@ -178,6 +209,7 @@ export function renderBauPostHead(
     `<meta name="twitter:image" content="${e(image)}" />`,
     `<meta name="robots" content="index, follow" />`,
     `<script type="application/ld+json">${jsonLd}</script>`,
+    ...(post.embed === undefined ? [] : [renderBauPostEmbed(post.embed)]),
   ].join("\n    ");
 }
 

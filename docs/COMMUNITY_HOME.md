@@ -376,14 +376,44 @@ carries the visitor through sign-up into the community (`?join=<slug>`).
   below all call it. Listing in the directory is not required, only the address.
 - **Read.** `GET /api/public/communities/:slug/posts/:postId` answers
   `{ post, community }` (`publicBauPostResponseSchema`): title, body, the media
-  the feed draws (signed GETs, twelve hours) and the community poster. **No
+  the feed draws (signed GETs, **ten minutes**: `BAU_PUBLIC_MEDIA_TTL_SECONDS`,
+  against the feed's twelve hours, so a post that stops being public stops being
+  served soon; a tab left open longer cannot seek in a video until reloaded),
+  the post's own `publicUrl` and the community poster, in ONE statement. **No
   author, no comments, no likers, no translation, no subtitles**; the counts
-  only. A `<#channelId>` reference in a body is swapped for
-  `<#00000000-0000-0000-0000-000000000000>`, which every client already draws as
-  the muted placeholder, so a real channel id never leaves; the teaser is cut
-  after the references are dropped (the markdown stripper would otherwise leave
-  the id behind as `<id`). `Cache-Control: public, max-age=60`, with the
-  unauthenticated limiter posture of the community poster and its own bucket.
+  only.
+- **Channel mentions.** A `<#channelId>` in a body keeps its id, and travels
+  with its name in `post.channels`, only when `@everyone` can view that channel
+  (the arithmetic of `channel_viewable` without a person: `@everyone`'s
+  permissions with the channel's `@everyone` overwrite, so a private channel's
+  deny fails with no special case). Any other mention is swapped for
+  `<#00000000-0000-0000-0000-000000000000>`, so a staff-only channel's name is
+  never published. The page draws both as neutral pills (`#anuncios`, `#canal`;
+  never "unavailable"); the teaser and the Open Graph text read `#anuncios` or
+  "um canal" (the markdown stripper would otherwise eat the `#` and leave the id
+  behind as `<id`).
+- **Caching.** 200: `public, max-age=0, s-maxage=60, stale-while-revalidate=60`.
+  Every refusal (and the cover redirect): `public, max-age=0, s-maxage=60`, the
+  same on every kind of refusal. 429 and 503 stay `no-store`. `Access-Control-Allow-Origin: *`
+  and no `Vary: Origin`, because Cloudflare does not honour `Vary` and the first
+  origin to ask would otherwise be the only one a cached copy answers. The
+  window a post flipped to private stays readable at the edge is at most
+  `s-maxage` + `stale-while-revalidate` (two minutes), then the signed URLs
+  inside run out (ten); the mirror cost is that a post published just after a
+  miss is invisible for up to a minute. **Cloudflare only caches this if a Cache
+  Rule says so** (a path with no file extension is not cached by default): an
+  "Eligible for cache, respect origin headers" rule for `/api/public/communities/*`.
+  Without the rule nothing breaks, the headers are simply not used.
+- **One API hit per page view.** The Pages middleware already fetches the post
+  to write the card, so it embeds the answer in the HTML as an inert
+  `<script type="application/json" id="pqp-bau-post">` (`<`, `>`, `&` escaped so
+  author text cannot close it). The page reads it first
+  (`takePublicPostEmbed`: parsed with the shared schema, must name the same
+  post and community, removed once read) and asks the API only when it is
+  absent or wrong. The limiter bucket is 240 burst / 8 per second per address (the
+  poster's is 60 / 2) because, until the Caddy change in `tools/api-host`
+  makes the API key on the viewer, every visitor behind one Cloudflare edge
+  shares it.
 - **Every refusal is the same 404**, byte for byte: draft, scheduled,
   unpublished, deleted, members-only (with the VIP flag on or off), unknown or
   malformed id, a post of another community under this slug, no address,
@@ -391,7 +421,7 @@ carries the visitor through sign-up into the community (`?join=<slug>`).
   (including a per-server override that says no). Pinned by
   `server/src/api/public-bau-post.test.ts`, which compares status, body and
   headers against the unknown post's.
-- **Cover.** `GET …/posts/:postId/cover` redirects (302, 60 s) to a fresh signed
+- **Cover.** `GET …/posts/:postId/cover` redirects (302, cached as above) to a fresh signed
   GET of an uploaded image or a video's chosen cover. It is the stable image
   address an unfurl card can keep for weeks; a YouTube post's cover is its public
   poster. No picture, or a post that does not qualify: the same 404.
@@ -409,7 +439,9 @@ carries the visitor through sign-up into the community (`?join=<slug>`).
   `navigator.share` on a touch device, a menu on desktop (copy link, X, Reddit,
   WhatsApp, Telegram). Every shared URL carries
   `?utm_source=<network>&utm_medium=share&utm_campaign=bau` (`bauShareUrl`), which
-  the existing acquisition capture reads.
+  the existing acquisition capture reads. The link is always the API's `publicUrl`
+  (canonical origin), on the page and in the app; the in-app button has a 44px
+  tap target (a pseudo-element past a compact visual).
 - **Edge.** `client/functions/_middleware.ts` rewrites the head for the route
   through `client/src/lib/bau-post-meta.ts`: the post's title and teaser, the
   post's picture (else the community banner) as `og:image`, `summary_large_image`

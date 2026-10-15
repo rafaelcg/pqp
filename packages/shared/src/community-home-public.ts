@@ -56,10 +56,11 @@ export function parseBauPublicPostPath(pathname: string): BauPublicPostRef | nul
 }
 
 /**
- * A channel reference no reader can resolve. A public body must not carry a
- * real channel id (`<#id>`), but the reference grammar is what every client
- * already draws as a muted placeholder, so the id is swapped for this one
- * instead of being cut out of the sentence.
+ * A channel reference no reader can resolve. A public body carries the id of a
+ * channel only when everybody in the community can see it (`channels` below);
+ * any other is swapped for this one, which the reference grammar still reads as
+ * "a channel", so no client has to special-case it and nothing is cut out of the
+ * sentence.
  */
 export const BAU_PUBLIC_REDACTED_CHANNEL_ID =
   "00000000-0000-0000-0000-000000000000";
@@ -91,6 +92,21 @@ export const publicBauPostSchema = z.object({
   likeCount: z.number().int().nonnegative(),
   commentCount: z.number().int().nonnegative(),
   publishedAt: z.string().nullable(),
+  /**
+   * The channels a body mentions that EVERYBODY in the community can see
+   * (`@everyone` has VIEW_CHANNEL there), by the id the body carries. A mention
+   * of any other channel is redacted to `BAU_PUBLIC_REDACTED_CHANNEL_ID` and is
+   * absent here, so a staff-only channel's name is never published.
+   */
+  channels: z
+    .array(z.object({ id: z.string().uuid(), name: z.string() }))
+    .default([]),
+  /**
+   * This post's own address, from the same function that hands `publicUrl` to
+   * members, so the page shares the canonical origin and not whichever host it
+   * happens to be opened on.
+   */
+  publicUrl: z.string().nullable().default(null),
 });
 
 export type PublicBauPost = z.infer<typeof publicBauPostSchema>;
@@ -103,6 +119,15 @@ export const publicBauPostResponseSchema = z.object({
 });
 
 export type PublicBauPostResponse = z.infer<typeof publicBauPostResponseSchema>;
+
+/**
+ * How long a signed media GET on the public page lives. Short on purpose: a
+ * post that stops being public (made members-only, unpublished) leaves the
+ * page and the cover redirect at once, and a signature minted a moment before
+ * must not keep serving it for the 12 hours a member's feed gets. The cost is
+ * that a tab left open longer than this cannot seek in a video until reloaded.
+ */
+export const BAU_PUBLIC_MEDIA_TTL_SECONDS = 10 * 60;
 
 /** The networks the Compartilhar menu offers, plus the two that are not one. */
 export const BAU_SHARE_SOURCES = [

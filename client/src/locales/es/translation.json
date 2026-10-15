@@ -5910,5 +5910,6 @@
   "bauPublic.missing.body": "Puede que el enlace esté mal, o que el post se haya retirado.",
   "bauPublic.missing.community": "Pero {name} sigue aquí.",
   "bauPublic.unavailable.title": "No se pudo cargar ese post",
-  "bauPublic.unavailable.body": "Algo salió mal de nuestro lado. Inténtalo de nuevo en un momento."
+  "bauPublic.unavailable.body": "Algo salió mal de nuestro lado. Inténtalo de nuevo en un momento.",
+  "bauPublic.channelGeneric": "canal"
 }

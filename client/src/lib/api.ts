@@ -125,6 +125,7 @@ import {
   type LivePreviewStartResponse,
 } from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
+import { takePublicPostEmbed } from "./community-home/public-post-embed";
 import { parseRetryAfterMs } from "./reconnect-jitter";
 
 const API_TIMEOUT_MS = 12_000;
@@ -441,6 +442,16 @@ export async function fetchPublicBauPost(
   postId: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<PublicBauPostResponse | null> {
+  // The edge already asked for this post to write its card and put the answer
+  // in the HTML: one API hit per page view instead of two. Only the first read
+  // of a document; anything unusable falls through to the network.
+  const embedded =
+    typeof document === "undefined"
+      ? null
+      : takePublicPostEmbed(document, slug, postId);
+  if (embedded) {
+    return embedded;
+  }
   try {
     return await apiFetch<PublicBauPostResponse>(
       `/api/public/communities/${encodeURIComponent(slug)}/posts/${encodeURIComponent(postId)}`,

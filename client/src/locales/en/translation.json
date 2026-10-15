@@ -5841,5 +5841,6 @@
   "bauPublic.missing.body": "The link may be wrong, or the post may have been taken down.",
   "bauPublic.missing.community": "But {name} is still here.",
   "bauPublic.unavailable.title": "Could not load that post",
-  "bauPublic.unavailable.body": "Something went wrong on our end. Try again in a moment."
+  "bauPublic.unavailable.body": "Something went wrong on our end. Try again in a moment.",
+  "bauPublic.channelGeneric": "channel"
 }

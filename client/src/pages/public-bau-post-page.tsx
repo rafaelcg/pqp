@@ -11,7 +11,7 @@ import {
   type PublicCommunity,
 } from "@pqp/shared";
 import { GifAttachment } from "@/components/chat/message-list";
-import { ChannelText } from "@/components/community-home/community-home-channel-refs";
+import { PublicChannelText } from "@/components/community-home/community-home-channel-refs";
 import { UnlockedMedia } from "@/components/community-home/community-home-media";
 import { BauShareButton } from "@/components/community-home/community-home-share-public";
 import { HeroMosaic } from "@/components/communities/hero-mosaic";
@@ -148,8 +148,13 @@ function PostPage({ slug, data }: { slug: string; data: PublicBauPostResponse })
     reduced ? undefined : ({ "--stagger": Math.min(index, 8) } as CSSProperties);
 
   const path = bauPublicPostPath(slug, post.id);
-  // The page's own address, so a staging or self-hosted origin shares itself.
-  const publicUrl = `${typeof window === "undefined" ? "https://pqp.gg" : window.location.origin}${path}`;
+  // The API's own address for the post, the one it hands to members' share
+  // buttons: PUBLIC_APP_URL's origin, so a link copied here and one copied in
+  // the app are the same link whatever host this page was opened on. Older
+  // answers (no field) fall back to this page's origin.
+  const publicUrl =
+    post.publicUrl ??
+    `${typeof window === "undefined" ? "https://pqp.gg" : window.location.origin}${path}`;
   const shareTitle = post.title?.trim() || post.teaser?.trim() || community.name;
 
   const postedLabel = post.publishedAt
@@ -216,7 +221,7 @@ function PostPage({ slug, data }: { slug: string; data: PublicBauPostResponse })
                 </div>
               ) : (
                 <p className="mt-4 whitespace-pre-wrap break-words text-base leading-7 text-text">
-                  <ChannelText text={post.body} />
+                  <PublicChannelText text={post.body} channels={post.channels} />
                 </p>
               ))}
 

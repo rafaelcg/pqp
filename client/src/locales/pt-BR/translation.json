@@ -5841,5 +5841,6 @@
   "bauPublic.missing.body": "Ou o link tá errado, ou o post saiu do ar.",
   "bauPublic.missing.community": "Mas {name} continua por aí.",
   "bauPublic.unavailable.title": "Não deu pra carregar esse post",
-  "bauPublic.unavailable.body": "Deu ruim do nosso lado. Tenta de novo daqui a pouco."
+  "bauPublic.unavailable.body": "Deu ruim do nosso lado. Tenta de novo daqui a pouco.",
+  "bauPublic.channelGeneric": "canal"
 }

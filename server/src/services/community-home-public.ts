@@ -1,4 +1,5 @@
 import {
+  BAU_PUBLIC_MEDIA_TTL_SECONDS,
   BAU_PUBLIC_REDACTED_CHANNEL_ID,
   CHANNEL_REF_PATTERN,
   youtubePosterUrl,
@@ -28,9 +29,12 @@ import { teaserFromBody } from "./community-home-share.js";
  *   - NO AUTHOR. The row is joined for the shared select and never read. The
  *     Baú has no member-facing author row anyway; the page is the creator.
  *   - NO COMMENTS, NO LIKERS. Counts, which are a fact about the post.
- *   - NO CHANNEL ID. A body may hold `<#channelId>` references; they are
- *     swapped for one that resolves to nothing, so every client still draws
- *     the muted placeholder and nobody is handed an identifier.
+ *   - CHANNEL MENTIONS NAME ONLY WHAT EVERYBODY CAN SEE. A body may hold
+ *     `<#channelId>` references. One to a channel `@everyone` can view (the
+ *     usual #geral) keeps its id and travels with its name in `channels`; any
+ *     other is swapped for an id that resolves to nothing, so a staff-only
+ *     channel's name is never published and every client still draws "a
+ *     channel" instead of an error.
  *   - NO LOCKED CONTENT. `bauPublicUrlFor` is the single definition of what
  *     qualifies and it refuses anything that is not published and free.
  *
@@ -99,12 +103,104 @@ async function loadQualifyingRow(
   };
 }
 
-/** `<#id>` references out of a body, see the note on `BAU_PUBLIC_REDACTED_CHANNEL_ID`. */
-export function redactChannelRefs(text: string): string {
+/**
+ * `<#id>` references of a body: kept for a channel everybody can see, swapped
+ * for `BAU_PUBLIC_REDACTED_CHANNEL_ID` for every other.
+ */
+export function redactChannelRefs(
+  text: string,
+  visible: ReadonlyMap<string, string> = new Map(),
+): string {
+  return text.replace(new RegExp(CHANNEL_REF_PATTERN), (_all, id: string) => {
+    const lower = id.toLowerCase();
+    return `<#${visible.has(lower) ? lower : BAU_PUBLIC_REDACTED_CHANNEL_ID}>`;
+  });
+}
+
+/** Every channel id a set of texts mentions. */
+function mentionedChannelIds(texts: ReadonlyArray<string | null>): string[] {
+  const ids = new Set<string>();
+  for (const text of texts) {
+    for (const match of (text ?? "").matchAll(new RegExp(CHANNEL_REF_PATTERN))) {
+      ids.add(match[1]!.toLowerCase());
+    }
+  }
+  return [...ids];
+}
+
+/**
+ * Of the channels a post mentions, the ones EVERYBODY in the community can see
+ * (id to name). The question a stranger's page has to ask is not "may this
+ * viewer see it" (there is no viewer) but "could the most ordinary member", so
+ * it is `@everyone`'s own permissions with the channel's `@everyone` overwrite
+ * applied, the same arithmetic as `channel_viewable` without a person in it:
+ * a private channel carries a deny overwrite for `@everyone`, so it fails here
+ * with no special case. Only real server channels count (not threads or DMs),
+ * and only ones of THIS server, so an id from elsewhere resolves to nothing.
+ */
+async function everyoneVisibleChannels(
+  serverId: string,
+  ids: string[],
+): Promise<Map<string, string>> {
+  const visible = new Map<string, string>();
+  if (ids.length === 0) {
+    return visible;
+  }
+  const { rows } = await getPool().query<{ id: string; name: string }>(
+    `SELECT c.id, c.name
+       FROM channels c
+       JOIN roles er ON er.server_id = c.server_id AND er.is_everyone
+       LEFT JOIN channel_overwrites o
+              ON o.channel_id = c.id
+             AND o.target_type = 'role'
+             AND o.target_id = er.id
+      WHERE c.id = ANY($1::uuid[])
+        AND c.server_id = $2
+        AND c.kind = 'server'
+        AND (
+          (er.permissions & 8) <> 0
+          OR (((er.permissions & ~COALESCE(o.deny, 0)) | COALESCE(o.allow, 0)) & 64) <> 0
+        )`,
+    [ids, serverId],
+  );
+  for (const row of rows) {
+    visible.set(row.id.toLowerCase(), row.name);
+  }
+  return visible;
+}
+
+/**
+ * Text for a card (teaser, Open Graph): `#name` where the channel is visible to
+ * everybody, "um canal" where it is not, so the sentence still reads. A
+ * private-use marker carries the mention through `teaserFromBody`, whose
+ * markdown stripping would otherwise eat the `#` (and the brackets of the
+ * reference, leaving the id behind as `<id`).
+ */
+const MARK_OPEN = "\uE000";
+const MARK_CLOSE = "\uE001";
+
+function markMentions(text: string, ids: string[]): string {
   return text.replace(
     new RegExp(CHANNEL_REF_PATTERN),
-    `<#${BAU_PUBLIC_REDACTED_CHANNEL_ID}>`,
+    (_all, id: string) => `${MARK_OPEN}${ids.indexOf(id.toLowerCase())}${MARK_CLOSE}`,
   );
+}
+
+function resolveMarks(
+  text: string,
+  ids: string[],
+  visible: ReadonlyMap<string, string>,
+): string {
+  return text
+    .replace(
+      new RegExp(`${MARK_OPEN}(\\d+)${MARK_CLOSE}`, "g"),
+      (_all, index: string) => {
+        const name = visible.get(ids[Number(index)] ?? "");
+        return name ? `#${name}` : "um canal";
+      },
+    )
+    // A cut that landed inside a marker leaves half of one.
+    .replace(new RegExp(`${MARK_OPEN}\\d*(?:${MARK_CLOSE})?`, "g"), "");
 }
 
 /** This API's own stable address for a post's picture. Relative, like an icon's. */
@@ -126,7 +222,7 @@ export async function getPublicBauPost(
 
   // `unlocked = true` is the whole point of the free-only rule above: the one
   // thing `buildMedia` withholds is members-only media, and none can be here.
-  const media = buildMedia(row, true);
+  const media = buildMedia(row, true, BAU_PUBLIC_MEDIA_TTL_SECONDS);
   const posterUrl =
     row.media_kind === "youtube" ? youtubePosterUrl(row.media_youtube_url) : null;
 
@@ -143,20 +239,28 @@ export async function getPublicBauPost(
     coverUrl = coverPath(slug, row.id);
   }
 
-  // The teaser is cut from the body with markdown stripped, and the stripping
-  // eats the angle brackets of a channel reference and leaves its id behind
-  // (`<#id>` becomes `<id`). So it is never cut from the original: channel
-  // references are dropped first, in the author's teaser too. A teaser is a
-  // summary for a card, and a summary can do without a mention.
-  const plain = (text: string | null): string | null =>
-    text ? text.replace(new RegExp(CHANNEL_REF_PATTERN), "") : null;
-  const teaser = row.teaser?.trim()
-    ? plain(row.teaser.trim())
-    : teaserFromBody(plain(row.body));
+  // Which of the mentioned channels everybody can see. One query, and only when
+  // a mention exists at all.
+  const ids = mentionedChannelIds([row.title, row.body, row.teaser]);
+  const visible = await everyoneVisibleChannels(row.server_id, ids);
+
+  // The teaser is cut from the body with markdown stripped, which eats the
+  // brackets of a channel reference and the `#` of its name. So mentions are
+  // marked first and resolved after the cut (`markMentions`), and an author's
+  // own teaser, which is shown as written, is resolved directly.
+  const authorTeaser = row.teaser?.trim();
+  const teaser = authorTeaser
+    ? resolveMarks(markMentions(authorTeaser, ids), ids, visible)
+    : (() => {
+        const cut = teaserFromBody(row.body ? markMentions(row.body, ids) : null);
+        return cut ? resolveMarks(cut, ids, visible) : null;
+      })();
+  const redact = (text: string | null): string | null =>
+    text ? redactChannelRefs(text, visible) : null;
   const post: PublicBauPost = {
     id: row.id,
-    title: row.title ? redactChannelRefs(row.title) : null,
-    body: row.body ? redactChannelRefs(row.body) : null,
+    title: redact(row.title),
+    body: redact(row.body),
     teaser,
     media,
     posterUrl,
@@ -164,6 +268,10 @@ export async function getPublicBauPost(
     likeCount: Number(row.like_count),
     commentCount: Number(row.comment_count),
     publishedAt: row.published_at?.toISOString() ?? null,
+    channels: ids
+      .filter((id) => visible.has(id))
+      .map((id) => ({ id, name: visible.get(id)! })),
+    publicUrl: bauPublicUrlFor(row),
   };
   return { post, community };
 }
@@ -185,7 +293,7 @@ export async function getPublicBauPostCoverTarget(
   if (!row) {
     return null;
   }
-  const media = buildMedia(row, true);
+  const media = buildMedia(row, true, BAU_PUBLIC_MEDIA_TTL_SECONDS);
   if (media?.kind === "image") {
     return media.url;
   }

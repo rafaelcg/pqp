@@ -472,6 +472,8 @@ async function fetchBauPost(
     return {
       slug: target.slug,
       postId: target.postId,
+      // The whole answer, so the page does not have to ask the API again.
+      embed: body,
       title: text(post.title),
       teaser: text(post.teaser),
       coverUrl: text(post.coverUrl),

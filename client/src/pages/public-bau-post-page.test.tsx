@@ -70,9 +70,14 @@ const ANSWER: PublicBauPostResponse = {
     likeCount: 7,
     commentCount: 2,
     publishedAt: "2026-10-15T07:29:48.569Z",
+    channels: [],
+    publicUrl: `https://pqp.gg/c/mesa-da-tues/p/${POST_ID}`,
   },
   community: COMMUNITY,
 };
+
+const OPEN_CHANNEL = "5b0f3e2a-6c1d-4a3e-8d57-0a1b2c3d4e5f";
+const REDACTED = "00000000-0000-0000-0000-000000000000";
 
 let host: HTMLDivElement;
 let unmount: () => void;
@@ -142,6 +147,27 @@ describe("PublicBauPostPage", () => {
     );
     // No author row, no comment words: the page has no field to draw them from.
     expect(host.querySelector("[data-home-post]")).toBeNull();
+  });
+
+  it("draws a channel mention as a neutral pill: the name when everybody can see it, a plain #channel when not, never an error", async () => {
+    api.fetchPublicBauPost.mockResolvedValue({
+      ...ANSWER,
+      post: {
+        ...ANSWER.post,
+        body: `Passa em <#${OPEN_CHANNEL}> e em <#${REDACTED}> pra contar.`,
+        channels: [{ id: OPEN_CHANNEL, name: "anuncios" }],
+      },
+    });
+    await mount();
+    const pills = [...host.querySelectorAll("[data-home-channel-ref]")];
+    expect(pills.map((pill) => [pill.getAttribute("data-home-channel-ref"), pill.textContent])).toEqual([
+      ["public-name", "#anuncios"],
+      ["public-generic", "#channel"],
+    ]);
+    // Neither is a link, and nothing says "unavailable".
+    expect(host.querySelector("a[data-home-channel-ref]")).toBeNull();
+    expect(host.textContent?.toLowerCase()).not.toContain("unavailable");
+    expect(host.textContent).toContain("Passa em #anuncios e em #channel pra contar.");
   });
 
   it("the CTA carries the slug through sign-up as the join intent", async () => {

@@ -54,22 +54,29 @@ vi.mock("../auth/clerk.js", () => ({
   verifyAuthHeader: async () => null,
 }));
 
+/** The lifetimes asked of every signed GET, to pin the public path's short one. */
+const signedTtls: number[] = [];
+
 vi.mock("../lib/s3.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/s3.js")>()),
   isStorageConfigured: () => true,
-  presignGet: (key: string) => `https://storage.test/get/${key}?sig=abc`,
+  presignGet: (key: string, options?: { ttlSeconds?: number }) => {
+    signedTtls.push(options?.ttlSeconds ?? -1);
+    return `https://storage.test/get/${key}?sig=abc`;
+  },
 }));
 
 const { getPool, initDb, closePool } = await import("../db.js");
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { upsertUser } = await import("../services/users.js");
-const { createServer: createChatServer } = await import("../services/servers.js");
+const { createServer: createChatServer, createChannel } = await import("../services/servers.js");
 const flags = await import("../lib/flags.js");
 const {
   publicBauPostResponseSchema,
   parseBauPublicPostPath,
   bauShareUrl,
   BAU_PUBLIC_REDACTED_CHANNEL_ID,
+  BAU_PUBLIC_MEDIA_TTL_SECONDS,
 } = await import("@pqp/shared");
 
 let httpServer: Server;
@@ -95,6 +102,9 @@ interface Wire {
   location: string | null;
 }
 
+const CACHE_HIT = "public, max-age=0, s-maxage=60, stale-while-revalidate=60";
+const CACHE_MISS = "public, max-age=0, s-maxage=60";
+
 async function get(path: string, headers: Record<string, string> = {}): Promise<Wire> {
   actor = null;
   const response = await fetch(`${baseUrl}${path}`, { headers, redirect: "manual" });
@@ -111,6 +121,7 @@ async function get(path: string, headers: Record<string, string> = {}): Promise<
     response.headers.get("content-type"),
     response.headers.get("cache-control"),
     response.headers.get("vary"),
+    response.headers.get("access-control-allow-origin"),
   ]);
   return {
     status: response.status,
@@ -162,6 +173,7 @@ describeDb("public Baú post", () => {
     await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
     resetApiRateLimits();
     flags.resetFeatureFlagsForTests();
+    signedTtls.length = 0;
     process.env.COMMUNITIES_ENABLED = "true";
     process.env.COMMUNITY_HOME_ENABLED = "true";
     process.env.COMMUNITY_HOME_VIP_ENABLED = "true";
@@ -248,6 +260,11 @@ describeDb("public Baú post", () => {
     return result.rows[0]!.id;
   }
 
+  async function createChatServerChannel(name: string, isPrivate: boolean): Promise<string> {
+    const channel = await createChannel(serverId, name, "text", isPrivate);
+    return channel.id;
+  }
+
   const url = (postId: string, slug = SLUG) =>
     `/api/public/communities/${slug}/posts/${postId}`;
 
@@ -272,7 +289,7 @@ describeDb("public Baú post", () => {
 
     const res = await get(url(id));
     expect(res.status).toBe(200);
-    expect(res.headers.get("cache-control")).toBe("public, max-age=60");
+    expect(res.headers.get("cache-control")).toBe(CACHE_HIT);
     expect(res.headers.get("set-cookie")).toBeNull();
 
     const parsed = publicBauPostResponseSchema.parse(res.body);
@@ -292,16 +309,20 @@ describeDb("public Baú post", () => {
     });
     expect(Object.keys(res.body!.post as object).sort()).toEqual([
       "body",
+      "channels",
       "commentCount",
       "coverUrl",
       "id",
       "likeCount",
       "media",
       "posterUrl",
+      "publicUrl",
       "publishedAt",
       "teaser",
       "title",
     ]);
+    expect(parsed.post.publicUrl).toBe(`https://pqp.gg/c/${SLUG}/p/${id}`);
+    expect(parsed.post.channels).toEqual([]);
 
     // The channel reference is redacted to one that resolves to nothing.
     expect(parsed.post.body).toBe(
@@ -336,7 +357,7 @@ describeDb("public Baú post", () => {
       expect(res.text.toLowerCase()).not.toContain(CHANNEL_ID);
     }
     const parsed = publicBauPostResponseSchema.parse((await get(url(fromBody))).body);
-    expect(parsed.post.teaser).toBe("Leia antes de entrar.");
+    expect(parsed.post.teaser).toBe("Leia um canal antes de entrar.");
   });
 
   it("needs no credential, and a garbage Authorization header does not veto it", async () => {
@@ -383,7 +404,7 @@ describeDb("public Baú post", () => {
     expect(cover.location).toBe(
       `https://storage.test/get/community-home/${serverId}/imagem.png?sig=abc`,
     );
-    expect(cover.headers.get("cache-control")).toBe("public, max-age=60");
+    expect(cover.headers.get("cache-control")).toBe(CACHE_MISS);
   });
 
   it("a video's cover is its chosen picture; with none there is no cover", async () => {
@@ -431,7 +452,10 @@ describeDb("public Baú post", () => {
     async function baseline(): Promise<Wire> {
       const res = await get(url(UNKNOWN_ID));
       expect(res.status).toBe(404);
-      expect(res.headers.get("cache-control")).toBe("no-store");
+      // Cacheable for the same short time as a hit, and the same on every
+      // refusal: a flood of guessed ids lands on the edge, and no refusal can
+      // be told from another by how it is cached.
+      expect(res.headers.get("cache-control")).toBe(CACHE_MISS);
       expect(res.body).toEqual({ error: "Not found" });
       return res;
     }
@@ -565,13 +589,118 @@ describeDb("public Baú post", () => {
     expect((await get(url(id))).status).toBe(404);
   });
 
-  it("runs out of its own address-keyed bucket", async () => {
+  it("runs out of its own address-keyed bucket, which is roomier than the poster's", async () => {
     const statuses: number[] = [];
-    for (let i = 0; i < 61; i += 1) {
+    for (let i = 0; i < 241; i += 1) {
       statuses.push((await get(url(UNKNOWN_ID))).status);
     }
-    expect(statuses.slice(0, 60).every((s) => s === 404)).toBe(true);
-    expect(statuses[60]).toBe(429);
+    expect(statuses.slice(0, 240).every((s) => s === 404)).toBe(true);
+    expect(statuses[240]).toBe(429);
+    // A 429 is never cached: the limiter must not be served from the edge.
+    const limited = await get(url(UNKNOWN_ID));
+    expect(limited.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("answers a shared cache the same way for every origin: ACAO *, no Vary", async () => {
+    const id = await seed();
+    process.env.CORS_ALLOWED_ORIGINS = "https://pqp.gg";
+    try {
+      for (const origin of ["https://pqp.gg", "https://evil.example", ""]) {
+        const headers: Record<string, string> = origin ? { Origin: origin } : {};
+        for (const path of [url(id), url(UNKNOWN_ID), `${url(id)}/cover`]) {
+          const res = await get(path, headers);
+          expect(res.headers.get("access-control-allow-origin"), `${origin} ${path}`).toBe("*");
+          expect(res.headers.get("vary"), `${origin} ${path}`).toBeNull();
+        }
+      }
+    } finally {
+      delete process.env.CORS_ALLOWED_ORIGINS;
+    }
+  });
+
+  it("signs the public media for ten minutes, not the twelve hours a member's feed gets", async () => {
+    const id = await seed({
+      mediaKind: "video",
+      storageKey: `community-home/${serverId}/v.mp4`,
+      posterKey: `community-home/${serverId}/p.jpg`,
+    });
+    signedTtls.length = 0;
+    expect((await get(url(id))).status).toBe(200);
+    expect((await get(`${url(id)}/cover`)).status).toBe(302);
+    expect(signedTtls.length).toBeGreaterThanOrEqual(3);
+    expect(signedTtls.every((ttl) => ttl === BAU_PUBLIC_MEDIA_TTL_SECONDS)).toBe(true);
+    expect(BAU_PUBLIC_MEDIA_TTL_SECONDS).toBe(600);
+
+    // The same post read by a member keeps the long one.
+    signedTtls.length = 0;
+    await asMember(member, `/api/servers/${serverId}/home/posts/${id}`);
+    expect(signedTtls.length).toBeGreaterThanOrEqual(1);
+    expect(signedTtls.every((ttl) => ttl === 12 * 60 * 60)).toBe(true);
+  });
+
+  describe("channel mentions", () => {
+    it("names a channel everybody can see, and hides a private one behind a neutral reference", async () => {
+      const open = await createChatServerChannel("anuncios", false);
+      const staff = await createChatServerChannel("so-staff", true);
+      const id = await seed({
+        title: `Veja <#${open}>`,
+        body: `Passa em <#${open}> e nao em <#${staff}>, ta?`,
+      });
+      const res = await get(url(id));
+      const parsed = publicBauPostResponseSchema.parse(res.body);
+
+      // The open channel keeps its id and travels with its name; the private
+      // one is the neutral reference and its name is nowhere.
+      expect(parsed.post.channels).toEqual([{ id: open, name: "anuncios" }]);
+      expect(parsed.post.body).toBe(
+        `Passa em <#${open}> e nao em <#${BAU_PUBLIC_REDACTED_CHANNEL_ID}>, ta?`,
+      );
+      expect(parsed.post.title).toBe(`Veja <#${open}>`);
+      expect(res.text).not.toContain(staff);
+      expect(res.text).not.toContain("so-staff");
+
+      // The teaser reads as a sentence either way.
+      expect(parsed.post.teaser).toBe("Passa em #anuncios e nao em um canal, ta?");
+    });
+
+    it("a hand-written teaser is resolved the same way", async () => {
+      const open = await createChatServerChannel("geral2", false);
+      const staff = await createChatServerChannel("diretoria", true);
+      const id = await seed({ body: "corpo", teaser: `Vem <#${open}> ou <#${staff}>` });
+      const parsed = publicBauPostResponseSchema.parse((await get(url(id))).body);
+      expect(parsed.post.teaser).toBe("Vem #geral2 ou um canal");
+    });
+
+    it("an id from another server, a voice-less thread id or garbage resolves to nothing", async () => {
+      const other = await createChatServer("Outra Mesa", owner.id);
+      const foreign = await getPool().query<{ id: string }>(
+        `SELECT id FROM channels WHERE server_id = $1 LIMIT 1`,
+        [other.server.id],
+      );
+      const id = await seed({ body: `Olha <#${foreign.rows[0]!.id}> e <#${CHANNEL_ID}>` });
+      const res = await get(url(id));
+      const parsed = publicBauPostResponseSchema.parse(res.body);
+      expect(parsed.post.channels).toEqual([]);
+      expect(res.text.toLowerCase()).not.toContain(foreign.rows[0]!.id);
+      expect(res.text.toLowerCase()).not.toContain(CHANNEL_ID);
+    });
+
+    it("a channel that denies @everyone VIEW_CHANNEL is hidden even when it is not flagged private", async () => {
+      const channel = await createChatServerChannel("restrito", false);
+      const everyone = await getPool().query<{ id: string }>(
+        `SELECT id FROM roles WHERE server_id = $1 AND is_everyone`,
+        [serverId],
+      );
+      await getPool().query(
+        `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+         VALUES ($1, 'role', $2, 0, 64)`,
+        [channel, everyone.rows[0]!.id],
+      );
+      const id = await seed({ body: `Ver <#${channel}>` });
+      const parsed = publicBauPostResponseSchema.parse((await get(url(id))).body);
+      expect(parsed.post.channels).toEqual([]);
+      expect(parsed.post.teaser).toBe("Ver um canal");
+    });
   });
 
   it("only GET reaches it", async () => {

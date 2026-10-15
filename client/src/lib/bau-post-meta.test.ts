@@ -254,8 +254,24 @@ describe("the middleware on /c/<slug>/p/<postId>", () => {
     expect(body).toContain(
       `<link rel="canonical" href="https://pqp.gg/c/mesa-da-tues/p/${POST_ID}" />`,
     );
-    // The post's body is not on the card.
-    expect(body).not.toContain("corpo inteiro");
+    // The post's body is not on the card: it is only in the embedded answer.
+    const [tags] = body.split('<script type="application/json"');
+    expect(tags).not.toContain("corpo inteiro");
+    expect(body).toContain('<script type="application/json" id="pqp-bau-post">');
+    const embedded = body.match(/id="pqp-bau-post">([^<]*)<\/script>/)?.[1];
+    expect(JSON.parse(embedded!)).toEqual(API_ANSWER);
+  });
+
+  it("an embedded post cannot break out of its block, whatever the author typed", async () => {
+    const hostile = {
+      ...API_ANSWER,
+      post: { ...API_ANSWER.post, title: "</script><script>alert(1)</script>", body: "a & b < c" },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(hostile)));
+    const body = await (await onRequest(ctx(`/c/mesa-da-tues/p/${POST_ID}`))).text();
+    expect(body).not.toContain("<script>alert");
+    const embedded = body.match(/id="pqp-bau-post">([^<]*)<\/script>/)?.[1];
+    expect(JSON.parse(embedded!)).toEqual(hostile);
   });
 
   it("answers in English when the reader leads with English", async () => {
