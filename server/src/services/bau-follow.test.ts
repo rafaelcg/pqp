@@ -56,7 +56,12 @@ const { upsertUser } = await import("./users.js");
 const { createServer: createChatServer, createChannel } = await import("./servers.js");
 const { createRole, assignRole, unassignRole, upsertChannelOverwrite } = await import("./roles.js");
 const { handleChatMessage } = await import("../ws/chat.js");
-const { computeMemberPermissions, computeMemberPermissionsForChannels } = await import("./permissions.js");
+const {
+  computeMemberPermissions,
+  computeMemberPermissionsForChannels,
+  loadMemberPermissionContext,
+  memberServerPermissions,
+} = await import("./permissions.js");
 const { createMessage } = await import("./messages.js");
 const { createBauFollow, removeBauFollower, updateBauFollow } = await import("./bau-follow.js");
 const { publishDueCommunityHomePosts } = await import("./community-home.js");
@@ -370,6 +375,10 @@ describeDb("Seguir: following a Baú into a channel", () => {
       for (const channel of [destChannelId, destOwnerOnlyChannel]) {
         expect(batched.get(channel)).toBe(await computeMemberPermissions(destId, who.id, channel));
       }
+      // The server-wide bits from the same context are the no-channel answer.
+      expect(memberServerPermissions((await loadMemberPermissionContext(destId, who.id))!)).toBe(
+        await computeMemberPermissions(destId, who.id),
+      );
     }
     expect((await follow(carol, destChannelId)).status).toBe(403);
     await getPool().query(`DELETE FROM bau_follows WHERE target_channel_id = $1`, [destOwnerOnlyChannel]);

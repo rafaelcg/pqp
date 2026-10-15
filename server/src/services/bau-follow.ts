@@ -13,7 +13,12 @@ import { getPool } from "../db.js";
 import { mapWithConcurrency } from "../lib/admission.js";
 import { isEnabled } from "../lib/flags.js";
 import { isCommunityHomeEnabled } from "./community-home.js";
-import { computeMemberPermissions, computeMemberPermissionsForChannels } from "./permissions.js";
+import {
+  computeMemberPermissions,
+  loadMemberPermissionContext,
+  memberServerPermissions,
+  permissionsForChannelsOf,
+} from "./permissions.js";
 import { isServerMember } from "./users.js";
 import { listChannels, listServersForUser } from "./servers.js";
 
@@ -277,7 +282,14 @@ export async function listBauFollowDestinations(
     servers.filter((server) => !blockedIds.has(server.id)),
     4,
     async (server): Promise<BauFollowDestination | null> => {
-      const permissions = await computeMemberPermissions(server.id, viewerId);
+      // The member is read ONCE for the server: the cargo bits for the early
+      // exit and the roles' MENTION_EVERYONE, and the same context for the
+      // per-channel resolution below.
+      const context = await loadMemberPermissionContext(server.id, viewerId);
+      if (!context) {
+        return null;
+      }
+      const permissions = memberServerPermissions(context);
       if (
         !FOLLOW_MANAGE_BITS.some((bit) => hasPermission(permissions, bit)) &&
         !overwriteServers.has(server.id)
@@ -295,9 +307,8 @@ export async function listBauFollowDestinations(
         ),
       ]);
       const text = visible.filter((channel) => channel.type === "text");
-      const channelPermissions = await computeMemberPermissionsForChannels(
-        server.id,
-        viewerId,
+      const channelPermissions = await permissionsForChannelsOf(
+        context,
         text.map((channel) => channel.id),
       );
       const channels = text.filter((channel) =>
