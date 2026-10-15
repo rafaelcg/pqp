@@ -108,6 +108,15 @@ jobs:
       - name: Test monitor scripts
         run: node --test scripts/monitor/*.test.mjs
 
+      # The API box's deploy script runs as root against production and had no
+      # test at all. These cut the Caddyfile layout and integrity-check
+      # functions out of the real script and run them against a stubbed
+      # `docker`; no daemon, no root.
+      - name: Test api-host deploy script
+        run: |
+          bash -n tools/api-host/pqp-deploy.sh
+          bash tools/api-host/test-pqp-deploy.sh
+
       # The Flatpak release bump (flatpak/bump.mjs) is outside the workspace
       # too, and `.github/workflows/flatpak-manifest.yml` runs it unattended
       # on every published desktop release.

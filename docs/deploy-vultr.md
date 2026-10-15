@@ -137,7 +137,7 @@ idempotent; re-run it (without the secrets, which persist once set) any time
 to check for drift, the same way `tools/sfu/install.sh` works.
 
 **This step does not start `api-a`/`api-b`, `worker` or `caddy`.** It lays out
-`/opt/pqp/{compose.yaml,Caddyfile,.env}`, installs Docker, ufw,
+`/opt/pqp/{compose.yaml,caddy/Caddyfile,.env}`, installs Docker, ufw,
 unattended-upgrades, Alloy, `rclone`, and the nightly backup cron
 (`tools/api-host/db-backup.sh` installed to `/opt/pqp/backup/run.sh`, run by
 root's crontab, see `docs/DB_RUNBOOK.md`). `.env` is written as an empty
@@ -249,12 +249,15 @@ backup credential). See `docs/DB_RUNBOOK.md` for what it does and the
 has to be inside for the dump to connect at all.
 
 **TLS.** Pick Mode A or B in `tools/api-host/Caddyfile` (the file's header
-comment explains both). Mode A needs `/opt/pqp/certs/origin.{pem,key}`
-copied onto the box by hand (`scp`, 0600, never in git):
+comment explains both). Mode A needs `/opt/pqp/caddy/certs/origin.{pem,key}`
+copied onto the box by hand (`scp`, 0600, never in git). `/opt/pqp/caddy` is
+the one directory Caddy reads from the host, mounted whole at `/etc/caddy`
+(see "Caddy directory layout" in §8), so the pair appears in the container at
+the `/etc/caddy/certs/...` path the Caddyfile already names:
 
 ```bash
-scp -o StrictHostKeyChecking=accept-new origin.pem origin.key pqp@<ip>:/opt/pqp/certs/
-ssh pqp@<ip> 'sudo chown pqp:pqp /opt/pqp/certs/* && chmod 600 /opt/pqp/certs/*'
+scp -o StrictHostKeyChecking=accept-new origin.pem origin.key pqp@<ip>:/opt/pqp/caddy/certs/
+ssh pqp@<ip> 'sudo chown pqp:pqp /opt/pqp/caddy/certs/* && chmod 600 /opt/pqp/caddy/certs/*'
 ```
 
 ## 4. GitHub Actions secrets and variables
@@ -449,6 +452,53 @@ header comment. `pqp-deploy.sh` now rewrites `.env`'s `APP_IMAGE_TAG`/
 `APP_VERSION` fallback pin to match every deploy it verifies healthy, so a
 manual recreate with no tag in scope lands on the last deployed build
 instead of whatever sha was last hand-written there.
+
+**Caddy directory layout (and the four-week stale Caddyfile).**
+`compose.yaml` mounts the DIRECTORY `/opt/pqp/caddy` at `/etc/caddy`; the
+Caddyfile is `/opt/pqp/caddy/Caddyfile` and the Origin CA pair is
+`/opt/pqp/caddy/certs/origin.{pem,key}`. It used to bind-mount the single
+file `/opt/pqp/Caddyfile`, and a single-file bind mount pins the file's
+inode when the container is created. `pqp-deploy.sh` replaces the host file
+by rename (a new inode), so from the first deploy after the container was
+created the host path moved on while the container kept reading the old
+inode: for four weeks (2026-09-16 to 2026-10-15) Caddy ran a 4660-byte
+Caddyfile while the host held 8323 bytes, so every change in between (the
+Cloudflare viewer-address keying, `stream_close_delay`, ...) never applied,
+and `caddy reload --force` reported "config is unchanged". A directory mount
+looks the name up on every access, so a rename is seen. Two guards stay on
+top: after every reload `pqp-deploy.sh` compares `sha256sum` of the host
+Caddyfile with the container's, and on a mismatch recreates ONLY the `caddy`
+container and checks again (the deploy fails if it still differs); and
+`pqp-deploy.sh` seeds `/opt/pqp/caddy` from the old `/opt/pqp/{Caddyfile,certs}`
+when it is missing, then retires the old `/opt/pqp/Caddyfile` once the new
+layout is proven live. Check by hand any time:
+```bash
+ssh pqp@<ip> 'sha256sum /opt/pqp/caddy/Caddyfile; cd /opt/pqp && docker compose exec -T caddy sha256sum /etc/caddy/Caddyfile'
+```
+The two hashes must match.
+
+**One-time bootstrap on the existing box (the first deploy of this change).**
+The installed `/usr/local/bin/pqp-deploy` runs first on every deploy and
+installs the new `compose.yaml` before it recreates `caddy`; an older copy
+would recreate `caddy` against a directory it never created. The deploy
+workflow therefore refuses to deploy (step "Require a pqp-deploy that knows
+the Caddy directory layout", before anything is copied or touched) unless
+the installed script carries the marker `pqp-deploy-capability:
+caddy-dir-v1`. Install the new script by hand, from a checkout that has it
+(this restarts nothing):
+```bash
+scp tools/api-host/pqp-deploy.sh pqp@<ip>:/tmp/pqp-deploy.new
+ssh pqp@<ip> 'sudo install -m 0755 -o root -g root /tmp/pqp-deploy.new /usr/local/bin/pqp-deploy && rm /tmp/pqp-deploy.new && grep -c caddy-dir-v1 /usr/local/bin/pqp-deploy'
+```
+(The `grep -c` must print `1` or more.) Then run, or re-run, the deploy. That
+deploy recreates the `caddy` container ONCE, on the new mount, which closes
+every open socket without the `stream_close_delay` drain: do it outside a
+live party. If a different deploy lands between the install and this one, it
+stages the previous script and overwrites yours; the workflow's marker check
+then fails the run before touching anything, so just install again and
+re-run. Afterwards, once `curl https://api.pqp.gg/health` is fine,
+`sudo rm -r /opt/pqp/certs` removes the old, no-longer-read certificate copy
+(`pqp-deploy.sh` leaves key material alone on purpose).
 
 **Check what is running.**
 ```bash
