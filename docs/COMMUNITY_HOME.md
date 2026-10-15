@@ -395,7 +395,26 @@ user and never in a member list.
   destination channel's settings list what it follows with **Deixar de seguir**
   (`GET /api/channels/:id/bau-follows`, `DELETE /api/bau-follows/:id`). Android
   has the same set (button, picker, followers with **Permitir seguir**, the
-  channel's list); see `docs/ANDROID.md` §Seguir. iOS does not yet.
+  channel's list); see `docs/ANDROID.md` §Seguir. iOS has it too (next item).
+- **On iOS** (`ios/pqp/Sources/Core/BauFollow.swift`, `Home/BauFollowViews.swift`).
+  The same three places as the web, in phone shapes. The Baú's toolbar draws a
+  bell while the state read says `enabled` (a filled bell once the viewer
+  follows it somewhere), which opens a sheet: the viewer's own follows of this
+  Baú (Deixar de seguir, Retomar when paused), then server, channel and optional
+  role pickers. Whoever holds Manage Server also gets an overflow menu whenever
+  the flag is on for the source (`flagOn` on the followers read), **even while the
+  owner's switch is off**, because that menu is where the switch lives on a phone
+  (there is no Baú settings screen): the Seguidores sheet holds the "Permitir
+  seguir" toggle, the follower list (Remover, Remover e bloquear after a
+  confirmation, 50 rows at a time) and the blocked servers with Desbloquear. A
+  text channel's context menu has **Seguindo** for whoever holds Manage Webhooks
+  or Manage Channels there, while the instance Baú flag is on: it lists what the
+  channel follows. Unlike the web, which hides that section when the list is
+  empty, the phone shows the entry and says "this channel follows nothing yet",
+  because a context menu cannot be filled after an async read. Refusals map the
+  way the web's `bauFollowErrorKey` does (`BauFollowFailure`). The rules are
+  pinned by `BauFollowTests`; `BauFollowUITests` drives the journey against a
+  local API (not run in CI).
 - **What goes out.** Free, published posts that went live AFTER the follow was
   made (or last resumed), never the backlog. Scheduled posts go out when they
   flip to published. Members-only (VIP) posts and drafts never do. A post older

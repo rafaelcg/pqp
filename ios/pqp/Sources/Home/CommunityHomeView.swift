@@ -135,6 +135,7 @@ struct CommunityHomeView: View {
             BauPlayback.shared.stopAllUnlessFullScreen()
         }
         .communityHomeComposer(server: server, config: config, channels: channels) { Task { await load() } }
+        .bauFollowEntry(server: server)
         .forwardSheet($forwardSource)
         .task { forwardsEnabled = await session.api.forwardConfig().enabled }
         .navigationDestination(item: $openedChannel) { channel in

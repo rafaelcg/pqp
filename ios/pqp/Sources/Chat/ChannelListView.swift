@@ -165,6 +165,8 @@ struct ChannelListView: View {
     @State private var confirmingLeave = false
     @State private var showingSettings = false
     @State private var webhooksFor: Channel?
+    /// Seguir: the channel whose "Following" list is up.
+    @State private var bauFollowsFor: Channel?
     @State private var memberPickerFor: Channel?
     @State private var threadsFor: Channel?
     @State private var current: Server
@@ -749,6 +751,7 @@ struct ChannelListView: View {
             )
         }
         .sheet(item: $webhooksFor) { channel in WebhooksView(channel: channel) }
+        .sheet(item: $bauFollowsFor) { channel in ChannelBauFollowsSheet(channel: channel) }
         .sheet(item: $memberPickerFor) { channel in
             ChannelMembersView(channel: channel, server: current)
         }
@@ -1434,6 +1437,17 @@ struct ChannelListView: View {
             Button { threadsFor = channel } label: {
                 Label("Threads", systemImage: "bubble.left.and.text.bubble.right")
             }
+        }
+        // Seguir: what a text channel follows, for whoever may set a follow up
+        // there (Manage Webhooks or Manage Channels), while the Baú is on at
+        // all. Per-source switches decide whether anything can be followed; a
+        // channel that follows nothing says so.
+        if channel.isText, communityHome?.enabled == true,
+           isManager || BauFollowRules.mayManageFollows(watchPartyPermissions, channelId: channel.id) {
+            Button { bauFollowsFor = channel } label: {
+                Label("Following", systemImage: "bell")
+            }
+            .accessibilityIdentifier("channel.menu.following")
         }
         if isManager {
             Button {

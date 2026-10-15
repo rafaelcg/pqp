@@ -11,6 +11,16 @@
         }
       }
     },
+    "%@ already follows %lld Baús, the most a server can." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ já segue %lld Baús, o máximo que um servidor pode."
+          }
+        }
+      }
+    },
     "%@ and %@ are typing" : {
       "localizations" : {
         "pt-BR" : {
@@ -351,6 +361,16 @@
         }
       }
     },
+    "Free posts arrive as cards in the channels people choose. In a public community any member can set it up; otherwise only people who manage the server. Members-only posts never go out." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os posts livres chegam como cartões nos canais que as pessoas escolherem. Numa comunidade pública qualquer membro pode configurar; nas outras, só quem gerencia o servidor. Posts só pra membros nunca saem."
+          }
+        }
+      }
+    },
     "It posts by itself when you're back online." : {
       "localizations" : {
         "pt-BR" : {
@@ -467,6 +487,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld d"
+          }
+        }
+      }
+    },
+    "%lld followers" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld follower"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld followers"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld seguidor"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld seguidores"
+                }
+              }
+            }
           }
         }
       }
@@ -1621,6 +1681,16 @@
         }
       }
     },
+    "Allow other servers to follow this Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permitir que outros servidores sigam este Baú"
+          }
+        }
+      }
+    },
     "Already added" : {
       "localizations" : {
         "pt-BR" : {
@@ -1921,6 +1991,16 @@
         }
       }
     },
+    "Baú of %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baú de %@"
+          }
+        }
+      }
+    },
     "Baú post: %@" : {
       "localizations" : {
         "pt-BR" : {
@@ -2057,6 +2137,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Bloqueados"
+          }
+        }
+      }
+    },
+    "Blocked servers" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Servidores bloqueados"
           }
         }
       }
@@ -2731,6 +2821,16 @@
         }
       }
     },
+    "Could not follow right now. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra seguir agora. Tenta de novo."
+          }
+        }
+      }
+    },
     "Could not load channels" : {
       "localizations" : {
         "pt-BR" : {
@@ -2761,12 +2861,42 @@
         }
       }
     },
+    "Could not load the followers. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar os seguidores. Tenta de novo."
+          }
+        }
+      }
+    },
     "Could not load this file." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Não deu para carregar este arquivo."
+          }
+        }
+      }
+    },
+    "Could not load what this channel follows." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar o que este canal segue."
+          }
+        }
+      }
+    },
+    "Could not load your servers. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar teus servidores. Tenta de novo."
           }
         }
       }
@@ -3441,6 +3571,16 @@
         }
       }
     },
+    "Done. New posts will arrive in #%@ of %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pronto. Os posts novos vão chegar em #%@ de %@."
+          }
+        }
+      }
+    },
     "Double tap to edit" : {
       "localizations" : {
         "pt-BR" : {
@@ -3631,12 +3771,32 @@
         }
       }
     },
+    "Every channel of this server already follows this Baú." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos os canais deste servidor já seguem este Baú."
+          }
+        }
+      }
+    },
     "Every channel, message, and invite is deleted for everyone." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Todos os canais, mensagens e convites são excluídos para todo mundo."
+          }
+        }
+      }
+    },
+    "Every follow from that server stops now, and it cannot follow this Baú again until you unblock it. Cards already delivered stay." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos os seguimentos desse servidor param agora, e ele não poderá seguir este Baú de novo até tu desbloquear. Os cartões já entregues ficam."
           }
         }
       }
@@ -3801,12 +3961,62 @@
         }
       }
     },
+    "Follow this Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir este Baú"
+          }
+        }
+      }
+    },
+    "Follow this Baú into a channel of another server" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir este Baú num canal de outro servidor"
+          }
+        }
+      }
+    },
+    "Followers" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguidores"
+          }
+        }
+      }
+    },
+    "Followers of this Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguidores deste Baú"
+          }
+        }
+      }
+    },
     "Following" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Seguindo"
+          }
+        }
+      }
+    },
+    "Following this Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguindo este Baú"
           }
         }
       }
@@ -4931,12 +5141,42 @@
         }
       }
     },
+    "Mention a role on each post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcar um cargo a cada post"
+          }
+        }
+      }
+    },
+    "Mention nobody" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem marcar ninguém"
+          }
+        }
+      }
+    },
     "Mention someone" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mencionar alguém"
+          }
+        }
+      }
+    },
+    "Mentions %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marca %@"
           }
         }
       }
@@ -5271,6 +5511,16 @@
         }
       }
     },
+    "New free posts arrive as a card in the channel you pick, signed by this community. Members-only posts never go out." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os posts livres novos chegam como cartão no canal que tu escolher, assinados por esta comunidade. Posts só pra membros nunca saem."
+          }
+        }
+      }
+    },
     "New in the Baú" : {
       "localizations" : {
         "pt-BR" : {
@@ -5557,6 +5807,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "NENHUMA RESPOSTA AINDA"
+          }
+        }
+      }
+    },
+    "No server follows this Baú yet." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhum servidor segue este Baú ainda."
           }
         }
       }
@@ -6771,6 +7031,26 @@
         }
       }
     },
+    "Remove and block" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remover e bloquear"
+          }
+        }
+      }
+    },
+    "Remove and block %@?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remover e bloquear %@?"
+          }
+        }
+      }
+    },
     "Remove friend" : {
       "localizations" : {
         "pt-BR" : {
@@ -7061,6 +7341,16 @@
         }
       }
     },
+    "Resume following" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retomar"
+          }
+        }
+      }
+    },
     "Rooms for\neverything." : {
       "localizations" : {
         "pt-BR" : {
@@ -7211,6 +7501,16 @@
         }
       }
     },
+    "Server" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Servidor"
+          }
+        }
+      }
+    },
     "Server default" : {
       "localizations" : {
         "pt-BR" : {
@@ -7227,6 +7527,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Servidores"
+          }
+        }
+      }
+    },
+    "Servers that receive your free posts as cards. You see server names, never people." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Servidores que recebem teus posts livres como cartões. Tu vê o nome dos servidores, nunca de pessoas."
           }
         }
       }
@@ -8181,6 +8491,16 @@
         }
       }
     },
+    "That channel already follows this Baú." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse canal já segue este Baú."
+          }
+        }
+      }
+    },
     "That did not work. Try again." : {
       "localizations" : {
         "pt-BR" : {
@@ -8217,6 +8537,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esse aí é reservado."
+          }
+        }
+      }
+    },
+    "That role cannot be mentioned." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse cargo não pode ser marcado."
+          }
+        }
+      }
+    },
+    "That server already follows as many Baús as it can." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse servidor já segue o máximo de Baús que pode."
           }
         }
       }
@@ -8461,6 +8801,16 @@
         }
       }
     },
+    "This Baú no longer accepts follows." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este Baú não aceita mais seguidores."
+          }
+        }
+      }
+    },
     "This call already has the maximum number of cameras." : {
       "localizations" : {
         "pt-BR" : {
@@ -8577,6 +8927,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Isso não tem volta. A gente não guarda backup pra te restaurar, e ninguém no pqp consegue trazer sua conta de volta."
+          }
+        }
+      }
+    },
+    "This channel does not follow any Baú yet. Open a Baú and tap the bell to follow it here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este canal ainda não segue nenhum Baú. Abre um Baú e toca no sininho pra seguir aqui."
+          }
+        }
+      }
+    },
+    "This community does not accept that server." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta comunidade não aceita esse servidor."
           }
         }
       }
@@ -9441,6 +9811,16 @@
         }
       }
     },
+    "What you already follow here" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O que tu já segue deste Baú"
+          }
+        }
+      }
+    },
     "What you tried, what went wrong, a screenshot if you have one" : {
       "localizations" : {
         "pt-BR" : {
@@ -9787,6 +10167,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você saiu da sala, então sua tela não está indo ao ar. Volte pra continuar transmitindo."
+          }
+        }
+      }
+    },
+    "You need to manage webhooks or channels in that channel." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu precisa gerenciar webhooks ou canais nesse canal."
           }
         }
       }
@@ -10197,6 +10587,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "mudou o domínio de e-mail SSO"
+          }
+        }
+      }
+    },
+    "Channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canal"
           }
         }
       }
@@ -12251,6 +12651,36 @@
         }
       }
     },
+    "Paused" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausado"
+          }
+        }
+      }
+    },
+    "Paused because this server banned the Baú's account. Unban it to resume, or unfollow." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausado porque este servidor baniu a conta do Baú. Desbane pra retomar, ou deixa de seguir."
+          }
+        }
+      }
+    },
+    "Paused because whoever set it up lost permission to manage this channel. Resuming makes you the one it answers to." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausado porque quem configurou perdeu a permissão de gerenciar este canal. Ao retomar, tu passa a ser quem responde por ele."
+          }
+        }
+      }
+    },
     "Playback speed" : {
       "localizations" : {
         "pt-BR" : {
@@ -12381,6 +12811,16 @@
         }
       }
     },
+    "Unfollow" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deixar de seguir"
+          }
+        }
+      }
+    },
     "You are on a call. Leave it to record a voice message." : {
       "localizations" : {
         "pt-BR" : {
@@ -12477,6 +12917,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Título"
+          }
+        }
+      }
+    },
+    "To follow a Baú you need to manage webhooks or channels in a server of yours." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pra seguir um Baú, tu precisa gerenciar webhooks ou canais num servidor teu."
           }
         }
       }
@@ -12611,6 +13061,16 @@
         }
       }
     },
+    "The Baús this channel follows. New free posts arrive here as cards." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os Baús que este canal segue. Os posts livres novos chegam aqui como cartões."
+          }
+        }
+      }
+    },
     "That file is too large for the Baú." : {
       "localizations" : {
         "pt-BR" : {
@@ -12627,6 +13087,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Calma, tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "Slow down a little and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vai com calma e tenta de novo."
           }
         }
       }
