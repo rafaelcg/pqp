@@ -48,8 +48,17 @@ export function useBringCrew(
   dismissed: BringCrewPhase | null;
   dismiss: () => void;
 } {
-  const [arrivals, setArrivals] = useState<DiscordImportArrivals | null>(null);
+  // The answer carries the server it was for, so a render after a server
+  // switch (before the effect that forgets it runs) can never show one
+  // server's count and invite code over another.
+  const [answer, setAnswer] = useState<{
+    serverId: string;
+    arrivals: DiscordImportArrivals;
+  } | null>(null);
   const [dismissed, setDismissed] = useState<BringCrewPhase | null>(null);
+  // Closing the reminder is final: nothing the server could say changes the
+  // screen after that, so stop asking.
+  const finished = dismissed === "reminder";
   /** The last request failed for a reason worth retrying (network, 5xx). */
   const [retrying, setRetrying] = useState(false);
   const forServer = useRef<string | null>(null);
@@ -64,7 +73,7 @@ export function useBringCrew(
       // The permission went away: forget the answer, and let a request that
       // is still in flight land on nothing.
       latest.current += 1;
-      setArrivals(null);
+      setAnswer(null);
       setRetrying(false);
       return;
     }
@@ -74,7 +83,7 @@ export function useBringCrew(
     getImportArrivals(asked)
       .then((next) => {
         if (current()) {
-          setArrivals(next);
+          setAnswer({ serverId: asked, arrivals: next });
           setRetrying(false);
         }
       })
@@ -85,7 +94,7 @@ export function useBringCrew(
         if (!isTransientArrivalsError(error)) {
           // A permission taken away, an API without the route, any other
           // refusal: nothing to draw, and nothing to retry.
-          setArrivals(null);
+          setAnswer(null);
           setRetrying(false);
           return;
         }
@@ -96,7 +105,7 @@ export function useBringCrew(
 
   useEffect(() => {
     forServer.current = serverId;
-    setArrivals(null);
+    setAnswer(null);
     setRetrying(false);
     setDismissed(serverId ? readBringCrewDismissed(serverId) : null);
   }, [serverId]);
@@ -117,7 +126,12 @@ export function useBringCrew(
   useEffect(() => {
     const before = lastCount.current;
     lastCount.current = memberCount;
-    if (memberCount === 0 || before === 0 || before === memberCount) {
+    if (
+      finished ||
+      memberCount === 0 ||
+      before === 0 ||
+      before === memberCount
+    ) {
       return;
     }
     const timer = window.setTimeout(
@@ -125,18 +139,20 @@ export function useBringCrew(
       MEMBER_COUNT_DEBOUNCE_MS,
     );
     return () => window.clearTimeout(timer);
-  }, [memberCount]);
+  }, [memberCount, finished]);
 
   // Derived as well as cleared: the render where `canManage` turns false must
   // not draw the strip while the effect that forgets it is still to run.
-  const visible = canManage ? arrivals : null;
+  const visible =
+    canManage && answer?.serverId === serverId ? answer.arrivals : null;
 
   const live =
     canManage &&
+    !finished &&
     (retrying ||
-      (arrivals?.enabled === true &&
-        arrivals.phase !== null &&
-        arrivals.phase !== "over"));
+      (visible?.enabled === true &&
+        visible.phase !== null &&
+        visible.phase !== "over"));
 
   useEffect(() => {
     if (!live) {

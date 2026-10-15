@@ -196,4 +196,44 @@ describe("useBringCrew", () => {
     await advance(MEMBER_COUNT_DEBOUNCE_MS * 2);
     expect(getImportArrivals).toHaveBeenCalledTimes(1);
   });
+
+  it("never shows one server's answer over another during a switch", async () => {
+    getImportArrivals.mockResolvedValueOnce(fresh).mockReturnValue(
+      new Promise(() => {}),
+    );
+    mount({ serverId: "s1", canManage: true, count: 5 });
+    await settle();
+    expect(seen!.arrivals?.inviteCode).toBe("AbC123");
+
+    // The render of the switch itself, before any effect has run.
+    update({ serverId: "s2", canManage: true, count: 5 });
+    expect(seen!.arrivals).toBeNull();
+  });
+
+  it("stops polling and refetching once the reminder is closed for good", async () => {
+    getImportArrivals.mockResolvedValue({ ...fresh, phase: "reminder" });
+    mount({ serverId: "s1", canManage: true, count: 5 });
+    await settle();
+    expect(seen!.arrivals?.phase).toBe("reminder");
+
+    act(() => seen!.dismiss());
+    expect(seen!.dismissed).toBe("reminder");
+    const asked = getImportArrivals.mock.calls.length;
+
+    await advance(120_000);
+    update({ serverId: "s1", canManage: true, count: 6 });
+    await advance(MEMBER_COUNT_DEBOUNCE_MS * 2);
+    expect(getImportArrivals).toHaveBeenCalledTimes(asked);
+  });
+
+  it("keeps polling after the first-day strip is closed, for the reminder", async () => {
+    getImportArrivals.mockResolvedValue(fresh);
+    mount({ serverId: "s1", canManage: true, count: 5 });
+    await settle();
+    act(() => seen!.dismiss());
+    expect(seen!.dismissed).toBe("fresh");
+    const asked = getImportArrivals.mock.calls.length;
+    await advance(30_000);
+    expect(getImportArrivals.mock.calls.length).toBeGreaterThan(asked);
+  });
 });
