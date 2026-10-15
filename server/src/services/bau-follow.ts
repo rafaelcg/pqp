@@ -85,8 +85,6 @@ interface FollowJoinRow {
   target_server_name: string;
   target_channel_id: string;
   target_channel_name: string;
-  role_ping_id: string | null;
-  role_ping_name: string | null;
   created_by: string | null;
   paused_at: Date | null;
   paused_reason: "permissions" | "banned" | null;
@@ -98,13 +96,11 @@ const FOLLOW_SELECT = `
          ss.icon_url AS source_server_icon_url,
          f.target_server_id, ts.name AS target_server_name,
          f.target_channel_id, tc.name AS target_channel_name,
-         f.role_ping_id, r.name AS role_ping_name,
          f.created_by, f.paused_at, f.paused_reason, f.created_at
     FROM bau_follows f
     JOIN servers ss ON ss.id = f.source_server_id
     JOIN servers ts ON ts.id = f.target_server_id
-    JOIN channels tc ON tc.id = f.target_channel_id
-    LEFT JOIN roles r ON r.id = f.role_ping_id`;
+    JOIN channels tc ON tc.id = f.target_channel_id`;
 
 function toFollow(row: FollowJoinRow, viewerId: string): BauFollow {
   return {
@@ -116,8 +112,10 @@ function toFollow(row: FollowJoinRow, viewerId: string): BauFollow {
     targetServerName: row.target_server_name,
     targetChannelId: row.target_channel_id,
     targetChannelName: row.target_channel_name,
-    rolePingId: row.role_ping_id,
-    rolePingName: row.role_ping_name,
+    // A delivery never pings, so there is no ping to report. The fields stay in
+    // the contract (an older client parses them) and always read null.
+    rolePingId: null,
+    rolePingName: null,
     status: row.paused_at ? "paused" : "active",
     pausedReason: row.paused_at ? (row.paused_reason ?? "permissions") : null,
     pausedAt: row.paused_at?.toISOString() ?? null,
@@ -296,16 +294,7 @@ export async function listBauFollowDestinations(
       ) {
         return null;
       }
-      const [visible, roles] = await Promise.all([
-        listChannels(server.id, viewerId),
-        pool.query<{ id: string; name: string; color: string | null }>(
-          `SELECT id, name, color FROM roles
-            WHERE server_id = $1 AND is_everyone = FALSE
-              AND ($2::boolean OR mentionable)
-            ORDER BY position DESC, name ASC`,
-          [server.id, hasPermission(permissions, Permission.MENTION_EVERYONE)],
-        ),
-      ]);
+      const visible = await listChannels(server.id, viewerId);
       const text = visible.filter((channel) => channel.type === "text");
       const channelPermissions = await permissionsForChannelsOf(
         context,
@@ -326,11 +315,9 @@ export async function listBauFollowDestinations(
           name: channel.name,
           following: followedChannels.has(channel.id),
         })),
-        roles: roles.rows.map((role) => ({
-          id: role.id,
-          name: role.name,
-          color: role.color,
-        })),
+        // Nothing to pick: a delivery never pings (see `followBody`). Kept in
+        // the contract so an older client still parses the answer.
+        roles: [],
         followCount: countByServer.get(server.id) ?? 0,
       };
     },
@@ -364,30 +351,11 @@ async function loadTextChannel(channelId: string): Promise<ChannelRow & { server
   return channel as ChannelRow & { server_id: string };
 }
 
-/** The role must belong to the destination and be one the actor may ping. */
-async function assertPingableRole(
-  roleId: string,
-  targetServerId: string,
-  permissions: bigint,
-): Promise<void> {
-  const result = await getPool().query<{ mentionable: boolean; is_everyone: boolean }>(
-    `SELECT mentionable, is_everyone FROM roles WHERE id = $1 AND server_id = $2`,
-    [roleId, targetServerId],
-  );
-  const role = result.rows[0];
-  if (
-    !role ||
-    role.is_everyone ||
-    !(role.mentionable || hasPermission(permissions, Permission.MENTION_EVERYONE))
-  ) {
-    throw new BauFollowError("invalid", "That role cannot be pinged");
-  }
-}
-
 export async function createBauFollow(input: {
   sourceServerId: string;
   channelId: string;
-  rolePingId: string | null;
+  /** Accepted for older clients and ignored: a delivery never pings. */
+  rolePingId?: string | null;
   actorId: string;
 }): Promise<BauFollow> {
   // A public source is followed by its MEMBERS (the route checks too; this is
@@ -416,9 +384,6 @@ export async function createBauFollow(input: {
       "forbidden",
       "You need to manage webhooks or channels in that channel",
     );
-  }
-  if (input.rolePingId) {
-    await assertPingableRole(input.rolePingId, channel.server_id, permissions);
   }
 
   const client = await pool.connect();
@@ -449,8 +414,8 @@ export async function createBauFollow(input: {
     }
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO bau_follows
-         (source_server_id, target_server_id, target_channel_id, created_by, role_ping_id)
-       VALUES ($1, $2, $3, $4, $5)
+         (source_server_id, target_server_id, target_channel_id, created_by)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT (source_server_id, target_channel_id) DO NOTHING
        RETURNING id`,
       [
@@ -458,7 +423,6 @@ export async function createBauFollow(input: {
         channel.server_id,
         channel.id,
         input.actorId,
-        input.rolePingId,
       ],
     );
     if (!inserted.rows[0]) {
@@ -532,6 +496,7 @@ export async function requireFollowAuthority(
 export async function updateBauFollow(input: {
   followId: string;
   actorId: string;
+  /** Accepted for older clients and ignored: a delivery never pings. */
   rolePingId?: string | null;
   resume?: boolean;
 }): Promise<BauFollow> {
@@ -539,19 +504,10 @@ export async function updateBauFollow(input: {
   if (!follow) {
     throw new BauFollowError("not_found", "Follow not found");
   }
-  const permissions = await requireFollowAuthority(follow, input.actorId);
-  if (input.rolePingId) {
-    await assertPingableRole(input.rolePingId, follow.target_server_id, permissions);
-  }
+  await requireFollowAuthority(follow, input.actorId);
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    if (input.rolePingId !== undefined) {
-      await client.query(`UPDATE bau_follows SET role_ping_id = $2 WHERE id = $1`, [
-        follow.id,
-        input.rolePingId,
-      ]);
-    }
     if (input.resume === true) {
       // The resumer is the authority from here on, and nothing older than this
       // moment is carried: the posts that came and went while it was paused

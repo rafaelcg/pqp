@@ -49,6 +49,7 @@ export const bauFollowSchema = z.object({
   targetServerName: z.string(),
   targetChannelId: z.string().uuid(),
   targetChannelName: z.string(),
+  /** Always null: a delivery never pings. Kept so an older client still parses it. */
   rolePingId: z.string().uuid().nullable(),
   rolePingName: z.string().nullable(),
   status: bauFollowStatusSchema,
@@ -74,7 +75,7 @@ export const bauFollowStateSchema = z.object({
 });
 export type BauFollowState = z.infer<typeof bauFollowStateSchema>;
 
-/** A role of a destination server a follow may ping. */
+/** A role of a destination server a follow may ping. Deprecated: a delivery never pings, so `roles` is always empty. */
 export const bauFollowRoleOptionSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -95,7 +96,7 @@ export const bauFollowDestinationSchema = z.object({
   serverName: z.string(),
   serverIconUrl: z.string().nullable(),
   channels: z.array(bauFollowChannelOptionSchema),
-  /** Roles the viewer may ping from this server (mentionable, or they may mention everyone). */
+  /** Always empty: a delivery never pings. Kept so an older client still parses the answer. */
   roles: z.array(bauFollowRoleOptionSchema),
   /** How many follows this server already holds, against `maxPerServer`. */
   followCount: z.number().int().nonnegative(),
@@ -118,12 +119,12 @@ export type BauFollowDestinations = z.infer<typeof bauFollowDestinationsSchema>;
 /** `POST /api/servers/:serverId/home/follow` */
 export const createBauFollowSchema = z.object({
   channelId: z.string().uuid(),
-  /** A role of the destination server to mention on each delivery. */
+  /** Ignored: a delivery never pings. Accepted so an older client's request still validates. */
   rolePingId: z.string().uuid().nullable().optional(),
 });
 export type CreateBauFollowRequest = z.infer<typeof createBauFollowSchema>;
 
-/** `PATCH /api/bau-follows/:followId`: change the ping, or resume a paused follow. */
+/** `PATCH /api/bau-follows/:followId`: resume a paused follow (`rolePingId` is accepted and ignored). */
 export const updateBauFollowSchema = z
   .object({
     rolePingId: z.string().uuid().nullable().optional(),

@@ -12,7 +12,7 @@ import { broadcastToChannel, announceServiceMessage } from "../ws/chat.js";
 import { logAudit } from "./audit.js";
 import { isBauFollowOn, mayManageFollow } from "./bau-follow.js";
 import {
-  buildBauPostSnapshot,
+  buildInertBauPostSnapshot,
   followBody,
   snapshotHash,
   snapshotIsEmpty,
@@ -340,8 +340,6 @@ interface SyncRow extends PostForSnapshot {
   source_id: string;
   source_name: string;
   source_icon_url: string | null;
-  role_ping_name: string | null;
-  ping_prefix: boolean;
 }
 
 /** Pages of stale cards one tick works through (SWEEP_BATCH rows each). */
@@ -375,15 +373,12 @@ async function syncEditedPosts(serverId?: string): Promise<number> {
               p.updated_at::text AS post_updated_at,
               p.id, p.server_id, p.title, p.body, p.teaser, p.media_kind,
               p.media_youtube_url, p.published_at, p.created_at,
-              s.id AS source_id, s.name AS source_name, s.icon_url AS source_icon_url,
-              CASE WHEN m.body LIKE '@%' THEN r.name END AS role_ping_name,
-              (m.body LIKE '@%') AS ping_prefix
+              s.id AS source_id, s.name AS source_name, s.icon_url AS source_icon_url
          FROM bau_follow_deliveries d
          JOIN messages m ON m.id = d.message_id
          JOIN community_home_posts p ON p.id = d.post_id
          JOIN servers s ON s.id = d.source_server_id
          JOIN bau_follows f ON f.id = d.follow_id
-         LEFT JOIN roles r ON r.id = f.role_ping_id
         WHERE d.status = 'delivered' AND d.message_id IS NOT NULL
           AND d.delivered_at > NOW() - INTERVAL '${RECONCILE_DAYS} days'
           AND p.status = 'published' AND p.visibility = 'free'
@@ -419,7 +414,7 @@ async function syncEditedPosts(serverId?: string): Promise<number> {
 
 async function syncOne(row: SyncRow): Promise<boolean> {
   const pool = getPool();
-  const snapshot = buildBauPostSnapshot(
+  const snapshot = await buildInertBauPostSnapshot(
     row,
     { id: row.source_id, name: row.source_name, icon_url: row.source_icon_url },
     { publicUrl: await getBauPublicUrl(row.server_id, row.id) },
@@ -433,7 +428,7 @@ async function syncOne(row: SyncRow): Promise<boolean> {
     );
     return false;
   }
-  const body = composeBody(snapshot, row.ping_prefix ? row.role_ping_name : null);
+  const body = followBody(snapshot);
   const changed = await pool.query(
     `UPDATE messages
         SET body = $2, forward = $3::jsonb, edited_at = NOW(),
@@ -470,10 +465,6 @@ async function syncOne(row: SyncRow): Promise<boolean> {
     });
   }
   return true;
-}
-
-function composeBody(snapshot: BauPostSnapshot, rolePingName: string | null): string {
-  return followBody(snapshot, rolePingName);
 }
 
 // ---------------------------------------------------------------- 3. enqueue
@@ -645,7 +636,6 @@ type Outcome = "delivered" | "skipped" | "failed" | "paused";
 
 interface DeliveryContext {
   created_by: string | null;
-  role_ping_id: string | null;
   paused_at: Date | null;
   after_since: boolean | null;
   target_channel_id: string;
@@ -660,8 +650,6 @@ interface DeliveryContext {
   source_public: boolean;
   slowmode_seconds: number;
   blocked: boolean;
-  role_name: string | null;
-  role_mentionable: boolean | null;
   post_id: string | null;
   post_server_id: string | null;
   title: string | null;
@@ -678,7 +666,7 @@ interface DeliveryContext {
 
 async function loadContext(claimed: Claimed): Promise<DeliveryContext | null> {
   const result = await getPool().query<DeliveryContext>(
-    `SELECT f.created_by, f.role_ping_id, f.paused_at, (p.published_at > f.since_at) AS after_since, f.target_channel_id,
+    `SELECT f.created_by, f.paused_at, (p.published_at > f.since_at) AS after_since, f.target_channel_id,
             f.target_server_id, tc.type AS channel_type, tc.kind AS channel_kind,
             s.id AS source_id, s.name AS source_name, s.icon_url AS source_icon_url,
             s.community_home_enabled AS home_enabled,
@@ -690,7 +678,6 @@ async function loadContext(claimed: Claimed): Promise<DeliveryContext | null> {
                WHERE b.source_server_id = f.source_server_id
                  AND b.blocked_server_id = f.target_server_id
             ) AS blocked,
-            r.name AS role_name, r.mentionable AS role_mentionable,
             p.id AS post_id, p.server_id AS post_server_id, p.title, p.body,
             p.teaser, p.visibility, p.status, p.media_kind, p.media_youtube_url,
             p.published_at, p.created_at AS post_created_at,
@@ -698,7 +685,6 @@ async function loadContext(claimed: Claimed): Promise<DeliveryContext | null> {
        FROM bau_follows f
        JOIN servers s ON s.id = f.source_server_id
        JOIN channels tc ON tc.id = f.target_channel_id
-       LEFT JOIN roles r ON r.id = f.role_ping_id
        LEFT JOIN community_home_posts p ON p.id = $2
       WHERE f.id = $1`,
     [claimed.follow_id, claimed.post_id],
@@ -846,7 +832,7 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
       published_at: ctx.published_at,
       created_at: ctx.post_created_at ?? ctx.published_at,
     };
-    const snapshot = buildBauPostSnapshot(
+    const snapshot = await buildInertBauPostSnapshot(
       post,
       { id: ctx.source_id, name: ctx.source_name, icon_url: ctx.source_icon_url },
       { publicUrl: await getBauPublicUrl(post.server_id, post.id) },
@@ -855,14 +841,7 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
       await settle(claimed, { status: "dead", error: "empty" });
       return "skipped";
     }
-    // A ping only when the follow asked for one AND its author may still make
-    // it (a role that stopped being mentionable is no ping, not a failure).
-    const pingable =
-      ctx.role_ping_id !== null &&
-      ctx.role_name !== null &&
-      (ctx.role_mentionable === true ||
-        hasPermission(permissions, Permission.MENTION_EVERYONE));
-    const committed = await commitDelivery(claimed, ctx, snapshot, pingable);
+    const committed = await commitDelivery(claimed, ctx, snapshot);
     if (committed === "ineligible") {
       await settle(claimed, { status: "retracted" });
       return "skipped";
@@ -887,7 +866,7 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
       try {
         const message = await getHydratedMessage(committed.messageId);
         if (message) {
-          await announceServiceMessage(mapMessage(message), committed.mentionedUserIds);
+          await announceServiceMessage(mapMessage(message));
         }
       } catch (error) {
         console.error("[bau-follow] announce failed after commit:", error);
@@ -906,7 +885,7 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
 }
 
 /**
- * The one transaction: the card, its role mentions and the row's move to
+ * The one transaction: the card and the row's move to
  * `delivered`, guarded on the claim. Returns null when the claim is no longer
  * ours (a lease that expired under a slow process), with nothing written.
  */
@@ -914,9 +893,8 @@ async function commitDelivery(
   claimed: Claimed,
   ctx: DeliveryContext,
   snapshot: BauPostSnapshot,
-  ping: boolean,
 ): Promise<
-  | { messageId: string; fresh: boolean; mentionedUserIds: string[] }
+  | { messageId: string; fresh: boolean }
   | { slowMs: number }
   | "ineligible"
   | null
@@ -974,7 +952,7 @@ async function commitDelivery(
       return "ineligible";
     }
     const nonce = `bau-follow:${claimed.post_id}`;
-    const body = composeBody(snapshot, ping ? ctx.role_name : null);
+    const body = followBody(snapshot);
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO messages
          (channel_id, author_id, body, webhook_username, webhook_avatar_url, nonce, forward)
@@ -993,7 +971,6 @@ async function commitDelivery(
     );
     let messageId = inserted.rows[0]?.id ?? null;
     const fresh = messageId !== null;
-    let mentionedUserIds: string[] = [];
     if (!messageId) {
       // The wall behind the table: a card for this post is already in this
       // channel. Adopt it instead of posting a second.
@@ -1006,17 +983,6 @@ async function commitDelivery(
       if (!messageId) {
         throw new Error("delivery nonce conflict without a message");
       }
-    } else if (ping && ctx.role_ping_id) {
-      const mentioned = await client.query<{ user_id: string }>(
-        `INSERT INTO message_mentions (message_id, user_id)
-         SELECT $1::uuid, mr.user_id
-           FROM member_roles mr
-          WHERE mr.role_id = $2 AND mr.server_id = $3
-         ON CONFLICT DO NOTHING
-         RETURNING user_id`,
-        [messageId, ctx.role_ping_id, ctx.target_server_id],
-      );
-      mentionedUserIds = mentioned.rows.map((row) => row.user_id);
     }
     const done = await client.query(
       `UPDATE bau_follow_deliveries
@@ -1043,7 +1009,7 @@ async function commitDelivery(
       [claimed.follow_id],
     );
     await client.query("COMMIT");
-    return { messageId, fresh, mentionedUserIds };
+    return { messageId, fresh };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     throw error;

@@ -86,7 +86,6 @@ describe("ChannelBauFollowsSection", () => {
             status: "paused",
             pausedReason: "permissions",
             pausedAt: "2026-10-15T13:00:00.000Z",
-            rolePingName: "novidades",
           }),
         ]}
         onChange={() => {}}
@@ -97,7 +96,7 @@ describe("ChannelBauFollowsSection", () => {
     expect((html.match(/data-channel-bau-follow-unfollow/g) ?? []).length).toBe(2);
     expect((html.match(/data-channel-bau-follow-resume/g) ?? []).length).toBe(1);
     expect(html).toContain("Paused");
-    expect(html).toContain("Mentions novidades");
+    expect(html).not.toContain("Mentions");
   });
 });
 

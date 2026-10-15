@@ -94,11 +94,6 @@ export function ChannelBauFollowsSection({
               <p className="truncate text-sm font-medium text-paper">
                 {t("bauFollow.channel.from", { server: follow.sourceServerName })}
               </p>
-              {follow.rolePingName && (
-                <p className="truncate text-xs text-paper-muted">
-                  {t("bauFollow.pings", { role: follow.rolePingName })}
-                </p>
-              )}
               {follow.status === "paused" && (
                 <p className="mt-0.5 text-xs text-warning">
                   {t(follow.pausedReason === "banned" ? "bauFollow.pausedHintBanned" : "bauFollow.pausedHint")}
