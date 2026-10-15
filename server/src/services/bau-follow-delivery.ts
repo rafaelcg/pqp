@@ -504,9 +504,13 @@ async function claimDue(serverId?: string): Promise<Claimed[]> {
       ${serverId ? `AND ${alias}.source_server_id = $4` : ""}`;
   const result = await getPool().query<Claimed>(
     `WITH RECURSIVE recent AS (
+       -- The quota counts what went out in the last minute AND what is being
+       -- delivered right now (a live claim), so two workers claiming at once
+       -- cannot each spend the whole quota.
        SELECT post_id, COUNT(*)::int AS n
          FROM bau_follow_deliveries
         WHERE delivered_at > NOW() - INTERVAL '1 minute'
+           OR (status = 'delivering' AND claimed_until > NOW())
         GROUP BY post_id
      ),
      -- Posts already at their quota this minute. Dropped from the window below,
@@ -593,6 +597,7 @@ interface DeliveryContext {
   created_by: string | null;
   role_ping_id: string | null;
   paused_at: Date | null;
+  after_since: boolean | null;
   target_channel_id: string;
   target_server_id: string;
   channel_type: string;
@@ -620,7 +625,7 @@ interface DeliveryContext {
 
 async function loadContext(claimed: Claimed): Promise<DeliveryContext | null> {
   const result = await getPool().query<DeliveryContext>(
-    `SELECT f.created_by, f.role_ping_id, f.paused_at, f.target_channel_id,
+    `SELECT f.created_by, f.role_ping_id, f.paused_at, (p.published_at > f.since_at) AS after_since, f.target_channel_id,
             f.target_server_id, tc.type AS channel_type, tc.kind AS channel_kind,
             s.id AS source_id, s.name AS source_name, s.icon_url AS source_icon_url,
             s.community_home_enabled AS home_enabled,
@@ -695,6 +700,10 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
       ctx.post_server_id === claimed.source_server_id &&
       ctx.status === "published" &&
       ctx.visibility === "free" &&
+      // Published after this follow began (or last resumed): a row that
+      // outlived a resume must not carry what came before it.
+      // (compared in SQL: a JavaScript Date only has milliseconds)
+      ctx.after_since === true &&
       !ctx.blocked;
     if (!eligible) {
       await settle(claimed, { status: "retracted" });

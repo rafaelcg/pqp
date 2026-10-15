@@ -56,7 +56,7 @@ const { upsertUser } = await import("./users.js");
 const { createServer: createChatServer, createChannel } = await import("./servers.js");
 const { createRole, assignRole, unassignRole, upsertChannelOverwrite } = await import("./roles.js");
 const { handleChatMessage } = await import("../ws/chat.js");
-const { createBauFollow, removeBauFollower } = await import("./bau-follow.js");
+const { createBauFollow, removeBauFollower, updateBauFollow } = await import("./bau-follow.js");
 const { publishDueCommunityHomePosts } = await import("./community-home.js");
 const {
   runBauFollowTick,
@@ -727,6 +727,39 @@ describeDb("Seguir: following a Baú into a channel", () => {
     expect(left.rowCount).toBe(0);
     const block = await getPool().query(`SELECT 1 FROM bau_follow_blocks WHERE source_server_id = $1`, [qgId]);
     expect(block.rowCount).toBe(1);
+  });
+
+  it("a second resume of a follow that is no longer paused changes nothing and drops nothing", async () => {
+    const made = await follow(alice, destChannelId);
+    await getPool().query(
+      `UPDATE bau_follows SET paused_at = NOW(), paused_reason = 'permissions' WHERE id = $1`,
+      [made.body.follow.id],
+    );
+    await updateBauFollow({ followId: made.body.follow.id, actorId: alice.id, resume: true });
+    const since = await getPool().query<{ since_at: Date }>(`SELECT since_at FROM bau_follows WHERE id = $1`, [
+      made.body.follow.id,
+    ]);
+    // A post queued after the first resume...
+    const postId = await publish({ title: "Entre as duas" });
+    await tick();
+    // Held back as a pending row (a retry waiting), the shape a resume would drop.
+    await getPool().query(
+      `UPDATE bau_follow_deliveries
+          SET status = 'pending', message_id = NULL, next_attempt_at = NOW() + INTERVAL '1 hour'
+        WHERE post_id = $1`,
+      [postId],
+    );
+    // ...survives the second resume, which finds the follow already active.
+    await updateBauFollow({ followId: made.body.follow.id, actorId: alice.id, resume: true });
+    const after = await getPool().query<{ since_at: Date }>(`SELECT since_at FROM bau_follows WHERE id = $1`, [
+      made.body.follow.id,
+    ]);
+    expect(after.rows[0]!.since_at.getTime()).toBe(since.rows[0]!.since_at.getTime());
+    const queued = await getPool().query(
+      `SELECT 1 FROM bau_follow_deliveries WHERE post_id = $1 AND status = 'pending'`,
+      [postId],
+    );
+    expect(queued.rowCount).toBe(1);
   });
 
   // ------------------------------------------------------------- the source

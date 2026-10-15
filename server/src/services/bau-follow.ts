@@ -438,18 +438,23 @@ export async function updateBauFollow(input: {
         input.rolePingId,
       ]);
     }
-    if (input.resume === true && follow.paused_at) {
+    if (input.resume === true) {
       // The resumer is the authority from here on, and nothing older than this
       // moment is carried: the posts that came and went while it was paused
-      // stay where they are, and what was still queued for it is dropped.
-      await client.query(
+      // stay where they are, and what was still queued for it is dropped. The
+      // transition is conditional on the row STILL being paused, so a second
+      // resume that raced the first changes nothing (and never drops what the
+      // first one let through).
+      const resumed = await client.query(
         `UPDATE bau_follows
             SET paused_at = NULL, paused_reason = NULL, permission_failures = 0,
                 created_by = $2, since_at = NOW()
-          WHERE id = $1`,
+          WHERE id = $1 AND paused_at IS NOT NULL`,
         [follow.id, input.actorId],
       );
-      await dropUndelivered(client, follow.id);
+      if ((resumed.rowCount ?? 0) > 0) {
+        await dropUndelivered(client, follow.id);
+      }
     }
     const updated = await readFollow(follow.id, input.actorId, client);
     await client.query("COMMIT");
