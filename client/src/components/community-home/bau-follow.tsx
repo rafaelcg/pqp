@@ -33,6 +33,9 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
  * answers `enabled: false` and the button is simply not drawn.
  */
 
+/** Follower rows drawn at a time. */
+const FOLLOWERS_PAGE = 50;
+
 const SELECT_CLASS =
   "h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:opacity-40";
 
@@ -541,6 +544,8 @@ export function BauFollowersDialog({
   const [loadError, setLoadError] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The list can hold hundreds of rows: draw a page at a time.
+  const [shown, setShown] = useState(FOLLOWERS_PAGE);
 
   const loadGeneration = useRef(0);
   const load = useCallback(() => {
@@ -564,17 +569,28 @@ export function BauFollowersDialog({
     if (open) {
       setData(null);
       setError(null);
+      setShown(FOLLOWERS_PAGE);
       void load();
     }
   }, [open, load]);
 
-  async function act(key: string, run: () => Promise<unknown>) {
+  /**
+   * Run a change, then reflect it on screen at once (`apply`) so a refresh that
+   * fails afterwards cannot leave a removed server on show; the read that
+   * follows only reconciles.
+   */
+  async function act(
+    key: string,
+    run: () => Promise<unknown>,
+    apply: (current: BauFollowers) => BauFollowers,
+  ) {
     setBusyId(key);
     setError(null);
     try {
       await run();
-      await load();
+      setData((current) => (current ? apply(current) : current));
       onChanged?.();
+      await load();
     } catch {
       setError(t("bauFollow.error.action"));
     } finally {
@@ -613,7 +629,7 @@ export function BauFollowersDialog({
               </p>
             ) : (
               <ul className="space-y-2">
-                {data.followers.map((follower) => (
+                {data.followers.slice(0, shown).map((follower) => (
                   <li
                     key={follower.id}
                     className="flex items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-1 px-3 py-2"
@@ -642,8 +658,16 @@ export function BauFollowersDialog({
                       size="sm"
                       disabled={busyId !== null}
                       onClick={() =>
-                        void act(follower.id, () =>
-                          removeBauFollower(serverId, follower.id, false),
+                        void act(
+                          follower.id,
+                          () => removeBauFollower(serverId, follower.id, false),
+                          (current) => ({
+                            ...current,
+                            count: Math.max(0, current.count - 1),
+                            followers: current.followers.filter(
+                              (one) => one.id !== follower.id,
+                            ),
+                          }),
                         )
                       }
                       data-bau-follower-remove
@@ -657,8 +681,30 @@ export function BauFollowersDialog({
                       className="text-danger"
                       disabled={busyId !== null}
                       onClick={() =>
-                        void act(follower.id, () =>
-                          removeBauFollower(serverId, follower.id, true),
+                        void act(
+                          follower.id,
+                          () => removeBauFollower(serverId, follower.id, true),
+                          (current) => {
+                            // Blocking removes every follow of that server.
+                            const gone = current.followers.filter(
+                              (one) => one.targetServerId === follower.targetServerId,
+                            ).length;
+                            return {
+                              ...current,
+                              count: Math.max(0, current.count - Math.max(1, gone)),
+                              followers: current.followers.filter(
+                                (one) => one.targetServerId !== follower.targetServerId,
+                              ),
+                              blocked: [
+                                {
+                                  serverId: follower.targetServerId,
+                                  serverName: follower.targetServerName,
+                                  createdAt: new Date().toISOString(),
+                                },
+                                ...current.blocked,
+                              ],
+                            };
+                          },
                         )
                       }
                       data-bau-follower-block
@@ -668,6 +714,17 @@ export function BauFollowersDialog({
                   </li>
                 ))}
               </ul>
+            )}
+            {data.followers.length > shown && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setShown((n) => n + FOLLOWERS_PAGE)}
+                data-bau-followers-more
+              >
+                {t("bauFollow.followers.more")}
+              </Button>
             )}
             {data.blocked.length > 0 && (
               <section className="space-y-2">
@@ -690,8 +747,15 @@ export function BauFollowersDialog({
                         size="sm"
                         disabled={busyId !== null}
                         onClick={() =>
-                          void act(blocked.serverId, () =>
-                            unblockBauFollower(serverId, blocked.serverId),
+                          void act(
+                            blocked.serverId,
+                            () => unblockBauFollower(serverId, blocked.serverId),
+                            (current) => ({
+                              ...current,
+                              blocked: current.blocked.filter(
+                                (one) => one.serverId !== blocked.serverId,
+                              ),
+                            }),
                           )
                         }
                         data-bau-follow-unblock

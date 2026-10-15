@@ -2631,6 +2631,7 @@
   "bauFollow.followers.title": "Seguidores deste Baú",
   "bauFollow.followers.hint": "Servidores que recebem teus posts livres como cartões. Tu vê o nome dos servidores, nunca de pessoas.",
   "bauFollow.followers.empty": "Nenhum servidor segue este Baú ainda.",
+  "bauFollow.followers.more": "Mostrar mais",
   "bauFollow.followers.count_one": "{count} seguidor",
   "bauFollow.followers.count_other": "{count} seguidores",
   "bauFollow.followers.remove": "Remover",

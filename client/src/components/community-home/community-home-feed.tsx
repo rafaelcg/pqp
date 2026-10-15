@@ -3398,6 +3398,7 @@ export function CommunityHomeFeed({
           open={followersOpen}
           serverId={serverId}
           onClose={() => setFollowersOpen(false)}
+          onChanged={() => void refreshFollow()}
         />
       )}
     </ChannelRefsProvider>

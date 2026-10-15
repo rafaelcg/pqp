@@ -2631,6 +2631,7 @@
   "bauFollow.followers.title": "Followers of this Baú",
   "bauFollow.followers.hint": "Servers that receive your free posts as cards. You see server names, never people.",
   "bauFollow.followers.empty": "No server follows this Baú yet.",
+  "bauFollow.followers.more": "Show more",
   "bauFollow.followers.count_one": "{count} follower",
   "bauFollow.followers.count_other": "{count} followers",
   "bauFollow.followers.remove": "Remove",
