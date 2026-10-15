@@ -124,6 +124,17 @@ profile's image is a square avatar and gets `summary`, a community's is a 3:1
 banner and gets `summary_large_image`. See `docs/CONTENT_SAFETY.md` §Communities
 for what that page may and may not carry.
 
+### A Baú post unfurls too
+
+`/c/<slug>/p/<postId>` (a free, published Baú post of an addressed community,
+behind the `bau_public_posts` flag) is handled by `client/src/lib/bau-post-meta.ts`
+from `GET /api/public/communities/:slug/posts/:postId`. The card is the post's:
+its title and teaser, its picture (the API's stable `/cover` address or a YouTube
+poster, else the community banner) and `summary_large_image`. A post the API says
+is not public (404) serves the generic card with `noindex` and `no-store`; an API
+that cannot be reached serves the page untouched, so a down API never makes a
+live post look dead. See `docs/COMMUNITY_HOME.md` §"A public page per post".
+
 ### Invite links unfurl too, and name nothing
 
 The same middleware handles `/app/invite/<code>` through

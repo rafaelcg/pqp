@@ -135,6 +135,8 @@ describe("renderBauPostHead", () => {
       OPTIONS,
     );
     expect(nothing).toContain('content="https://pqp.gg/images/og-image.jpg"');
+    // The site's own card is 1200x630, which is what the large card is for.
+    expect(nothing).toContain('<meta name="twitter:card" content="summary_large_image" />');
   });
 
   it("takes a YouTube poster as it is and refuses anything that is not https", () => {

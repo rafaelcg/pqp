@@ -82,10 +82,33 @@ export async function shareNatively(
 
 /** Copies the link, campaign included. False when the browser would not. */
 export async function copyShareLink(publicUrl: string): Promise<boolean> {
+  const link = bauShareUrl(publicUrl, "copy");
   try {
-    await navigator.clipboard.writeText(bauShareUrl(publicUrl, "copy"));
+    await navigator.clipboard.writeText(link);
     return true;
   } catch {
+    // No async clipboard (plain http, a webview, permission denied): the old
+    // way still works inside a click, and a copy button that does nothing is
+    // worse than one that takes an extra step.
+    return legacyCopy(link);
+  }
+}
+
+function legacyCopy(text: string): boolean {
+  if (typeof document === "undefined" || typeof document.execCommand !== "function") {
     return false;
+  }
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.setAttribute("readonly", "");
+  field.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+  document.body.appendChild(field);
+  try {
+    field.select();
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    field.remove();
   }
 }

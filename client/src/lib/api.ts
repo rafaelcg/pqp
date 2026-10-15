@@ -454,6 +454,44 @@ export async function fetchPublicBauPost(
   }
 }
 
+/**
+ * Whether the signed-in person is already in a community, and its id, from a
+ * PUBLIC page (`/c/<slug>/p/<id>`).
+ *
+ * Its own request with the token passed in, not `apiFetch`: the app's token
+ * provider is installed by `App` (`setAuthTokenProvider`), which has not mounted
+ * on a public page, so `apiFetch` would send no credential and read a 401 as
+ * "not a member". Null on every failure (not signed in, banned, offline, the
+ * route off): the caller's join button is the honest fallback for all of them.
+ */
+export async function lookupCommunityMembership(
+  slug: string,
+  getToken: () => Promise<string | null>,
+): Promise<{ serverId: string; joined: boolean } | null> {
+  try {
+    const token = await getToken();
+    if (!token) {
+      return null;
+    }
+    const response = await fetch(
+      `${getApiBaseUrl()}/api/communities/by-slug/${encodeURIComponent(slug)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) {
+      return null;
+    }
+    const { community } = (await response.json()) as {
+      community?: { id?: unknown; joined?: unknown };
+    };
+    if (typeof community?.id !== "string") {
+      return null;
+    }
+    return { serverId: community.id, joined: community.joined === true };
+  } catch {
+    return null;
+  }
+}
+
 /** One request per code per tab: the route is rate limited per IP. */
 const invitePreviewCache = new Map<string, Promise<PublicInvitePreview | null>>();
 

@@ -92,6 +92,30 @@ describe("BauShareButton", () => {
     expect(host.textContent).not.toContain("Link copied");
   });
 
+  it("without the async clipboard the old copy still works inside the click", async () => {
+    pointer(true);
+    const exec = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", { value: exec, configurable: true });
+    vi.stubGlobal("navigator", {
+      share: vi.fn(async () => {
+        throw new DOMException("no", "NotAllowedError");
+      }),
+      clipboard: { writeText: vi.fn(async () => Promise.reject(new Error("denied"))) },
+    });
+    const button = await mount();
+    await act(async () => {
+      button.click();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(exec).toHaveBeenCalledWith("copy");
+    expect(host.textContent).toContain("Link copied");
+    // The scratch field does not stay in the page.
+    expect(document.querySelector("textarea[readonly]")).toBeNull();
+    Reflect.deleteProperty(document, "execCommand");
+  });
+
   it("a dismissed sheet is not an error and copies nothing", async () => {
     pointer(true);
     const writeText = vi.fn(async () => undefined);

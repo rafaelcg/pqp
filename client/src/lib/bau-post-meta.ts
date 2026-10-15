@@ -137,9 +137,10 @@ export function renderBauPostHead(
   const icon = absoluteImageUrl(post.community.iconUrl, options.apiOrigin);
   // The post's own picture, else the room's banner, else its square icon, else
   // the site's card. A wide card only when the picture is wide: a banner and a
-  // post image are both fit for it, an icon is not.
+  // post image are both fit for it, and so is the site's own 1200x630 card; a
+  // square icon is not, and gets the small one.
   const image = cover ?? banner ?? icon ?? `${options.siteOrigin}/images/og-image.jpg`;
-  const large = Boolean(cover ?? banner);
+  const large = Boolean(cover ?? banner) || !icon;
   const e = escapeHtml;
 
   const jsonLd = JSON.stringify({

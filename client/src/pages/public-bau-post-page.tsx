@@ -1,6 +1,6 @@
-import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
+import { SignUpButton, SignedIn, SignedOut, useAuth } from "@clerk/clerk-react";
 import { ArrowUpRight, Heart, MessageCircle } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import {
   bauPostPath,
@@ -21,10 +21,10 @@ import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import {
   fetchPublicBauPost,
   fetchPublicCommunity,
-  lookupCommunityBySlug,
+  lookupCommunityMembership,
 } from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
-import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { gifMessageMedia } from "@/lib/gif-media";
 import { intentStorage, stashJoinIntent } from "@/lib/handle-intent";
 import { heroHue, heroTintStyle, initialsFor } from "@/lib/hero-tint";
@@ -381,6 +381,7 @@ function CommunityCta({
               postId={postId}
               buttonClass={buttonClass}
               joinLink={joinLink}
+              getToken={devToken}
             />
           ) : (
             <>
@@ -394,7 +395,7 @@ function CommunityCta({
                 </SignUpButton>
               </SignedOut>
               <SignedIn>
-                <ViewerCta
+                <ClerkViewerCta
                   community={community}
                   postId={postId}
                   buttonClass={buttonClass}
@@ -414,6 +415,28 @@ function CommunityCta({
   );
 }
 
+/** The dev bypass's token, through the same helper every other caller uses. */
+const devToken = () => getAuthToken(async () => null);
+
+type ViewerCtaProps = {
+  community: PublicCommunity;
+  postId: string | null;
+  buttonClass: string;
+  joinLink: React.ReactNode;
+};
+
+/** `ViewerCta` with Clerk's token, for a real signed-in session. */
+function ClerkViewerCta(props: ViewerCtaProps) {
+  const { getToken } = useAuth();
+  // Held in a ref: Clerk's `getToken` is a fresh function on some renders, and
+  // a dependency that changes every render would re-ask on every render
+  // (CLAUDE.md pitfall 2).
+  const ref = useRef(getToken);
+  ref.current = getToken;
+  const stable = useRef(() => ref.current()).current;
+  return <ViewerCta {...props} getToken={stable} />;
+}
+
 /**
  * What a signed-in person is offered. Asked once, behind auth, because the
  * room's id (what "Abrir no app" needs to land on the post) is not in the
@@ -424,29 +447,26 @@ function ViewerCta({
   postId,
   buttonClass,
   joinLink,
-}: {
-  community: PublicCommunity;
-  postId: string | null;
-  buttonClass: string;
-  joinLink: React.ReactNode;
-}) {
+  getToken,
+}: ViewerCtaProps & { getToken: () => Promise<string | null> }) {
   const { t } = useTranslation();
   const [member, setMember] = useState<{ serverId: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    lookupCommunityBySlug(community.slug)
-      .then(({ community: listing }) => {
-        if (!cancelled && listing.joined) {
-          setMember({ serverId: listing.id });
-        }
-      })
-      .catch(() => {
-        // Not asked, not answered, banned: the join button is still the truth.
-      });
+    // Null for every failure (see `lookupCommunityMembership`): not signed in,
+    // banned, offline. The join button is still the truth for all of them.
+    void lookupCommunityMembership(community.slug, getToken).then((found) => {
+      if (!cancelled && found?.joined) {
+        setMember({ serverId: found.serverId });
+      }
+    });
     return () => {
       cancelled = true;
     };
+    // `getToken` is stable by construction (a ref-backed wrapper or a module
+    // constant), so it is not what re-asks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [community.slug]);
 
   if (!member) {

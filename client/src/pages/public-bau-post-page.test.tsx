@@ -16,6 +16,7 @@ vi.mock("@clerk/clerk-react", () => ({
   SignedIn: () => null,
   SignedOut: ({ children }: { children: React.ReactNode }) => children,
   useClerk: () => ({ loaded: false }),
+  useAuth: () => ({ getToken: async () => "t" }),
 }));
 vi.mock("@/components/marketing/marketing-auth-ctas", () => ({
   MarketingAuthCtas: () => null,
@@ -30,7 +31,7 @@ vi.mock("@/components/marketing/marketing-footer", () => ({
 const api = vi.hoisted(() => ({
   fetchPublicBauPost: vi.fn(),
   fetchPublicCommunity: vi.fn(),
-  lookupCommunityBySlug: vi.fn(),
+  lookupCommunityMembership: vi.fn(),
 }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
@@ -101,7 +102,7 @@ describe("PublicBauPostPage", () => {
     localStorage.clear();
     api.fetchPublicBauPost.mockReset();
     api.fetchPublicCommunity.mockReset();
-    api.lookupCommunityBySlug.mockReset();
+    api.lookupCommunityMembership.mockReset();
     // Signed out unless a case says otherwise. A developer's `client/.env`
     // may switch the bypass on, and then every case would take the other branch.
     vi.stubEnv("VITE_DEV_AUTH_BYPASS", "false");
@@ -202,8 +203,9 @@ describe("PublicBauPostPage", () => {
     });
 
     it("a member gets Abrir no app, straight onto the post", async () => {
-      api.lookupCommunityBySlug.mockResolvedValue({
-        community: { id: SERVER_ID, joined: true },
+      api.lookupCommunityMembership.mockResolvedValue({
+        serverId: SERVER_ID,
+        joined: true,
       });
       await mount();
       const open = host.querySelector<HTMLAnchorElement>("[data-public-bau-open]");
@@ -212,8 +214,9 @@ describe("PublicBauPostPage", () => {
     });
 
     it("anybody else gets the join button, which lands in the community", async () => {
-      api.lookupCommunityBySlug.mockResolvedValue({
-        community: { id: SERVER_ID, joined: false },
+      api.lookupCommunityMembership.mockResolvedValue({
+        serverId: SERVER_ID,
+        joined: false,
       });
       await mount();
       expect(host.querySelector("[data-public-bau-open]")).toBeNull();
@@ -223,7 +226,7 @@ describe("PublicBauPostPage", () => {
     });
 
     it("keeps the join button when the lookup fails", async () => {
-      api.lookupCommunityBySlug.mockRejectedValue(new Error("banned or offline"));
+      api.lookupCommunityMembership.mockResolvedValue(null);
       await mount();
       expect(host.querySelector("[data-public-bau-join]")).not.toBeNull();
     });
