@@ -1230,7 +1230,8 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               onChooseFile={() => fileInput.current?.click()}
             />
           ) : (
-            <StoryContent story={display} still={false} playVideo muted={false} paused={false} loop withLayers={false} />
+            // Muted on purpose: editing is silent, the viewer is where a clip has sound (and a mute button).
+            <StoryContent story={display} still={false} playVideo muted paused={false} loop withLayers={false} />
           )}
 
           {hasBase && (
