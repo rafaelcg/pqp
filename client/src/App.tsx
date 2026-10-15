@@ -1427,6 +1427,9 @@ function MainAppContent({
     setDraftsAccount(user?.id ?? null);
   }, [user?.id]);
   const [servers, setServers] = useState<Server[]>([]);
+  // The first list has arrived: an empty one is then a real answer (an account
+  // in no server), not "not loaded yet".
+  const [serversLoaded, setServersLoaded] = useState(false);
   const [channels, setChannels] = useState<Channel[]>([]);
   /**
    * Starts on the conversation view rather than on a server, because at this
@@ -5138,6 +5141,7 @@ function MainAppContent({
         communityHomeConfigRef.current = homeConfig;
         setCommunityHomeConfig(homeConfig);
         setServers(serverList);
+        setServersLoaded(true);
 
         // Conversations and blocks are loaded whatever the first view is: the
         // Home badge counts across the whole account, and the block list drives
@@ -10024,9 +10028,9 @@ function MainAppContent({
   // Encaminhar: which servers this account is in, so tapping a card from one it
   // is not in says so instead of doing nothing. Unknown until the list loads.
   useEffect(() => {
-    setForwardMemberServers(servers.length > 0 ? servers.map((one) => one.id) : null);
+    setForwardMemberServers(serversLoaded ? servers.map((one) => one.id) : null);
     return () => setForwardMemberServers(null);
-  }, [servers]);
+  }, [servers, serversLoaded]);
   // Encaminhar: whether the action exists (`forward_messages`), same refresh
   // pass and the same gate as the config above.
   useEffect(
