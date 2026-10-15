@@ -104,8 +104,11 @@ export const messageForwardSchema = z.object({
   createdAt: z.string(),
   /**
    * True when the source is members-only (VIP) or lives in a private channel.
-   * Such a card was only ever created inside `sourceServerId` and can only be
-   * forwarded again inside it; it never gets a public page. Absent reads as
+   * Such a card can only be forwarded again inside the server that holds it:
+   * for a members-only post that is `sourceServerId`; for a card that sits in
+   * a private channel it is the server of that channel (the server decides
+   * from the message it is forwarding, so a client asks the same question of
+   * the message's own server). It never gets a public page. Absent reads as
    * false.
    */
   restricted: z.boolean().optional(),

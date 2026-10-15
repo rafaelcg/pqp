@@ -490,7 +490,11 @@ async function forwardToOne(
     // A dependency failed (the database). One target's failure is that
     // target's answer, never the request's: the others may already be sent.
     console.error("[forwards] target failed:", error);
-    // The send may have committed before the throw: the nonce says.
+    // The send may have committed before the throw: the nonce says. A row
+    // that is stored IS the forward (history and every later reader show it),
+    // and what a throw after the commit can have missed is live fan-out, which
+    // a viewer's next history read repairs. A retry would find the same row
+    // and answer the same way, so reporting it as sent is what is true.
     if (input.nonce && channelId) {
       try {
         const existing = await findMessageByNonce(channelId, input.user.id, input.nonce);
