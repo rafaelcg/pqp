@@ -358,6 +358,67 @@ path, send permission), `packages/shared/src/community-home-share.test.ts`
 (permalink parsing), `client/src/lib/community-home/share-card.test.ts` (which
 links get a card), `client/src/components/chat/bau-post-card.test.tsx`.
 
+## A public page per post (`bau_public_posts`)
+
+Runtime flag, **per server, default off** (`docs/FEATURE_FLAGS.md`). A free,
+published post of a community with a public address has a page anybody can open
+with no account: `pqp.gg/c/<slug>/p/<postId>` (`bauPublicPostPath`,
+`parseBauPublicPostPath` in `packages/shared/src/community-home-public.ts`).
+It is the thing a member shares to X, Reddit, WhatsApp or Telegram, and the
+page's job is the same as `/c/<slug>`'s: show the post, then one button that
+carries the visitor through sign-up into the community (`?join=<slug>`).
+
+- **One predicate.** `bauPublicUrlFor` (`server/src/services/community-home.ts`)
+  says whether a post has a page: published, `visibility = free`, the server is
+  a community with an address and is not suspended, `COMMUNITIES_ENABLED`,
+  `COMMUNITY_HOME_ENABLED`, the server's own Baú switch, and the flag for that
+  server. The unauthenticated read, its cover redirect and the `publicUrl`
+  below all call it. Listing in the directory is not required, only the address.
+- **Read.** `GET /api/public/communities/:slug/posts/:postId` answers
+  `{ post, community }` (`publicBauPostResponseSchema`): title, body, the media
+  the feed draws (signed GETs, twelve hours) and the community poster. **No
+  author, no comments, no likers, no translation, no subtitles**; the counts
+  only. A `<#channelId>` reference in a body is swapped for
+  `<#00000000-0000-0000-0000-000000000000>`, which every client already draws as
+  the muted placeholder, so a real channel id never leaves; the teaser is cut
+  after the references are dropped (the markdown stripper would otherwise leave
+  the id behind as `<id`). `Cache-Control: public, max-age=60`, with the
+  unauthenticated limiter posture of the community poster and its own bucket.
+- **Every refusal is the same 404**, byte for byte: draft, scheduled,
+  unpublished, deleted, members-only (with the VIP flag on or off), unknown or
+  malformed id, a post of another community under this slug, no address,
+  suspended, the Baú off for the server, and any of the three flags off
+  (including a per-server override that says no). Pinned by
+  `server/src/api/public-bau-post.test.ts`, which compares status, body and
+  headers against the unknown post's.
+- **Cover.** `GET …/posts/:postId/cover` redirects (302, 60 s) to a fresh signed
+  GET of an uploaded image or a video's chosen cover. It is the stable image
+  address an unfurl card can keep for weeks; a YouTube post's cover is its public
+  poster. No picture, or a post that does not qualify: the same 404.
+- **`publicUrl`.** Every Baú post a member reads (feed, single read, chat card)
+  carries `publicUrl`, the page's absolute URL (origin from `PUBLIC_APP_URL`'s
+  first entry, else `https://pqp.gg`), **only** while the page would answer. A
+  client shows Compartilhar when, and only when, it is a string, and never
+  builds the URL itself.
+- **Web.** `client/src/pages/public-bau-post-page.tsx` (route `/c/:slug/p/:postId`):
+  the post drawn like the Baú (`UnlockedMedia`), then the CTA block (the community
+  poster, the member count, "Entrar na comunidade" through the same join intent
+  as `/c/<slug>`); signed-in members get "Abrir no app". A post that does not
+  qualify is a friendly 404 that still offers the community when it is public.
+  Compartilhar (`client/src/components/community-home/community-home-share-public.tsx`):
+  `navigator.share` on a touch device, a menu on desktop (copy link, X, Reddit,
+  WhatsApp, Telegram). Every shared URL carries
+  `?utm_source=<network>&utm_medium=share&utm_campaign=bau` (`bauShareUrl`), which
+  the existing acquisition capture reads.
+- **Edge.** `client/functions/_middleware.ts` rewrites the head for the route
+  through `client/src/lib/bau-post-meta.ts`: the post's title and teaser, the
+  post's picture (else the community banner) as `og:image`, `summary_large_image`
+  when there is one. It fetches the same read the page does, so a post that
+  would 404 unfurls as the product's generic card and says nothing.
+- **iOS and Android** show Compartilhar on a post that has `publicUrl` and hand
+  it to the system share sheet (`ShareLink` / `ACTION_SEND` chooser) with the
+  `utm_source=native` link.
+
 ## Limits
 
 What a member can do, and how much of it. The global per-user write budget

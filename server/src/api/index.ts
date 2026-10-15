@@ -503,6 +503,10 @@ import {
 import { notifyStoriesUpdate, notifyStoryAudiences } from "../ws/stories.js";
 import { copyObject, deleteObject, StorageError } from "../lib/s3.js";
 import {
+  getPublicBauPost,
+  getPublicBauPostCoverTarget,
+} from "../services/community-home-public.js";
+import {
   getCommunityHomePostCard,
   listLatestCommunityHomeCards,
   safeShareOrigin,
@@ -1171,6 +1175,16 @@ const publicProfileLimiter = createRateLimiter({
   refillPerSecond: 2,
 });
 /**
+ * The public Baú post page's reads (`servePublicBauPost`, its cover redirect).
+ * Their own bucket, for the reason the two above have theirs: a post link going
+ * around a group chat must not be starved by a crawler walking profiles, and
+ * the cover is hit by every page view, so it gets the same budget as the page.
+ */
+const publicBauPostLimiter = createRateLimiter({
+  capacity: 60,
+  refillPerSecond: 2,
+});
+/**
  * The public community page's read. Same posture as `publicProfileLimiter` and
  * deliberately its OWN bucket rather than a share of it: the two are reached
  * from different pages by different traffic, and a crawler walking profiles
@@ -1305,6 +1319,7 @@ export function resetApiRateLimits(): void {
   depoimentoLimiter.reset();
   publicProfileLimiter.reset();
   publicCommunityLimiter.reset();
+  publicBauPostLimiter.reset();
   publicInviteLimiter.reset();
   voiceLeaveLimiter.reset();
   transcriptRequestLimiter.reset();
@@ -13000,6 +13015,128 @@ async function servePublicCommunity(
   res.end(JSON.stringify({ community }));
 }
 
+const PUBLIC_BAU_POST_PATH =
+  /^\/api\/public\/communities\/([^/]{1,64})\/posts\/([^/]{1,64})(\/cover)?$/;
+
+const BAU_POST_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * One Baú post's public page, by community slug and post id, and its cover.
+ *
+ * THE THIRD UNAUTHENTICATED READ OF A COMMUNITY, after the poster and the
+ * invite preview, and it exists for the same reason: `pqp.gg/c/<slug>/p/<id>`
+ * is a link pasted into X, Reddit, WhatsApp and Telegram, and a post that asks
+ * for a login before it renders is a post nobody opens. The Pages middleware
+ * that writes the unfurl card calls it too.
+ *
+ * WHAT MAKES THAT SAFE IS ONE PREDICATE AND ONE SHAPE. `bauPublicUrlFor` (in
+ * `services/community-home.ts`) is the only place that decides a post is
+ * public: published, free, in a community with an address, not suspended, with
+ * communities, the Baú and the `bau_public_posts` flag on. The shape is
+ * `publicBauPostResponseSchema`: no author, no comments, no channel ids, no
+ * member data of any kind. See `services/community-home-public.ts`.
+ *
+ * EVERY REFUSAL IS THE SAME 404, byte for byte and header for header: bad slug,
+ * bad id, unknown post, a post of another community, draft, scheduled, deleted,
+ * members-only, no address, suspended, any flag off. Telling them apart would
+ * tell a stranger holding a guessed id which posts exist and which are VIP.
+ * (The one thing it cannot hide is timing, and it does not try: it is a
+ * public page about posts that were published to be read.)
+ *
+ * THE COVER is the stable address of the post's picture. It redirects to a
+ * fresh signed GET, which is why an unfurl card can point at it: a signature
+ * lasts twelve hours and a card is kept for weeks.
+ */
+async function servePublicBauPost(
+  req: IncomingMessage,
+  res: ServerResponse,
+  rawSlug: string,
+  rawPostId: string,
+  cover: boolean,
+): Promise<void> {
+  const address = clientAddress(req as never);
+  if (!publicBauPostLimiter.take(`bau-post:${address}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(publicBauPostLimiter.retryAfter(`bau-post:${address}`)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+
+  if (!isCommunitiesEnabled()) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+
+  let slug: string;
+  let postId: string;
+  try {
+    slug = decodeURIComponent(rawSlug).toLowerCase();
+    postId = decodeURIComponent(rawPostId).toLowerCase();
+  } catch {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  // Shape-checked before Postgres, like the community read, and for the same
+  // reason: both halves are path segments from the open internet.
+  if (!COMMUNITY_SLUG_PATTERN.test(slug) || !BAU_POST_ID_PATTERN.test(postId)) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+
+  if (cover) {
+    let target: string | null;
+    try {
+      target = await getPublicBauPostCoverTarget(slug, postId);
+    } catch (error) {
+      console.error(`[bau-public] cover failed for ${slug}:`, error);
+      sendError(res, 503, "Posts temporarily unavailable", req);
+      return;
+    }
+    if (!target) {
+      sendError(res, 404, "Not found", req);
+      return;
+    }
+    // A minute, like the page: a post taken down must not keep a cached
+    // redirect for longer than it keeps a cached page, and the target is signed
+    // for twelve hours.
+    res.writeHead(302, {
+      location: target,
+      "cache-control": "public, max-age=60",
+    });
+    res.end();
+    return;
+  }
+
+  let result;
+  try {
+    result = await getPublicBauPost(slug, postId);
+  } catch (error) {
+    console.error(`[bau-public] could not resolve ${slug}:`, error);
+    sendError(res, 503, "Posts temporarily unavailable", req);
+    return;
+  }
+  if (!result) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+
+  // Cacheable for the minute its siblings get: identical for every caller by
+  // construction, obtained with no credential, and shaped like a link going
+  // around a group chat. The signed media URLs inside last twelve hours. The
+  // 404 stays `no-store`, so a post published a moment after a probe is never
+  // shadowed by a cached miss.
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Cache-Control": "public, max-age=60",
+    ...SECURITY_HEADERS,
+    ...corsHeaders(req),
+  });
+  res.end(JSON.stringify(result));
+}
+
 const PUBLIC_INVITE_PATH = /^\/api\/public\/invites\/([^/]{1,64})$/;
 
 /**
@@ -13366,6 +13503,19 @@ export async function handleApi(
     req.method === "GET" ? PUBLIC_COMMUNITY_PATH.exec(pathname) : null;
   if (publicCommunityMatch) {
     await servePublicCommunity(req, res, publicCommunityMatch[1]!);
+    return;
+  }
+
+  const publicBauPostMatch =
+    req.method === "GET" ? PUBLIC_BAU_POST_PATH.exec(pathname) : null;
+  if (publicBauPostMatch) {
+    await servePublicBauPost(
+      req,
+      res,
+      publicBauPostMatch[1]!,
+      publicBauPostMatch[2]!,
+      publicBauPostMatch[3] !== undefined,
+    );
     return;
   }
 

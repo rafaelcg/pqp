@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  bauPublicPostPath,
   COMMUNITY_HOME_COMMENTS_LIMIT,
   COMMUNITY_HOME_COVER_CONTENT_TYPES,
   COMMUNITY_HOME_COVER_MAX_BYTES,
@@ -58,6 +59,7 @@ import {
   loadCaptionTracks,
   scheduleCommunityHomeCaptions,
 } from "./community-home-captions.js";
+import { isCommunitiesEnabled } from "./communities.js";
 import { toPublicUserSummary } from "./users.js";
 import { checkCommunityHomeUpload } from "./community-home-scan.js";
 import { isContentScanConfigured, type ScanStatus } from "./content-scan.js";
@@ -135,6 +137,76 @@ export function isBauCustomCoverOn(serverId: string): boolean {
   return isEnabled("bau_custom_cover", { serverId });
 }
 
+/**
+ * A Baú post's public page (runtime flag `bau_public_posts`, per server,
+ * default off). Off means no post of the server has a page, no card and no
+ * `publicUrl`; the public read answers the same 404 an unknown post gets.
+ */
+export function isBauPublicPostsOn(serverId: string): boolean {
+  return isEnabled("bau_public_posts", { serverId });
+}
+
+/** Where this deployment's public pages live: `PUBLIC_APP_URL`'s first origin, else pqp.gg. */
+function publicSiteOrigin(): string {
+  const first = process.env.PUBLIC_APP_URL?.split(",")[0]?.trim();
+  if (first) {
+    try {
+      const url = new URL(first);
+      if (url.protocol === "https:" || url.protocol === "http:") {
+        return url.origin;
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return "https://pqp.gg";
+}
+
+/**
+ * THE ONE DEFINITION of "this post has a public page", and every reader of
+ * the question calls it: the unauthenticated read, its cover redirect, and the
+ * `publicUrl` a feed post carries. Two copies of this list is how a post ends
+ * up with a Compartilhar button over a page that answers 404, or the reverse.
+ *
+ * All of it, or nothing: published and free (a members-only post is the one
+ * thing a public page must never carry, and with the VIP flag off the row is
+ * still `members`); the server is a community with a public ADDRESS and is not
+ * suspended (listing in the directory is not required, the address is what
+ * makes a link something an owner may hand out); the instance has communities
+ * on and the Baú on; the server's own Baú switch is on, which is what the chat
+ * card already requires; and the `bau_public_posts` flag is on for the server.
+ */
+export function bauPublicUrlFor(
+  row: Pick<
+    PostRow,
+    | "id"
+    | "server_id"
+    | "status"
+    | "visibility"
+    | "is_community"
+    | "is_community_suspended"
+    | "community_slug"
+    | "community_home_enabled"
+  >,
+): string | null {
+  if (row.status !== "published" || row.visibility !== "free") {
+    return null;
+  }
+  if (!row.is_community || row.is_community_suspended || !row.community_slug) {
+    return null;
+  }
+  if (row.community_home_enabled !== true) {
+    return null;
+  }
+  if (!isCommunitiesEnabled() || !isCommunityHomeEnabled()) {
+    return null;
+  }
+  if (!isBauPublicPostsOn(row.server_id)) {
+    return null;
+  }
+  return `${publicSiteOrigin()}${bauPublicPostPath(row.community_slug, row.id)}`;
+}
+
 const COVER_CONTENT_TYPES: ReadonlySet<string> = new Set(
   COMMUNITY_HOME_COVER_CONTENT_TYPES,
 );
@@ -163,7 +235,7 @@ export class CommunityHomeError extends Error {
   }
 }
 
-interface PostRow {
+export interface PostRow {
   id: string;
   server_id: string;
   author_id: string;
@@ -198,6 +270,10 @@ interface PostRow {
   liked_by_me: boolean;
   comment_count: string;
   server_owner_id: string;
+  is_community: boolean;
+  is_community_suspended: boolean;
+  community_slug: string | null;
+  community_home_enabled: boolean | null;
 }
 
 interface CommentRow {
@@ -228,7 +304,7 @@ function notBlockedSql(viewerParam: string): string {
 }
 
 /** `$1` = viewer id in the liked_by_me subquery. Caller supplies the rest. */
-function postSelectSql(viewerParam: string): string {
+export function postSelectSql(viewerParam: string): string {
   return `
   p.id, p.server_id, p.author_id, p.title, p.body, p.teaser, p.visibility,
   p.status, p.comments_enabled, p.media_kind, p.media_name, p.media_content_type,
@@ -239,6 +315,8 @@ function postSelectSql(viewerParam: string): string {
   p.created_at, p.updated_at,
   u.display_name, u.username, u.discriminator, u.avatar_url,
   s.owner_id AS server_owner_id,
+  s.is_community, s.is_community_suspended, s.community_slug,
+  s.community_home_enabled,
   (SELECT COUNT(*)::text FROM community_home_likes l WHERE l.post_id = p.id) AS like_count,
   EXISTS(
     SELECT 1 FROM community_home_likes l
@@ -318,7 +396,7 @@ function authorBadgeFor(
   return null;
 }
 
-function buildMedia(
+export function buildMedia(
   row: PostRow,
   unlocked: boolean,
 ): CommunityHomeMedia | null {
@@ -594,6 +672,7 @@ function toPost(
       !locked && row.media_kind === "video" && row.status === "published"
         ? captions
         : null,
+    publicUrl: bauPublicUrlFor(row),
   };
 }
 

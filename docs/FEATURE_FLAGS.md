@@ -120,6 +120,14 @@ a push when a Baú post goes live, to members who have not muted the server;
 never the author, members-only posts only to people who can open them. Server
 only, no client reads it. Counted under `product.pushSkipped.bau.*`; rules in
 `docs/COMMUNITY_HOME.md` §"Push on a new post".
+`BAU_PUBLIC_POSTS` (`bau_public_posts`, **per server**, default off, born as a
+flag): a free published Baú post of a community with a public address gets a page
+anybody can open, `pqp.gg/c/<slug>/p/<postId>`, with an edge-written unfurl card
+and a Compartilhar button. Needs `COMMUNITIES_ENABLED` and the Baú on; with any of
+them off the public read answers the same 404 as an unknown post. The clients
+learn it as `publicUrl` on each post of `GET /api/servers/:id/home/posts`, which is
+null unless the post qualifies. Rules in `docs/COMMUNITY_HOME.md` §"A public page
+per post".
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
 Born as a flag (no old reader): `COMMUNITY_HOME_VIDEO_CAPTIONS`
 (`community_home_video_captions`, **per server**, default off), automatic
