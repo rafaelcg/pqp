@@ -136,15 +136,29 @@ class ForwardViewModel(
 
         val servers = session.servers.value
         serverOrder = servers.map { it.id }
-        val gate = Semaphore(LOAD_PARALLELISM)
         val jobs: List<Deferred<Unit>> = servers.map { server ->
-            viewModelScope.async { gate.withPermit { loadServer(server) } }
+            viewModelScope.async { loadServerBounded(server) }
         }
         jobs.forEach { it.await() }
         _state.update { it.copy(loading = false) }
     }
 
     private var serverOrder: List<String> = emptyList()
+
+    /** Shared by the first load and every retry, so a burst of taps cannot exceed it. */
+    private val serverGate = Semaphore(LOAD_PARALLELISM)
+
+    /** Servers being read right now, so a second tap on the same retry does nothing. */
+    private val loadingServers = HashSet<String>()
+
+    private suspend fun loadServerBounded(server: gg.pqp.app.core.ServerSummary) {
+        if (!synchronized(loadingServers) { loadingServers.add(server.id) }) return
+        try {
+            serverGate.withPermit { loadServer(server) }
+        } finally {
+            synchronized(loadingServers) { loadingServers.remove(server.id) }
+        }
+    }
 
     /** One server's channels and permissions, asked for together. A failure is kept, not hidden. */
     private suspend fun loadServer(server: gg.pqp.app.core.ServerSummary) = coroutineScope {
@@ -177,7 +191,7 @@ class ForwardViewModel(
     /** Try a server that failed to load again. */
     fun retryServer(serverId: String) {
         val server = session.servers.value.firstOrNull { it.id == serverId } ?: return
-        viewModelScope.launch { loadServer(server) }
+        viewModelScope.launch { loadServerBounded(server) }
     }
 
     private fun publishPeople(social: SocialRepository, selfId: String?) {
