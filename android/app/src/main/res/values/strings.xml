@@ -125,6 +125,9 @@
     <string name="bau_like">Like</string>
     <string name="bau_unlike">Remove like</string>
     <string name="bau_comments">Comments</string>
+    <string name="bau_share">Share</string>
+    <string name="bau_share_description">Share this post</string>
+    <string name="bau_share_failed">Could not open the share sheet.</string>
     <string name="bau_comments_view_one">See %1$d comment</string>
     <string name="bau_comments_view_all">See all %1$d comments</string>
     <string name="bau_comments_show_less">Show fewer</string>
@@ -1259,4 +1262,61 @@
     <string name="you_open">Your profile</string>
     <!-- Overrides the Material bottom sheet scrim label, whose pt-BR default says "Fechar planilha" (spreadsheet). -->
     <string name="close_sheet">Close</string>
+
+    <!-- Encaminhar (forward) -->
+    <string name="chat_jump_latest">Jump to latest</string>
+    <string name="forward_action">Forward</string>
+    <string name="forward_title">Forward</string>
+    <string name="forward_search_hint">Search servers, channels and people</string>
+    <string name="forward_comment_hint">Add a message (optional)</string>
+    <string name="forward_section_recent">Recent</string>
+    <string name="forward_section_people">Conversations</string>
+    <string name="forward_group">Group</string>
+    <string name="forward_new_dm">New direct message</string>
+    <string name="forward_private_channel">Private channel</string>
+    <string name="forward_restricted_note">This stays in %1$s. You can only forward it to a channel there.</string>
+    <string name="forward_send_none">Pick where to send it</string>
+    <string name="forward_send">Forward (%1$d)</string>
+    <string name="forward_server_failed">Couldn\'t load the channels of %1$s</string>
+    <string name="forward_not_member">You\'re not in that server</string>
+    <string name="forward_retry">Try again</string>
+    <string name="forward_sending">Forwarding</string>
+    <string name="forward_cap">Up to 5 at a time.</string>
+    <string name="forward_none_found">Nothing matches.</string>
+    <string name="forward_loading">Loading your channels</string>
+    <string name="forward_sent_badge">Sent</string>
+    <string name="forward_selected_count">%1$d selected</string>
+    <string name="forward_post_preview">Baú post: %1$s</string>
+    <string name="forward_message_preview">Message from %1$s: %2$s</string>
+    <string name="forward_message_preview_bare">Message from %1$s</string>
+    <string name="forward_sent_to">Forwarded to %1$s</string>
+    <plurals name="forward_sent_many">
+        <item quantity="one">Forwarded to %1$d place</item>
+        <item quantity="other">Forwarded to %1$d places</item>
+    </plurals>
+    <string name="forward_view">View</string>
+    <string name="forward_refusal_no_access">You can\'t see that channel.</string>
+    <string name="forward_refusal_cannot_send">You can\'t send messages there.</string>
+    <string name="forward_refusal_bad_target">Nothing can be sent there.</string>
+    <string name="forward_refusal_stays_in_server">This only goes inside its own server.</string>
+    <string name="forward_refusal_unreachable">You can\'t message this person.</string>
+    <string name="forward_refusal_slow_mode">Slow mode is on there. Try again in %1$ds.</string>
+    <string name="forward_refusal_slow_mode_nowait">Slow mode is on there. Try again in a moment.</string>
+    <string name="forward_refusal_rate_limited">Too many in a row. Try again in %1$ds.</string>
+    <string name="forward_refusal_rate_limited_nowait">Too many in a row. Try again in a moment.</string>
+    <string name="forward_refusal_automod">That server\'s AutoMod blocked it.</string>
+    <string name="forward_refusal_unavailable">That didn\'t work right now. Try again.</string>
+    <string name="forward_failure_gone">This isn\'t available to forward anymore.</string>
+    <string name="forward_failure_not_forwardable">This message can\'t be forwarded.</string>
+    <string name="forward_failure_empty">There is nothing here to forward.</string>
+    <string name="forward_failure_slow">Easy there. Try again in a few seconds.</string>
+    <string name="forward_failure_other">Couldn\'t forward. Try again.</string>
+    <string name="forward_card_from_bau">Forwarded from %1$s · Baú</string>
+    <string name="forward_card_from_channel">Forwarded from %1$s · #%2$s</string>
+    <string name="forward_card_from_server">Forwarded from %1$s</string>
+    <string name="forward_card_aria">%1$s. %2$s</string>
+    <string name="forward_card_aria_empty">%1$s</string>
+    <string name="forward_card_restricted">Only inside its server</string>
+    <string name="forward_card_empty">Open the original</string>
+    <string name="forward_post_menu">Post options</string>
 </resources>

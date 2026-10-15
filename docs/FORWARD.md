@@ -45,10 +45,17 @@ Request-level failures: 400 invalid body, 404 flag off or source not found or no
 - A restricted post's snapshot is the locked view: title, teaser, a public YouTube poster, no body, no media, no author, even when the forwarder could unlock it.
 - A forward of a forward carries the original snapshot, not the card message.
 - Each target goes through the chat's own send (`postChannelMessage`): access, SEND_MESSAGES, blocks, slow mode, AutoMod (which reads the comment and the snapshot text), the closed-1:1 restore, unread, push and fan-out. Each target also spends one message from the sender's send budget, and the route has its own burst limit.
-- **Nothing pings.** `@everyone` and `@here` never fire from a forward. Mentions are read from the comment only; names inside the snapshot or the fallback line mention no one. The fallback body is not unfurled.
+- **Nothing pings.** `@everyone` and `@here` never fire from a forward. Mentions are read from the comment only; names inside the snapshot or the fallback line mention no one. The fallback body is not unfurled. The snapshot itself is inert: `<@id>`, `<@&id>` and `<#id>` markup is turned into plain `@Nome` / `@cargo` / `#canal` when the card is made (a private channel's name is never resolved, it reads `#unknown`), and every remaining `@name` gets an invisible zero-width space after the `@`, so no client's mention scan finds anyone in the card or in the fallback body. The card's `url` is built from `PUBLIC_APP_URL` (first entry), never from the request Origin header.
 - Media: `mediaKind` says what the source has, `mediaThumbUrl` is only ever a stable public URL (a YouTube poster). Signed, expiring URLs are never stored in a snapshot.
 - The snapshot does not follow the source: editing or deleting the original later does not change a forward that was sent.
 
 ## Rolling it out
 
 Off by default. The dashboard flips `forward_messages` globally with no deploy. Turn it on after the web build that draws the card is live; the phones show the fallback line until their builds ship.
+
+## Web client
+
+- The card is `client/src/components/chat/forward-card.tsx`, drawn by `MessageList`, so it shows wherever messages render (channels, DMs, threads, forum posts). It reads the snapshot only and fetches nothing. A forward's fallback body is hidden (`forwardCommentOf` in `client/src/lib/forward.ts`) and the message is never also drawn as a Baú link card.
+- The action is "Encaminhar" in a chat message's menu and on every published Baú post (the button under the post for everyone, plus the staff menu). It opens `components/forward/forward-picker.tsx`: search, recent places first, up to five picks, optional comment, each refusal shown on its own row. A members-only post or a private-channel message is only offered its own server.
+- A message in a conversation, and every message while `forward_messages` is off, keeps the old behaviour (quote into the composer). The flag is read from `GET /api/forwards/config` (`startForwardConfig`), asked again on the config refresh pass.
+- Success shows a corner toast with "Ver", which opens the first place it went.

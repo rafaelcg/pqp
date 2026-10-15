@@ -78,6 +78,10 @@ final class SessionStore {
     /// room. Cleared by the view that shows it.
     var arrivalCelebration: ArrivalCelebration?
 
+    /// "Encaminhado, Ver": set by the forward picker when it closes on a
+    /// success, drawn at the app root so it outlives the sheet that made it.
+    var forwardToast: ForwardToast?
+
     /// Whether this launch walked the account through the age gate, which is
     /// what marks a brand-new account (see `Onboarding.shouldRun`).
     private var answeredAgeGateThisLaunch = false

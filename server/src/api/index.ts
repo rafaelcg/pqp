@@ -535,6 +535,7 @@ import {
 import { resolveRedirectOrigin } from "../services/connections.js";
 import {
   ForwardError,
+  forwardAppOrigin,
   forwardMessagesEnabled,
   forwardToTargets,
   resolveForwardSource,
@@ -9458,11 +9459,9 @@ router.post("/api/forwards", async ({ req, res, user }) => {
     throw new HttpError(429, "Slow down");
   }
   const body = createForwardSchema.parse(await readJsonBody(req));
-  const origin = safeShareOrigin(
-    resolveRedirectOrigin(
-      typeof req.headers.origin === "string" ? req.headers.origin : undefined,
-    ),
-  );
+  // The deployment's own address, never the caller's Origin header: the url
+  // is stored on the message for everybody who reads it.
+  const origin = forwardAppOrigin();
   try {
     const resolved = await resolveForwardSource(user, body.source, origin);
     const results = await forwardToTargets({

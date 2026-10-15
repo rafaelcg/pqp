@@ -69,8 +69,25 @@ struct ChatView: View {
     /// landing on the question or the first unread reply instead of the tail.
     /// A post is a thread channel, so everything else is this same screen.
     var forumPost: ForumPostModel? = nil
+    /// A forwarded message's card brought us here: scroll to this message
+    /// once the history has it, outline it for a moment, then say so through
+    /// `onJumped` so coming back later does not jump again.
+    var jumpToMessageId: String? = nil
+    var onJumped: () -> Void = {}
 
     @State private var model = ChatModel()
+    /// Encaminhar: the flag (`GET /api/forwards/config`), the message whose
+    /// picker is up, and the message a jump landed on.
+    @State private var forwardsEnabled = false
+    @State private var forwardSource: ForwardSource?
+    @State private var forwardStart: Task<Void, Never>?
+    @State private var jumpTarget: String?
+    @State private var highlightedMessageId: String?
+    /// This screen was opened on a message. Latched on for the screen's life
+    /// (the prop is cleared once the jump is done, which would flip the
+    /// scroll view's modifier and rebuild it mid-landing).
+    @State private var jumpedHere = false
+    private var landsOnMessage: Bool { jumpToMessageId != nil || jumpedHere }
     /// Chamar a atenção: the flag (`GET /api/fun/config`) and whether the other
     /// person in this 1:1 is a friend. Both read when the conversation opens.
     @State private var funConfig = FunConfig.off
@@ -506,6 +523,8 @@ struct ChatView: View {
         }
         .animation(Motion.standard, value: call.isCollapsed)
         .animation(Motion.standard, value: actionTarget?.id)
+        .forwardSheet($forwardSource)
+        .task { forwardsEnabled = await session.api.forwardConfig().enabled }
         .threadDestination($openedThread, serverId: server?.id)
         // Opening a DM from a profile pushes the conversation onto this stack.
         // Wrapped in its own type rather than pushing `DmSummary` directly:
@@ -571,6 +590,7 @@ struct ChatView: View {
                 joinsAsThread: forumPost != nil
             )
             transcriptOpening = false
+            await landOnJumpTarget()
             if let forumPost {
                 let target = await forumPost.land(chat: model)
                 let cursor = forumPost.previousReadAt
@@ -784,6 +804,7 @@ struct ChatView: View {
                                     .accessibilityLabel(Text("Solution"))
                             }
                         }
+                        .overlay { jumpOutline(for: message) }
                         .id(message.id)
                         // A gesture rather than `.contextMenu`, because the
                         // quick-reaction row's layout is the whole point and a
@@ -855,7 +876,10 @@ struct ChatView: View {
                 .padding(.vertical, 12)
             }
             .scrollDismissesKeyboard(.interactively)
-            .modifier(TranscriptBottomAnchor(enabled: forumPost == nil))
+            // Not while a link is putting the transcript on one message: the
+            // bottom anchor would pull it back to the tail as rows are
+            // measured, the same fight a forum post's landing has.
+            .modifier(TranscriptBottomAnchor(enabled: forumPost == nil && !landsOnMessage))
             // Held invisible until it is on its latest message: see
             // `TranscriptOpening.isHidden`. Not `.hidden()`, which would also
             // skip the layout the scroll needs.
@@ -903,6 +927,18 @@ struct ChatView: View {
                     withAnimation(Motion.standard) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
+                }
+            }
+            .onChange(of: jumpTarget) { _, id in
+                guard let id else { return }
+                // Where a link opens is not a navigation the reader made, so
+                // it is not animated; the second pass is for the heights a
+                // lazy stack only learns once it has built the rows.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { proxy.scrollTo(id, anchor: .center) }
+                DispatchQueue.main.async {
+                    withTransaction(transaction) { proxy.scrollTo(id, anchor: .center) }
                 }
             }
             .onChange(of: forumLanding) { _, target in
@@ -1016,6 +1052,8 @@ struct ChatView: View {
             ),
             canPin: Moderation.canPin(inServer: server != nil, serverRole: server?.role),
             canReport: !model.isMine(message) && !message.isWebhook,
+            canForward: canForward(message),
+            onForward: { startForward(message) },
             onReact: { emoji in
                 Task { await model.toggleReaction(emoji, on: message) }
             },
@@ -1057,6 +1095,66 @@ struct ChatView: View {
                 }
             }
         )
+    }
+
+    // MARK: - Encaminhar
+
+    /// "Forward" is offered on a message of a server channel, a thread or a
+    /// forum post, while the flag is on. A conversation is never a source (the
+    /// server answers 422), and neither is a nudge or a row it has not
+    /// confirmed yet.
+    private func canForward(_ message: Message) -> Bool {
+        forwardsEnabled && conversation == nil && !message.isNudge
+            && !message.isPending && !message.blocked
+    }
+
+    /// Opens the picker. Whether this message is stuck in its server is asked
+    /// of the channel list first (a cached read), so the picker never offers a
+    /// DM or another server for a private channel's message.
+    private func startForward(_ message: Message) {
+        let serverId = server?.id ?? flagsServerId
+        // Only the latest tap may open the picker: a slow read for an earlier
+        // message must not land after, and replace, a later one.
+        forwardStart?.cancel()
+        forwardStart = Task {
+            var channels: [Channel]?
+            if let serverId { channels = try? await session.api.channels(serverId: serverId) }
+            guard !Task.isCancelled else { return }
+            let stays = ForwardSource.messageStaysIn(message, serverId: serverId, channels: channels)
+            forwardSource = ForwardSource.message(message, stayInServerId: stays)
+        }
+    }
+
+    /// A forwarded message's card asked for one message: read back until the
+    /// history has it (a bounded number of pages), scroll there, outline it for
+    /// a moment. A message older than that, or gone, leaves the channel on its
+    /// latest message, which is where it would have opened anyway.
+    private func landOnJumpTarget() async {
+        guard let id = jumpToMessageId else { return }
+        jumpedHere = true
+        defer { onJumped() }
+        var pages = 0
+        while model.hasMore, pages < 12, !model.messages.contains(where: { $0.id == id }) {
+            await model.loadEarlier()
+            pages += 1
+        }
+        guard model.messages.contains(where: { $0.id == id }) else { return }
+        transcriptPositioned = true
+        jumpTarget = id
+        withAnimation(Motion.standard) { highlightedMessageId = id }
+        try? await Task.sleep(for: .seconds(2.5))
+        withAnimation(Motion.standard) { highlightedMessageId = nil }
+    }
+
+    @ViewBuilder
+    private func jumpOutline(for message: Message) -> some View {
+        if highlightedMessageId == message.id {
+            RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous)
+                .strokeBorder(Palette.signal, lineWidth: 2)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+                .accessibilityIdentifier("message.jumpOutline")
+        }
     }
 
     /// The author and staff mark a reply as the answer. Never the question
@@ -1456,7 +1554,10 @@ struct MessageRow: View {
     /// The same-instance Baú permalink this message gets a card for, if any.
     /// A blocked message gets none: it is hidden, not unfurled.
     private var bauSelection: BauShare.Selection? {
-        message.blocked ? nil : BauShare.selectCardLink(in: message.body)
+        // A forward's fallback body carries the permalink its own card opens:
+        // a second, Baú card for the same link would say it twice.
+        message.blocked || message.hasForwardFallbackBody
+            ? nil : BauShare.selectCardLink(in: message.body)
     }
 
     private var bauCardShown: Bool {
@@ -1468,8 +1569,11 @@ struct MessageRow: View {
     /// the sender wrote stay. When the viewer may not see the post the body is
     /// untouched, so the plain link is exactly what it was.
     private var displayBody: String {
-        guard let bauSelection, bauState != .unavailable else { return message.body }
-        return BauShare.strippingLink(bauSelection.link, from: message.body)
+        // The forwarder's own words; nothing when the body is only the
+        // fallback an old client reads.
+        let words = message.forwardComment
+        guard let bauSelection, bauState != .unavailable else { return words }
+        return BauShare.strippingLink(bauSelection.link, from: words)
     }
 
     var body: some View {
@@ -1561,6 +1665,10 @@ struct MessageRow: View {
                     MessageBodyText(body: displayBody)
                         .font(Typography.body)
                         .foregroundStyle(Palette.paper)
+                }
+
+                if let forward = message.forward, !message.blocked {
+                    ForwardCard(forward: forward)
                 }
 
                 if let bauSelection {
