@@ -23,7 +23,7 @@ import {
   getCommunityHomePost,
   isCommunityHomeEnabled,
 } from "./community-home.js";
-import { coverPath, getPublicBauPostCover } from "./community-home-public.js";
+import { coverPath } from "./community-home-public.js";
 import { DmRefusedError, openConversation } from "./dms.js";
 import { findMessageByNonce, mapMessage } from "./messages.js";
 import { getChannel } from "./servers.js";
@@ -204,23 +204,24 @@ async function resolveBauPostSource(
   // route, which answers anybody with no signature, and which re-proves on
   // every request that the post is still published, free and on a public
   // address (a post that stops qualifying 404s, and the URL stored here goes
-  // dark with it). That is the one place the answer to "may a stranger see
-  // this picture" is decided, so the snapshot asks it instead of deciding
-  // again: no page (a members-only post, the flag off, no address) means no
-  // thumbnail, exactly as before. Root-relative, like the server icon: the
-  // server does not know its own public origin, and every client resolves it
-  // against the API's.
+  // dark with it). `publicUrl` is `bauPublicUrlFor`, the one definition of
+  // "has a public page", and a cover exists exactly when the feed's own media
+  // carries a signed picture (`buildMedia`, the function the route calls too:
+  // an uploaded image, or a video's chosen cover), so this reads what the
+  // loaded post already says instead of asking the database again, and has
+  // no lookup that can fail. No page (a members-only post, the flag off, no
+  // address) means no thumbnail, exactly as before. Root-relative, like the
+  // server icon: the server does not know its own public origin, and every
+  // client resolves it against the API's.
   if (
     !mediaThumbUrl &&
     !restricted &&
     post.publicUrl &&
     serverRow.community_slug &&
-    (post.media?.kind === "image" || post.media?.kind === "video")
+    ((post.media?.kind === "image" && post.media.url) ||
+      (post.media?.kind === "video" && post.media.posterUrl))
   ) {
-    const cover = await getPublicBauPostCover(serverRow.community_slug, post.id);
-    if (cover) {
-      mediaThumbUrl = coverPath(serverRow.community_slug, post.id);
-    }
+    mediaThumbUrl = coverPath(serverRow.community_slug, post.id);
   }
   const title = post.title?.trim();
   const snapshot: MessageForward = {
