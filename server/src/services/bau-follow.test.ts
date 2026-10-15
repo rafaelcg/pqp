@@ -56,6 +56,7 @@ const { upsertUser } = await import("./users.js");
 const { createServer: createChatServer, createChannel } = await import("./servers.js");
 const { createRole, assignRole, unassignRole, upsertChannelOverwrite } = await import("./roles.js");
 const { handleChatMessage } = await import("../ws/chat.js");
+const { createMessage } = await import("./messages.js");
 const { createBauFollow, removeBauFollower, updateBauFollow } = await import("./bau-follow.js");
 const { publishDueCommunityHomePosts } = await import("./community-home.js");
 const {
@@ -805,6 +806,24 @@ describeDb("Seguir: following a Baú into a channel", () => {
     await expect(
       createBauFollow({ sourceServerId: qgId, channelId: channel, rolePingId: null, actorId: outsider.id }),
     ).rejects.toThrow(/Not found/);
+  });
+
+  it("a reply to a card quotes its title, not the fallback line with the URL", async () => {
+    const role = await createRole(destId, { name: "novidades", permissions: Permission.VIEW_CHANNEL, mentionable: true });
+    await follow(alice, destChannelId, role.id);
+    await publish({ title: "Sessão 11" });
+    await tick();
+    const [card] = await cards(destChannelId);
+    await createMessage(destChannelId, bob as never, "boa", card!.id);
+    const history = await call<{ messages: Array<{ body: string; replyTo: { excerpt: string } | null }> }>(
+      bob,
+      "GET",
+      `/api/channels/${destChannelId}/messages`,
+    );
+    const reply = history.body.messages.find((m) => m.body === "boa");
+    expect(reply?.replyTo?.excerpt).toContain("Sessão 11");
+    expect(reply?.replyTo?.excerpt).not.toContain("Encaminhado");
+    expect(reply?.replyTo?.excerpt).not.toContain("http");
   });
 
   // ------------------------------------------------- edits reach every card

@@ -8,6 +8,7 @@ import {
   formatUserTag,
   MAX_PINS_PER_CHANNEL,
   MESSAGE_SYSTEM_KINDS,
+  forwardBodyComment,
   messageForwardSchema,
   resolveChanceRequest,
   type Attachment,
@@ -110,7 +111,8 @@ export type HydratedMessage = Omit<DbMessage, "chance"> & {
 const REPLY_COLUMNS = `m.reply_to_id,
             parent.author_id as reply_author_id,
             COALESCE(NULLIF(reply_sm.nickname, ''), pu.display_name) as reply_author_name,
-            parent.body as reply_body`;
+            parent.body as reply_body,
+            parent.forward as reply_forward`;
 
 const REPLY_JOINS = `LEFT JOIN messages parent ON parent.id = m.reply_to_id
      LEFT JOIN users pu ON pu.id = parent.author_id
@@ -1173,6 +1175,25 @@ export async function deleteMessagesBulk(
   return deleted;
 }
 
+/**
+ * What a reply quotes of its parent. A forwarded message's body is the fallback
+ * line (`Encaminhado: <title> <url>`) or just a role mention, neither of which
+ * says what the card is about, so the preview quotes the card's title (or its
+ * excerpt) and, when a person added words, those first. Any other parent quotes
+ * its body as it always did.
+ */
+function replyBodyOf(m: DbMessage): string {
+  const body = m.reply_body ?? "";
+  const parsed = messageForwardSchema.safeParse(m.reply_forward);
+  if (!parsed.success) {
+    return body;
+  }
+  const forward = parsed.data;
+  const shown = forwardBodyComment(body, forward).trim();
+  const about = (forward.title?.trim() || forward.excerpt.trim()).replace(/\s+/g, " ");
+  return [shown, about].filter((part) => part.length > 0).join(" ");
+}
+
 function mapReplyTo(m: DbMessage): MessageReplyRef | null {
   if (!m.reply_to_id) {
     return null;
@@ -1192,7 +1213,7 @@ function mapReplyTo(m: DbMessage): MessageReplyRef | null {
     id: m.reply_to_id,
     authorId: m.reply_author_id,
     authorName: m.reply_author_name ?? "User",
-    excerpt: buildReplyExcerpt(m.reply_body ?? ""),
+    excerpt: buildReplyExcerpt(replyBodyOf(m)),
     deleted: false,
   };
 }
