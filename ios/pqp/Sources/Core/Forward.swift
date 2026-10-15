@@ -170,10 +170,28 @@ enum ForwardFallback {
         return "\(prefix)\(text) \(forward.url)"
     }
 
+    /// `forwardBodyComment` in `@pqp/shared`: what to show of `body`. Nothing
+    /// for the bare fallback; the role-mention line alone when a followed Baú's
+    /// delivery put `@Role` on its own line above the fallback; `body` itself
+    /// for anything the forwarder wrote (a comment that merely starts with the
+    /// same word, or a mention on the same line, is a comment).
+    static func comment(_ body: String, for forward: MessageForward) -> String {
+        let fallback = Self.body(for: forward)
+        if body == fallback { return "" }
+        if body.hasPrefix("@"), let newline = body.firstIndex(of: "\n") {
+            let units = body.utf16.distance(from: body.startIndex, to: newline)
+            if units > 1, String(body[body.index(after: newline)...]) == fallback {
+                return String(body[..<newline])
+            }
+        }
+        return body
+    }
+
     /// `isForwardFallbackBody`: compared against the snapshot, so a comment
-    /// that merely starts with the same word is never hidden.
+    /// that merely starts with the same word is never hidden. True for the
+    /// bare fallback and for a mention line above it.
     static func isFallback(_ body: String, for forward: MessageForward) -> Bool {
-        body == Self.body(for: forward)
+        body == Self.body(for: forward) || comment(body, for: forward) != body
     }
 }
 
@@ -186,11 +204,12 @@ private extension String {
 }
 
 extension Message {
-    /// The words to draw above the card: the forwarder's comment, or nothing
+    /// The words to draw above the card: the forwarder's comment, the role
+    /// mention a followed Baú's delivery put above the fallback, or nothing
     /// when the body is only the fallback an old client reads.
     var forwardComment: String {
         guard let forward else { return body }
-        return ForwardFallback.isFallback(body, for: forward) ? "" : body
+        return ForwardFallback.comment(body, for: forward)
     }
 
     /// A forward whose body is the fallback. The fallback carries the same

@@ -182,6 +182,23 @@ final class ForwardTests: XCTestCase {
         _ = forward
     }
 
+    func testARoleMentionAboveTheFallbackIsTheCommentAndTheFallbackIsHidden() throws {
+        let forward = card()
+        let fallback = ForwardFallback.body(for: forward)
+        let pinged = "@Novidades\n\(fallback)"
+        XCTAssertEqual(ForwardFallback.comment(fallback, for: forward), "")
+        XCTAssertEqual(ForwardFallback.comment(pinged, for: forward), "@Novidades")
+        XCTAssertTrue(ForwardFallback.isFallback(pinged, for: forward))
+        // A mention on the same line, or anything else written by a person, is a comment.
+        XCTAssertEqual(ForwardFallback.comment("@Novidades \(fallback)", for: forward), "@Novidades \(fallback)")
+        XCTAssertEqual(ForwardFallback.comment("olha\n\(fallback)", for: forward), "olha\n\(fallback)")
+        XCTAssertFalse(ForwardFallback.isFallback("olha isso", for: forward))
+        var message = try Coding.decoder.decode(Message.self, from: messageJSON(forward: cardJSON))
+        message.body = "@Novidades\n\(ForwardFallback.body(for: try XCTUnwrap(message.forward)))"
+        XCTAssertEqual(message.forwardComment, "@Novidades")
+        XCTAssertTrue(message.hasForwardFallbackBody)
+    }
+
     func testAnOrdinaryMessageKeepsItsBody() throws {
         let message = try Coding.decoder.decode(Message.self, from: messageJSON(forward: nil, body: "Encaminhado: x"))
         XCTAssertEqual(message.forwardComment, "Encaminhado: x")
