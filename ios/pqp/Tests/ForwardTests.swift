@@ -25,14 +25,15 @@ final class ForwardTests: XCTestCase {
         channel: String? = nil,
         thumb: String? = nil,
         mediaKind: MessageForward.MediaKind? = nil,
-        restricted: Bool = false
+        restricted: Bool = false,
+        restrictedTo: String? = nil
     ) -> MessageForward {
         MessageForward(
             kind: kind, sourceServerId: serverId, sourceServerName: "QG",
             sourceServerIconUrl: "/api/servers/\(serverId)/icon?v=ab12cd34",
             sourceChannelName: channel, sourceId: sourceId, authorDisplayName: "Rafa",
             title: title, excerpt: excerpt, mediaThumbUrl: thumb, mediaKind: mediaKind,
-            url: url ?? postURL, restricted: restricted
+            url: url ?? postURL, restricted: restricted, restrictedToServerId: restrictedTo
         )
     }
 
@@ -483,6 +484,33 @@ final class ForwardTests: XCTestCase {
         // The card in this message is restricted (the JSON says so): it can
         // only be forwarded again inside the server it came from.
         XCTAssertEqual(ForwardSource.message(forwarded).stayInServerId, serverId)
+    }
+
+    /// A restricted card may only go to `restrictedToServerId`, which is not
+    /// always the server it came from (a free card stamped inside a private
+    /// channel of another server); an older restricted card reads as its source.
+    func testARestrictedCardStaysInRestrictedToServerIdElseItsSource() throws {
+        XCTAssertNil(card().stayInServerId)
+        XCTAssertNil(card(restricted: false, restrictedTo: otherServerId).stayInServerId)
+        XCTAssertEqual(card(restricted: true).stayInServerId, serverId)
+        XCTAssertEqual(card(restricted: true, restrictedTo: otherServerId).stayInServerId, otherServerId)
+
+        let json = cardJSON.replacingOccurrences(
+            of: #""restricted":true"#,
+            with: #""restricted":true,"restrictedToServerId":"\#(otherServerId)""#
+        )
+        var message = try Coding.decoder.decode(Message.self, from: messageJSON(forward: json))
+        XCTAssertEqual(message.forward?.restrictedToServerId, otherServerId)
+        message.body = ForwardFallback.body(for: try XCTUnwrap(message.forward))
+        XCTAssertEqual(ForwardSource.message(message).stayInServerId, otherServerId)
+        // The picker then offers only that server's channels.
+        let model = ForwardPickerModel(
+            source: ForwardSource.message(message), recentIds: [],
+            conversations: [dmTarget("d", "Ana")],
+            channels: [channelTarget("c1", "a", server: serverId), channelTarget("c2", "b", server: otherServerId)]
+        )
+        XCTAssertEqual(model.conversationRows.map(\.id), [])
+        XCTAssertEqual(model.channelRows.map(\.id), ["c2"])
     }
 
     // MARK: - The request and its answer

@@ -58,11 +58,23 @@ struct MessageForward: Codable, Hashable, Sendable {
     /// Members-only post or private-channel message: it can only be forwarded
     /// again inside `sourceServerId`.
     let restricted: Bool
+    /// With `restricted`: the only server this card may be forwarded into
+    /// (never a conversation). It can differ from `sourceServerId`: a free
+    /// card forwarded into a private channel of another server is restricted
+    /// to that one. Absent on a restricted card from an older build.
+    let restrictedToServerId: String?
+
+    /// Where a forward of this card may go, or nil when anywhere: the named
+    /// server, else the source's for an older restricted card.
+    var stayInServerId: String? {
+        guard restricted else { return nil }
+        return restrictedToServerId ?? sourceServerId
+    }
 
     private enum CodingKeys: String, CodingKey {
         case v, kind, sourceServerId, sourceServerName, sourceServerIconUrl
         case sourceChannelName, sourceId, authorDisplayName, title, excerpt
-        case mediaThumbUrl, mediaKind, url, createdAt, restricted
+        case mediaThumbUrl, mediaKind, url, createdAt, restricted, restrictedToServerId
     }
 
     init(from decoder: Decoder) throws {
@@ -88,6 +100,7 @@ struct MessageForward: Codable, Hashable, Sendable {
         url = try c.decode(String.self, forKey: .url)
         createdAt = try c.decode(String.self, forKey: .createdAt)
         restricted = (try? c.decodeIfPresent(Bool.self, forKey: .restricted)) ?? false
+        restrictedToServerId = (try? c.decodeIfPresent(String.self, forKey: .restrictedToServerId)) ?? nil
     }
 
     init(
@@ -104,7 +117,8 @@ struct MessageForward: Codable, Hashable, Sendable {
         mediaKind: MediaKind? = nil,
         url: String,
         createdAt: String = "2026-10-15T12:00:00.000Z",
-        restricted: Bool = false
+        restricted: Bool = false,
+        restrictedToServerId: String? = nil
     ) {
         v = Self.supportedVersion
         self.kind = kind
@@ -121,6 +135,7 @@ struct MessageForward: Codable, Hashable, Sendable {
         self.url = url
         self.createdAt = createdAt
         self.restricted = restricted
+        self.restrictedToServerId = restrictedToServerId
     }
 }
 
@@ -329,7 +344,7 @@ struct ForwardSource: Equatable, Sendable {
         }
         return ForwardSource(
             kind: .message, id: message.id, serverId: nil, summary: summary,
-            stayInServerId: forward?.restricted == true ? forward?.sourceServerId : stayInServerId
+            stayInServerId: forward?.stayInServerId ?? stayInServerId
         )
     }
 
