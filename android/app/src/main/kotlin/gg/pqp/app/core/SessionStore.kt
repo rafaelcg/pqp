@@ -447,6 +447,11 @@ class SessionStore(
                                 _servers.value = gg.pqp.app.ui.screens.ServerActions
                                     .applyOrder(_servers.value, back)
                             }
+                            // A reorder from another device that arrived while this save was
+                            // in flight was ignored (the order here was the newer one). This
+                            // save is the one that failed, so the server's order is the truth
+                            // again: read it instead of staying behind.
+                            refreshServers()
                             onError(it.message.orEmpty())
                         }
                 }

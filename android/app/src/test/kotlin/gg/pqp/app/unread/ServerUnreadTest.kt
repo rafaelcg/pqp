@@ -68,17 +68,21 @@ class ServerUnreadTest {
         val reads = mutableListOf<String>()
         var failing: Set<String> = emptySet()
         var gate: CompletableDeferred<Unit>? = null
+        var user: String? = "me"
         private val job: Job = SupervisorJob()
 
         val store = ServerUnreadStore(
             scope = CoroutineScope(job + Dispatchers.Unconfined),
             readServer = { id ->
                 reads += id
+                // The answer is what the server held when the request LEFT.
+                val answer = answers[id].orEmpty()
                 gate?.await()
                 if (id in failing) throw IOException("offline")
-                answers[id].orEmpty()
+                answer
             },
             muted = { mutedChannels to mutedServers },
+            userId = { user },
             now = { clock },
         )
     }
@@ -193,5 +197,48 @@ class ServerUnreadTest {
         // The answer predates the frame: it says one unread, no mention.
         f.gate!!.complete(Unit)
         assertEquals(ServerUnreadSummary(1, 1), f.store.unread.value["a"])
+    }
+
+    @Test
+    fun `another account starts from nothing`() {
+        val f = Fixture()
+        f.answers["a"] = listOf(unread("a1", 3))
+        f.store.hydrate(listOf(server("a")))
+        assertEquals(setOf("a"), f.store.unread.value.keys)
+
+        f.user = "somebody-else"
+        f.answers["a"] = emptyList()
+        f.store.hydrate(listOf(server("z")))
+        assertTrue(f.store.unread.value.isEmpty())
+    }
+
+    @Test
+    fun `the cap limits what is read, not what is kept`() {
+        val f = Fixture()
+        val servers = (1..35).map { server("s$it") }
+        f.store.bump("s35", "c", mention = true)
+        f.store.hydrate(servers)
+        assertEquals(ServerUnreadRules.MAX_SERVERS, f.reads.size)
+        assertEquals(ServerUnreadSummary(1, 1), f.store.unread.value["s35"])
+    }
+
+    @Test
+    fun `an older read of a server cannot overwrite a newer one`() {
+        val f = Fixture()
+        f.answers["a"] = listOf(unread("a1", 5))
+        val slow = CompletableDeferred<Unit>()
+        f.gate = slow
+        f.store.hydrate(listOf(server("a")))
+        // While that read is out, the person reads a channel and the list asks again:
+        // this second read answers at once, with nothing unread.
+        f.gate = null
+        f.answers["a"] = emptyList()
+        f.store.markStale("a")
+        f.store.hydrate(listOf(server("a")))
+        assertTrue(f.store.unread.value.isEmpty())
+
+        // The first read finally lands with its old answer: dropped.
+        slow.complete(Unit)
+        assertTrue(f.store.unread.value.isEmpty())
     }
 }

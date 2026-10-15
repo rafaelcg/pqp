@@ -3,6 +3,7 @@ package gg.pqp.app.social
 import gg.pqp.app.core.ApiException
 import gg.pqp.app.core.MeNotificationPreferences
 import gg.pqp.app.core.MePreferences
+import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,16 @@ class ConversationPrefsTest {
     }
 
     @Test
+    fun `what is shown is the confirmed list with the unsaved asks on top`() {
+        assertEquals(listOf("c", "a", "b"), ConversationPins.applyOps(listOf("a", "b"), mapOf("c" to true)))
+        assertEquals(listOf("a"), ConversationPins.applyOps(listOf("a", "b"), mapOf("b" to false)))
+        // Asked in order: pin then unpin the same one is nothing.
+        assertEquals(listOf("a"), ConversationPins.applyOps(listOf("a"), linkedMapOf("x" to true, "x" to false)))
+        // Already there stays where it is.
+        assertEquals(listOf("a", "b"), ConversationPins.applyOps(listOf("a", "b"), mapOf("b" to true)))
+    }
+
+    @Test
     fun `a mute puts none on the channel, an unmute takes only none off`() {
         val levels = mapOf("a" to "mentions", "b" to "none")
         assertEquals(
@@ -77,8 +88,14 @@ class ConversationPrefsTest {
         /** What the "server" holds. */
         var serverPins: List<String> = emptyList()
         var serverLevels: Map<String, String> = emptyMap()
-        var failPins: Throwable? = null
-        var failLevels: Throwable? = null
+
+        /** The next this many saves fail. */
+        var failPinSaves = 0
+        var failLevelSaves = 0
+
+        /** A save that LANDS and then fails to answer. */
+        var commitThenFail = false
+        var failure: Throwable = ApiException(500, "boom")
         var freshFails = false
         var gate: CompletableDeferred<Unit>? = null
         val pinSaves = mutableListOf<List<String>>()
@@ -97,17 +114,36 @@ class ConversationPrefsTest {
 
         override suspend fun savePinned(ids: List<String>): MePreferences {
             gate?.await()
-            failPins?.let { throw it }
+            if (commitThenFail) {
+                serverPins = ids
+                throw failure
+            }
+            if (failPinSaves > 0) {
+                failPinSaves -= 1
+                throw failure
+            }
             pinSaves += ids
             serverPins = ids
             return MePreferences(pinnedConversations = serverPins)
         }
 
-        override suspend fun freshChannelLevels(): Map<String, String>? = if (freshFails) null else serverLevels
+        override suspend fun freshPinned(): List<String>? = if (freshFails) null else serverPins
+
+        override suspend fun freshChannelLevels(): Map<String, String> {
+            if (freshFails) throw IOException("offline")
+            return serverLevels
+        }
 
         override suspend fun saveChannelLevels(levels: Map<String, String>): MePreferences {
             gate?.await()
-            failLevels?.let { throw it }
+            if (commitThenFail) {
+                serverLevels = levels
+                throw failure
+            }
+            if (failLevelSaves > 0) {
+                failLevelSaves -= 1
+                throw failure
+            }
             levelSaves += levels
             serverLevels = levels
             return MePreferences(notifications = MeNotificationPreferences(channels = serverLevels))
@@ -139,11 +175,12 @@ class ConversationPrefsTest {
     }
 
     @Test
-    fun `a refused pin goes back to what the server confirmed and says why`() {
+    fun `a refused pin goes back to what the server holds and says why`() {
         val backend = FakeBackend()
         backend.pins = listOf("a")
         backend.serverPins = listOf("a")
-        backend.failPins = ApiException(429, "Slow down")
+        backend.failPinSaves = 1
+        backend.failure = ApiException(429, "Slow down")
         var said: String? = null
         actor(backend).togglePin("b") { said = it }
         assertEquals(listOf("a"), backend.pins)
@@ -162,9 +199,40 @@ class ConversationPrefsTest {
         assertEquals(listOf("b", "a"), backend.pins)
         gate.complete(Unit)
         // In turn, never overtaking: the first save was already out with "a" when the
-        // second tap came; the second sends what the session holds when its turn comes.
+        // second tap came; the second sends what is on screen when its turn comes.
         assertEquals(listOf(listOf("a"), listOf("b", "a")), backend.pinSaves)
         assertEquals(listOf("b", "a"), backend.serverPins)
+    }
+
+    @Test
+    fun `a failed save takes back only itself, a tap made while it was in flight survives`() {
+        val backend = FakeBackend()
+        val gate = CompletableDeferred<Unit>()
+        backend.gate = gate
+        backend.failPinSaves = 1
+        val errors = mutableListOf<String>()
+        val prefs = actor(backend)
+        prefs.togglePin("a") { errors += it }
+        prefs.togglePin("b") { errors += it }
+        gate.complete(Unit)
+        // The first save ("a") was refused; the second tap ("b") was saved after it.
+        assertEquals(listOf("b"), backend.serverPins)
+        assertEquals(listOf("b"), backend.pins)
+        assertEquals(1, errors.size)
+    }
+
+    @Test
+    fun `a save that landed and lost its answer is not rolled back or reported`() {
+        val backend = FakeBackend()
+        backend.pins = listOf("a")
+        backend.serverPins = listOf("a")
+        backend.commitThenFail = true
+        var said: String? = null
+        actor(backend).togglePin("b") { said = it }
+        // The server holds the new pins; the phone shows them, and says nothing.
+        assertEquals(listOf("b", "a"), backend.serverPins)
+        assertEquals(listOf("b", "a"), backend.pins)
+        assertEquals(null, said)
     }
 
     @Test
@@ -191,21 +259,40 @@ class ConversationPrefsTest {
     }
 
     @Test
-    fun `a refused mute goes back, and an unreadable server map falls back to what was confirmed`() {
+    fun `when the server's levels cannot be read nothing is sent, the row goes back and it says so`() {
         val backend = FakeBackend()
         backend.levels = mapOf("c2" to "none")
         backend.serverLevels = mapOf("c2" to "none")
-        backend.failLevels = ApiException(500, "boom")
+        backend.freshFails = true
         var said: String? = null
-        val prefs = actor(backend)
-        prefs.toggleMute("c1", muted = true) { said = it }
+        actor(backend).toggleMute("c1", muted = true) { said = it }
+        assertTrue("a stale whole-map write could erase a mute set elsewhere", backend.levelSaves.isEmpty())
+        assertEquals(mapOf("c2" to "none"), backend.levels)
+        assertEquals("offline", said)
+    }
+
+    @Test
+    fun `a refused mute goes back to what the server holds`() {
+        val backend = FakeBackend()
+        backend.levels = mapOf("c2" to "none")
+        backend.serverLevels = mapOf("c2" to "none")
+        backend.failLevelSaves = 1
+        var said: String? = null
+        actor(backend).toggleMute("c1", muted = true) { said = it }
         assertEquals(mapOf("c2" to "none"), backend.levels)
         assertEquals("boom", said)
+    }
 
-        backend.failLevels = null
-        backend.freshFails = true
-        prefs.toggleMute("c1", muted = true) { error(it) }
-        assertEquals(mapOf("c2" to "none", "c1" to "none"), backend.levelSaves.single())
+    @Test
+    fun `a mute that landed and lost its answer is kept`() {
+        val backend = FakeBackend()
+        backend.levels = emptyMap()
+        backend.serverLevels = emptyMap()
+        backend.commitThenFail = true
+        var said: String? = null
+        actor(backend).toggleMute("c1", muted = true) { said = it }
+        assertEquals(mapOf("c1" to "none"), backend.levels)
+        assertEquals(null, said)
     }
 
     @Test
@@ -219,9 +306,41 @@ class ConversationPrefsTest {
         backend.user = "somebody-else"
         backend.pins = listOf("x")
         backend.serverPins = listOf("x")
-        backend.failPins = ApiException(500, "boom")
+        backend.failPinSaves = 1
         prefs.togglePin("y") { }
         // Rolled back to what THIS account had, not to the last account's pins.
         assertEquals(listOf("x"), backend.pins)
+    }
+
+    @Test
+    fun `a save that comes back after somebody else signed in changes nothing`() {
+        val backend = FakeBackend()
+        val gate = CompletableDeferred<Unit>()
+        backend.gate = gate
+        backend.pins = listOf("a")
+        backend.serverPins = listOf("a")
+        actor(backend).togglePin("b") { error("no error for a stale save: $it") }
+
+        // Account B signs in while A's save is out.
+        backend.user = "somebody-else"
+        backend.pins = listOf("theirs")
+        gate.complete(Unit)
+        assertEquals(listOf("theirs"), backend.pins)
+    }
+
+    @Test
+    fun `a mute queued for one account is not applied to the next`() {
+        val backend = FakeBackend()
+        val gate = CompletableDeferred<Unit>()
+        backend.gate = gate
+        backend.levels = mapOf("a" to "none")
+        backend.serverLevels = mapOf("a" to "none")
+        val prefs = actor(backend)
+        prefs.toggleMute("c1", muted = true) { }
+
+        backend.user = "somebody-else"
+        backend.levels = mapOf("theirs" to "none")
+        gate.complete(Unit)
+        assertEquals(mapOf("theirs" to "none"), backend.levels)
     }
 }

@@ -92,6 +92,8 @@ class ServerUnreadStore(
     private val readServer: suspend (String) -> Collection<ChannelUnread>,
     /** The muted channel and server sets, asked for at each pass and frame. */
     private val muted: () -> Pair<Set<String>, Set<String>>,
+    /** Who is signed in: another account must not see this one's badges. */
+    private val userId: () -> String? = { null },
     private val now: () -> Long = SystemClock::elapsedRealtime,
 ) {
     private val _unread = MutableStateFlow<Map<String, ServerUnreadSummary>>(emptyMap())
@@ -103,6 +105,15 @@ class ServerUnreadStore(
 
     /** Bumped by [clear]: a read that started before it must not write after it. */
     private var epoch = 0
+
+    /** Two requests at a time across EVERY pass: overlapping passes share the budget. */
+    private val gate = Semaphore(ServerUnreadRules.PARALLELISM)
+
+    /** The newest read started for a server: an older one that lands after it is dropped. */
+    private val readSeq = HashMap<String, Int>()
+
+    /** Whose servers these are; another account starts from nothing. */
+    private var account: String? = null
 
     /** Frames since a server was last read, so a pass in flight cannot erase them. */
     private val generation = HashMap<String, Int>()
@@ -117,6 +128,12 @@ class ServerUnreadStore(
      * refresh); a stale server is read whatever the interval says.
      */
     fun hydrate(servers: List<ServerSummary>, force: Boolean = false) {
+        val signedIn = userId()
+        if (account != null && signedIn != account) {
+            // A different account: nothing of the last one's badges may show.
+            clear()
+        }
+        account = signedIn
         val (_, mutedServers) = muted()
         val wanted = ServerUnreadRules.targets(servers, mutedServers)
         val toRead = synchronized(lock) {
@@ -128,13 +145,15 @@ class ServerUnreadStore(
             stale -= picked.toSet()
             picked
         }
-        // Forget servers the account left, and the muted ones: they badge nothing.
-        _unread.value = _unread.value.filterKeys { it in wanted }
+        // Forget servers the account left, and the muted ones: they badge nothing. The
+        // thirty-server cap limits what is READ, not what is kept: a live frame for the
+        // thirty-first still shows.
+        val kept = servers.map { it.id }.filterNot { it in mutedServers }.toSet()
+        _unread.value = _unread.value.filterKeys { it in kept }
         // A pass is never cancelled by the next one: a small "read this server
         // again" must not cut a full pass short and leave its servers unread
         // until the interval comes round.
         scope.launch {
-            val gate = Semaphore(ServerUnreadRules.PARALLELISM)
             toRead.map { serverId ->
                 async {
                     gate.withPermit { readOne(serverId) }
@@ -144,7 +163,11 @@ class ServerUnreadStore(
     }
 
     private suspend fun readOne(serverId: String) {
-        val (before, startedIn) = synchronized(lock) { (generation[serverId] ?: 0) to epoch }
+        val (before, startedIn, mySeq) = synchronized(lock) {
+            val seq = (readSeq[serverId] ?: 0) + 1
+            readSeq[serverId] = seq
+            Triple(generation[serverId] ?: 0, epoch, seq)
+        }
         val channels = try {
             readServer(serverId)
         } catch (cancelled: CancellationException) {
@@ -157,6 +180,9 @@ class ServerUnreadStore(
         val summary = ServerUnreadRules.summarize(channels, muted().first)
         synchronized(lock) {
             if (epoch != startedIn) return
+            // A newer read of this server started after this one: it will land with the
+            // truth, and this answer is older than what it was asked about.
+            if (readSeq[serverId] != mySeq) return
             // A frame that landed while the request was out may or may not be in
             // its answer; the larger of the two never loses one, and the next pass
             // (nothing in flight) settles it, the way the channel list does.
@@ -197,6 +223,7 @@ class ServerUnreadStore(
             lastPassAt = null
             stale.clear()
             generation.clear()
+            readSeq.clear()
         }
     }
 
@@ -214,6 +241,7 @@ class ServerUnreadStore(
                         val levels = (session.phase.value as? SessionPhase.Ready)?.me?.preferences?.notifications
                         mutedChannelIds(levels?.channels) to ServerUnreadRules.mutedServerIds(levels?.servers)
                     },
+                    userId = { (session.phase.value as? SessionPhase.Ready)?.me?.id },
                 ).also { instance = it }
             }
     }

@@ -56,6 +56,24 @@ object ConversationPins {
         ids.size >= MAX -> null
         else -> listOf(channelId) + ids
     }
+
+    /**
+     * [base] with the asked-for changes on top, in the order they were asked:
+     * `true` pins (to the front), `false` unpins. What is shown is always what
+     * the server last confirmed plus what is still waiting to be saved, so a
+     * refused change takes back only itself.
+     */
+    fun applyOps(base: List<String>, ops: Map<String, Boolean>): List<String> {
+        var out = base
+        for ((id, wantPinned) in ops) {
+            out = if (wantPinned) {
+                if (id in out) out else listOf(id) + out
+            } else {
+                out - id
+            }
+        }
+        return out
+    }
 }
 
 /** What a toggle did, for the screen to say something about. */
@@ -116,7 +134,7 @@ suspend fun ApiClient.setChannelNotificationLevels(channels: Map<String, String>
 
 /** Everything the actor reads and writes, so it can be driven in a JVM test. */
 interface ConversationPrefsBackend {
-    /** Who is signed in; a different one starts the actor over. */
+    /** Who is signed in. Work started for one account never lands on another. */
     fun userId(): String?
 
     /** The pins and the channel levels as the session holds them now (optimistic state included). */
@@ -129,8 +147,11 @@ interface ConversationPrefsBackend {
 
     suspend fun savePinned(ids: List<String>): MePreferences
 
-    /** The levels the server holds right now, or null when it could not be read. */
-    suspend fun freshChannelLevels(): Map<String, String>?
+    /** What the server holds right now, or null when it could not be read. */
+    suspend fun freshPinned(): List<String>?
+
+    /** The levels the server holds right now. Throws when they cannot be read. */
+    suspend fun freshChannelLevels(): Map<String, String>
     suspend fun saveChannelLevels(levels: Map<String, String>): MePreferences
 }
 
@@ -149,8 +170,11 @@ class SessionConversationPrefsBackend(private val session: SessionStore) : Conve
 
     override suspend fun savePinned(ids: List<String>) = session.api.setPinnedConversations(ids)
 
-    override suspend fun freshChannelLevels(): Map<String, String>? =
-        runCatching { session.api.me().preferences?.notifications?.channels.orEmpty() }.getOrNull()
+    override suspend fun freshPinned(): List<String>? =
+        runCatching { session.api.me().preferences?.pinnedConversations.orEmpty() }.getOrNull()
+
+    override suspend fun freshChannelLevels(): Map<String, String> =
+        session.api.me().preferences?.notifications?.channels.orEmpty()
 
     override suspend fun saveChannelLevels(levels: Map<String, String>) =
         session.api.setChannelNotificationLevels(levels)
@@ -161,9 +185,17 @@ class SessionConversationPrefsBackend(private val session: SessionStore) : Conve
  *
  * The session moves FIRST (a pin lands under Fixadas on the tap, not after the
  * round trip) and the save follows, serialised so two quick taps cannot
- * overtake each other. A save sends what the session holds when its turn
- * comes, so the last tap wins, and a refused one puts back what the server
- * last confirmed and says why through [onError], in the server's own sentence.
+ * overtake each other. What is on screen is always what the server last
+ * confirmed with the still-unsaved asks on top, so a refused save takes back
+ * only itself: a tap made while it was in flight survives and is sent next.
+ *
+ * AN ANSWER THAT NEVER CAME is not "it did not save": the write may have
+ * committed and lost its response, so a failure reads the server's truth before
+ * rolling anything back, and only says something when the server does not hold
+ * what was asked.
+ *
+ * ONE ACCOUNT. Every save is tied to the account that asked: a response that
+ * comes back after somebody else signed in changes nothing.
  */
 class ConversationPrefs(
     private val backend: ConversationPrefsBackend,
@@ -172,73 +204,126 @@ class ConversationPrefs(
     private val mutex = Mutex()
     private var owner: String? = null
 
-    /** The pins the server last confirmed. */
+    /** The pins the server last confirmed, and the changes still waiting to be saved. */
     private var confirmedPins: List<String>? = null
+    private val pendingPins = LinkedHashMap<String, Boolean>()
 
-    /** Mutes asked for and not yet saved: channel id to muted. */
-    private val pendingMutes = LinkedHashMap<String, Boolean>()
-
-    /** What the server last confirmed of the levels. Null until a save or read. */
+    /** The same for the channel levels; a pending mute is `true`, an unmute `false`. */
     private var confirmedLevels: Map<String, String>? = null
+    private val pendingMutes = LinkedHashMap<String, Boolean>()
 
     /** Fixar / Desafixar. */
     fun togglePin(channelId: String, onError: (String) -> Unit): PrefOutcome {
         adoptAccount()
-        val before = backend.pinned()
-        val next = ConversationPins.toggled(before, channelId) ?: return PrefOutcome.PinLimit
-        if (confirmedPins == null) confirmedPins = before
-        backend.setPinned(next)
-        scope.launch {
-            mutex.withLock {
-                val wanted = backend.pinned()
-                if (wanted == confirmedPins) return@withLock
-                try {
-                    val saved = backend.savePinned(wanted)
-                    val held = saved.pinnedConversations.orEmpty()
-                    confirmedPins = held
-                    if (held != wanted) backend.setPinned(held)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (failure: Exception) {
-                    backend.setPinned(confirmedPins.orEmpty())
-                    onError(readable(failure))
-                }
-            }
+        val local = backend.pinned()
+        val next = ConversationPins.toggled(local, channelId) ?: return PrefOutcome.PinLimit
+        synchronized(pendingPins) {
+            if (confirmedPins == null && pendingPins.isEmpty()) confirmedPins = local
+            pendingPins[channelId] = channelId in next
         }
+        backend.setPinned(next)
+        val account = backend.userId()
+        scope.launch { mutex.withLock { savePins(account, onError) } }
         return PrefOutcome.Done
+    }
+
+    private suspend fun savePins(account: String?, onError: (String) -> Unit) {
+        if (backend.userId() != account) return
+        val batch = synchronized(pendingPins) { LinkedHashMap(pendingPins) }
+        val base = confirmedPins ?: return
+        if (batch.isEmpty()) return
+        val wanted = ConversationPins.applyOps(base, batch)
+        if (wanted == base) {
+            settlePins(batch)
+            backend.setPinned(ConversationPins.applyOps(base, pendingSnapshot()))
+            return
+        }
+        try {
+            val saved = backend.savePinned(wanted)
+            if (backend.userId() != account) return
+            confirmedPins = saved.pinnedConversations.orEmpty()
+            settlePins(batch)
+            backend.setPinned(ConversationPins.applyOps(confirmedPins.orEmpty(), pendingSnapshot()))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            // The write may have landed with its answer lost: ask before rolling back.
+            val truth = backend.freshPinned()
+            if (backend.userId() != account) return
+            if (truth != null) confirmedPins = truth
+            settlePins(batch)
+            backend.setPinned(ConversationPins.applyOps(confirmedPins.orEmpty(), pendingSnapshot()))
+            if (truth == null || truth != wanted) onError(readable(failure))
+        }
+    }
+
+    private fun pendingSnapshot(): Map<String, Boolean> = synchronized(pendingPins) { LinkedHashMap(pendingPins) }
+
+    private fun settlePins(batch: Map<String, Boolean>) = synchronized(pendingPins) {
+        batch.forEach { (id, wanted) -> if (pendingPins[id] == wanted) pendingPins.remove(id) }
     }
 
     /** Silenciar / Reativar: the channel's level is `none`, or not there at all. */
     fun toggleMute(channelId: String, muted: Boolean, onError: (String) -> Unit) {
         adoptAccount()
-        val before = backend.channelLevels()
-        if (confirmedLevels == null) confirmedLevels = before
-        synchronized(pendingMutes) { pendingMutes[channelId] = muted }
-        backend.setChannelLevels(applyMutes(before, mapOf(channelId to muted)))
-        scope.launch {
-            mutex.withLock {
-                val batch = synchronized(pendingMutes) { LinkedHashMap(pendingMutes) }
-                if (batch.isEmpty()) return@withLock
-                try {
-                    // The whole map, read fresh: the server replaces `channels`.
-                    val fresh = backend.freshChannelLevels() ?: confirmedLevels ?: backend.channelLevels()
-                    val saved = backend.saveChannelLevels(applyMutes(fresh, batch))
-                    val held = saved.notifications?.channels.orEmpty()
-                    confirmedLevels = held
-                    synchronized(pendingMutes) { batch.forEach { (id, wanted) -> if (pendingMutes[id] == wanted) pendingMutes.remove(id) } }
-                    // Whatever else is still pending sits on top of what the server holds.
-                    backend.setChannelLevels(applyMutes(held, synchronized(pendingMutes) { HashMap(pendingMutes) }))
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (failure: Exception) {
-                    synchronized(pendingMutes) { batch.forEach { (id, wanted) -> if (pendingMutes[id] == wanted) pendingMutes.remove(id) } }
-                    backend.setChannelLevels(
-                        applyMutes(confirmedLevels ?: backend.channelLevels(), synchronized(pendingMutes) { HashMap(pendingMutes) }),
-                    )
-                    onError(readable(failure))
-                }
-            }
+        val local = backend.channelLevels()
+        synchronized(pendingMutes) {
+            if (confirmedLevels == null && pendingMutes.isEmpty()) confirmedLevels = local
+            pendingMutes[channelId] = muted
         }
+        backend.setChannelLevels(applyMutes(local, mapOf(channelId to muted)))
+        val account = backend.userId()
+        scope.launch { mutex.withLock { saveMutes(account, onError) } }
+    }
+
+    private suspend fun saveMutes(account: String?, onError: (String) -> Unit) {
+        if (backend.userId() != account) return
+        val batch = synchronized(pendingMutes) { LinkedHashMap(pendingMutes) }
+        if (batch.isEmpty()) return
+        // The server replaces the whole `channels` map, so what is sent is built on what it
+        // holds NOW. If that cannot be read, nothing is sent: a stale copy would erase a mute
+        // set on another device since.
+        val fresh = try {
+            backend.freshChannelLevels()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            if (backend.userId() != account) return
+            settleMutes(batch)
+            backend.setChannelLevels(applyMutes(confirmedLevels ?: backend.channelLevels(), pendingMutesSnapshot()))
+            onError(readable(failure))
+            return
+        }
+        if (backend.userId() != account) return
+        val wanted = applyMutes(fresh, batch)
+        try {
+            val saved = backend.saveChannelLevels(wanted)
+            if (backend.userId() != account) return
+            confirmedLevels = saved.notifications?.channels.orEmpty()
+            settleMutes(batch)
+            backend.setChannelLevels(applyMutes(confirmedLevels.orEmpty(), pendingMutesSnapshot()))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            val truth = try {
+                backend.freshChannelLevels()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            if (backend.userId() != account) return
+            confirmedLevels = truth ?: confirmedLevels ?: fresh
+            settleMutes(batch)
+            backend.setChannelLevels(applyMutes(confirmedLevels.orEmpty(), pendingMutesSnapshot()))
+            if (truth == null || truth != wanted) onError(readable(failure))
+        }
+    }
+
+    private fun pendingMutesSnapshot(): Map<String, Boolean> = synchronized(pendingMutes) { LinkedHashMap(pendingMutes) }
+
+    private fun settleMutes(batch: Map<String, Boolean>) = synchronized(pendingMutes) {
+        batch.forEach { (id, wanted) -> if (pendingMutes[id] == wanted) pendingMutes.remove(id) }
     }
 
     /** A different account signed in: nothing of the last one's confirmed state applies. */
@@ -246,9 +331,14 @@ class ConversationPrefs(
         val now = backend.userId()
         if (now != owner) {
             owner = now
-            confirmedPins = null
-            confirmedLevels = null
-            synchronized(pendingMutes) { pendingMutes.clear() }
+            synchronized(pendingPins) {
+                confirmedPins = null
+                pendingPins.clear()
+            }
+            synchronized(pendingMutes) {
+                confirmedLevels = null
+                pendingMutes.clear()
+            }
         }
     }
 
