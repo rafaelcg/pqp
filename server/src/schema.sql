@@ -6508,11 +6508,22 @@ CREATE TABLE IF NOT EXISTS bau_follows (
   role_ping_id      UUID REFERENCES roles(id) ON DELETE SET NULL,
   since_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   paused_at         TIMESTAMPTZ,
-  paused_reason     TEXT CHECK (paused_reason IS NULL OR paused_reason IN ('permissions')),
+  paused_reason     TEXT CHECK (paused_reason IS NULL OR paused_reason IN ('permissions', 'banned')),
   permission_failures INT NOT NULL DEFAULT 0,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (source_server_id, target_channel_id)
 );
+
+-- A database that has the older two-word check (permissions only) gets the wider one.
+DO $$
+BEGIN
+  ALTER TABLE bau_follows DROP CONSTRAINT IF EXISTS bau_follows_paused_reason_check;
+  ALTER TABLE bau_follows
+    ADD CONSTRAINT bau_follows_paused_reason_check
+    CHECK (paused_reason IS NULL OR paused_reason IN ('permissions', 'banned'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_bau_follows_target_server
   ON bau_follows (target_server_id);
