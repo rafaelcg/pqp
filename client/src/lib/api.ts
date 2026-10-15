@@ -35,6 +35,12 @@ import type {
   UpdateServerCommunityHomeConfig,
   CommunityHomeLikeResponse,
   CommunityHomePostCard,
+  BauFollow,
+  BauFollowDestinations,
+  BauFollowState,
+  BauFollowers,
+  CreateBauFollowRequest,
+  UpdateBauFollowRequest,
   CommunityHomePostResponse,
   ShareCommunityHomePostRequest,
   CommunityHomePostsResponse,
@@ -2419,6 +2425,53 @@ export const updateCommunityHomePost = (
 
 export const deleteCommunityHomePost = (serverId: string, postId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}/home/posts/${postId}`);
+
+// ---------------------------------------------------------------- Seguir
+//
+// Following a Baú into a channel of another server. `enabled: false` (the
+// per-source flag `bau_follow`) means no button; everything else is a 404 then.
+
+export const fetchBauFollowState = (serverId: string) =>
+  apiFetch<BauFollowState>(`/api/servers/${serverId}/home/follow`);
+
+export const fetchBauFollowDestinations = (serverId: string) =>
+  apiFetch<BauFollowDestinations>(
+    `/api/servers/${serverId}/home/follow/destinations`,
+  );
+
+export const createBauFollow = (
+  serverId: string,
+  body: CreateBauFollowRequest,
+) => post<{ follow: BauFollow }>(`/api/servers/${serverId}/home/follow`, body);
+
+export const fetchChannelBauFollows = (channelId: string) =>
+  apiFetch<{ follows: BauFollow[] }>(`/api/channels/${channelId}/bau-follows`);
+
+export const updateBauFollow = (
+  followId: string,
+  body: UpdateBauFollowRequest,
+) => patch<{ follow: BauFollow }>(`/api/bau-follows/${followId}`, body);
+
+export const deleteBauFollow = (followId: string) =>
+  del<{ ok: boolean }>(`/api/bau-follows/${followId}`);
+
+/** Source staff: who follows this Baú (server names, never people). */
+export const fetchBauFollowers = (serverId: string) =>
+  apiFetch<BauFollowers>(`/api/servers/${serverId}/home/followers`);
+
+export const removeBauFollower = (
+  serverId: string,
+  followId: string,
+  block: boolean,
+) =>
+  del<{ ok: boolean; removed: number }>(
+    `/api/servers/${serverId}/home/followers/${followId}${block ? "?block=1" : ""}`,
+  );
+
+export const unblockBauFollower = (serverId: string, blockedServerId: string) =>
+  del<{ ok: boolean }>(
+    `/api/servers/${serverId}/home/follow-blocks/${blockedServerId}`,
+  );
 
 /** The sidebar badge: posts this person has not seen. Cheap, no posts. */
 export const fetchCommunityHomeUnread = (serverId: string) =>
