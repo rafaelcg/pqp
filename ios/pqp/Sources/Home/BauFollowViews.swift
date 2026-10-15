@@ -529,6 +529,8 @@ final class BauFollowersModel {
             await load(session: session)
         } catch {
             self.error = String(localized: "That did not work. Try again.")
+            // A lost answer can hide a change that did commit: show what is true.
+            await load(session: session)
         }
     }
 
@@ -544,6 +546,8 @@ final class BauFollowersModel {
             await load(session: session)
         } catch {
             self.error = String(localized: "That did not work. Try again.")
+            // A lost answer can hide a change that did commit: show what is true.
+            await load(session: session)
         }
     }
 }
@@ -759,6 +763,8 @@ final class ChannelBauFollowsModel {
             follows.removeAll { $0.id == follow.id }
         } catch {
             self.error = String(localized: "That did not work. Try again.")
+            // A lost answer can hide a change that did commit: show what is true.
+            await load(session: session)
         }
     }
 
@@ -772,6 +778,8 @@ final class ChannelBauFollowsModel {
             if let index = follows.firstIndex(where: { $0.id == follow.id }) { follows[index] = updated }
         } catch {
             self.error = String(localized: "That did not work. Try again.")
+            // A lost answer can hide a change that did commit: show what is true.
+            await load(session: session)
         }
     }
 }
