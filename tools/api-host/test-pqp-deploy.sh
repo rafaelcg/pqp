@@ -137,6 +137,28 @@ check "no host file: not treated as in sync" test "$rc" -ne 0
 check "no host file: does not recreate caddy" bash -c "! grep -q 'force-recreate' '$WORK/calls'"
 mv "$WORK/caddy/Caddyfile.gone" "$WORK/caddy/Caddyfile"
 
+# 5b. garbage on stdout is not a checksum: it must not read as a mismatch
+cp "$WORK/caddy/Caddyfile" "$WORK/container"
+run_integrity_garbage() {
+  (
+    export CADDY_DIR="$WORK/caddy" CADDY_SYNC_TRIES=3 CADDY_SYNC_SLEEP=0 CADDY_PROBE_TRIES=2
+    CALLS="$WORK/calls"
+    : >"$CALLS"
+    docker() {
+      echo "docker $*" >>"$CALLS"
+      echo "Error response from daemon: container is restarting"
+      return 0
+    }
+    # shellcheck disable=SC1091
+    source "$WORK/integrity.sh"
+    verify_caddyfile_in_sync
+  ) >"$WORK/out" 2>"$WORK/err"
+}
+run_integrity_garbage
+rc=$?
+check "non-hash output from exec: fails, does not read as a mismatch" test "$rc" -ne 0
+check "non-hash output from exec: does not recreate caddy" bash -c "! grep -q 'force-recreate' '$WORK/calls'"
+
 # 6. a transient exec failure on a container that IS in sync must not recreate
 # caddy (that would cut every open socket over a Docker blip)
 cp "$WORK/caddy/Caddyfile" "$WORK/container"

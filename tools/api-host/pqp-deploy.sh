@@ -474,11 +474,16 @@ fi
 # the fallback and the reload stays first.
 #
 # >>> caddy-integrity (test-pqp-deploy.sh extracts this block, keep the markers)
+# Both print a 64-hex-digit sha256 or NOTHING. Anything else on stdout (an
+# error text, a banner) is not a checksum and must never be compared as one:
+# an empty result means "could not read", which verify_caddyfile_in_sync
+# retries and then fails on, and only two real, different hashes count as a
+# mismatch.
 caddy_host_sum() {
-  { sha256sum "$CADDY_DIR/Caddyfile" 2>/dev/null || true; } | awk '{print $1}'
+  { sha256sum "$CADDY_DIR/Caddyfile" 2>/dev/null || true; } | { grep -Eo '^[0-9a-f]{64}' || true; }
 }
 caddy_container_sum() {
-  { docker compose exec -T caddy sha256sum /etc/caddy/Caddyfile 2>/dev/null || true; } | awk '{print $1}'
+  { docker compose exec -T caddy sha256sum /etc/caddy/Caddyfile 2>/dev/null || true; } | { grep -Eo '^[0-9a-f]{64}' || true; }
 }
 caddy_in_sync() {
   local host cont
