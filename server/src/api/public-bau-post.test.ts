@@ -590,12 +590,15 @@ describeDb("public Baú post", () => {
   });
 
   it("runs out of its own address-keyed bucket, which is roomier than the poster's", async () => {
+    // The bucket refills while the loop runs (8 a second), so the first 429
+    // lands a little past the burst on a slow runner. Never before it.
     const statuses: number[] = [];
-    for (let i = 0; i < 241; i += 1) {
+    for (let i = 0; i < 2000 && !statuses.includes(429); i += 1) {
       statuses.push((await get(url(UNKNOWN_ID))).status);
     }
-    expect(statuses.slice(0, 240).every((s) => s === 404)).toBe(true);
-    expect(statuses[240]).toBe(429);
+    const firstLimited = statuses.indexOf(429);
+    expect(firstLimited).toBeGreaterThanOrEqual(240);
+    expect(statuses.slice(0, firstLimited).every((s) => s === 404)).toBe(true);
     // A 429 is never cached: the limiter must not be served from the edge.
     const limited = await get(url(UNKNOWN_ID));
     expect(limited.headers.get("cache-control")).toBe("no-store");
