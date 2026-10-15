@@ -153,6 +153,18 @@ class ForwardActionTest {
     }
 
     @Test
+    fun `the preview drops raw mention markup the way the card does`() {
+        val id = "a473ca1d-6356-4c96-a9d8-80d222b99877"
+        assertEquals("fala olha o aqui", ForwardInputs.messageExcerpt(message(body = "fala <@$id> olha o <@!$id> aqui")))
+        assertEquals("veja", ForwardInputs.messageExcerpt(message(body = "<#chan_1> <@&role99> veja")))
+        // A forward's own title and excerpt are cleaned too.
+        assertEquals("Sessao", ForwardInputs.messageExcerpt(message(forward = card(title = "<@$id> Sessao"))))
+        assertEquals("texto", ForwardInputs.messageExcerpt(message(forward = card(title = null, excerpt = "<@$id> texto"))))
+        // Nothing but markup is an empty preview, which the sheet words as "Mensagem de X".
+        assertEquals("", ForwardInputs.messageExcerpt(message(body = "<@$id>")))
+    }
+
+    @Test
     fun `the preview words are flattened and cut`() {
         assertEquals("a b c", ForwardInputs.messageExcerpt(message(body = "  a\n\n b   c ")))
         val long = ForwardInputs.messageExcerpt(message(body = "x".repeat(200)))
