@@ -14,6 +14,7 @@ import { mapWithConcurrency } from "../lib/admission.js";
 import { isEnabled } from "../lib/flags.js";
 import { isCommunityHomeEnabled } from "./community-home.js";
 import { computeMemberPermissions } from "./permissions.js";
+import { isServerMember } from "./users.js";
 import { listChannels, listServersForUser } from "./servers.js";
 
 /**
@@ -347,6 +348,11 @@ export async function createBauFollow(input: {
   rolePingId: string | null;
   actorId: string;
 }): Promise<BauFollow> {
+  // A public source is followed by its MEMBERS (the route checks too; this is
+  // the service's own rule, so no other caller can skip it).
+  if (!(await isServerMember(input.sourceServerId, input.actorId))) {
+    throw new BauFollowError("disabled", "Not found");
+  }
   const availability = await getBauFollowAvailability(input.sourceServerId, input.actorId);
   if (!availability.followable) {
     // 404 for every reason (flag, Baú, switch, not staff of a private server):

@@ -624,7 +624,6 @@ interface DeliveryContext {
   follow_allowed: boolean;
   source_public: boolean;
   slowmode_seconds: number;
-  last_card_at: Date | null;
   blocked: boolean;
   role_name: string | null;
   role_mentionable: boolean | null;
@@ -651,9 +650,6 @@ async function loadContext(claimed: Claimed): Promise<DeliveryContext | null> {
             s.bau_follow_allowed AS follow_allowed,
             (s.is_community AND NOT s.is_community_suspended AND s.community_slug IS NOT NULL) AS source_public,
             tc.slowmode_seconds,
-            (SELECT MAX(m.created_at) FROM messages m
-               JOIN users u ON u.id = m.author_id
-              WHERE m.channel_id = f.target_channel_id AND u.clerk_id = 'bau-follow:' || s.id) AS last_card_at,
             EXISTS (
               SELECT 1 FROM bau_follow_blocks b
                WHERE b.source_server_id = f.source_server_id
@@ -803,15 +799,6 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
       await settle(claimed, retryPatch(claimed, sourceOk ? "banned" : "source authority"));
       return paused ? "paused" : "failed";
     }
-    // Slow mode is the channel's own pace: one card per interval, the rest wait.
-    if (ctx.slowmode_seconds > 0 && ctx.last_card_at) {
-      const waitMs = ctx.last_card_at.getTime() + ctx.slowmode_seconds * 1000 - Date.now();
-      if (waitMs > 0) {
-        await settle(claimed, { status: "pending", delayMs: waitMs + 500, refundAttempt: true });
-        return "skipped";
-      }
-    }
-
     const post: PostForSnapshot = {
       id: ctx.post_id!,
       server_id: ctx.post_server_id!,
@@ -842,6 +829,14 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
     const committed = await commitDelivery(claimed, ctx, snapshot, pingable);
     if (committed === "ineligible") {
       await settle(claimed, { status: "retracted" });
+      return "skipped";
+    }
+    if (committed && "slowMs" in committed) {
+      await settle(claimed, {
+        status: "pending",
+        delayMs: committed.slowMs + 500,
+        refundAttempt: true,
+      });
       return "skipped";
     }
     if (!committed) {
@@ -885,7 +880,10 @@ async function commitDelivery(
   snapshot: BauPostSnapshot,
   ping: boolean,
 ): Promise<
-  { messageId: string; fresh: boolean; mentionedUserIds: string[] } | "ineligible" | null
+  | { messageId: string; fresh: boolean; mentionedUserIds: string[] }
+  | { slowMs: number }
+  | "ineligible"
+  | null
 > {
   const authorId = await bauFollowAuthorFor(ctx.source_id, ctx.source_name);
   const client = await getPool().connect();
@@ -900,6 +898,29 @@ async function commitDelivery(
     if (guard.rows.length === 0) {
       await client.query("ROLLBACK");
       return null;
+    }
+    // Slow mode is the channel's own pace: one card per interval, the rest wait.
+    // Decided HERE, under a lock on the channel, so two deliveries into the same
+    // channel at once cannot both read "the interval has passed" and both post;
+    // the second waits for the first's commit and then sees its card. Only a
+    // channel that has slow mode pays for the lookup (an index read, newest
+    // first).
+    if (ctx.slowmode_seconds > 0) {
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+        `bau-follow-slow:${ctx.target_channel_id}`,
+      ]);
+      const last = await client.query<{ created_at: Date }>(
+        `SELECT created_at FROM messages
+          WHERE channel_id = $1 AND author_id = $2
+          ORDER BY created_at DESC LIMIT 1`,
+        [ctx.target_channel_id, authorId],
+      );
+      const lastAt = last.rows[0]?.created_at;
+      const waitMs = lastAt ? lastAt.getTime() + ctx.slowmode_seconds * 1000 - Date.now() : 0;
+      if (waitMs > 0) {
+        await client.query("ROLLBACK");
+        return { slowMs: waitMs };
+      }
     }
     // The post, locked for the length of this transaction and checked AGAIN:
     // the context was read a moment ago, and a post made members-only or
