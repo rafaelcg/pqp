@@ -59,6 +59,16 @@ describe("forwardCommentOf", () => {
     );
     expect(forwardCommentOf({ body: "oi", forward: null })).toBe("oi");
   });
+
+  it("shows the role mention a followed Baú's delivery put above the fallback, and only that", () => {
+    const pinged = `@Novidades\n${forwardFallbackBody(card)}`;
+    expect(forwardCommentOf({ body: pinged, forward: card })).toBe("@Novidades");
+    // The fallback is never repeated, and a mention that is not on its own line is a comment.
+    expect(forwardCommentOf({ body: pinged, forward: card })).not.toContain("Encaminhado");
+    expect(forwardCommentOf({ body: `@Novidades ${forwardFallbackBody(card)}`, forward: card })).toBe(
+      `@Novidades ${forwardFallbackBody(card)}`,
+    );
+  });
 });
 
 describe("forwardUrlTarget", () => {
