@@ -341,10 +341,158 @@ export async function resolveForwardSource(
   source: CreateForwardRequest["source"],
   origin: string,
 ): Promise<ResolvedForwardSource> {
-  if (source.kind === "bau_post") {
-    return resolveBauPostSource(user, source.serverId!, source.id, origin);
+  const resolved =
+    source.kind === "bau_post"
+      ? await resolveBauPostSource(user, source.serverId!, source.id, origin)
+      : await resolveMessageSource(user, source.id, origin);
+  return { ...resolved, snapshot: await defangSnapshot(resolved.snapshot) };
+}
+
+/**
+ * THE ORIGIN OF A CARD'S URL. The deployment's own public address
+ * (`PUBLIC_APP_URL`, the first entry), never the request's Origin header: that
+ * header is whatever the caller's browser or script sent, and the URL is
+ * stored on the message for everybody. Unset, production falls back to the
+ * hosted address and development to the local Vite server, so a card is
+ * always a link that opens somewhere sensible.
+ */
+export function forwardAppOrigin(): string {
+  const configured = (process.env.PUBLIC_APP_URL ?? "")
+    .split(",")
+    .map((value) => value.trim().replace(/\/$/, ""))
+    .find(Boolean);
+  if (configured) {
+    try {
+      const url = new URL(configured);
+      if (url.protocol === "https:" || url.protocol === "http:") {
+        return url.origin;
+      }
+    } catch {
+      // fall through to the default
+    }
   }
-  return resolveMessageSource(user, source.id, origin);
+  return process.env.NODE_ENV === "production"
+    ? "https://pqp.gg"
+    : "http://localhost:5173";
+}
+
+// ------------------------------------------------------------- no pings
+
+const MARKUP = /<(@&|@!|@|#)([0-9a-fA-F]{8}-[0-9a-fA-F-]{27})>/g;
+const ZERO_WIDTH_SPACE = "\u200B";
+
+/**
+ * Mention markup (`<@id>`, `<@&id>`, `<#id>`) as the plain words a person
+ * reads: `@Nome`, `@cargo`, `#canal`. Looked up here, once, so no client has
+ * to know the markup and none can show it raw. A name that cannot be found
+ * (gone, or a private channel whose name must not travel to another server)
+ * is a neutral `@unknown` / `#unknown`.
+ */
+async function plainMarkup(texts: readonly string[]): Promise<Map<string, string>> {
+  const users = new Set<string>();
+  const roles = new Set<string>();
+  const channels = new Set<string>();
+  for (const text of texts) {
+    for (const match of text.matchAll(MARKUP)) {
+      const id = match[2]!.toLowerCase();
+      (match[1] === "#" ? channels : match[1] === "@&" ? roles : users).add(id);
+    }
+  }
+  const lookup = (sql: string, ids: Set<string>) =>
+    ids.size === 0
+      ? Promise.resolve({ rows: [] as { id: string; name: string }[] })
+      : getPool().query<{ id: string; name: string }>(sql, [[...ids]]);
+  // One round trip each, all at once: the three tables do not depend on each other.
+  const [userRows, roleRows, channelRows] = await Promise.all([
+    lookup(`SELECT id::text, display_name AS name FROM users WHERE id = ANY($1::uuid[])`, users),
+    lookup(`SELECT id::text, name FROM roles WHERE id = ANY($1::uuid[])`, roles),
+    lookup(
+      `SELECT id::text, name FROM channels
+        WHERE id = ANY($1::uuid[]) AND kind = 'server' AND is_private = FALSE`,
+      channels,
+    ),
+  ]);
+  const names = new Map<string, string>();
+  for (const row of userRows.rows) {
+    names.set(`@${row.id}`, row.name);
+  }
+  for (const row of roleRows.rows) {
+    names.set(`@&${row.id}`, row.name);
+  }
+  for (const row of channelRows.rows) {
+    names.set(`#${row.id}`, row.name);
+  }
+  return names;
+}
+
+/**
+ * Text that can never be read as a mention by any client. A client finds
+ * mentions by scanning a message body for `@name`, and the body of a forward
+ * with no comment is a line built from the snapshot, so the snapshot itself
+ * has to be inert: markup becomes plain words, and every `@` that would start
+ * a name gets an invisible zero-width space after it, which no mention
+ * pattern matches and no reader sees. The same text is what the card shows.
+ */
+export function defangMentionText(
+  text: string,
+  names: ReadonlyMap<string, string>,
+): string {
+  const plain = text.replace(MARKUP, (_all, kind: string, id: string) => {
+    const prefix = kind === "#" ? "#" : kind === "@&" ? "@&" : "@";
+    // A name is somebody's text too: one that itself contains markup (a display
+    // name of "<@id>") must not bring it back, so angle brackets are dropped
+    // from it. The `@` pass below then covers any `@word` inside it.
+    const name = names.get(`${prefix}${id.toLowerCase()}`)?.replace(/[<>]/g, "");
+    if (name) {
+      return kind === "#" ? `#${name}` : `@${name}`;
+    }
+    return kind === "#" ? "#unknown" : "@unknown";
+  });
+  // A complete pass over the FINAL text, names included: any markup that is
+  // still there (a resolved name that carried `<@&id>`, `<@!id>`, `<#id>`) loses
+  // its opening bracket, and every `@word` (`@everyone`, `@here`, a username)
+  // gets the zero-width space.
+  return plain
+    .replace(/<(?=@|#)/g, "")
+    .replace(/@(?=[A-Za-z0-9_])/g, `@${ZERO_WIDTH_SPACE}`);
+}
+
+/** Cut to the schema's unit (UTF-16), never inside a surrogate pair. */
+function clampExcerpt(text: string): string {
+  if (text.length <= FORWARD_EXCERPT_MAX) {
+    return text;
+  }
+  let cut = text.slice(0, FORWARD_EXCERPT_MAX - 3);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) {
+    cut = cut.slice(0, -1);
+  }
+  return `${cut.trimEnd()}...`;
+}
+
+/** Every text of a snapshot made inert (see `defangMentionText`). */
+export async function defangSnapshot(snapshot: MessageForward): Promise<MessageForward> {
+  const fields = [
+    snapshot.title,
+    snapshot.excerpt,
+    snapshot.authorDisplayName,
+    snapshot.sourceServerName,
+    snapshot.sourceChannelName,
+  ].filter((value): value is string => typeof value === "string");
+  const names = await plainMarkup(fields);
+  const clean = (value: string) => defangMentionText(value, names);
+  return {
+    ...snapshot,
+    sourceServerName: clean(snapshot.sourceServerName),
+    ...(snapshot.sourceChannelName !== undefined
+      ? { sourceChannelName: clean(snapshot.sourceChannelName) }
+      : {}),
+    ...(snapshot.authorDisplayName !== undefined
+      ? { authorDisplayName: clean(snapshot.authorDisplayName) }
+      : {}),
+    ...(snapshot.title !== undefined ? { title: clean(snapshot.title) } : {}),
+    excerpt: clampExcerpt(clean(snapshot.excerpt)),
+  };
 }
 
 /** Targets with duplicates dropped, first occurrence kept. */
