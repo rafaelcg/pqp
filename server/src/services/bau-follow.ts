@@ -125,7 +125,15 @@ export async function getBauFollowState(
   sourceServerId: string,
   viewerId: string,
 ): Promise<BauFollowState> {
-  if (!isBauFollowOn(sourceServerId)) {
+  // Followable only where the delivery would run: the flag AND this server's
+  // own Baú switch (create refuses a server whose Baú is off).
+  const home = isBauFollowOn(sourceServerId)
+    ? await getPool().query<{ community_home_enabled: boolean | null }>(
+        `SELECT community_home_enabled FROM servers WHERE id = $1`,
+        [sourceServerId],
+      )
+    : null;
+  if (!home || home.rows[0]?.community_home_enabled !== true) {
     return { enabled: false, maxPerServer: BAU_FOLLOW_MAX_PER_SERVER, mine: [] };
   }
   const result = await getPool().query<FollowJoinRow>(

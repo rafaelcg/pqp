@@ -965,7 +965,7 @@ async function recordPermissionFailure(
         AND EXISTS (
           SELECT 1 FROM bau_follow_deliveries d
            WHERE d.post_id = $2 AND d.follow_id = $1 AND d.claim_id = $3
-             AND d.status = 'delivering'
+             AND d.status = 'delivering' AND d.claimed_until > NOW()
         )
       RETURNING permission_failures`,
     [followId, claimed.post_id, claimed.claim_id],
