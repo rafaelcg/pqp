@@ -5,6 +5,7 @@ import type {
   PutForumTagsRequest,
   UpdateForumSettingsRequest,
   VoiceAudienceResponse,
+  DiscordImportArrivals,
   ChannelType,
   ChannelLayoutConfig,
   ChannelLayoutInput,
@@ -1437,6 +1438,8 @@ export const applyDiscordImport = (source: string, idempotencyKey?: string) =>
     channels: Channel[];
     roles: ServerRole[];
     invite: Invite;
+    /** Flag `discord_bring_crew` for the new server; absent on an older API. */
+    bringCrew?: boolean;
   }>(
     "/api/import/discord/apply",
     { source },
@@ -2381,6 +2384,10 @@ export const createInvite = (
 
 export const listInvites = (serverId: string) =>
   apiFetch<{ invites: Invite[] }>(`/api/servers/${serverId}/invites`);
+
+/** "Traz tua galera": who came over since a Discord import (managers only). */
+export const getImportArrivals = (serverId: string) =>
+  apiFetch<DiscordImportArrivals>(`/api/servers/${serverId}/import-arrivals`);
 
 export const deleteInvite = (serverId: string, inviteId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}/invites/${inviteId}`);

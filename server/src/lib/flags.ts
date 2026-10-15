@@ -817,6 +817,20 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/forwards/config",
   },
+  discord_bring_crew: {
+    description:
+      "Traz tua galera (depois de copiar um Discord): o último passo vira um anúncio pronto pra colar no Discord antigo, e o dono vê quantas pessoas já chegaram, com um lembrete no dia seguinte se veio pouca gente.",
+    env: "DISCORD_BRING_CREW",
+    parseEnv: exactTrue,
+    // Off until the step has been seen on a real import: on, it changes the
+    // last screen of every import and puts a strip over the owner's channels.
+    codeDefault: false,
+    // Every reader has the server: the import's apply (the server it just
+    // made) and the arrivals route.
+    perServer: true,
+    clientVia:
+      "POST /api/import/discord/apply (bringCrew) and GET /api/servers/:id/import-arrivals (enabled)",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

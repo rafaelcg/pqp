@@ -465,7 +465,13 @@ import {
 } from "@/components/watch-party/waitlist/watch-party-approved-toasts";
 import { sendFriendRequest } from "@/components/friends/friends-api";
 import { onboardingPath, shouldRunOnboarding } from "@/lib/onboarding";
-import { copyInvitePaste, setInviteCacheAccount } from "@/lib/invite-paste-copy";
+import {
+  copyInvitePaste,
+  inviteCodeFor,
+  setInviteCacheAccount,
+} from "@/lib/invite-paste-copy";
+import { bringCrewStrip } from "@/lib/bring-crew";
+import { useBringCrew } from "@/lib/use-bring-crew";
 import { track, trackFirstAction } from "@/lib/track";
 import { firstRunDismissedPatch } from "@/lib/first-run";
 import {
@@ -500,6 +506,7 @@ import { acknowledgeAcquisition, peekAcquisition } from "@/lib/acquisition";
 import { noteSignupCta, noteSignupReturn } from "@/lib/signup-assist";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
+import { BringCrewStrip } from "@/components/onboarding/bring-crew-strip";
 import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
 import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
 import { NudgeButton, useNudgeTrigger } from "@/components/dm/nudge-button";
@@ -3062,6 +3069,17 @@ function MainAppContent({
   const perms = usePermissions(selectedServerId);
   const permsRef = useRef(perms);
   permsRef.current = perms;
+  /**
+   * "Traz tua galera" (flag `discord_bring_crew`): who came over since the
+   * open server was copied from Discord, for whoever may manage it. Asks
+   * again as the member list changes length, which is what makes the count
+   * live. Drawn by `renderArrivalBanner`, in the arrival strip's slot.
+   */
+  const bringCrew = useBringCrew(
+    selectedServerId,
+    perms.can(Permission.MANAGE_SERVER),
+    serverMembers.length,
+  );
   /**
    * Every `watch_party` channel on the open server this viewer may see the
    * history of, that actually has a broadcast to show -- see the long
@@ -10651,6 +10669,31 @@ function MainAppContent({
     // party surface makes (see `ArrivalSurface`). The Baú home keeps its own.
     if (surface !== "home" && watchNowStreams.length > 0) {
       return null;
+    }
+    // A server copied from Discord in the last week, for its owner: the
+    // counter of who came over replaces the arrival strip (whose owner
+    // variant says the same thing with less). Not over a live party.
+    const crew = bringCrewStrip(bringCrew.arrivals, bringCrew.dismissed);
+    if (
+      crew &&
+      surface !== "party" &&
+      selection.kind === "server" &&
+      !activeConversation &&
+      selectedServer
+    ) {
+      const serverId = selectedServer.id;
+      const importInvite = bringCrew.arrivals?.inviteCode ?? null;
+      return (
+        <BringCrewStrip
+          kind={crew.kind}
+          count={crew.count}
+          serverName={selectedServer.name}
+          resolveInviteCode={() =>
+            importInvite ? Promise.resolve(importInvite) : inviteCodeFor(serverId)
+          }
+          onDismiss={bringCrew.dismiss}
+        />
+      );
     }
     // A newcomer alone in a public community: the one thing that changes that
     // is bringing somebody, so this strip takes the arrival strip's place.

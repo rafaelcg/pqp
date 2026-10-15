@@ -144,6 +144,7 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   stories_eager_uploads: offWords,
   // New with the flag, so there was no old reader: this is its definition.
   mixed_channel_list: (raw) => raw === "true",
+  discord_bring_crew: (raw) => raw === "true",
 };
 
 const SAMPLES = [

@@ -148,6 +148,14 @@ The translated track also needs `community_home_translation` on for the server.
 Producing anything needs `VOICE_STT_PROVIDER`, its key and ffmpeg on the worker;
 it shares `VOICE_STT_DAILY_SECONDS` with voice notes. See
 `docs/COMMUNITY_HOME.md` §"Video subtitles".
+`DISCORD_BRING_CREW` (`discord_bring_crew`, **per server**, default off, born
+as a flag): "Traz tua galera" after a Discord import. The import's last screen
+becomes a ready announcement for the old Discord, and whoever manages the
+server sees how many people arrived for a week, with one reminder a day later
+if fewer than three did. Served as `bringCrew` on `POST /api/import/discord/apply`
+(read for the server just made, so the global value decides the last screen)
+and `enabled` on `GET /api/servers/:id/import-arrivals`. Web only. See
+`docs/DISCORD_IMPORT.md` §"Bring your people".
 `WATCH_PARTY_SERVER_AUDIENCE` (`watch_party_server_audience`, **per server**, default
 off, born as a flag): the in-app watch party count is the server's, distinct
 accounts on the playlist from every API machine, instead of the sockets one

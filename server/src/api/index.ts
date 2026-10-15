@@ -658,6 +658,10 @@ import {
   replayImportedServer,
 } from "../services/discord-import.js";
 import {
+  bringCrewEnabledFor,
+  getDiscordImportArrivals,
+} from "../services/discord-bring-crew.js";
+import {
   normalizeIdempotencyKey,
   peekServerIdempotencyKey,
 } from "../services/idempotency-keys.js";
@@ -4493,8 +4497,18 @@ router.post("/api/import/discord/preview", async ({ req, user, res }) => {
   takeDiscordImportLimiters(user.id, res);
   try {
     const { plan } = await fetchMappedDiscordTemplate(body.source);
+    // "Started" in the import funnel: nothing else records a preview, and the
+    // audit row only exists once an import finishes. Logged after the
+    // limiter, so a flood of pastes cannot flood the log.
+    logEvent("import.discordPreview", {
+      outcome: "ok",
+      channels: plan.channels.length,
+    });
     return plan;
   } catch (error) {
+    logEvent("import.discordPreview", {
+      outcome: error instanceof Error ? error.constructor.name : "unknown",
+    });
     throwDiscordImportHttp(error, res);
   }
 });
@@ -4517,7 +4531,10 @@ router.post("/api/import/discord/apply", async ({ req, user, res }) => {
       const replay = await replayImportedServer(existingServerId, user.id);
       if (replay) {
         const { replayed: _replayed, ...replayBody } = replay;
-        return replayBody;
+        return {
+          ...replayBody,
+          bringCrew: bringCrewEnabledFor(replayBody.server.id),
+        };
       }
     }
   }
@@ -4530,11 +4547,29 @@ router.post("/api/import/discord/apply", async ({ req, user, res }) => {
       plan,
       idempotencyKey,
     );
-    return replayed ? createdServer : created(createdServer);
+    // `bringCrew`: whether the last screen is "Traz tua galera" (flag
+    // `discord_bring_crew`, read for the server just made).
+    const responseBody = {
+      ...createdServer,
+      bringCrew: bringCrewEnabledFor(createdServer.server.id),
+    };
+    return replayed ? responseBody : created(responseBody);
   } catch (error) {
     throwDiscordImportHttp(error, res);
   }
 });
+
+/**
+ * Who came over since this server was copied from Discord, for the owner's
+ * "Traz tua galera" strip. Same gate as the invite list it sits beside.
+ */
+router.get(
+  "/api/servers/:serverId/import-arrivals",
+  async ({ user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    return getDiscordImportArrivals(serverId!);
+  },
+);
 
 router.patch("/api/servers/:serverId", async ({ req, user }, { serverId }) => {
   const body = updateServerSchema.parse(await readJsonBody(req));
