@@ -203,6 +203,21 @@ test("A posts a text story; B sees the ring, opens it, reacts and replies; A see
       second.page.getByRole("button", { name: "Alice Story's story, seen" }),
     ).toBeVisible({ timeout: 10_000 });
 
+    // The X in the corner takes a real mouse click (the deck, a positioned full-size box later in the
+    // tree, once painted over it, so only the keyboard could close the viewer).
+    await second.page.getByRole("button", { name: "Alice Story's story, seen" }).click();
+    await expect(viewer).toBeVisible();
+    const closeBox = (await viewer.getByRole("button", { name: "Close" }).boundingBox())!;
+    // What a click at its centre reaches must be the button itself (a one-story viewer also closes by
+    // itself when the story ends, so "it closed" alone would prove nothing).
+    const reaches = await second.page.evaluate(([x, y]) => {
+      const found = document.elementFromPoint(x, y);
+      return Boolean(found?.closest("button[aria-label='Close']"));
+    }, [closeBox.x + closeBox.width / 2, closeBox.y + closeBox.height / 2]);
+    expect(reaches, "the X is what a click on it reaches").toBe(true);
+    await second.page.mouse.click(closeBox.x + closeBox.width / 2, closeBox.y + closeBox.height / 2);
+    await expect(viewer).toBeHidden();
+
     // ---- A: the reply is a conversation message quoting the story.
     const conversations = await fetch(`${API}/api/dms`, { headers: headersFor(alice) });
     const { conversations: list } = (await conversations.json()) as {

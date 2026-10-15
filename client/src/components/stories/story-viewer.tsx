@@ -1701,7 +1701,9 @@ export function StoryViewer({
           type="button"
           aria-label={t("stories.viewer.close")}
           onClick={() => dispatch({ type: "close" })}
-          className="absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-full opacity-90 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          // z-10: the deck below is a positioned full-size box that comes later in the tree, so without it
+          // the X is painted under it and a click never reaches the button.
+          className="absolute right-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-full opacity-90 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           style={{ color: "var(--story-on-media)" }}
         >
           <X className="h-6 w-6" />
