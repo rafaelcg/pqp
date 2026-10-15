@@ -72,6 +72,12 @@ describe("createForwardSchema", () => {
     ).toBe(false);
   });
 
+  it("refuses a comment with a control character, as every message body does", () => {
+    const base = { source, targets: [{ channelId: ID }] };
+    expect(createForwardSchema.safeParse({ ...base, comment: "oi\u0000" }).success).toBe(false);
+    expect(createForwardSchema.safeParse({ ...base, comment: "oi\ntchau" }).success).toBe(true);
+  });
+
   it("a Baú post is addressed with its server; a message needs only its id", () => {
     expect(
       createForwardSchema.safeParse({

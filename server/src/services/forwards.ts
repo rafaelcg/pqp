@@ -24,6 +24,7 @@ import {
   isCommunityHomeEnabled,
 } from "./community-home.js";
 import { DmRefusedError, openConversation } from "./dms.js";
+import { findMessageByNonce, mapMessage } from "./messages.js";
 import { getChannel } from "./servers.js";
 import { canAccessChannel, getMemberRole } from "./users.js";
 
@@ -69,7 +70,7 @@ export function forwardMessagesEnabled(): boolean {
   return isEnabled("forward_messages");
 }
 
-/** Plain text for a card: markdown noise out, whitespace collapsed, cut by characters. */
+/** Plain text for a card: markdown noise out, whitespace collapsed, cut to the contract. */
 export function forwardExcerpt(text: string | null | undefined): string {
   if (!text) {
     return "";
@@ -81,18 +82,29 @@ export function forwardExcerpt(text: string | null | undefined): string {
     .replace(/^\s*(?:>|#{1,6})\s+/gm, "")
     .replace(/\s+/g, " ")
     .trim();
+  // The schema's `.max(500)` counts UTF-16 units, which is what every client
+  // can count too, so the cut is made in the same unit. 251 emoji are 502
+  // units and must be cut even though they are 251 characters.
   if (plain.length <= FORWARD_EXCERPT_MAX) {
     return plain;
   }
-  // By code point, so a cut never lands inside a surrogate pair.
-  const points = Array.from(plain);
-  if (points.length <= FORWARD_EXCERPT_MAX) {
-    return plain;
+  let cut = plain.slice(0, FORWARD_EXCERPT_MAX - 3);
+  // Never end on half a surrogate pair.
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) {
+    cut = cut.slice(0, -1);
   }
-  const cut = points.slice(0, FORWARD_EXCERPT_MAX - 3).join("");
   const lastSpace = cut.lastIndexOf(" ");
   const base = lastSpace > FORWARD_EXCERPT_MAX * 0.6 ? cut.slice(0, lastSpace) : cut;
   return `${base.replace(/[\s.,;:!?-]+$/, "")}...`;
+}
+
+/** The one thumbnail a snapshot may hold: a YouTube poster, public and stable. */
+export function isStableYoutubePoster(url: string | null | undefined): url is string {
+  return (
+    typeof url === "string" &&
+    /^https:\/\/i\.ytimg\.com\/vi\/[\w-]{6,20}\/[\w]+\.jpg$/.test(url)
+  );
 }
 
 /** A resolved source: the snapshot to store and where it may go. */
@@ -158,7 +170,10 @@ async function resolveBauPostSource(
   // The one thumbnail that is stable and public is a YouTube poster; every
   // other media url is a signed GET that expires, and a snapshot must not
   // store one. A locked reader gets the poster too, so a restricted post may.
-  if (post.posterUrl && (restricted || post.media?.kind === "youtube")) {
+  if (
+    isStableYoutubePoster(post.posterUrl) &&
+    (post.media?.kind === "youtube" || (restricted && post.hasMedia))
+  ) {
     mediaKind = "youtube";
     mediaThumbUrl = post.posterUrl;
   }
@@ -272,7 +287,9 @@ async function resolveMessageSource(
   if (earlier.success) {
     const restricted = earlier.data.restricted === true || inPrivate;
     return {
-      snapshot: earlier.data,
+      // Stamped, so a copy made from THIS message in a public channel is
+      // still known to be restricted.
+      snapshot: restricted ? { ...earlier.data, restricted: true } : earlier.data,
       stayInServerId: restricted ? row.server_id : null,
     };
   }
@@ -379,9 +396,9 @@ export function forwardBody(comment: string | undefined, snapshot: MessageForwar
 }
 
 /**
- * One message per target, sequentially (at most five), each through the chat's
- * send. A target that fails does not stop the others; the answer says which
- * did what, in request order.
+ * One message per target, each through the chat's send, in parallel (at most
+ * five). A target that fails, even by throwing, does not stop the others; the
+ * answer says which did what, in request order.
  */
 export async function forwardToTargets(input: {
   user: DbUser;
@@ -392,29 +409,64 @@ export async function forwardToTargets(input: {
 }): Promise<ForwardResult[]> {
   const comment = input.comment?.trim() ?? "";
   const body = forwardBody(comment, input.resolved.snapshot);
-  const results: ForwardResult[] = [];
-  for (const target of dedupeForwardTargets(input.targets)) {
+  const targets = dedupeForwardTargets(input.targets);
+  return Promise.all(
+    targets.map((target) => forwardToOne(input, target, comment, body)),
+  );
+}
+
+async function forwardToOne(
+  input: {
+    user: DbUser;
+    resolved: ResolvedForwardSource;
+    nonce?: string;
+  },
+  target: ForwardTarget,
+  comment: string,
+  body: string,
+): Promise<ForwardResult> {
+  let channelId: string | null = null;
+  try {
     const resolved = await resolveTarget(
       input.user,
       target,
       input.resolved.stayInServerId,
     );
     if (!resolved.ok) {
-      results.push({ ok: false, target, reason: resolved.reason });
-      continue;
+      return { ok: false, target, reason: resolved.reason };
+    }
+    channelId = resolved.channelId;
+    const done = (message: unknown): ForwardResult => ({
+      ok: true,
+      target,
+      channelId: resolved.channelId,
+      serverId: resolved.serverId,
+      message,
+    });
+
+    // A retry of a request whose answer was lost: what already went out is
+    // handed back BEFORE the budget is charged, so a retry is never refused
+    // for sends it does not make.
+    if (input.nonce) {
+      const existing = await findMessageByNonce(
+        resolved.channelId,
+        input.user.id,
+        input.nonce,
+      );
+      if (existing) {
+        return done(mapMessage(existing));
+      }
     }
     // The chat's own send budget, charged per message so a forward to five
-    // places costs what five sends cost. Charged only once the target is
-    // known to be a place this could land.
+    // places costs what five sends cost.
     const budget = takeMessageBudget(input.user.id);
     if (!budget.ok) {
-      results.push({
+      return {
         ok: false,
         target,
         reason: "rate_limited",
         retryAfterMs: Math.ceil(budget.retryAfterMs),
-      });
-      continue;
+      };
     }
     const posted = await postChannelMessage({
       author: input.user,
@@ -424,25 +476,40 @@ export async function forwardToTargets(input: {
       ...(input.nonce ? { nonce: input.nonce } : {}),
     });
     if (posted.ok) {
-      results.push({
-        ok: true,
-        target,
-        channelId: resolved.channelId,
-        serverId: resolved.serverId,
-        message: posted.message,
-      });
-      continue;
+      return done(posted.message);
     }
-    results.push({
+    return {
       ok: false,
       target,
       reason: refusalFor(posted.reason),
       ...(posted.retryAfterMs && posted.retryAfterMs > 0
         ? { retryAfterMs: Math.ceil(posted.retryAfterMs) }
         : {}),
-    });
+    };
+  } catch (error) {
+    // A dependency failed (the database). One target's failure is that
+    // target's answer, never the request's: the others may already be sent.
+    console.error("[forwards] target failed:", error);
+    // The send may have committed before the throw: the nonce says.
+    if (input.nonce && channelId) {
+      try {
+        const existing = await findMessageByNonce(channelId, input.user.id, input.nonce);
+        if (existing) {
+          const serverId = (await getChannel(channelId))?.server_id ?? null;
+          return {
+            ok: true,
+            target,
+            channelId,
+            serverId,
+            message: mapMessage(existing),
+          };
+        }
+      } catch {
+        // Fall through to unavailable.
+      }
+    }
+    return { ok: false, target, reason: "unavailable" };
   }
-  return results;
 }
 
 function refusalFor(reason: string): ForwardRefusalReason {

@@ -68,7 +68,8 @@ const { createRole, assignRole, upsertChannelOverwrite } = await import(
   "../services/roles.js"
 );
 const { createMessage } = await import("../services/messages.js");
-const { handleChatMessage, resetChatRateLimits } = await import("../ws/chat.js");
+const chatModule = await import("../ws/chat.js");
+const { handleChatMessage, resetChatRateLimits } = chatModule;
 const {
   Permission,
   messageSchema,
@@ -76,7 +77,7 @@ const {
   isForwardFallbackBody,
   FORWARD_EXCERPT_MAX,
 } = await import("@pqp/shared");
-const { forwardExcerpt, dedupeForwardTargets } = await import(
+const { forwardExcerpt, dedupeForwardTargets, isStableYoutubePoster } = await import(
   "../services/forwards.js"
 );
 
@@ -138,10 +139,23 @@ describe("forwardExcerpt", () => {
     const long = forwardExcerpt("palavra ".repeat(200));
     expect(Array.from(long).length).toBeLessThanOrEqual(FORWARD_EXCERPT_MAX);
     expect(long.endsWith("...")).toBe(true);
-    // A cut never lands inside a surrogate pair.
-    const emoji = forwardExcerpt("\u{1F600}".repeat(600));
-    expect(Array.from(emoji).length).toBeLessThanOrEqual(FORWARD_EXCERPT_MAX);
-    expect(emoji.includes("�")).toBe(false);
+    // The schema counts UTF-16 units: 251 emoji are 502 of them and must be cut,
+    // and a cut never lands inside a surrogate pair.
+    const emoji = forwardExcerpt("\u{1F600}".repeat(251));
+    expect(emoji.length).toBeLessThanOrEqual(FORWARD_EXCERPT_MAX);
+    expect(emoji.includes("\uFFFD")).toBe(false);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(emoji)).toBe(false);
+    const mixed = forwardExcerpt(`${"a".repeat(496)}\u{1F600}\u{1F600}`);
+    expect(mixed.length).toBeLessThanOrEqual(FORWARD_EXCERPT_MAX);
+  });
+});
+
+describe("isStableYoutubePoster", () => {
+  it("accepts only a public YouTube poster, never a signed bucket url", () => {
+    expect(isStableYoutubePoster("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg")).toBe(true);
+    expect(isStableYoutubePoster("https://bucket.example/p.jpg?X-Amz-Signature=abc")).toBe(false);
+    expect(isStableYoutubePoster("http://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg")).toBe(false);
+    expect(isStableYoutubePoster(null)).toBe(false);
   });
 });
 
@@ -735,5 +749,83 @@ describeDb("POST /api/forwards", () => {
     );
     expect("forward" in history.body.messages[0]!).toBe(false);
     expect(messageSchema.parse(history.body.messages[0]).forward ?? null).toBeNull();
+  });
+
+  it("a private channel stamps the restriction on a card it carries on, so a later copy cannot leave", async () => {
+    const free = await publish({ title: "Livre" });
+    // A free card, posted into the private channel by someone who can see it.
+    const inPrivate = (
+      await forward(owner, postSource(free), [{ channelId: privateId }])
+    ).body.results[0] as Extract<Result, { ok: true }>;
+    expect(inPrivate.message.forward!.restricted).toBeUndefined();
+    // Carried from the private channel into a public one of the same server.
+    const carried = (
+      await forward(owner, { kind: "message", id: inPrivate.message.id }, [
+        { channelId: otherGeneralId },
+        { channelId: generalId },
+      ])
+    ).body.results;
+    expect(carried[0]).toMatchObject({ ok: false, reason: "stays_in_server" });
+    const stamped = carried[1] as Extract<Result, { ok: true }>;
+    expect(stamped.message.forward!.restricted).toBe(true);
+    // And that copy, now in a public channel, still cannot leave the server.
+    const again = await forward(owner, { kind: "message", id: stamped.message.id }, [
+      { channelId: otherGeneralId },
+      { userId: friend.id },
+    ]);
+    expect(again.body.results.map((r) => (r.ok ? "ok" : r.reason))).toEqual([
+      "stays_in_server",
+      "stays_in_server",
+    ]);
+  });
+
+  it("a retry of a request whose answer was lost gets the sent messages back, not rate_limited", async () => {
+    const postId = await publish();
+    const channels: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      channels.push((await createChannel(serverId, `retry${i}`, "text")).id);
+    }
+    const targets = channels.map((channelId) => ({ channelId }));
+    const first = await forward(owner, postSource(postId), targets, { nonce: "A" });
+    await forward(owner, postSource(postId), targets, { nonce: "B" });
+    // The send budget (ten) is spent. Retrying A finds what A already sent.
+    const retry = await forward(owner, postSource(postId), targets, { nonce: "A" });
+    expect(retry.body.results.every((r) => r.ok)).toBe(true);
+    expect(
+      retry.body.results.map((r) => (r as Extract<Result, { ok: true }>).message.id),
+    ).toEqual(first.body.results.map((r) => (r as Extract<Result, { ok: true }>).message.id));
+    // A genuinely new request is still refused.
+    const fresh = await forward(owner, postSource(postId), targets, { nonce: "C" });
+    expect(fresh.body.results.every((r) => !r.ok && r.reason === "rate_limited")).toBe(true);
+    expect(await messageCount(channels[0]!)).toBe(2);
+  });
+
+  it("a target that throws is that target's answer; the others still go out and report", async () => {
+    const postId = await publish();
+    const spy = vi
+      .spyOn(chatModule, "postChannelMessage")
+      .mockRejectedValueOnce(new Error("database went away"));
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const other = (await createChannel(serverId, "outro", "text")).id;
+      const res = await forward(owner, postSource(postId), [
+        { channelId: generalId },
+        { channelId: other },
+      ]);
+      expect(res.status).toBe(200);
+      const kinds = res.body.results.map((r) => (r.ok ? "ok" : r.reason)).sort();
+      expect(kinds).toEqual(["ok", "unavailable"]);
+    } finally {
+      spy.mockRestore();
+      quiet.mockRestore();
+    }
+  });
+
+  it("a comment with a control character is a 400", async () => {
+    const postId = await publish();
+    const res = await forward(owner, postSource(postId), [{ channelId: generalId }], {
+      comment: "oi\u0000 tchau",
+    });
+    expect(res.status).toBe(400);
   });
 });

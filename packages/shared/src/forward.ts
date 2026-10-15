@@ -48,6 +48,10 @@ export const FORWARD_COMMENT_MAX = 1500;
 /** Snapshot version. A reader that does not know a version renders `body` only. */
 export const FORWARD_VERSION = 1;
 
+/** The same set `api.ts` refuses in a message body (it cannot be imported: cycle). */
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS =/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+
 export const forwardKindSchema = z.enum(["bau_post", "message"]);
 export type ForwardKind = z.infer<typeof forwardKindSchema>;
 
@@ -154,7 +158,13 @@ export const createForwardSchema = z.object({
   /** 1 to `FORWARD_MAX_TARGETS`. Duplicates are dropped, order is kept. */
   targets: z.array(forwardTargetSchema).min(1).max(FORWARD_MAX_TARGETS),
   /** The forwarder's own words; becomes the message `body`. May be empty. */
-  comment: z.string().max(FORWARD_COMMENT_MAX).optional(),
+  comment: z
+    .string()
+    .max(FORWARD_COMMENT_MAX)
+    // Message storage cannot hold a NUL, and the other control characters are
+    // refused on every other body in the app (`messageBodyTextSchema`).
+    .refine((value) => !CONTROL_CHARS.test(value), "Invalid characters")
+    .optional(),
   /**
    * One per dialog attempt. Chat de-duplicates on it per channel, so a retry
    * after a lost response returns the messages that already went out instead
