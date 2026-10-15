@@ -120,6 +120,13 @@ a push when a Baú post goes live, to members who have not muted the server;
 never the author, members-only posts only to people who can open them. Server
 only, no client reads it. Counted under `product.pushSkipped.bau.*`; rules in
 `docs/COMMUNITY_HOME.md` §"Push on a new post".
+`BAU_FOLLOW` (`bau_follow`, **per server, read for the SOURCE**, default off, born
+as a flag): Seguir, following a Baú so its new free posts are delivered as forward
+cards into a channel of another server. Off for a source: no Seguir button
+(`GET /api/servers/:id/home/follow` answers `enabled: false`), creating a follow is
+a 404, nothing is delivered (a delivery already queued waits and goes out if the
+flag returns within six hours), and removing a follow always works. Turn it on
+for the QG with its override first. See `docs/COMMUNITY_HOME.md` §"Seguir".
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
 Born as a flag (no old reader): `COMMUNITY_HOME_VIDEO_CAPTIONS`
 (`community_home_video_captions`, **per server**, default off), automatic

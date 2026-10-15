@@ -6477,3 +6477,88 @@ CREATE INDEX IF NOT EXISTS idx_story_uploads_created
 -- forward route built, and read back through `mapMessage`, which validates it:
 -- a value this build cannot parse leaves as an ordinary message.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS forward JSONB;
+
+-- ============================================================ Seguir (Baú follows)
+--
+-- A follow points ONE source server's Baú at ONE text channel of another
+-- server. When the source publishes a free post, `bau-follow-delivery.ts`
+-- posts a forward card into every followed channel as the source (a
+-- webhook-style pseudo identity, never a person). Behind the per-server
+-- runtime flag `bau_follow`, read for the SOURCE.
+--
+-- `created_by` is the authority the delivery re-checks: the person who set the
+-- follow up must still be able to manage webhooks or channels in the
+-- destination. Nulled (not cascaded) when their account goes, which the
+-- delivery reads as lost authority and pauses on.
+--
+-- `since_at` is the line no post may be older than: a follow only ever carries
+-- what is published AFTER it was made (or after it was last resumed), never
+-- the backlog.
+CREATE TABLE IF NOT EXISTS bau_follows (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_server_id  UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  target_server_id  UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  target_channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  created_by        UUID REFERENCES users(id) ON DELETE SET NULL,
+  role_ping_id      UUID REFERENCES roles(id) ON DELETE SET NULL,
+  since_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  paused_at         TIMESTAMPTZ,
+  paused_reason     TEXT CHECK (paused_reason IS NULL OR paused_reason IN ('permissions')),
+  permission_failures INT NOT NULL DEFAULT 0,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (source_server_id, target_channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bau_follows_target_server
+  ON bau_follows (target_server_id);
+CREATE INDEX IF NOT EXISTS idx_bau_follows_target_channel
+  ON bau_follows (target_channel_id);
+
+-- A source may refuse a destination server: its follows are removed and a new
+-- one is refused. Keyed on the destination SERVER, not the channel.
+CREATE TABLE IF NOT EXISTS bau_follow_blocks (
+  source_server_id  UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  blocked_server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  created_by        UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (source_server_id, blocked_server_id)
+);
+
+-- One row per (post, follow): the dedupe. `post_id` deliberately has NO
+-- foreign key: a deleted post must still find the messages it delivered, so
+-- the delivery rows outlive the post and the sweep deletes the messages, then
+-- the row. `message_id` is SET NULL when somebody deletes the delivered
+-- message by hand, which leaves a `delivered` row with no message: done, never
+-- redelivered.
+--
+-- status: pending (due at `next_attempt_at`), delivering (claimed under
+-- `claim_id` until `claimed_until`), delivered, retracted (the post stopped
+-- being a free published post, the message is gone; goes back to pending when
+-- it qualifies again), dead (retries used up).
+CREATE TABLE IF NOT EXISTS bau_follow_deliveries (
+  post_id          UUID NOT NULL,
+  follow_id        UUID NOT NULL REFERENCES bau_follows(id) ON DELETE CASCADE,
+  source_server_id UUID NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'delivering', 'delivered', 'retracted', 'dead')),
+  message_id       UUID REFERENCES messages(id) ON DELETE SET NULL,
+  attempts         INT NOT NULL DEFAULT 0,
+  next_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  claim_id         UUID,
+  claimed_until    TIMESTAMPTZ,
+  last_error       TEXT,
+  snapshot_hash    TEXT,
+  post_updated_at  TIMESTAMPTZ,
+  delivered_at     TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (post_id, follow_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_due
+  ON bau_follow_deliveries (next_attempt_at) WHERE status IN ('pending', 'delivering');
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_follow
+  ON bau_follow_deliveries (follow_id);
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_message
+  ON bau_follow_deliveries (message_id) WHERE message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_delivered
+  ON bau_follow_deliveries (post_id) WHERE status = 'delivered';
