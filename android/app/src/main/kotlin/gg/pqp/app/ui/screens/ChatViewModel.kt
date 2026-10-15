@@ -1128,8 +1128,13 @@ class ChatViewModel(
         // A failed read is tried again (a few times, a second apart): live messages
         // were held back while `hasNewer` was true and are only recovered from here.
         repeat(CATCH_UP_ATTEMPTS) { attempt ->
-            val newest = _state.value.messages.lastOrNull { it.id !in pending }?.id ?: return
-            val page = runSuspendCatching { session.api.messages(channelId, after = newest) }.getOrNull()
+            // Re-read each try: the anchor is whatever is newest NOW, after live frames.
+            // With nothing persisted to anchor on (only optimistic rows), ask for the
+            // latest page instead of for "after" a row the server has never heard of.
+            val newest = _state.value.messages.lastOrNull { it.id !in pending }?.id
+            val page = runSuspendCatching {
+                if (newest != null) session.api.messages(channelId, after = newest) else session.api.messages(channelId)
+            }.getOrNull()
             if (page != null) {
                 if (page.messages.isEmpty()) return
                 val known = _state.value.messages.map { it.id }.toSet()
