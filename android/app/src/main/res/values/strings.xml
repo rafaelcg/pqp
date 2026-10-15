@@ -127,6 +127,7 @@
     <string name="bau_comments">Comments</string>
     <string name="bau_share">Share</string>
     <string name="bau_share_description">Share this post</string>
+    <string name="bau_share_failed">Could not open the share sheet.</string>
     <string name="bau_comments_view_one">See %1$d comment</string>
     <string name="bau_comments_view_all">See all %1$d comments</string>
     <string name="bau_comments_show_less">Show fewer</string>

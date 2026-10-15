@@ -119,6 +119,7 @@
     <string name="bau_comments">Comentários</string>
     <string name="bau_share">Compartilhar</string>
     <string name="bau_share_description">Compartilhar esse post</string>
+    <string name="bau_share_failed">Não deu pra abrir o compartilhamento.</string>
     <string name="bau_comments_view_one">Ver %1$d comentário</string>
     <string name="bau_comments_view_all">Ver todos os %1$d comentários</string>
     <string name="bau_comments_show_less">Mostrar menos</string>

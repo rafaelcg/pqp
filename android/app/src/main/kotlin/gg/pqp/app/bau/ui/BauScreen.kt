@@ -744,6 +744,7 @@ private fun ShareControl(publicUrl: String, title: String?) {
     val context = LocalContext.current
     val label = stringResource(R.string.bau_share)
     val description = stringResource(R.string.bau_share_description)
+    val failed = stringResource(R.string.bau_share_failed)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -752,7 +753,9 @@ private fun ShareControl(publicUrl: String, title: String?) {
             // the description and then the visible word again.
             .semantics { contentDescription = description }
             .clickable(role = Role.Button) {
-                BauPublicShare.share(context, publicUrl, title, label)
+                if (!BauPublicShare.share(context, publicUrl, title, label)) {
+                    android.widget.Toast.makeText(context, failed, android.widget.Toast.LENGTH_SHORT).show()
+                }
             }
             .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
             .testTag("bau.share"),
