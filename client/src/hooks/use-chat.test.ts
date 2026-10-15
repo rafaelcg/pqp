@@ -952,6 +952,30 @@ describe("typing indicators", () => {
     expect(chat.getTypingUsers()).toEqual([]);
   });
 
+  it("drops somebody's typing line the moment their message arrives", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u1",
+      displayName: "Ana",
+    } as never);
+    chat.handleServerMessage({
+      type: "typing-broadcast",
+      channelId: CHANNEL,
+      userId: "u2",
+      displayName: "Bia",
+    } as never);
+    expect(chat.getTypingUsers()).toHaveLength(2);
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({ authorId: "u1" }),
+    } as never);
+    // Ana sent; Bia is still typing, with no wait for the five-second expiry.
+    expect(chat.getTypingUsers()).toEqual([{ userId: "u2", displayName: "Bia" }]);
+  });
+
   it("ignores its own typing echo", () => {
     const { chat } = setup();
     chat.handleServerMessage({
