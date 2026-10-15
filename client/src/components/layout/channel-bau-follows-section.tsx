@@ -1,5 +1,5 @@
 import type { BauFollow } from "@pqp/shared";
-import { useState } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ export function ChannelBauFollowsSection({
   onChange,
 }: {
   follows: BauFollow[];
-  onChange: (next: BauFollow[]) => void;
+  onChange: Dispatch<SetStateAction<BauFollow[]>>;
 }) {
   const { t } = useTranslation();
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -29,7 +29,7 @@ export function ChannelBauFollowsSection({
     setError(null);
     try {
       await deleteBauFollow(follow.id);
-      onChange(follows.filter((one) => one.id !== follow.id));
+      onChange((current) => current.filter((one) => one.id !== follow.id));
     } catch {
       setError(t("bauFollow.error.action"));
     } finally {
@@ -42,7 +42,9 @@ export function ChannelBauFollowsSection({
     setError(null);
     try {
       const res = await updateBauFollow(follow.id, { resume: true });
-      onChange(follows.map((one) => (one.id === follow.id ? res.follow : one)));
+      onChange((current) =>
+        current.map((one) => (one.id === follow.id ? res.follow : one)),
+      );
     } catch {
       setError(t("bauFollow.error.action"));
     } finally {
@@ -95,7 +97,7 @@ export function ChannelBauFollowsSection({
                   type="button"
                   size="sm"
                   variant="secondary"
-                  disabled={busyId === follow.id}
+                  disabled={busyId !== null}
                   onClick={() => void resume(follow)}
                   data-channel-bau-follow-resume
                 >
@@ -108,7 +110,7 @@ export function ChannelBauFollowsSection({
               size="sm"
               variant="ghost"
               className="text-danger"
-              disabled={busyId === follow.id}
+              disabled={busyId !== null}
               onClick={() => void unfollow(follow)}
               data-channel-bau-follow-unfollow
             >

@@ -5,7 +5,7 @@ import type {
   BauFollowers,
 } from "@pqp/shared";
 import { BellPlus, BellRing } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,38 +68,35 @@ export function bauFollowErrorKey(error: unknown): MessageKey {
  */
 export function useBauFollowState(serverId: string, active: boolean) {
   const [state, setState] = useState<BauFollowState | null>(null);
+  // A read answers only if no newer read started after it: a slow early answer
+  // must not overwrite a later one (two quick actions refresh twice).
+  const generation = useRef(0);
   const refresh = useCallback(async () => {
+    generation.current += 1;
+    const mine = generation.current;
     if (!active) {
       setState(null);
       return;
     }
     try {
-      setState(await fetchBauFollowState(serverId));
+      const next = await fetchBauFollowState(serverId);
+      if (generation.current === mine) {
+        setState(next);
+      }
     } catch {
-      setState(null);
+      if (generation.current === mine) {
+        setState(null);
+      }
     }
   }, [serverId, active]);
   useEffect(() => {
-    let cancelled = false;
     setState(null);
-    if (!active) {
-      return;
-    }
-    fetchBauFollowState(serverId)
-      .then((next) => {
-        if (!cancelled) {
-          setState(next);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setState(null);
-        }
-      });
+    void refresh();
     return () => {
-      cancelled = true;
+      // Whatever is still in flight belongs to the server or switch we left.
+      generation.current += 1;
     };
-  }, [serverId, active]);
+  }, [refresh]);
   return { state, refresh };
 }
 
@@ -241,16 +238,24 @@ export function BauFollowDialog({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const loadGeneration = useRef(0);
   const load = useCallback(() => {
+    loadGeneration.current += 1;
+    const mine = loadGeneration.current;
     setLoadError(false);
     return fetchBauFollowDestinations(serverId)
       .then((res) => {
+        if (loadGeneration.current !== mine) {
+          return null;
+        }
         setDestinations(res.servers);
         setMaxPerServer(res.maxPerServer);
         return res.servers;
       })
       .catch(() => {
-        setLoadError(true);
+        if (loadGeneration.current === mine) {
+          setLoadError(true);
+        }
         return null;
       });
   }, [serverId]);
@@ -385,7 +390,7 @@ export function BauFollowDialog({
                 <FollowRow
                   key={follow.id}
                   follow={follow}
-                  busy={rowBusy === follow.id}
+                  busy={rowBusy !== null}
                   onUnfollow={() => void unfollow(follow)}
                   onResume={() => void resume(follow)}
                 />
@@ -537,11 +542,22 @@ export function BauFollowersDialog({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const loadGeneration = useRef(0);
   const load = useCallback(() => {
+    loadGeneration.current += 1;
+    const mine = loadGeneration.current;
     setLoadError(false);
     return fetchBauFollowers(serverId)
-      .then(setData)
-      .catch(() => setLoadError(true));
+      .then((next) => {
+        if (loadGeneration.current === mine) {
+          setData(next);
+        }
+      })
+      .catch(() => {
+        if (loadGeneration.current === mine) {
+          setLoadError(true);
+        }
+      });
   }, [serverId]);
 
   useEffect(() => {
