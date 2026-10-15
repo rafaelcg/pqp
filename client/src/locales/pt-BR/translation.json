@@ -2593,6 +2593,8 @@
   "serverSettings.audit.action.bau_follow.remove_follower": "removeu um servidor que seguia este Baú",
   "serverSettings.audit.action.bau_follow.block": "bloqueou um servidor de seguir este Baú",
   "serverSettings.audit.action.bau_follow.unblock": "desbloqueou um servidor de seguir este Baú",
+  "serverSettings.audit.action.bau_follow.allow": "permitiu que outros servidores sigam este Baú",
+  "serverSettings.audit.action.bau_follow.disallow": "deixou de permitir que outros servidores sigam este Baú",
   "serverSettings.audit.soundboard.clip": "Som: {name}",
   "serverSettings.audit.soundboard.renamed": "Nome: {old} para {new}",
   "serverSettings.audit.soundboard.volume": "Volume: {old} para {new}",

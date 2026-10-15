@@ -67,6 +67,7 @@ const {
   Permission,
   messageForwardSchema,
   isForwardFallbackBody,
+  forwardBodyComment,
   BAU_FOLLOW_MAX_PER_SERVER,
   BAU_FOLLOW_MAX_DELIVERIES_PER_POST_PER_MINUTE,
 } = await import("@pqp/shared");
@@ -172,7 +173,13 @@ describeDb("Seguir: following a Baú into a channel", () => {
 
     const qg = await createChatServer("QG", qgOwner.id);
     qgId = qg.server.id;
-    await getPool().query(`UPDATE servers SET community_home_enabled = TRUE WHERE id = $1`, [qgId]);
+    // The QG: a public community (address) with its Baú on and "Permitir seguir" on.
+    await getPool().query(
+      `UPDATE servers SET community_home_enabled = TRUE, bau_follow_allowed = TRUE,
+              is_community = TRUE, community_slug = 'qg-oficial'
+        WHERE id = $1`,
+      [qgId],
+    );
     await addMember(qgId, alice);
     await addMember(qgId, carol);
     await sourceFlag(qgId, true);
@@ -271,9 +278,12 @@ describeDb("Seguir: following a Baú into a channel", () => {
 
   it("the flag is per SOURCE: on for the QG says nothing about another server", async () => {
     const other = await createChatServer("Outra comunidade", qgOwner.id);
-    await getPool().query(`UPDATE servers SET community_home_enabled = TRUE WHERE id = $1`, [
-      other.server.id,
-    ]);
+    await getPool().query(
+      `UPDATE servers SET community_home_enabled = TRUE, bau_follow_allowed = TRUE,
+              is_community = TRUE, community_slug = 'outra-comunidade'
+        WHERE id = $1`,
+      [other.server.id],
+    );
     await addMember(other.server.id, alice);
     const stateOther = await call(alice, "GET", `/api/servers/${other.server.id}/home/follow`);
     expect(stateOther.body.enabled).toBe(false);
@@ -470,7 +480,11 @@ describeDb("Seguir: following a Baú into a channel", () => {
     );
     expect(pinged.rows).toEqual([{ user_id: bob.id, channel_id: destChannelId }]);
     const withPing = (await cards(destChannelId))[0]!;
-    expect(withPing.body.startsWith("@novidades ")).toBe(true);
+    // The mention alone on the first line, the fallback on its own line below.
+    expect(withPing.body.startsWith("@novidades\nEncaminhado: ")).toBe(true);
+    const parsed = messageForwardSchema.parse(withPing.forward);
+    expect(forwardBodyComment(withPing.body, parsed)).toBe("@novidades");
+    expect(isForwardFallbackBody(withPing.body, parsed)).toBe(true);
     const plain = (await cards(destOwnerOnlyChannel))[0]!;
     expect(plain.body.startsWith("Encaminhado: ")).toBe(true);
     // The snapshot never carries an @everyone through.
@@ -760,6 +774,158 @@ describeDb("Seguir: following a Baú into a channel", () => {
       [postId],
     );
     expect(queued.rowCount).toBe(1);
+  });
+
+  // ----------------------------------------------- who may follow a source
+
+  it("a plain member of an ordinary (private) server cannot follow it; its staff can, with the owner's switch on", async () => {
+    const priv = await createChatServer("Interno", qgOwner.id);
+    const privId = priv.server.id;
+    await getPool().query(
+      `UPDATE servers SET community_home_enabled = TRUE, bau_follow_allowed = TRUE WHERE id = $1`,
+      [privId],
+    );
+    await sourceFlag(privId, true);
+    await addMember(privId, alice);
+    await addMember(privId, bob);
+    const stateOf = async (as: TestUser) =>
+      (await call(as, "GET", `/api/servers/${privId}/home/follow`)).body.enabled;
+    // A plain member sees nothing offered, and creating is a 404.
+    expect(await stateOf(alice)).toBe(false);
+    const refused = await call(alice, "POST", `/api/servers/${privId}/home/follow`, {
+      channelId: destChannelId,
+      rolePingId: null,
+    });
+    expect(refused.status).toBe(404);
+    // Its Manage Server staff are offered it.
+    expect(await stateOf(qgOwner)).toBe(true);
+    const staffRole = await createRole(privId, { name: "Staff", permissions: Permission.VIEW_CHANNEL | Permission.MANAGE_SERVER });
+    await assignRole(privId, bob.id, staffRole.id);
+    expect(await stateOf(bob)).toBe(true);
+    // The switch off closes it for everyone, staff included.
+    expect(
+      (await call(qgOwner, "PATCH", `/api/servers/${privId}/home/follow-config`, { allowed: false })).status,
+    ).toBe(200);
+    expect(await stateOf(qgOwner)).toBe(false);
+  });
+
+  it("the owner's switch gates a public community too, and moving it is audited and a plain member cannot move it", async () => {
+    // The QG is public: a plain member follows while the switch is on...
+    expect((await call(alice, "GET", `${home()}/follow`)).body.enabled).toBe(true);
+    expect((await call(alice, "PATCH", `${home()}/follow-config`, { allowed: false })).status).toBe(403);
+    const off = await call(qgOwner, "PATCH", `${home()}/follow-config`, { allowed: false });
+    expect(off.status).toBe(200);
+    expect(off.body.allowed).toBe(false);
+    // ...and not once it is off (default for a server that never turned it on).
+    expect((await call(alice, "GET", `${home()}/follow`)).body.enabled).toBe(false);
+    expect((await follow(alice, destChannelId)).status).toBe(404);
+    await call(qgOwner, "PATCH", `${home()}/follow-config`, { allowed: true });
+    expect((await follow(alice, destChannelId)).status).toBe(201);
+    const audit = await getPool().query<{ action: string }>(
+      `SELECT action FROM audit_log WHERE server_id = $1 AND action LIKE 'bau_follow.%allow' ORDER BY created_at`,
+      [qgId],
+    );
+    expect(audit.rows.map((r) => r.action)).toEqual(["bau_follow.disallow", "bau_follow.allow"]);
+  });
+
+  it("switching it off stops deliveries (they wait), switching it back on sends them", async () => {
+    await follow(alice, destChannelId);
+    await call(qgOwner, "PATCH", `${home()}/follow-config`, { allowed: false });
+    await publish({ title: "Durante" });
+    await tick();
+    expect(await cards(destChannelId)).toHaveLength(0);
+    await call(qgOwner, "PATCH", `${home()}/follow-config`, { allowed: true });
+    await getPool().query(`UPDATE bau_follow_deliveries SET next_attempt_at = NOW()`);
+    await tick();
+    await tick();
+    expect(await cards(destChannelId)).toHaveLength(1);
+  });
+
+  it("a creator who loses Manage Server on a PRIVATE source loses the follow after three failures", async () => {
+    const priv = await createChatServer("Interno 2", qgOwner.id);
+    const privId = priv.server.id;
+    await getPool().query(
+      `UPDATE servers SET community_home_enabled = TRUE, bau_follow_allowed = TRUE WHERE id = $1`,
+      [privId],
+    );
+    await sourceFlag(privId, true);
+    await addMember(privId, alice);
+    const staffRole = await createRole(privId, { name: "Staff", permissions: Permission.VIEW_CHANNEL | Permission.MANAGE_SERVER });
+    await assignRole(privId, alice.id, staffRole.id);
+    const made = await call(alice, "POST", `/api/servers/${privId}/home/follow`, {
+      channelId: destChannelId,
+      rolePingId: null,
+    });
+    expect(made.status).toBe(201);
+    await unassignRole(privId, alice.id, staffRole.id);
+    for (const title of ["A", "B", "C"]) {
+      await call(qgOwner, "POST", `/api/servers/${privId}/home/posts`, {
+        status: "published",
+        title,
+        body: "texto",
+      });
+    }
+    await tick();
+    expect(await cards(destChannelId)).toHaveLength(0);
+    const row = await getPool().query(`SELECT paused_at FROM bau_follows WHERE id = $1`, [made.body.follow.id]);
+    expect(row.rows[0]!.paused_at).not.toBeNull();
+  });
+
+  // ----------------------------------------- the destination's own say
+
+  it("a destination's ban of the source identity is honoured and counts toward the pause", async () => {
+    const made = await follow(alice, destChannelId);
+    // The first card creates the identity; ban it in the destination.
+    await publish({ title: "Primeiro" });
+    await tick();
+    expect(await cards(destChannelId)).toHaveLength(1);
+    const identity = await getPool().query<{ id: string }>(
+      `SELECT id FROM users WHERE clerk_id = $1`,
+      [`bau-follow:${qgId}`],
+    );
+    await getPool().query(`INSERT INTO server_bans (server_id, user_id, banned_by) VALUES ($1, $2, $3)`, [
+      destId,
+      identity.rows[0]!.id,
+      alice.id,
+    ]);
+    for (const title of ["Dois", "Tres", "Quatro"]) {
+      await publish({ title });
+    }
+    await tick();
+    expect(await cards(destChannelId)).toHaveLength(1);
+    const row = await getPool().query(`SELECT paused_at FROM bau_follows WHERE id = $1`, [made.body.follow.id]);
+    expect(row.rows[0]!.paused_at).not.toBeNull();
+  });
+
+  it("slow mode in the destination spaces the cards out instead of bypassing it", async () => {
+    await follow(alice, destChannelId);
+    await getPool().query(`UPDATE channels SET slowmode_seconds = 600 WHERE id = $1`, [destChannelId]);
+    await publish({ title: "Um" });
+    await tick();
+    await publish({ title: "Dois" });
+    await tick();
+    expect(await cards(destChannelId)).toHaveLength(1);
+    const waiting = await getPool().query<{ wait: number }>(
+      `SELECT EXTRACT(EPOCH FROM (next_attempt_at - NOW()))::float AS wait
+         FROM bau_follow_deliveries WHERE status = 'pending'`,
+    );
+    expect(waiting.rows).toHaveLength(1);
+    expect(waiting.rows[0]!.wait).toBeGreaterThan(300);
+  });
+
+  it("nobody can send a friend request to the source identity", async () => {
+    await follow(alice, destChannelId);
+    await publish({ title: "Um" });
+    await tick();
+    const [card] = await cards(destChannelId);
+    const author = await getPool().query<{ author_id: string }>(
+      `SELECT author_id FROM messages WHERE id = $1`,
+      [card!.id],
+    );
+    const res = await call(bob, "POST", "/api/friends", { userId: author.rows[0]!.author_id });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    const rows = await getPool().query(`SELECT 1 FROM friendships`);
+    expect(rows.rowCount).toBe(0);
   });
 
   // ------------------------------------------------------------- the source

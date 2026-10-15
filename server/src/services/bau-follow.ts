@@ -120,20 +120,82 @@ function toFollow(row: FollowJoinRow, viewerId: string): BauFollow {
   };
 }
 
-/** What `GET /api/servers/:id/home/follow` answers: the flag, and the viewer's own follows of this Baú. */
+export interface BauFollowAvailability {
+  flagOn: boolean;
+  homeOn: boolean;
+  /** The owner's "Permitir seguir" switch. */
+  allowed: boolean;
+  /** A public community with an address, not suspended. */
+  publicCommunity: boolean;
+  /** The asker holds MANAGE_SERVER on the source. */
+  staff: boolean;
+  /** All of it: the flag, the Baú, the switch, and (public community OR staff). */
+  followable: boolean;
+}
+
+/**
+ * Whether `actorId` may follow this source's Baú. Four things, all required:
+ * the `bau_follow` flag for the source, the source's own Baú switch, the
+ * owner's explicit "allow following" switch (default off), and EITHER the
+ * source is a public community with an address (a Baú that is public by
+ * intent) OR the asker holds MANAGE_SERVER on it (an opt-in by its staff). A
+ * plain member of an ordinary server can never pipe its posts elsewhere.
+ */
+export async function getBauFollowAvailability(
+  sourceServerId: string,
+  actorId: string | null,
+): Promise<BauFollowAvailability> {
+  const flagOn = isBauFollowOn(sourceServerId);
+  const row = await getPool().query<{
+    community_home_enabled: boolean | null;
+    bau_follow_allowed: boolean;
+    is_community: boolean;
+    is_community_suspended: boolean;
+    community_slug: string | null;
+  }>(
+    `SELECT community_home_enabled, bau_follow_allowed, is_community,
+            is_community_suspended, community_slug
+       FROM servers WHERE id = $1`,
+    [sourceServerId],
+  );
+  const server = row.rows[0];
+  if (!server) {
+    return { flagOn, homeOn: false, allowed: false, publicCommunity: false, staff: false, followable: false };
+  }
+  const publicCommunity =
+    server.is_community && !server.is_community_suspended && Boolean(server.community_slug);
+  const homeOn = server.community_home_enabled === true;
+  const staff =
+    actorId !== null &&
+    hasPermission(await computeMemberPermissions(sourceServerId, actorId), Permission.MANAGE_SERVER);
+  return {
+    flagOn,
+    homeOn,
+    allowed: server.bau_follow_allowed,
+    publicCommunity,
+    staff,
+    followable: flagOn && homeOn && server.bau_follow_allowed && (publicCommunity || staff),
+  };
+}
+
+/** The owner's switch. The route checks MANAGE_SERVER; this only writes. */
+export async function setBauFollowAllowed(
+  sourceServerId: string,
+  allowed: boolean,
+): Promise<void> {
+  await getPool().query(`UPDATE servers SET bau_follow_allowed = $2 WHERE id = $1`, [
+    sourceServerId,
+    allowed,
+  ]);
+}
+
+/** What `GET /api/servers/:id/home/follow` answers: whether this viewer may follow, and their own follows of this Baú. */
 export async function getBauFollowState(
   sourceServerId: string,
   viewerId: string,
 ): Promise<BauFollowState> {
-  // Followable only where the delivery would run: the flag AND this server's
-  // own Baú switch (create refuses a server whose Baú is off).
-  const home = isBauFollowOn(sourceServerId)
-    ? await getPool().query<{ community_home_enabled: boolean | null }>(
-        `SELECT community_home_enabled FROM servers WHERE id = $1`,
-        [sourceServerId],
-      )
-    : null;
-  if (!home || home.rows[0]?.community_home_enabled !== true) {
+  const availability = await getBauFollowAvailability(sourceServerId, viewerId);
+  if (!availability.followable) {
     return { enabled: false, maxPerServer: BAU_FOLLOW_MAX_PER_SERVER, mine: [] };
   }
   const result = await getPool().query<FollowJoinRow>(
@@ -285,17 +347,13 @@ export async function createBauFollow(input: {
   rolePingId: string | null;
   actorId: string;
 }): Promise<BauFollow> {
-  if (!isBauFollowOn(input.sourceServerId)) {
+  const availability = await getBauFollowAvailability(input.sourceServerId, input.actorId);
+  if (!availability.followable) {
+    // 404 for every reason (flag, Baú, switch, not staff of a private server):
+    // a refusal here must not say which.
     throw new BauFollowError("disabled", "Not found");
   }
   const pool = getPool();
-  const source = await pool.query<{ community_home_enabled: boolean | null }>(
-    `SELECT community_home_enabled FROM servers WHERE id = $1`,
-    [input.sourceServerId],
-  );
-  if (!source.rows[0] || source.rows[0].community_home_enabled !== true) {
-    throw new BauFollowError("disabled", "Not found");
-  }
   const channel = await loadTextChannel(input.channelId);
   if (channel.server_id === input.sourceServerId) {
     throw new BauFollowError("invalid", "A Baú is not delivered into its own server");
@@ -558,8 +616,12 @@ export async function listBauFollowers(sourceServerId: string): Promise<BauFollo
       ORDER BY b.created_at DESC`,
     [sourceServerId],
   );
+  const availability = await getBauFollowAvailability(sourceServerId, null);
   return {
-    enabled: isBauFollowOn(sourceServerId),
+    enabled: availability.flagOn && availability.homeOn && availability.allowed,
+    flagOn: availability.flagOn,
+    allowed: availability.allowed,
+    publicCommunity: availability.publicCommunity,
     count: Number(total.rows[0]?.n ?? "0"),
     followers: followers.rows.map((row) => ({
       id: row.id,

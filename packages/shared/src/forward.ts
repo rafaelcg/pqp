@@ -291,7 +291,30 @@ export function isForwardFallbackBody(
   body: string,
   forward: Pick<MessageForward, "title" | "excerpt" | "url" | "sourceServerName">,
 ): boolean {
-  return body === forwardFallbackBody(forward);
+  return forwardBodyComment(body, forward) !== body || body === forwardFallbackBody(forward);
+}
+
+/**
+ * What a client that draws the card should show of `body`: nothing when it is
+ * the fallback line (`""`), the role-mention line alone when a followed Baú's
+ * delivery put one above the fallback (`@Role` on its own line, then the
+ * fallback on the next), and `body` unchanged for anything the forwarder wrote.
+ * A delivery that pings a role writes `@Role\n<fallback>` so an old client still
+ * reads a mention and a title, and a new one strips the fallback by this rule.
+ */
+export function forwardBodyComment(
+  body: string,
+  forward: Pick<MessageForward, "title" | "excerpt" | "url" | "sourceServerName">,
+): string {
+  const fallback = forwardFallbackBody(forward);
+  if (body === fallback) {
+    return "";
+  }
+  const newline = body.indexOf("\n");
+  if (newline > 1 && body.startsWith("@") && body.slice(newline + 1) === fallback) {
+    return body.slice(0, newline);
+  }
+  return body;
 }
 
 /** Where a chat message lives, as the jump link every client already opens. */

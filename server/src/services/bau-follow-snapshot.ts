@@ -84,6 +84,20 @@ function thumbFor(post: PostForSnapshot): string | undefined {
   return undefined;
 }
 
+/**
+ * THE SEAM FOR A PUBLIC PAGE. The card's `url` is where a follower opens the
+ * post. Today that is the in-app Baú address, which only a member of the source
+ * can open. When Part 2's public post page lands (`bauPublicUrlFor`,
+ * `bau_public_posts`), this is the one place that returns its URL for a post
+ * that qualifies, so followers outside the source open a real page; `null`
+ * keeps the in-app address.
+ */
+export function followPublicUrl(
+  _post: Pick<PostForSnapshot, "id" | "server_id">,
+): string | null {
+  return null;
+}
+
 export function buildBauPostSnapshot(
   post: PostForSnapshot,
   source: SourceForSnapshot,
@@ -107,7 +121,7 @@ export function buildBauPostSnapshot(
     excerpt,
     ...(thumb ? { mediaThumbUrl: thumb } : {}),
     ...(mediaKind ? { mediaKind } : {}),
-    url: `${origin}${bauPostPath(post.server_id, post.id)}`,
+    url: followPublicUrl(post) ?? `${origin}${bauPostPath(post.server_id, post.id)}`,
     createdAt: (post.published_at ?? post.created_at).toISOString(),
   });
 }
@@ -126,6 +140,17 @@ export function snapshotHash(snapshot: BauPostSnapshot): string {
  */
 export function followFallbackBody(snapshot: BauPostSnapshot): string {
   return forwardFallbackBody(snapshot);
+}
+
+/**
+ * The message body of a delivery: the fallback line, and when the follow pings a
+ * role, the mention alone on the line above it. A client that draws the card
+ * strips the fallback (`forwardBodyComment` in `@pqp/shared`) and keeps the
+ * mention; an old client reads a mention, then a title and a link.
+ */
+export function followBody(snapshot: BauPostSnapshot, rolePingName: string | null): string {
+  const fallback = followFallbackBody(snapshot);
+  return rolePingName ? `@${rolePingName.replace(/\s+/g, "")}\n${fallback}` : fallback;
 }
 
 /** A card with nothing to show (no title, no text, no media) is not delivered. */

@@ -370,6 +370,21 @@ a webhook-style pseudo identity per source (`users.is_webhook`, clerk id
 `bau-follow:<serverId>`), shown with the source's name and icon, never a real
 user and never in a member list.
 
+- **Who may be followed, and by whom.** Three things, all required, plus a fourth
+  that depends on the viewer: the `bau_follow` flag for the source, the source's
+  own Baú switch, and the OWNER'S switch **Permitir seguir** (`servers.bau_follow_allowed`,
+  default off, Baú settings in Server settings, Manage Server, audited), and then
+  EITHER the source is a public community with an address (a Baú that is public
+  by intent: any member of it may follow) OR the viewer holds Manage Server on it
+  (an ordinary server's staff may pipe their own Baú elsewhere; a plain member of
+  one never can). A refusal is a 404 for every reason. Delivery asks again: a
+  private source's follow whose creator lost Manage Server there counts as a
+  permission failure like any other. "Free" means free for the server's members,
+  which is why a private server needs its staff and its owner's say.
+- **The destination's say.** A destination that bans the source identity gets no
+  more cards (each skipped card counts toward the auto-pause), slow mode spaces
+  the cards out (one per interval, the rest wait), and the identity cannot be
+  sent a friend request.
 - **Setting it up.** A **Seguir** button on the Baú header of a followable
   server opens a picker of the viewer's own servers where they hold
   MANAGE_WEBHOOKS or MANAGE_CHANNELS, then a text channel and an optional role to
@@ -414,9 +429,12 @@ user and never in a member list.
   (`DELETE .../home/followers/:id?block=1`, which also removes that server's
   other follows and refuses new ones); `DELETE .../home/follow-blocks/:serverId`
   unblocks. A destination server holds at most 20 follows.
-- **Not built yet.** The card's `url` is the in-app Baú post address; once the
-  public post page exists (Part 2) a follower who is not a member of the source
-  should get that instead.
+- **The card's link.** The in-app Baú post address, which only a member of the
+  source can open, until Part 2's public post page lands; `followPublicUrl` in
+  `bau-follow-snapshot.ts` is the one seam that returns the public URL for a post
+  that qualifies. A delivery that pings a role writes `@Role` alone on the first
+  line and the fallback below it; clients that draw the card use
+  `forwardBodyComment` (`@pqp/shared`) to strip the fallback and keep the mention.
 
 Tests: `server/src/services/bau-follow.test.ts` (flag per source, permissions,
 delivery, scheduled, edit, delete, pause, source staff, limits) and

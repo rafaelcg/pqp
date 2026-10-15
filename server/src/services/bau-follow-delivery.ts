@@ -13,7 +13,7 @@ import { logAudit } from "./audit.js";
 import { isBauFollowOn, mayManageFollow } from "./bau-follow.js";
 import {
   buildBauPostSnapshot,
-  followFallbackBody,
+  followBody,
   snapshotHash,
   snapshotIsEmpty,
   type BauPostSnapshot,
@@ -437,8 +437,7 @@ async function syncOne(row: SyncRow): Promise<boolean> {
 }
 
 function composeBody(snapshot: BauPostSnapshot, rolePingName: string | null): string {
-  const fallback = followFallbackBody(snapshot);
-  return rolePingName ? `@${rolePingName} ${fallback}` : fallback;
+  return followBody(snapshot, rolePingName);
 }
 
 // ---------------------------------------------------------------- 3. enqueue
@@ -464,7 +463,8 @@ async function enqueueQualifying(serverId?: string): Promise<number> {
     `INSERT INTO bau_follow_deliveries (post_id, follow_id, source_server_id)
      SELECT p.id, f.id, p.server_id
        FROM bau_follows f
-       JOIN servers s ON s.id = f.source_server_id AND s.community_home_enabled = TRUE
+       JOIN servers s ON s.id = f.source_server_id
+         AND s.community_home_enabled = TRUE AND s.bau_follow_allowed = TRUE
        JOIN community_home_posts p ON p.server_id = f.source_server_id
       WHERE f.source_server_id = ANY($1::uuid[])
         AND f.paused_at IS NULL
@@ -620,6 +620,10 @@ interface DeliveryContext {
   source_name: string;
   source_icon_url: string | null;
   home_enabled: boolean | null;
+  follow_allowed: boolean;
+  source_public: boolean;
+  slowmode_seconds: number;
+  last_card_at: Date | null;
   blocked: boolean;
   role_name: string | null;
   role_mentionable: boolean | null;
@@ -643,6 +647,12 @@ async function loadContext(claimed: Claimed): Promise<DeliveryContext | null> {
             f.target_server_id, tc.type AS channel_type, tc.kind AS channel_kind,
             s.id AS source_id, s.name AS source_name, s.icon_url AS source_icon_url,
             s.community_home_enabled AS home_enabled,
+            s.bau_follow_allowed AS follow_allowed,
+            (s.is_community AND NOT s.is_community_suspended AND s.community_slug IS NOT NULL) AS source_public,
+            tc.slowmode_seconds,
+            (SELECT MAX(m.created_at) FROM messages m
+               JOIN users u ON u.id = m.author_id
+              WHERE m.channel_id = f.target_channel_id AND u.clerk_id = 'bau-follow:' || s.id) AS last_card_at,
             EXISTS (
               SELECT 1 FROM bau_follow_blocks b
                WHERE b.source_server_id = f.source_server_id
@@ -730,7 +740,11 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
       await settle(claimed, { status: "dead", error: "stale" });
       return "skipped";
     }
-    if (!isBauFollowOn(claimed.source_server_id) || ctx.home_enabled !== true) {
+    if (
+      !isBauFollowOn(claimed.source_server_id) ||
+      ctx.home_enabled !== true ||
+      !ctx.follow_allowed
+    ) {
       // Switched off at the source: nothing is lost, it waits, and the attempt
       // is not counted against it.
       await settle(claimed, {
@@ -762,6 +776,39 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
       const paused = await recordPermissionFailure(claimed, ctx);
       await settle(claimed, retryPatch(claimed, "permissions"));
       return paused ? "paused" : "failed";
+    }
+
+    // The source side of the authority: a private source is followed only by
+    // its own staff, so a creator who lost MANAGE_SERVER there has lost the
+    // right (a public community is open to any member by intent).
+    let sourceOk = true;
+    if (!ctx.source_public) {
+      sourceOk =
+        ctx.created_by !== null &&
+        hasPermission(
+          await computeMemberPermissions(claimed.source_server_id, ctx.created_by),
+          Permission.MANAGE_SERVER,
+        );
+    }
+    // The destination's own ban of the source identity is honoured: the card is
+    // not posted, and it counts toward the auto-pause like a lost permission.
+    const authorId = await bauFollowAuthorFor(ctx.source_id, ctx.source_name);
+    const banned = await getPool().query(
+      `SELECT 1 FROM server_bans WHERE server_id = $1 AND user_id = $2`,
+      [ctx.target_server_id, authorId],
+    );
+    if (!sourceOk || (banned.rowCount ?? 0) > 0) {
+      const paused = await recordPermissionFailure(claimed, ctx);
+      await settle(claimed, retryPatch(claimed, sourceOk ? "banned" : "source authority"));
+      return paused ? "paused" : "failed";
+    }
+    // Slow mode is the channel's own pace: one card per interval, the rest wait.
+    if (ctx.slowmode_seconds > 0 && ctx.last_card_at) {
+      const waitMs = ctx.last_card_at.getTime() + ctx.slowmode_seconds * 1000 - Date.now();
+      if (waitMs > 0) {
+        await settle(claimed, { status: "pending", delayMs: waitMs + 500, refundAttempt: true });
+        return "skipped";
+      }
     }
 
     const post: PostForSnapshot = {

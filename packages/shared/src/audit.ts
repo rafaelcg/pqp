@@ -231,6 +231,9 @@ export const AUDIT_ACTIONS = [
   "bau_follow.remove_follower",
   "bau_follow.block",
   "bau_follow.unblock",
+  /** Written in the SOURCE server: the owner's "Permitir seguir" switch moved. */
+  "bau_follow.allow",
+  "bau_follow.disallow",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

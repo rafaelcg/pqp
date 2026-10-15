@@ -6480,6 +6480,11 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS forward JSONB;
 
 -- ============================================================ Seguir (Baú follows)
 --
+-- The owner's own switch for being followed: off by default, so a server that
+-- opens Seguir through the flag is still not followable until its Manage Server
+-- staff turn this on in the Baú settings. Read with the flag and the Baú switch.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS bau_follow_allowed BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- A follow points ONE source server's Baú at ONE text channel of another
 -- server. When the source publishes a free post, `bau-follow-delivery.ts`
 -- posts a forward card into every followed channel as the source (a

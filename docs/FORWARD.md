@@ -6,7 +6,7 @@ Putting a Baú post or a chat message into another channel or a DM as a card tha
 
 A forward is a message. `messages.forward` is a nullable JSONB column holding a snapshot taken at forward time, validated by `messageForwardSchema`. It rides on the message object everywhere messages travel (REST history, `message-broadcast`, `message-update`, pins), and it is absent on every ordinary message. Read it as `message.forward ?? null`.
 
-`body` is the forwarder's own comment. With no comment the server writes `Encaminhado: <title or excerpt> <url>` so a client that predates the card still shows something useful. A client that draws the card hides `body` when `isForwardFallbackBody(body, forward)` is true.
+`body` is the forwarder's own comment. With no comment the server writes `Encaminhado: <title or excerpt> <url>` so a client that predates the card still shows something useful. A client that draws the card hides `body` when `isForwardFallbackBody(body, forward)` is true. A followed Baú's delivery (Seguir) that pings a role writes `@Role` alone on the first line and the fallback on the next; `isForwardFallbackBody` is true for that too, and `forwardBodyComment(body, forward)` returns the part to show (`""`, the mention line, or the forwarder's own text). Mobile: the fallback is `body` itself, or `body` after a first line that starts with `@`.
 
 ## Endpoints
 

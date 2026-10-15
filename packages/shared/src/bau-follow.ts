@@ -162,9 +162,22 @@ export const bauFollowBlockSchema = z.object({
 });
 export type BauFollowBlock = z.infer<typeof bauFollowBlockSchema>;
 
+/** `PATCH /api/servers/:serverId/home/follow-config` (MANAGE_SERVER). */
+export const updateBauFollowConfigSchema = z.object({
+  allowed: z.boolean(),
+});
+export type UpdateBauFollowConfigRequest = z.infer<typeof updateBauFollowConfigSchema>;
+
 /** `GET /api/servers/:serverId/home/followers` (MANAGE_SERVER). */
 export const bauFollowersSchema = z.object({
+  /** Followable right now: the flag, the Baú itself and the owner's switch, all on. */
   enabled: z.boolean(),
+  /** The `bau_follow` flag is on for this server (the feature is offered to it at all). */
+  flagOn: z.boolean(),
+  /** The owner's own switch ("Permitir seguir"), default off. */
+  allowed: z.boolean(),
+  /** A public community with an address: its Baú may be followed by any member. */
+  publicCommunity: z.boolean(),
   /** Followers across every destination channel (a server with two channels counts twice). */
   count: z.number().int().nonnegative(),
   followers: z.array(bauFollowerSchema),

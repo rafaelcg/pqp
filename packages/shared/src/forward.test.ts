@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   FORWARD_MAX_TARGETS,
   createForwardSchema,
+  forwardBodyComment,
   forwardFallbackBody,
   forwardMessagePath,
   isForwardFallbackBody,
@@ -114,5 +115,28 @@ describe("the fallback body", () => {
 describe("forwardMessagePath", () => {
   it("is the jump link the web app opens", () => {
     expect(forwardMessagePath("s", "c", "m")).toBe("/app/server/s/channel/c/message/m");
+  });
+});
+
+describe("forwardBodyComment (a delivery that pings a role)", () => {
+  const forward = {
+    title: "Sessão 12",
+    excerpt: "resumo",
+    url: "https://pqp.gg/app/server/x/bau/y",
+    sourceServerName: "QG",
+  };
+  const fallback = forwardFallbackBody(forward);
+
+  it("shows nothing for the bare fallback, and the mention line alone above it", () => {
+    expect(forwardBodyComment(fallback, forward)).toBe("");
+    expect(forwardBodyComment(`@Novidades\n${fallback}`, forward)).toBe("@Novidades");
+    expect(isForwardFallbackBody(`@Novidades\n${fallback}`, forward)).toBe(true);
+  });
+
+  it("leaves anything the forwarder wrote alone", () => {
+    expect(forwardBodyComment("olha isso", forward)).toBe("olha isso");
+    expect(forwardBodyComment(`olha\n${fallback}`, forward)).toBe(`olha\n${fallback}`);
+    expect(forwardBodyComment(`@Novidades ${fallback}`, forward)).toBe(`@Novidades ${fallback}`);
+    expect(isForwardFallbackBody("olha isso", forward)).toBe(false);
   });
 });

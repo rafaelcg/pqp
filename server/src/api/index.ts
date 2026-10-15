@@ -152,6 +152,7 @@ import {
   createCommunityHomeCommentSchema,
   createCommunityHomeMediaUploadSchema,
   createBauFollowSchema,
+  updateBauFollowConfigSchema,
   createCommunityHomePostSchema,
   publishCommunityHomePostSchema,
   shareCommunityHomePostSchema,
@@ -478,6 +479,7 @@ import {
 import { pushPendingCommunityHomePosts } from "../services/community-home-push.js";
 import {
   BauFollowError,
+  setBauFollowAllowed,
   createBauFollow,
   deleteBauFollow,
   getBauFollowState,
@@ -5683,6 +5685,33 @@ router.delete(
     } catch (error) {
       mapBauFollowError(error);
     }
+  },
+);
+
+/**
+ * The owner's own switch for being followed ("Permitir seguir", Baú settings),
+ * default off. Needs MANAGE_SERVER; with the flag and the Baú on it is what
+ * makes the server followable at all.
+ */
+router.patch(
+  "/api/servers/:serverId/home/follow-config",
+  async ({ req, res, user }, { serverId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    const body = updateBauFollowConfigSchema.parse(await readJsonBody(req));
+    await setBauFollowAllowed(serverId!, body.allowed);
+    await auditBauFollow({
+      serverId: serverId!,
+      actorId: user.id,
+      action: body.allowed ? "bau_follow.allow" : "bau_follow.disallow",
+      targetType: "server",
+      targetId: serverId!,
+    });
+    if (!body.allowed) {
+      kickBauFollow(serverId!);
+    }
+    return listBauFollowers(serverId!);
   },
 );
 

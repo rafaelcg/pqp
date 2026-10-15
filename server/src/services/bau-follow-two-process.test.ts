@@ -44,7 +44,7 @@ describeDb("Seguir across two processes", () => {
     await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
     const owner = await upsertUser({ clerkId: "clerk_bf2_owner", displayName: "owner", avatarUrl: null });
     const qg = await createChatServer("QG", owner.id);
-    await getPool().query(`UPDATE servers SET community_home_enabled = TRUE WHERE id = $1`, [qg.server.id]);
+    await getPool().query(`UPDATE servers SET community_home_enabled = TRUE, bau_follow_allowed = TRUE WHERE id = $1`, [qg.server.id]);
     const dest = await createChatServer("Galera", owner.id);
     for (let i = 0; i < FOLLOWS; i += 1) {
       const channel = await createChannel(dest.server.id, `c${i}`, "text", false);

@@ -136,6 +136,8 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "bau_follow.remove_follower": "serverSettings.audit.action.bau_follow.remove_follower",
   "bau_follow.block": "serverSettings.audit.action.bau_follow.block",
   "bau_follow.unblock": "serverSettings.audit.action.bau_follow.unblock",
+  "bau_follow.allow": "serverSettings.audit.action.bau_follow.allow",
+  "bau_follow.disallow": "serverSettings.audit.action.bau_follow.disallow",
   "forum.post_pin": "serverSettings.audit.action.forum.post_pin",
   "forum.post_lock": "serverSettings.audit.action.forum.post_lock",
   "forum.post_delete": "serverSettings.audit.action.forum.post_delete",
