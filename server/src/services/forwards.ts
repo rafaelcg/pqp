@@ -398,34 +398,29 @@ async function plainMarkup(texts: readonly string[]): Promise<Map<string, string
       (match[1] === "#" ? channels : match[1] === "@&" ? roles : users).add(id);
     }
   }
-  const names = new Map<string, string>();
-  if (users.size > 0) {
-    const rows = await getPool().query<{ id: string; name: string }>(
-      `SELECT id::text, display_name AS name FROM users WHERE id = ANY($1::uuid[])`,
-      [[...users]],
-    );
-    for (const row of rows.rows) {
-      names.set(`@${row.id}`, row.name);
-    }
-  }
-  if (roles.size > 0) {
-    const rows = await getPool().query<{ id: string; name: string }>(
-      `SELECT id::text, name FROM roles WHERE id = ANY($1::uuid[])`,
-      [[...roles]],
-    );
-    for (const row of rows.rows) {
-      names.set(`@&${row.id}`, row.name);
-    }
-  }
-  if (channels.size > 0) {
-    const rows = await getPool().query<{ id: string; name: string }>(
+  const lookup = (sql: string, ids: Set<string>) =>
+    ids.size === 0
+      ? Promise.resolve({ rows: [] as { id: string; name: string }[] })
+      : getPool().query<{ id: string; name: string }>(sql, [[...ids]]);
+  // One round trip each, all at once: the three tables do not depend on each other.
+  const [userRows, roleRows, channelRows] = await Promise.all([
+    lookup(`SELECT id::text, display_name AS name FROM users WHERE id = ANY($1::uuid[])`, users),
+    lookup(`SELECT id::text, name FROM roles WHERE id = ANY($1::uuid[])`, roles),
+    lookup(
       `SELECT id::text, name FROM channels
         WHERE id = ANY($1::uuid[]) AND kind = 'server' AND is_private = FALSE`,
-      [[...channels]],
-    );
-    for (const row of rows.rows) {
-      names.set(`#${row.id}`, row.name);
-    }
+      channels,
+    ),
+  ]);
+  const names = new Map<string, string>();
+  for (const row of userRows.rows) {
+    names.set(`@${row.id}`, row.name);
+  }
+  for (const row of roleRows.rows) {
+    names.set(`@&${row.id}`, row.name);
+  }
+  for (const row of channelRows.rows) {
+    names.set(`#${row.id}`, row.name);
   }
   return names;
 }
@@ -444,7 +439,10 @@ export function defangMentionText(
 ): string {
   const plain = text.replace(MARKUP, (_all, kind: string, id: string) => {
     const prefix = kind === "#" ? "#" : kind === "@&" ? "@&" : "@";
-    const name = names.get(`${prefix}${id.toLowerCase()}`);
+    // A name is somebody's text too: one that itself contains markup (a display
+    // name of "<@id>") must not bring it back, so angle brackets are dropped
+    // from it. The `@` pass below then covers any `@word` inside it.
+    const name = names.get(`${prefix}${id.toLowerCase()}`)?.replace(/[<>]/g, "");
     if (name) {
       return kind === "#" ? `#${name}` : `@${name}`;
     }

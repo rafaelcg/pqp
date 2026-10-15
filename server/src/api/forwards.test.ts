@@ -1013,6 +1013,11 @@ describe("defangMentionText", () => {
     );
     const out = defangMentionText("@bob @everyone @here e-mail a@b.co", new Map());
     expect(extractMentions(out)).toEqual({ usernames: [], everyone: false, here: false, roleNames: [] });
+    // A resolved name that itself holds markup does not bring it back.
+    const sneaky = new Map([[`@${id}`, `<@${id}> @everyone`]]);
+    const sneakyOut = defangMentionText(`<@${id}>`, sneaky);
+    expect(sneakyOut).not.toContain("<");
+    expect(extractMentions(sneakyOut)).toEqual({ usernames: [], everyone: false, here: false, roleNames: [] });
     // Idempotent: an already inert text does not grow.
     expect(defangMentionText(out, new Map())).toBe(out);
   });
