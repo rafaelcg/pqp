@@ -84,25 +84,20 @@ function thumbFor(post: PostForSnapshot): string | undefined {
   return undefined;
 }
 
-/**
- * THE SEAM FOR A PUBLIC PAGE. The card's `url` is where a follower opens the
- * post. Today that is the in-app Baú address, which only a member of the source
- * can open. When Part 2's public post page lands (`bauPublicUrlFor`,
- * `bau_public_posts`), this is the one place that returns its URL for a post
- * that qualifies, so followers outside the source open a real page; `null`
- * keeps the in-app address.
- */
-export function followPublicUrl(
-  _post: Pick<PostForSnapshot, "id" | "server_id">,
-): string | null {
-  return null;
-}
-
 export function buildBauPostSnapshot(
   post: PostForSnapshot,
   source: SourceForSnapshot,
-  origin: string = bauFollowAppOrigin(),
+  options: {
+    origin?: string;
+    /**
+     * The post's public page (`getBauPublicUrl`, Part 2), when it has one: a
+     * follower who is not a member of the source opens a real page instead of
+     * an in-app address that is a dead end for them. Null keeps the in-app one.
+     */
+    publicUrl?: string | null;
+  } = {},
 ): BauPostSnapshot {
+  const origin = options.origin ?? bauFollowAppOrigin();
   const title = post.title?.trim() || undefined;
   const excerptSource = post.teaser?.trim() || post.body;
   const excerpt = forwardExcerpt(excerptSource);
@@ -121,7 +116,7 @@ export function buildBauPostSnapshot(
     excerpt,
     ...(thumb ? { mediaThumbUrl: thumb } : {}),
     ...(mediaKind ? { mediaKind } : {}),
-    url: followPublicUrl(post) ?? `${origin}${bauPostPath(post.server_id, post.id)}`,
+    url: options.publicUrl ?? `${origin}${bauPostPath(post.server_id, post.id)}`,
     createdAt: (post.published_at ?? post.created_at).toISOString(),
   });
 }

@@ -348,6 +348,22 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/servers/:id/home/follow (enabled)",
   },
+  bau_public_posts: {
+    description:
+      "Página pública de post do Baú (pqp.gg/c/<comunidade>/p/<post>) e o botão Compartilhar: só posts grátis e publicados de comunidade com endereço público.",
+    env: "BAU_PUBLIC_POSTS",
+    parseEnv: exactTrue,
+    // Off: a post that was members' business becomes a page anybody holding the
+    // link can read, and an Open Graph card on every network it is pasted into.
+    // Turned on one community first (its override), then everybody. Needs
+    // `COMMUNITIES_ENABLED` and the Baú on; with either off the page answers
+    // 404 like an unknown address.
+    codeDefault: false,
+    // Every reader starts from a post, and a post has a server: the public
+    // read, the cover redirect and the `publicUrl` on a feed post.
+    perServer: true,
+    clientVia: "publicUrl on GET /api/servers/:id/home/posts",
+  },
   community_home_video_captions: {
     description:
       "Legendas automáticas nos vídeos enviados pro Baú (o áudio vai pro Cloudflare Workers AI; a tradução das legendas também precisa da tradução do Baú ligada).",

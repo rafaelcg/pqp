@@ -24,6 +24,7 @@ import {
   invalidateLatestMessages,
   mapMessage,
 } from "./messages.js";
+import { getBauPublicUrl } from "./community-home-public.js";
 import { computeMemberPermissions } from "./permissions.js";
 
 /**
@@ -383,11 +384,11 @@ async function syncEditedPosts(serverId?: string): Promise<number> {
 
 async function syncOne(row: SyncRow): Promise<boolean> {
   const pool = getPool();
-  const snapshot = buildBauPostSnapshot(row, {
-    id: row.source_id,
-    name: row.source_name,
-    icon_url: row.source_icon_url,
-  });
+  const snapshot = buildBauPostSnapshot(
+    row,
+    { id: row.source_id, name: row.source_name, icon_url: row.source_icon_url },
+    { publicUrl: await getBauPublicUrl(row.server_id, row.id) },
+  );
   const hash = snapshotHash(snapshot);
   if (hash === row.snapshot_hash) {
     await pool.query(
@@ -822,11 +823,11 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
       published_at: ctx.published_at,
       created_at: ctx.post_created_at ?? ctx.published_at,
     };
-    const snapshot = buildBauPostSnapshot(post, {
-      id: ctx.source_id,
-      name: ctx.source_name,
-      icon_url: ctx.source_icon_url,
-    });
+    const snapshot = buildBauPostSnapshot(
+      post,
+      { id: ctx.source_id, name: ctx.source_name, icon_url: ctx.source_icon_url },
+      { publicUrl: await getBauPublicUrl(post.server_id, post.id) },
+    );
     if (snapshotIsEmpty(snapshot)) {
       await settle(claimed, { status: "dead", error: "empty" });
       return "skipped";

@@ -124,6 +124,8 @@ export const communityHomePostCardSchema = z.object({
   likeCount: z.number().int().nonnegative(),
   commentCount: z.number().int().nonnegative(),
   publishedAt: z.string().nullable(),
+  /** The post's public page, when it qualifies. See `communityHomePostSchema.publicUrl`. */
+  publicUrl: z.string().nullable().optional(),
 });
 
 export type CommunityHomePostCard = z.infer<typeof communityHomePostCardSchema>;

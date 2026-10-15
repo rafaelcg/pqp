@@ -776,6 +776,28 @@ describeDb("Seguir: following a Baú into a channel", () => {
     expect(queued.rowCount).toBe(1);
   });
 
+  it("the card links the public page when the post has one, the in-app address otherwise", async () => {
+    process.env.COMMUNITIES_ENABLED = "true";
+    try {
+      await follow(alice, destChannelId);
+      const first = await publish({ title: "Sem pagina publica" });
+      await tick();
+      const plain = messageForwardSchema.parse((await cards(destChannelId))[0]!.forward);
+      expect(plain.url).toContain(`/app/server/${qgId}/bau/${first}`);
+
+      await setServerFlagOverride("bau_public_posts", qgId, true, { kind: "dashboard" });
+      const second = await publish({ title: "Com pagina publica" });
+      await tick();
+      const rows = await cards(destChannelId);
+      const withPage = rows
+        .map((r) => messageForwardSchema.parse(r.forward))
+        .find((f) => f.sourceId === second)!;
+      expect(withPage.url).toMatch(new RegExp(`/c/qg-oficial/p/${second}$`));
+    } finally {
+      delete process.env.COMMUNITIES_ENABLED;
+    }
+  });
+
   // ----------------------------------------------- who may follow a source
 
   it("a plain member of an ordinary (private) server cannot follow it; its staff can, with the owner's switch on", async () => {
