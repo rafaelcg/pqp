@@ -6632,7 +6632,12 @@ function MainAppContent({
       setForwardSource({
         kind: "message",
         id: message.id,
-        serverId: selectedServerId,
+        // A restricted card names the one server it may travel inside; a plain
+        // message is forwarded from the server it is in.
+        serverId:
+          (message.forward?.restricted === true
+            ? message.forward.restrictedToServerId
+            : undefined) ?? selectedServerId,
         title:
           message.forward?.title ||
           buildReplyExcerpt(message.forward?.excerpt || message.body) ||
