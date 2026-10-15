@@ -2547,8 +2547,22 @@ export const deleteBauFollow = (followId: string) =>
   del<{ ok: boolean }>(`/api/bau-follows/${followId}`);
 
 /** Source staff: who follows this Baú (server names, never people). */
-export const fetchBauFollowers = (serverId: string) =>
-  apiFetch<BauFollowers>(`/api/servers/${serverId}/home/followers`);
+export const fetchBauFollowers = (
+  serverId: string,
+  page: { limit?: number; cursor?: string | null } = {},
+) => {
+  const query = new URLSearchParams();
+  if (page.limit) {
+    query.set("limit", String(page.limit));
+  }
+  if (page.cursor) {
+    query.set("cursor", page.cursor);
+  }
+  const qs = query.toString();
+  return apiFetch<BauFollowers>(
+    `/api/servers/${serverId}/home/followers${qs ? `?${qs}` : ""}`,
+  );
+};
 
 /** Owner: the "Permitir seguir" switch. Answers the followers read. */
 export const updateBauFollowConfig = (serverId: string, allowed: boolean) =>

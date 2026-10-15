@@ -486,6 +486,7 @@ import {
   getFollowRef,
   listBauFollowDestinations,
   listBauFollowers,
+  BAU_FOLLOWERS_MAX_PAGE,
   listChannelBauFollows,
   removeBauFollower,
   unblockBauFollower,
@@ -5793,10 +5794,21 @@ router.patch(
 /** The source's staff: who follows this Baú (server names, never people). */
 router.get(
   "/api/servers/:serverId/home/followers",
-  async ({ user }, { serverId }) => {
+  async ({ url, user }, { serverId }) => {
     requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
-    return listBauFollowers(serverId!);
+    try {
+      return await listBauFollowers(serverId!, {
+        limit: clampLimit(
+          url.searchParams.get("limit"),
+          BAU_FOLLOWERS_MAX_PAGE,
+          BAU_FOLLOWERS_MAX_PAGE,
+        ),
+        cursor: url.searchParams.get("cursor"),
+      });
+    } catch (error) {
+      mapBauFollowError(error);
+    }
   },
 );
 

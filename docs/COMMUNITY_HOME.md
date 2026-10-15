@@ -424,7 +424,10 @@ user and never in a member list.
   Seguir section; the resumer becomes the authority, `since_at` resets and what
   was queued is dropped.
 - **Source side.** Staff with MANAGE_SERVER see the follower count and the list
-  (server and channel names, never people; `GET .../home/followers`), can remove
+  (server and channel names, never people; `GET .../home/followers`, newest first,
+  paged with `?limit=` up to 500 and the opaque `?cursor=` from the previous
+  `nextCursor`, `count` always the total; no parameters answers the first 500 as
+  it always did), can remove
   a follower, or remove and **block** its whole server
   (`DELETE .../home/followers/:id?block=1`, which also removes that server's
   other follows and refuses new ones); `DELETE .../home/follow-blocks/:serverId`

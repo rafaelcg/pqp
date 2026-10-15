@@ -169,7 +169,11 @@ export const updateBauFollowConfigSchema = z.object({
 });
 export type UpdateBauFollowConfigRequest = z.infer<typeof updateBauFollowConfigSchema>;
 
-/** `GET /api/servers/:serverId/home/followers` (MANAGE_SERVER). */
+/**
+ * `GET /api/servers/:serverId/home/followers` (MANAGE_SERVER). Optional
+ * `?limit=` (1 to 500, default 500) and `?cursor=` (the previous `nextCursor`),
+ * newest follower first. `count` is the total across every page.
+ */
 export const bauFollowersSchema = z.object({
   /** Followable right now: the flag, the Baú itself and the owner's switch, all on. */
   enabled: z.boolean(),
@@ -182,6 +186,12 @@ export const bauFollowersSchema = z.object({
   /** Followers across every destination channel (a server with two channels counts twice). */
   count: z.number().int().nonnegative(),
   followers: z.array(bauFollowerSchema),
+  /**
+   * Pass back as `?cursor=` for the next page of `followers`; null on the last
+   * page. Absent from an answer by an older server, which sent every row up to
+   * 500 at once: read it as `nextCursor ?? null`.
+   */
+  nextCursor: z.string().nullable().optional(),
   blocked: z.array(bauFollowBlockSchema),
 });
 export type BauFollowers = z.infer<typeof bauFollowersSchema>;

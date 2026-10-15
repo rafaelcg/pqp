@@ -1094,6 +1094,65 @@ describeDb("Seguir: following a Baú into a channel", () => {
     expect((await follow(alice, destChannelId)).status).toBe(201);
   });
 
+  it("the follower list pages with an opaque cursor, a total count, and answers an old client in one go", async () => {
+    for (let i = 0; i < 5; i += 1) {
+      await createChannel(destId, `extra${i}`, "text", false);
+    }
+    // Seven follows, three pairs sharing a microsecond: the page boundary must
+    // never repeat or skip a row at a tie.
+    await getPool().query(
+      `INSERT INTO bau_follows (source_server_id, target_server_id, target_channel_id, created_by, created_at)
+       SELECT $1, $2, c.id, $3,
+              '2026-10-01 10:00:00.123456+00'::timestamptz
+                + (floor((row_number() OVER (ORDER BY c.id) - 1) / 2) * interval '1 microsecond')
+         FROM channels c WHERE c.server_id = $2 AND c.type = 'text'`,
+      [qgId, destId, alice.id],
+    );
+    type Page = {
+      count: number;
+      followers: Array<{ id: string }>;
+      nextCursor?: string | null;
+      blocked: unknown[];
+    };
+    const total = (await getPool().query(`SELECT 1 FROM bau_follows`)).rowCount!;
+    expect(total).toBe(7);
+
+    // No parameters: everything (up to 500) and no cursor, as before.
+    const all = await call<Page>(qgOwner, "GET", `${home()}/followers`);
+    expect(all.body.followers).toHaveLength(7);
+    expect(all.body.nextCursor ?? null).toBeNull();
+    expect(all.body.count).toBe(7);
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const qs: string = `limit=3${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+      const page: { status: number; body: Page } = await call<Page>(qgOwner, "GET", `${home()}/followers?${qs}`);
+      expect(page.status).toBe(200);
+      expect(page.body.count).toBe(7);
+      expect(page.body.followers.length).toBeLessThanOrEqual(3);
+      seen.push(...page.body.followers.map((f) => f.id));
+      cursor = page.body.nextCursor ?? null;
+      pages += 1;
+    } while (cursor && pages < 10);
+    expect(pages).toBe(3);
+    // Same rows, same order as the unpaged read, none twice.
+    expect(seen).toEqual(all.body.followers.map((f) => f.id));
+    expect(new Set(seen).size).toBe(7);
+
+    // An exact multiple ends with a null cursor, not an empty extra page.
+    const exact = await call<Page>(qgOwner, "GET", `${home()}/followers?limit=7`);
+    expect(exact.body.followers).toHaveLength(7);
+    expect(exact.body.nextCursor ?? null).toBeNull();
+
+    // A cursor that is not one of ours is a 400, a nonsense limit is the default.
+    expect((await call(qgOwner, "GET", `${home()}/followers?cursor=nope`)).status).toBe(400);
+    expect((await call<Page>(qgOwner, "GET", `${home()}/followers?limit=0`)).body.followers).toHaveLength(7);
+    // Still staff only.
+    expect((await call(carol, "GET", `${home()}/followers?limit=3`)).status).toBe(403);
+  });
+
   // ------------------------------------------------------------------ limits
 
   it("delivers at most the per-minute cap of one post, the rest on the next minute", async () => {

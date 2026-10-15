@@ -37,6 +37,8 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 
 /** Follower rows drawn at a time. */
 const FOLLOWERS_PAGE = 50;
+/** The API's ceiling per page; a refresh after a change asks for what is on screen, up to this. */
+const FOLLOWERS_MAX = 500;
 
 /**
  * Enter on a focused select must not submit the form: a follow starts sending
@@ -609,8 +611,9 @@ export function BauFollowersDialog({
   const [loadError, setLoadError] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // The list can hold hundreds of rows: draw a page at a time.
-  const [shown, setShown] = useState(FOLLOWERS_PAGE);
+  // The list can hold hundreds of rows: the API answers a page at a time.
+  const [moreBusy, setMoreBusy] = useState(false);
+  const loaded = useRef(0);
   // Blocking is not obvious to undo, so it asks first.
   const [confirmBlock, setConfirmBlock] = useState<BauFollower | null>(null);
 
@@ -619,9 +622,13 @@ export function BauFollowersDialog({
     loadGeneration.current += 1;
     const mine = loadGeneration.current;
     setLoadError(false);
-    return fetchBauFollowers(serverId)
+    // A reconcile after a change keeps the pages already on screen (up to the
+    // API's ceiling) instead of snapping the list back to the first page.
+    const limit = Math.min(Math.max(loaded.current, FOLLOWERS_PAGE), FOLLOWERS_MAX);
+    return fetchBauFollowers(serverId, { limit })
       .then((next) => {
         if (loadGeneration.current === mine) {
+          loaded.current = next.followers.length;
           setData(next);
         }
       })
@@ -636,10 +643,38 @@ export function BauFollowersDialog({
     if (open) {
       setData(null);
       setError(null);
-      setShown(FOLLOWERS_PAGE);
+      loaded.current = 0;
       void load();
     }
   }, [open, load]);
+
+  async function loadMore() {
+    const cursor = data?.nextCursor;
+    if (!cursor || moreBusy) {
+      return;
+    }
+    setMoreBusy(true);
+    const mine = loadGeneration.current;
+    try {
+      const next = await fetchBauFollowers(serverId, { limit: FOLLOWERS_PAGE, cursor });
+      if (loadGeneration.current !== mine) {
+        return;
+      }
+      setData((current) => {
+        if (!current) {
+          return current;
+        }
+        const seen = new Set(current.followers.map((one) => one.id));
+        const followers = [...current.followers, ...next.followers.filter((one) => !seen.has(one.id))];
+        loaded.current = followers.length;
+        return { ...current, count: next.count, followers, nextCursor: next.nextCursor ?? null };
+      });
+    } catch {
+      setError(t("bauFollow.error.action"));
+    } finally {
+      setMoreBusy(false);
+    }
+  }
 
   /**
    * Run a change, then reflect it on screen at once (`apply`) so a refresh that
@@ -697,7 +732,7 @@ export function BauFollowersDialog({
               </p>
             ) : (
               <ul className="space-y-2">
-                {data.followers.slice(0, shown).map((follower) => (
+                {data.followers.map((follower) => (
                   <li
                     key={follower.id}
                     className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-control)] border border-border bg-surface-1 px-3 py-2"
@@ -758,13 +793,14 @@ export function BauFollowersDialog({
                 ))}
               </ul>
             )}
-            {data.followers.length > shown && (
+            {data.nextCursor && (
               <Button
                 type="button"
                 variant="secondary"
                 size="sm"
         className={TOUCH}
-                onClick={() => setShown((n) => n + FOLLOWERS_PAGE)}
+                onClick={() => void loadMore()}
+                disabled={moreBusy}
                 data-bau-followers-more
               >
                 {t("bauFollow.followers.more")}

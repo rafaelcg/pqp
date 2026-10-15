@@ -584,8 +584,44 @@ export async function listChannelBauFollows(
 
 // ------------------------------------------------------------ the source's side
 
-export async function listBauFollowers(sourceServerId: string): Promise<BauFollowers> {
+/** What an old client, which sends no `limit`, has always been answered with. Also the ceiling. */
+export const BAU_FOLLOWERS_MAX_PAGE = 500;
+
+/**
+ * Newest first, keyed on (created_at, id). The timestamp travels as the text
+ * Postgres printed (microseconds), never as a JS Date, which would round it to
+ * milliseconds and skip or repeat rows that share one.
+ */
+function encodeFollowerCursor(createdAt: string, id: string): string {
+  return Buffer.from(`${createdAt}|${id}`, "utf8").toString("base64url");
+}
+
+function decodeFollowerCursor(raw: string): { at: string; id: string } {
+  const [at, id] = Buffer.from(raw, "base64url").toString("utf8").split("|");
+  if (
+    !at ||
+    !id ||
+    !/^\d{4}-\d{2}-\d{2}[ T][0-9:.]+([+-]\d{2}(:?\d{2})?|Z)?$/.test(at) ||
+    !/^[0-9a-f-]{36}$/i.test(id)
+  ) {
+    throw new BauFollowError("invalid", "Invalid cursor");
+  }
+  return { at, id };
+}
+
+/**
+ * The source's follower list, one page at a time: `limit` (default and ceiling
+ * 500, the old fixed cap, so a caller that sends nothing is answered as before)
+ * and an opaque `cursor` from the previous answer's `nextCursor`. `count` is
+ * always the total across every page.
+ */
+export async function listBauFollowers(
+  sourceServerId: string,
+  page: { limit?: number; cursor?: string | null } = {},
+): Promise<BauFollowers> {
   const pool = getPool();
+  const limit = Math.min(Math.max(page.limit ?? BAU_FOLLOWERS_MAX_PAGE, 1), BAU_FOLLOWERS_MAX_PAGE);
+  const cursor = page.cursor ? decodeFollowerCursor(page.cursor) : null;
   const followers = await pool.query<{
     id: string;
     target_server_id: string;
@@ -594,18 +630,23 @@ export async function listBauFollowers(sourceServerId: string): Promise<BauFollo
     target_channel_name: string;
     paused_at: Date | null;
     created_at: Date;
+    created_at_text: string;
   }>(
     `SELECT f.id, f.target_server_id, ts.name AS target_server_name,
             ts.icon_url AS target_server_icon_url,
-            tc.name AS target_channel_name, f.paused_at, f.created_at
+            tc.name AS target_channel_name, f.paused_at, f.created_at,
+            f.created_at::text AS created_at_text
        FROM bau_follows f
        JOIN servers ts ON ts.id = f.target_server_id
        JOIN channels tc ON tc.id = f.target_channel_id
       WHERE f.source_server_id = $1
-      ORDER BY f.created_at DESC
-      LIMIT 500`,
-    [sourceServerId],
+        AND ($2::timestamptz IS NULL OR (f.created_at, f.id) < ($2::timestamptz, $3::uuid))
+      ORDER BY f.created_at DESC, f.id DESC
+      LIMIT $4`,
+    [sourceServerId, cursor?.at ?? null, cursor?.id ?? null, limit + 1],
   );
+  const rows = followers.rows.slice(0, limit);
+  const last = rows.at(-1);
   const total = await pool.query<{ n: string }>(
     `SELECT COUNT(*)::text AS n FROM bau_follows WHERE source_server_id = $1`,
     [sourceServerId],
@@ -629,7 +670,7 @@ export async function listBauFollowers(sourceServerId: string): Promise<BauFollo
     allowed: availability.allowed,
     publicCommunity: availability.publicCommunity,
     count: Number(total.rows[0]?.n ?? "0"),
-    followers: followers.rows.map((row) => ({
+    followers: rows.map((row) => ({
       id: row.id,
       targetServerId: row.target_server_id,
       targetServerName: row.target_server_name,
@@ -638,6 +679,10 @@ export async function listBauFollowers(sourceServerId: string): Promise<BauFollo
       status: row.paused_at ? ("paused" as const) : ("active" as const),
       createdAt: row.created_at.toISOString(),
     })),
+    nextCursor:
+      followers.rows.length > limit && last
+        ? encodeFollowerCursor(last.created_at_text, last.id)
+        : null,
     blocked: blocked.rows.map((row) => ({
       serverId: row.blocked_server_id,
       serverName: row.name,
