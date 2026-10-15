@@ -23,6 +23,7 @@ import {
 import { conversationTitle } from "@/lib/conversations";
 import {
   MAX_FORWARD_TARGETS,
+  plainPreviewText,
   readRecentForwardTargets,
   rememberForwardTargets,
   targetAllowedFor,
@@ -584,7 +585,12 @@ export function ForwardPicker({
             ) : (
               <Forward className="h-4 w-4 shrink-0 text-text-tertiary" aria-hidden />
             )}
-            <span className="min-w-0 truncate">{source.title}</span>
+            <span className="min-w-0 truncate">
+              {plainPreviewText(source.title) ||
+                (source.kind === "bau_post"
+                  ? t("forward.postFallback")
+                  : t("forward.messageFallback"))}
+            </span>
           </p>
         )}
         {source?.restricted && (

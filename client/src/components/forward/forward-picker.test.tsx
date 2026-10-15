@@ -193,6 +193,20 @@ describe("ForwardPicker destinations", () => {
   });
 });
 
+describe("ForwardPicker preview", () => {
+  it("shows the source as plain text: no raw mention markup, even a malformed one", async () => {
+    api.fetchChannels.mockResolvedValue({ channels: [channel(SERVER_A.id, 1)] });
+    mount({
+      ...SOURCE,
+      title: "Aviso <@11111111-1111-4111-8111-111111111111> e <@123> @everyone",
+    });
+    await flush();
+    const line = document.querySelector("[data-forward-source]")!.textContent;
+    expect(line).toBe("Aviso e @everyone");
+    expect(line).not.toContain("<");
+  });
+});
+
 describe("ForwardPicker sending", () => {
   async function pickFirstAndSend() {
     click(rows()[0]!.querySelector("button"));

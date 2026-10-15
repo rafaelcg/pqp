@@ -3295,6 +3295,7 @@
   "forward.restrictedHint": "Este se queda dentro de su servidor, así que solo salen los canales de ese servidor.",
   "forward.messageFrom": "Mensaje de {name}",
   "forward.postFallback": "Post del Baú",
+  "forward.messageFallback": "Mensaje",
   "forward.error.noAccess": "No puedes ver este canal.",
   "forward.error.cannotSend": "No puedes enviar mensajes ahí.",
   "forward.error.badTarget": "No se pueden enviar mensajes ahí.",
