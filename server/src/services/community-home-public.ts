@@ -215,7 +215,7 @@ function resolveMarks(
 }
 
 /** This API's own stable address for a post's picture. Relative, like an icon's. */
-function coverPath(slug: string, postId: string): string {
+export function coverPath(slug: string, postId: string): string {
   return `/api/public/communities/${slug}/posts/${postId}/cover`;
 }
 

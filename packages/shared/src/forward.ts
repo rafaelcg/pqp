@@ -90,6 +90,15 @@ export const messageForwardSchema = z.object({
   title: z.string().optional(),
   /** Plain text, at most `FORWARD_EXCERPT_MAX` characters. May be empty when `mediaKind` is set. */
   excerpt: z.string().max(FORWARD_EXCERPT_MAX),
+  /**
+   * A picture for the card, only ever one a stranger could fetch: a YouTube
+   * poster (an `https://` URL), or, for a free Baú post that has a public
+   * page, the API's public cover route as a ROOT-RELATIVE path
+   * (`/api/public/communities/<slug>/posts/<postId>/cover`), which a client
+   * resolves against the API origin exactly like `sourceServerIconUrl`. That
+   * route re-checks on every request that the post is still public, so the
+   * thumbnail goes dark with the page. Never a signed, expiring URL.
+   */
   mediaThumbUrl: z.string().nullable().optional(),
   mediaKind: forwardMediaKindSchema.optional(),
   /**
