@@ -104,6 +104,16 @@ async function loadQualifyingRow(
 }
 
 /**
+ * A fresh, GLOBAL, case-insensitive copy of the reference pattern: `matchAll`
+ * refuses a non-global one, and a shared global regex carries `lastIndex`
+ * between uses. Spelled out rather than cloned from `CHANNEL_REF_PATTERN`'s
+ * flags so the property is on this line.
+ */
+function refPattern(): RegExp {
+  return new RegExp(CHANNEL_REF_PATTERN.source, "gi");
+}
+
+/**
  * `<#id>` references of a body: kept for a channel everybody can see, swapped
  * for `BAU_PUBLIC_REDACTED_CHANNEL_ID` for every other.
  */
@@ -111,7 +121,7 @@ export function redactChannelRefs(
   text: string,
   visible: ReadonlyMap<string, string> = new Map(),
 ): string {
-  return text.replace(new RegExp(CHANNEL_REF_PATTERN), (_all, id: string) => {
+  return text.replace(refPattern(), (_all, id: string) => {
     const lower = id.toLowerCase();
     return `<#${visible.has(lower) ? lower : BAU_PUBLIC_REDACTED_CHANNEL_ID}>`;
   });
@@ -121,7 +131,7 @@ export function redactChannelRefs(
 function mentionedChannelIds(texts: ReadonlyArray<string | null>): string[] {
   const ids = new Set<string>();
   for (const text of texts) {
-    for (const match of (text ?? "").matchAll(new RegExp(CHANNEL_REF_PATTERN))) {
+    for (const match of (text ?? "").matchAll(refPattern())) {
       ids.add(match[1]!.toLowerCase());
     }
   }
@@ -181,7 +191,7 @@ const MARK_CLOSE = "\uE001";
 
 function markMentions(text: string, ids: string[]): string {
   return text.replace(
-    new RegExp(CHANNEL_REF_PATTERN),
+    refPattern(),
     (_all, id: string) => `${MARK_OPEN}${ids.indexOf(id.toLowerCase())}${MARK_CLOSE}`,
   );
 }
