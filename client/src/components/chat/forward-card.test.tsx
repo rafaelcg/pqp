@@ -90,6 +90,30 @@ describe("ForwardCardView", () => {
     expect(render(forward())).not.toContain('target="_blank"');
   });
 
+  it("a card of a post with a public page offers Compartilhar, beside the link and never inside it", () => {
+    const publicUrl = `https://pqp.gg/c/qg-oficial/p/${ID}`;
+    const html = render(forward({ url: publicUrl }));
+    expect(html).toContain("data-forward-share");
+    expect(html).toContain('data-bau-share="forward"');
+    expect(html).toContain("Share this post");
+    // One link (the card), and the share button is not inside it.
+    expect(html.match(/<a /g)).toHaveLength(1);
+    const anchor = html.slice(html.indexOf("<a "), html.indexOf("</a>"));
+    expect(anchor).not.toContain("<button");
+  });
+
+  it("offers no Compartilhar for an in-app address, a restricted card or a forwarded message", () => {
+    expect(render(forward())).not.toContain("data-forward-share");
+    expect(render(forward({ url: `https://pqp.gg/c/qg-oficial/p/${ID}`, restricted: true }))).not.toContain(
+      "data-forward-share",
+    );
+    expect(
+      render(
+        forward({ kind: "message", url: `https://pqp.gg/c/qg-oficial/p/${ID}`, sourceChannelName: "geral" }),
+      ),
+    ).not.toContain("data-forward-share");
+  });
+
   it("a restricted card says so", () => {
     expect(render(forward({ restricted: true }))).toContain("Members of that server only");
   });

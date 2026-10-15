@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   forwardCommentOf,
   forwardEnabledFromConfig,
+  forwardShareUrl,
   forwardUrlTarget,
   loadForwardConfig,
   mergeRecentForwardTargets,
@@ -91,6 +92,26 @@ describe("forwardUrlTarget", () => {
     });
     expect(forwardUrlTarget("javascript:alert(1)", "https://pqp.gg")).toBeNull();
     expect(forwardUrlTarget("not a url", "https://pqp.gg")).toBeNull();
+  });
+});
+
+describe("forwardShareUrl", () => {
+  const page = `https://pqp.gg/c/qg-oficial/p/${ID}`;
+
+  it("is the card's own url, and only when that url is a public Baú post page", () => {
+    expect(forwardShareUrl({ ...card, url: page })).toBe(page);
+    // A self-host or a dev origin works the same: the path is the proof.
+    expect(forwardShareUrl({ ...card, url: `http://localhost:5173/c/qg-oficial/p/${ID}` })).toBe(
+      `http://localhost:5173/c/qg-oficial/p/${ID}`,
+    );
+  });
+
+  it("is null for an in-app address, a restricted card, a forwarded message and garbage", () => {
+    expect(forwardShareUrl(card)).toBeNull();
+    expect(forwardShareUrl({ ...card, url: page, restricted: true })).toBeNull();
+    expect(forwardShareUrl({ ...card, url: page, kind: "message" })).toBeNull();
+    expect(forwardShareUrl({ ...card, url: "not a url" })).toBeNull();
+    expect(forwardShareUrl({ ...card, url: `https://pqp.gg/c/qg-oficial/p/not-an-id` })).toBeNull();
   });
 });
 

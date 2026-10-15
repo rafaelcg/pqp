@@ -2,10 +2,12 @@ import type { ForwardMediaKind, MessageForward } from "@pqp/shared";
 import { Forward, Image as ImageIcon, Lock, Play, Video } from "lucide-react";
 import { useCallback, type MouseEvent } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
+import { BauShareButton } from "@/components/community-home/community-home-share-public";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { messageLinkState } from "@/lib/app-route";
 import {
   announceNotInServer,
+  forwardShareUrl,
   forwardUrlTarget,
   isKnownNonMember,
 } from "@/lib/forward";
@@ -19,6 +21,11 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
  * links and ping nobody, and nothing is fetched. The card opens the live
  * source through `url`; a reader who may not open it lands on the app's own
  * "no access" screen, so a card never reveals more than it already says.
+ *
+ * A card of a free post that has a public page also carries Compartilhar, the
+ * same menu as on the Baú post (`BauShareButton`). It sits in a footer BESIDE
+ * the link, not inside it: a button in an anchor is not valid markup and its
+ * click would navigate.
  */
 
 const MEDIA_LABEL: Record<ForwardMediaKind, MessageKey> = {
@@ -55,105 +62,120 @@ export function ForwardCardView({
     server: forward.sourceServerName,
     title: title || excerpt.slice(0, 80) || forward.sourceServerName,
   });
+  const shareUrl = forwardShareUrl(forward);
   return (
-    <a
-      href={href}
-      onClick={onOpen}
-      {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-      aria-label={label}
-      data-forward-card=""
-      data-forward-kind={forward.kind}
-      className="group/fwd mt-1.5 block w-full max-w-[26rem] overflow-hidden rounded-[var(--radius-card)] border border-border border-l-[3px] border-l-accent bg-surface-1 text-left no-underline transition-[border-color,background-color] duration-[var(--duration-fast)] hover:border-accent/50 hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+    <div
+      className="group/fwd mt-1.5 w-full max-w-[26rem] overflow-hidden rounded-[var(--radius-card)] border border-border border-l-[3px] border-l-accent bg-surface-1 text-left transition-[border-color,background-color] duration-[var(--duration-fast)] hover:border-accent/50 hover:bg-surface-2"
+      data-forward-card-frame=""
     >
-      <div className="flex items-center gap-1.5 px-3 pt-2.5 text-xs text-text-tertiary">
-        <Forward className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span className="shrink-0">{t("forwardCard.from")}</span>
-        <span
-          className="flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden rounded bg-surface-3 text-[8px] font-semibold text-text"
-          data-forward-server-icon=""
-        >
-          <ServerIcon
-            name={forward.sourceServerName}
-            iconUrl={forward.sourceServerIconUrl}
-          />
-        </span>
-        {/* The server name gives way first: "· Baú" / "· #canal" is what tells
-            a post from a message, and stays whole at a phone's width. */}
-        <span className="min-w-0 truncate font-medium text-text-secondary">
-          {forward.sourceServerName}
-        </span>
-        {where && <span className="shrink-0 whitespace-nowrap">{`· ${where}`}</span>}
-        {forward.restricted && (
-          <Lock
-            className="ml-auto h-3 w-3 shrink-0"
-            aria-label={t("forwardCard.restricted")}
-          />
-        )}
-      </div>
-
-      <div className="flex gap-3 px-3 pb-3 pt-1.5 max-sm:flex-col">
-        <div className="min-w-0 flex-1 space-y-1">
-          {title && (
-            <p
-              className="line-clamp-2 break-words font-display text-base font-bold leading-snug text-text"
-              data-forward-title=""
-            >
-              {title}
-            </p>
-          )}
-          {excerpt && (
-            <p
-              className="line-clamp-3 whitespace-pre-line break-words text-sm leading-snug text-text-secondary"
-              data-forward-excerpt=""
-            >
-              {excerpt}
-            </p>
-          )}
-          {forward.authorDisplayName && (
-            <p className="truncate text-xs text-text-tertiary">
-              {t("forwardCard.by", { name: forward.authorDisplayName })}
-            </p>
-          )}
-          {mediaKind && !thumb && (
-            <span
-              className="inline-flex items-center gap-1 rounded-full bg-surface-3 px-2 py-0.5 text-[11px] font-medium text-text-secondary"
-              data-forward-media-chip=""
-            >
-              {mediaKind === "image" ? (
-                <ImageIcon className="h-3 w-3" aria-hidden />
-              ) : mediaKind === "video" || mediaKind === "youtube" ? (
-                <Video className="h-3 w-3" aria-hidden />
-              ) : (
-                <Play className="h-3 w-3" aria-hidden />
-              )}
-              {t(MEDIA_LABEL[mediaKind])}
-            </span>
+      <a
+        href={href}
+        onClick={onOpen}
+        {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+        aria-label={label}
+        data-forward-card=""
+        data-forward-kind={forward.kind}
+        className="block w-full text-left no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+      >
+        <div className="flex items-center gap-1.5 px-3 pt-2.5 text-xs text-text-tertiary">
+          <Forward className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="shrink-0">{t("forwardCard.from")}</span>
+          <span
+            className="flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden rounded bg-surface-3 text-[8px] font-semibold text-text"
+            data-forward-server-icon=""
+          >
+            <ServerIcon
+              name={forward.sourceServerName}
+              iconUrl={forward.sourceServerIconUrl}
+            />
+          </span>
+          {/* The server name gives way first: "· Baú" / "· #canal" is what tells
+              a post from a message, and stays whole at a phone's width. */}
+          <span className="min-w-0 truncate font-medium text-text-secondary">
+            {forward.sourceServerName}
+          </span>
+          {where && <span className="shrink-0 whitespace-nowrap">{`· ${where}`}</span>}
+          {forward.restricted && (
+            <Lock
+              className="ml-auto h-3 w-3 shrink-0"
+              aria-label={t("forwardCard.restricted")}
+            />
           )}
         </div>
-        {thumb && (
-          <div
-            className="relative h-16 w-24 shrink-0 self-start overflow-hidden rounded-[var(--radius-control)] bg-surface-2 max-sm:order-first max-sm:h-32 max-sm:w-full max-sm:self-stretch"
-            data-forward-thumb=""
-          >
-            <img
-              src={thumb}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              referrerPolicy="no-referrer"
-              className="h-full w-full object-cover"
-            />
-            {(mediaKind === "video" || mediaKind === "youtube") && (
-              <span className="absolute inset-0 flex items-center justify-center">
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent text-on-accent shadow">
-                  <Play className="h-3.5 w-3.5 translate-x-px fill-current" aria-hidden />
-                </span>
+
+        <div className="flex gap-3 px-3 pb-3 pt-1.5 max-sm:flex-col">
+          <div className="min-w-0 flex-1 space-y-1">
+            {title && (
+              <p
+                className="line-clamp-2 break-words font-display text-base font-bold leading-snug text-text"
+                data-forward-title=""
+              >
+                {title}
+              </p>
+            )}
+            {excerpt && (
+              <p
+                className="line-clamp-3 whitespace-pre-line break-words text-sm leading-snug text-text-secondary"
+                data-forward-excerpt=""
+              >
+                {excerpt}
+              </p>
+            )}
+            {forward.authorDisplayName && (
+              <p className="truncate text-xs text-text-tertiary">
+                {t("forwardCard.by", { name: forward.authorDisplayName })}
+              </p>
+            )}
+            {mediaKind && !thumb && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-surface-3 px-2 py-0.5 text-[11px] font-medium text-text-secondary"
+                data-forward-media-chip=""
+              >
+                {mediaKind === "image" ? (
+                  <ImageIcon className="h-3 w-3" aria-hidden />
+                ) : mediaKind === "video" || mediaKind === "youtube" ? (
+                  <Video className="h-3 w-3" aria-hidden />
+                ) : (
+                  <Play className="h-3 w-3" aria-hidden />
+                )}
+                {t(MEDIA_LABEL[mediaKind])}
               </span>
             )}
           </div>
-        )}
-      </div>
-    </a>
+          {thumb && (
+            <div
+              className="relative h-16 w-24 shrink-0 self-start overflow-hidden rounded-[var(--radius-control)] bg-surface-2 max-sm:order-first max-sm:h-32 max-sm:w-full max-sm:self-stretch"
+              data-forward-thumb=""
+            >
+              <img
+                src={thumb}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                referrerPolicy="no-referrer"
+                className="h-full w-full object-cover"
+              />
+              {(mediaKind === "video" || mediaKind === "youtube") && (
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent text-on-accent shadow">
+                    <Play className="h-3.5 w-3.5 translate-x-px fill-current" aria-hidden />
+                  </span>
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </a>
+      {shareUrl && (
+        <div className="flex justify-end px-2 pb-1.5" data-forward-share="">
+          <BauShareButton
+            publicUrl={shareUrl}
+            title={title || excerpt.slice(0, 120)}
+            surface="forward"
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
