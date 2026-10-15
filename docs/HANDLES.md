@@ -49,10 +49,22 @@ loser. Do not add a pre-check — it would look safer and be exactly as racy.
 | `GET /api/public/profiles/:handle` | **none** | the profile; 404 = free |
 | `GET /api/public/communities/config` | **none** | `{ "enabled": boolean }` only, the `COMMUNITIES_ENABLED` switch for the signed-out landing; 200 even when off; `public, max-age=60` |
 | `GET /api/public/invites/:code` | **none** | invite preview: server name, icon, member count; 404 = unusable |
-| `GET /api/users/:userId/banner` | **none** | the banner bytes, as a redirect |
+| `GET\|HEAD /api/users/:userId/banner` | **none** | the banner bytes: a redirect for a plain GET; a HEAD or a ranged GET is served from the API (see below) |
 | `GET /api/users/by-handle/:handle` | session | handle → `publicUserSchema`, for "add me" |
 | `PATCH /api/me` `{ handle }` | session | claim or rename |
 | `POST /api/me/banner` → `…/claim`, `DELETE /api/me/banner` | session | the banner, mint / claim / clear |
+
+**HEAD and Range on the pictures.** The avatar (`/api/avatars/:userId`), the
+profile banner and a server's icon, banner and featured image
+(`/api/servers/:id/(icon|banner|featured)`), and the profile read itself, answer
+HEAD. A plain GET of a picture stays a 302 to the object store on purpose (these
+are the highest-volume image routes, and streaming each is the egress bill the
+presigned design avoids). A HEAD or a GET with a `Range` header is served from
+the API the way the Baú cover is (`serveCover`): 200 or 206 with `Content-Type`,
+`Content-Length`, `ETag` (a hash of the immutable key), `Accept-Ranges`, 416, 304
+with no storage call, and the old redirect for anything over 5 MB or not an inert
+image. Link unfurlers HEAD or range an address before using it and read a 401 as
+"no image". Tests: `server/src/api/public-images.test.ts`.
 
 The public profile route is one of the deliberately-unauthenticated routes in
 `server/src/api/index.ts` (see CLAUDE.md pitfall #8). It carries **only**:

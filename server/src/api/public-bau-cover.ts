@@ -113,6 +113,8 @@ export interface CoverResponders {
   unavailable: () => void;
   /** The refusal-cache header, for the redirect fallback. */
   missCacheControl: string;
+  /** What a served (200, 206, 304) picture may be cached for. Defaults to `PUBLIC_COVER_CACHE`. */
+  cacheControl?: string;
 }
 
 /**
@@ -122,13 +124,13 @@ export interface CoverResponders {
 export async function serveCover(
   req: IncomingMessage,
   res: ServerResponse,
-  cover: PublicBauCover,
+  cover: Pick<PublicBauCover, "key" | "signedUrl">,
   out: CoverResponders,
 ): Promise<void> {
   const head = req.method === "HEAD";
   const etag = coverEtag(cover.key);
   const validators = {
-    ...out.headers(PUBLIC_COVER_CACHE),
+    ...out.headers(out.cacheControl ?? PUBLIC_COVER_CACHE),
     ETag: etag,
     "Accept-Ranges": "bytes",
   };

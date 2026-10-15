@@ -12,6 +12,7 @@ import {
   isStorageConfigured,
   presignGet,
   presignPut,
+  type StoredImage,
 } from "../lib/s3.js";
 
 /**
@@ -321,6 +322,14 @@ export async function presignServerImageRead(
   kind: ServerImageKind,
   serverId: string,
 ): Promise<string | null> {
+  return (await readServerImageObject(kind, serverId))?.signedUrl ?? null;
+}
+
+/** `presignServerImageRead` with the key kept (see `readAvatarObject`). */
+export async function readServerImageObject(
+  kind: ServerImageKind,
+  serverId: string,
+): Promise<StoredImage | null> {
   if (!isStorageConfigured()) {
     return null;
   }
@@ -333,5 +342,8 @@ export async function presignServerImageRead(
   if (!storageKey) {
     return null;
   }
-  return presignGet(storageKey, { ttlSeconds: READ_URL_TTL_SECONDS });
+  return {
+    key: storageKey,
+    signedUrl: presignGet(storageKey, { ttlSeconds: READ_URL_TTL_SECONDS }),
+  };
 }
