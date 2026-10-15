@@ -1,6 +1,88 @@
-# Handover: pqp, 2026-10-12 (read this first)
+# Handover: pqp, 2026-10-15 (read this first)
 
-This top section is the current state. Everything below it is older history; where they disagree, this section wins.
+This top section is the current state. The section after it (2026-10-12) and everything below are older history; where they disagree, this section wins. Written at the end of the coordinator session pqp-c4 (Opus 5.5 coordinator, Sonnet 5.5 subagents).
+
+## Where production is
+
+- **API:** Vultr box `216.238.126.103` behind Cloudflare, `/opt/pqp`, compose services `api-a`, `api-b`, `worker`, `caddy`. `ssh root@216.238.126.103` works from Rafael's Mac. Deploys: `deploy-api-vultr.yml` and `deploy-web.yml` after CI is green on `main`. `https://api.pqp.gg/ready` prints the deployed commit (`version`).
+- **Database:** Vultr managed Postgres. Agents read only (`~/.config/pqp/prod-db-readonly.env`, `PQP_DB_RO_URL`). The operator does writes and flag flips.
+- **Caddy was running a four week old config until today.** See "Caddy" below before touching `tools/api-host/Caddyfile`.
+- **Runtime flags** (global, from `feature_flags`, 2026-10-15): on: `forward_messages`, `bau_public_posts`, `mixed_channel_list`, `nudge`, `conversations_home`, `conversations_home_phone_tabs`, `voice_notes`, `voice_note_transcription`, `soundboard`, `bau_post_push`, and the older ones in the table below. Per server: `stories` and `forum_channels` are on for the PQP test server only (`65b56c34-ab0b-4862-982f-43c2cf116a74`); QG (`7c8190e9-6d85-4eef-b819-3b8f877f3baf`) has `bau_mobile_rendition`, `bau_post_push`, `community_home_video_captions`, `voice_note_transcription`. `client_force_update` is unset (NULL, effectively off) and Rafael confirmed both it and `client_force_update_in_call` read off. **Do not flip flags yourself**: Rafael does.
+- **Not on yet:** `bau_follow` (Seguir) and its per-source switch, `stories` and `forum_channels` for QG, `stories_friends`.
+
+## What shipped 2026-10-13 to 2026-10-15
+
+| Area | What | Notes |
+|---|---|---|
+| Stories v2 | Composer rebuilt on web, iOS, Android (layers, text/photo/drawing/call sticker, camera + import), viewer never crops, compact Instagram-like chrome | Independent QA ran on all three. Spec: `docs/plans/STORIES.md` and the scratchpad spec |
+| Stories speed | Post closes the composer at once, eager uploads while editing (`POST/DELETE /api/stories/uploads`, `publish: true`), progress ring on your own ring, "Esperando conexao" auto-retry, preloading, a story appears whole in one frame, crisp scaled text, mute in the top bar, bigger "+" on the own ring | Post to live about 1 s when the upload finished during editing |
+| Update UX | Quiet indicator, announced once a day at 09:00 UTC, blocking only for critical builds, no auto reload in a call, chunk 404s contained (#1218) | Bug #120 root cause |
+| Server rail | Per-user order, drag and drop on web, Move up/down on phones (#1212 to #1217) | |
+| Unread badges | Other servers hydrate their unread after load (#1211) | Phones still show no channel unread on the server list |
+| Moderation | `GET /api/reports/:id/context` and the **Contexto** panel on every report (Settings > Moderacao), direct timeout/ban/terminate actions, reporter stats, reported message in place (#1234, #1235, #1236) | Instance moderators only for DM and cross-server data |
+| Encaminhar | Forward a Baú post or message to up to 5 channels/DMs as a card (`messages.forward`, `POST /api/forwards`, `forward_messages` flag). Server #1242 #1251 #1256, web #1244 #1257, Android #1247 #1252 #1253, iOS #1248 #1254 #1255. Contract: `docs/FORWARD.md` | Restricted sources (private channel, VIP) stay in their server |
+| Public Baú page | `/c/<slug>/p/<postId>`, Compartilhar menu (X, Reddit, WhatsApp, Telegram, native share), edge OG tags, `bau_public_posts` flag (#1241, #1246, #1249, #1260) | HEAD, Range, 304 now answered; `/cover` serves bytes from our origin |
+| Seguir | Follow a Baú so new free posts arrive in a channel (server #1243, web #1245). `bau_follow` flag plus a per-source "Permitir seguir" switch in Baú settings (off by default) | No phone UI yet; phones render the delivered card |
+| CI | Sharded: about 8 min instead of 16 (#1239), date-dependent test pinned (#1240) | Jobs `checks` and `e2e` are aggregators; no branch protection exists |
+| Webhooks and RSS | 48 h soak passed (#1124, docs #1232). n8n gives up after 3 tries; MonitoRSS-style senders catch up | One webhook per tool, 60 posts/hour each |
+| Android share bug | Foreground service type below Android 14 (#1184), shipped | Phynack reply is drafted in the session notes; post after promotion |
+| Voice | Cross-machine roster fix (#1186) | **Decision: no one-voice-seat-per-person limit.** Only fix ghost seats if they recur |
+
+## Mobile releases
+
+- iOS latest **1.0.32** (Encaminhar, Compartilhar, picker fixes; 1.0.30 had the story reveal, 1.0.29 fast posting, 1.0.28 the camera freeze fix). Tag `ios-vX.Y.Z` on `main`.
+- Android latest **0.4.24** (versionCode 31). Bump PR, merge, tag `android-vX.Y.Z` on the merge commit. **Rafael promotes in Play Console**; promote 0.4.24 and skip 0.4.21 to 0.4.23. The tag push starts the workflow twice; the duplicate fails with "Version code N has already been used", harmless.
+- Always cut mobile releases after mobile code merges, without asking. No Seguir UI on phones yet.
+
+## Open PRs and decisions
+
+| PR | What | State |
+|---|---|---|
+| #1259 | Caddy: mount the directory, not the file, and verify what Caddy runs | Green. **Needs Rafael's go** and one-time box steps in its body (install the new `pqp-deploy.sh` on the box FIRST or the deploy guard fails the run; the first deploy recreates caddy once, which drops every `/ws`). Do it outside a live watch party |
+| #1031 | Discord import "Traz tua galera" | On hold by Rafael |
+| #1238, #1228, #1205, #1204, #1193, #1191, #1188, #1183, #1179, #1168 | Andre's PRs | Never touch Andre's PRs |
+
+Waiting on Rafael: promote Android 0.4.24; close reports #36, #37, #38 (notes: #38 looks like a bad-faith report, #37's message is already deleted, #36 is an inactive troll account; Encerrar conta refuses because it owns a server); the Cloudflare **Cache Rule** for `/api/public/communities/*` (without it the 60 s edge cache does nothing); Grafana false alarms (decision below); a reversible site-wide ban and saving attachment copies when a message is reported are proposed, not built.
+
+## Caddy (read before editing `tools/api-host/Caddyfile`)
+
+- `compose.yaml` bind-mounts the single file `/opt/pqp/Caddyfile`. `pqp-deploy.sh` replaces it with `install` (new inode), so the container kept the 2026-09-16 file for four weeks and `caddy reload` said "config is unchanged". #713 and `stream_close_delay` never ran. Fixed 2026-10-15 by hand: PR #1250 then `cd /opt/pqp && docker compose up -d --no-deps --force-recreate caddy`.
+- Until #1259 lands, **any Caddyfile change needs that recreate**. Check: `docker exec pqp-caddy-1 stat -c "%i %s" /etc/caddy/Caddyfile` against the host file.
+- Verified live: the API now sees the real viewer in `X-Forwarded-For` (tcpdump on port 3001), a forged header is ignored, a burst from one address gets 429 while another stays 200. Anonymous limiter: `RATE_LIMIT_ANON_CAPACITY=600`, `REFILL=150` in `/opt/pqp/.env`. Rollback: `/opt/pqp/Caddyfile.bak-20261015-xff` then recreate.
+
+## Known gaps
+
+- **Real devices untested:** the iPhone camera (selfie mirror, torch, zoom, mic prompt), the freeze after record then X (iOS 1.0.28 fix is a 60% guess, the TestFlight crash never reached the API), two-finger pinch/rotate, VoiceOver, Dynamic Type in the composer, a real Clerk sign-up through the public post CTA, background uploads past about 12 s on iOS.
+- **Stories:** no text-story background families, no manual alt text, video plays with sound in the editor, Safari/Firefox/Electron untested, iOS "Load earlier messages" jump, iOS trimmer preview crops 16:9 to portrait, a 28 px dialog close icon (hit area is 44 px).
+- **Encaminhar:** threads are not offered as destinations (need a threads endpoint); the picker loads two requests per server cold; a Baú card's image has no public thumbnail unless the post has a public page.
+- **Seguir:** a source with several staff can amplify role pings; followers list capped at 500 rows from the API; the destination picker only lists servers where you hold MANAGE_WEBHOOKS or MANAGE_CHANNELS server-wide.
+- **Public page:** banner/icon fallback images and `/@handle` avatars are still GET-only redirects (HEAD answers 401); neither phone app ships Spanish for Compartilhar; the chat card has no share button.
+- **Phones:** no unread on the server list, no live server-order follow, collapsed category shows only a white dot for a mention, Android Conversas pin/mute/swipe, "Mandar um oi" after accepting a friend request.
+- **Forum minors:** tag filter "+7", closed-post strip clipping, embed-only card snippet.
+- **Grafana:** when its Prometheus datasource is unreachable the rules (`execErrState: Alerting`) email FIRING then RESOLVED. 2026-10-14 20:13 to 20:36 UTC was exactly that; prod was healthy. Proposed fix: set those rules to keep last state and add one "Grafana cannot query" rule. Not done.
+
+## How we work (lessons from this push)
+
+- **QA must be independent and use real input.** A builder never grades its own UI. A separate agent walks the user's real journey with real mouse/touch (Playwright `page.mouse.click` plus `elementFromPoint`, adb taps, XCUITest taps) and the coordinator looks at the screenshots before saying "works". The dead story editor shipped once because this was skipped. Re-QA only the failed or changed steps.
+- **Never merge before every check is green.** `gh pr merge` does not wait. Loop `gh pr checks` until nothing is non-pass, then merge. (#1236 was merged once with a red shard; it was a flake, but do not rely on that.)
+- **Commits pushed after a squash merge are lost.** Check `git log origin/main..origin/<branch>` and cherry-pick onto a fresh branch (#1252 happened this way).
+- **Stacked PRs:** retarget to `main`, merge the parent first, then rebase the child (it keeps the parent's commits until then).
+- **Farol lags and re-lists old findings.** Read every finding on the final head, fix the real ones, reply with evidence on the rest. A "missing" Farol or CI run usually means a conflict.
+- **Subagents:** always pass `model` (Sonnet 5.5 for building, QA and docs; Opus only when asked). They use worktrees, never the main checkout (Rafael's uncommitted work lives there). Session limits (429) kill running agents; resume them with `SendMessage` after the reset. `TaskStop` does not stop children: run `ListAgents`.
+- **Laptop heat:** one headless simulator (`simctl`, no Simulator.app) or emulator (`-no-window`) per agent, one heavy QA job at a time, kill only your own PIDs (a broad `pkill` once killed the soak rig and hung Docker). Rafael decided against buying a test machine.
+- **Copy:** pt-BR uses "tu", never "voce"; no em dashes; no emoji as UI; icons only.
+- **Production:** agents never touch credentials, `fly secrets`, deploys or flags. The coordinator runs box operations and read-only DB probes. Say `restarts-api` on any PR touching `server/` or `packages/shared`.
+- **Rafael hates update prompts.** Treat any user-visible update prompt as a bug.
+
+## Leftovers on the laptop
+
+Local scratch databases (`pqp_flaky`, `pqp_androidqa`, `pqp_storyqa`, `pqp_av2`, `pqp_stfix`, `pqp_test_modctx`, `pqp_forward_android`, `pqp_test_p2pub`, `pqp_qa_p2pub` and others) and many agent worktrees under `.claude/worktrees` can be removed. QA reports and screenshots live in the session scratchpad (`/private/tmp/claude-501/-Users-rafael-Projects-pqp/555020cc-f53b-4c4b-ab74-54f3d74abd53/scratchpad/`: `stories/`, `encaminhar/`, `moderation/`, `forum/WEBHOOK-SOAK.md`), which is temporary.
+
+---
+
+# Previous handover: pqp, 2026-10-12
+
+Superseded by the section above. Kept for the flag history and rollout recipes.
 
 ## Where production is
 
