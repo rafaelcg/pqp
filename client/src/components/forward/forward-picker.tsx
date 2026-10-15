@@ -47,6 +47,8 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 const COMMENT_MAX = 1500;
 /** Rows drawn at first and per "Mostrar mais": the search still covers every target. */
 const RENDER_STEP = 80;
+/** A send that has not answered by now can be dismissed; its late answer only reports what went out. */
+const STUCK_SEND_MS = 20_000;
 const FETCH_CONCURRENCY = 4;
 
 function newNonce(): string {
@@ -122,8 +124,13 @@ async function loadServerTargets(server: Server, force = false): Promise<PickerT
   if (!force && cached && Date.now() - cached.at < TARGET_CACHE_MS) {
     return cached.targets;
   }
+  // A load started for one account must not write into the cache after another
+  // account took it over: the owner is read before and checked after.
+  const owner = targetCacheOwner;
   const targets = await fetchServerTargets(server);
-  targetCache.set(server.id, { at: Date.now(), targets });
+  if (targetCacheOwner === owner) {
+    targetCache.set(server.id, { at: Date.now(), targets });
+  }
   return targets;
 }
 
@@ -211,6 +218,7 @@ export function ForwardPicker({
   // Servers whose list could not be loaded: shown with a retry, never as "empty".
   const [failedServers, setFailedServers] = useState<Server[]>([]);
   const [shown, setShown] = useState(RENDER_STEP);
+  const [stuck, setStuck] = useState(false);
   // One per opening. A completion that finds a different one is from a picker
   // that is gone and must not touch the one on screen.
   const sessionRef = useRef(0);
@@ -254,6 +262,16 @@ export function ForwardPicker({
       alive,
     );
   }
+
+  // A request that never answers must not trap the person in the dialog.
+  useEffect(() => {
+    if (!busy) {
+      setStuck(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setStuck(true), STUCK_SEND_MS);
+    return () => window.clearTimeout(timer);
+  }, [busy]);
 
   useEffect(() => {
     if (!open || !source) {
@@ -506,11 +524,11 @@ export function ForwardPicker({
       // Whatever dismisses it (Escape, the backdrop, the X), a send in flight
       // is not abandoned: its answer belongs to this picker.
       onClose={() => {
-        if (!busy) {
+        if (!busy || stuck) {
           onClose();
         }
       }}
-      dismissible={!busy}
+      dismissible={!busy || stuck}
       footer={
         <>
           <span
@@ -523,7 +541,7 @@ export function ForwardPicker({
               max: MAX_FORWARD_TARGETS,
             })}
           </span>
-          <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={busy && !stuck}>
             {t("common.cancel")}
           </Button>
           <Button

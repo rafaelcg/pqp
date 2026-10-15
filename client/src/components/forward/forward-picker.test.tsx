@@ -144,6 +144,30 @@ describe("ForwardPicker destinations", () => {
     expect(api.fetchChannels).toHaveBeenCalledTimes(2);
   });
 
+  it("a load that finishes after another account took over does not write into the cache", async () => {
+    let release: (value: unknown) => void = () => {};
+    api.fetchChannels.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    mount(SOURCE);
+    await flush();
+    // The page moves to another account (the cache is scoped and emptied), then the old load lands.
+    act(() => root?.unmount());
+    host?.remove();
+    currentUser = "user-2";
+    api.fetchChannels.mockResolvedValue({ channels: [channel(SERVER_A.id, 7)] });
+    mount(SOURCE);
+    await flush();
+    await act(async () => { release({ channels: [channel(SERVER_A.id, 1)] }); await Promise.resolve(); });
+    await flush();
+    // User 2 opens again: served from ITS cache entry (channel 7), not user 1's late write (channel 1).
+    act(() => root?.unmount());
+    host?.remove();
+    mount(SOURCE);
+    await flush();
+    expect(rows().map((row) => row.getAttribute("data-forward-target"))).toEqual([
+      channel(SERVER_A.id, 7).id,
+    ]);
+  });
+
   it("a server that fails is a retryable error, not an empty list", async () => {
     api.fetchChannels.mockRejectedValueOnce(new Error("503"));
     mount(SOURCE);
@@ -222,6 +246,28 @@ describe("ForwardPicker sending", () => {
     await flush();
     click(rows()[0]!.querySelector("button"));
     expect(sendButton().disabled).toBe(false);
+  });
+
+  it("a send that never answers can be dismissed after a while, and its late answer does not touch a later picker", async () => {
+    vi.useFakeTimers();
+    try {
+      const a = channel(SERVER_A.id, 1);
+      api.fetchChannels.mockResolvedValue({ channels: [a] });
+      let finish: (value: unknown) => void = () => {};
+      api.createForward.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+      mount(SOURCE);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      click(rows()[0]!.querySelector("button"));
+      await act(async () => { sendButton().click(); await Promise.resolve(); });
+      act(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+      expect(onClose).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(21_000); });
+      act(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+      expect(onClose).toHaveBeenCalledTimes(1);
+      void finish;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("cannot be dismissed while a send is in flight", async () => {
