@@ -58,8 +58,26 @@ export const STORY_CONTENT_TYPES = [...STORY_IMAGE_TYPES, ...STORY_VIDEO_TYPES] 
 
 export const STORY_KINDS = ["image", "video", "text"] as const;
 export const STORY_REACTIONS = ["gg", "fire", "joy", "wow", "skull", "clap"] as const;
-/** Palette keys for a text card. Each is chosen for at least 4.5:1 with white text. */
+/**
+ * Palette keys for a text card, the first family ("glow": a soft light over a dark gradient).
+ * Each is chosen for at least 4.5:1 with white text. THIS LIST IS WHAT THE PHONES KNOW: iOS and
+ * Android keep a copy, and an Android test pins it to this constant. A new key goes in a family
+ * below, never in here, so a build that has not learned it yet keeps parsing and falls back to its
+ * default card instead of failing.
+ */
 export const STORY_BACKGROUNDS = ["lime", "night", "ember", "grape", "sand", "ink"] as const;
+/** A family of flat colors. Same 4.5:1 with white text. */
+export const STORY_BACKGROUNDS_SOLID = ["cobalt", "crimson", "pine", "plum", "teal", "onyx"] as const;
+/** A family of two-stop diagonal gradients. Same 4.5:1 with white text at the lighter stop. */
+export const STORY_BACKGROUNDS_GRADIENT = ["sunset", "ocean", "aurora", "dusk", "berry", "lagoon"] as const;
+/** Every key a text card may carry, in the order a picker draws them. */
+export const STORY_CARD_BACKGROUNDS = [
+  ...STORY_BACKGROUNDS,
+  ...STORY_BACKGROUNDS_SOLID,
+  ...STORY_BACKGROUNDS_GRADIENT,
+] as const;
+export const STORY_BACKGROUND_FAMILIES = ["glow", "solid", "gradient"] as const;
+export type StoryBackgroundFamily = (typeof STORY_BACKGROUND_FAMILIES)[number];
 
 export const STORY_CAPTION_MAX = 200;
 export const STORY_TEXT_MAX = 280;
@@ -266,8 +284,24 @@ export type StoryKind = z.infer<typeof storyKindSchema>;
 export const storyReactionValueSchema = z.enum(STORY_REACTIONS);
 export type StoryReaction = z.infer<typeof storyReactionValueSchema>;
 
-export const storyBackgroundSchema = z.enum(STORY_BACKGROUNDS);
+export const storyBackgroundSchema = z.enum(STORY_CARD_BACKGROUNDS);
 export type StoryBackground = z.infer<typeof storyBackgroundSchema>;
+
+/** Which family a card background belongs to (an unknown key reads as the first). */
+export function storyBackgroundFamily(key: string | null | undefined): StoryBackgroundFamily {
+  if ((STORY_BACKGROUNDS_SOLID as readonly string[]).includes(key ?? "")) {
+    return "solid";
+  }
+  if ((STORY_BACKGROUNDS_GRADIENT as readonly string[]).includes(key ?? "")) {
+    return "gradient";
+  }
+  return "glow";
+}
+
+/** The keys of one family, in picker order. */
+export function storyBackgroundsOf(family: StoryBackgroundFamily): readonly StoryBackground[] {
+  return family === "solid" ? STORY_BACKGROUNDS_SOLID : family === "gradient" ? STORY_BACKGROUNDS_GRADIENT : STORY_BACKGROUNDS;
+}
 
 export const storyContentTypeSchema = z.enum(STORY_CONTENT_TYPES);
 export type StoryContentType = z.infer<typeof storyContentTypeSchema>;

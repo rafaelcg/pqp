@@ -3623,6 +3623,22 @@ html[data-immersive-stage] [data-immersive-hide] {
     linear-gradient(170deg, oklch(0.42 0.08 65) 0%, oklch(0.22 0.04 55) 100%);
   --story-bg-ink: radial-gradient(70% 50% at 50% 0%, oklch(0.4 0.02 250 / 0.5) 0%, oklch(0.4 0.02 250 / 0) 70%),
     linear-gradient(180deg, oklch(0.2 0.012 250) 0%, oklch(0.11 0.01 250) 100%);
+
+  /* The solid family: one flat color each. Every one, and the lighter stop of each gradient below,
+     holds 4.5:1 with white text (the rule the first family was chosen by). */
+  --story-bg-cobalt: oklch(0.5 0.2 262);
+  --story-bg-crimson: oklch(0.5 0.2 25);
+  --story-bg-pine: oklch(0.44 0.1 160);
+  --story-bg-plum: oklch(0.46 0.17 330);
+  --story-bg-teal: oklch(0.5 0.1 195);
+  --story-bg-onyx: oklch(0.16 0.005 260);
+  /* The gradient family: two stops on a diagonal, no glow. */
+  --story-bg-sunset: linear-gradient(160deg, oklch(0.58 0.2 45) 0%, oklch(0.44 0.2 350) 100%);
+  --story-bg-ocean: linear-gradient(160deg, oklch(0.54 0.11 215) 0%, oklch(0.38 0.14 258) 100%);
+  --story-bg-aurora: linear-gradient(160deg, oklch(0.5 0.13 165) 0%, oklch(0.4 0.16 290) 100%);
+  --story-bg-dusk: linear-gradient(160deg, oklch(0.4 0.17 275) 0%, oklch(0.56 0.2 350) 100%);
+  --story-bg-berry: linear-gradient(160deg, oklch(0.52 0.21 350) 0%, oklch(0.36 0.16 305) 100%);
+  --story-bg-lagoon: linear-gradient(160deg, oklch(0.54 0.1 190) 0%, oklch(0.44 0.13 150) 100%);
 }
 
 /* A ring: a gradient layer and a seen layer, crossfaded (never animate the
@@ -3735,6 +3751,45 @@ html[data-immersive-stage] [data-immersive-hide] {
 }
 .story-text-card[data-bg="ink"] {
   background: var(--story-bg-ink);
+}
+/* The solid and gradient families (`STORY_BACKGROUNDS_SOLID` / `_GRADIENT` in @pqp/shared). The
+   composer's swatches, the viewer, the deck, the DM quote card and every thumbnail read the same
+   rule, so a key looks the same in all of them. */
+.story-text-card[data-bg="cobalt"] {
+  background: var(--story-bg-cobalt);
+}
+.story-text-card[data-bg="crimson"] {
+  background: var(--story-bg-crimson);
+}
+.story-text-card[data-bg="pine"] {
+  background: var(--story-bg-pine);
+}
+.story-text-card[data-bg="plum"] {
+  background: var(--story-bg-plum);
+}
+.story-text-card[data-bg="teal"] {
+  background: var(--story-bg-teal);
+}
+.story-text-card[data-bg="onyx"] {
+  background: var(--story-bg-onyx);
+}
+.story-text-card[data-bg="sunset"] {
+  background: var(--story-bg-sunset);
+}
+.story-text-card[data-bg="ocean"] {
+  background: var(--story-bg-ocean);
+}
+.story-text-card[data-bg="aurora"] {
+  background: var(--story-bg-aurora);
+}
+.story-text-card[data-bg="dusk"] {
+  background: var(--story-bg-dusk);
+}
+.story-text-card[data-bg="berry"] {
+  background: var(--story-bg-berry);
+}
+.story-text-card[data-bg="lagoon"] {
+  background: var(--story-bg-lagoon);
 }
 
 /* Hold to pause: the chrome leaves after 250 ms in 200 ms, returns in 150. */

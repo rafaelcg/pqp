@@ -4,6 +4,9 @@ import { messageSchema } from "./api.js";
 import { createReportSchema, REPORT_REASONS } from "./reports.js";
 import { Permission, PERMISSION_DEFAULT_EVERYONE, hasPermission } from "./permissions.js";
 import {
+  STORY_BACKGROUNDS,
+  STORY_BACKGROUND_FAMILIES,
+  STORY_CARD_BACKGROUNDS,
   STORY_LAYERS_MAX,
   STORY_LAYER_IMAGES_MAX,
   STORY_LAYER_MAX_BYTES,
@@ -16,6 +19,8 @@ import {
   createStoryResponseSchema,
   createStorySchema,
   storiesConfigSchema,
+  storyBackgroundFamily,
+  storyBackgroundsOf,
   storyLayerInputSchema,
   sniffStoryMediaType,
   storiesUpdateSchema,
@@ -39,6 +44,39 @@ const photo = {
   audiences: { serverIds: [SERVER] },
   media: { contentType: "image/jpeg", byteSize: 400_000, width: 1080, height: 1440 },
 };
+
+describe("text card backgrounds", () => {
+  const card = (background: string) => ({
+    kind: "text",
+    text: "oi",
+    background,
+    audiences: { serverIds: [SERVER] },
+  });
+
+  it("takes every key of every family, and nothing else", () => {
+    for (const key of STORY_CARD_BACKGROUNDS) {
+      expect(createStorySchema.safeParse(card(key)).success, key).toBe(true);
+    }
+    expect(createStorySchema.safeParse(card("hotpink")).success).toBe(false);
+  });
+
+  it("keeps the first family exactly as the phones know it, and the keys unique", () => {
+    // Android pins STORY_BACKGROUNDS to its own copy: a new key belongs in a new family.
+    expect([...STORY_BACKGROUNDS]).toEqual(["lime", "night", "ember", "grape", "sand", "ink"]);
+    expect(new Set(STORY_CARD_BACKGROUNDS).size).toBe(STORY_CARD_BACKGROUNDS.length);
+  });
+
+  it("tells each key's family, an unknown one reading as the first", () => {
+    for (const family of STORY_BACKGROUND_FAMILIES) {
+      for (const key of storyBackgroundsOf(family)) {
+        expect(storyBackgroundFamily(key)).toBe(family);
+      }
+    }
+    expect(storyBackgroundFamily("lime")).toBe("glow");
+    expect(storyBackgroundFamily(null)).toBe("glow");
+    expect(storyBackgroundFamily("from-a-newer-build")).toBe("glow");
+  });
+});
 
 describe("createStorySchema", () => {
   it("takes a photo to one server, replies on by default, no friends", () => {
