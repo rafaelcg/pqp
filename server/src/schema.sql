@@ -6517,10 +6517,19 @@ CREATE TABLE IF NOT EXISTS bau_follows (
 -- A database that has the older two-word check (permissions only) gets the wider one.
 DO $$
 BEGIN
-  ALTER TABLE bau_follows DROP CONSTRAINT IF EXISTS bau_follows_paused_reason_check;
-  ALTER TABLE bau_follows
-    ADD CONSTRAINT bau_follows_paused_reason_check
-    CHECK (paused_reason IS NULL OR paused_reason IN ('permissions', 'banned'));
+  -- Only a table that still has the narrow check is touched, so a replay of this
+  -- file on a current database does no work and takes no lock.
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'bau_follows_paused_reason_check'
+       AND conrelid = 'bau_follows'::regclass
+       AND pg_get_constraintdef(oid) NOT LIKE '%banned%'
+  ) THEN
+    ALTER TABLE bau_follows DROP CONSTRAINT bau_follows_paused_reason_check;
+    ALTER TABLE bau_follows
+      ADD CONSTRAINT bau_follows_paused_reason_check
+      CHECK (paused_reason IS NULL OR paused_reason IN ('permissions', 'banned'));
+  END IF;
 EXCEPTION
   WHEN others THEN NULL;
 END $$;
