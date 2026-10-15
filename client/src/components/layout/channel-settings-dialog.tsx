@@ -25,7 +25,7 @@ import {
 } from "@/components/layout/channel-permissions-section";
 import { WebhooksSection } from "@/components/layout/webhooks-section";
 import { ChannelBauFollowsSection } from "@/components/layout/channel-bau-follows-section";
-import { fetchChannelBauFollows } from "@/lib/api";
+import { ApiError, fetchChannelBauFollows } from "@/lib/api";
 import { channelTakesWebhooks } from "@/lib/channel-webhooks";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
@@ -191,12 +191,20 @@ export function ChannelSettingsDialog({
   // the section is drawn only when there is something to show, so a deployment
   // with the feature off (the read is a 404) never sees it.
   const [bauFollows, setBauFollows] = useState<BauFollow[]>([]);
+  // A read that FAILED (not the 404 of a deployment with the feature off) shows
+  // the section anyway, with the error and a retry, so a hiccup does not hide
+  // the way to unfollow.
+  const [bauFollowsFailed, setBauFollowsFailed] = useState(false);
+  const [bauFollowsNonce, setBauFollowsNonce] = useState(0);
   const canSeeFollows =
-    canManageChannels && channel?.type === "text" && bauFollows.length > 0;
+    canManageChannels &&
+    channel?.type === "text" &&
+    (bauFollows.length > 0 || bauFollowsFailed);
   const followChannelId =
     open && canManageChannels && channel?.type === "text" ? channel.id : null;
   useEffect(() => {
     setBauFollows([]);
+    setBauFollowsFailed(false);
     if (!followChannelId) {
       return;
     }
@@ -207,11 +215,15 @@ export function ChannelSettingsDialog({
           setBauFollows(res.follows);
         }
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setBauFollowsFailed(!(error instanceof ApiError && error.status === 404));
+        }
+      });
     return () => {
       cancelled = true;
     };
-  }, [followChannelId]);
+  }, [followChannelId, bauFollowsNonce]);
 
   const canSeeOverview = canManageChannels;
   const canSeeTags = canManageChannels && isForum;
@@ -810,6 +822,8 @@ export function ChannelSettingsDialog({
             <ChannelBauFollowsSection
               follows={bauFollows}
               onChange={setBauFollows}
+              failed={bauFollowsFailed}
+              onRetry={() => setBauFollowsNonce((n) => n + 1)}
             />
           )}
         </div>

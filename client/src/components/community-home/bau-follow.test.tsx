@@ -100,3 +100,13 @@ describe("ChannelBauFollowsSection", () => {
     expect(html).toContain("Mentions novidades");
   });
 });
+
+describe("ChannelBauFollowsSection when the read failed", () => {
+  it("says so and offers a retry instead of vanishing", () => {
+    const html = renderToStaticMarkup(
+      <ChannelBauFollowsSection follows={[]} onChange={() => {}} failed onRetry={() => {}} />,
+    );
+    expect(html).toContain("Could not load what this channel follows.");
+    expect(html).toContain("Retry");
+  });
+});

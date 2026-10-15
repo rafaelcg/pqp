@@ -16,9 +16,14 @@ import { useTranslation } from "@/lib/i18n";
 export function ChannelBauFollowsSection({
   follows,
   onChange,
+  failed = false,
+  onRetry,
 }: {
   follows: BauFollow[];
   onChange: Dispatch<SetStateAction<BauFollow[]>>;
+  /** The read of the list failed (not "feature off"): say so and offer a retry. */
+  failed?: boolean;
+  onRetry?: () => void;
 }) {
   const { t } = useTranslation();
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -57,6 +62,16 @@ export function ChannelBauFollowsSection({
       <p className="text-sm text-paper-muted">
         {t("bauFollow.channel.description")}
       </p>
+      {failed && (
+        <div role="alert" className="flex items-center gap-3 text-sm text-danger">
+          <span className="flex-1">{t("bauFollow.channel.loadFailed")}</span>
+          {onRetry && (
+            <Button type="button" size="sm" variant="secondary" onClick={onRetry}>
+              {t("bauFollow.channel.retry")}
+            </Button>
+          )}
+        </div>
+      )}
       {error && (
         <p role="alert" className="text-sm text-danger">
           {error}

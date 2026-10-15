@@ -2652,6 +2652,8 @@
   "channelSettings.section.follows": "Siguiendo",
   "bauFollow.channel.description": "Los Baús que sigue este canal. Los posts libres nuevos llegan aquí como tarjetas.",
   "bauFollow.channel.from": "Baú de {server}",
+  "bauFollow.channel.loadFailed": "No se pudo cargar lo que sigue este canal.",
+  "bauFollow.channel.retry": "Reintentar",
   "serverSettings.audit.soundboard.clip": "Sonido: {name}",
   "serverSettings.audit.soundboard.renamed": "Nombre: {old} a {new}",
   "serverSettings.audit.soundboard.volume": "Volumen: {old} a {new}",
