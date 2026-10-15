@@ -2459,6 +2459,10 @@ export const deleteBauFollow = (followId: string) =>
 export const fetchBauFollowers = (serverId: string) =>
   apiFetch<BauFollowers>(`/api/servers/${serverId}/home/followers`);
 
+/** Owner: the "Permitir seguir" switch. Answers the followers read. */
+export const updateBauFollowConfig = (serverId: string, allowed: boolean) =>
+  patch<BauFollowers>(`/api/servers/${serverId}/home/follow-config`, { allowed });
+
 export const removeBauFollower = (
   serverId: string,
   followId: string,

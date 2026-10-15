@@ -3,12 +3,14 @@ import type {
   BauFollowDestination,
   BauFollowState,
   BauFollowers,
+  BauFollower,
 } from "@pqp/shared";
 import { BellPlus, BellRing } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
 import {
   ApiError,
@@ -35,6 +37,19 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 
 /** Follower rows drawn at a time. */
 const FOLLOWERS_PAGE = 50;
+
+/**
+ * Enter on a focused select must not submit the form: a follow starts sending
+ * messages into a channel, so it is made with the button, on purpose.
+ */
+function noEnterSubmit(event: React.KeyboardEvent) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+  }
+}
+
+/** 44 px touch targets on a phone, the compact size above it. */
+const TOUCH = "max-sm:min-h-11 max-sm:px-4";
 
 const SELECT_CLASS =
   "h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:opacity-40";
@@ -122,7 +137,7 @@ export function BauFollowButton({
       type="button"
       variant="secondary"
       size="sm"
-      className="rounded-full"
+      className={`rounded-full ${TOUCH}`}
       onClick={onOpen}
       aria-label={t("bauFollow.buttonAria")}
       data-bau-follow-button
@@ -180,6 +195,7 @@ function FollowRow({
           type="button"
           variant="secondary"
           size="sm"
+        className={TOUCH}
           disabled={busy}
           onClick={onResume}
           data-bau-follow-resume
@@ -191,7 +207,7 @@ function FollowRow({
         type="button"
         variant="ghost"
         size="sm"
-        className="text-danger"
+        className={`text-danger ${TOUCH}`}
         disabled={busy}
         onClick={onUnfollow}
         data-bau-follow-unfollow
@@ -362,6 +378,7 @@ export function BauFollowDialog({
   }
 
   const mine = state?.mine ?? [];
+  const noDestinations = destinations !== null && destinations.length === 0;
 
   return (
     <Dialog
@@ -373,8 +390,14 @@ export function BauFollowDialog({
       onClose={onClose}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
-            {t("bauFollow.done")}
+          <Button
+            type="button"
+            variant="ghost"
+            className="max-sm:min-h-11"
+            onClick={onClose}
+            disabled={busy}
+          >
+            {noDestinations ? t("bauFollow.close") : t("bauFollow.done")}
           </Button>
           {destinations !== null && destinations.length > 0 && (
             <Button
@@ -439,6 +462,7 @@ export function BauFollowDialog({
                 }}
                 disabled={busy}
                 className={SELECT_CLASS}
+                onKeyDown={noEnterSubmit}
                 data-bau-follow-server
               >
                 {destinations.map((one) => (
@@ -477,6 +501,7 @@ export function BauFollowDialog({
                     }}
                     disabled={busy}
                     className={SELECT_CLASS}
+                onKeyDown={noEnterSubmit}
                     data-bau-follow-channel
                   >
                     {freeChannels.map((channel) => (
@@ -497,6 +522,7 @@ export function BauFollowDialog({
                       onChange={(event) => setRoleId(event.target.value)}
                       disabled={busy}
                       className={SELECT_CLASS}
+                onKeyDown={noEnterSubmit}
                       data-bau-follow-role
                     >
                       <option value="">{t("bauFollow.noRole")}</option>
@@ -553,6 +579,8 @@ export function BauFollowersDialog({
   const [error, setError] = useState<string | null>(null);
   // The list can hold hundreds of rows: draw a page at a time.
   const [shown, setShown] = useState(FOLLOWERS_PAGE);
+  // Blocking is not obvious to undo, so it asks first.
+  const [confirmBlock, setConfirmBlock] = useState<BauFollower | null>(null);
 
   const loadGeneration = useRef(0);
   const load = useCallback(() => {
@@ -606,6 +634,7 @@ export function BauFollowersDialog({
   }
 
   return (
+    <>
     <Dialog
       open={open}
       eyebrow={t("bauFollow.eyebrow")}
@@ -663,6 +692,7 @@ export function BauFollowersDialog({
                       type="button"
                       variant="ghost"
                       size="sm"
+        className={TOUCH}
                       disabled={busyId !== null}
                       onClick={() =>
                         void act(
@@ -685,35 +715,9 @@ export function BauFollowersDialog({
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="text-danger"
+                      className={`text-danger ${TOUCH}`}
                       disabled={busyId !== null}
-                      onClick={() =>
-                        void act(
-                          follower.id,
-                          () => removeBauFollower(serverId, follower.id, true),
-                          (current) => {
-                            // Blocking removes every follow of that server.
-                            const gone = current.followers.filter(
-                              (one) => one.targetServerId === follower.targetServerId,
-                            ).length;
-                            return {
-                              ...current,
-                              count: Math.max(0, current.count - Math.max(1, gone)),
-                              followers: current.followers.filter(
-                                (one) => one.targetServerId !== follower.targetServerId,
-                              ),
-                              blocked: [
-                                {
-                                  serverId: follower.targetServerId,
-                                  serverName: follower.targetServerName,
-                                  createdAt: new Date().toISOString(),
-                                },
-                                ...current.blocked,
-                              ],
-                            };
-                          },
-                        )
-                      }
+                      onClick={() => setConfirmBlock(follower)}
                       data-bau-follower-block
                     >
                       {t("bauFollow.followers.block")}
@@ -727,6 +731,7 @@ export function BauFollowersDialog({
                 type="button"
                 variant="secondary"
                 size="sm"
+        className={TOUCH}
                 onClick={() => setShown((n) => n + FOLLOWERS_PAGE)}
                 data-bau-followers-more
               >
@@ -752,6 +757,7 @@ export function BauFollowersDialog({
                         type="button"
                         variant="secondary"
                         size="sm"
+        className={TOUCH}
                         disabled={busyId !== null}
                         onClick={() =>
                           void act(
@@ -783,5 +789,47 @@ export function BauFollowersDialog({
         )}
       </div>
     </Dialog>
+      <ConfirmDialog
+        open={confirmBlock !== null}
+        title={t("bauFollow.followers.confirmBlockTitle", {
+          server: confirmBlock?.targetServerName ?? "",
+        })}
+        description={t("bauFollow.followers.confirmBlockBody")}
+        confirmLabel={t("bauFollow.followers.block")}
+        onClose={() => setConfirmBlock(null)}
+        onConfirm={() => {
+          const target = confirmBlock;
+          setConfirmBlock(null);
+          if (!target) {
+            return;
+          }
+          void act(
+            target.id,
+            () => removeBauFollower(serverId, target.id, true),
+            (current) => {
+              // Blocking removes every follow of that server.
+              const gone = current.followers.filter(
+                (one) => one.targetServerId === target.targetServerId,
+              ).length;
+              return {
+                ...current,
+                count: Math.max(0, current.count - Math.max(1, gone)),
+                followers: current.followers.filter(
+                  (one) => one.targetServerId !== target.targetServerId,
+                ),
+                blocked: [
+                  {
+                    serverId: target.targetServerId,
+                    serverName: target.targetServerName,
+                    createdAt: new Date().toISOString(),
+                  },
+                  ...current.blocked,
+                ],
+              };
+            },
+          );
+        }}
+      />
+    </>
   );
 }

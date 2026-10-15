@@ -66,7 +66,7 @@ export function ChannelBauFollowsSection({
         <div role="alert" className="flex items-center gap-3 text-sm text-danger">
           <span className="flex-1">{t("bauFollow.channel.loadFailed")}</span>
           {onRetry && (
-            <Button type="button" size="sm" variant="secondary" onClick={onRetry}>
+            <Button type="button" size="sm" variant="secondary" className="max-sm:min-h-11" onClick={onRetry}>
               {t("bauFollow.channel.retry")}
             </Button>
           )}
@@ -112,6 +112,7 @@ export function ChannelBauFollowsSection({
                   type="button"
                   size="sm"
                   variant="secondary"
+                  className="max-sm:min-h-11"
                   disabled={busyId !== null}
                   onClick={() => void resume(follow)}
                   data-channel-bau-follow-resume
@@ -124,7 +125,7 @@ export function ChannelBauFollowsSection({
               type="button"
               size="sm"
               variant="ghost"
-              className="text-danger"
+              className="text-danger max-sm:min-h-11"
               disabled={busyId !== null}
               onClick={() => void unfollow(follow)}
               data-channel-bau-follow-unfollow
