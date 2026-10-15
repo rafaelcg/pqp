@@ -149,6 +149,13 @@ describe("the picker rules", () => {
     expect(targetMatches(dm, "")).toBe(true);
   });
 
+  it("a thread answers to its parent channel's name as well", () => {
+    const thread: PickerTarget = { ...channel, id: "t1", label: "ideias", threadOf: "geral" };
+    expect(targetMatches(thread, "ideia")).toBe(true);
+    expect(targetMatches(thread, "GERAL")).toBe(true);
+    expect(targetMatches(thread, "outro")).toBe(false);
+  });
+
   it("a restricted source is offered only its own server's channels", () => {
     const restricted = { restricted: true, serverId: "s1" };
     expect(targetAllowedFor(restricted, channel)).toBe(true);

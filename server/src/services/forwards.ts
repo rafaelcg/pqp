@@ -1,6 +1,7 @@
 import {
   bauPostPath,
   customEmojiTokensAsText,
+  FORWARD_DESTINATION_THREADS_MAX,
   FORWARD_EXCERPT_MAX,
   FORWARD_VERSION,
   forwardFallbackBody,
@@ -31,6 +32,7 @@ import { DmRefusedError, openConversation } from "./dms.js";
 import { findMessageByNonce, mapMessage } from "./messages.js";
 import { computeMemberPermissionsForChannels } from "./permissions.js";
 import { getChannel, listChannels } from "./servers.js";
+import { listActiveThreadsByParent } from "./threads.js";
 import { canAccessChannel, getMemberRole } from "./users.js";
 
 /**
@@ -88,19 +90,72 @@ export async function listForwardDestinations(
   const channels = (await listChannels(serverId, userId)).filter(
     (channel) => channel.kind === "server" && FORWARD_CHANNEL_TYPES.has(channel.type),
   );
-  // One membership read and one overwrite read for the whole list, not three
-  // queries per channel; `computeMemberPermissionsForChannels` gives the same
-  // bits `computeMemberPermissions` (the send's own call) would.
-  const bits = await computeMemberPermissionsForChannels(serverId, userId, channels);
+  const candidates = await listForwardThreadCandidates(serverId, userId, channels);
+  // One membership read and one overwrite read for the channels AND the
+  // threads, not three queries each; `computeMemberPermissionsForChannels`
+  // gives the same bits `computeMemberPermissions` (the send's own call) would,
+  // and resolves a thread through its parent as the send does.
+  const bits = await computeMemberPermissionsForChannels(serverId, userId, [
+    ...channels,
+    ...candidates.map((thread) => ({
+      id: thread.channelId,
+      type: "thread",
+      parent_id: thread.parentChannelId,
+    })),
+  ]);
+  const canSend = (id: string) =>
+    hasPermission(bits.get(id) ?? 0n, Permission.SEND_MESSAGES);
+  const parentName = new Map(channels.map((channel) => [channel.id, channel.name]));
   return {
     channels: channels
-      .filter((channel) => hasPermission(bits.get(channel.id) ?? 0n, Permission.SEND_MESSAGES))
+      .filter((channel) => canSend(channel.id))
       .map((channel) => ({
         id: channel.id,
         name: channel.name,
         type: channel.type as "text" | "voice" | "watch_party",
       })),
+    threads: candidates
+      .filter((thread) => canSend(thread.channelId))
+      .map((thread) => ({
+        id: thread.channelId,
+        name: thread.name,
+        parentId: thread.parentChannelId,
+        parentName: parentName.get(thread.parentChannelId) ?? "",
+      })),
   };
+}
+
+/** Threads a person is in, per text channel: enough to fill the picker, not the whole server. */
+const FORWARD_THREADS_PER_CHANNEL = 5;
+
+/**
+ * The active threads this person is in (`listActiveThreadsByParent`: the set
+ * their channel list nests, parents they can see only), most recently active
+ * first, capped for the picker. Whether they may POST in each is the caller's
+ * question, asked of the thread itself (the id the send asks about), so a
+ * thread under a channel with an overwrite that takes SEND_MESSAGES away is
+ * not offered.
+ */
+async function listForwardThreadCandidates(
+  serverId: string,
+  userId: string,
+  visibleChannels: readonly { id: string; type: string }[],
+) {
+  const parents = visibleChannels.filter((channel) => channel.type === "text");
+  if (parents.length === 0) {
+    return [];
+  }
+  const byParent = await listActiveThreadsByParent(
+    serverId,
+    parents.map((channel) => channel.id),
+    FORWARD_THREADS_PER_CHANNEL,
+    userId,
+  );
+  return [...byParent.values()]
+    .flat()
+    .filter((thread) => !thread.archived)
+    .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
+    .slice(0, FORWARD_DESTINATION_THREADS_MAX);
 }
 
 export function forwardMessagesEnabled(): boolean {
