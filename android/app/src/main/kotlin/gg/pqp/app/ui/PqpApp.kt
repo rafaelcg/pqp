@@ -319,26 +319,45 @@ private fun SignedInNav(
     // `rememberOpenForward`), and the "Ver" on the "Encaminhado" line opens the
     // first place that took it.
     val forwardScope = androidx.compose.runtime.rememberCoroutineScope()
+    var forwardNotice by remember { mutableStateOf<String?>(null) }
+    val notMember = stringResource(R.string.forward_not_member)
+    val servers by session.servers.collectAsStateWithLifecycle()
+    // Not in the server a card came from: there is nothing here to open (a channel
+    // list that 404s is a dead screen), and the card carries no public page yet, so
+    // say so. Only once the server list is known; an empty list is "not loaded".
+    val canOpen = { serverId: String ->
+        servers.isEmpty() || servers.any { it.id.equals(serverId, ignoreCase = true) }
+    }
     val openForward = rememberOpenForward { target ->
         when (target) {
-            is ForwardOpen.BauPost -> openBauPost(
-                BauPostTarget(BauPostRef(target.serverId, target.postId)),
-            )
-            is ForwardOpen.Message -> forwardScope.launch {
-                val channel = runCatching { session.api.channels(target.serverId) }
-                    .getOrNull()?.firstOrNull { it.id == target.channelId }
-                nav.navigate(
-                    ChatRoute(
-                        target.channelId,
-                        channel?.name.orEmpty(),
-                        channel?.slowmodeSeconds ?: 0,
-                        serverId = target.serverId,
-                        isVoiceChannel = channel?.isVoice == true,
-                        isWatchParty = channel?.type == "watch_party",
-                        focusMessageId = target.messageId,
-                    ),
-                )
-            }
+            is ForwardOpen.BauPost ->
+                if (canOpen(target.serverId)) {
+                    openBauPost(BauPostTarget(BauPostRef(target.serverId, target.postId)))
+                } else {
+                    forwardNotice = notMember
+                }
+
+            is ForwardOpen.Message ->
+                if (canOpen(target.serverId)) {
+                    forwardScope.launch {
+                        val channel = runCatching { session.api.channels(target.serverId) }
+                            .getOrNull()?.firstOrNull { it.id == target.channelId }
+                        nav.navigate(
+                            ChatRoute(
+                                target.channelId,
+                                channel?.name.orEmpty(),
+                                channel?.slowmodeSeconds ?: 0,
+                                serverId = target.serverId,
+                                isVoiceChannel = channel?.isVoice == true,
+                                isWatchParty = channel?.type == "watch_party",
+                                focusMessageId = target.messageId,
+                            ),
+                        )
+                    }
+                } else {
+                    forwardNotice = notMember
+                }
+
             is ForwardOpen.External -> Unit
         }
     }
@@ -538,7 +557,12 @@ private fun SignedInNav(
                 LocalOpenBauPost provides openBauPost,
                 LocalOpenForward provides openForward,
             ) {
-            ForwardHost(session = session, onView = viewForwarded) {
+            ForwardHost(
+                session = session,
+                onView = viewForwarded,
+                notice = forwardNotice,
+                onNoticeShown = { forwardNotice = null },
+            ) {
             NavHost(navController = nav, startDestination = ServersRoute) {
                 composable<ServersRoute> {
                     // The start destination is the three-tab home (servers,

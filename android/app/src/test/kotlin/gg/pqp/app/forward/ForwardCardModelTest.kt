@@ -108,6 +108,18 @@ class ForwardCardModelTest {
     }
 
     @Test
+    fun `raw mention markup in an excerpt is dropped and the words stay`() {
+        val id = "a473ca1d-6356-4c96-a9d8-80d222b99877"
+        assertEquals("oi , bora?", ForwardCards.model(message(excerpt = "oi <@$id>, bora?")).excerpt)
+        assertEquals("fala e", ForwardCards.model(message(excerpt = "fala <@!$id> e")).excerpt)
+        assertEquals("veja", ForwardCards.model(message(excerpt = "<#chan_1> veja")).excerpt)
+        // A title is cleaned the same way; ordinary angle brackets stay.
+        assertEquals("Sessao", ForwardCards.model(post(title = "<@$id> Sessao")).heading)
+        assertEquals("a <b> c", ForwardCards.model(message(excerpt = "a <b> c")).excerpt)
+        assertEquals("", ForwardCards.model(message(excerpt = "<@$id>")).excerpt)
+    }
+
+    @Test
     fun `the spoken summary joins the heading and the excerpt`() {
         assertEquals("Sessao 11. o clip inteiro", ForwardCards.model(post()).spokenSummary())
         assertEquals("o clip inteiro", ForwardCards.model(post(title = null)).spokenSummary())

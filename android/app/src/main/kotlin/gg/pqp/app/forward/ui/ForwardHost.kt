@@ -71,6 +71,9 @@ fun rememberForwardEnabled(api: ApiClient): Boolean {
 fun ForwardHost(
     session: SessionStore,
     onView: (ForwardSent) -> Unit,
+    /** A line to say once (a card that cannot be opened), or null. */
+    notice: String? = null,
+    onNoticeShown: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     var forwarding by remember { mutableStateOf<ForwardInput?>(null) }
@@ -98,6 +101,15 @@ fun ForwardHost(
                     .navigationBarsPadding()
                     .padding(horizontal = Spacing.md, vertical = Spacing.md),
             )
+        }
+    }
+
+    // A tap on a card this account cannot open. Shown on the same line as the
+    // "Encaminhado" confirmation, one at a time, and consumed so it never repeats.
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            snackbars.showSnackbar(message = notice, duration = SnackbarDuration.Short)
+            onNoticeShown()
         }
     }
 

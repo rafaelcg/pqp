@@ -1271,6 +1271,7 @@
     <string name="forward_send_none">Escolhe pra onde mandar</string>
     <string name="forward_send">Encaminhar (%1$d)</string>
     <string name="forward_server_failed">Não deu pra carregar os canais de %1$s</string>
+    <string name="forward_not_member">Tu não participa desse servidor</string>
     <string name="forward_retry">Tentar de novo</string>
     <string name="forward_sending">Encaminhando</string>
     <string name="forward_cap">Até 5 por vez.</string>

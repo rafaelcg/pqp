@@ -108,6 +108,7 @@ import gg.pqp.app.core.Message
 import gg.pqp.app.core.Reaction
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.core.runSuspendCatching
 import gg.pqp.app.push.VisibleChannel
 import gg.pqp.app.reports.ReportTarget
 import gg.pqp.app.reports.ui.ReportSheet
@@ -165,6 +166,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** How long a message a jump link landed on stays marked, and how slowly the mark fades. */
@@ -427,14 +429,32 @@ fun ChatScreen(
         val target = focusMessageId ?: return@LaunchedEffect
         if (!focusPending || state.loading) return@LaunchedEffect
         val index = state.messages.asReversed().indexOfFirst { it.id == target }
-        focusPending = false
-        if (index < 0) return@LaunchedEffect
+        if (index < 0) {
+            focusPending = false
+            return@LaunchedEffect
+        }
         // One frame for the list to lay the page out before scrolling.
         androidx.compose.runtime.withFrameNanos { }
-        bringNearTop(index)
+        // Looked up again after the frame: the index is only meaningful against the
+        // list the screen is actually showing.
+        val shown = model.state.value.messages.asReversed().indexOfFirst { it.id == target }
+        if (shown >= 0) bringNearTop(shown)
         flashId = target
+        // Only now may anything else (the next page, following the tail) move the list.
+        focusPending = false
         delay(FLASH_MILLIS)
         flashId = null
+    }
+    // The newer pages a jump left unloaded are fetched when the READER scrolls, never
+    // on their own. A target near the bottom of the screen leaves the end of the list
+    // (and its loading row) in view right after the jump lands, and fetching then
+    // appended a page under the list's anchor and carried the view away from the very
+    // message the jump was for.
+    var readerScrolled by remember(channelId, focusMessageId) { mutableStateOf(focusMessageId == null) }
+    LaunchedEffect(channelId, focusMessageId, focusPending) {
+        if (focusPending || readerScrolled) return@LaunchedEffect
+        androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress }.first { it }
+        readerScrolled = true
     }
     // "Ir pra mais recentes" brings the list to the end once the newest page is in.
     LaunchedEffect(state.latestToken) {
@@ -741,11 +761,16 @@ fun ChatScreen(
                             // fetches them (`hasNewer` is false in every ordinary chat).
                             if (state.hasNewer) {
                                 item(key = "newer") {
-                                    // Keyed on `landed` only: a page arriving changes the message
-                                    // count, and re-running on that would chain page after page
-                                    // for as long as the sentinel stays in view. Scrolling away
-                                    // and back recomposes it, which is the next explicit reach.
-                                    LaunchedEffect(landed) { if (landed) model.loadNewer() }
+                                    // Keyed on `landed` (and the jump settling) only: a page
+                                    // arriving changes the message count, and re-running on that
+                                    // would chain page after page for as long as the sentinel
+                                    // stays in view. Scrolling away and back recomposes it, which
+                                    // is the next explicit reach. Not while a jump is still
+                                    // scrolling to its message, and not before the reader has
+                                    // scrolled: see `readerScrolled`.
+                                    LaunchedEffect(landed, focusPending, readerScrolled) {
+                                        if (landed && !focusPending && readerScrolled) model.loadNewer()
+                                    }
                                     Box(
                                         Modifier.fillMaxWidth().padding(Spacing.gutter),
                                         contentAlignment = Alignment.Center,
@@ -948,12 +973,20 @@ fun ChatScreen(
             ) {
                 {
                     acting = null
-                    startForward(
-                        ForwardInputs.forMessage(
-                            message = message,
-                            previewText = forwardPreviewText,
-                        ),
-                    )
+                    // A private channel's message cannot leave its server, so the
+                    // picker is told before it opens rather than after a refusal.
+                    scope.launch {
+                        val channels = serverId?.let {
+                            runSuspendCatching { session.api.channels(it) }.getOrNull()
+                        }
+                        startForward(
+                            ForwardInputs.forMessage(
+                                message = message,
+                                previewText = forwardPreviewText,
+                                privateChannelServerId = ForwardInputs.privateBoundary(serverId, channelId, channels),
+                            ),
+                        )
+                    }
                 }
             } else {
                 null

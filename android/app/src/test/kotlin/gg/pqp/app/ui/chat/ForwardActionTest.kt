@@ -107,6 +107,41 @@ class ForwardActionTest {
         assertNull(ForwardInputs.forMessage(message(), "p").restrictedToServerId)
     }
 
+    private fun channelRow(id: String, isPrivate: Boolean) =
+        gg.pqp.app.core.Channel(id = id, serverId = "s", name = "n", type = "text", isPrivate = isPrivate)
+
+    @Test
+    fun `a private channel's message cannot leave its server`() {
+        val list = listOf(channelRow("pub", false), channelRow("priv", true))
+        assertEquals("s", ForwardInputs.privateBoundary("s", "priv", list))
+        assertNull(ForwardInputs.privateBoundary("s", "pub", list))
+    }
+
+    @Test
+    fun `a channel this client cannot place is treated as private`() {
+        // A thread or a forum post is not in the channel list; so is anything when the list failed.
+        assertEquals("s", ForwardInputs.privateBoundary("s", "thread", listOf(channelRow("pub", false))))
+        assertEquals("s", ForwardInputs.privateBoundary("s", "pub", null))
+    }
+
+    @Test
+    fun `a conversation has no server to keep it in`() {
+        assertNull(ForwardInputs.privateBoundary(null, "dm", emptyList()))
+        assertNull(ForwardInputs.privateBoundary(null, "dm", null))
+    }
+
+    @Test
+    fun `the private channel boundary rides on the picker input, a restricted card's own wins`() {
+        assertEquals("s", ForwardInputs.forMessage(message(), "p", privateChannelServerId = "s").restrictedToServerId)
+        assertEquals(
+            "other",
+            ForwardInputs.forMessage(
+                message(forward = card(restricted = true, restrictedTo = "other")), "p", privateChannelServerId = "s",
+            ).restrictedToServerId,
+        )
+        assertNull(ForwardInputs.forMessage(message(), "p").restrictedToServerId)
+    }
+
     @Test
     fun `a post source is addressed with its server and a members-only one stays in it`() {
         val free = ForwardInputs.forBauPost("s", "p", "preview", membersOnly = false)

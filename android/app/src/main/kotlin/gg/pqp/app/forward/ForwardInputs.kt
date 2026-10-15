@@ -1,5 +1,6 @@
 package gg.pqp.app.forward
 
+import gg.pqp.app.core.Channel
 import gg.pqp.app.core.Message
 
 /**
@@ -22,16 +23,33 @@ object ForwardInputs {
         return cut(text)
     }
 
-    fun forMessage(message: Message, previewText: String): ForwardInput =
+    /**
+     * [privateChannelServerId] is [privateBoundary]'s answer for the channel the
+     * message sits in.
+     */
+    fun forMessage(message: Message, previewText: String, privateChannelServerId: String? = null): ForwardInput =
         ForwardInput(
             source = ForwardSource(kind = FORWARD_KIND_MESSAGE, id = message.id),
             preview = previewText,
             // A forward of a restricted card stays inside the server the card names
-            // (`restrictedToServerId ?? sourceServerId`), which is not necessarily the
-            // channel it sits in. A private channel is not knowable here; the
-            // server's per-target answer says so.
-            restrictedToServerId = message.forward?.restrictedBoundary,
+            // (`restrictedToServerId ?: sourceServerId`), which is not necessarily the
+            // channel it sits in; a message in a private channel stays in that server.
+            restrictedToServerId = message.forward?.restrictedBoundary ?: privateChannelServerId,
         )
+
+    /**
+     * The server a message must not leave, when its channel is not one everybody
+     * in the server can read: the channel is private in the loaded channel list,
+     * or is not in that list at all (a thread, a forum post, a channel this
+     * account cannot list, or a list that failed to load). The same conservative
+     * rule the web applies; the server enforces the real one per target. Null for
+     * a conversation and for an ordinary public channel.
+     */
+    fun privateBoundary(serverId: String?, channelId: String, channels: List<Channel>?): String? {
+        if (serverId == null) return null
+        val channel = channels?.firstOrNull { it.id == channelId } ?: return serverId
+        return if (channel.isPrivate) serverId else null
+    }
 
     /** A Baú post is addressed with its server. A members-only post stays in it. */
     fun forBauPost(serverId: String, postId: String, previewText: String, membersOnly: Boolean): ForwardInput =

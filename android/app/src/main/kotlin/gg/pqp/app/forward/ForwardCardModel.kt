@@ -41,13 +41,26 @@ data class ForwardCardModel(
         listOfNotNull(heading, excerpt.takeIf { it.isNotEmpty() }).joinToString(". ")
 }
 
+/**
+ * A snapshot is plain text, but an older server wrote a message's raw mention
+ * markup (`<@uuid>`, `<@!uuid>`, `<@&role>`, `<#channel>`) into the excerpt. The
+ * card never resolves a mention, so the markup is dropped rather than shown as
+ * an id; the words around it stay.
+ */
+object ForwardText {
+    private val MARKUP = Regex("<(?:@[!&]?|#)[0-9A-Za-z_-]{3,64}>")
+
+    fun plain(text: String): String =
+        MARKUP.replace(text, "").replace(Regex("[ \\t]{2,}"), " ").trim()
+}
+
 object ForwardCards {
 
     fun model(forward: MessageForward): ForwardCardModel {
         val heading = if (forward.isBauPost) {
-            forward.title?.trim()?.takeIf { it.isNotEmpty() }
+            forward.title?.let(ForwardText::plain)?.takeIf { it.isNotEmpty() }
         } else {
-            forward.authorDisplayName?.trim()?.takeIf { it.isNotEmpty() }
+            forward.authorDisplayName?.let(ForwardText::plain)?.takeIf { it.isNotEmpty() }
         }
         val origin = if (forward.isBauPost) {
             ForwardOrigin.Bau
@@ -59,7 +72,7 @@ object ForwardCards {
             serverIconUrl = forward.sourceServerIconUrl?.takeIf { it.isNotBlank() },
             origin = origin,
             heading = heading,
-            excerpt = forward.excerpt.trim(),
+            excerpt = ForwardText.plain(forward.excerpt),
             thumbUrl = forward.mediaThumbUrl?.takeIf { it.isNotBlank() },
             glyph = glyphFor(forward.mediaKind),
             restricted = forward.restricted,

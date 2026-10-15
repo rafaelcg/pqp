@@ -1278,6 +1278,7 @@
     <string name="forward_send_none">Pick where to send it</string>
     <string name="forward_send">Forward (%1$d)</string>
     <string name="forward_server_failed">Couldn\'t load the channels of %1$s</string>
+    <string name="forward_not_member">You\'re not in that server</string>
     <string name="forward_retry">Try again</string>
     <string name="forward_sending">Forwarding</string>
     <string name="forward_cap">Up to 5 at a time.</string>

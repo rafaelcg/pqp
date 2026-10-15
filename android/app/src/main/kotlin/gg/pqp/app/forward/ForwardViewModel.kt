@@ -4,20 +4,27 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import gg.pqp.app.core.Channel
+import gg.pqp.app.core.PermissionsSnapshot
+import gg.pqp.app.core.ServerSummary
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.core.runSuspendCatching
 import gg.pqp.app.core.serverPermissions
+import gg.pqp.app.social.DmSummary
+import gg.pqp.app.social.Friend
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.social.ui.titleOr
 import java.util.UUID
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -83,6 +90,45 @@ data class ForwardPickerState(
 )
 
 /**
+ * Everything the picker reads and the one thing it writes, so the view model can
+ * be built and driven in a JVM test with no session, socket or Android.
+ */
+interface ForwardBackend {
+    /** The servers this account is in, in the order the list shows them. */
+    val servers: List<ServerSummary>
+    val conversations: Flow<List<DmSummary>>
+    val friends: Flow<List<Friend>>
+    val selfId: String?
+
+    /** Ask for fresh conversations and friends. Never waits for the answer. */
+    fun refreshPeople()
+
+    suspend fun channels(serverId: String): List<Channel>
+    suspend fun permissions(serverId: String): PermissionsSnapshot
+    suspend fun createForward(request: CreateForwardRequest): CreateForwardResponse
+}
+
+/** The live backend: the session's API and the social repository. */
+class SessionForwardBackend(private val session: SessionStore) : ForwardBackend {
+    private val social get() = SocialRepository.of(session)
+
+    override val servers: List<ServerSummary> get() = session.servers.value
+    override val conversations: Flow<List<DmSummary>> get() = social.conversations
+    override val friends: Flow<List<Friend>> get() = social.friends.map { it.friends }
+    override val selfId: String? get() = ((session.phase.value as? SessionPhase.Ready)?.me)?.id
+
+    override fun refreshPeople() {
+        social.refreshConversations()
+        social.refreshFriends()
+    }
+
+    override suspend fun channels(serverId: String): List<Channel> = session.api.channels(serverId)
+    override suspend fun permissions(serverId: String): PermissionsSnapshot = session.api.serverPermissions(serverId)
+    override suspend fun createForward(request: CreateForwardRequest): CreateForwardResponse =
+        session.api.createForward(request)
+}
+
+/**
  * The Encaminhar sheet's brain: loads what can be forwarded to, keeps the
  * selection, sends, and says what came of it.
  *
@@ -92,7 +138,7 @@ data class ForwardPickerState(
  * server's per-target answer is the truth and is what the sheet reports.
  */
 class ForwardViewModel(
-    private val session: SessionStore,
+    private val backend: ForwardBackend,
     val input: ForwardInput,
     private val recents: ForwardRecentsStore,
 ) : ViewModel() {
@@ -116,33 +162,6 @@ class ForwardViewModel(
 
     private val byKey = HashMap<String, ForwardTarget>()
 
-    init {
-        viewModelScope.launch { load() }
-    }
-
-    private suspend fun load() {
-        val social = SocialRepository.of(session)
-        social.refreshConversations()
-        social.refreshFriends()
-        val selfId = ((session.phase.value as? SessionPhase.Ready)?.me)?.id
-
-        // People are known as soon as the two lists answer; do not make a
-        // person wait for forty servers' channels to forward to a friend.
-        viewModelScope.launch {
-            combine(social.conversations, social.friends) { _, _ -> }.collect {
-                publishPeople(social, selfId)
-            }
-        }
-
-        val servers = session.servers.value
-        serverOrder = servers.map { it.id }
-        val jobs: List<Deferred<Unit>> = servers.map { server ->
-            viewModelScope.async { loadServerBounded(server) }
-        }
-        jobs.forEach { it.await() }
-        _state.update { it.copy(loading = false) }
-    }
-
     private var serverOrder: List<String> = emptyList()
 
     /** Shared by the first load and every retry, so a burst of taps cannot exceed it. */
@@ -151,7 +170,37 @@ class ForwardViewModel(
     /** Servers being read right now, so a second tap on the same retry does nothing. */
     private val loadingServers = HashSet<String>()
 
-    private suspend fun loadServerBounded(server: gg.pqp.app.core.ServerSummary) {
+    // LAST among the fields on purpose. `viewModelScope` runs on Main.immediate, so
+    // this block executes `load()` right here, up to its first suspension, and a
+    // field declared below it would still be null. That was the Encaminhar crash
+    // (`synchronize on a null object`); `ForwardViewModelTest` constructs the view
+    // model so it cannot come back.
+    init {
+        viewModelScope.launch { load() }
+    }
+
+    private suspend fun load() {
+        backend.refreshPeople()
+        val selfId = backend.selfId
+
+        // People are known as soon as the two lists answer; do not make a
+        // person wait for forty servers' channels to forward to a friend.
+        viewModelScope.launch {
+            combine(backend.conversations, backend.friends) { dms, friends -> dms to friends }.collect {
+                publishPeople(it.first, it.second, selfId)
+            }
+        }
+
+        val servers = backend.servers
+        serverOrder = servers.map { it.id }
+        val jobs: List<Deferred<Unit>> = servers.map { server ->
+            viewModelScope.async { loadServerBounded(server) }
+        }
+        jobs.forEach { it.await() }
+        _state.update { it.copy(loading = false) }
+    }
+
+    private suspend fun loadServerBounded(server: ServerSummary) {
         if (!synchronized(loadingServers) { loadingServers.add(server.id) }) return
         try {
             serverGate.withPermit { loadServer(server) }
@@ -161,11 +210,11 @@ class ForwardViewModel(
     }
 
     /** One server's channels and permissions, asked for together. A failure is kept, not hidden. */
-    private suspend fun loadServer(server: gg.pqp.app.core.ServerSummary) = coroutineScope {
-        val channelsCall = async { runSuspendCatching { session.api.channels(server.id) }.getOrNull() }
+    private suspend fun loadServer(server: ServerSummary) = coroutineScope {
+        val channelsCall = async { runSuspendCatching { backend.channels(server.id) }.getOrNull() }
         // No permission answer is "do not filter": the server refuses per target.
         val permissionsCall = async {
-            runSuspendCatching { session.api.serverPermissions(server.id) }.getOrNull()
+            runSuspendCatching { backend.permissions(server.id) }.getOrNull()
         }
         val channels = channelsCall.await()
         val permissions = permissionsCall.await()
@@ -190,14 +239,14 @@ class ForwardViewModel(
 
     /** Try a server that failed to load again. */
     fun retryServer(serverId: String) {
-        val server = session.servers.value.firstOrNull { it.id == serverId } ?: return
+        val server = backend.servers.firstOrNull { it.id == serverId } ?: return
         viewModelScope.launch { loadServerBounded(server) }
     }
 
-    private fun publishPeople(social: SocialRepository, selfId: String?) {
+    private fun publishPeople(conversations: List<DmSummary>, friends: List<Friend>, selfId: String?) {
         val people = ForwardTargets.peopleOf(
-            conversations = social.conversations.value,
-            friends = social.friends.value.friends,
+            conversations = conversations,
+            friends = friends,
             selfId = selfId,
             titleOf = { it.titleOr("") },
         )
@@ -250,7 +299,7 @@ class ForwardViewModel(
         _state.update { it.copy(sending = true, failure = null, refusals = emptyMap(), capHit = false) }
 
         viewModelScope.launch {
-            runSuspendCatching { session.api.createForward(request) }
+            runSuspendCatching { backend.createForward(request) }
                 .onSuccess { response -> onResponse(targets, response) }
                 .onFailure { error ->
                     val failure = ForwardOutcomes.failureOf(error)
@@ -269,7 +318,7 @@ class ForwardViewModel(
         // An answer ends this attempt: whatever is sent next is a new request.
         unknownOutcome = null
         val refusals = HashMap<String, TargetRefusal>()
-        val sentKeys = HashSet<String>()
+        val sentKeys = LinkedHashSet<String>()
         response.results.forEachIndexed { index, result ->
             val target = targets.firstOrNull { it.toRef() == result.target }
                 ?: targets.getOrNull(index)
@@ -315,7 +364,11 @@ class ForwardViewModel(
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    ForwardViewModel(session, input, PrefsForwardRecents(context.applicationContext)) as T
+                    ForwardViewModel(
+                        SessionForwardBackend(session),
+                        input,
+                        PrefsForwardRecents(context.applicationContext),
+                    ) as T
             }
     }
 }
