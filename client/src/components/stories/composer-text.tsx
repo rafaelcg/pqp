@@ -153,11 +153,12 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift, keepCl
   const root = useRef<HTMLDivElement>(null);
   const patch = (change: Partial<TextLayerFields>) => setFields((current) => ({ ...current, ...change }));
 
-  // The biggest the words may be made: the whole layer, turned as it is, still inside the canvas.
-  // Words that do not fit at the size they were given (a long text, a long unbroken word) are made
-  // smaller until they do, and their center moved just enough to keep them on the canvas, instead
-  // of running off its top and bottom. Measured from the field's own size at scale 1, so it follows
-  // the words, the font and the size as they change.
+  // The biggest the words may be made. NEW words that do not fit at the size they were given (a long
+  // text, a long unbroken word) are made smaller until they fit the canvas less the chrome band, and
+  // their center is moved just enough to lie inside it, instead of running off the top and bottom.
+  // Words already on the canvas are never made smaller than they are (the author put them there; only
+  // growing is held to the canvas). Measured from the field's own size at scale 1, so it follows the
+  // words, the font and the size as they change.
   const [maxScale, setMaxScale] = useState(STORY_LAYER_SCALE_MAX);
   const inset = keepClearOfChrome ? STORY_SAFE_AREA : NO_INSET;
   const [fit, setFit] = useState<{ natural: { width: number; height: number }; canvas: { width: number; height: number } } | null>(null);
@@ -169,8 +170,18 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift, keepCl
     }
     const natural = { width: element.offsetWidth, height: element.offsetHeight };
     const size = { width: canvas.clientWidth, height: canvas.clientHeight };
-    setFit({ natural, canvas: size });
-    setMaxScale(Math.min(STORY_LAYER_SCALE_MAX, maxScaleToFit(natural, geometry.rotation, usableBox(size, inset))));
+    // The same measurement again (most keystrokes) publishes nothing: no extra render per letter.
+    setFit((current) =>
+      current &&
+      current.natural.width === natural.width &&
+      current.natural.height === natural.height &&
+      current.canvas.width === size.width &&
+      current.canvas.height === size.height
+        ? current
+        : { natural, canvas: size },
+    );
+    const limit = maxScaleToFit(natural, geometry.rotation, usableBox(size, inset));
+    setMaxScale(Math.min(STORY_LAYER_SCALE_MAX, keepClearOfChrome ? limit : Math.max(limit, geometry.scale)));
     // Everything that changes the words' natural size.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fields.text, fields.font, fields.size, fields.align, fields.background, geometry.rotation]);
