@@ -75,4 +75,21 @@ class FollowPermissionsTest {
         assertTrue(FollowPermissions.mayManage(api, "s2", "a", { 0L }, fetch))
         assertEquals(3, fetches)
     }
+
+    @Test
+    fun `expired snapshots are dropped when a new one is kept, and the cache is bounded`() = runBlocking {
+        var clock = 0L
+        val fetch: suspend () -> PermissionsSnapshot = { snapshot(Permission.MANAGE_CHANNELS) }
+        FollowPermissions.mayManage(api, "old", "a", { clock }, fetch)
+        assertEquals(1, FollowPermissions.held(api))
+
+        clock += FollowPermissions.TTL_MS
+        FollowPermissions.mayManage(api, "new", "a", { clock }, fetch)
+        assertEquals("the expired one went", 1, FollowPermissions.held(api))
+
+        for (i in 1..(FollowPermissions.MAX_SERVERS * 2)) {
+            FollowPermissions.mayManage(api, "s$i", "a", { clock }, fetch)
+        }
+        assertEquals(FollowPermissions.MAX_SERVERS, FollowPermissions.held(api))
+    }
 }

@@ -26,6 +26,7 @@ import kotlinx.coroutines.CancellationException
 object FollowPermissions {
 
     const val TTL_MS = 60_000L
+    const val MAX_SERVERS = 16
 
     private data class Entry(val snapshot: PermissionsSnapshot, val at: Long)
 
@@ -54,10 +55,22 @@ object FollowPermissions {
             return false
         }
         synchronized(cache) {
-            cache.getOrPut(api) { HashMap() }[serverId] = Entry(snapshot, now())
+            val at = now()
+            val perServer = cache.getOrPut(api) { HashMap() }
+            // What expired is dead weight (a snapshot carries every channel of its
+            // server): drop it whenever a new one is kept, and never hold more than
+            // [MAX_SERVERS] however many servers somebody visits within the minute.
+            perServer.values.removeAll { at - it.at >= TTL_MS }
+            if (perServer.size >= MAX_SERVERS) {
+                perServer.entries.minByOrNull { it.value.at }?.let { perServer.remove(it.key) }
+            }
+            perServer[serverId] = Entry(snapshot, at)
         }
         return mayManage(snapshot, channelId)
     }
+
+    /** Tests only: how many snapshots are held for [api]. */
+    internal fun held(api: ApiClient): Int = synchronized(cache) { cache[api]?.size ?: 0 }
 
     /** Tests only. */
     internal fun clear() = synchronized(cache) { cache.clear() }
