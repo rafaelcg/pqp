@@ -44,6 +44,7 @@ import {
 } from "@pqp/shared";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { useInertBackground } from "@/lib/use-inert-background";
 import { fetchStoryAudiences } from "@/lib/stories/api";
 import { STORIES_CONFIG_OFF, loadStoriesConfig } from "@/lib/stories/config";
 import { captureStill } from "@/lib/stories/camera";
@@ -190,6 +191,8 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const fileInput = useRef<HTMLInputElement>(null);
   const photoInput = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  // The page behind is unreachable while this is open (Safari tabs out of an aria-modal alone).
+  useInertBackground(rootRef);
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const autoOpenedText = useRef(false);
