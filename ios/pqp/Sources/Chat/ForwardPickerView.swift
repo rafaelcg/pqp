@@ -103,7 +103,7 @@ final class ForwardPickerModel {
         // Bounded: a few servers in flight, results appended as they land but
         // kept in the servers' own order.
         var byIndex: [Int: [ForwardTarget]] = [:]
-        await withTaskGroup(of: (Int, [ForwardTarget]?).self) { group in
+        await withTaskGroup(of: (Int, ServerTargets?).self) { group in
             var next = 0
             func start() {
                 guard next < wanted.count else { return }
@@ -112,8 +112,11 @@ final class ForwardPickerModel {
                 group.addTask { (index, await Self.targets(in: server, api: api)) }
             }
             for _ in 0..<min(Self.concurrency, wanted.count) { start() }
-            for await (index, targets) in group {
-                if let targets { byIndex[index] = targets } else { loadFailed = true }
+            for await (index, loaded) in group {
+                if let loaded { byIndex[index] = loaded.targets }
+                // A channel list that did not load, or permissions that did not
+                // (so the list may offer a place that will refuse): said out loud.
+                if loaded == nil || loaded?.permissionsKnown == false { loadFailed = true }
                 channels = byIndex.keys.sorted().flatMap { byIndex[$0] ?? [] }
                 start()
             }
@@ -124,14 +127,22 @@ final class ForwardPickerModel {
 
     private static let concurrency = 4
 
+    private struct ServerTargets: Sendable {
+        let targets: [ForwardTarget]
+        /// False when the permissions read failed and every text channel is
+        /// offered (the server stays the authority and refuses per target).
+        let permissionsKnown: Bool
+    }
+
     /// One server's channels this account may send in, or nil when its channel
-    /// list could not be read. Where the server would refuse a send is not
-    /// offered; a failed permissions read offers everything, since the server is
-    /// the authority and says `cannot_send` per target.
-    private nonisolated static func targets(in server: Server, api: APIClient) async -> [ForwardTarget]? {
-        guard let list = try? await api.channels(serverId: server.id) else { return nil }
-        let permissions = try? await api.fetchMemberPermissions(serverId: server.id)
-        return list
+    /// list could not be read. Both reads depend only on the server, so they
+    /// run together.
+    private nonisolated static func targets(in server: Server, api: APIClient) async -> ServerTargets? {
+        async let listed = try? await api.channels(serverId: server.id)
+        async let allowed = try? await api.fetchMemberPermissions(serverId: server.id)
+        guard let list = await listed else { return nil }
+        let permissions = await allowed
+        let targets = list
             .filter { $0.isText && (permissions?.can(PermissionBit.sendMessages, channelId: $0.id) ?? true) }
             .sorted { $0.position < $1.position }
             .map { channel in
@@ -141,6 +152,7 @@ final class ForwardPickerModel {
                     isConversation: false
                 )
             }
+        return ServerTargets(targets: targets, permissionsKnown: permissions != nil)
     }
 
     // MARK: What the list shows
