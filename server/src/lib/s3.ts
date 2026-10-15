@@ -499,6 +499,12 @@ export interface PresignGetOptions {
   downloadFilename?: string;
 }
 
+/** An object in the bucket and a signed address for it: what a route that may redirect OR serve needs. */
+export interface StoredImage {
+  key: string;
+  signedUrl: string;
+}
+
 export function presignGet(key: string, options: PresignGetOptions): string {
   return signRequest({
     method: "GET",

@@ -409,8 +409,8 @@ import {
   discardBannerObject,
   isAvatarUploadConfigured,
   isUserBannerUploadConfigured,
-  presignAvatarRead,
-  presignUserBannerRead,
+  readAvatarObject,
+  readUserBannerObject,
   setUserBanner,
   userBannerUrlForKey,
   verifyAvatarObject,
@@ -419,7 +419,7 @@ import {
 import {
   createServerImageUpload,
   isServerImageUploadConfigured,
-  presignServerImageRead,
+  readServerImageObject,
   scheduleDiscardServerImageObject,
   serverImageUrlForKey,
   setServerImage,
@@ -520,7 +520,12 @@ import {
   unmuteAuthor,
 } from "../services/stories.js";
 import { notifyStoriesUpdate, notifyStoryAudiences } from "../ws/stories.js";
-import { copyObject, deleteObject, StorageError } from "../lib/s3.js";
+import {
+  copyObject,
+  deleteObject,
+  StorageError,
+  type StoredImage,
+} from "../lib/s3.js";
 import {
   getPublicBauPost,
   getPublicBauPostCover,
@@ -13029,6 +13034,57 @@ async function serveEmbedImage(
   }
 }
 
+/** How long a redirect, or a served picture, may be cached (the signature behind it lives an hour). */
+const STORED_IMAGE_CACHE = "public, max-age=300";
+
+/**
+ * The answer for a profile picture, a banner or a server picture that has been
+ * found: a redirect to the object store, or the bytes themselves.
+ *
+ * A PLAIN GET STAYS A REDIRECT. These are the highest-volume image routes in
+ * the app (every message row draws an avatar) and streaming each one through
+ * this process is the egress bill the presigned design exists to avoid. The
+ * redirect is cacheable because the URL carries `?v=<hash of the key>`: a new
+ * picture is a new address, so nothing here can serve a stale one, and the
+ * window stays under the presigned target's own hour.
+ *
+ * A HEAD, OR A GET THAT ASKS FOR A RANGE, IS SERVED FROM HERE, exactly as the
+ * public Baú cover is (`serveCover`: 200 with a type and a length, an ETag,
+ * `Accept-Ranges`, 206 and 416, 304, and over the size cap or for a type that is
+ * not an inert image it still redirects). Those are the two probes a link
+ * unfurler makes before it will use an image (the same ones X made of the Baú
+ * cover), and until now a HEAD fell through to the authenticated router and
+ * answered 401, which reads as "no image". The key is immutable (a replaced
+ * picture is a new key), so the ETag needs no storage call to revalidate.
+ *
+ * Every refusal is the one 404, whichever method asked.
+ */
+async function answerStoredImage(
+  req: IncomingMessage,
+  res: ServerResponse,
+  image: StoredImage | null,
+): Promise<void> {
+  if (!image) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  if (req.method === "HEAD" || req.headers.range !== undefined) {
+    await serveCover(req, res, image, {
+      headers: (cacheControl) => publicBauHeaders(req, cacheControl),
+      notFound: () => sendError(res, 404, "Not found", req),
+      unavailable: () => sendError(res, 503, "Images temporarily unavailable", req),
+      missCacheControl: STORED_IMAGE_CACHE,
+      cacheControl: STORED_IMAGE_CACHE,
+    });
+    return;
+  }
+  res.writeHead(302, {
+    location: image.signedUrl,
+    "cache-control": STORED_IMAGE_CACHE,
+  });
+  res.end();
+}
+
 const AVATAR_OBJECT_PATH =
   /^\/api\/avatars\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
@@ -13060,27 +13116,15 @@ async function serveAvatarObject(
   res: ServerResponse,
   userId: string,
 ): Promise<void> {
-  let url: string | null;
+  let image: StoredImage | null;
   try {
-    url = await presignAvatarRead(userId);
+    image = await readAvatarObject(userId);
   } catch (error) {
     console.error(`[avatars] could not resolve ${userId}:`, error);
     sendError(res, 404, "Not found", req);
     return;
   }
-  if (!url) {
-    sendError(res, 404, "Not found", req);
-    return;
-  }
-  // Cacheable because the URL carries `?v=<hash of the key>`: a new avatar is a
-  // new address, so nothing here can serve a stale picture. The window is kept
-  // under the presigned target's own hour so a cached redirect cannot outlive
-  // the URL it points at.
-  res.writeHead(302, {
-    location: url,
-    "cache-control": "public, max-age=300",
-  });
-  res.end();
+  await answerStoredImage(req, res, image);
 }
 
 const USER_BANNER_OBJECT_PATH =
@@ -13108,27 +13152,15 @@ async function serveUserBannerObject(
   res: ServerResponse,
   userId: string,
 ): Promise<void> {
-  let url: string | null;
+  let image: StoredImage | null;
   try {
-    url = await presignUserBannerRead(userId);
+    image = await readUserBannerObject(userId);
   } catch (error) {
     console.error(`[banners] could not resolve ${userId}:`, error);
     sendError(res, 404, "Not found", req);
     return;
   }
-  if (!url) {
-    sendError(res, 404, "Not found", req);
-    return;
-  }
-  // Cacheable because the URL carries `?v=<hash of the key>`: a new banner is a
-  // new address, so nothing here can serve a stale picture. The window stays
-  // under the presigned target's own hour so a cached redirect cannot outlive
-  // the URL it points at.
-  res.writeHead(302, {
-    location: url,
-    "cache-control": "public, max-age=300",
-  });
-  res.end();
+  await answerStoredImage(req, res, image);
 }
 
 const SERVER_IMAGE_OBJECT_PATH =
@@ -13167,27 +13199,15 @@ async function serveServerImageObject(
     sendError(res, 404, "Not found", req);
     return;
   }
-  let url: string | null;
+  let image: StoredImage | null;
   try {
-    url = await presignServerImageRead(kind, serverId);
+    image = await readServerImageObject(kind, serverId);
   } catch (error) {
     console.error(`[server-images] could not resolve ${serverId}:`, error);
     sendError(res, 404, "Not found", req);
     return;
   }
-  if (!url) {
-    sendError(res, 404, "Not found", req);
-    return;
-  }
-  // Cacheable because the URL carries `?v=<hash of the key>`: a new picture is
-  // a new address, so nothing here can serve a stale one. The window stays
-  // under the presigned target's own hour so a cached redirect cannot outlive
-  // the URL it points at.
-  res.writeHead(302, {
-    location: url,
-    "cache-control": "public, max-age=300",
-  });
-  res.end();
+  await answerStoredImage(req, res, image);
 }
 
 const SERVER_EMOJI_OBJECT_PATH =
@@ -13311,13 +13331,17 @@ async function servePublicProfile(
   // The 404 above stays `no-store` deliberately — it is what the claim landing
   // reads as "this handle is free", and a cached "free" is a cached wrong answer
   // the moment somebody claims it.
+  const payload = JSON.stringify({ profile });
   res.writeHead(200, {
     "Content-Type": "application/json",
+    // Explicit, so a HEAD (which Node answers without a length of its own)
+    // carries the very header the GET does.
+    "Content-Length": String(Buffer.byteLength(payload)),
     "Cache-Control": "public, max-age=60",
     ...SECURITY_HEADERS,
     ...corsHeaders(req),
   });
-  res.end(JSON.stringify({ profile }));
+  res.end(payload);
 }
 
 const PUBLIC_COMMUNITY_PATH = /^\/api\/public\/communities\/([^/]{1,64})$/;
@@ -13862,22 +13886,30 @@ export async function handleApi(
     return;
   }
 
-  const avatarMatch =
-    req.method === "GET" ? AVATAR_OBJECT_PATH.exec(pathname) : null;
+  // HEAD is answered as GET is, minus the body (Node drops it), on every public
+  // read below that a link unfurler probes: the pictures (see
+  // `answerStoredImage`), the profile, and the community reads further down. A
+  // crawler HEADs an address before it fetches it and reads a 401 as "nothing
+  // here"; without this a HEAD fell through to the authenticated router.
+  const readsPublic = req.method === "GET" || req.method === "HEAD";
+
+  const avatarMatch = readsPublic ? AVATAR_OBJECT_PATH.exec(pathname) : null;
   if (avatarMatch) {
     await serveAvatarObject(req, res, avatarMatch[1]!);
     return;
   }
 
-  const userBannerMatch =
-    req.method === "GET" ? USER_BANNER_OBJECT_PATH.exec(pathname) : null;
+  const userBannerMatch = readsPublic
+    ? USER_BANNER_OBJECT_PATH.exec(pathname)
+    : null;
   if (userBannerMatch) {
     await serveUserBannerObject(req, res, userBannerMatch[1]!);
     return;
   }
 
-  const serverImageMatch =
-    req.method === "GET" ? SERVER_IMAGE_OBJECT_PATH.exec(pathname) : null;
+  const serverImageMatch = readsPublic
+    ? SERVER_IMAGE_OBJECT_PATH.exec(pathname)
+    : null;
   if (serverImageMatch) {
     await serveServerImageObject(
       req,
@@ -13895,8 +13927,7 @@ export async function handleApi(
     return;
   }
 
-  const profileMatch =
-    req.method === "GET" ? PUBLIC_PROFILE_PATH.exec(pathname) : null;
+  const profileMatch = readsPublic ? PUBLIC_PROFILE_PATH.exec(pathname) : null;
   if (profileMatch) {
     await servePublicProfile(req, res, profileMatch[1]!);
     return;
@@ -13907,11 +13938,6 @@ export async function handleApi(
     return;
   }
 
-  // HEAD is answered exactly as GET is, minus the body (Node drops it), for
-  // every public community read. Link crawlers (X, LinkedIn, Slack, iMessage)
-  // probe an address with HEAD before they fetch it and read a 401 as "nothing
-  // here"; without this a HEAD fell through to the authenticated router.
-  const readsPublic = req.method === "GET" || req.method === "HEAD";
   const publicCommunityMatch = readsPublic
     ? PUBLIC_COMMUNITY_PATH.exec(pathname)
     : null;
