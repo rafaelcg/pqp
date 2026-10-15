@@ -378,7 +378,19 @@ export function forwardAppOrigin(): string {
 
 // ------------------------------------------------------------- no pings
 
-const MARKUP = /<(@&|@!|@|#)([0-9a-fA-F]{8}-[0-9a-fA-F-]{27})>/g;
+// Any `<@..>`, `<@!..>`, `<@&..>`, `<#..>` token. Only a well-formed id is looked
+// up; a malformed one (`<@123>`) is an unknown name, never leftover text.
+const MARKUP = /<(@&|@!|@|#)([^<>\s]*)>/g;
+const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * A name (a display name, a server or channel name) made of readable text
+ * only: every markup token is dropped whole, with its id, and stray angle
+ * brackets go with it. What is left is what a person would read.
+ */
+function stripMarkup(name: string): string {
+  return name.replace(MARKUP, "").replace(/[<>]/g, "").replace(/\s+/g, " ").trim();
+}
 const ZERO_WIDTH_SPACE = "\u200B";
 
 /**
@@ -395,6 +407,9 @@ async function plainMarkup(texts: readonly string[]): Promise<Map<string, string
   for (const text of texts) {
     for (const match of text.matchAll(MARKUP)) {
       const id = match[2]!.toLowerCase();
+      if (!UUID.test(id)) {
+        continue;
+      }
       (match[1] === "#" ? channels : match[1] === "@&" ? roles : users).add(id);
     }
   }
@@ -440,9 +455,12 @@ export function defangMentionText(
   const plain = text.replace(MARKUP, (_all, kind: string, id: string) => {
     const prefix = kind === "#" ? "#" : kind === "@&" ? "@&" : "@";
     // A name is somebody's text too: one that itself contains markup (a display
-    // name of "<@id>") must not bring it back, so angle brackets are dropped
-    // from it. The `@` pass below then covers any `@word` inside it.
-    const name = names.get(`${prefix}${id.toLowerCase()}`)?.replace(/[<>]/g, "");
+    // name of "<@id> @&id") loses every token whole, ids included, and keeps
+    // only the readable text. The `@` pass below covers any `@word` left in it.
+    const found = names.get(`${prefix}${id.toLowerCase()}`);
+    // Leading `@` / `#` of the name go too, so the one the markup stands for
+    // is the only one: "@@name" never reaches the card.
+    const name = found === undefined ? "" : stripMarkup(found).replace(/^[@#]+/, "");
     if (name) {
       return kind === "#" ? `#${name}` : `@${name}`;
     }
@@ -472,23 +490,21 @@ function clampExcerpt(text: string): string {
 
 /** Every text of a snapshot made inert (see `defangMentionText`). */
 export async function defangSnapshot(snapshot: MessageForward): Promise<MessageForward> {
-  const fields = [
-    snapshot.title,
-    snapshot.excerpt,
-    snapshot.authorDisplayName,
-    snapshot.sourceServerName,
-    snapshot.sourceChannelName,
-  ].filter((value): value is string => typeof value === "string");
+  const fields = [snapshot.title, snapshot.excerpt].filter(
+    (value): value is string => typeof value === "string",
+  );
   const names = await plainMarkup(fields);
   const clean = (value: string) => defangMentionText(value, names);
+  // Names are plain labels: markup inside one is dropped whole, not resolved.
+  const label = (value: string) => defangMentionText(stripMarkup(value), new Map());
   return {
     ...snapshot,
-    sourceServerName: clean(snapshot.sourceServerName),
+    sourceServerName: label(snapshot.sourceServerName),
     ...(snapshot.sourceChannelName !== undefined
-      ? { sourceChannelName: clean(snapshot.sourceChannelName) }
+      ? { sourceChannelName: label(snapshot.sourceChannelName) }
       : {}),
     ...(snapshot.authorDisplayName !== undefined
-      ? { authorDisplayName: clean(snapshot.authorDisplayName) }
+      ? { authorDisplayName: label(snapshot.authorDisplayName) }
       : {}),
     ...(snapshot.title !== undefined ? { title: clean(snapshot.title) } : {}),
     excerpt: clampExcerpt(clean(snapshot.excerpt)),

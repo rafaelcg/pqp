@@ -888,6 +888,28 @@ describeDb("POST /api/forwards", () => {
     expect(ok.message.mentionEveryone).toBe(false);
     expect(ok.message.mentionHere).toBe(false);
     expect(await mentionRows()).toBe(before);
+    // Readable text only: no raw ids left behind, no stray brackets.
+    // (The fallback body ends with the card's own link, which has ids by design.)
+    for (const text of [excerpt, ok.message.body.split(" http")[0]!]) {
+      expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+      expect(text).not.toMatch(/@@|[<>]/);
+    }
+    expect(excerpt).toBe("oi @\u200Beveryone @\u200Bhere @\u200Bmember");
+  });
+
+  it("malformed markup and a hostile author name read as plain words, with no ids left", async () => {
+    const villain = await makeUser("villain2");
+    const id = "99999999-9999-4999-8999-999999999997";
+    await getPool().query(`UPDATE users SET display_name = $2 WHERE id = $1`, [
+      villain.id,
+      `<@${id}> <@&${id}> <#${id}> Vilão`,
+    ]);
+    // The author's own name is hostile, and the body has a malformed token.
+    const said = await say(generalId, villain, "oi <@123> <#abc> tchau");
+    const res = await forward(owner, { kind: "message", id: said }, [{ channelId: otherGeneralId }]);
+    const card = (res.body.results[0] as Extract<Result, { ok: true }>).message.forward!;
+    expect(card.excerpt).toBe("oi @\u200Bunknown #unknown tchau");
+    expect(card.authorDisplayName).toBe("Vilão");
   });
 
   it("the card url comes from PUBLIC_APP_URL, never from the request Origin header", async () => {
