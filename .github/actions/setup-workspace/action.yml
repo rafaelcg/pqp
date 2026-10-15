@@ -1,0 +1,26 @@
+name: Set up workspace
+description: >-
+  pnpm, Node 22 with the pnpm store cache, `pnpm install --frozen-lockfile`
+  and the @pqp/shared build. Every CI job starts with this after checkout, so
+  the jobs split out of the old single `checks` job do not each carry their own
+  copy of the same four steps.
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm
+      # Version comes from the root package.json "packageManager" field.
+      uses: pnpm/action-setup@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    - name: Build shared
+      shell: bash
+      run: pnpm --filter @pqp/shared build
