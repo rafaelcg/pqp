@@ -198,10 +198,15 @@ viewer who lands on that edge. `clientAddress()` (`server/src/lib/rate-limit.ts`
 reads exactly that one hop, so every such viewer would share one anonymous
 bucket and one socket bucket — a watch party where 300 people arrive at once
 gets closed with 4429 rather than rate-limited per person.
-`tools/api-host/Caddyfile`'s `(upstreams)` snippet sets `trusted_proxies` to
-Cloudflare's published ranges plus a `header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}`
-belt-and-braces line, so the one hop `TRUST_PROXY=true` reads is the real
-per-viewer address Cloudflare itself vouches for, not Cloudflare's own edge.
+`tools/api-host/Caddyfile` carries it in its GLOBAL `servers { trusted_proxies
+static <Cloudflare ranges> client_ip_headers CF-Connecting-IP }` block, and the
+`(upstreams)` snippet sends `header_up X-Forwarded-For {client_ip}`, so the one
+hop `TRUST_PROXY=true` reads is the real per-viewer address Cloudflare itself
+vouches for, not Cloudflare's own edge. It has to be the server-level setting:
+a `trusted_proxies` inside `reverse_proxy` (what #713 shipped) is deprecated
+since Caddy 2.7 and a tcpdump on the box showed the API still received an edge
+IP (2026-09-19). See `tools/api-host/README.md` "Viewer address" for how to
+prove it on the box with tcpdump.
 
 **Verify it from two networks**, since this is exactly the kind of bug that
 passes every single-machine test: from two different networks (a laptop off
