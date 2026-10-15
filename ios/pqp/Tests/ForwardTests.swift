@@ -594,6 +594,26 @@ final class ForwardTests: XCTestCase {
         XCTAssertEqual(ForwardCardContent(card(excerpt: "@everyone <b> 3 < 4")).excerpt, "@everyone <b> 3 < 4")
     }
 
+    /// The picker's source line is the same plain text the card is: no ids.
+    func testThePickersSourceLineCarriesNoChatMarkup() throws {
+        let id = "11111111-1111-4111-8111-111111111111"
+        let message = try Coding.decoder.decode(
+            Message.self, from: messageJSON(forward: nil, body: "Oi <@\(id)> e <#\(id)> @everyone")
+        )
+        let line = ForwardSource.message(message).summary
+        XCTAssertFalse(line.contains("<"))
+        XCTAssertFalse(line.contains(id))
+        XCTAssertTrue(line.contains("@everyone"), "literal text is left alone")
+
+        let post = try Coding.decoder.decode(CommunityHomePost.self, from: Data("""
+        {"id":"\(sourceId)","serverId":"\(serverId)","author":{"id":"\(id)","displayName":"Rafa"},
+         "title":"Aviso <@\(id)>","visibility":"free","media":null,"locked":false,
+         "createdAt":"2026-10-15T12:00:00.000Z"}
+        """.utf8))
+        XCTAssertFalse(ForwardSource.bauPost(post).summary.contains(id))
+        XCTAssertTrue(ForwardSource.bauPost(post).summary.hasPrefix("Aviso @"))
+    }
+
     // MARK: - The request and its answer
 
     func testTheRequestBodyIsTheContract() throws {

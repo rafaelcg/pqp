@@ -377,7 +377,7 @@ struct ForwardSource: Equatable, Sendable {
             summary = words.isEmpty ? message.authorName : words
         }
         return ForwardSource(
-            kind: .message, id: message.id, serverId: nil, summary: summary,
+            kind: .message, id: message.id, serverId: nil, summary: ForwardCardContent.plain(summary) ?? summary,
             stayInServerId: forward?.stayInServerId ?? stayInServerId
         )
     }
@@ -404,7 +404,7 @@ struct ForwardSource: Equatable, Sendable {
         let words = post.body ?? post.teaser ?? ""
         return ForwardSource(
             kind: .bauPost, id: post.id, serverId: post.serverId,
-            summary: title.isEmpty ? words : title,
+            summary: ForwardCardContent.plain(title.isEmpty ? words : title) ?? "",
             stayInServerId: post.isMembersOnly ? post.serverId : nil
         )
     }
