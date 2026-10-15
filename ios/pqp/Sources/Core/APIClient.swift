@@ -174,6 +174,8 @@ actor APIClient {
     /// The Baú's instance flags, memoised beside its endpoints in
     /// CommunityHomeAPI.swift. Gates a row on every server's channel list.
     var communityHomeConfigCache: CommunityHomeConfig?
+    /// `forward_messages`, held for a minute. Beside its endpoint in Forward.swift.
+    var forwardConfigCache: (config: ForwardConfig, at: Date)?
 
     init(
         backend: Backend = .current,

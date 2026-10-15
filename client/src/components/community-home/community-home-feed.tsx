@@ -23,6 +23,7 @@ import {
   RotateCcw,
   Send,
   Share2,
+  Forward,
   Smile,
   Trash2,
   Upload,
@@ -205,6 +206,11 @@ type Props = {
    * announce default honest; the server still decides for real.
    */
   canSendInChannel?: (channelId: string) => boolean;
+  /**
+   * Encaminhar (`forward_messages`): opens the forward picker for a post.
+   * Absent while the flag is off, which hides the action for everybody.
+   */
+  onForwardPost?: (post: CommunityHomePost) => void;
   /**
    * A post to scroll to and highlight (a Baú permalink or a card in chat).
    * `focusNonce` changes on every follow, so the same card clicked twice
@@ -735,6 +741,8 @@ type PostCardProps = {
   /** Staff: post this into a channel as a card. */
   onShare?: (post: CommunityHomePost) => void;
   onCopyLink?: (post: CommunityHomePost) => void;
+  /** Encaminhar: any reader, any published post. Absent while the flag is off. */
+  onForward?: (post: CommunityHomePost) => void;
   /** Followed from a permalink or a chat card: ring it for a moment. */
   highlighted?: boolean;
 };
@@ -766,6 +774,7 @@ export function PostCard({
   onToggleLock,
   onShare,
   onCopyLink,
+  onForward,
   highlighted = false,
 }: PostCardProps) {
   const { t, locale } = useTranslation();
@@ -803,7 +812,8 @@ export function PostCard({
         onUnpublish ||
         onToggleLock ||
         onShare ||
-        onCopyLink,
+        onCopyLink ||
+        onForward,
     );
 
   useEffect(() => {
@@ -913,6 +923,20 @@ export function PostCard({
                 title={t("communityHome.drafts.unscheduleHint")}
               >
                 {t("communityHome.drafts.unschedule")}
+              </button>
+            )}
+            {onForward && post.status === "published" && (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onForward(post);
+                }}
+                data-home-forward-menu
+              >
+                <Forward className="h-3.5 w-3.5" aria-hidden />
+                {t("forward.action")}
               </button>
             )}
             {onShare && post.status === "published" && (
@@ -1154,13 +1178,28 @@ export function PostCard({
               <MessageCircle className="h-4 w-4" aria-hidden />
               <span className="tabular-nums">{post.commentCount}</span>
             </span>
-            {interactive && !locked && post.publicUrl && (
-              <BauShareButton
-                publicUrl={post.publicUrl}
-                title={view.title?.trim() || summary || ""}
-                surface="card"
-                className="ml-auto"
-              />
+            {((interactive && !locked && post.publicUrl) ||
+              (onForward && post.status === "published")) && (
+              <span className="ml-auto flex items-center gap-1">
+                {onForward && post.status === "published" && (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-ink-4 hover:text-paper"
+                    onClick={() => onForward(post)}
+                    data-home-forward
+                  >
+                    <Forward className="h-4 w-4" aria-hidden />
+                    {t("forward.action")}
+                  </button>
+                )}
+                {interactive && !locked && post.publicUrl && (
+                  <BauShareButton
+                    publicUrl={post.publicUrl}
+                    title={view.title?.trim() || summary || ""}
+                    surface="card"
+                  />
+                )}
+              </span>
             )}
           </footer>
         )}
@@ -2411,6 +2450,7 @@ export function CommunityHomeFeed({
   channels = [],
   onOpenChannel,
   canSendInChannel,
+  onForwardPost,
   focusPostId = null,
   focusNonce = 0,
   composeNonce = 0,
@@ -3336,6 +3376,7 @@ export function CommunityHomeFeed({
                       : undefined
                   }
                   onShare={canManageServer ? setShareTarget : undefined}
+                  onForward={onForwardPost}
                   onCopyLink={
                     canManageServer ? (target) => void copyPostLink(target) : undefined
                   }

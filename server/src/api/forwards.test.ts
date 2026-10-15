@@ -75,9 +75,10 @@ const {
   messageSchema,
   messageForwardSchema,
   isForwardFallbackBody,
+  extractMentions,
   FORWARD_EXCERPT_MAX,
 } = await import("@pqp/shared");
-const { forwardExcerpt, dedupeForwardTargets, isStableYoutubePoster } = await import(
+const { forwardExcerpt, dedupeForwardTargets, isStableYoutubePoster, defangMentionText } = await import(
   "../services/forwards.js"
 );
 
@@ -718,7 +719,14 @@ describeDb("POST /api/forwards", () => {
     // No comment: the body is the fallback, which carries the title (a name in it).
     const silent = await forward(owner, postSource(postId), [{ channelId: generalId }]);
     const silentOk = silent.body.results[0] as Extract<Result, { ok: true }>;
-    expect(silentOk.message.body).toContain("@member");
+    // The title's name is there to read, and inert to every client's scan.
+    expect(silentOk.message.body).toContain("@\u200Bmember");
+    expect(extractMentions(silentOk.message.body)).toEqual({
+      usernames: [],
+      everyone: false,
+      here: false,
+      roleNames: [],
+    });
     expect(silentOk.message.mentionEveryone).toBe(false);
     expect(await mentionRows()).toBe(before);
 
@@ -823,6 +831,115 @@ describeDb("POST /api/forwards", () => {
     expect(await messageCount(generalId)).toBe(0);
   });
 
+  it("mention markup in the source becomes plain words in the card and the fallback body, and fires nothing", async () => {
+    const role = await createRole(serverId, { name: "CargoVIP", permissions: Permission.VIEW_CHANNEL });
+    const said = await say(
+      generalId,
+      owner,
+      `oi <@${member.id}> e <@&${role.id}> em <#${generalId}> e <#${privateId}> e @member e @everyone`,
+    );
+    const before = await mentionRows();
+    const res = await forward(owner, { kind: "message", id: said }, [{ channelId: otherGeneralId }]);
+    const ok = res.body.results[0] as Extract<Result, { ok: true }>;
+    const excerpt = ok.message.forward!.excerpt as string;
+    expect(excerpt).toBe(
+      "oi @\u200Bmember e @\u200BCargoVIP em #general e #unknown e @\u200Bmember e @\u200Beveryone",
+    );
+    // No markup left, anywhere the card or an old client would read it.
+    expect(excerpt).not.toContain("<");
+    expect(ok.message.body).not.toContain("<@");
+    expect(ok.message.body).not.toContain("<#");
+    // No client's mention scan finds anyone in the body of a forward with no comment.
+    expect(extractMentions(ok.message.body)).toEqual({
+      usernames: [],
+      everyone: false,
+      here: false,
+      roleNames: [],
+    });
+    expect(ok.message.mentionEveryone).toBe(false);
+    expect(ok.message.mentionHere).toBe(false);
+    // And the server recorded no mention row for it.
+    expect(await mentionRows()).toBe(before);
+    // The private channel's name never travels in markup to another server.
+    expect(JSON.stringify(res.body)).not.toContain("diretoria");
+  });
+
+  it("a hostile display name cannot bring mention markup back after it is resolved", async () => {
+    const villain = await makeUser("villain");
+    const id = "99999999-9999-4999-8999-999999999998";
+    await getPool().query(`UPDATE users SET display_name = $2 WHERE id = $1`, [
+      villain.id,
+      `<@&${id}> <@!${id}> <#${id}> @everyone @here @member`,
+    ]);
+    const said = await say(generalId, owner, `oi <@${villain.id}>`);
+    const before = await mentionRows();
+    const res = await forward(owner, { kind: "message", id: said }, [{ channelId: otherGeneralId }]);
+    const ok = res.body.results[0] as Extract<Result, { ok: true }>;
+    const excerpt = ok.message.forward!.excerpt as string;
+    for (const text of [excerpt, ok.message.body]) {
+      expect(text).not.toMatch(/<[@#]/);
+      expect(extractMentions(text)).toEqual({
+        usernames: [],
+        everyone: false,
+        here: false,
+        roleNames: [],
+      });
+    }
+    expect(ok.message.mentionEveryone).toBe(false);
+    expect(ok.message.mentionHere).toBe(false);
+    expect(await mentionRows()).toBe(before);
+  });
+
+  it("the card url comes from PUBLIC_APP_URL, never from the request Origin header", async () => {
+    const postId = await publish();
+    const previous = process.env.PUBLIC_APP_URL;
+    process.env.PUBLIC_APP_URL = "https://app.example.test/, https://other.example.test";
+    try {
+      actor = owner;
+      const response = await fetch(`${baseUrl}/api/forwards`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer test",
+          Origin: "https://evil.example",
+        },
+        body: JSON.stringify({
+          source: postSource(postId),
+          targets: [{ channelId: generalId }],
+        }),
+      });
+      const body = (await response.json()) as { results: Result[] };
+      const ok = body.results[0] as Extract<Result, { ok: true }>;
+      expect(ok.message.forward!.url).toBe(
+        `https://app.example.test/app/server/${serverId}/bau/${postId}`,
+      );
+      expect(JSON.stringify(body)).not.toContain("evil.example");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.PUBLIC_APP_URL;
+      } else {
+        process.env.PUBLIC_APP_URL = previous;
+      }
+    }
+  });
+
+  it("a forward of a forward made before this fix is made inert too", async () => {
+    const said = await say(generalId, owner, "plain");
+    const first = (
+      await forward(owner, { kind: "message", id: said }, [{ channelId: generalId }])
+    ).body.results[0] as Extract<Result, { ok: true }>;
+    // An old card whose snapshot still carries a raw name and markup.
+    await getPool().query(
+      `UPDATE messages SET forward = jsonb_set(forward, '{excerpt}', to_jsonb($2::text)) WHERE id = $1`,
+      [first.message.id, `ping @member <@${member.id}>`],
+    );
+    const again = (
+      await forward(owner, { kind: "message", id: first.message.id }, [{ channelId: otherGeneralId }])
+    ).body.results[0] as Extract<Result, { ok: true }>;
+    expect(again.message.forward!.excerpt).toBe("ping @\u200Bmember @\u200Bmember");
+    expect(extractMentions(again.message.body).usernames).toEqual([]);
+  });
+
   it("a retry of a request whose answer was lost gets the sent messages back, not rate_limited", async () => {
     const postId = await publish();
     const channels: string[] = [];
@@ -910,5 +1027,24 @@ describeDb("POST /api/forwards", () => {
       comment: "oi\u0000 tchau",
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("defangMentionText", () => {
+  it("resolves markup, falls back to a neutral word, and leaves nothing a mention scan matches", () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const names = new Map([[`@${id}`, "Ana"]]);
+    expect(defangMentionText(`<@${id}> <@!${id}> <@&${id}> <#${id}>`, names)).toBe(
+      "@\u200BAna @\u200BAna @\u200Bunknown #unknown",
+    );
+    const out = defangMentionText("@bob @everyone @here e-mail a@b.co", new Map());
+    expect(extractMentions(out)).toEqual({ usernames: [], everyone: false, here: false, roleNames: [] });
+    // A resolved name that itself holds markup does not bring it back.
+    const sneaky = new Map([[`@${id}`, `<@${id}> @everyone`]]);
+    const sneakyOut = defangMentionText(`<@${id}>`, sneaky);
+    expect(sneakyOut).not.toContain("<");
+    expect(extractMentions(sneakyOut)).toEqual({ usernames: [], everyone: false, here: false, roleNames: [] });
+    // Idempotent: an already inert text does not grow.
+    expect(defangMentionText(out, new Map())).toBe(out);
   });
 });

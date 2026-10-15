@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,6 +31,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -52,6 +55,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,10 +69,15 @@ import gg.pqp.app.attachments.formatAttachmentSize
 import gg.pqp.app.bau.BauComment
 import gg.pqp.app.bau.BauMedia
 import gg.pqp.app.bau.BauPost
+import gg.pqp.app.bau.BauPublicShare
 import gg.pqp.app.bau.BauViewModel
 import gg.pqp.app.bau.YoutubeLinks
 import gg.pqp.app.core.Channel
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.forward.ForwardInputs
+import gg.pqp.app.forward.ui.LocalStartForward
+import gg.pqp.app.forward.ui.rememberForwardEnabled
+import gg.pqp.app.ui.screens.SheetAction
 import gg.pqp.app.ui.chat.DayLabel
 import gg.pqp.app.ui.chat.DayLabels
 import gg.pqp.app.ui.components.Avatar
@@ -125,6 +136,10 @@ private fun BauScreenContent(
     val state by model.state.collectAsStateWithLifecycle()
     val canPost = rememberCanPostToBau(session, serverId, state.config)
     var composing by rememberSaveable { mutableStateOf(false) }
+    // Encaminhar, from a post's own menu, while the runtime flag is on.
+    val forwardEnabled = rememberForwardEnabled(session.api)
+    val startForward = LocalStartForward.current
+    var menuPost by remember { mutableStateOf<BauPost?>(null) }
 
     // Arrived from a post card in chat: bring that post to the top, once. A
     // post that is not in the feed (gone, or not published) leaves the feed
@@ -151,6 +166,18 @@ private fun BauScreenContent(
                 composing = false
                 model.refresh()
             },
+        )
+    }
+
+    menuPost?.let { post ->
+        val title = post.title?.trim()?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.bau_card_untitled)
+        val preview = stringResource(R.string.forward_post_preview, title)
+        BauPostMenu(
+            onForward = {
+                menuPost = null
+                startForward(ForwardInputs.forBauPost(serverId, post.id, preview, post.isMembersOnly))
+            },
+            onDismiss = { menuPost = null },
         )
     }
 
@@ -242,6 +269,7 @@ private fun BauScreenContent(
                             submitting = post.id in state.submitting,
                             commentFailed = post.id in state.commentFailed,
                             onToggleLike = { model.toggleLike(post.id) },
+                            onMore = if (forwardEnabled) ({ menuPost = post }) else null,
                             onLoadAll = { model.loadAllComments(post.id) },
                             onCollapse = { model.collapseComments(post.id) },
                             onComment = { body -> model.addComment(post.id, body) },
@@ -264,6 +292,8 @@ private fun PostCard(
     submitting: Boolean,
     commentFailed: Boolean,
     onToggleLike: () -> Unit,
+    /** The post's menu (Encaminhar). Null hides the button. */
+    onMore: (() -> Unit)?,
     onLoadAll: () -> Unit,
     onCollapse: () -> Unit,
     onComment: (String) -> Unit,
@@ -337,7 +367,7 @@ private fun PostCard(
         }
 
         Spacer(Modifier.height(Spacing.md))
-        ActionRow(post, onToggleLike)
+        ActionRow(post, onToggleLike, onMore)
 
         CommentsBlock(
             post = post,
@@ -676,8 +706,8 @@ private fun FileCard(media: BauMedia, open: () -> Unit) {
 }
 
 @Composable
-private fun ActionRow(post: BauPost, onToggleLike: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun ActionRow(post: BauPost, onToggleLike: () -> Unit, onMore: (() -> Unit)?) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         val likeLabel = stringResource(if (post.likedByMe) R.string.bau_unlike else R.string.bau_like)
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -722,8 +752,98 @@ private fun ActionRow(post: BauPost, onToggleLike: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // The right edge: Compartilhar (a post with a public page) and the post menu
+        // (Encaminhar), side by side.
+        val publicUrl = BauPublicShare.shareableUrl(post)
+        if (publicUrl != null || onMore != null) Spacer(Modifier.weight(1f))
+        if (publicUrl != null) ShareControl(publicUrl = publicUrl, title = shareTitle(post))
+        if (onMore != null) {
+            IconButton(onClick = onMore, modifier = Modifier.testTag("bau.post.menu")) {
+                Icon(
+                    imageVector = PqpIcons.More,
+                    contentDescription = stringResource(R.string.forward_post_menu),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(Sizes.iconAction),
+                )
+            }
+        }
     }
 }
+
+/** What a Baú post's menu offers: Encaminhar, which is the only entry so far. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BauPostMenu(onForward: () -> Unit, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.testTag("bau.post.menu.sheet"),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = Spacing.lg),
+        ) {
+            SheetAction(
+                icon = PqpIcons.ForwardMessage,
+                label = stringResource(R.string.forward_action),
+                testTag = "bau.post.forward",
+                onClick = onForward,
+            )
+        }
+    }
+}
+
+/**
+ * Compartilhar, right-aligned in the footer like the web's card: the system
+ * share sheet with the post's public link. Only drawn when the API sent a
+ * `publicUrl` ([BauPublicShare.shareableUrl]), so a members-only, locked or
+ * unpublished post, or a server without a public address, never shows it.
+ */
+@Composable
+private fun ShareControl(publicUrl: String, title: String?) {
+    val context = LocalContext.current
+    val label = stringResource(R.string.bau_share)
+    val description = stringResource(R.string.bau_share_description)
+    val failed = stringResource(R.string.bau_share_failed)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(MaterialTheme.shapes.small)
+            // One node for TalkBack: "Compartilhar esse post, button", not
+            // the description and then the visible word again.
+            .semantics { contentDescription = description }
+            .clickable(role = Role.Button) {
+                if (!BauPublicShare.share(context, publicUrl, title, label)) {
+                    android.widget.Toast.makeText(context, failed, android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+            .testTag("bau.share"),
+    ) {
+        Icon(
+            imageVector = PqpIcons.Share,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(Sizes.iconAction),
+        )
+        Spacer(Modifier.width(Spacing.xs))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.clearAndSetSemantics {},
+        )
+    }
+}
+
+/** What the share sheet shows as the subject: the title, else the body's first line. */
+private fun shareTitle(post: BauPost): String? =
+    post.title?.trim()?.takeIf { it.isNotEmpty() }
+        ?: post.body?.trim()?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()?.take(120)
 
 /**
  * The two newest comments, "see all" for the rest, and a one-line composer.

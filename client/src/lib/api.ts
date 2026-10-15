@@ -121,6 +121,8 @@ import type {
   CreateAutomodRuleInput,
   UpdateAutomodRuleInput,
   PublicInvitePreview,
+  CreateForwardRequest,
+  CreateForwardResponse,
 } from "@pqp/shared";
 import {
   LIVE_PREVIEW_ENDED_ERROR,
@@ -2327,6 +2329,18 @@ export const lookupUserByTag = (tag: string, signal?: AbortSignal) =>
     `/api/users/lookup?tag=${encodeURIComponent(tag)}`,
     signal ? { signal } : {},
   );
+
+/**
+ * Encaminhar. `forward_messages` is a runtime flag: off, the route is a 404 and
+ * the config says `enabled: false` (an older API has no config route at all,
+ * which reads as off too). See `lib/forward.ts`.
+ */
+export const fetchForwardConfig = () =>
+  apiFetch<{ enabled?: boolean }>("/api/forwards/config");
+
+/** Always a 200 once the request was valid; each target answers for itself. */
+export const createForward = (body: CreateForwardRequest) =>
+  post<CreateForwardResponse>("/api/forwards", body);
 
 export const fetchConversations = () =>
   apiFetch<DmListResponse>("/api/dms");

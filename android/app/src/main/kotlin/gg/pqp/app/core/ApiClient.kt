@@ -124,19 +124,23 @@ class ApiClient(
     /**
      * Oldest-first, always. `before` walks backwards through history while
      * `hasMore`; only one cursor may be set per call, which the server enforces
-     * with a 400 rather than picking one.
+     * with a 400 rather than picking one. `around` is the jump: a page with the
+     * named message in it and room on both sides, `hasMore` and `hasNewer` both
+     * meaningful (a forward card's link lands on its message this way).
      */
     suspend fun messages(
         channelId: String,
         limit: Int = 50,
         before: String? = null,
         after: String? = null,
+        around: String? = null,
     ): MessagesResponse = get(
         "/api/channels/$channelId/messages",
         buildMap {
             put("limit", limit.coerceIn(1, 100).toString())
             before?.let { put("before", it) }
             after?.let { put("after", it) }
+            around?.let { put("around", it) }
         },
     )
 

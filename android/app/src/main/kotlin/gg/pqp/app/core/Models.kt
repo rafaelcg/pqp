@@ -380,6 +380,15 @@ data class Message(
      * story expires.
      */
     val storyId: String? = null,
+    /**
+     * Encaminhar: the snapshot a forwarded message carries
+     * (`messageSchema.forward`, `packages/shared/src/forward.ts`). Absent on
+     * every ordinary message. Read leniently ([LenientForwardSerializer]): a
+     * version this build does not know, or a value that fails today's parse, is
+     * null and the message shows its `body`, never a failed page.
+     */
+    @Serializable(with = gg.pqp.app.forward.LenientForwardSerializer::class)
+    val forward: gg.pqp.app.forward.MessageForward? = null,
 )
 
 /** `webhookEmbedSchema` in `packages/shared/src/webhooks.ts`. Every field optional, as on Discord. */

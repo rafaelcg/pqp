@@ -320,6 +320,8 @@ struct RootView: View {
                 await setUpNotifications()
             }
         }
+        // Encaminhado, with a "Ver" that opens the first place it went.
+        .overlay(alignment: .top) { ForwardToastLayer() }
         // The invitee's arrival: confetti and "You're in {server}" over the room
         // they just walked into. The organizer had theirs on the ready step.
         .overlay(alignment: .top) {
