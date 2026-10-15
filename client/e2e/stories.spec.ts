@@ -178,6 +178,13 @@ test("A posts a text story; B sees the ring, opens it, reacts and replies; A see
     // Past the one second that counts as a view.
     await second.page.waitForTimeout(1_400);
 
+    // Escape in the "More options" menu closes the menu only; the viewer stays.
+    await viewer.getByRole("button", { name: "More options" }).click();
+    await expect(second.page.getByRole("menu")).toBeVisible();
+    await second.page.keyboard.press("Escape");
+    await expect(second.page.getByRole("menu")).toBeHidden();
+    await expect(viewer).toBeVisible();
+
     // React: focusing the reply raises the reaction row.
     const reply = viewer.getByRole("textbox", { name: "Reply to Alice Story…" });
     await reply.click();

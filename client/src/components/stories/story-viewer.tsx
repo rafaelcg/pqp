@@ -864,6 +864,11 @@ export function StoryViewer({
       if (event.key === "Escape" && document.querySelector("[data-profile-card]")) {
         return;
       }
+      // The same for the "More options" menu: this listener is on the window in the capture phase, so it
+      // runs before the menu's own, and the key is the menu's (it closes itself, the viewer stays).
+      if (event.key === "Escape" && document.querySelector("[role='menu']")) {
+        return;
+      }
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
