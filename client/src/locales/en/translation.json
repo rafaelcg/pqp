@@ -3249,6 +3249,7 @@
   "forward.restrictedHint": "This one stays inside its server, so only that server's channels are listed.",
   "forward.messageFrom": "Message from {name}",
   "forward.postFallback": "Baú post",
+  "forward.messageFallback": "Message",
   "forward.error.noAccess": "You cannot see this channel.",
   "forward.error.cannotSend": "You cannot send messages here.",
   "forward.error.badTarget": "Messages cannot go here.",
