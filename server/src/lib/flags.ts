@@ -333,6 +333,21 @@ export const FEATURE_FLAGS = {
     // The fan-out starts from a post, and a post has a server.
     perServer: true,
   },
+  bau_follow: {
+    description:
+      "Seguir um Baú: quem gerencia um canal de outro servidor passa a receber ali os posts livres novos deste Baú, como um cartão de encaminhado. Ligado para o servidor DE ORIGEM (o Baú seguido).",
+    env: "BAU_FOLLOW",
+    parseEnv: exactTrue,
+    // Off: the Seguir button is absent, creating a follow is a 404 and nothing
+    // is delivered. Turned on for ONE source first (the QG, its override), then
+    // any community that asks, with no deploy. It reads the SOURCE: a follow is
+    // set up from the source's Baú and delivered when the source publishes.
+    codeDefault: false,
+    // Every reader knows the source server: the follow routes sit under
+    // `/servers/:id/home`, and the delivery job works from a post, which has one.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/follow (enabled)",
+  },
   bau_public_posts: {
     description:
       "Página pública de post do Baú (pqp.gg/c/<comunidade>/p/<post>) e o botão Compartilhar: só posts grátis e publicados de comunidade com endereço público.",

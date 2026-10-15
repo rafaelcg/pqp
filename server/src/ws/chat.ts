@@ -765,6 +765,49 @@ export function broadcastToChannel(
 }
 
 /**
+ * A message written by the SERVER, not typed by a person (a followed Baú's card
+ * delivered into a channel, `services/bau-follow-delivery.ts`): the same
+ * fan-out a send gets after it commits, minus everything that belongs to a
+ * sender. The message reaches the channel's viewers; everybody else who can
+ * see the channel gets the activity frame (unread dot, and a mention flag for
+ * `mentionedUserIds`, the people a role ping was recorded for).
+ *
+ * Runs in the API or in the worker. In the worker there are no sockets, so
+ * `broadcastToChannel` only reaches the siblings over the cluster bus, and
+ * the activity frame is published for them to fan out (their copy is the one
+ * that sends web push, as it is for every message that crosses the bus). With
+ * the bus off the worker has nobody to tell, which is what a deployment with a
+ * worker and no bus already means for every other frame.
+ */
+export async function announceServiceMessage(
+  message: ReturnType<typeof mapMessage>,
+  mentionedUserIds: readonly string[] = [],
+): Promise<void> {
+  broadcastToChannel(message.channelId, {
+    type: "message-broadcast",
+    message,
+  });
+  if (isBusEnabled()) {
+    publishToCluster(ACTIVITY_TOPIC, {
+      channelId: message.channelId,
+      authorId: message.authorId,
+      mentions: [],
+      repliedToUserId: null,
+      ...(mentionedUserIds.length > 0 ? { mentionedUserIds } : {}),
+      preview: null,
+    });
+  }
+  // The message is already out: a failure in the activity leg (unread dots,
+  // push) is logged, never thrown, so the caller cannot mistake a completed
+  // broadcast for a failed one and replay it.
+  await notifyChannelActivity(message.channelId, message.authorId, [], null, {
+    mentionedUserIds,
+  }).catch((error: unknown) => {
+    console.error("[chat] service message activity failed:", error);
+  });
+}
+
+/**
  * The local half of `broadcastToChannel`, and the *only* thing a frame arriving
  * from the bus is allowed to call. Separating them is the loop guard's second
  * line of defence: even a frame that somehow escaped the origin check in

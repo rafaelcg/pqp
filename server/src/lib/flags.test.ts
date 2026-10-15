@@ -82,6 +82,7 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   bau_custom_cover: offWords,
   community_home_video_captions: (raw) => raw === "true",
   bau_post_push: (raw) => raw === "true",
+  bau_follow: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   bau_public_posts: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.

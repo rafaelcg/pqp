@@ -358,6 +358,87 @@ path, send permission), `packages/shared/src/community-home-share.test.ts`
 (permalink parsing), `client/src/lib/community-home/share-card.test.ts` (which
 links get a card), `client/src/components/chat/bau-post-card.test.tsx`.
 
+## Seguir (follow a Baú into a channel)
+
+Behind the per-server runtime flag `bau_follow` (default off), read for the
+SOURCE server: the QG first, any other community later with an override and no
+deploy. A follow is a row `source Baú -> text channel of another server`
+(`bau_follows`, unique per source and channel). When the source publishes a
+**free** post, a job posts a forward card (`messages.forward`, the contract in
+`docs/FORWARD.md`, `kind: "bau_post"`) into every followed channel. The author is
+a webhook-style pseudo identity per source (`users.is_webhook`, clerk id
+`bau-follow:<serverId>`), shown with the source's name and icon, never a real
+user and never in a member list.
+
+- **Who may be followed, and by whom.** Three things, all required, plus a fourth
+  that depends on the viewer: the `bau_follow` flag for the source, the source's
+  own Baú switch, and the OWNER'S switch **Permitir seguir** (`servers.bau_follow_allowed`,
+  default off, Baú settings in Server settings, Manage Server, audited), and then
+  EITHER the source is a public community with an address (a Baú that is public
+  by intent: any member of it may follow) OR the viewer holds Manage Server on it
+  (an ordinary server's staff may pipe their own Baú elsewhere; a plain member of
+  one never can). A refusal is a 404 for every reason. Delivery asks again: a
+  private source's follow whose creator lost Manage Server there counts as a
+  permission failure like any other. "Free" means free for the server's members,
+  which is why a private server needs its staff and its owner's say.
+- **The destination's say.** A destination that bans the source identity gets no
+  more cards (each skipped card counts toward the auto-pause), slow mode spaces
+  the cards out (one per interval, the rest wait), and the identity cannot be
+  sent a friend request.
+- **Setting it up.** A **Seguir** button on the Baú header of a followable
+  server opens a picker of the viewer's own servers where they hold
+  MANAGE_WEBHOOKS or MANAGE_CHANNELS, then a text channel and an optional role to
+  ping (a role of the destination that is mentionable, or any role for someone
+  who may mention everyone). `POST /api/servers/:id/home/follow`; the channel is
+  checked for the same authority, so a per-channel grant counts there. The
+  destination channel's settings list what it follows with **Deixar de seguir**
+  (`GET /api/channels/:id/bau-follows`, `DELETE /api/bau-follows/:id`).
+- **What goes out.** Free, published posts that went live AFTER the follow was
+  made (or last resumed), never the backlog. Scheduled posts go out when they
+  flip to published. Members-only (VIP) posts and drafts never do. A post older
+  than six hours when it would go out is dropped, so a flag that was off for a
+  day does not announce the day.
+- **Exactly once.** The seam is the post's state, not a hook (like the push
+  claim): `runBauFollowTick` (`bau-follow-delivery.ts`) enqueues a row in
+  `bau_follow_deliveries` per qualifying (post, follow), claims due rows with a
+  lease, and writes the card and the row's move to `delivered` in one
+  transaction guarded on the claim; a unique nonce on the message
+  (`bau-follow:<postId>`) is the second wall. Two processes (API and worker) may
+  tick at once. Retries after 5 s, 30 s, 2 min, 10 min and 1 h, then `dead`.
+  At most 60 deliveries of one post per minute. Runs in `jobs.ts` (the worker
+  when there is one) every 10 s and is kicked by the publish, edit, unpublish
+  and delete routes.
+- **Edits and deletes follow.** An edit that changes what the card shows updates
+  the delivered message (the snapshot, the fallback body, `editedAt`, and a
+  `message-update` frame). Deleting the post, moving it back to a draft or
+  locking it for members deletes the delivered messages; a post that comes back
+  free is delivered again. A card a destination moderator deleted by hand is not
+  posted again. Unfollowing stops future cards and leaves the delivered ones.
+- **The ping.** Only the follow's own role, recorded as mentions for the role's
+  members (`@everyone` and `@here` never fire, and the snapshot pings nobody).
+- **Auto-pause.** Delivery re-checks the authority the follow was made under
+  (`created_by` must still manage webhooks or channels in the channel). Three
+  consecutive failures pause the follow (`paused_reason: permissions`), write an
+  audit entry in the destination server and post one plain notice in the channel
+  from the source identity. The channel's staff resume it from the channel's
+  Seguir section; the resumer becomes the authority, `since_at` resets and what
+  was queued is dropped.
+- **Source side.** Staff with MANAGE_SERVER see the follower count and the list
+  (server and channel names, never people; `GET .../home/followers`), can remove
+  a follower, or remove and **block** its whole server
+  (`DELETE .../home/followers/:id?block=1`, which also removes that server's
+  other follows and refuses new ones); `DELETE .../home/follow-blocks/:serverId`
+  unblocks. A destination server holds at most 20 follows.
+- **The card's link.** The post's public page when it has one (`getBauPublicUrl`,
+  `bau_public_posts` on, a public community with an address), so a follower who
+  is not a member of the source opens a real page; otherwise the in-app Baú post
+  address, which only a member of the source can open. A delivery that pings a role writes `@Role` alone on the first
+  line and the fallback below it; clients that draw the card use
+  `forwardBodyComment` (`@pqp/shared`) to strip the fallback and keep the mention.
+
+Tests: `server/src/services/bau-follow.test.ts` (flag per source, permissions,
+delivery, scheduled, edit, delete, pause, source staff, limits) and
+`bau-follow-two-process.test.ts` (two processes, one card each).
 ## A public page per post (`bau_public_posts`)
 
 Runtime flag, **per server, default off** (`docs/FEATURE_FLAGS.md`). A free,

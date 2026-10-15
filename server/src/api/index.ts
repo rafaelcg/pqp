@@ -151,6 +151,8 @@ import {
   pinCommunityHomePostSchema,
   createCommunityHomeCommentSchema,
   createCommunityHomeMediaUploadSchema,
+  createBauFollowSchema,
+  updateBauFollowConfigSchema,
   createCommunityHomePostSchema,
   publishCommunityHomePostSchema,
   shareCommunityHomePostSchema,
@@ -160,6 +162,7 @@ import {
   parseCommunityHomeTeaser,
   parseCommunityHomeTitle,
   scheduleCommunityHomePostSchema,
+  updateBauFollowSchema,
   updateCommunityHomePostSchema,
   updateServerCommunityHomeConfigSchema,
   isVoiceRoomChannelType,
@@ -474,6 +477,21 @@ import {
   updateCommunityHomePost,
 } from "../services/community-home.js";
 import { pushPendingCommunityHomePosts } from "../services/community-home-push.js";
+import {
+  BauFollowError,
+  setBauFollowAllowed,
+  createBauFollow,
+  deleteBauFollow,
+  getBauFollowState,
+  getFollowRef,
+  listBauFollowDestinations,
+  listBauFollowers,
+  listChannelBauFollows,
+  removeBauFollower,
+  unblockBauFollower,
+  updateBauFollow,
+} from "../services/bau-follow.js";
+import { kickBauFollow } from "../services/bau-follow-delivery.js";
 import {
   ackStoryNotice,
   createStory,
@@ -998,6 +1016,8 @@ const homeCommentLimiter = createRateLimiter({
 });
 const homeLikeLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
 const homePostLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 0.05 });
+/** Setting follows up, changing and removing them: a person doing admin, not a feed. */
+const bauFollowLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 0.1 });
 /**
  * `POST /api/forwards`: a burst of eight, then one every five seconds. A
  * forward fans out to up to five places, and each one ALSO spends the chat's
@@ -1374,6 +1394,7 @@ export function resetApiRateLimits(): void {
   homeLikeLimiter.reset();
   homePostLimiter.reset();
   forwardLimiter.reset();
+  bauFollowLimiter.reset();
   userSearchLimiter.reset();
   exportLimiter.reset();
   discordImportLimiter.reset();
@@ -5432,6 +5453,7 @@ router.post(
       // A post created as published is announced by push (flag permitting).
       // Not awaited: it never fails the publish, and it never throws.
       void pushPendingCommunityHomePosts(serverId!);
+      kickBauFollow(serverId!);
       const announced =
         post.status === "published"
           ? await announceHomePost(
@@ -5479,6 +5501,9 @@ router.patch(
         posterUploadId: raw.posterUploadId,
       });
       await notifyHome(serverId!);
+      // An edit of a delivered post updates its cards, and an edit that makes
+      // a draft published or a published post members-only moves them.
+      kickBauFollow(serverId!);
       return { post };
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -5497,6 +5522,7 @@ router.delete(
     try {
       await deleteCommunityHomePost(serverId!, postId!, user.id);
       await notifyHome(serverId!);
+      kickBauFollow(serverId!);
       return { ok: true };
     } catch (error) {
       mapCommunityHomeError(error);
@@ -5568,6 +5594,256 @@ router.get(
   },
 );
 
+// ---------------------------------------------------------------- Seguir
+//
+// Following a Baú into a channel of another server (docs/COMMUNITY_HOME.md,
+// "Seguir"). Switched by the per-server flag `bau_follow`, read for the SOURCE
+// server: off, the state read says so and the rest is a 404, except removing a
+// follow, which always works.
+
+/**
+ * The audit entry for a follow change, written AFTER the change committed. A
+ * failure to write it is logged and never turns the committed change into an
+ * error (a retry would meet the follow it just made).
+ */
+async function auditBauFollow(entry: Parameters<typeof logAudit>[0]): Promise<void> {
+  try {
+    await logAudit(entry);
+  } catch (error) {
+    console.error("[bau-follow] audit write failed:", error);
+  }
+}
+
+function mapBauFollowError(error: unknown): never {
+  if (error instanceof BauFollowError) {
+    switch (error.code) {
+      case "not_found":
+      case "disabled":
+        throw new NotFound(error.message);
+      case "forbidden":
+      case "blocked":
+        throw new Forbidden(error.message);
+      case "exists":
+      case "limit":
+        throw new HttpError(409, error.message);
+      default:
+        throw new HttpError(400, error.message);
+    }
+  }
+  throw error;
+}
+
+router.get(
+  "/api/servers/:serverId/home/follow",
+  async ({ user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    return getBauFollowState(serverId!, user.id);
+  },
+);
+
+router.get(
+  "/api/servers/:serverId/home/follow/destinations",
+  async ({ user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    const state = await getBauFollowState(serverId!, user.id);
+    if (!state.enabled) {
+      throw new NotFound("Not found");
+    }
+    return listBauFollowDestinations(serverId!, user.id);
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/follow",
+  async ({ req, res, user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    const body = createBauFollowSchema.parse(await readJsonBody(req));
+    try {
+      const follow = await createBauFollow({
+        sourceServerId: serverId!,
+        channelId: body.channelId,
+        rolePingId: body.rolePingId ?? null,
+        actorId: user.id,
+      });
+      await auditBauFollow({
+        serverId: follow.targetServerId,
+        actorId: user.id,
+        action: "bau_follow.create",
+        targetType: "bau_follow",
+        targetId: follow.id,
+        changes: [
+          { key: "source", old: null, new: follow.sourceServerName },
+          { key: "channelId", old: null, new: follow.targetChannelId },
+        ],
+      });
+      return created({ follow });
+    } catch (error) {
+      mapBauFollowError(error);
+    }
+  },
+);
+
+router.get(
+  "/api/channels/:channelId/bau-follows",
+  async ({ user }, { channelId }) => {
+    requireCommunityHome();
+    try {
+      return { follows: await listChannelBauFollows(channelId!, user.id) };
+    } catch (error) {
+      mapBauFollowError(error);
+    }
+  },
+);
+
+router.patch(
+  "/api/bau-follows/:followId",
+  async ({ req, res, user }, { followId }) => {
+    requireCommunityHome();
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    const body = updateBauFollowSchema.parse(await readJsonBody(req));
+    try {
+      const before = await getFollowRef(followId!);
+      const follow = await updateBauFollow({
+        followId: followId!,
+        actorId: user.id,
+        rolePingId: body.rolePingId,
+        resume: body.resume,
+      });
+      if (before && body.resume === true && before.paused_at) {
+        await auditBauFollow({
+          serverId: follow.targetServerId,
+          actorId: user.id,
+          action: "bau_follow.resume",
+          targetType: "bau_follow",
+          targetId: follow.id,
+          changes: [
+            { key: "source", old: null, new: follow.sourceServerName },
+            { key: "channelId", old: null, new: follow.targetChannelId },
+          ],
+        });
+        kickBauFollow(follow.sourceServerId);
+      }
+      return { follow };
+    } catch (error) {
+      mapBauFollowError(error);
+    }
+  },
+);
+
+router.delete(
+  "/api/bau-follows/:followId",
+  async ({ res, user }, { followId }) => {
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    try {
+      const removed = await deleteBauFollow({ followId: followId!, actorId: user.id });
+      await auditBauFollow({
+        serverId: removed.target_server_id,
+        actorId: user.id,
+        action: "bau_follow.delete",
+        targetType: "bau_follow",
+        targetId: removed.id,
+        changes: [
+          { key: "sourceServerId", old: removed.source_server_id, new: null },
+          { key: "channelId", old: removed.target_channel_id, new: null },
+        ],
+      });
+      return { ok: true };
+    } catch (error) {
+      mapBauFollowError(error);
+    }
+  },
+);
+
+/**
+ * The owner's own switch for being followed ("Permitir seguir", Baú settings),
+ * default off. Needs MANAGE_SERVER; with the flag and the Baú on it is what
+ * makes the server followable at all.
+ */
+router.patch(
+  "/api/servers/:serverId/home/follow-config",
+  async ({ req, res, user }, { serverId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    const body = updateBauFollowConfigSchema.parse(await readJsonBody(req));
+    await setBauFollowAllowed(serverId!, body.allowed);
+    await auditBauFollow({
+      serverId: serverId!,
+      actorId: user.id,
+      action: body.allowed ? "bau_follow.allow" : "bau_follow.disallow",
+      targetType: "server",
+      targetId: serverId!,
+    });
+    if (!body.allowed) {
+      kickBauFollow(serverId!);
+    }
+    return listBauFollowers(serverId!);
+  },
+);
+
+/** The source's staff: who follows this Baú (server names, never people). */
+router.get(
+  "/api/servers/:serverId/home/followers",
+  async ({ user }, { serverId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    return listBauFollowers(serverId!);
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/home/followers/:followId",
+  async ({ url, res, user }, { serverId, followId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    const block = url.searchParams.get("block") === "1";
+    try {
+      const removed = await removeBauFollower({
+        sourceServerId: serverId!,
+        followId: followId!,
+        actorId: user.id,
+        block,
+      });
+      await auditBauFollow({
+        serverId: serverId!,
+        actorId: user.id,
+        action: block ? "bau_follow.block" : "bau_follow.remove_follower",
+        targetType: "server",
+        targetId: removed.targetServerId,
+        changes: [{ key: "server", old: removed.targetServerName, new: null }],
+      });
+      return { ok: true, removed: removed.removed };
+    } catch (error) {
+      mapBauFollowError(error);
+    }
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/home/follow-blocks/:blockedServerId",
+  async ({ res, user }, { serverId, blockedServerId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    if (!(await unblockBauFollower(serverId!, blockedServerId!))) {
+      throw new NotFound("Not found");
+    }
+    await auditBauFollow({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "bau_follow.unblock",
+      targetType: "server",
+      targetId: blockedServerId!,
+    });
+    return { ok: true };
+  },
+);
+
 router.post(
   "/api/servers/:serverId/home/read",
   async ({ user }, { serverId }) => {
@@ -5616,6 +5892,7 @@ router.post(
       const post = await publishCommunityHomePost(serverId!, postId!, user.id);
       await notifyHome(serverId!);
       void pushPendingCommunityHomePosts(serverId!);
+      kickBauFollow(serverId!);
       const announced = await announceHomePost(
         req,
         user,
@@ -5642,6 +5919,7 @@ router.post(
         user.id,
       );
       await notifyHome(serverId!);
+      kickBauFollow(serverId!);
       return { post };
     } catch (error) {
       mapCommunityHomeError(error);
