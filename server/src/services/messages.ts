@@ -8,11 +8,13 @@ import {
   formatUserTag,
   MAX_PINS_PER_CHANNEL,
   MESSAGE_SYSTEM_KINDS,
+  messageForwardSchema,
   resolveChanceRequest,
   type Attachment,
   type ChanceRequest,
   type ChanceResult,
   type Embed,
+  type MessageForward,
   type MessagePinnedBy,
   type MessageSystemKind,
   type MessageReaction,
@@ -66,6 +68,11 @@ export interface MessageInteractive {
    * what every client that predates the kind renders.
    */
   systemKind?: MessageSystemKind;
+  /**
+   * The snapshot a forward carries (`POST /api/forwards`), stored in
+   * `messages.forward`. Only the forward route builds one.
+   */
+  forward?: MessageForward;
 }
 
 /**
@@ -125,7 +132,7 @@ const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.author_id, m.body, m.create
             (u.clerk_id = '${AUTOMOD_CLERK_ID}') as author_is_automod,
             m.webhook_embeds, m.webhook_username, m.webhook_avatar_url,
             m.mention_everyone, m.mention_here,
-            m.chance, m.system_kind, m.story_id,
+            m.chance, m.system_kind, m.story_id, m.forward,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM messages m
@@ -486,6 +493,14 @@ export interface MentionWrite {
    * message that mentions a big role costs exactly what it did before.
    */
   collectRecipients?: boolean;
+  /**
+   * The text mentions are read from, when it is not the stored body. A
+   * forward's body can be the server's fallback line (a title and a URL the
+   * forwarder never wrote), and a name inside a forwarded snapshot must not
+   * ping anybody, so the route passes the forwarder's own comment here and
+   * mentions are read from that alone.
+   */
+  mentionText?: string;
 }
 
 async function recordMentions(
@@ -789,14 +804,14 @@ async function insertMessage(
     // parent lookup hangs off.
     const result = await client.query<DbMessage>(
       `WITH inserted AS (
-         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance, nonce, system_kind, story_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance, nonce, system_kind, story_id, forward)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (channel_id, author_id, nonce) WHERE nonce IS NOT NULL DO NOTHING
          RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                   mention_everyone, mention_here, chance, system_kind, story_id
+                   mention_everyone, mention_here, chance, system_kind, story_id, forward
        )
        SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
-              m.mention_everyone, m.mention_here, m.chance, m.system_kind, m.story_id,
+              m.mention_everyone, m.mention_here, m.chance, m.system_kind, m.story_id, m.forward,
               ${REPLY_COLUMNS}
        FROM inserted m
        JOIN channels msg_ch ON msg_ch.id = m.channel_id
@@ -812,6 +827,7 @@ async function insertMessage(
         nonce ?? null,
         interactive?.systemKind ?? null,
         storyId,
+        interactive?.forward ? JSON.stringify(interactive.forward) : null,
       ],
     );
     // A message is never born pinned, so the columns above are left out rather
@@ -858,7 +874,7 @@ async function insertMessage(
       message.id,
       channelId,
       author.id,
-      storedBody,
+      mentions?.mentionText ?? storedBody,
       replyToId ? { parentId: replyToId, authorId: author.id } : undefined,
       mentions,
     );
@@ -937,14 +953,14 @@ export async function updateMessageBody(
        UPDATE messages SET body = $2, edited_at = NOW()
        WHERE id = $1 AND system_kind IS NULL
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                 pinned_at, pinned_by, chance, system_kind
+                 pinned_at, pinned_by, chance, system_kind, forward
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
-            m.chance, m.system_kind,
+            m.chance, m.system_kind, m.forward,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM updated m
@@ -1246,7 +1262,22 @@ export function mapMessage(
     systemKind: parseStoredSystemKind(m.system_kind),
     // Only on a story reply; absent everywhere else, so no other payload grows.
     ...(m.story_id ? { storyId: m.story_id } : {}),
+    // Only on a forward; absent everywhere else, so no other payload grows.
+    ...forwardField(m.forward),
   };
+}
+
+/**
+ * The stored snapshot, validated on the way out. A value this build cannot
+ * parse (a newer version, a hand-edited row) leaves as an ordinary message,
+ * which its plaintext body already is.
+ */
+function forwardField(value: unknown): { forward?: MessageForward } {
+  if (value == null) {
+    return {};
+  }
+  const parsed = messageForwardSchema.safeParse(value);
+  return parsed.success ? { forward: parsed.data } : {};
 }
 
 /**
@@ -1344,14 +1375,14 @@ export async function pinMessage(
            pinned_by = COALESCE(pinned_by, $2)
        WHERE id = $1
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                 pinned_at, pinned_by, chance, system_kind
+                 pinned_at, pinned_by, chance, system_kind, forward
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
-            m.chance, m.system_kind,
+            m.chance, m.system_kind, m.forward,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM updated m
@@ -1377,14 +1408,14 @@ export async function unpinMessage(
        UPDATE messages SET pinned_at = NULL, pinned_by = NULL
        WHERE id = $1
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                 pinned_at, pinned_by, chance, system_kind
+                 pinned_at, pinned_by, chance, system_kind, forward
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
-            m.chance, m.system_kind,
+            m.chance, m.system_kind, m.forward,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM updated m

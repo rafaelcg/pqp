@@ -1639,6 +1639,8 @@ export interface DbMessage {
   system_kind?: string | null;
   /** The story a DM reply quotes (`messages.story_id`). */
   story_id?: string | null;
+  /** `messages.forward`: the snapshot of a forwarded message, or null. */
+  forward?: unknown;
 }
 
 export interface DbInvite {

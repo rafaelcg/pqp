@@ -23,6 +23,7 @@ export * from "./chance.js";
 export * from "./polls.js";
 export * from "./feedback.js";
 export * from "./forums.js";
+export * from "./forward.js";
 export * from "./friends.js";
 export * from "./gifs.js";
 export * from "./hls-remux-control.js";
