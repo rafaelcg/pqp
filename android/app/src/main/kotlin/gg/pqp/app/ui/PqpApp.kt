@@ -107,6 +107,9 @@ import kotlinx.serialization.Serializable
 
 @Serializable object ServersRoute
 
+/** How long a forward card's jump waits for the channel record before opening anyway. */
+private const val CHANNEL_LOOKUP_MS = 1_200L
+
 @Serializable data class ChannelsRoute(val serverId: String, val serverName: String)
 
 /**
@@ -344,8 +347,12 @@ private fun SignedInNav(
                     forwardScope.launch {
                         // Cancellation-preserving: a sign-out while this is in the air
                         // must not go on to navigate on a host that is gone.
-                        val channel = gg.pqp.app.core.runSuspendCatching { session.api.channels(target.serverId) }
-                            .getOrNull()?.firstOrNull { it.id == target.channelId }
+                        // The channel record only fills in the title and the voice flags, so
+                        // it gets a short wait: a slow connection opens the chat with a
+                        // placeholder title rather than holding the tap.
+                        val channel = kotlinx.coroutines.withTimeoutOrNull(CHANNEL_LOOKUP_MS) {
+                            gg.pqp.app.core.runSuspendCatching { session.api.channels(target.serverId) }.getOrNull()
+                        }?.firstOrNull { it.id == target.channelId }
                         nav.navigate(
                             ChatRoute(
                                 target.channelId,
