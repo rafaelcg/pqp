@@ -52,6 +52,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,6 +66,7 @@ import gg.pqp.app.attachments.formatAttachmentSize
 import gg.pqp.app.bau.BauComment
 import gg.pqp.app.bau.BauMedia
 import gg.pqp.app.bau.BauPost
+import gg.pqp.app.bau.BauPublicShare
 import gg.pqp.app.bau.BauViewModel
 import gg.pqp.app.bau.YoutubeLinks
 import gg.pqp.app.core.Channel
@@ -677,7 +681,7 @@ private fun FileCard(media: BauMedia, open: () -> Unit) {
 
 @Composable
 private fun ActionRow(post: BauPost, onToggleLike: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         val likeLabel = stringResource(if (post.likedByMe) R.string.bau_unlike else R.string.bau_like)
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -722,8 +726,58 @@ private fun ActionRow(post: BauPost, onToggleLike: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        BauPublicShare.shareableUrl(post)?.let { publicUrl ->
+            Spacer(Modifier.weight(1f))
+            ShareControl(publicUrl = publicUrl, title = shareTitle(post))
+        }
     }
 }
+
+/**
+ * Compartilhar, right-aligned in the footer like the web's card: the system
+ * share sheet with the post's public link. Only drawn when the API sent a
+ * `publicUrl` ([BauPublicShare.shareableUrl]), so a members-only, locked or
+ * unpublished post, or a server without a public address, never shows it.
+ */
+@Composable
+private fun ShareControl(publicUrl: String, title: String?) {
+    val context = LocalContext.current
+    val label = stringResource(R.string.bau_share)
+    val description = stringResource(R.string.bau_share_description)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(MaterialTheme.shapes.small)
+            // One node for TalkBack: "Compartilhar esse post, button", not
+            // the description and then the visible word again.
+            .semantics { contentDescription = description }
+            .clickable(role = Role.Button) {
+                BauPublicShare.share(context, publicUrl, title, label)
+            }
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+            .testTag("bau.share"),
+    ) {
+        Icon(
+            imageVector = PqpIcons.Share,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(Sizes.iconAction),
+        )
+        Spacer(Modifier.width(Spacing.xs))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.clearAndSetSemantics {},
+        )
+    }
+}
+
+/** What the share sheet shows as the subject: the title, else the body's first line. */
+private fun shareTitle(post: BauPost): String? =
+    post.title?.trim()?.takeIf { it.isNotEmpty() }
+        ?: post.body?.trim()?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()?.take(120)
 
 /**
  * The two newest comments, "see all" for the rest, and a one-line composer.

@@ -203,6 +203,8 @@ data class BauPostCard(
     val likeCount: Int = 0,
     val commentCount: Int = 0,
     val publishedAt: String? = null,
+    /** The post's public page, when it has one. See [BauPost.publicUrl]. */
+    val publicUrl: String? = null,
 ) {
     /** A cover that can actually be fetched; anything else falls back to the frame. */
     val hasReadableCover: Boolean
