@@ -16,10 +16,11 @@ arithmetic: [`docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md`](../../docs/plans
 | `db-backup.sh` | The nightly Postgres backup job (`docs/DB_RUNBOOK.md`): `pg_dump` against `DATABASE_URL` from `/opt/pqp/.env`, uploaded with `rclone` to the `LIVE_HLS_S3_*` R2 bucket. No secrets of its own. | `/opt/pqp/backup/run.sh`, run by root's crontab (`/etc/cron.d/pqp-db-backup`) |
 | `compose.yaml` | `api-a` + `api-b` (two copies of the API half, same image as `pqp-api` on Fly, `WORKER_MODE=api` on both — `api-b` is Compose-profile-gated, see `docs/deploy-vultr.md` §9 "Two replicas on one box"), `worker` (same image, `WORKER_MODE=worker`, stays single, same `stop_grace_period` contract as `fly.toml`'s `kill_timeout`), `caddy` | `/opt/pqp/compose.yaml` |
 | `pqp-deploy.sh` | The one command the unprivileged `pqp-deploy` SSH account may sudo. Rolling-updates `api-a` → `api-b` → `worker`, verifies each replica's own reported version, splits `PG_POOL_MAX` across however many replicas are running. Signed and transferred by the deploy workflow the same way as `compose.yaml`/`Caddyfile` (same HMAC manifest) and installs a newer copy of itself mid-run when one is staged — see its own header comment for why that self-replacement is safe. A box whose installed copy predates this file's `api-a`/`api-b` split needs ONE manual `provision.sh` re-run first; `docs/deploy-vultr.md` §9 "Migrating an existing box" has the exact commands. | `/usr/local/bin/pqp-deploy` (root:root, 0755) |
-| `Caddyfile` | TLS for `api.pqp.gg` (two modes documented in its header: Cloudflare Origin CA, or Caddy automatic HTTPS), load-balancing reverse proxy across `api-a:3001` / `api-b:3001` with active health checking, WebSocket pass-through | `/opt/pqp/Caddyfile` |
+| `Caddyfile` | TLS for `api.pqp.gg` (two modes documented in its header: Cloudflare Origin CA, or Caddy automatic HTTPS), load-balancing reverse proxy across `api-a:3001` / `api-b:3001` with active health checking, WebSocket pass-through | `/opt/pqp/caddy/Caddyfile` (the directory `/opt/pqp/caddy` is mounted whole at `/etc/caddy`, never the single file: see below) |
+| `test-pqp-deploy.sh` | Offline checks (stubbed `docker`, temp directories, no root) for the Caddy layout seeding and the post-reload integrity check in `pqp-deploy.sh`; the functions are cut out of the real script. Not installed on the box. | not on the box |
 | `config.alloy` | Box metrics + `api-a`/`api-b`/`worker` container logs (labeled by Compose service name automatically — no changes needed here for the second replica), both to the same Grafana Cloud stack `tools/sfu-monitoring` and `tools/log-shipper` already use | `/etc/alloy/config.alloy` |
 
-Not here, and never in git: `.env`, `certs/origin.{pem,key}`,
+Not here, and never in git: `.env`, `caddy/certs/origin.{pem,key}`,
 `/etc/alloy/credentials.env`. `provision.sh` writes an empty template for
 the first and refuses to overwrite anything that already exists. The
 nightly backup has no secrets file of its own, `db-backup.sh` reads
@@ -91,10 +92,24 @@ For a change that is only this `Caddyfile` (no new image to roll), on the
 box:
 
 ```bash
-sudo cp Caddyfile /opt/pqp/Caddyfile
+sudo install -m 0644 -o pqp -g pqp Caddyfile /opt/pqp/caddy/Caddyfile
+cd /opt/pqp
 docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile
 docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+# the two hashes must be identical, or the container is not running what you installed
+sha256sum /opt/pqp/caddy/Caddyfile
+docker compose exec -T caddy sha256sum /etc/caddy/Caddyfile
 ```
+
+`compose.yaml` mounts the directory `/opt/pqp/caddy` at `/etc/caddy`, so
+any way of replacing the file (`install`, `cp`, `mv`, an editor's save) is
+seen by the container. It used to bind-mount the single file, which pins an
+inode: a rename-replace left the container on the old content for four
+weeks (2026-09-16 to 2026-10-15) while `caddy reload` said "config is
+unchanged". Do not put a single-file mount back. `pqp-deploy.sh` also
+compares the two hashes after every reload and recreates only `caddy` when
+they differ. The one-time move from the old layout is in
+`docs/deploy-vultr.md` §8, "Caddy directory layout".
 
 `caddy reload` validates the new config before it swaps it in, so a bad
 config is refused rather than left half-applied — the explicit `validate`

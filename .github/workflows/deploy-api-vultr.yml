@@ -228,6 +228,44 @@ jobs:
           echo "tag=${tag:-}" >> "$GITHUB_OUTPUT"
           echo "Previously deployed tag: ${tag:-none (first deploy on this box)}"
 
+      # Fail closed, before anything is copied or touched, when the
+      # pqp-deploy installed on the box predates the Caddy directory layout.
+      # compose.yaml bind-mounts /opt/pqp/caddy (a DIRECTORY) at /etc/caddy
+      # since the single-file Caddyfile mount went four weeks stale (the
+      # container kept an old inode while the deploy renamed new files over
+      # the host path). The installed script runs FIRST on every deploy and
+      # installs the new compose.yaml before it recreates caddy, so an old
+      # script would `up -d caddy` against a directory it never created and
+      # take the public API down at the proxy. That script cannot be taught
+      # anything by this run (it only learns about a staged pqp-deploy.sh
+      # for the NEXT invocation), so the one-time bootstrap is by hand, the
+      # same shape as docs/deploy-vultr.md "Migrating an existing box": see
+      # "Caddy directory layout" there. Detected by a marker line the new
+      # script carries, read from /usr/local/bin (0755, readable by this
+      # account) rather than from /opt/pqp (0750).
+      - name: Require a pqp-deploy that knows the Caddy directory layout
+        if: steps.relevant.outputs.needed == 'true'
+        env:
+          SSH_KEY: ${{ runner.temp }}/vultr_deploy_key
+          HOST: ${{ secrets.VULTR_API_HOST }}
+        run: |
+          set +e
+          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" \
+            'grep -q "pqp-deploy-capability: caddy-dir-v1" /usr/local/bin/pqp-deploy'
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "installed pqp-deploy carries the caddy-dir-v1 marker" ;;
+            1|2)
+              echo "::error::/usr/local/bin/pqp-deploy on the box predates the Caddy directory layout (no 'pqp-deploy-capability: caddy-dir-v1' marker). Nothing was touched. Install the new script by hand once, then re-run this workflow: docs/deploy-vultr.md, 'Caddy directory layout'."
+              exit 1
+              ;;
+            *)
+              echo "::error::could not ask the box about its pqp-deploy (ssh exit $rc); not deploying blind"
+              exit "$rc"
+              ;;
+          esac
+
       # pqp-deploy (the account VULTR_API_SSH_KEY authenticates to) can
       # stage whatever bytes it likes in its own home directory -- that is
       # the account a leaked key gives an attacker. Root only installs a
