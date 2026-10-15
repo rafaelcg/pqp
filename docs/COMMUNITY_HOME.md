@@ -446,11 +446,12 @@ carries the visitor through sign-up into the community (`?join=<slug>`).
   picture's own first 64 KB (`server/src/lib/image-info.ts`, jpeg / png / webp /
   gif, no dependency) and remembered per storage key
   (`server/src/services/community-home-cover-info.ts`). Null when unknown: a
-  YouTube poster, a format we do not read, or a bucket that took more than 1 s on
-  a cold cover, because the page never waits longer than that on storage for a
-  hint. The lookup is one HEAD and one ranged read sent together; when the page
-  gives up and nobody else is waiting on it (the cover route may be), both are
-  cancelled at the bucket, each has a 5 s deadline of its own, and the page does
+  YouTube poster, a format we do not read, or a bucket that took more than 0.5 s
+  on a cold cover, because the page never waits longer than that on storage for
+  a hint. The lookup is one HEAD and one ranged read sent together; when the page
+  gives up and nobody else is waiting on it (the cover route may be), or one of
+  the two fails, both are cancelled at the bucket, each has a 5 s deadline of its
+  own, and the page does
   not start more than 16 at once. The file's `Content-Type` is what the header
   says the bytes are (the card advertises the same), falling back to the type the
   object was stored under. The edge turns them into

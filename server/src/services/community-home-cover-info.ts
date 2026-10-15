@@ -137,11 +137,19 @@ function start(key: string): Probe {
     settled: false,
   };
   inFlight += 1;
-  probe.promise = lookup(key, abort.signal).finally(() => {
-    clearTimeout(timer);
-    probe.settled = true;
-    inFlight -= 1;
-  });
+  probe.promise = lookup(key, abort.signal)
+    .catch((error: unknown) => {
+      // A lookup that failed (a HEAD that errored while the ranged read is still
+      // pending, say) takes its sibling request down with it instead of leaving
+      // it holding a storage connection until its own timeout.
+      abort.abort();
+      throw error;
+    })
+    .finally(() => {
+      clearTimeout(timer);
+      probe.settled = true;
+      inFlight -= 1;
+    });
   probes.set(key, probe);
   while (probes.size > COVER_INFO_MAX_ENTRIES) {
     // The oldest entry; a probe still running keeps running, and is no longer

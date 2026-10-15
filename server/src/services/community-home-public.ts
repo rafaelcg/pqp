@@ -360,7 +360,7 @@ export async function getPublicBauPostCover(
  * `community-home-cover-info.ts`), and it is the first scrape of a link that
  * the hint exists for, so a wait on a miss is deliberate and a short one.
  */
-const COVER_FACTS_BUDGET_MS = 1000;
+const COVER_FACTS_BUDGET_MS = 500;
 
 interface CoverFacts {
   type: string | null;

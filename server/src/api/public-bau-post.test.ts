@@ -77,6 +77,8 @@ const storage = {
   ignoresRange: false,
   /** Resolves never: a bucket that does not answer (until its request is aborted). */
   hang: false,
+  /** Only the ranged read never answers (the HEAD beside it does, or fails). */
+  hangPrefix: false,
   /** Calls that were told to stop (their AbortSignal fired). */
   aborted: 0,
   /** A store that ignores Range, then dies partway through the whole body. */
@@ -136,7 +138,7 @@ vi.mock("../lib/s3.js", async (importOriginal) => {
     },
     getObjectPrefix: async (key: string, length: number, signal?: AbortSignal) => {
       storageCalls.prefix += 1;
-      if (storage.hang) {
+      if (storage.hang || storage.hangPrefix) {
         return hangUntilAborted(signal);
       }
       await answerAfterDelay(signal);
@@ -392,6 +394,7 @@ describeDb("public Baú post", () => {
     storage.fault = false;
     storage.ignoresRange = false;
     storage.hang = false;
+    storage.hangPrefix = false;
     storage.aborted = 0;
     storage.delayMs = 0;
     storage.bodyFails = false;
@@ -978,6 +981,22 @@ describeDb("public Baú post", () => {
       }
       expect(coverProbesInFlight()).toBe(0);
       expect(storage.aborted).toBeGreaterThanOrEqual(storageCalls.head);
+    });
+
+    it("a HEAD that fails takes the ranged read beside it down, instead of leaving it holding a connection", async () => {
+      const key = `community-home/${serverId}/falha.png`;
+      store.set(key, { bytes: pngBytes(1200, 630), type: "image/png" });
+      const id = await seed({ mediaKind: "image", storageKey: key });
+      storage.fault = true;
+      storage.hangPrefix = true;
+      const page = await get(url(id));
+      expect(page.status).toBe(200);
+      expect(publicBauPostResponseSchema.parse(page.body).post.coverWidth).toBeNull();
+      for (let i = 0; i < 50 && storage.aborted === 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(storage.aborted).toBe(1);
+      expect(coverProbesInFlight()).toBe(0);
     });
 
     it("does not abort a lookup the cover route is still waiting on when the page gives up", async () => {
