@@ -25,8 +25,9 @@ function text(n: number, over: Partial<Extract<EditorLayer, { type: "text" }>> =
 function mention(n: number, userId = uuid(900 + n)): EditorLayer {
   return { id: uuid(n), type: "mention", x: 0.5, y: 0.5, scale: 1, rotation: 0, userId, name: `Ana${n}` };
 }
-function image(n: number): EditorLayer {
+function image(n: number, alt?: string): EditorLayer {
   return {
+    ...(alt === undefined ? {} : { alt }),
     id: uuid(n),
     type: "image",
     x: 0.5,
@@ -242,6 +243,14 @@ describe("toLayerInput", () => {
     });
   });
 
+  it("sends a photo's description trimmed on one line, and none when it is blank", () => {
+    expect(toLayerInput(image(1, "  um gato\n  dormindo "))).toMatchObject({ alt: "um gato dormindo" });
+    expect(toLayerInput(image(1, "   "))).not.toHaveProperty("alt");
+    expect(toLayerInput(image(1))).not.toHaveProperty("alt");
+    const long = toLayerInput(image(1, "x".repeat(300))) as { alt: string };
+    expect(long.alt.length).toBe(200);
+  });
+
   it("sends the trimmed text", () => {
     expect(toLayerInput(text(1, { text: "  oi  " }))).toMatchObject({ text: "oi" });
   });
@@ -252,6 +261,16 @@ describe("altTextFor", () => {
     const layers = [text(1, { text: "segundo", y: 0.6 }), text(2, { text: "primeiro", y: 0.2 }), mention(3)];
     const alt = altTextFor(layers, "legenda", (name) => `com ${name}`);
     expect(alt).toBe("primeiro. segundo. com Ana3. legenda");
+  });
+
+  it("leads with what the author wrote for the picture and the placed photos", () => {
+    const layers = [
+      text(1, { text: "oi", y: 0.1 }),
+      { ...image(2, "  segunda   foto "), y: 0.7 },
+      { ...image(3, "primeira foto"), y: 0.3 },
+      image(4),
+    ];
+    expect(altTextFor(layers, "", (n) => n, " um cachorro\ncorrendo ")).toBe("um cachorro correndo. primeira foto. segunda foto. oi");
   });
 
   it("is empty with nothing to say and never longer than the wire allows", () => {

@@ -1,4 +1,5 @@
 import {
+  Accessibility,
   ArrowUpToLine,
   Camera,
   ChevronLeft,
@@ -74,6 +75,7 @@ import {
 import { useCamera, useRecorder, type RecordedClip } from "@/lib/stories/use-camera";
 import type { ComposerRequest } from "@/lib/stories/ui-store";
 import { cn } from "@/lib/utils";
+import { AltTextSheet } from "./composer-alt";
 import { AudienceChip, AudienceSheet, audienceSummary } from "./composer-audience";
 import { CameraControlsRow, CameraStage } from "./composer-camera";
 import { ComposerCanvas } from "./composer-canvas";
@@ -128,7 +130,7 @@ type Mode = "camera" | "text";
 type RootKeyEvent = Pick<KeyboardEvent, "key" | "shiftKey" | "metaKey" | "ctrlKey" | "preventDefault" | "stopPropagation"> & {
   target: EventTarget | null;
 };
-type Panel = "stickers" | "call" | "mention" | "audience" | null;
+type Panel = "stickers" | "call" | "mention" | "audience" | "alt" | null;
 
 const PROBLEM_KEY: Record<StoryFileProblem["kind"], MessageKey> = {
   "wrong-type": "stories.compose.wrongType",
@@ -177,6 +179,9 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const [drawing, setDrawing] = useState(false);
   const [drawSettings, setDrawSettings] = useState<DrawSettings>(DEFAULT_DRAW);
   const [panel, setPanel] = useState<Panel>(null);
+  // The author's description of the picture, and what the description sheet is open for ("base" or a photo layer's id).
+  const [baseAlt, setBaseAlt] = useState("");
+  const [altTarget, setAltTarget] = useState<string | null>(null);
   const [mentionPeople, setMentionPeople] = useState<MentionPerson[] | null>(null);
   const [mentionLoading, setMentionLoading] = useState(false);
   const [gestureActive, setGestureActive] = useState(false);
@@ -402,6 +407,8 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     }
     setProblem(null);
     setMedia(next);
+    // A different picture, a different description.
+    setBaseAlt("");
     // The bytes are final (a photo is already cropped and encoded, a clip is recorded): start sending
     // them now. A newer file replaces an older one, and the older one's upload is thrown away.
     baseUpload.current?.cancel();
@@ -611,6 +618,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     // The picture is being thrown away, and so is its upload.
     baseUpload.current?.cancel();
     baseUpload.current = null;
+    setBaseAlt("");
     setProblem(null);
     setDrawing(false);
     setEditing(null);
@@ -715,7 +723,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       const input = toLayerInput(layer, drawingFile ?? undefined);
       return input ? [input] : [];
     });
-    const altText = altTextFor(current, "", (name) => t("stories.editor.altMention", { name }));
+    const altText = altTextFor(current, "", (name) => t("stories.editor.altMention", { name }), mode === "camera" ? baseAlt : "");
     // The words go up twice: as layers, and as the plain caption older builds still read.
     const words = current
       .filter((layer): layer is Extract<EditorLayer, { type: "text" }> => layer.type === "text")
@@ -1127,7 +1135,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       case "text":
         return t("stories.editor.layer.text", { text: layer.text });
       case "image":
-        return t("stories.editor.layer.image");
+        return layer.alt?.trim() ? t("stories.editor.layer.imageAlt", { alt: layer.alt.trim() }) : t("stories.editor.layer.image");
       case "drawing":
         return t("stories.editor.layer.drawing");
       case "call":
@@ -1135,6 +1143,22 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       case "mention":
         return t("stories.editor.layer.mention", { name: layer.name });
     }
+  }
+
+  function openAlt(target: string) {
+    setEditing(null);
+    setDrawing(false);
+    setAltTarget(target);
+    setPanel("alt");
+  }
+
+  function saveAlt(alt: string) {
+    if (altTarget === "base") {
+      setBaseAlt(alt);
+    } else if (altTarget) {
+      dispatch({ type: "patch", id: altTarget, patch: { alt } });
+    }
+    setPanel(null);
   }
 
   function cycleShape(layer: Extract<EditorLayer, { type: "image" }>) {
@@ -1339,6 +1363,19 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
                   )}
                 </button>
               )}
+              {selected.type === "image" && (
+                <button
+                  type="button"
+                  className="story-cbtn"
+                  data-story-alt-layer=""
+                  data-active={selected.alt?.trim() ? "true" : undefined}
+                  aria-label={t("stories.editor.alt.titlePhoto")}
+                  title={t("stories.editor.alt.titlePhoto")}
+                  onClick={() => openAlt(selected.id)}
+                >
+                  <Accessibility className="h-[18px] w-[18px]" aria-hidden />
+                </button>
+              )}
               <button
                 type="button"
                 className="story-cbtn"
@@ -1424,6 +1461,19 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
 
           {!showingCamera && !drawing && (
             <div className="flex items-center gap-2.5 px-2">
+              {mode === "camera" && media && (
+                <button
+                  type="button"
+                  className="story-cbtn shrink-0"
+                  data-story-alt-base=""
+                  data-active={baseAlt.trim() ? "true" : undefined}
+                  aria-label={t("stories.editor.alt.titleBase")}
+                  title={t("stories.editor.alt.titleBase")}
+                  onClick={() => openAlt("base")}
+                >
+                  <Accessibility className="h-[18px] w-[18px]" aria-hidden />
+                </button>
+              )}
               <AudienceChip summary={summary} onOpen={() => setPanel("audience")} />
               <StoryButton data-story-post="" disabled={!ready} onClick={() => void submit()}>
                 {t("stories.audience.post")}
@@ -1486,6 +1536,22 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
             callAvailable={Boolean(voiceRooms)}
             callPlaced={Boolean(callLayer)}
             mentionFull={!canAddLayer(layers, "mention")}
+          />
+        )}
+        {panel === "alt" && altTarget && (
+          <AltTextSheet
+            key={altTarget}
+            kind={altTarget === "base" ? "base" : "photo"}
+            initial={
+              altTarget === "base"
+                ? baseAlt
+                : (() => {
+                    const target = layers.find((layer) => layer.id === altTarget);
+                    return target?.type === "image" ? (target.alt ?? "") : "";
+                  })()
+            }
+            onSave={saveAlt}
+            onClose={() => setPanel(null)}
           />
         )}
         {panel === "call" && voiceRooms && (

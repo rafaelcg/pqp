@@ -31,7 +31,7 @@ export interface MentionTarget {
 
 export type DisplayLayer =
   | (LayerGeometry & { type: "text" } & TextLayerFields)
-  | (LayerGeometry & { type: "image"; src: string; width: number; height: number; shape: ImageShape })
+  | (LayerGeometry & { type: "image"; src: string; width: number; height: number; shape: ImageShape; alt?: string | null })
   | (LayerGeometry & { type: "drawing"; src?: string; strokes?: readonly Stroke[] })
   | (LayerGeometry & { type: "call" })
   | (LayerGeometry & { type: "mention"; userId: string; name: string; avatarUrl?: string | null });
@@ -52,7 +52,7 @@ export function displayLayerFrom(layer: StoryLayer): DisplayLayer {
         size: layer.size,
       };
     case "image":
-      return { ...geometry, type: "image", src: layer.url, width: layer.width, height: layer.height, shape: layer.shape };
+      return { ...geometry, type: "image", src: layer.url, width: layer.width, height: layer.height, shape: layer.shape, alt: layer.alt };
     case "drawing":
       return { ...geometry, type: "drawing", src: layer.url };
     case "call":
@@ -81,7 +81,7 @@ function ImageLayerView({ layer }: { layer: Extract<DisplayLayer, { type: "image
   return (
     <img
       src={layer.src}
-      alt=""
+      alt={layer.alt?.trim() || ""}
       draggable={false}
       decoding="async"
       className="block select-none"

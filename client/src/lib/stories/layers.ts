@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import {
   STORY_LAYOUT,
+  STORY_LAYER_ALT_MAX,
   STORY_LAYER_IMAGE_SHAPES,
   STORY_LAYER_SCALE_MAX,
   STORY_LAYER_SCALE_MIN,
@@ -84,6 +85,8 @@ export type EditorLayer =
       previewUrl: string;
       width: number;
       height: number;
+      /** What the author wrote to describe the photo, for screen readers. Empty or absent: none. */
+      alt?: string;
     })
   | (LayerGeometry & { type: "drawing"; strokes: Stroke[] })
   | (LayerGeometry & { type: "call"; serverId: string; channelId: string; channelName: string })
@@ -357,6 +360,7 @@ export function toLayerInput(layer: EditorLayer, drawing?: { blob: Blob; width: 
         ...geometry,
         type: "image",
         shape: layer.shape,
+        ...(layer.alt?.trim() ? { alt: layer.alt.trim().replace(/\s+/g, " ").slice(0, STORY_LAYER_ALT_MAX) } : {}),
         upload: {
           contentType: layer.contentType,
           byteSize: layer.blob.size,
@@ -379,10 +383,26 @@ export function toLayerInput(layer: EditorLayer, drawing?: { blob: Blob; width: 
   }
 }
 
-/** The words a screen reader gets for a story: the text layers in reading order, then the caption. */
-export function altTextFor(layers: readonly EditorLayer[], caption: string, mentionLabel: (name: string) => string): string {
+/**
+ * The words a screen reader gets for a story: what the author wrote to describe the picture (the
+ * base's, then each placed photo's), the text layers in reading order, the people, then the caption.
+ */
+export function altTextFor(
+  layers: readonly EditorLayer[],
+  caption: string,
+  mentionLabel: (name: string) => string,
+  baseAlt = "",
+): string {
   const parts: string[] = [];
   const reading = (a: EditorLayer, b: EditorLayer) => a.y - b.y || a.x - b.x;
+  if (baseAlt.trim()) {
+    parts.push(baseAlt.trim().replace(/\s+/g, " "));
+  }
+  for (const layer of layers.filter((entry) => entry.type === "image").sort(reading)) {
+    if (layer.type === "image" && layer.alt?.trim()) {
+      parts.push(layer.alt.trim().replace(/\s+/g, " "));
+    }
+  }
   // What is written, top to bottom, then who is in it.
   for (const layer of layers.filter((entry) => entry.type === "text").sort(reading)) {
     if (layer.type === "text" && layer.text.trim()) {

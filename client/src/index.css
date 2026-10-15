@@ -4079,6 +4079,11 @@ html[data-immersive-stage] [data-immersive-hide] {
   background: var(--story-on-media);
   color: var(--story-card);
 }
+/* "Describe the photo" once the author has written one: the button says it is done. */
+.story-cbtn[data-active="true"]:not(:disabled) {
+  background: var(--story-accent);
+  color: var(--story-on-accent);
+}
 .story-cmp button:focus-visible,
 .story-cmp [role="radio"]:focus-visible,
 .story-cmp [data-story-layer]:focus-visible {

@@ -621,6 +621,33 @@ describeDb("stories composer v2: layers", () => {
       ]);
     });
 
+    it("keeps the author's description of a placed photo, trimmed, and answers null for one without", async () => {
+      as(alice);
+      const described = imageLayer({ alt: "  um gato dormindo no teclado  " });
+      const plain = imageLayer({ x: 0.3 });
+      const created = await post([described, plain]);
+      expect(created.status).toBe(201);
+      const layers = (created.body.story as Story).layers;
+      expect(layers[0]).toMatchObject({ type: "image", alt: "um gato dormindo no teclado" });
+      expect(layers[1]).toMatchObject({ type: "image", alt: null });
+    });
+
+    it("refuses a description that is empty, too long or has control characters", async () => {
+      as(alice);
+      for (const alt of ["   ", "x".repeat(201), "oi\u0000mundo"]) {
+        expect((await post([imageLayer({ alt })])).status, JSON.stringify(alt).slice(0, 20)).toBe(400);
+      }
+    });
+
+    it("runs AutoMod over a photo's description", async () => {
+      await getPool().query(
+        `INSERT INTO automod_rules (server_id, kind, keywords) VALUES ($1, 'keywords', ARRAY['golpe*'])`,
+        [serverId],
+      );
+      as(bob);
+      expect((await post([imageLayer({ alt: "print de um golpe" })])).status).toBe(422);
+    });
+
     it("runs AutoMod over layer text past the first 280 characters", async () => {
       await getPool().query(
         `INSERT INTO automod_rules (server_id, kind, keywords) VALUES ($1, 'keywords', ARRAY['golpe*'])`,
