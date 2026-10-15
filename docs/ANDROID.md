@@ -2311,6 +2311,7 @@ does with it.
     story is never lost to it. A story from before layers is drawn as it always
     was: its photo, its centred text, its call card where the sticker sat
     (`visibleLayers` synthesises the call layer for a server that does not).
+  - **When the story cannot be read** (the API is unreachable) the viewer shows the one line and **Tentar de novo** and **Fechar**; it used to be a black screen with no way out but the system back gesture.
   - **What is tappable.** Mentions (a sheet with the person, "Adicionar amigo"
     and, when they have a handle, "Ver perfil" on their public page) and the
     call card (joins, then closes the viewer). Text and photos are not: a tap on

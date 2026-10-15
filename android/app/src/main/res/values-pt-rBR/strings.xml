@@ -1196,7 +1196,7 @@
     <string name="stories_outbox_try_now">Tentar agora</string>
     <string name="stories_outbox_failed_label">Não postou</string>
     <string name="stories_outbox_failed_title">Teu story não subiu</string>
-    <string name="stories_outbox_failed_body">Tua foto ou teu vídeo continua guardado. Tenta de novo ou descarta.</string>
+    <string name="stories_outbox_failed_body">Teu story continua guardado. Tenta de novo ou descarta.</string>
     <string name="stories_outbox_posting_title">Postando teu story</string>
     <string name="stories_outbox_posting_body">Ele tá subindo. Se descartares, não vai ao ar.</string>
     <string name="stories_outbox_keep">Continuar postando</string>
