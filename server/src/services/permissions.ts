@@ -440,15 +440,103 @@ export async function resolveMemberChannelPermissions(
   };
 }
 
+/**
+ * The pure half of a channel's answer: the member's context plus the
+ * overwrite rows of ONE channel (already narrowed to that channel; a thread's
+ * are its parent's). Shared by the one-channel path below and the many-channel
+ * path (`computeMemberPermissionsForChannels`), so there is one copy of how an
+ * overwrite is picked and applied.
+ */
+function permissionsFromOverwriteRows(
+  ctx: MemberPermissionContext,
+  rows: readonly OverwriteRow[],
+  options?: { timedOut?: boolean },
+): bigint {
+  let everyoneOverwrite: PermissionOverwrite | null = null;
+  const roleOverwrites: PermissionOverwrite[] = [];
+  let memberOverwrite: PermissionOverwrite | null = null;
+  const heldIds = new Set(ctx.heldRoles.map((role) => role.id));
+  for (const row of rows) {
+    if (row.target_type === "member" && row.target_id === ctx.userId) {
+      memberOverwrite = overwriteOf(row);
+      continue;
+    }
+    if (row.target_type !== "role") {
+      continue;
+    }
+    if (row.target_id === ctx.everyoneRoleId) {
+      everyoneOverwrite = overwriteOf(row);
+      continue;
+    }
+    if (heldIds.has(row.target_id)) {
+      roleOverwrites.push(overwriteOf(row));
+    }
+  }
+  return computePermissions({
+    isOwner: ctx.isOwner,
+    everyonePermissions: ctx.everyonePermissions,
+    rolePermissions: ctx.heldRoles.map((role) => role.permissions),
+    everyoneOverwrite,
+    roleOverwrites,
+    memberOverwrite,
+    timedOut: options?.timedOut,
+  });
+}
+
+/**
+ * `computeMemberPermissions` for MANY channels of one server, for one member:
+ * the membership and roles are read once and every channel's overwrites in one
+ * statement, instead of three queries per channel. The same answer per channel
+ * (`permissionsFromOverwriteRows` is the one implementation), a thread resolved
+ * through its parent exactly as the single-channel path does. For a list that
+ * asks "where may this person speak" over a whole server (the Encaminhar
+ * picker); a person who is not in the server gets 0 everywhere.
+ */
+export async function computeMemberPermissionsForChannels(
+  serverId: string,
+  userId: string,
+  channels: readonly PermissionChannelRef[],
+): Promise<Map<string, bigint>> {
+  const out = new Map<string, bigint>();
+  if (channels.length === 0) {
+    return out;
+  }
+  const ctx = await loadMemberPermissionContext(serverId, userId);
+  if (!ctx) {
+    for (const channel of channels) {
+      out.set(channel.id, 0n);
+    }
+    return out;
+  }
+  const effectiveId = (channel: PermissionChannelRef): string =>
+    channel.type === "thread" && channel.parent_id ? channel.parent_id : channel.id;
+  const wanted = [...new Set(channels.map(effectiveId))];
+  const rows = await getPool().query<OverwriteRow & { channel_id: string }>(
+    `SELECT channel_id, target_type, target_id, allow::text AS allow, deny::text AS deny
+       FROM channel_overwrites WHERE channel_id = ANY($1::uuid[])`,
+    [wanted],
+  );
+  const byChannel = new Map<string, OverwriteRow[]>();
+  for (const row of rows.rows) {
+    const list = byChannel.get(row.channel_id);
+    if (list) {
+      list.push(row);
+    } else {
+      byChannel.set(row.channel_id, [row]);
+    }
+  }
+  for (const channel of channels) {
+    out.set(channel.id, permissionsFromOverwriteRows(ctx, byChannel.get(effectiveId(channel)) ?? []));
+  }
+  return out;
+}
+
 async function applyChannelOverwrites(
   ctx: MemberPermissionContext,
   channel: string | PermissionChannelRef | null,
   options?: { timedOut?: boolean },
 ): Promise<bigint> {
-  let everyoneOverwrite: PermissionOverwrite | null = null;
-  const roleOverwrites: PermissionOverwrite[] = [];
-  let memberOverwrite: PermissionOverwrite | null = null;
-  const userId = ctx.userId;
+  let rows: readonly OverwriteRow[] = [];
 
   if (channel) {
     // Threads have no overwrite rows of their own. Privacy and send/react
@@ -476,34 +564,10 @@ async function applyChannelOverwrites(
          FROM channel_overwrites WHERE channel_id = $1`,
       [overwriteChannelId],
     );
-    const heldIds = new Set(ctx.heldRoles.map((role) => role.id));
-    for (const row of overwrites.rows) {
-      if (row.target_type === "member" && row.target_id === userId) {
-        memberOverwrite = overwriteOf(row);
-        continue;
-      }
-      if (row.target_type !== "role") {
-        continue;
-      }
-      if (row.target_id === ctx.everyoneRoleId) {
-        everyoneOverwrite = overwriteOf(row);
-        continue;
-      }
-      if (heldIds.has(row.target_id)) {
-        roleOverwrites.push(overwriteOf(row));
-      }
-    }
+    rows = overwrites.rows;
   }
 
-  return computePermissions({
-    isOwner: ctx.isOwner,
-    everyonePermissions: ctx.everyonePermissions,
-    rolePermissions: ctx.heldRoles.map((role) => role.permissions),
-    everyoneOverwrite,
-    roleOverwrites,
-    memberOverwrite,
-    timedOut: options?.timedOut,
-  });
+  return permissionsFromOverwriteRows(ctx, rows, options);
 }
 
 /**

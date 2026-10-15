@@ -28,7 +28,7 @@ import {
 } from "./community-home.js";
 import { DmRefusedError, openConversation } from "./dms.js";
 import { findMessageByNonce, mapMessage } from "./messages.js";
-import { computeMemberPermissions } from "./permissions.js";
+import { computeMemberPermissionsForChannels } from "./permissions.js";
 import { getChannel, listChannels } from "./servers.js";
 import { canAccessChannel, getMemberRole } from "./users.js";
 
@@ -76,10 +76,9 @@ const FORWARD_CHANNEL_TYPES = new Set(["text", "voice", "watch_party"]);
 /**
  * The channels of one server this person may forward into, for the picker, in
  * one pass. `listChannels` is the visibility answer (private channels and
- * overwrites already folded in); SEND_MESSAGES is resolved per channel with
- * `computeMemberPermissions`, the call the send itself makes, so a listed
- * channel is one the send will not refuse for permission. The caller has
- * already proved membership.
+ * overwrites already folded in); SEND_MESSAGES is resolved for the whole list
+ * at once with the rule the send applies, so a listed channel is one the send
+ * will not refuse for permission. The caller has already proved membership.
  */
 export async function listForwardDestinations(
   serverId: string,
@@ -88,17 +87,13 @@ export async function listForwardDestinations(
   const channels = (await listChannels(serverId, userId)).filter(
     (channel) => channel.kind === "server" && FORWARD_CHANNEL_TYPES.has(channel.type),
   );
-  const canSend = await Promise.all(
-    channels.map(async (channel) =>
-      hasPermission(
-        await computeMemberPermissions(serverId, userId, channel.id),
-        Permission.SEND_MESSAGES,
-      ),
-    ),
-  );
+  // One membership read and one overwrite read for the whole list, not three
+  // queries per channel; `computeMemberPermissionsForChannels` gives the same
+  // bits `computeMemberPermissions` (the send's own call) would.
+  const bits = await computeMemberPermissionsForChannels(serverId, userId, channels);
   return {
     channels: channels
-      .filter((_, index) => canSend[index])
+      .filter((channel) => hasPermission(bits.get(channel.id) ?? 0n, Permission.SEND_MESSAGES))
       .map((channel) => ({
         id: channel.id,
         name: channel.name,
