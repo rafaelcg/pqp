@@ -16,6 +16,7 @@ import gg.pqp.app.core.Attachment
 import gg.pqp.app.core.CreateGifAttachmentRequest
 import gg.pqp.app.core.Gif
 import gg.pqp.app.core.Message
+import gg.pqp.app.core.MessagesResponse
 import gg.pqp.app.core.PqpJson
 import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
@@ -126,6 +127,17 @@ data class ChatState(
     val loading: Boolean = true,
     val hasMore: Boolean = false,
     val loadingOlder: Boolean = false,
+    /**
+     * Newer messages exist past the loaded window: the chat was opened on a
+     * message in the middle of history (a forward card's jump link). Live
+     * messages are not appended while this is true, because they would sit
+     * after a gap; [ChatViewModel.loadNewer] pages forward and
+     * [ChatViewModel.jumpToLatest] returns to the end.
+     */
+    val hasNewer: Boolean = false,
+    val loadingNewer: Boolean = false,
+    /** Bumped by [ChatViewModel.jumpToLatest] so the screen scrolls to the newest message. */
+    val latestToken: Int = 0,
     val typing: Set<String> = emptySet(),
     val error: String? = null,
     /**
@@ -254,6 +266,11 @@ class ChatViewModel(
      * primary slot exactly as before.
      */
     private val primaryChannelId: String? = null,
+    /**
+     * Open on the page around this message instead of the newest one, when it
+     * exists; a message that is gone falls back to the newest page.
+     */
+    private val aroundMessageId: String? = null,
 ) : ViewModel() {
 
     private val attachmentApi = AttachmentApi(session.api)
@@ -894,12 +911,32 @@ class ChatViewModel(
         _state.value = _state.value.copy(attachmentRefusal = null)
     }
 
+    /**
+     * The first page: around [aroundMessageId] when one was asked for and it
+     * answers, otherwise the newest. A message that was deleted, or that this
+     * account may not read (the server's 400/403/404), is the plain chat, never
+     * an error. Any other failure (a timeout, a 5xx, no network) is a failed
+     * load like the newest page's, with the screen's own error state, rather
+     * than a chat silently opened somewhere the person did not ask for.
+     */
+    private suspend fun fetchInitial(): Result<MessagesResponse> {
+        val around = aroundMessageId
+        if (around != null) {
+            val attempt = runSuspendCatching { session.api.messages(channelId, around = around) }
+            val failure = attempt.exceptionOrNull()
+            val gone = failure is gg.pqp.app.core.ApiException && failure.status in AROUND_GONE_STATUSES
+            if (failure == null || !gone) return attempt
+        }
+        return runSuspendCatching { session.api.messages(channelId) }
+    }
+
     private suspend fun loadInitial() {
-        runSuspendCatching { session.api.messages(channelId) }
+        fetchInitial()
             .onSuccess { page ->
                 _state.value = _state.value.copy(
                     messages = page.messages,
                     hasMore = page.hasMore,
+                    hasNewer = page.hasNewer,
                     loading = false,
                 )
             }
@@ -946,8 +983,11 @@ class ChatViewModel(
         val current = _state.value
         if (!current.hasMore) return 0
         val oldest = current.messages.firstOrNull()?.id ?: return 0
+        val generation = pagingGeneration
         _state.value = current.copy(loadingOlder = true)
         val page = runCatching { session.api.messages(channelId, before = oldest) }.getOrNull()
+        // A jump to latest replaced the window this page was asked about.
+        if (generation != pagingGeneration) return 0
         if (page == null) {
             _state.value = _state.value.copy(loadingOlder = false)
             return 0
@@ -967,10 +1007,13 @@ class ChatViewModel(
         if (current.loadingOlder || !current.hasMore) return
         val oldest = current.messages.firstOrNull()?.id ?: return
 
+        val generation = pagingGeneration
         _state.value = current.copy(loadingOlder = true)
         viewModelScope.launch {
             runCatching { session.api.messages(channelId, before = oldest) }
                 .onSuccess { page ->
+                    // A jump to latest replaced the window this page was asked about.
+                    if (generation != pagingGeneration) return@onSuccess
                     val known = _state.value.messages.map { it.id }.toSet()
                     _state.value = _state.value.copy(
                         messages = page.messages.filterNot { it.id in known } + _state.value.messages,
@@ -978,7 +1021,82 @@ class ChatViewModel(
                         loadingOlder = false,
                     )
                 }
-                .onFailure { _state.value = _state.value.copy(loadingOlder = false) }
+                .onFailure {
+                    if (generation == pagingGeneration) {
+                        _state.value = _state.value.copy(loadingOlder = false)
+                    }
+                }
+        }
+    }
+
+    /**
+     * Bumped by [jumpToLatest]. A paging answer that started under an older
+     * value is stale (it was asked about a window that is gone) and is dropped,
+     * so it can never append old messages after the newest page or restore
+     * `hasNewer`.
+     */
+    private var pagingGeneration = 0
+    private var jumping = false
+
+    /** The next page toward the present, while a jump left newer messages unloaded. */
+    fun loadNewer() {
+        val current = _state.value
+        if (!current.hasNewer || current.loadingNewer || jumping) return
+        val newest = current.messages.lastOrNull { it.id !in pending }?.id ?: return
+        val generation = pagingGeneration
+        _state.value = current.copy(loadingNewer = true)
+        viewModelScope.launch {
+            runSuspendCatching { session.api.messages(channelId, after = newest) }
+                .onSuccess { page ->
+                    if (generation != pagingGeneration) return@onSuccess
+                    // A newer page can only overlap what was appended last, so the
+                    // duplicate check looks at the tail, not the whole transcript.
+                    val tail = _state.value.messages.takeLast(page.messages.size + TAIL_DEDUPE_SLACK)
+                        .mapTo(HashSet()) { it.id }
+                    _state.value = _state.value.copy(
+                        messages = _state.value.messages + page.messages.filterNot { it.id in tail },
+                        hasNewer = page.hasNewer && page.messages.isNotEmpty(),
+                        loadingNewer = false,
+                    )
+                    // Live messages were held back until now: fetch anything
+                    // that arrived while the last page was in flight.
+                    if (!_state.value.hasNewer) catchUp()
+                }
+                .onFailure {
+                    if (generation == pagingGeneration) {
+                        _state.value = _state.value.copy(loadingNewer = false)
+                    }
+                }
+        }
+    }
+
+    /** Back to the newest page from the middle of history. */
+    fun jumpToLatest() {
+        if (!_state.value.hasNewer || jumping) return
+        jumping = true
+        // Whatever paging request is in flight was asked about the old window.
+        pagingGeneration += 1
+        viewModelScope.launch {
+            try {
+                runSuspendCatching { session.api.messages(channelId) }
+                    .onSuccess { page ->
+                        _state.value = _state.value.copy(
+                            messages = page.messages,
+                            hasMore = page.hasMore,
+                            hasNewer = false,
+                            loadingNewer = false,
+                            loadingOlder = false,
+                            latestToken = _state.value.latestToken + 1,
+                        )
+                        // Live messages were held back while `hasNewer` was true, and
+                        // one may have arrived after this page was cut: ask for
+                        // anything past its newest.
+                        catchUp()
+                    }
+                    .onFailure { _state.value = _state.value.copy(loadingNewer = false) }
+            } finally {
+                jumping = false
+            }
         }
     }
 
@@ -999,6 +1117,9 @@ class ChatViewModel(
     }
 
     private suspend fun catchUp() {
+        // In the middle of history the newest loaded message is not the newest
+        // there is: `loadNewer` pages forward from it instead.
+        if (_state.value.hasNewer) return
         val newest = _state.value.messages.lastOrNull()?.id ?: return
         runCatching { session.api.messages(channelId, after = newest) }
             .onSuccess { page ->
@@ -1082,6 +1203,9 @@ class ChatViewModel(
         val message = frame.message() ?: return
         if (message.channelId != channelId) return
         val nonce = frame.string("nonce")
+        // Opened in the middle of history: a live message would land after a
+        // gap. `loadNewer` fetches it in order. Our own echo is the exception.
+        if (_state.value.hasNewer && (nonce == null || nonce !in pending)) return
 
         val current = _state.value.messages
         val withoutOptimistic = if (nonce != null && pending.remove(nonce) != null) {
@@ -1395,6 +1519,12 @@ class ChatViewModel(
         // `message-rejected` anyway; refusing here keeps the words in the box
         // instead of taking them on a round trip to come back.
         if (_state.value.sendHoldUntilMs > now()) return false
+        // Opened in the middle of history, a send would land after a gap. Go to
+        // the end first and keep the words in the box; the next tap sends.
+        if (_state.value.hasNewer) {
+            jumpToLatest()
+            return false
+        }
 
         val nonce = UUID.randomUUID().toString()
         pending[nonce] = PendingSend(trimmed, attachments)
@@ -1543,6 +1673,12 @@ class ChatViewModel(
     companion object {
         private const val TYPING_TTL_MS = 4_000L
 
+        /** What the server answers for a jump target that is deleted or not readable. */
+        private val AROUND_GONE_STATUSES = setOf(400, 403, 404)
+
+        /** Extra tail messages the paging duplicate check looks at, beyond the page's own size. */
+        private const val TAIL_DEDUPE_SLACK = 50
+
         /** How many input levels the locked panel's live waveform keeps. */
         private const val LIVE_LEVELS = 48
 
@@ -1590,6 +1726,7 @@ class ChatViewModel(
             recorder: NoteRecorder? = null,
             callActive: () -> Boolean = { false },
             primaryChannelId: String? = null,
+            aroundMessageId: String? = null,
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
@@ -1602,6 +1739,7 @@ class ChatViewModel(
                     recorder,
                     callActive,
                     primaryChannelId,
+                    aroundMessageId,
                 ) as T
         }
     }
