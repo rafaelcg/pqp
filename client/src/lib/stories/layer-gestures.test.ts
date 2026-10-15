@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   HANDLE_ROTATE_DEAD_ZONE,
   SNAP_DISTANCE,
+  clampCenterInside,
   clampScaleToFit,
   dragTo,
   handleDrag,
@@ -12,6 +13,7 @@ import {
   pinch,
   snap,
   trashZone,
+  usableBox,
   wheelScale,
 } from "./layer-gestures";
 
@@ -209,5 +211,38 @@ describe("keyboardTransform", () => {
 
   it("ignores keys it does not own", () => {
     expect(keyboardTransform(start, "a", false)).toBeNull();
+  });
+});
+
+describe("clampCenterInside", () => {
+  const safe = { x: 0.05, top: 0.1, bottom: 0.13 };
+
+  it("leaves a layer that is inside alone", () => {
+    expect(clampCenterInside({ x: 0.5, y: 0.4 }, { width: 200, height: 100 }, 1, 0, canvas)).toEqual({ x: 0.5, y: 0.4 });
+  });
+
+  it("moves a tall layer down until it clears the top", () => {
+    // 500 of 711 tall is 0.703 of the canvas: centered at 0.2 its top hangs off.
+    const moved = clampCenterInside({ x: 0.5, y: 0.2 }, { width: 200, height: 500 }, 1, 0, canvas);
+    expect(moved.x).toBe(0.5);
+    expect(moved.y).toBeCloseTo(0.5 * 500 / 711, 5);
+  });
+
+  it("keeps clear of the chrome when given the safe area", () => {
+    const moved = clampCenterInside({ x: 0.5, y: 0.4 }, { width: 200, height: 400 }, 1, 0, canvas, safe);
+    expect(moved.y - 400 / 711 / 2).toBeGreaterThanOrEqual(safe.top - 1e-9);
+    expect(moved.y + 400 / 711 / 2).toBeLessThanOrEqual(1 - safe.bottom + 1e-9);
+  });
+
+  it("centers what is bigger than the room", () => {
+    expect(clampCenterInside({ x: 0.2, y: 0.1 }, { width: 900, height: 900 }, 1, 0, canvas)).toEqual({ x: 0.5, y: 0.5 });
+    expect(clampCenterInside({ x: 0.1, y: 0.1 }, { width: 900, height: 900 }, 1, 0, canvas, safe).y).toBeCloseTo((safe.top + 1 - safe.bottom) / 2, 5);
+  });
+
+  it("fits against the usable box", () => {
+    expect(usableBox(canvas, safe)).toEqual({ width: 400 * 0.9, height: 711 * 0.77 });
+    // Words 400 px tall fit the canvas at scale 1 but not the safe area.
+    expect(maxScaleToFit({ width: 200, height: 700 }, 0, usableBox(canvas, safe))).toBeLessThan(1);
+    expect(maxScaleToFit({ width: 200, height: 700 }, 0, canvas)).toBeCloseTo(711 / 700, 3);
   });
 });

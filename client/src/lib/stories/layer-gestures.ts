@@ -121,6 +121,44 @@ export function maxScaleToFit(natural: Natural | null | undefined, rotation: num
   return clampScale(Math.min(canvas.width / turned.width, canvas.height / turned.height));
 }
 
+/** What a viewer's chrome can cover, as shares of the canvas (`STORY_SAFE_AREA`); none by default. */
+export interface Inset {
+  x: number;
+  top: number;
+  bottom: number;
+}
+export const NO_INSET: Inset = { x: 0, top: 0, bottom: 0 };
+
+/** The canvas less its inset: where a layer is meant to sit. */
+export function usableBox(canvas: Box, inset: Inset = NO_INSET): Box {
+  return { width: canvas.width * (1 - 2 * inset.x), height: canvas.height * (1 - inset.top - inset.bottom) };
+}
+
+/**
+ * The center (0..1 of the canvas) moved the least it takes for a layer of `natural` size at `scale`,
+ * turned by `rotation`, to lie inside the canvas less `inset`. A layer wider (or taller) than that
+ * is centered in it on that axis. Used for words that were sized to fit: a center chosen for a
+ * small layer would otherwise leave the big one hanging off the top.
+ */
+export function clampCenterInside(
+  center: { x: number; y: number },
+  natural: Natural,
+  scale: number,
+  rotation: number,
+  canvas: Box,
+  inset: Inset = NO_INSET,
+): { x: number; y: number } {
+  const turned = turnedSize(natural.width * scale, natural.height * scale, rotation);
+  const along = (value: number, size: number, span: number, from: number, to: number) => {
+    const half = size / 2 / span;
+    return half >= (to - from) / 2 ? (from + to) / 2 : clamp(value, from + half, to - half);
+  };
+  return {
+    x: along(center.x, turned.width, canvas.width, inset.x, 1 - inset.x),
+    y: along(center.y, turned.height, canvas.height, inset.top, 1 - inset.bottom),
+  };
+}
+
 /**
  * `start`: where the layer was when the gesture began. A layer that did not fit the canvas then
  * (an old story, a long text) is never forced smaller by a gesture that does not make it bigger:

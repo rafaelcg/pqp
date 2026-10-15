@@ -7,11 +7,12 @@ import {
   STORY_LAYER_TEXT_BACKGROUNDS,
   STORY_LAYER_SCALE_MAX,
   STORY_LAYER_SCALE_MIN,
+  STORY_SAFE_AREA,
   STORY_TEXT_MAX,
 } from "@pqp/shared";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { useWheelScrollX } from "@/lib/use-wheel-scroll-x";
-import { maxScaleToFit } from "@/lib/stories/layer-gestures";
+import { NO_INSET, clampCenterInside, maxScaleToFit, usableBox } from "@/lib/stories/layer-gestures";
 import { layerStyle, type TextLayerFields } from "@/lib/stories/layers";
 
 /**
@@ -109,13 +110,19 @@ interface TextEditorProps {
   /** Where the layer is, and how big and tilted: the words are edited right there. */
   geometry: TextEditorGeometry;
   /** The text, its style and its scale as they are now (the scale is the size slider's). */
-  onDone: (fields: TextLayerFields, scale: number) => void;
+  onDone: (fields: TextLayerFields, scale: number, center: { x: number; y: number }) => void;
   onCancel: () => void;
   /**
    * How far the whole stage has to rise to keep the layer (and the controls under it) above
    * a soft keyboard, in CSS pixels. 0 when nothing is covered. Called as the keyboard comes and goes.
    */
   onLift?: (pixels: number) => void;
+  /**
+   * New words are kept out of the band a viewer's own chrome covers (progress bars and header on
+   * top, the reply row below): sized and placed to fit what is left. Words already on the canvas
+   * are only kept on the canvas itself, so editing one never pulls it somewhere the author put it.
+   */
+  keepClearOfChrome?: boolean;
 }
 
 /** What a soft keyboard takes off the bottom of the window, from the visual viewport (0 without one). */
@@ -137,7 +144,7 @@ function keyboardHeight(): number {
  * On a phone the keyboard can cover the layer: the whole stage rises just enough to
  * show it and settles back after (`onLift`), the layer's own position never changes.
  */
-export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: TextEditorProps) {
+export function TextEditor({ initial, geometry, onDone, onCancel, onLift, keepClearOfChrome = false }: TextEditorProps) {
   const { t } = useTranslation();
   const [fields, setFields] = useState<TextLayerFields>(initial);
   const [scale, setScale] = useState(geometry.scale);
@@ -147,25 +154,31 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: Text
   const patch = (change: Partial<TextLayerFields>) => setFields((current) => ({ ...current, ...change }));
 
   // The biggest the words may be made: the whole layer, turned as it is, still inside the canvas.
-  // (A layer that was already bigger keeps what it had; it just cannot grow.) Measured from the
-  // field's own size at scale 1, so it follows the words, the font and the size as they change.
+  // Words that do not fit at the size they were given (a long text, a long unbroken word) are made
+  // smaller until they do, and their center moved just enough to keep them on the canvas, instead
+  // of running off its top and bottom. Measured from the field's own size at scale 1, so it follows
+  // the words, the font and the size as they change.
   const [maxScale, setMaxScale] = useState(STORY_LAYER_SCALE_MAX);
+  const inset = keepClearOfChrome ? STORY_SAFE_AREA : NO_INSET;
+  const [fit, setFit] = useState<{ natural: { width: number; height: number }; canvas: { width: number; height: number } } | null>(null);
   useLayoutEffect(() => {
     const element = box.current;
     const canvas = root.current;
     if (!element || !canvas) {
       return;
     }
-    const limit = maxScaleToFit(
-      { width: element.offsetWidth, height: element.offsetHeight },
-      geometry.rotation,
-      { width: canvas.clientWidth, height: canvas.clientHeight },
-    );
-    setMaxScale(Math.min(STORY_LAYER_SCALE_MAX, Math.max(limit, geometry.scale)));
+    const natural = { width: element.offsetWidth, height: element.offsetHeight };
+    const size = { width: canvas.clientWidth, height: canvas.clientHeight };
+    setFit({ natural, canvas: size });
+    setMaxScale(Math.min(STORY_LAYER_SCALE_MAX, maxScaleToFit(natural, geometry.rotation, usableBox(size, inset))));
     // Everything that changes the words' natural size.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fields.text, fields.font, fields.size, fields.align, fields.background, geometry.rotation]);
   const shownScale = Math.min(scale, maxScale);
+  // Only new words are moved onto the canvas; words the author already placed stay exactly where they put them.
+  const center = fit && keepClearOfChrome
+    ? clampCenterInside({ x: geometry.x, y: geometry.y }, fit.natural, shownScale, geometry.rotation, fit.canvas, inset)
+    : { x: geometry.x, y: geometry.y };
 
   useEffect(() => {
     const element = area.current;
@@ -221,7 +234,7 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: Text
       onCancel();
     } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
-      onDone(fields, shownScale);
+      onDone(fields, shownScale, center);
     }
   }
 
@@ -244,11 +257,11 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: Text
         aria-hidden="true"
         data-story-text-backdrop=""
         className="story-dim absolute inset-0 cursor-default"
-        onClick={() => onDone(fields, shownScale)}
+        onClick={() => onDone(fields, shownScale, center)}
       />
 
       {/* The layer, where it is: same center, same scale, same tilt as on the canvas. */}
-      <div ref={box} data-story-text-box="" style={{ ...layerStyle({ id: "editing", ...geometry, scale: shownScale }), ...style }}>
+      <div ref={box} data-story-text-box="" style={{ ...layerStyle({ id: "editing", ...geometry, ...center, scale: shownScale }), ...style }}>
         <div className="grid max-w-full">
           {/* The mirror sizes the box to the words; the field is laid over it. */}
           <div
@@ -320,7 +333,7 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift }: Text
           className="story-cbtn pointer-events-auto !px-3.5"
           data-story-text-done=""
           style={{ background: "var(--story-accent)", color: "var(--story-on-accent)" }}
-          onClick={() => onDone(fields, shownScale)}
+          onClick={() => onDone(fields, shownScale, center)}
         >
           <Check className="h-4 w-4" aria-hidden />
           {t("stories.compose.done")}

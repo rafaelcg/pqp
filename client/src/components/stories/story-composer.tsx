@@ -813,14 +813,14 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     });
   }, []);
 
-  function finishText(fields: TextLayerFields, scale: number) {
+  function finishText(fields: TextLayerFields, scale: number, center: { x: number; y: number }) {
     const trimmed = fields.text.trim();
     const { text: _text, ...style } = fields;
     setTextStyle(style);
     if (editing?.id) {
       if (trimmed) {
         // One history step for the whole edit: the words, their style and the scale together.
-        dispatch({ type: "patch", id: editing.id, patch: { ...style, text: trimmed, scale } });
+        dispatch({ type: "patch", id: editing.id, patch: { ...style, text: trimmed, scale, ...center } });
       } else {
         dispatch({ type: "remove", id: editing.id });
       }
@@ -828,10 +828,10 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       if (!canAddLayer(layersRef.current, "text")) {
         setProblem(t("stories.editor.limit.layers"));
       } else {
-        const { x, y, rotation } = editing!.geometry;
+        const { rotation } = editing!.geometry;
         dispatch({
           type: "add",
-          layer: { id: newLayerId(), type: "text", x, y, scale, rotation, ...style, text: trimmed },
+          layer: { id: newLayerId(), type: "text", ...center, scale, rotation, ...style, text: trimmed },
         });
       }
     }
@@ -1403,6 +1403,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               initial={editingFields}
               geometry={editing.geometry}
               onDone={finishText}
+              keepClearOfChrome={!editing.id}
               onCancel={() => setEditing(null)}
               onLift={setStageLift}
             />
