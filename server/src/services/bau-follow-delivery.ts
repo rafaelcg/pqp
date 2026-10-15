@@ -335,7 +335,8 @@ interface SyncRow extends PostForSnapshot {
   message_id: string;
   channel_id: string;
   snapshot_hash: string | null;
-  post_updated_at: Date;
+  /** `updated_at::text`: microsecond exact, written back with a cast (a JS Date has milliseconds). */
+  post_updated_at: string;
   source_id: string;
   source_name: string;
   source_icon_url: string | null;
@@ -343,39 +344,73 @@ interface SyncRow extends PostForSnapshot {
   ping_prefix: boolean;
 }
 
+/** Pages of stale cards one tick works through (SWEEP_BATCH rows each). */
+const SYNC_PAGES_PER_TICK = 10;
+
+/**
+ * Cards whose post changed since they were last synced, ALL of them: a keyset
+ * walk over (post, follow), a bounded number of pages per tick, so an edit of a
+ * post with hundreds of followers reaches every card instead of re-reading the
+ * same first page. A row leaves the set once it is synced (its stored version
+ * is the post's own `updated_at`, to the microsecond), so the next tick starts
+ * from what is still stale.
+ */
 async function syncEditedPosts(serverId?: string): Promise<number> {
   const pool = getPool();
-  const rows = await pool.query<SyncRow>(
-    `SELECT d.follow_id, d.message_id, m.channel_id, d.snapshot_hash,
-            p.updated_at AS post_updated_at,
-            p.id, p.server_id, p.title, p.body, p.teaser, p.media_kind,
-            p.media_youtube_url, p.published_at, p.created_at,
-            s.id AS source_id, s.name AS source_name, s.icon_url AS source_icon_url,
-            CASE WHEN m.body LIKE '@%' THEN r.name END AS role_ping_name,
-            (m.body LIKE '@%') AS ping_prefix
-       FROM bau_follow_deliveries d
-       JOIN messages m ON m.id = d.message_id
-       JOIN community_home_posts p ON p.id = d.post_id
-       JOIN servers s ON s.id = d.source_server_id
-       JOIN bau_follows f ON f.id = d.follow_id
-       LEFT JOIN roles r ON r.id = f.role_ping_id
-      WHERE d.status = 'delivered' AND d.message_id IS NOT NULL
-        AND d.delivered_at > NOW() - INTERVAL '${RECONCILE_DAYS} days'
-        AND p.status = 'published' AND p.visibility = 'free'
-        AND (d.post_updated_at IS NULL OR p.updated_at > d.post_updated_at)
-        ${serverId ? "AND d.source_server_id = $2" : ""}
-      LIMIT $1`,
-    serverId ? [SWEEP_BATCH, serverId] : [SWEEP_BATCH],
-  );
-  const done = await mapWithConcurrency(rows.rows, CONCURRENCY, async (row) => {
-    try {
-      return await syncOne(row);
-    } catch (error) {
-      console.error("[bau-follow] sync failed:", error);
-      return false;
+  let cursor: { post: string; follow: string } | null = null;
+  let updated = 0;
+  for (let page = 0; page < SYNC_PAGES_PER_TICK; page += 1) {
+    const params: unknown[] = [SWEEP_BATCH];
+    let scope = "";
+    if (serverId) {
+      params.push(serverId);
+      scope += ` AND d.source_server_id = $${params.length}`;
     }
-  });
-  const updated = done.filter(Boolean).length;
+    if (cursor) {
+      params.push(cursor.post, cursor.follow);
+      scope += ` AND (d.post_id, d.follow_id) > ($${params.length - 1}::uuid, $${params.length}::uuid)`;
+    }
+    const rows = await pool.query<SyncRow>(
+      `SELECT d.follow_id, d.message_id, m.channel_id, d.snapshot_hash,
+              p.updated_at::text AS post_updated_at,
+              p.id, p.server_id, p.title, p.body, p.teaser, p.media_kind,
+              p.media_youtube_url, p.published_at, p.created_at,
+              s.id AS source_id, s.name AS source_name, s.icon_url AS source_icon_url,
+              CASE WHEN m.body LIKE '@%' THEN r.name END AS role_ping_name,
+              (m.body LIKE '@%') AS ping_prefix
+         FROM bau_follow_deliveries d
+         JOIN messages m ON m.id = d.message_id
+         JOIN community_home_posts p ON p.id = d.post_id
+         JOIN servers s ON s.id = d.source_server_id
+         JOIN bau_follows f ON f.id = d.follow_id
+         LEFT JOIN roles r ON r.id = f.role_ping_id
+        WHERE d.status = 'delivered' AND d.message_id IS NOT NULL
+          AND d.delivered_at > NOW() - INTERVAL '${RECONCILE_DAYS} days'
+          AND p.status = 'published' AND p.visibility = 'free'
+          AND (d.post_updated_at IS NULL OR p.updated_at > d.post_updated_at)
+          ${scope}
+        ORDER BY d.post_id, d.follow_id
+        LIMIT $1`,
+      params,
+    );
+    if (rows.rows.length === 0) {
+      break;
+    }
+    const done = await mapWithConcurrency(rows.rows, CONCURRENCY, async (row) => {
+      try {
+        return await syncOne(row);
+      } catch (error) {
+        console.error("[bau-follow] sync failed:", error);
+        return false;
+      }
+    });
+    updated += done.filter(Boolean).length;
+    const last = rows.rows[rows.rows.length - 1]!;
+    cursor = { post: last.id, follow: last.follow_id };
+    if (rows.rows.length < SWEEP_BATCH) {
+      break;
+    }
+  }
   if (updated > 0) {
     logEvent("bau.follow.updated", { count: updated });
   }
@@ -392,7 +427,7 @@ async function syncOne(row: SyncRow): Promise<boolean> {
   const hash = snapshotHash(snapshot);
   if (hash === row.snapshot_hash) {
     await pool.query(
-      `UPDATE bau_follow_deliveries SET post_updated_at = $3
+      `UPDATE bau_follow_deliveries SET post_updated_at = $3::timestamptz
         WHERE post_id = $1 AND follow_id = $2`,
       [row.id, row.follow_id, row.post_updated_at],
     );
@@ -419,7 +454,7 @@ async function syncOne(row: SyncRow): Promise<boolean> {
   );
   await pool.query(
     `UPDATE bau_follow_deliveries
-        SET snapshot_hash = $3, post_updated_at = $4
+        SET snapshot_hash = $3, post_updated_at = $4::timestamptz
       WHERE post_id = $1 AND follow_id = $2`,
     [row.id, row.follow_id, hash, row.post_updated_at],
   );
@@ -638,7 +673,7 @@ interface DeliveryContext {
   media_youtube_url: string | null;
   published_at: Date | null;
   post_created_at: Date | null;
-  post_updated_at: Date | null;
+  post_updated_at: string | null;
 }
 
 async function loadContext(claimed: Claimed): Promise<DeliveryContext | null> {
@@ -659,7 +694,7 @@ async function loadContext(claimed: Claimed): Promise<DeliveryContext | null> {
             p.id AS post_id, p.server_id AS post_server_id, p.title, p.body,
             p.teaser, p.visibility, p.status, p.media_kind, p.media_youtube_url,
             p.published_at, p.created_at AS post_created_at,
-            p.updated_at AS post_updated_at
+            p.updated_at::text AS post_updated_at
        FROM bau_follows f
        JOIN servers s ON s.id = f.source_server_id
        JOIN channels tc ON tc.id = f.target_channel_id
@@ -770,7 +805,7 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
           )
         : 0n;
     if (!mayManageFollow(permissions)) {
-      const paused = await recordPermissionFailure(claimed, ctx);
+      const paused = await recordPermissionFailure(claimed, ctx, "permissions");
       await settle(claimed, retryPatch(claimed, "permissions"));
       return paused ? "paused" : "failed";
     }
@@ -795,8 +830,9 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
       [ctx.target_server_id, authorId],
     );
     if (!sourceOk || (banned.rowCount ?? 0) > 0) {
-      const paused = await recordPermissionFailure(claimed, ctx);
-      await settle(claimed, retryPatch(claimed, sourceOk ? "banned" : "source authority"));
+      const banPause = sourceOk;
+      const paused = await recordPermissionFailure(claimed, ctx, banPause ? "banned" : "permissions");
+      await settle(claimed, retryPatch(claimed, banPause ? "banned" : "source authority"));
       return paused ? "paused" : "failed";
     }
     const post: PostForSnapshot = {
@@ -985,7 +1021,7 @@ async function commitDelivery(
     const done = await client.query(
       `UPDATE bau_follow_deliveries
           SET status = 'delivered', message_id = $4, delivered_at = NOW(),
-              snapshot_hash = $5, post_updated_at = $6,
+              snapshot_hash = $5, post_updated_at = $6::timestamptz,
               claim_id = NULL, claimed_until = NULL, last_error = NULL
         WHERE post_id = $1 AND follow_id = $2 AND claim_id = $3`,
       [
@@ -1022,6 +1058,7 @@ async function commitDelivery(
 async function recordPermissionFailure(
   claimed: Claimed,
   ctx: DeliveryContext,
+  reason: "permissions" | "banned",
 ): Promise<boolean> {
   const followId = claimed.follow_id;
   const pool = getPool();
@@ -1045,9 +1082,9 @@ async function recordPermissionFailure(
   }
   const paused = await pool.query(
     `UPDATE bau_follows
-        SET paused_at = NOW(), paused_reason = 'permissions'
+        SET paused_at = NOW(), paused_reason = $2
       WHERE id = $1 AND paused_at IS NULL`,
-    [followId],
+    [followId, reason],
   );
   if ((paused.rowCount ?? 0) === 0) {
     return false;
@@ -1064,13 +1101,13 @@ async function recordPermissionFailure(
       action: "bau_follow.pause",
       targetType: "bau_follow",
       targetId: followId,
-      reason: "permissions",
+      reason,
       changes: [
         { key: "source", old: null, new: ctx.source_name },
         { key: "channelId", old: null, new: ctx.target_channel_id },
       ],
     });
-    await postPauseNotice(ctx);
+    await postPauseNotice(ctx, reason);
   });
   return true;
 }
@@ -1081,15 +1118,21 @@ async function recordPermissionFailure(
  * Server-written copy in Portuguese, like the AutoMod alert is: the audit log
  * and the channel's Seguir section say the same in the viewer's language.
  */
-async function postPauseNotice(ctx: DeliveryContext): Promise<void> {
+async function postPauseNotice(
+  ctx: DeliveryContext,
+  reason: "permissions" | "banned",
+): Promise<void> {
   const authorId = await bauFollowAuthorFor(ctx.source_id, ctx.source_name);
   const client = await getPool().connect();
   let messageId: string;
   try {
     const body =
-      `Seguir pausado: os posts do Baú de ${ctx.source_name} pararam de chegar neste canal ` +
-      "porque quem configurou perdeu a permissão de gerenciar o canal. " +
-      "Quem gerencia o canal pode retomar nas configurações do canal, em Seguir.";
+      reason === "banned"
+        ? `Seguir pausado: este servidor baniu o Baú de ${ctx.source_name}, então os posts pararam de chegar neste canal. ` +
+          "Quem gerencia o servidor pode desbanir e retomar nas configurações do canal, em Seguir, ou deixar de seguir."
+        : `Seguir pausado: os posts do Baú de ${ctx.source_name} pararam de chegar neste canal ` +
+          "porque quem configurou perdeu a permissão de gerenciar o canal. " +
+          "Quem gerencia o canal pode retomar nas configurações do canal, em Seguir.";
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO messages (channel_id, author_id, body, webhook_username, webhook_avatar_url)
        VALUES ($1, $2, $3, $4, $5)

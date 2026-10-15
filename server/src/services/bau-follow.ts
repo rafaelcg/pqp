@@ -84,7 +84,7 @@ interface FollowJoinRow {
   role_ping_name: string | null;
   created_by: string | null;
   paused_at: Date | null;
-  paused_reason: "permissions" | null;
+  paused_reason: "permissions" | "banned" | null;
   created_at: Date;
 }
 

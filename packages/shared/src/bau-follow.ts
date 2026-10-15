@@ -31,12 +31,13 @@ export const bauFollowStatusSchema = z.enum(["active", "paused"]);
 export type BauFollowStatus = z.infer<typeof bauFollowStatusSchema>;
 
 /**
- * Why a follow is paused. Only `permissions` today: whoever set it up lost the
- * right to (or the channel stopped being one they can manage) and delivery
- * failed repeatedly. A follow that is merely switched off at the source (the
+ * Why a follow is paused. `permissions`: whoever set it up lost the right to
+ * (or the channel stopped being one they can manage) and delivery failed
+ * repeatedly. `banned`: the destination server banned the source's identity, so
+ * the cards were refused repeatedly. A follow that is merely switched off at the source (the
  * flag) is not stored as paused; nothing is lost and nothing needs resuming.
  */
-export const bauFollowPausedReasonSchema = z.enum(["permissions"]);
+export const bauFollowPausedReasonSchema = z.enum(["permissions", "banned"]);
 export type BauFollowPausedReason = z.infer<typeof bauFollowPausedReasonSchema>;
 
 export const bauFollowSchema = z.object({

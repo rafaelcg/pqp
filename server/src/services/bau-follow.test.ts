@@ -807,6 +807,65 @@ describeDb("Seguir: following a Baú into a channel", () => {
     ).rejects.toThrow(/Not found/);
   });
 
+  // ------------------------------------------------- edits reach every card
+
+  it.each([21, 160])("an edit reaches all %i delivered cards, however many there are", async (total) => {
+    const servers: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      servers.push((await createChatServer(`Dest ${i}`, alice.id)).server.id);
+    }
+    const channelIds: string[] = [];
+    for (let i = 0; i < total; i += 1) {
+      const server = servers[i % servers.length]!;
+      const ch = await createChannel(server, `ed-${i}`, "text", false);
+      channelIds.push(ch.id);
+      await getPool().query(
+        `INSERT INTO bau_follows (source_server_id, target_server_id, target_channel_id, created_by)
+         VALUES ($1, $2, $3, $4)`,
+        [qgId, server, ch.id, alice.id],
+      );
+    }
+    const postId = await publish({ title: "Antes" });
+    const delivered = async () =>
+      (
+        await getPool().query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM bau_follow_deliveries WHERE post_id = $1 AND status = 'delivered'`,
+          [postId],
+        )
+      ).rows[0]!.n;
+    // The per-minute quota paces a big audience; move its window along until all are out.
+    for (let round = 0; round < 6 && (await delivered()) < total; round += 1) {
+      for (let i = 0; i < 4; i += 1) {
+        await tick();
+      }
+      await getPool().query(
+        `UPDATE bau_follow_deliveries SET delivered_at = NOW() - INTERVAL '2 minutes' WHERE status = 'delivered'`,
+      );
+    }
+    expect(await delivered()).toBe(total);
+
+    const edit = await call(qgOwner, "PATCH", `${home()}/posts/${postId}`, { title: "Depois" });
+    expect(edit.status).toBe(200);
+    // One tick carries the whole edit (ten pages of a hundred), however many cards.
+    await tick();
+    await tick();
+    const stale = await getPool().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM messages WHERE forward IS NOT NULL AND forward->>'title' <> 'Depois'`,
+    );
+    expect(stale.rows[0]!.n).toBe(0);
+    const updated = await getPool().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM messages WHERE forward->>'title' = 'Depois'`,
+    );
+    expect(updated.rows[0]!.n).toBe(total);
+    // And a synced row is no longer "stale": the versions match to the microsecond.
+    const still = await getPool().query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM bau_follow_deliveries d JOIN community_home_posts p ON p.id = d.post_id
+        WHERE d.status = 'delivered' AND p.updated_at > d.post_updated_at`,
+    );
+    expect(still.rows[0]!.n).toBe(0);
+  }, 120_000);
+
   // ----------------------------------------------- who may follow a source
 
   it("a plain member of an ordinary (private) server cannot follow it; its staff can, with the owner's switch on", async () => {
@@ -924,8 +983,31 @@ describeDb("Seguir: following a Baú into a channel", () => {
     }
     await tick();
     expect(await cards(destChannelId)).toHaveLength(1);
-    const row = await getPool().query(`SELECT paused_at FROM bau_follows WHERE id = $1`, [made.body.follow.id]);
+    const row = await getPool().query<{ paused_at: Date | null; paused_reason: string | null }>(
+      `SELECT paused_at, paused_reason FROM bau_follows WHERE id = $1`,
+      [made.body.follow.id],
+    );
     expect(row.rows[0]!.paused_at).not.toBeNull();
+    // Said as what it is: the server banned the Baú, not "somebody lost a permission".
+    expect(row.rows[0]!.paused_reason).toBe("banned");
+    const audit = await getPool().query<{ reason: string }>(
+      `SELECT reason FROM audit_log WHERE server_id = $1 AND action = 'bau_follow.pause'`,
+      [destId],
+    );
+    expect(audit.rows.map((r) => r.reason)).toEqual(["banned"]);
+    const notice = await getPool().query<{ body: string }>(
+      `SELECT body FROM messages WHERE channel_id = $1 AND forward IS NULL`,
+      [destChannelId],
+    );
+    expect(notice.rows).toHaveLength(1);
+    expect(notice.rows[0]!.body).toContain("baniu");
+    expect(notice.rows[0]!.body).not.toContain("perdeu a permissão");
+    const listed = await call<{ follows: Array<{ pausedReason: string | null }> }>(
+      alice,
+      "GET",
+      `/api/channels/${destChannelId}/bau-follows`,
+    );
+    expect(listed.body.follows[0]!.pausedReason).toBe("banned");
   });
 
   it("slow mode in the destination spaces the cards out instead of bypassing it", async () => {
