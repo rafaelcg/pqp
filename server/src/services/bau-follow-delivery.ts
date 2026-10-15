@@ -509,8 +509,10 @@ async function claimDue(serverId?: string): Promise<Claimed[]> {
         WHERE delivered_at > NOW() - INTERVAL '1 minute'
         GROUP BY post_id
      ),
-     -- Posts already at their quota this minute: skipped by the scan below, so
-     -- the window of posts it looks at holds only posts that can still deliver.
+     -- Posts already at their quota this minute. Dropped from the window below,
+     -- NOT inside the scan: the scan is one index probe per post however many
+     -- due rows a post has, and a probe that filtered rows would walk all of a
+     -- saturated post's due rows to find the next post.
      spent AS (
        SELECT post_id FROM recent WHERE n >= $3
      ),
@@ -518,12 +520,10 @@ async function claimDue(serverId?: string): Promise<Claimed[]> {
      -- over the partial index on due rows), never a scan of the whole queue.
      posts(post_id) AS (
        (SELECT d.post_id FROM bau_follow_deliveries d
-         WHERE ${due("d")} AND d.post_id NOT IN (SELECT post_id FROM spent)
-         ORDER BY d.post_id LIMIT 1)
+         WHERE ${due("d")} ORDER BY d.post_id LIMIT 1)
        UNION ALL
        SELECT (SELECT d.post_id FROM bau_follow_deliveries d
                 WHERE d.post_id > p.post_id AND ${due("d")}
-                  AND d.post_id NOT IN (SELECT post_id FROM spent)
                 ORDER BY d.post_id LIMIT 1)
          FROM posts p WHERE p.post_id IS NOT NULL
      ),
@@ -532,7 +532,9 @@ async function claimDue(serverId?: string): Promise<Claimed[]> {
      -- later post out of the window.
      candidates AS (
        SELECT x.post_id, x.follow_id, x.next_attempt_at
-         FROM (SELECT post_id FROM posts WHERE post_id IS NOT NULL LIMIT ${CLAIM_POSTS}) p
+         FROM (SELECT post_id FROM posts
+                WHERE post_id IS NOT NULL AND post_id NOT IN (SELECT post_id FROM spent)
+                LIMIT ${CLAIM_POSTS}) p
          LEFT JOIN recent r ON r.post_id = p.post_id
          CROSS JOIN LATERAL (
            SELECT d.post_id, d.follow_id, d.next_attempt_at
