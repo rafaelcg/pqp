@@ -5529,6 +5529,19 @@ router.get(
 // server: off, the state read says so and the rest is a 404, except removing a
 // follow, which always works.
 
+/**
+ * The audit entry for a follow change, written AFTER the change committed. A
+ * failure to write it is logged and never turns the committed change into an
+ * error (a retry would meet the follow it just made).
+ */
+async function auditBauFollow(entry: Parameters<typeof logAudit>[0]): Promise<void> {
+  try {
+    await logAudit(entry);
+  } catch (error) {
+    console.error("[bau-follow] audit write failed:", error);
+  }
+}
+
 function mapBauFollowError(error: unknown): never {
   if (error instanceof BauFollowError) {
     switch (error.code) {
@@ -5584,7 +5597,7 @@ router.post(
         rolePingId: body.rolePingId ?? null,
         actorId: user.id,
       });
-      await logAudit({
+      await auditBauFollow({
         serverId: follow.targetServerId,
         actorId: user.id,
         action: "bau_follow.create",
@@ -5629,7 +5642,7 @@ router.patch(
         resume: body.resume,
       });
       if (before && body.resume === true && before.paused_at) {
-        await logAudit({
+        await auditBauFollow({
           serverId: follow.targetServerId,
           actorId: user.id,
           action: "bau_follow.resume",
@@ -5655,7 +5668,7 @@ router.delete(
     takeHomeBudget(bauFollowLimiter, res, user.id);
     try {
       const removed = await deleteBauFollow({ followId: followId!, actorId: user.id });
-      await logAudit({
+      await auditBauFollow({
         serverId: removed.target_server_id,
         actorId: user.id,
         action: "bau_follow.delete",
@@ -5697,7 +5710,7 @@ router.delete(
         actorId: user.id,
         block,
       });
-      await logAudit({
+      await auditBauFollow({
         serverId: serverId!,
         actorId: user.id,
         action: block ? "bau_follow.block" : "bau_follow.remove_follower",
@@ -5721,7 +5734,7 @@ router.delete(
     if (!(await unblockBauFollower(serverId!, blockedServerId!))) {
       throw new NotFound("Not found");
     }
-    await logAudit({
+    await auditBauFollow({
       serverId: serverId!,
       actorId: user.id,
       action: "bau_follow.unblock",

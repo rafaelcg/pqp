@@ -10,6 +10,7 @@ import {
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
 import { getPool } from "../db.js";
+import { mapWithConcurrency } from "../lib/admission.js";
 import { isEnabled } from "../lib/flags.js";
 import { isCommunityHomeEnabled } from "./community-home.js";
 import { computeMemberPermissions } from "./permissions.js";
@@ -181,49 +182,47 @@ export async function listBauFollowDestinations(
   );
   const blockedIds = new Set(blocked.rows.map((row) => row.blocked_server_id));
 
-  const out: BauFollowDestination[] = [];
-  for (const server of servers) {
-    if (blockedIds.has(server.id)) {
-      continue;
-    }
-    const permissions = await computeMemberPermissions(server.id, viewerId);
-    if (!FOLLOW_MANAGE_BITS.some((bit) => hasPermission(permissions, bit))) {
-      continue;
-    }
-    const channels = (await listChannels(server.id, viewerId)).filter(
-      (channel) => channel.type === "text",
-    );
-    if (channels.length === 0) {
-      continue;
-    }
-    const roles = await pool.query<{
-      id: string;
-      name: string;
-      color: string | null;
-    }>(
-      `SELECT id, name, color FROM roles
-        WHERE server_id = $1 AND is_everyone = FALSE
-          AND ($2::boolean OR mentionable)
-        ORDER BY position DESC, name ASC`,
-      [server.id, hasPermission(permissions, Permission.MENTION_EVERYONE)],
-    );
-    out.push({
-      serverId: server.id,
-      serverName: server.name,
-      serverIconUrl: server.icon_url ?? null,
-      channels: channels.map((channel) => ({
-        id: channel.id,
-        name: channel.name,
-        following: followedChannels.has(channel.id),
-      })),
-      roles: roles.rows.map((role) => ({
-        id: role.id,
-        name: role.name,
-        color: role.color,
-      })),
-      followCount: countByServer.get(server.id) ?? 0,
-    });
-  }
+  const built = await mapWithConcurrency(
+    servers.filter((server) => !blockedIds.has(server.id)),
+    4,
+    async (server): Promise<BauFollowDestination | null> => {
+      const permissions = await computeMemberPermissions(server.id, viewerId);
+      if (!FOLLOW_MANAGE_BITS.some((bit) => hasPermission(permissions, bit))) {
+        return null;
+      }
+      const [visible, roles] = await Promise.all([
+        listChannels(server.id, viewerId),
+        pool.query<{ id: string; name: string; color: string | null }>(
+          `SELECT id, name, color FROM roles
+            WHERE server_id = $1 AND is_everyone = FALSE
+              AND ($2::boolean OR mentionable)
+            ORDER BY position DESC, name ASC`,
+          [server.id, hasPermission(permissions, Permission.MENTION_EVERYONE)],
+        ),
+      ]);
+      const channels = visible.filter((channel) => channel.type === "text");
+      if (channels.length === 0) {
+        return null;
+      }
+      return {
+        serverId: server.id,
+        serverName: server.name,
+        serverIconUrl: server.icon_url ?? null,
+        channels: channels.map((channel) => ({
+          id: channel.id,
+          name: channel.name,
+          following: followedChannels.has(channel.id),
+        })),
+        roles: roles.rows.map((role) => ({
+          id: role.id,
+          name: role.name,
+          color: role.color,
+        })),
+        followCount: countByServer.get(server.id) ?? 0,
+      };
+    },
+  );
+  const out = built.filter((one): one is BauFollowDestination => one !== null);
   return { maxPerServer: BAU_FOLLOW_MAX_PER_SERVER, servers: out };
 }
 
@@ -351,8 +350,11 @@ export async function createBauFollow(input: {
     if (!inserted.rows[0]) {
       throw new BauFollowError("exists", "That channel already follows this Baú");
     }
+    // Read back inside the transaction: a reload that fails after COMMIT would
+    // report a follow that exists as an error, and the retry would meet it.
+    const follow = await readFollow(inserted.rows[0].id, input.actorId, client);
     await client.query("COMMIT");
-    return await readFollow(inserted.rows[0].id, input.actorId);
+    return follow;
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     throw error;
@@ -361,8 +363,12 @@ export async function createBauFollow(input: {
   }
 }
 
-async function readFollow(followId: string, viewerId: string): Promise<BauFollow> {
-  const result = await getPool().query<FollowJoinRow>(
+async function readFollow(
+  followId: string,
+  viewerId: string,
+  db: Pick<PoolClient, "query"> = getPool(),
+): Promise<BauFollow> {
+  const result = await db.query<FollowJoinRow>(
     `${FOLLOW_SELECT} WHERE f.id = $1`,
     [followId],
   );
@@ -445,14 +451,15 @@ export async function updateBauFollow(input: {
       );
       await dropUndelivered(client, follow.id);
     }
+    const updated = await readFollow(follow.id, input.actorId, client);
     await client.query("COMMIT");
+    return updated;
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     throw error;
   } finally {
     client.release();
   }
-  return readFollow(follow.id, input.actorId);
 }
 
 async function dropUndelivered(client: PoolClient, followId: string): Promise<void> {
@@ -572,6 +579,19 @@ export async function removeBauFollower(input: {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    // The destination server's row, the same lock `createBauFollow` takes
+    // before it reads the block list: a follow being made and a block being
+    // made are serialised, so a follow cannot slip in between the block and the
+    // delete. Taken before the follow's own row, in the same order as creation.
+    const target = await client.query<{ target_server_id: string }>(
+      `SELECT target_server_id FROM bau_follows WHERE id = $1 AND source_server_id = $2`,
+      [input.followId, input.sourceServerId],
+    );
+    if (target.rows[0]) {
+      await client.query(`SELECT 1 FROM servers WHERE id = $1 FOR UPDATE`, [
+        target.rows[0].target_server_id,
+      ]);
+    }
     const found = await client.query<{ target_server_id: string; name: string }>(
       `SELECT f.target_server_id, s.name
          FROM bau_follows f JOIN servers s ON s.id = f.target_server_id

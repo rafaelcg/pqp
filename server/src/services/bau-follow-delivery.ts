@@ -6,6 +6,7 @@ import {
   hasPermission,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { mapWithConcurrency } from "../lib/admission.js";
 import { logEvent } from "../lib/log.js";
 import { broadcastToChannel, announceServiceMessage } from "../ws/chat.js";
 import { logAudit } from "./audit.js";
@@ -19,7 +20,6 @@ import {
   type PostForSnapshot,
 } from "./bau-follow-snapshot.js";
 import {
-  deleteMessage,
   getHydratedMessage,
   invalidateLatestMessages,
   mapMessage,
@@ -71,6 +71,8 @@ export const BAU_FOLLOW_CLAIM_BATCH = 50;
 const SWEEP_BATCH = 100;
 const ENQUEUE_BATCH = 500;
 const CONCURRENCY = 4;
+/** Due rows looked at per claim, before the per-post quota ranks them. */
+const CLAIM_CANDIDATES = 1000;
 /** After the Nth failed attempt, wait this long. */
 export const BAU_FOLLOW_BACKOFF_MS = [5_000, 30_000, 120_000, 600_000, 3_600_000];
 /** Attempts a delivery gets before it is given up on (`dead`). */
@@ -261,24 +263,44 @@ async function retractIneligible(serverId?: string): Promise<number> {
       LIMIT $1`,
     params,
   );
-  let retracted = 0;
-  for (const row of candidates.rows) {
-    const deleted = await deleteMessage(row.message_id);
-    await pool.query(
-      `UPDATE bau_follow_deliveries
-          SET status = 'retracted', message_id = NULL
-        WHERE post_id = $1 AND follow_id = $2 AND status = 'delivered'`,
-      [row.post_id, row.follow_id],
-    );
+  const results = await mapWithConcurrency(candidates.rows, CONCURRENCY, async (row) => {
+    // The message and the row's move to `retracted` are ONE transaction: a
+    // process that stops between them must not leave a `delivered` row whose
+    // message is gone (nothing would ever revive it). `deleteMessage`'s other
+    // work (attachment sweep) has nothing to do here: a card has no files.
+    const client = await pool.connect();
+    let deleted = false;
+    try {
+      await client.query("BEGIN");
+      const gone = await client.query(`DELETE FROM messages WHERE id = $1`, [
+        row.message_id,
+      ]);
+      deleted = (gone.rowCount ?? 0) > 0;
+      await client.query(
+        `UPDATE bau_follow_deliveries
+            SET status = 'retracted', message_id = NULL
+          WHERE post_id = $1 AND follow_id = $2 AND status = 'delivered'`,
+        [row.post_id, row.follow_id],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("[bau-follow] retract failed:", error);
+      return false;
+    } finally {
+      client.release();
+    }
     if (deleted) {
-      retracted += 1;
+      invalidateLatestMessages(row.channel_id);
       broadcastToChannel(row.channel_id, {
         type: "message-delete",
         channelId: row.channel_id,
         messageId: row.message_id,
       });
     }
-  }
+    return deleted;
+  });
+  const retracted = results.filter(Boolean).length;
   // Rows that never delivered, for a post that is gone or no longer qualifies.
   await pool.query(
     `UPDATE bau_follow_deliveries d
@@ -335,59 +357,69 @@ async function syncEditedPosts(serverId?: string): Promise<number> {
       LIMIT $1`,
     serverId ? [SWEEP_BATCH, serverId] : [SWEEP_BATCH],
   );
-  let updated = 0;
-  for (const row of rows.rows) {
-    const snapshot = buildBauPostSnapshot(row, {
-      id: row.source_id,
-      name: row.source_name,
-      icon_url: row.source_icon_url,
-    });
-    const hash = snapshotHash(snapshot);
-    if (hash === row.snapshot_hash) {
-      await pool.query(
-        `UPDATE bau_follow_deliveries SET post_updated_at = $3
-          WHERE post_id = $1 AND follow_id = $2`,
-        [row.id, row.follow_id, row.post_updated_at],
-      );
-      continue;
+  const done = await mapWithConcurrency(rows.rows, CONCURRENCY, async (row) => {
+    try {
+      return await syncOne(row);
+    } catch (error) {
+      console.error("[bau-follow] sync failed:", error);
+      return false;
     }
-    const body = composeBody(snapshot, row.ping_prefix ? row.role_ping_name : null);
-    const changed = await pool.query(
-      `UPDATE messages
-          SET body = $2, forward = $3::jsonb, edited_at = NOW(),
-              webhook_username = $4, webhook_avatar_url = $5
-        WHERE id = $1`,
-      [
-        row.message_id,
-        body,
-        JSON.stringify(snapshot),
-        snapshot.sourceServerName,
-        snapshot.sourceServerIconUrl ?? null,
-      ],
-    );
-    await pool.query(
-      `UPDATE bau_follow_deliveries
-          SET snapshot_hash = $3, post_updated_at = $4
-        WHERE post_id = $1 AND follow_id = $2`,
-      [row.id, row.follow_id, hash, row.post_updated_at],
-    );
-    if ((changed.rowCount ?? 0) === 0) {
-      continue;
-    }
-    invalidateLatestMessages(row.channel_id);
-    updated += 1;
-    const message = await getHydratedMessage(row.message_id);
-    if (message) {
-      broadcastToChannel(row.channel_id, {
-        type: "message-update",
-        message: mapMessage(message),
-      });
-    }
-  }
+  });
+  const updated = done.filter(Boolean).length;
   if (updated > 0) {
     logEvent("bau.follow.updated", { count: updated });
   }
   return updated;
+}
+
+async function syncOne(row: SyncRow): Promise<boolean> {
+  const pool = getPool();
+  const snapshot = buildBauPostSnapshot(row, {
+    id: row.source_id,
+    name: row.source_name,
+    icon_url: row.source_icon_url,
+  });
+  const hash = snapshotHash(snapshot);
+  if (hash === row.snapshot_hash) {
+    await pool.query(
+      `UPDATE bau_follow_deliveries SET post_updated_at = $3
+        WHERE post_id = $1 AND follow_id = $2`,
+      [row.id, row.follow_id, row.post_updated_at],
+    );
+    return false;
+  }
+  const body = composeBody(snapshot, row.ping_prefix ? row.role_ping_name : null);
+  const changed = await pool.query(
+    `UPDATE messages
+        SET body = $2, forward = $3::jsonb, edited_at = NOW(),
+            webhook_username = $4, webhook_avatar_url = $5
+      WHERE id = $1`,
+    [
+      row.message_id,
+      body,
+      JSON.stringify(snapshot),
+      snapshot.sourceServerName,
+      snapshot.sourceServerIconUrl ?? null,
+    ],
+  );
+  await pool.query(
+    `UPDATE bau_follow_deliveries
+        SET snapshot_hash = $3, post_updated_at = $4
+      WHERE post_id = $1 AND follow_id = $2`,
+    [row.id, row.follow_id, hash, row.post_updated_at],
+  );
+  if ((changed.rowCount ?? 0) === 0) {
+    return false;
+  }
+  invalidateLatestMessages(row.channel_id);
+  const message = await getHydratedMessage(row.message_id).catch(() => null);
+  if (message) {
+    broadcastToChannel(row.channel_id, {
+      type: "message-update",
+      message: mapMessage(message),
+    });
+  }
+  return true;
 }
 
 function composeBody(snapshot: BauPostSnapshot, rolePingName: string | null): string {
@@ -473,16 +505,23 @@ async function claimDue(serverId?: string): Promise<Claimed[]> {
         WHERE delivered_at > NOW() - INTERVAL '1 minute'
         GROUP BY post_id
      ),
-     due AS (
-       SELECT d.post_id, d.follow_id,
-              ROW_NUMBER() OVER (
-                PARTITION BY d.post_id ORDER BY d.next_attempt_at, d.follow_id
-              ) AS rn,
-              d.next_attempt_at
+     candidates AS (
+       -- Bounded BEFORE it is ranked: a burst that enqueued thousands of rows
+       -- must not make every tick rank the whole queue to claim fifty.
+       SELECT d.post_id, d.follow_id, d.next_attempt_at
          FROM bau_follow_deliveries d
         WHERE ((d.status = 'pending' AND d.next_attempt_at <= NOW())
             OR (d.status = 'delivering' AND d.claimed_until < NOW()))
           ${serverId ? "AND d.source_server_id = $4" : ""}
+        ORDER BY d.next_attempt_at
+        LIMIT ${CLAIM_CANDIDATES}
+     ),
+     due AS (
+       SELECT c.post_id, c.follow_id, c.next_attempt_at,
+              ROW_NUMBER() OVER (
+                PARTITION BY c.post_id ORDER BY c.next_attempt_at, c.follow_id
+              ) AS rn
+         FROM candidates c
      ),
      picked AS (
        SELECT due.post_id, due.follow_id
@@ -718,14 +757,20 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
     if (!committed) {
       return "skipped";
     }
+    // COMMITTED means delivered. The announcement is a courtesy to people who
+    // have the channel open: a failure here (a hydrating read, the fan-out) is
+    // logged and never turned into a failed delivery, because the card exists
+    // and the row is settled; a client that missed the frame reads it on open.
     invalidateLatestMessages(ctx.target_channel_id);
-    const message = await getHydratedMessage(committed.messageId);
-    if (message && committed.fresh) {
-      await announceServiceMessage(mapMessage(message), committed.mentionedUserIds).catch(
-        (error: unknown) => {
-          console.error("[bau-follow] fan-out failed:", error);
-        },
-      );
+    if (committed.fresh) {
+      try {
+        const message = await getHydratedMessage(committed.messageId);
+        if (message) {
+          await announceServiceMessage(mapMessage(message), committed.mentionedUserIds);
+        }
+      } catch (error) {
+        console.error("[bau-follow] announce failed after commit:", error);
+      }
     }
     return "delivered";
   } catch (error) {

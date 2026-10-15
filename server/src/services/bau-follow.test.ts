@@ -54,8 +54,9 @@ const { startFeatureFlags, setGlobalFlag, setServerFlagOverride, resetFeatureFla
   await import("../lib/flags.js");
 const { upsertUser } = await import("./users.js");
 const { createServer: createChatServer, createChannel } = await import("./servers.js");
-const { createRole, assignRole, unassignRole } = await import("./roles.js");
+const { createRole, assignRole, unassignRole, upsertChannelOverwrite } = await import("./roles.js");
 const { handleChatMessage } = await import("../ws/chat.js");
+const { createBauFollow, removeBauFollower } = await import("./bau-follow.js");
 const { publishDueCommunityHomePosts } = await import("./community-home.js");
 const {
   runBauFollowTick,
@@ -673,6 +674,59 @@ describeDb("Seguir: following a Baú into a channel", () => {
     await tick();
     const after = (await cards(destChannelId)).map((r) => messageForwardSchema.parse(r.forward).title);
     expect(after).toEqual(["Entregue", "Depois"]);
+  });
+
+  it("a creator who can still manage the channel but can no longer SEE it pauses the follow", async () => {
+    await addMember(qgId, bob);
+    const role = await createRole(destId, {
+      name: "Integracoes",
+      permissions: Permission.VIEW_CHANNEL | Permission.MANAGE_WEBHOOKS,
+    });
+    await assignRole(destId, bob.id, role.id);
+    const made = await follow(bob, destChannelId);
+    expect(made.status).toBe(201);
+    // A channel overwrite takes sight away from the role, and leaves the management bit.
+    await upsertChannelOverwrite(destChannelId, destId, "role", role.id, 0n, Permission.VIEW_CHANNEL);
+    for (const title of ["Um", "Dois", "Tres"]) {
+      await publish({ title });
+    }
+    await tick();
+    expect(await cards(destChannelId)).toHaveLength(0);
+    const paused = await getPool().query(`SELECT paused_at FROM bau_follows WHERE id = $1`, [
+      made.body.follow.id,
+    ]);
+    expect(paused.rows[0]!.paused_at).not.toBeNull();
+  });
+
+  it("a block and a follow being made at once leave no follow behind (the same lock)", async () => {
+    const first = await follow(alice, destChannelId);
+    expect(first.status).toBe(201);
+    // The service calls directly: the HTTP helper above shares one signed-in
+    // identity, which two simultaneous requests would fight over.
+    const [blocked, second] = await Promise.allSettled([
+      removeBauFollower({
+        sourceServerId: qgId,
+        followId: first.body.follow.id,
+        actorId: qgOwner.id,
+        block: true,
+      }),
+      createBauFollow({
+        sourceServerId: qgId,
+        channelId: destOwnerOnlyChannel,
+        rolePingId: null,
+        actorId: alice.id,
+      }),
+    ]);
+    expect(blocked.status).toBe("fulfilled");
+    // Whichever ran first, the end state is the same: blocked, and nothing of that server follows.
+    expect(second.status === "fulfilled" || String((second as PromiseRejectedResult).reason).includes("does not accept")).toBe(true);
+    const left = await getPool().query(
+      `SELECT 1 FROM bau_follows WHERE source_server_id = $1 AND target_server_id = $2`,
+      [qgId, destId],
+    );
+    expect(left.rowCount).toBe(0);
+    const block = await getPool().query(`SELECT 1 FROM bau_follow_blocks WHERE source_server_id = $1`, [qgId]);
+    expect(block.rowCount).toBe(1);
   });
 
   // ------------------------------------------------------------- the source
