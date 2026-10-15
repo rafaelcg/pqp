@@ -5,9 +5,12 @@ import {
   FORWARD_VERSION,
   forwardFallbackBody,
   forwardMessagePath,
+  hasPermission,
   messageForwardSchema,
   MESSAGE_MAX_LENGTH,
+  Permission,
   type CreateForwardRequest,
+  type ForwardDestinations,
   type ForwardMediaKind,
   type ForwardRefusalReason,
   type ForwardResult,
@@ -25,7 +28,8 @@ import {
 } from "./community-home.js";
 import { DmRefusedError, openConversation } from "./dms.js";
 import { findMessageByNonce, mapMessage } from "./messages.js";
-import { getChannel } from "./servers.js";
+import { computeMemberPermissions } from "./permissions.js";
+import { getChannel, listChannels } from "./servers.js";
 import { canAccessChannel, getMemberRole } from "./users.js";
 
 /**
@@ -64,6 +68,43 @@ export class ForwardError extends Error {
     super(message);
     this.name = "ForwardError";
   }
+}
+
+/** Channel types whose chat takes a message: text, a voice room's chat, a watch party's. */
+const FORWARD_CHANNEL_TYPES = new Set(["text", "voice", "watch_party"]);
+
+/**
+ * The channels of one server this person may forward into, for the picker, in
+ * one pass. `listChannels` is the visibility answer (private channels and
+ * overwrites already folded in); SEND_MESSAGES is resolved per channel with
+ * `computeMemberPermissions`, the call the send itself makes, so a listed
+ * channel is one the send will not refuse for permission. The caller has
+ * already proved membership.
+ */
+export async function listForwardDestinations(
+  serverId: string,
+  userId: string,
+): Promise<ForwardDestinations> {
+  const channels = (await listChannels(serverId, userId)).filter(
+    (channel) => channel.kind === "server" && FORWARD_CHANNEL_TYPES.has(channel.type),
+  );
+  const canSend = await Promise.all(
+    channels.map(async (channel) =>
+      hasPermission(
+        await computeMemberPermissions(serverId, userId, channel.id),
+        Permission.SEND_MESSAGES,
+      ),
+    ),
+  );
+  return {
+    channels: channels
+      .filter((_, index) => canSend[index])
+      .map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+        type: channel.type as "text" | "voice" | "watch_party",
+      })),
+  };
 }
 
 export function forwardMessagesEnabled(): boolean {

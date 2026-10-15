@@ -18,6 +18,7 @@ import {
   ApiError,
   createForward,
   fetchChannels,
+  fetchForwardDestinations,
   fetchMemberPermissions,
 } from "@/lib/api";
 import { conversationTitle } from "@/lib/conversations";
@@ -93,10 +94,10 @@ export interface ForwardedSummary {
 }
 
 /**
- * What a server's list costs: two requests (channels and permissions). Kept for
- * a minute, so opening the picker twice (or forwarding twice in a row) does not
- * repeat the fan-out over every server. A failed load is never cached, and the
- * retry button asks again past the cache.
+ * What a server's list costs: one request (`forward-destinations`; two against
+ * an API that predates it). Kept for a minute, so opening the picker twice (or
+ * forwarding twice in a row) does not repeat the fan-out over every server. A
+ * failed load is never cached, and the retry button asks again past the cache.
  */
 const TARGET_CACHE_MS = 60_000;
 const targetCache = new Map<string, { at: number; targets: PickerTarget[] }>();
@@ -138,7 +139,35 @@ async function loadServerTargets(server: Server, force = false): Promise<PickerT
 /** Channel types a message can go to: text, and the chat beside a voice room. */
 const SENDABLE_TYPES = new Set(["text", "voice", "watch_party"]);
 
+function channelTarget(
+  server: Server,
+  channel: { id: string; name: string; type: string },
+): PickerTarget {
+  return {
+    id: channel.id,
+    kind: "channel" as const,
+    serverId: server.id,
+    serverName: server.name,
+    label: channel.name,
+    ...(channel.type === "text" ? {} : { voice: true }),
+  };
+}
+
 async function fetchServerTargets(server: Server): Promise<PickerTarget[]> {
+  try {
+    // One request: the server lists the channels this account can speak in.
+    const { channels } = await fetchForwardDestinations(server.id);
+    return channels.map((channel) => channelTarget(server, channel));
+  } catch (error) {
+    // An API that predates the route: the same answer from the two older reads.
+    if (!(error instanceof ApiError) || error.status !== 404) {
+      throw error;
+    }
+  }
+  return fetchServerTargetsLegacy(server);
+}
+
+async function fetchServerTargetsLegacy(server: Server): Promise<PickerTarget[]> {
   const [{ channels }, snapshot] = await Promise.all([
     fetchChannels(server.id),
     fetchMemberPermissions(server.id),
@@ -154,14 +183,7 @@ async function fetchServerTargets(server: Server): Promise<PickerTarget[]> {
       return hasPermission(mask, Permission.SEND_MESSAGES);
     })
     .sort((a, b) => a.position - b.position)
-    .map((channel) => ({
-      id: channel.id,
-      kind: "channel" as const,
-      serverId: server.id,
-      serverName: server.name,
-      label: channel.name,
-      ...(channel.type === "text" ? {} : { voice: true }),
-    }));
+    .map((channel) => channelTarget(server, channel));
 }
 
 /** Runs `worker` over `items`, `limit` at a time, calling `onEach` as each lands. */

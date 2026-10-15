@@ -539,6 +539,7 @@ import {
   forwardAppOrigin,
   forwardMessagesEnabled,
   forwardToTargets,
+  listForwardDestinations,
   resolveForwardSource,
 } from "../services/forwards.js";
 import {
@@ -9453,6 +9454,20 @@ router.post(
 router.get("/api/forwards/config", async () => ({
   enabled: forwardMessagesEnabled(),
 }));
+
+/**
+ * The channels of one server a forward may go to, in one request: the picker
+ * used to ask for the channel list and the permission snapshot per server.
+ * Not behind the flag (it lists only what the caller could already post in);
+ * the 404 of a non-member is `requireServerMember`'s.
+ */
+router.get(
+  "/api/servers/:serverId/forward-destinations",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    return listForwardDestinations(serverId!, user.id);
+  },
+);
 
 router.post("/api/forwards", async ({ req, res, user }) => {
   if (!forwardMessagesEnabled() || user.is_character) {

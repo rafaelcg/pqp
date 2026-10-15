@@ -3,11 +3,13 @@ import { Permission, type Channel, type DmSummary, type Server } from "@pqp/shar
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "@/lib/api";
 import { I18nProvider } from "@/lib/i18n";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const api = vi.hoisted(() => ({
+  fetchForwardDestinations: vi.fn(),
   fetchChannels: vi.fn(),
   fetchMemberPermissions: vi.fn(),
   createForward: vi.fn(),
@@ -101,7 +103,20 @@ afterEach(() => {
 });
 
 describe("ForwardPicker destinations", () => {
-  it("offers text channels and a voice room's chat, never a category or a forum, nor one you cannot speak in", async () => {
+  it("asks for each server's destinations in ONE request, in the order the server answers", async () => {
+    const text = channel(SERVER_A.id, 1);
+    const voice = channel(SERVER_A.id, 2, "voice");
+    api.fetchForwardDestinations.mockResolvedValue({ channels: [text, voice] });
+    mount(SOURCE);
+    await flush();
+    expect(rows().map((row) => row.getAttribute("data-forward-target"))).toEqual([text.id, voice.id]);
+    expect(api.fetchForwardDestinations).toHaveBeenCalledTimes(1);
+    expect(api.fetchChannels).not.toHaveBeenCalled();
+    expect(api.fetchMemberPermissions).not.toHaveBeenCalled();
+  });
+
+  it("against an API without the route, the older two reads give the same list: text and a voice room's chat, never a category or a forum, nor one you cannot speak in", async () => {
+    api.fetchForwardDestinations.mockRejectedValue(new ApiError(404, "Not found"));
     const text = channel(SERVER_A.id, 1);
     const voice = channel(SERVER_A.id, 2, "voice");
     const category = channel(SERVER_A.id, 3, "category");
@@ -120,40 +135,40 @@ describe("ForwardPicker destinations", () => {
   });
 
   it("keeps a minute of results: opening again does not fetch every server again", async () => {
-    api.fetchChannels.mockResolvedValue({ channels: [channel(SERVER_A.id, 1)] });
+    api.fetchForwardDestinations.mockResolvedValue({ channels: [channel(SERVER_A.id, 1)] });
     const render = mount(SOURCE);
     await flush();
-    expect(api.fetchChannels).toHaveBeenCalledTimes(1);
+    expect(api.fetchForwardDestinations).toHaveBeenCalledTimes(1);
     render(false);
     render(true);
     await flush();
-    expect(api.fetchChannels).toHaveBeenCalledTimes(1);
+    expect(api.fetchForwardDestinations).toHaveBeenCalledTimes(1);
   });
 
   it("never serves one account's destinations to another in the same page", async () => {
-    api.fetchChannels.mockResolvedValue({ channels: [channel(SERVER_A.id, 1)] });
+    api.fetchForwardDestinations.mockResolvedValue({ channels: [channel(SERVER_A.id, 1)] });
     let render = mount(SOURCE);
     await flush();
-    expect(api.fetchChannels).toHaveBeenCalledTimes(1);
+    expect(api.fetchForwardDestinations).toHaveBeenCalledTimes(1);
     act(() => root?.unmount());
     host?.remove();
     currentUser = "user-2";
     render = mount(SOURCE);
     await flush();
     void render;
-    expect(api.fetchChannels).toHaveBeenCalledTimes(2);
+    expect(api.fetchForwardDestinations).toHaveBeenCalledTimes(2);
   });
 
   it("a load that finishes after another account took over does not write into the cache", async () => {
     let release: (value: unknown) => void = () => {};
-    api.fetchChannels.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    api.fetchForwardDestinations.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
     mount(SOURCE);
     await flush();
     // The page moves to another account (the cache is scoped and emptied), then the old load lands.
     act(() => root?.unmount());
     host?.remove();
     currentUser = "user-2";
-    api.fetchChannels.mockResolvedValue({ channels: [channel(SERVER_A.id, 7)] });
+    api.fetchForwardDestinations.mockResolvedValue({ channels: [channel(SERVER_A.id, 7)] });
     mount(SOURCE);
     await flush();
     await act(async () => { release({ channels: [channel(SERVER_A.id, 1)] }); await Promise.resolve(); });
@@ -169,12 +184,12 @@ describe("ForwardPicker destinations", () => {
   });
 
   it("a server that fails is a retryable error, not an empty list", async () => {
-    api.fetchChannels.mockRejectedValueOnce(new Error("503"));
+    api.fetchForwardDestinations.mockRejectedValueOnce(new Error("503"));
     mount(SOURCE);
     await flush();
     expect(document.querySelector("[data-forward-load-failed]")).not.toBeNull();
     expect(document.querySelector("[data-forward-empty]")).toBeNull();
-    api.fetchChannels.mockResolvedValue({ channels: [channel(SERVER_A.id, 1)] });
+    api.fetchForwardDestinations.mockResolvedValue({ channels: [channel(SERVER_A.id, 1)] });
     click(document.querySelector("[data-forward-retry-load]"));
     await flush();
     expect(document.querySelector("[data-forward-load-failed]")).toBeNull();
@@ -182,7 +197,7 @@ describe("ForwardPicker destinations", () => {
   });
 
   it("draws the first rows only, and Mostrar mais draws the next", async () => {
-    api.fetchChannels.mockResolvedValue({
+    api.fetchForwardDestinations.mockResolvedValue({
       channels: Array.from({ length: 200 }, (_, i) => channel(SERVER_A.id, i + 1)),
     });
     mount(SOURCE);
@@ -195,7 +210,7 @@ describe("ForwardPicker destinations", () => {
 
 describe("ForwardPicker preview", () => {
   it("shows the source as plain text: no raw mention markup, even a malformed one", async () => {
-    api.fetchChannels.mockResolvedValue({ channels: [channel(SERVER_A.id, 1)] });
+    api.fetchForwardDestinations.mockResolvedValue({ channels: [channel(SERVER_A.id, 1)] });
     mount({
       ...SOURCE,
       title: "Aviso <@11111111-1111-4111-8111-111111111111> e <@123> @everyone",
@@ -219,7 +234,7 @@ describe("ForwardPicker sending", () => {
 
   it("after a VALID partial answer the retry is a new attempt with a new nonce; after a lost connection it keeps the nonce", async () => {
     const a = channel(SERVER_A.id, 1);
-    api.fetchChannels.mockResolvedValue({ channels: [a] });
+    api.fetchForwardDestinations.mockResolvedValue({ channels: [a] });
     api.createForward
       // A lost connection: ambiguous, the same request may be retried as is.
       .mockRejectedValueOnce(new Error("network"))
@@ -248,7 +263,7 @@ describe("ForwardPicker sending", () => {
 
   it("a new opening starts idle even when the previous send never answered", async () => {
     const a = channel(SERVER_A.id, 1);
-    api.fetchChannels.mockResolvedValue({ channels: [a] });
+    api.fetchForwardDestinations.mockResolvedValue({ channels: [a] });
     api.createForward.mockReturnValue(new Promise(() => {}));
     const render = mount(SOURCE);
     await flush();
@@ -266,7 +281,7 @@ describe("ForwardPicker sending", () => {
     vi.useFakeTimers();
     try {
       const a = channel(SERVER_A.id, 1);
-      api.fetchChannels.mockResolvedValue({ channels: [a] });
+      api.fetchForwardDestinations.mockResolvedValue({ channels: [a] });
       let finish: (value: unknown) => void = () => {};
       api.createForward.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
       mount(SOURCE);
@@ -286,7 +301,7 @@ describe("ForwardPicker sending", () => {
 
   it("cannot be dismissed while a send is in flight", async () => {
     const a = channel(SERVER_A.id, 1);
-    api.fetchChannels.mockResolvedValue({ channels: [a] });
+    api.fetchForwardDestinations.mockResolvedValue({ channels: [a] });
     let finish: (value: unknown) => void = () => {};
     api.createForward.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
     mount(SOURCE);

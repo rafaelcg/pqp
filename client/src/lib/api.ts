@@ -123,6 +123,7 @@ import type {
   PublicInvitePreview,
   CreateForwardRequest,
   CreateForwardResponse,
+  ForwardDestinations,
 } from "@pqp/shared";
 import {
   LIVE_PREVIEW_ENDED_ERROR,
@@ -2341,6 +2342,14 @@ export const fetchForwardConfig = () =>
 /** Always a 200 once the request was valid; each target answers for itself. */
 export const createForward = (body: CreateForwardRequest) =>
   post<CreateForwardResponse>("/api/forwards", body);
+
+/**
+ * The channels of one server a forward may go to, already filtered by what the
+ * caller can see and speak in: one request where the picker used to make two
+ * (channels + permission snapshot). A 404 is an API that predates it.
+ */
+export const fetchForwardDestinations = (serverId: string) =>
+  apiFetch<ForwardDestinations>(`/api/servers/${serverId}/forward-destinations`);
 
 export const fetchConversations = () =>
   apiFetch<DmListResponse>("/api/dms");

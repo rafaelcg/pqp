@@ -12,6 +12,8 @@ A forward is a message. `messages.forward` is a nullable JSONB column holding a 
 
 `GET /api/forwards/config` answers `{ enabled }`. Clients hide the action when it is false. Cards already in history keep rendering with the flag off.
 
+`GET /api/servers/:serverId/forward-destinations` answers `{ channels: [{ id, name, type }] }` (`forwardDestinationsSchema`): the channels of ONE server the caller can see and hold SEND_MESSAGES on, text, a voice room's chat and a watch party's chat, in channel order. It is what the destination picker asks per server, one request where the channel list plus the permission snapshot were two. Not behind the flag (it lists only what the caller could already post in); a non-member gets the usual 404. It is a convenience for the list: the send still decides (slow mode, AutoMod, locks).
+
 `POST /api/forwards`
 
 ```json
@@ -56,6 +58,6 @@ Off by default. The dashboard flips `forward_messages` globally with no deploy. 
 ## Web client
 
 - The card is `client/src/components/chat/forward-card.tsx`, drawn by `MessageList`, so it shows wherever messages render (channels, DMs, threads, forum posts). It reads the snapshot only and fetches nothing. A forward's fallback body is hidden (`forwardCommentOf` in `client/src/lib/forward.ts`) and the message is never also drawn as a Baú link card.
-- The action is "Encaminhar" in a chat message's menu and on every published Baú post (the button under the post for everyone, plus the staff menu). It opens `components/forward/forward-picker.tsx`: search, recent places first, up to five picks, optional comment, each refusal shown on its own row. A members-only post or a private-channel message is only offered its own server.
+- The action is "Encaminhar" in a chat message's menu and on every published Baú post (the button under the post for everyone, plus the staff menu). It opens `components/forward/forward-picker.tsx` (one `forward-destinations` request per server, kept a minute; an API that predates the route answers 404 and the picker falls back to the channel list plus the permission snapshot): search, recent places first, up to five picks, optional comment, each refusal shown on its own row. A members-only post or a private-channel message is only offered its own server.
 - A message in a conversation, and every message while `forward_messages` is off, keeps the old behaviour (quote into the composer). The flag is read from `GET /api/forwards/config` (`startForwardConfig`), asked again on the config refresh pass.
 - Success shows a corner toast with "Ver", which opens the first place it went.
