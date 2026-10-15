@@ -3401,6 +3401,7 @@
   "chat.reject.rateLimited": "Estás enviando demasiado rápido",
   "chat.reject.noAccess": "No puedes enviar mensajes en este canal",
   "chat.reject.cannotSend": "No tienes permiso para enviar aquí",
+  "chat.readOnly": "Aquí puedes leer, pero no puedes enviar mensajes.",
   "chat.reject.undeliverable": "Este mensaje no se entregó",
   "chat.reject.slowMode": "El modo lento está activado.",
   "chat.reject.automod": "AutoMod bloqueó este mensaje.",

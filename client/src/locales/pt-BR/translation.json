@@ -3355,6 +3355,7 @@
   "chat.reject.rateLimited": "Você tá mandando rápido demais",
   "chat.reject.noAccess": "Você não pode mandar mensagem neste canal",
   "chat.reject.cannotSend": "Você não tem permissão pra mandar aqui",
+  "chat.readOnly": "Aqui tu pode ler, mas não pode mandar mensagem.",
   "chat.reject.undeliverable": "Essa mensagem não foi entregue",
   "chat.reject.slowMode": "Slow mode tá ligado.",
   "chat.reject.automod": "O AutoMod bloqueou essa mensagem.",

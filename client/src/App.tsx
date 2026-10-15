@@ -66,6 +66,7 @@ import type {
   User,
   VoiceRoomTransport,
 } from "@pqp/shared";
+import { ComposerReadOnlyNotice } from "@/components/chat/composer-read-only-notice";
 import { MessageComposer } from "@/components/chat/message-composer";
 import { VoiceNoteMiniPlayer } from "@/components/chat/voice-note-mini-player";
 import {
@@ -12503,6 +12504,16 @@ function MainAppContent({
           onDismiss={() => setSanctionNotice(null)}
         />
       )}
+      {!canSendHere ? (
+        // SEND_MESSAGES denied here: no box to type into (the message used to
+        // appear, then fail with "You don't have permission to send here").
+        // The call dock and music bar still live in this well.
+        <div>
+          {musicInComposer ? <MusicComposer voiceState={voiceState} /> : null}
+          <CallDockOutlet channelId={selectedChannel.id} />
+          <ComposerReadOnlyNotice />
+        </div>
+      ) : (
       <MessageComposer
         variant={isWatchPartySplit ? "stream" : "default"}
         // Remount per channel: the draft is component state, so without this a
@@ -12586,6 +12597,7 @@ function MainAppContent({
           musicInComposer ? <MusicComposer voiceState={voiceState} /> : undefined
         }
       />
+      )}
       </CallSplit>
       </CallDockProvider>
     </FileDropZone>

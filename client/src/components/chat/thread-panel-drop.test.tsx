@@ -113,3 +113,19 @@ describe("ThreadPanel drop zone", () => {
     expect(overlay?.textContent).toBe("You cannot send messages here");
   });
 });
+
+describe("ThreadPanel composer", () => {
+  it("is a box for a reader who can send", async () => {
+    const panel = await mount(true);
+    expect(panel.querySelector("textarea")).not.toBeNull();
+    expect(panel.querySelector("[data-composer-readonly]")).toBeNull();
+  });
+
+  it("is a read-only notice, with no box, for a reader who cannot send", async () => {
+    const panel = await mount(false);
+    expect(panel.querySelector("textarea")).toBeNull();
+    expect(panel.querySelector("[data-composer-readonly]")?.textContent).toBe(
+      "You can read here, but you can't send messages.",
+    );
+  });
+});

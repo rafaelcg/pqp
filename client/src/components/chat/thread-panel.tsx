@@ -18,6 +18,7 @@ import { useAttachmentsEnabled } from "@/hooks/use-attachments-enabled";
 import { useFileDropZone } from "@/hooks/use-file-drop-zone";
 import { chatDropVerdict } from "@/lib/chat-file-drop";
 import type { DroppedItems } from "@/lib/file-drop";
+import { ComposerReadOnlyNotice } from "@/components/chat/composer-read-only-notice";
 import {
   MessageComposer,
   type ComposerSlashContext,
@@ -473,7 +474,13 @@ export function ThreadPanel({
         </div>
       )}
 
-      {(!forum?.locked || forum.canReplyLocked) && (
+      {/* Positively lacking SEND_MESSAGES: say so instead of offering a box
+          whose messages the server would refuse. A closed post has its own
+          strip above and no box for a non-staff reader either way. */}
+      {canSend === false && (!forum?.locked || forum.canReplyLocked) && (
+        <ComposerReadOnlyNotice />
+      )}
+      {canSend !== false && (!forum?.locked || forum.canReplyLocked) && (
       <MessageComposer
         // Remount per thread, same reason the main composer keys by channel.
         key={thread.channelId}
