@@ -56,6 +56,7 @@ const { upsertUser } = await import("./users.js");
 const { createServer: createChatServer, createChannel } = await import("./servers.js");
 const { createRole, assignRole, unassignRole, upsertChannelOverwrite } = await import("./roles.js");
 const { handleChatMessage } = await import("../ws/chat.js");
+const { computeMemberPermissions, computeMemberPermissionsForChannels } = await import("./permissions.js");
 const { createMessage } = await import("./messages.js");
 const { createBauFollow, removeBauFollower, updateBauFollow } = await import("./bau-follow.js");
 const { publishDueCommunityHomePosts } = await import("./community-home.js");
@@ -321,6 +322,58 @@ describeDb("Seguir: following a Baú into a channel", () => {
     await unassignRole(destId, bob.id, role.id);
     await assignRole(destId, bob.id, manager.id);
     expect((await follow(bob, destOwnerOnlyChannel)).status).toBe(201);
+  });
+
+  it("the destination picker follows the same per-channel test as creating a follow", async () => {
+    type Destinations = { servers: Array<{ serverId: string; channels: Array<{ id: string }> }> };
+    const destinationsFor = async (as: TestUser) =>
+      (await call<Destinations>(as, "GET", `${home()}/follow/destinations`)).body.servers.find(
+        (server) => server.serverId === destId,
+      );
+    await addMember(qgId, bob);
+    await addMember(qgId, carol);
+    await addMember(destId, carol);
+
+    // Bob holds nothing: the server is not offered, and creating a follow is refused.
+    expect(await destinationsFor(bob)).toBeUndefined();
+    expect((await follow(bob, destOwnerOnlyChannel)).status).toBe(403);
+
+    // MANAGE_WEBHOOKS granted by an overwrite on ONE channel, to a role Bob holds
+    // that has no management bit of its own: that channel, and only it, is offered.
+    const plain = await createRole(destId, { name: "Plain", permissions: Permission.VIEW_CHANNEL });
+    await assignRole(destId, bob.id, plain.id);
+    await upsertChannelOverwrite(destOwnerOnlyChannel, destId, "role", plain.id, Permission.MANAGE_WEBHOOKS, 0n);
+    const offered = await destinationsFor(bob);
+    expect(offered?.channels.map((channel) => channel.id)).toEqual([destOwnerOnlyChannel]);
+    // ...and the follow the picker offered is accepted, the one it did not is not.
+    expect((await follow(bob, destChannelId)).status).toBe(403);
+    expect((await follow(bob, destOwnerOnlyChannel)).status).toBe(201);
+
+    // The other direction: the bit server-wide, taken away on one channel by an
+    // overwrite. The picker no longer offers that channel, and creating one there
+    // is refused too (the delivery check would pause it).
+    const manager = await createRole(destId, {
+      name: "Integracoes",
+      permissions: Permission.VIEW_CHANNEL | Permission.MANAGE_WEBHOOKS,
+    });
+    await assignRole(destId, carol.id, manager.id);
+    expect((await destinationsFor(carol))?.channels.map((channel) => channel.id).sort()).toEqual(
+      [destChannelId, destOwnerOnlyChannel].sort(),
+    );
+    await upsertChannelOverwrite(destChannelId, destId, "role", manager.id, 0n, Permission.MANAGE_WEBHOOKS);
+    expect((await destinationsFor(carol))?.channels.map((channel) => channel.id)).toEqual([
+      destOwnerOnlyChannel,
+    ]);
+    // The batched read is the one-channel read, channel for channel, for everyone.
+    for (const who of [alice, bob, carol]) {
+      const batched = await computeMemberPermissionsForChannels(destId, who.id, [destChannelId, destOwnerOnlyChannel]);
+      for (const channel of [destChannelId, destOwnerOnlyChannel]) {
+        expect(batched.get(channel)).toBe(await computeMemberPermissions(destId, who.id, channel));
+      }
+    }
+    expect((await follow(carol, destChannelId)).status).toBe(403);
+    await getPool().query(`DELETE FROM bau_follows WHERE target_channel_id = $1`, [destOwnerOnlyChannel]);
+    expect((await follow(carol, destOwnerOnlyChannel)).status).toBe(201);
   });
 
   it("refuses a non-member of the source, the source's own channels, voice channels, and a duplicate", async () => {

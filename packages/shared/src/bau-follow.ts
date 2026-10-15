@@ -104,8 +104,9 @@ export type BauFollowDestination = z.infer<typeof bauFollowDestinationSchema>;
 
 /**
  * `GET /api/servers/:serverId/home/follow/destinations`: every server of the
- * viewer where they may set a follow up (MANAGE_WEBHOOKS or MANAGE_CHANNELS),
- * with the text channels they may point it at. The server being followed is
+ * viewer with at least one text channel where they may set a follow up
+ * (MANAGE_WEBHOOKS or MANAGE_CHANNELS in THAT channel, overwrites included),
+ * with exactly those channels. The server being followed is
  * left out: a Baú is not delivered into itself.
  */
 export const bauFollowDestinationsSchema = z.object({
