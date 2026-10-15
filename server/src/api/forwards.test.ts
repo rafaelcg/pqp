@@ -738,6 +738,29 @@ describeDb("POST /api/forwards", () => {
     expect(owners).toEqual(expect.arrayContaining([hidden, readOnly, strangers]));
   });
 
+  it("threads: read-only channels' threads never take a slot, and a channel offers its five most recent", async () => {
+    const noSend = await createChannel(serverId, "so-leitura", "text");
+    const role = await createRole(serverId, { name: "Leitor", permissions: Permission.VIEW_CHANNEL });
+    await assignRole(serverId, member.id, role.id);
+    await upsertChannelOverwrite(noSend.id, serverId, "role", role.id, 0n, Permission.SEND_MESSAGES);
+    const made: string[] = [];
+    for (let i = 0; i < 7; i += 1) {
+      const origin = await createMessage(generalId, member as never, `origem ${i}`);
+      const started = await createThreadForMessage(origin!.id, `t${i}`, member.id);
+      made.push(started!.thread.channelId);
+      await createMessage(started!.thread.channelId, member as never, `resposta ${i}`);
+    }
+    // Newer than all of them, but under a channel the member cannot speak in.
+    for (let i = 0; i < 3; i += 1) {
+      const origin = await createMessage(noSend.id, member as never, `lido ${i}`);
+      const started = await createThreadForMessage(origin!.id, `ro${i}`, member.id);
+      await createMessage(started!.thread.channelId, member as never, `resposta ro${i}`);
+    }
+    const res = await call<unknown>(member, "GET", `/api/servers/${serverId}/forward-destinations`);
+    const threads = forwardDestinationsSchema.parse(res.body).threads;
+    expect(threads.map((thread) => thread.name)).toEqual(["t6", "t5", "t4", "t3", "t2"]);
+  });
+
   it("slow mode applies as on a normal send: the second forward is refused with a retry time", async () => {
     const postId = await publish();
     await getPool().query(`UPDATE channels SET slowmode_seconds = 60 WHERE id = $1`, [generalId]);
