@@ -173,11 +173,30 @@ private fun jsTrimEnd(text: String): String = text.trimEnd(::isJsSpace)
  * word is a comment and stays.
  */
 fun isFallbackBody(body: String, forward: MessageForward): Boolean =
-    body == forwardFallbackBody(forward)
+    body == forwardFallbackBody(forward) || forwardBodyComment(body, forward) != body
 
-/** What shows above the card: the forwarder's comment, or nothing. */
+/**
+ * `forwardBodyComment` in `forward.ts`: what to show of [body]. Nothing for the
+ * bare fallback; the role-mention line alone when a followed Baú's delivery
+ * put `@Role` on its own line above the fallback; [body] itself for anything
+ * the forwarder wrote (a mention on the same line is a comment).
+ */
+fun forwardBodyComment(body: String, forward: MessageForward): String {
+    val fallback = forwardFallbackBody(forward)
+    if (body == fallback) return ""
+    val newline = body.indexOf('\n')
+    if (newline > 1 && body.startsWith("@") && body.substring(newline + 1) == fallback) {
+        return body.substring(0, newline)
+    }
+    return body
+}
+
+/**
+ * What shows above the card: the forwarder's comment, the role mention a
+ * followed Baú's delivery put above the fallback, or nothing.
+ */
 fun forwarderComment(body: String, forward: MessageForward?): String =
-    if (forward != null && isFallbackBody(body, forward)) "" else body
+    if (forward != null) forwardBodyComment(body, forward) else body
 
 // ---------------------------------------------------------------- request and response
 

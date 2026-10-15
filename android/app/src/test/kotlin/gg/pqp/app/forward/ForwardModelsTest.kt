@@ -217,6 +217,19 @@ class ForwardModelsTest {
         assertEquals("oi", forwarderComment("oi", null))
     }
 
+    @Test
+    fun `a role mention above the fallback is the comment and the fallback is hidden`() {
+        val forward = snapshot()
+        val fallback = forwardFallbackBody(forward)
+        val pinged = "@Novidades\n$fallback"
+        assertEquals("@Novidades", forwarderComment(pinged, forward))
+        assertTrue(isFallbackBody(pinged, forward))
+        // Same line, or any other words, is a comment and stays whole.
+        assertEquals("@Novidades $fallback", forwarderComment("@Novidades $fallback", forward))
+        assertEquals("olha\n$fallback", forwarderComment("olha\n$fallback", forward))
+        assertFalse(isFallbackBody("olha isso", forward))
+    }
+
     // ---- the request
 
     @Test
