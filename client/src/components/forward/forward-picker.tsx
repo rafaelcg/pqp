@@ -5,7 +5,7 @@ import {
   type DmSummary,
   type Server,
 } from "@pqp/shared";
-import { Forward, Hash, Loader2, Lock, Search, Users } from "lucide-react";
+import { Forward, Hash, Loader2, Lock, Search, Users, Volume2 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { CheckRow } from "@/components/ui/check-row";
@@ -45,6 +45,8 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
  */
 
 const COMMENT_MAX = 1500;
+/** Rows drawn at first and per "Mostrar mais": the search still covers every target. */
+const RENDER_STEP = 80;
 const FETCH_CONCURRENCY = 4;
 
 function newNonce(): string {
@@ -87,7 +89,34 @@ export interface ForwardedSummary {
   first: PickerTarget;
 }
 
-async function loadServerTargets(server: Server): Promise<PickerTarget[]> {
+/**
+ * What a server's list costs: two requests (channels and permissions). Kept for
+ * a minute, so opening the picker twice (or forwarding twice in a row) does not
+ * repeat the fan-out over every server. A failed load is never cached, and the
+ * retry button asks again past the cache.
+ */
+const TARGET_CACHE_MS = 60_000;
+const targetCache = new Map<string, { at: number; targets: PickerTarget[] }>();
+
+/** Test seam. */
+export function resetForwardTargetCacheForTests(): void {
+  targetCache.clear();
+}
+
+async function loadServerTargets(server: Server, force = false): Promise<PickerTarget[]> {
+  const cached = targetCache.get(server.id);
+  if (!force && cached && Date.now() - cached.at < TARGET_CACHE_MS) {
+    return cached.targets;
+  }
+  const targets = await fetchServerTargets(server);
+  targetCache.set(server.id, { at: Date.now(), targets });
+  return targets;
+}
+
+/** Channel types a message can go to: text, and the chat beside a voice room. */
+const SENDABLE_TYPES = new Set(["text", "voice", "watch_party"]);
+
+async function fetchServerTargets(server: Server): Promise<PickerTarget[]> {
   const [{ channels }, snapshot] = await Promise.all([
     fetchChannels(server.id),
     fetchMemberPermissions(server.id),
@@ -95,7 +124,7 @@ async function loadServerTargets(server: Server): Promise<PickerTarget[]> {
   const serverBits = parsePermissions(snapshot.server);
   return channels
     .filter((channel) => {
-      if (channel.kind !== "server" || channel.type !== "text") {
+      if (channel.kind !== "server" || !SENDABLE_TYPES.has(channel.type)) {
         return false;
       }
       const raw = snapshot.channels[channel.id];
@@ -109,6 +138,7 @@ async function loadServerTargets(server: Server): Promise<PickerTarget[]> {
       serverId: server.id,
       serverName: server.name,
       label: channel.name,
+      ...(channel.type === "text" ? {} : { voice: true }),
     }));
 }
 
@@ -161,6 +191,12 @@ export function ForwardPicker({
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [serverTargets, setServerTargets] = useState<Record<string, PickerTarget[]>>({});
   const [pending, setPending] = useState(0);
+  // Servers whose list could not be loaded: shown with a retry, never as "empty".
+  const [failedServers, setFailedServers] = useState<Server[]>([]);
+  const [shown, setShown] = useState(RENDER_STEP);
+  // One per opening. A completion that finds a different one is from a picker
+  // that is gone and must not touch the one on screen.
+  const sessionRef = useRef(0);
   const nonceRef = useRef("");
   const recentsRef = useRef<string[]>([]);
   const serversRef = useRef(servers);
@@ -178,10 +214,35 @@ export function ForwardPicker({
     );
   }, [servers, source, currentServerId]);
 
+  /** Load these servers' targets as they land; the ones that fail are kept for a retry. */
+  function loadServers(list: readonly Server[], force: boolean) {
+    const session = sessionRef.current;
+    const alive = () => sessionRef.current === session;
+    setPending((count) => count + list.length);
+    void pool(
+      list,
+      FETCH_CONCURRENCY,
+      (server) => loadServerTargets(server, force),
+      (result, server) => {
+        if (!alive()) {
+          return;
+        }
+        if (result) {
+          setServerTargets((prev) => ({ ...prev, [server.id]: result }));
+        } else {
+          setFailedServers((prev) => [...prev.filter((one) => one.id !== server.id), server]);
+        }
+        setPending((count) => Math.max(0, count - 1));
+      },
+      alive,
+    );
+  }
+
   useEffect(() => {
     if (!open || !source) {
       return;
     }
+    setPending(0);
     setQuery("");
     setSelected([]);
     setComment("");
@@ -189,28 +250,14 @@ export function ForwardPicker({
     setError(null);
     setRowErrors({});
     setServerTargets({});
+    setFailedServers([]);
+    setShown(RENDER_STEP);
+    sessionRef.current += 1;
     nonceRef.current = newNonce();
     recentsRef.current = readRecentForwardTargets();
-    let alive = true;
-    const list = eligibleServers;
-    setPending(list.length);
-    void pool(
-      list,
-      FETCH_CONCURRENCY,
-      loadServerTargets,
-      (result, server) => {
-        if (!alive) {
-          return;
-        }
-        if (result) {
-          setServerTargets((prev) => ({ ...prev, [server.id]: result }));
-        }
-        setPending((count) => Math.max(0, count - 1));
-      },
-      () => alive,
-    );
+    loadServers(eligibleServers, false);
     return () => {
-      alive = false;
+      sessionRef.current += 1;
     };
     // Opening is the trigger; the server list can move under an open dialog
     // without restarting what was typed.
@@ -297,7 +344,11 @@ export function ForwardPicker({
           }
           icon={
             target.kind === "channel" ? (
-              <Hash className="h-4 w-4" aria-hidden />
+              target.voice ? (
+                <Volume2 className="h-4 w-4" aria-hidden />
+              ) : (
+                <Hash className="h-4 w-4" aria-hidden />
+              )
             ) : target.avatarName ? (
               <UserAvatar
                 name={target.avatarName}
@@ -328,6 +379,7 @@ export function ForwardPicker({
     setBusy(true);
     setError(null);
     setRowErrors({});
+    const session = sessionRef.current;
     try {
       const response = await createForward({
         source:
@@ -360,17 +412,30 @@ export function ForwardPicker({
         rememberForwardTargets(sent.map((target) => target.id));
         onForwarded({ count: sent.length, first: sent[0]! });
       }
+      // The picker this belongs to is gone: what went out is told, nothing else.
+      if (session !== sessionRef.current) {
+        return;
+      }
       if (stillSelected.length === 0) {
         onClose();
         return;
       }
-      // Some went out: what is left is what to fix or retry, each with its reason.
+      // Some went out: what is left is what to fix or retry, each with its
+      // reason. The answer was a valid one, so the retry is a NEW attempt with
+      // its own nonce (the same nonce would read as a replay of this request).
+      nonceRef.current = newNonce();
       setSelected(stillSelected);
       setRowErrors(failed);
     } catch (err) {
-      setError(t(forwardRequestErrorKey(err)));
+      // Ambiguous (a lost connection): the nonce stays, so a retry of the same
+      // request returns what already went out instead of sending it twice.
+      if (session === sessionRef.current) {
+        setError(t(forwardRequestErrorKey(err)));
+      }
     } finally {
-      setBusy(false);
+      if (session === sessionRef.current) {
+        setBusy(false);
+      }
     }
   }
 
@@ -390,9 +455,30 @@ export function ForwardPicker({
   );
   const nothing =
     pending === 0 &&
+    failedServers.length === 0 &&
     visibleRecents.length === 0 &&
     groups.length === 0 &&
     visibleConversations.length === 0;
+
+  // Only the first rows are drawn (a long list is thousands of DOM rows on an
+  // account in many servers); search still looks at every target, and "Mostrar
+  // mais" draws the next step.
+  let left = shown;
+  const take = <T,>(list: readonly T[]): T[] => {
+    const out = list.slice(0, Math.max(0, left));
+    left -= out.length;
+    return out;
+  };
+  const shownRecents = take(visibleRecents);
+  const shownConversations = take(visibleConversations);
+  const shownGroups = groups
+    .map((group) => ({ ...group, targets: take(group.targets) }))
+    .filter((group) => group.targets.length > 0);
+  const matching =
+    visibleRecents.length +
+    visibleConversations.length +
+    groups.reduce((sum, group) => sum + group.targets.length, 0);
+  const hasMore = matching > shown;
 
   return (
     <Dialog
@@ -400,6 +486,7 @@ export function ForwardPicker({
       title={t("forward.title")}
       size="md"
       onClose={onClose}
+      dismissible={!busy}
       footer={
         <>
           <span
@@ -473,7 +560,10 @@ export function ForwardPicker({
           <Input
             type="search"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setShown(RENDER_STEP);
+            }}
             placeholder={t("forward.search")}
             className="pl-9"
             autoComplete="off"
@@ -485,23 +575,23 @@ export function ForwardPicker({
           className="max-h-[min(22rem,42vh)] space-y-3 overflow-y-auto pr-1"
           data-forward-list
         >
-          {visibleRecents.length > 0 && (
+          {shownRecents.length > 0 && (
             <section aria-label={t("forward.recent")}>
               <h3 className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
                 {t("forward.recent")}
               </h3>
-              <ul>{visibleRecents.map((target) => rowFor(target, true))}</ul>
+              <ul>{shownRecents.map((target) => rowFor(target, true))}</ul>
             </section>
           )}
-          {visibleConversations.length > 0 && (
+          {shownConversations.length > 0 && (
             <section aria-label={t("forward.conversations")}>
               <h3 className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
                 {t("forward.conversations")}
               </h3>
-              <ul>{visibleConversations.map((target) => rowFor(target, false))}</ul>
+              <ul>{shownConversations.map((target) => rowFor(target, false))}</ul>
             </section>
           )}
-          {groups.map(({ server, targets }) => (
+          {shownGroups.map(({ server, targets }) => (
             <section key={server.id} aria-label={server.name} data-forward-server={server.id}>
               <h3 className="flex items-center gap-1.5 px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
                 <span className="flex h-4 w-4 items-center justify-center overflow-hidden rounded bg-surface-3 text-[8px] text-text">
@@ -512,6 +602,40 @@ export function ForwardPicker({
               <ul>{targets.map((target) => rowFor(target, false))}</ul>
             </section>
           ))}
+          {hasMore && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full"
+              onClick={() => setShown((count) => count + RENDER_STEP)}
+              data-forward-show-more
+            >
+              {t("forward.showMore")}
+            </Button>
+          )}
+          {failedServers.length > 0 && pending === 0 && (
+            <div
+              className="flex items-center gap-2 rounded-[var(--radius-control)] bg-surface-1 px-3 py-2 text-xs text-text-secondary"
+              role="alert"
+              data-forward-load-failed
+            >
+              <span className="min-w-0 flex-1">{t("forward.loadFailed")}</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  const again = failedServers;
+                  setFailedServers([]);
+                  loadServers(again, true);
+                }}
+                data-forward-retry-load
+              >
+                {t("forward.retry")}
+              </Button>
+            </div>
+          )}
           {pending > 0 && (
             <p
               className="flex items-center gap-2 px-2 py-1 text-xs text-text-tertiary"

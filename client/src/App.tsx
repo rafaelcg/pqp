@@ -6642,7 +6642,11 @@ function MainAppContent({
           message.forward?.title ||
           buildReplyExcerpt(message.forward?.excerpt || message.body) ||
           t("forward.messageFrom", { name: message.authorName }),
-        restricted: channel?.isPrivate === true || message.forward?.restricted === true,
+        // Private, or a channel this list does not hold (a thread or a forum
+        // post, whose own flag may not carry its parent's privacy): restricted
+        // to this server, the safe reading. The server enforces it anyway.
+        restricted:
+          !channel || channel.isPrivate === true || message.forward?.restricted === true,
       });
     },
     [channels, forwardEnabled, selectedServerId, t],

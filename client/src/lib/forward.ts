@@ -212,6 +212,8 @@ export interface PickerTarget {
   serverName: string | null;
   /** Channel name (no `#`) or the conversation's title. */
   label: string;
+  /** A voice room's chat (drawn with a speaker, not a hash). */
+  voice?: boolean;
   /** For a conversation: who to draw. */
   avatarName?: string;
   avatarUrl?: string | null;

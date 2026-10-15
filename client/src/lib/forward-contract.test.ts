@@ -77,6 +77,9 @@ describe("the places the action has to be wired", () => {
     const app = read("client/src/App.tsx");
     expect(app).toContain("onForward={requestForward}");
     expect(app).toContain("onForwardPost={forwardEnabled ? requestForwardPost : undefined}");
+    // A message in a channel the list does not hold (a thread, a forum post)
+    // is restricted to its server: its own flag may not carry its parent's.
+    expect(app).toContain("!channel || channel.isPrivate === true");
     expect(app).toContain("<ForwardPicker");
     expect(app).toContain("<ForwardedToast");
     const feed = read("client/src/components/community-home/community-home-feed.tsx");
