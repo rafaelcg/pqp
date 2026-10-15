@@ -1,0 +1,466 @@
+import {
+  bauPostPath,
+  customEmojiTokensAsText,
+  FORWARD_EXCERPT_MAX,
+  FORWARD_VERSION,
+  forwardFallbackBody,
+  forwardMessagePath,
+  messageForwardSchema,
+  MESSAGE_MAX_LENGTH,
+  type CreateForwardRequest,
+  type ForwardMediaKind,
+  type ForwardRefusalReason,
+  type ForwardResult,
+  type ForwardTarget,
+  type MessageForward,
+} from "@pqp/shared";
+import type { DbUser } from "../db.js";
+import { getPool } from "../db.js";
+import { isEnabled } from "../lib/flags.js";
+import { postChannelMessage, takeMessageBudget } from "../ws/chat.js";
+import {
+  CommunityHomeError,
+  getCommunityHomePost,
+  isCommunityHomeEnabled,
+} from "./community-home.js";
+import { DmRefusedError, openConversation } from "./dms.js";
+import { getChannel } from "./servers.js";
+import { canAccessChannel, getMemberRole } from "./users.js";
+
+/**
+ * ENCAMINHAR. The contract is `packages/shared/src/forward.ts`; this is the
+ * rule set behind `POST /api/forwards`.
+ *
+ * THE FLAG IS CHECKED PER REQUEST, not at boot: `forward_messages` off is a
+ * 404, the same answer as a route that does not exist, so a stale client's
+ * button fails closed. Cards already stored keep rendering (the flag gates
+ * creation, never reads).
+ *
+ * A FORWARD GOES THROUGH THE CHAT'S OWN SEND (`postChannelMessage`), once per
+ * target, so access, SEND_MESSAGES, blocks, slow mode, AutoMod, the closed-1:1
+ * restore, mentions, unread, push and the broadcast are the chat's, not a
+ * copy. Two things differ on purpose: nothing a snapshot says can mention
+ * anybody (`@everyone` / `@here` never fire, names are read from the
+ * forwarder's comment alone), and the fallback body is not unfurled.
+ *
+ * WHAT MAY LEAVE ITS SERVER. The forwarder must be able to read the source.
+ * A members-only (VIP) Baú post and a message in a private channel are
+ * `restricted`: they can only be forwarded into the SAME server, never into
+ * another server or a conversation, and a restricted post's snapshot carries
+ * only what the feed shows a locked reader (title, teaser, a public YouTube
+ * poster), never the body, the media or the author, even when the forwarder
+ * could unlock the post, because the card is read by people who cannot. A
+ * conversation message (DM or group) is never a source: it belongs to the two
+ * of you, not to the person who happens to read it.
+ */
+
+/** A refusal of the whole request: the HTTP status and a machine-readable message. */
+export class ForwardError extends Error {
+  constructor(
+    readonly status: 404 | 422,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ForwardError";
+  }
+}
+
+export function forwardMessagesEnabled(): boolean {
+  return isEnabled("forward_messages");
+}
+
+/** Plain text for a card: markdown noise out, whitespace collapsed, cut by characters. */
+export function forwardExcerpt(text: string | null | undefined): string {
+  if (!text) {
+    return "";
+  }
+  const plain = customEmojiTokensAsText(text)
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*~`]+/g, "")
+    .replace(/^\s*(?:>|#{1,6})\s+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (plain.length <= FORWARD_EXCERPT_MAX) {
+    return plain;
+  }
+  // By code point, so a cut never lands inside a surrogate pair.
+  const points = Array.from(plain);
+  if (points.length <= FORWARD_EXCERPT_MAX) {
+    return plain;
+  }
+  const cut = points.slice(0, FORWARD_EXCERPT_MAX - 3).join("");
+  const lastSpace = cut.lastIndexOf(" ");
+  const base = lastSpace > FORWARD_EXCERPT_MAX * 0.6 ? cut.slice(0, lastSpace) : cut;
+  return `${base.replace(/[\s.,;:!?-]+$/, "")}...`;
+}
+
+/** A resolved source: the snapshot to store and where it may go. */
+export interface ResolvedForwardSource {
+  snapshot: MessageForward;
+  /**
+   * Set when the source may only be forwarded inside one server (members-only
+   * post, private channel). Null when it may go anywhere the forwarder can send.
+   */
+  stayInServerId: string | null;
+}
+
+interface PostServerRow {
+  name: string;
+  icon_url: string | null;
+  community_home_enabled: boolean | null;
+}
+
+async function resolveBauPostSource(
+  user: DbUser,
+  serverId: string,
+  postId: string,
+  origin: string,
+): Promise<ResolvedForwardSource> {
+  if (!isCommunityHomeEnabled()) {
+    throw new ForwardError(404, "Not found");
+  }
+  // A non-member cannot tell a post from a server that does not exist.
+  if (!(await getMemberRole(serverId, user.id))) {
+    throw new ForwardError(404, "Not found");
+  }
+  const server = await getPool().query<PostServerRow>(
+    `SELECT name, icon_url, community_home_enabled FROM servers WHERE id = $1`,
+    [serverId],
+  );
+  const serverRow = server.rows[0];
+  if (!serverRow || serverRow.community_home_enabled !== true) {
+    throw new ForwardError(404, "Not found");
+  }
+  let post;
+  try {
+    post = await getCommunityHomePost(serverId, postId, user.id);
+  } catch (error) {
+    if (error instanceof CommunityHomeError) {
+      throw new ForwardError(404, "Not found");
+    }
+    throw error;
+  }
+  // A draft or a scheduled post is not published yet, even to the staff who can open it.
+  if (post.status !== "published") {
+    throw new ForwardError(404, "Not found");
+  }
+  const restricted = post.visibility === "members";
+
+  // A restricted post is drawn as the feed draws it to a reader who cannot
+  // unlock it, whoever forwards it: the card is read by people who may not
+  // be able to. Free posts get the body.
+  const excerpt = restricted
+    ? forwardExcerpt(post.teaser)
+    : forwardExcerpt(post.teaser?.trim() || post.body);
+  let mediaKind: ForwardMediaKind | undefined;
+  let mediaThumbUrl: string | null | undefined;
+  // The one thumbnail that is stable and public is a YouTube poster; every
+  // other media url is a signed GET that expires, and a snapshot must not
+  // store one. A locked reader gets the poster too, so a restricted post may.
+  if (post.posterUrl && (restricted || post.media?.kind === "youtube")) {
+    mediaKind = "youtube";
+    mediaThumbUrl = post.posterUrl;
+  }
+  if (!restricted && post.media) {
+    switch (post.media.kind) {
+      case "image":
+        mediaKind = "image";
+        break;
+      case "video":
+        mediaKind = "video";
+        break;
+      case "youtube":
+        mediaKind = "youtube";
+        break;
+      case "twitch":
+      case "tiktok":
+      case "instagram":
+        mediaKind = "embed";
+        break;
+      default:
+        break;
+    }
+  }
+  const title = post.title?.trim();
+  const snapshot: MessageForward = {
+    v: FORWARD_VERSION,
+    kind: "bau_post",
+    sourceServerId: serverId,
+    sourceServerName: serverRow.name,
+    sourceServerIconUrl: serverRow.icon_url,
+    sourceId: post.id,
+    ...(!restricted && post.author.displayName
+      ? { authorDisplayName: post.author.displayName }
+      : {}),
+    ...(title ? { title } : {}),
+    excerpt,
+    ...(mediaThumbUrl ? { mediaThumbUrl } : {}),
+    ...(mediaKind ? { mediaKind } : {}),
+    url: `${origin}${bauPostPath(serverId, post.id)}`,
+    createdAt: post.publishedAt ?? post.createdAt,
+    ...(restricted ? { restricted: true } : {}),
+  };
+  if (!snapshot.title && !snapshot.excerpt && !snapshot.mediaKind) {
+    throw new ForwardError(422, "source_empty");
+  }
+  return { snapshot, stayInServerId: restricted ? serverId : null };
+}
+
+interface MessageSourceRow {
+  id: string;
+  channel_id: string;
+  body: string;
+  created_at: Date;
+  system_kind: string | null;
+  forward: unknown;
+  webhook_username: string | null;
+  server_id: string | null;
+  channel_name: string;
+  channel_kind: "server" | "dm" | "group";
+  is_private: boolean;
+  parent_is_private: boolean | null;
+  server_name: string | null;
+  server_icon_url: string | null;
+  author_name: string | null;
+  attachment_type: string | null;
+}
+
+async function resolveMessageSource(
+  user: DbUser,
+  messageId: string,
+  origin: string,
+): Promise<ResolvedForwardSource> {
+  const result = await getPool().query<MessageSourceRow>(
+    `SELECT m.id, m.channel_id, m.body, m.created_at, m.system_kind, m.forward,
+            m.webhook_username,
+            c.server_id, c.name AS channel_name, c.kind AS channel_kind,
+            c.is_private, pc.is_private AS parent_is_private,
+            s.name AS server_name, s.icon_url AS server_icon_url,
+            COALESCE(NULLIF(sm.nickname, ''), u.display_name) AS author_name,
+            (SELECT a.content_type
+               FROM message_attachments a
+              WHERE a.message_id = m.id
+                AND (a.content_type LIKE 'image/%' OR a.content_type LIKE 'video/%')
+              ORDER BY a.position, a.created_at
+              LIMIT 1) AS attachment_type
+       FROM messages m
+       JOIN channels c ON c.id = m.channel_id
+       LEFT JOIN channels pc ON pc.id = c.parent_id
+       LEFT JOIN servers s ON s.id = c.server_id
+       JOIN users u ON u.id = m.author_id
+       LEFT JOIN server_members sm
+         ON sm.server_id = c.server_id AND sm.user_id = m.author_id
+      WHERE m.id = $1`,
+    [messageId],
+  );
+  const row = result.rows[0];
+  // Missing and unreadable are one answer: an id must not be probeable.
+  if (!row || !(await canAccessChannel(row.channel_id, user.id))) {
+    throw new ForwardError(404, "Not found");
+  }
+  // A conversation is private to its people, and a forward needs a server to
+  // say where it came from. A nudge is the server's sentence, not a message.
+  if (row.channel_kind !== "server" || !row.server_id || row.system_kind) {
+    throw new ForwardError(422, "source_not_forwardable");
+  }
+  const inPrivate = row.is_private || row.parent_is_private === true;
+
+  // A forward of a forward carries the ORIGINAL snapshot on, so a chain of
+  // forwards keeps pointing at the first source, and keeps its restriction.
+  const earlier = messageForwardSchema.safeParse(row.forward);
+  if (earlier.success) {
+    const restricted = earlier.data.restricted === true || inPrivate;
+    return {
+      snapshot: earlier.data,
+      stayInServerId: restricted ? row.server_id : null,
+    };
+  }
+
+  const excerpt = forwardExcerpt(row.body);
+  const mediaKind: ForwardMediaKind | undefined = row.attachment_type?.startsWith(
+    "video/",
+  )
+    ? "video"
+    : row.attachment_type
+      ? "image"
+      : undefined;
+  if (!excerpt && !mediaKind) {
+    throw new ForwardError(422, "source_empty");
+  }
+  const snapshot: MessageForward = {
+    v: FORWARD_VERSION,
+    kind: "message",
+    sourceServerId: row.server_id,
+    sourceServerName: row.server_name ?? "",
+    sourceServerIconUrl: row.server_icon_url,
+    sourceChannelName: row.channel_name,
+    sourceId: row.id,
+    ...(row.webhook_username || row.author_name
+      ? { authorDisplayName: row.webhook_username ?? row.author_name ?? undefined }
+      : {}),
+    excerpt,
+    ...(mediaKind ? { mediaKind } : {}),
+    url: `${origin}${forwardMessagePath(row.server_id, row.channel_id, row.id)}`,
+    createdAt: row.created_at.toISOString(),
+    ...(inPrivate ? { restricted: true } : {}),
+  };
+  return { snapshot, stayInServerId: inPrivate ? row.server_id : null };
+}
+
+export async function resolveForwardSource(
+  user: DbUser,
+  source: CreateForwardRequest["source"],
+  origin: string,
+): Promise<ResolvedForwardSource> {
+  if (source.kind === "bau_post") {
+    return resolveBauPostSource(user, source.serverId!, source.id, origin);
+  }
+  return resolveMessageSource(user, source.id, origin);
+}
+
+/** Targets with duplicates dropped, first occurrence kept. */
+export function dedupeForwardTargets(targets: ForwardTarget[]): ForwardTarget[] {
+  const seen = new Set<string>();
+  const kept: ForwardTarget[] = [];
+  for (const target of targets) {
+    const key = "channelId" in target ? `c:${target.channelId}` : `u:${target.userId}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      kept.push(target);
+    }
+  }
+  return kept;
+}
+
+type Refusal = { ok: false; reason: ForwardRefusalReason; retryAfterMs?: number };
+
+/** Where a target resolves to, or why it may not receive this forward. */
+async function resolveTarget(
+  user: DbUser,
+  target: ForwardTarget,
+  stayInServerId: string | null,
+): Promise<{ ok: true; channelId: string; serverId: string | null } | Refusal> {
+  if ("userId" in target) {
+    // A person is a conversation: never for a restricted source, and decided
+    // before the conversation is opened so a refusal creates nothing.
+    if (stayInServerId) {
+      return { ok: false, reason: "stays_in_server" };
+    }
+    try {
+      const opened = await openConversation(user.id, [target.userId]);
+      return { ok: true, channelId: opened.channelId, serverId: null };
+    } catch (error) {
+      if (error instanceof DmRefusedError) {
+        // Blocked, private, self, unknown: one answer, so this is no oracle.
+        return { ok: false, reason: "unreachable" };
+      }
+      throw error;
+    }
+  }
+  const channel = await getChannel(target.channelId);
+  if (!channel || !(await canAccessChannel(channel.id, user.id))) {
+    return { ok: false, reason: "no_access" };
+  }
+  if (channel.kind === "server" && (channel.type === "category" || channel.type === "forum")) {
+    return { ok: false, reason: "bad_target" };
+  }
+  if (stayInServerId && channel.server_id !== stayInServerId) {
+    return { ok: false, reason: "stays_in_server" };
+  }
+  return { ok: true, channelId: channel.id, serverId: channel.server_id };
+}
+
+/** The message body: the forwarder's comment, or the fallback an old client shows. */
+export function forwardBody(comment: string | undefined, snapshot: MessageForward): string {
+  const own = comment?.trim() ?? "";
+  const body = own || forwardFallbackBody(snapshot);
+  return body.length > MESSAGE_MAX_LENGTH ? body.slice(0, MESSAGE_MAX_LENGTH) : body;
+}
+
+/**
+ * One message per target, sequentially (at most five), each through the chat's
+ * send. A target that fails does not stop the others; the answer says which
+ * did what, in request order.
+ */
+export async function forwardToTargets(input: {
+  user: DbUser;
+  resolved: ResolvedForwardSource;
+  targets: ForwardTarget[];
+  comment?: string;
+  nonce?: string;
+}): Promise<ForwardResult[]> {
+  const comment = input.comment?.trim() ?? "";
+  const body = forwardBody(comment, input.resolved.snapshot);
+  const results: ForwardResult[] = [];
+  for (const target of dedupeForwardTargets(input.targets)) {
+    const resolved = await resolveTarget(
+      input.user,
+      target,
+      input.resolved.stayInServerId,
+    );
+    if (!resolved.ok) {
+      results.push({ ok: false, target, reason: resolved.reason });
+      continue;
+    }
+    // The chat's own send budget, charged per message so a forward to five
+    // places costs what five sends cost. Charged only once the target is
+    // known to be a place this could land.
+    const budget = takeMessageBudget(input.user.id);
+    if (!budget.ok) {
+      results.push({
+        ok: false,
+        target,
+        reason: "rate_limited",
+        retryAfterMs: Math.ceil(budget.retryAfterMs),
+      });
+      continue;
+    }
+    const posted = await postChannelMessage({
+      author: input.user,
+      channelId: resolved.channelId,
+      body,
+      forward: { snapshot: input.resolved.snapshot, comment },
+      ...(input.nonce ? { nonce: input.nonce } : {}),
+    });
+    if (posted.ok) {
+      results.push({
+        ok: true,
+        target,
+        channelId: resolved.channelId,
+        serverId: resolved.serverId,
+        message: posted.message,
+      });
+      continue;
+    }
+    results.push({
+      ok: false,
+      target,
+      reason: refusalFor(posted.reason),
+      ...(posted.retryAfterMs && posted.retryAfterMs > 0
+        ? { retryAfterMs: Math.ceil(posted.retryAfterMs) }
+        : {}),
+    });
+  }
+  return results;
+}
+
+function refusalFor(reason: string): ForwardRefusalReason {
+  switch (reason) {
+    case "no-access":
+      return "no_access";
+    case "cannot-send":
+    case "locked":
+      return "cannot_send";
+    case "undeliverable":
+      return "unreachable";
+    case "slow-mode":
+      return "slow_mode";
+    case "rate-limited":
+      return "rate_limited";
+    case "automod":
+      return "automod";
+    default:
+      return "unavailable";
+  }
+}

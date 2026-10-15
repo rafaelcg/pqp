@@ -174,6 +174,7 @@ import {
   setVoiceAudienceSchema,
   setVoiceAudienceSpeakerSchema,
   updateServerOrderSchema,
+  createForwardSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -510,6 +511,12 @@ import {
   type ShareFailure,
 } from "../services/community-home-share.js";
 import { resolveRedirectOrigin } from "../services/connections.js";
+import {
+  ForwardError,
+  forwardMessagesEnabled,
+  forwardToTargets,
+  resolveForwardSource,
+} from "../services/forwards.js";
 import {
   isCommunityHomeTranslationConfigured,
   isCommunityHomeTranslationOn,
@@ -987,6 +994,13 @@ const homeCommentLimiter = createRateLimiter({
 const homeLikeLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
 const homePostLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 0.05 });
 /**
+ * `POST /api/forwards`: a burst of eight, then one every five seconds. A
+ * forward fans out to up to five places, and each one ALSO spends the chat's
+ * own send budget (`takeMessageBudget`), so this is the ceiling on how often
+ * somebody may ask, not on how many messages they may send.
+ */
+const forwardLimiter = createRateLimiter({ capacity: 8, refillPerSecond: 0.2 });
+/**
  * User discovery is an enumeration surface over every account on the instance,
  * and unlike message search it is not scoped to anything the caller already
  * belongs to — it is the one endpoint that answers questions about people the
@@ -1290,6 +1304,7 @@ export function resetApiRateLimits(): void {
   homeCommentLimiter.reset();
   homeLikeLimiter.reset();
   homePostLimiter.reset();
+  forwardLimiter.reset();
   userSearchLimiter.reset();
   exportLimiter.reset();
   discordImportLimiter.reset();
@@ -9069,6 +9084,58 @@ router.post(
     return created({ message: posted.message });
   },
 );
+
+/**
+ * Encaminhar. One request puts a Baú post or a chat message into up to five
+ * channels or conversations as a forward card (`forward.ts` in `@pqp/shared`
+ * is the contract; `services/forwards.ts` the rules). The flag is read here,
+ * per request: off is a 404, the answer of a route that does not exist.
+ *
+ * A bad body is a 400. A source the caller cannot read, or that does not
+ * exist, is one 404. A source that cannot be forwarded at all (a DM message,
+ * a nudge, nothing to show) is a 422 with a machine-readable message. Anything
+ * per target (no access, no SEND_MESSAGES, slow mode, a private source going
+ * to another server) is in `results`, and the request still answers 200.
+ */
+router.get("/api/forwards/config", async () => ({
+  enabled: forwardMessagesEnabled(),
+}));
+
+router.post("/api/forwards", async ({ req, res, user }) => {
+  if (!forwardMessagesEnabled() || user.is_character) {
+    throw new NotFound("Not found");
+  }
+  const key = `forward:${user.id}`;
+  if (!forwardLimiter.take(key)) {
+    res.setHeader("Retry-After", String(forwardLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  const body = createForwardSchema.parse(await readJsonBody(req));
+  const origin = safeShareOrigin(
+    resolveRedirectOrigin(
+      typeof req.headers.origin === "string" ? req.headers.origin : undefined,
+    ),
+  );
+  try {
+    const resolved = await resolveForwardSource(user, body.source, origin);
+    const results = await forwardToTargets({
+      user,
+      resolved,
+      targets: body.targets,
+      ...(body.comment !== undefined ? { comment: body.comment } : {}),
+      ...(body.nonce ? { nonce: body.nonce } : {}),
+    });
+    return { results };
+  } catch (error) {
+    if (error instanceof ForwardError) {
+      if (error.status === 404) {
+        throw new NotFound(error.message);
+      }
+      throw new HttpError(error.status, error.message);
+    }
+    throw error;
+  }
+});
 
 router.get(
   "/api/channels/:channelId/messages",
