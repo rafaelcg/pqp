@@ -58,6 +58,15 @@ class ForwardOutcomeTest {
         assertTrue(ForwardOutcomes.failureOf(IOException("offline")) is ForwardFailure.Other)
     }
 
+    @Test
+    fun `only a failure that is not an answer may have landed`() {
+        assertTrue(ForwardOutcomes.failureOf(IOException("offline")).mayHaveLanded)
+        assertTrue(ForwardOutcomes.failureOf(ApiException(502, "bad gateway")).mayHaveLanded)
+        assertFalse(ForwardOutcomes.failureOf(ApiException(404, "Not found")).mayHaveLanded)
+        assertFalse(ForwardOutcomes.failureOf(ApiException(422, "source_empty")).mayHaveLanded)
+        assertFalse(ForwardOutcomes.failureOf(ApiException(429, "Slow down")).mayHaveLanded)
+    }
+
     // ---- the flag
 
     @Test

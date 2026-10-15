@@ -741,7 +741,11 @@ fun ChatScreen(
                             // fetches them (`hasNewer` is false in every ordinary chat).
                             if (state.hasNewer) {
                                 item(key = "newer") {
-                                    LaunchedEffect(landed, state.messages.size) { if (landed) model.loadNewer() }
+                                    // Keyed on `landed` only: a page arriving changes the message
+                                    // count, and re-running on that would chain page after page
+                                    // for as long as the sentinel stays in view. Scrolling away
+                                    // and back recomposes it, which is the next explicit reach.
+                                    LaunchedEffect(landed) { if (landed) model.loadNewer() }
                                     Box(
                                         Modifier.fillMaxWidth().padding(Spacing.gutter),
                                         contentAlignment = Alignment.Center,

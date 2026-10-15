@@ -1270,6 +1270,7 @@
     <string name="forward_restricted_note">Isso fica só em %1$s. Só dá pra encaminhar pra um canal de lá.</string>
     <string name="forward_send_none">Escolhe pra onde mandar</string>
     <string name="forward_send">Encaminhar (%1$d)</string>
+    <string name="forward_retry">Tentar de novo</string>
     <string name="forward_sending">Encaminhando</string>
     <string name="forward_cap">Até 5 por vez.</string>
     <string name="forward_none_found">Nada encontrado.</string>

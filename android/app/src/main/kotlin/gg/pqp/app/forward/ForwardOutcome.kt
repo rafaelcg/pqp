@@ -34,6 +34,13 @@ data class TargetRefusal(val refusal: ForwardRefusal, val waitSeconds: Int?)
 
 /** What a request that never produced results (the whole call failed) means. */
 sealed interface ForwardFailure {
+    /**
+     * Whether the request may have been carried out although no answer arrived:
+     * only a failure that is not an answer from the server (a lost connection, a
+     * 5xx). A 404, 422 or 429 is an answer, and nothing went out.
+     */
+    val mayHaveLanded: Boolean get() = this is Other
+
     /** 404: the flag went off, or the source is gone or unreadable (one answer on purpose). */
     data object Gone : ForwardFailure
 

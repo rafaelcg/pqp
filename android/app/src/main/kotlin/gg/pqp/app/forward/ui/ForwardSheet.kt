@@ -190,7 +190,7 @@ fun ForwardSheet(
                                 SectionHeader(stringResource(R.string.forward_section_recent))
                             }
                             items(list.recent, key = { "r-" + it.key }) { target ->
-                                TargetRow(target, state.selected, state.sentKeys, state.refusals, showServer = true) {
+                                TargetRow(target, state.selected, state.sentKeys, state.refusals, showServer = true, locked = state.retryLocked) {
                                     model.toggle(target.key)
                                 }
                             }
@@ -200,7 +200,7 @@ fun ForwardSheet(
                                 SectionHeader(stringResource(R.string.forward_section_people))
                             }
                             items(list.people, key = { "p-" + it.key }) { target ->
-                                TargetRow(target, state.selected, state.sentKeys, state.refusals, showServer = false) {
+                                TargetRow(target, state.selected, state.sentKeys, state.refusals, showServer = false, locked = state.retryLocked) {
                                     model.toggle(target.key)
                                 }
                             }
@@ -208,7 +208,7 @@ fun ForwardSheet(
                         list.servers.forEach { group ->
                             item(key = "h-" + group.serverId) { ServerHeader(group) }
                             items(group.channels, key = { "s-" + it.key }) { target ->
-                                TargetRow(target, state.selected, state.sentKeys, state.refusals, showServer = false) {
+                                TargetRow(target, state.selected, state.sentKeys, state.refusals, showServer = false, locked = state.retryLocked) {
                                     model.toggle(target.key)
                                 }
                             }
@@ -315,6 +315,7 @@ private fun TargetRow(
     sentKeys: Set<String>,
     refusals: Map<String, TargetRefusal>,
     showServer: Boolean,
+    locked: Boolean,
     onClick: () -> Unit,
 ) {
     val isSelected = target.key in selected
@@ -327,7 +328,7 @@ private fun TargetRow(
             .fillMaxWidth()
             .toggleable(
                 value = isSelected,
-                enabled = !isSent,
+                enabled = !isSent && !locked,
                 role = Role.Checkbox,
                 onValueChange = { onClick() },
             )
@@ -401,6 +402,7 @@ private fun TargetRow(
                     checked = isSelected,
                     onCheckedChange = null,
                     colors = CheckboxDefaults.colors(),
+                    enabled = !locked,
                 )
             }
         }
@@ -484,6 +486,7 @@ private fun Footer(
             value = state.comment,
             onValueChange = onComment,
             modifier = Modifier.fillMaxWidth().testTag("forward.comment"),
+            enabled = !state.retryLocked,
             maxLines = 3,
             shape = MaterialTheme.shapes.small,
             textStyle = MaterialTheme.typography.bodyLarge,
@@ -526,10 +529,10 @@ private fun Footer(
                 Icon(PqpIcons.ForwardMessage, contentDescription = null, modifier = Modifier.size(Sizes.iconInline))
                 Spacer(Modifier.width(Spacing.sm))
                 Text(
-                    if (count == 0) {
-                        stringResource(R.string.forward_send_none)
-                    } else {
-                        stringResource(R.string.forward_send, count)
+                    when {
+                        state.retryLocked -> stringResource(R.string.forward_retry)
+                        count == 0 -> stringResource(R.string.forward_send_none)
+                        else -> stringResource(R.string.forward_send, count)
                     },
                 )
             }

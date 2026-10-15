@@ -19,8 +19,8 @@ class ForwardTargetsTest {
     private fun server(id: String, name: String) =
         ServerSummary(id = id, name = name, ownerId = "o", createdAt = "2026-01-01T00:00:00.000Z")
 
-    private fun channel(id: String, name: String, type: String = "text", position: Double = 0.0, private: Boolean = false) =
-        Channel(id = id, serverId = "s", name = name, type = type, position = position, isPrivate = private)
+    private fun channel(id: String, name: String, type: String = "text", position: Double = 0.0, isPrivate: Boolean = false) =
+        Channel(id = id, serverId = "s", name = name, type = type, position = position, isPrivate = isPrivate)
 
     private val send = Permission.SEND_MESSAGES.toString()
 
@@ -74,7 +74,7 @@ class ForwardTargetsTest {
     fun `channels keep the server's order and a private one is marked`() {
         val group = ForwardTargets.channelsOf(
             server("s", "QG"),
-            listOf(channel("b", "dois", position = 2.0), channel("a", "um", position = 1.0, private = true)),
+            listOf(channel("b", "dois", position = 2.0), channel("a", "um", position = 1.0, isPrivate = true)),
             snapshot("a", "b"),
         )
         assertEquals(listOf("a", "b"), group.channels.map { it.channelId })

@@ -1014,18 +1014,32 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * Bumped by [jumpToLatest]. A paging answer that started under an older
+     * value is stale (it was asked about a window that is gone) and is dropped,
+     * so it can never append old messages after the newest page or restore
+     * `hasNewer`.
+     */
+    private var pagingGeneration = 0
+    private var jumping = false
+
     /** The next page toward the present, while a jump left newer messages unloaded. */
     fun loadNewer() {
         val current = _state.value
-        if (!current.hasNewer || current.loadingNewer) return
+        if (!current.hasNewer || current.loadingNewer || jumping) return
         val newest = current.messages.lastOrNull { it.id !in pending }?.id ?: return
+        val generation = pagingGeneration
         _state.value = current.copy(loadingNewer = true)
         viewModelScope.launch {
             runSuspendCatching { session.api.messages(channelId, after = newest) }
                 .onSuccess { page ->
-                    val known = _state.value.messages.map { it.id }.toSet()
+                    if (generation != pagingGeneration) return@onSuccess
+                    // A newer page can only overlap what was appended last, so the
+                    // duplicate check looks at the tail, not the whole transcript.
+                    val tail = _state.value.messages.takeLast(page.messages.size + TAIL_DEDUPE_SLACK)
+                        .mapTo(HashSet()) { it.id }
                     _state.value = _state.value.copy(
-                        messages = _state.value.messages + page.messages.filterNot { it.id in known },
+                        messages = _state.value.messages + page.messages.filterNot { it.id in tail },
                         hasNewer = page.hasNewer && page.messages.isNotEmpty(),
                         loadingNewer = false,
                     )
@@ -1033,24 +1047,40 @@ class ChatViewModel(
                     // that arrived while the last page was in flight.
                     if (!_state.value.hasNewer) catchUp()
                 }
-                .onFailure { _state.value = _state.value.copy(loadingNewer = false) }
+                .onFailure {
+                    if (generation == pagingGeneration) {
+                        _state.value = _state.value.copy(loadingNewer = false)
+                    }
+                }
         }
     }
 
     /** Back to the newest page from the middle of history. */
     fun jumpToLatest() {
-        if (!_state.value.hasNewer) return
+        if (!_state.value.hasNewer || jumping) return
+        jumping = true
+        // Whatever paging request is in flight was asked about the old window.
+        pagingGeneration += 1
         viewModelScope.launch {
-            runSuspendCatching { session.api.messages(channelId) }
-                .onSuccess { page ->
-                    _state.value = _state.value.copy(
-                        messages = page.messages,
-                        hasMore = page.hasMore,
-                        hasNewer = false,
-                        loadingNewer = false,
-                        latestToken = _state.value.latestToken + 1,
-                    )
-                }
+            try {
+                runSuspendCatching { session.api.messages(channelId) }
+                    .onSuccess { page ->
+                        _state.value = _state.value.copy(
+                            messages = page.messages,
+                            hasMore = page.hasMore,
+                            hasNewer = false,
+                            loadingNewer = false,
+                            latestToken = _state.value.latestToken + 1,
+                        )
+                        // Live messages were held back while `hasNewer` was true, and
+                        // one may have arrived after this page was cut: ask for
+                        // anything past its newest.
+                        catchUp()
+                    }
+                    .onFailure { _state.value = _state.value.copy(loadingNewer = false) }
+            } finally {
+                jumping = false
+            }
         }
     }
 
@@ -1626,6 +1656,9 @@ class ChatViewModel(
 
     companion object {
         private const val TYPING_TTL_MS = 4_000L
+
+        /** Extra tail messages the paging duplicate check looks at, beyond the page's own size. */
+        private const val TAIL_DEDUPE_SLACK = 50
 
         /** How many input levels the locked panel's live waveform keeps. */
         private const val LIVE_LEVELS = 48

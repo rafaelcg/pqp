@@ -67,6 +67,13 @@ data class ForwardPickerState(
     val failure: ForwardFailure? = null,
     /** The cap on targets was hit by the last tap. */
     val capHit: Boolean = false,
+    /**
+     * A send whose outcome is unknown (the connection dropped before an answer):
+     * the selection and the comment are frozen and the button retries that exact
+     * request, so a changed target set can never re-send to somebody who may
+     * already have the forward under the first request's nonce.
+     */
+    val retryLocked: Boolean = false,
 )
 
 /**
@@ -92,8 +99,11 @@ class ForwardViewModel(
     /** Set once, when the sheet is finished with and something was sent. */
     val done: StateFlow<ForwardDone?> = _done.asStateFlow()
 
-    /** One per attempt; kept across a lost connection so a retry cannot post twice. */
-    private var nonce: String? = null
+    /**
+     * The request whose outcome is unknown, kept whole (targets, comment, nonce)
+     * across a lost connection. Retrying sends exactly this, never a rebuilt one.
+     */
+    private var unknownOutcome: Pair<CreateForwardRequest, List<ForwardTarget>>? = null
 
     /** Everything that went out, across attempts, for the "Encaminhado" line. */
     private val sent = mutableListOf<ForwardSent>()
@@ -123,10 +133,14 @@ class ForwardViewModel(
         val jobs: List<Deferred<Unit>> = servers.map { server ->
             viewModelScope.async {
                 gate.withPermit {
-                    val channels = runSuspendCatching { session.api.channels(server.id) }.getOrNull()
+                    // The two reads are independent: ask for both at once.
+                    val channelsCall = async { runSuspendCatching { session.api.channels(server.id) }.getOrNull() }
                     // No answer is "do not filter": the server refuses per target.
-                    val permissions = runSuspendCatching { session.api.serverPermissions(server.id) }
-                        .getOrNull()
+                    val permissionsCall = async {
+                        runSuspendCatching { session.api.serverPermissions(server.id) }.getOrNull()
+                    }
+                    val channels = channelsCall.await()
+                    val permissions = permissionsCall.await()
                     if (channels != null) {
                         val group = ForwardTargets.channelsOf(server, channels, permissions)
                         group.channels.forEach { byKey[it.key] = it }
@@ -155,12 +169,14 @@ class ForwardViewModel(
 
     fun setQuery(query: String) = _state.update { it.copy(query = query.take(64)) }
 
-    fun setComment(comment: String) = _state.update { it.copy(comment = comment.take(FORWARD_COMMENT_MAX)) }
+    fun setComment(comment: String) = _state.update {
+        if (it.retryLocked) it else it.copy(comment = comment.take(FORWARD_COMMENT_MAX))
+    }
 
     /** A target that already took this forward cannot be picked again in the same sheet. */
     fun toggle(key: String) {
         _state.update { current ->
-            if (key in current.sentKeys || current.sending) return@update current
+            if (key in current.sentKeys || current.sending || current.retryLocked) return@update current
             val (next, capHit) = ForwardTargets.toggle(current.selected, key)
             current.copy(
                 selected = next,
@@ -170,8 +186,6 @@ class ForwardViewModel(
                 failure = null,
             )
         }
-        // Another selection is another request: the old attempt's nonce no longer applies.
-        nonce = null
     }
 
     fun clearCapHit() = _state.update { it.copy(capHit = false) }
@@ -181,32 +195,38 @@ class ForwardViewModel(
     fun send() {
         val current = _state.value
         if (current.sending || current.selected.isEmpty()) return
-        val targets = current.selected.mapNotNull { byKey[it] }
-        if (targets.isEmpty()) return
-        val attempt = nonce ?: UUID.randomUUID().toString().also { nonce = it }
+        // After a lost connection the retry is the SAME request, nonce and all.
+        val (request, targets) = unknownOutcome ?: run {
+            val picked = current.selected.mapNotNull { byKey[it] }
+            if (picked.isEmpty()) return
+            CreateForwardRequest(
+                source = input.source,
+                targets = picked.map { it.toRef() },
+                comment = current.comment.trim().takeIf { it.isNotEmpty() },
+                nonce = UUID.randomUUID().toString(),
+            ) to picked
+        }
         _state.update { it.copy(sending = true, failure = null, refusals = emptyMap(), capHit = false) }
 
         viewModelScope.launch {
-            val request = CreateForwardRequest(
-                source = input.source,
-                targets = targets.map { it.toRef() },
-                comment = current.comment.trim().takeIf { it.isNotEmpty() },
-                nonce = attempt,
-            )
             runSuspendCatching { session.api.createForward(request) }
                 .onSuccess { response -> onResponse(targets, response) }
                 .onFailure { error ->
-                    // The nonce stays: nothing says the first attempt did not land.
+                    val failure = ForwardOutcomes.failureOf(error)
+                    // Only a call that may have landed keeps its request: a 404, 422 or 429
+                    // answered, so nothing went out and the selection is free again.
+                    val ambiguous = failure.mayHaveLanded
+                    unknownOutcome = if (ambiguous) request to targets else null
                     _state.update {
-                        it.copy(sending = false, failure = ForwardOutcomes.failureOf(error))
+                        it.copy(sending = false, failure = failure, retryLocked = ambiguous)
                     }
                 }
         }
     }
 
     private fun onResponse(targets: List<ForwardTarget>, response: CreateForwardResponse) {
-        // An answer ends this attempt: whatever is retried next is a new request.
-        nonce = null
+        // An answer ends this attempt: whatever is sent next is a new request.
+        unknownOutcome = null
         val refusals = HashMap<String, TargetRefusal>()
         val sentKeys = HashSet<String>()
         response.results.forEachIndexed { index, result ->
@@ -231,6 +251,7 @@ class ForwardViewModel(
         _state.update { s ->
             s.copy(
                 sending = false,
+                retryLocked = false,
                 sentKeys = s.sentKeys + sentKeys,
                 selected = s.selected.filterNot { it in sentKeys },
                 refusals = refusals,
