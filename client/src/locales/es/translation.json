@@ -5732,7 +5732,7 @@
   "stories.call.join": "Unirse a la llamada",
   "stories.call.ended": "La llamada terminó",
   "stories.call.full": "La sala está llena",
-  "stories.call.empty": "Nadie en la llamada ahora",
+  "stories.call.empty": "Nadie en la llamada",
   "stories.call.enter": "Entrar",
   "stories.call.count_one": "{count} en la llamada",
   "stories.call.count_other": "{count} en la llamada",
