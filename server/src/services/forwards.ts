@@ -448,7 +448,13 @@ export function defangMentionText(
     }
     return kind === "#" ? "#unknown" : "@unknown";
   });
-  return plain.replace(/@(?=[A-Za-z0-9_])/g, `@${ZERO_WIDTH_SPACE}`);
+  // A complete pass over the FINAL text, names included: any markup that is
+  // still there (a resolved name that carried `<@&id>`, `<@!id>`, `<#id>`) loses
+  // its opening bracket, and every `@word` (`@everyone`, `@here`, a username)
+  // gets the zero-width space.
+  return plain
+    .replace(/<(?=@|#)/g, "")
+    .replace(/@(?=[A-Za-z0-9_])/g, `@${ZERO_WIDTH_SPACE}`);
 }
 
 /** Cut to the schema's unit (UTF-16), never inside a surrogate pair. */

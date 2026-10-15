@@ -864,6 +864,32 @@ describeDb("POST /api/forwards", () => {
     expect(JSON.stringify(res.body)).not.toContain("diretoria");
   });
 
+  it("a hostile display name cannot bring mention markup back after it is resolved", async () => {
+    const villain = await makeUser("villain");
+    const id = "99999999-9999-4999-8999-999999999998";
+    await getPool().query(`UPDATE users SET display_name = $2 WHERE id = $1`, [
+      villain.id,
+      `<@&${id}> <@!${id}> <#${id}> @everyone @here @member`,
+    ]);
+    const said = await say(generalId, owner, `oi <@${villain.id}>`);
+    const before = await mentionRows();
+    const res = await forward(owner, { kind: "message", id: said }, [{ channelId: otherGeneralId }]);
+    const ok = res.body.results[0] as Extract<Result, { ok: true }>;
+    const excerpt = ok.message.forward!.excerpt as string;
+    for (const text of [excerpt, ok.message.body]) {
+      expect(text).not.toMatch(/<[@#]/);
+      expect(extractMentions(text)).toEqual({
+        usernames: [],
+        everyone: false,
+        here: false,
+        roleNames: [],
+      });
+    }
+    expect(ok.message.mentionEveryone).toBe(false);
+    expect(ok.message.mentionHere).toBe(false);
+    expect(await mentionRows()).toBe(before);
+  });
+
   it("the card url comes from PUBLIC_APP_URL, never from the request Origin header", async () => {
     const postId = await publish();
     const previous = process.env.PUBLIC_APP_URL;
