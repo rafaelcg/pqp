@@ -65,9 +65,11 @@ object ConversationList {
 
     /**
      * The Conversas tab badge: how many CONVERSATIONS are waiting, not how many
-     * messages. Three people writing forty lines is "3".
+     * messages. Three people writing forty lines is "3". A muted conversation
+     * is not counted: it badges nothing anywhere else either.
      */
-    fun waiting(list: List<DmSummary>): Int = list.count { it.unread.count > 0 }
+    fun waiting(list: List<DmSummary>, muted: Set<String> = emptySet()): Int =
+        list.count { it.unread.count > 0 && it.channelId !in muted }
 
     /**
      * The row's count. The server caps a conversation's unread at 100 (S3), so

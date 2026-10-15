@@ -1,0 +1,220 @@
+package gg.pqp.app.unread
+
+import android.os.SystemClock
+import gg.pqp.app.core.ServerSummary
+import gg.pqp.app.core.SessionPhase
+import gg.pqp.app.core.SessionStore
+import gg.pqp.app.ui.screens.channels.ChannelUnread
+import gg.pqp.app.ui.screens.channels.mutedChannelIds
+import gg.pqp.app.ui.screens.channels.serverUnread
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+
+/**
+ * What one server's channels hold that this person has not read: the sum of the
+ * per-channel unread of `GET /api/servers/:id/unread`, with muted channels left
+ * out, which is what the web rail shows on a server it is not looking at.
+ */
+data class ServerUnreadSummary(val count: Int = 0, val mentions: Int = 0) {
+    val hasUnread: Boolean get() = count > 0 || mentions > 0
+}
+
+object ServerUnreadRules {
+
+    /** The most servers read in one pass, the web rail's cap. */
+    const val MAX_SERVERS = 30
+
+    /** Two requests at a time, the web rail's pace. */
+    const val PARALLELISM = 2
+
+    /** How soon the list reads again without being told something changed. */
+    const val REFRESH_AFTER_MS = 30_000L
+
+    /**
+     * One server's number. A muted channel counts for nothing, mentions
+     * included, and a channel with a mention but no count still counts (a forum
+     * can carry one).
+     */
+    fun summarize(channels: Collection<ChannelUnread>, mutedChannels: Set<String>): ServerUnreadSummary {
+        val live = channels.filter { it.channelId !in mutedChannels }
+        return ServerUnreadSummary(
+            count = live.sumOf { it.count.coerceAtLeast(0) },
+            mentions = live.sumOf { it.mentions.coerceAtLeast(0) },
+        )
+    }
+
+    /**
+     * Which servers a pass reads: in list order, a server muted as a whole is
+     * skipped (it badges nothing), and no more than [MAX_SERVERS].
+     */
+    fun targets(servers: List<ServerSummary>, mutedServers: Set<String>): List<String> =
+        servers.map { it.id }.filterNot { it in mutedServers }.take(MAX_SERVERS)
+
+    /** `servers` map of the stored notification levels: only `none` silences a server. */
+    fun mutedServerIds(levels: Map<String, String>?): Set<String> =
+        levels.orEmpty().filterValues { it == "none" }.keys
+
+    /** A `channel-activity` frame on top of a summary: one more, and one more mention when it was one. */
+    fun bumped(existing: ServerUnreadSummary?, mention: Boolean): ServerUnreadSummary = ServerUnreadSummary(
+        count = (existing?.count ?: 0) + 1,
+        mentions = (existing?.mentions ?: 0) + if (mention) 1 else 0,
+    )
+}
+
+/**
+ * Channel unread for every server on the server list.
+ *
+ * The list only knew the Baú's count; a server with unread messages looked the
+ * same as a quiet one until it was opened. There is no all-servers endpoint, so
+ * this reads `/unread` per server (two at a time, thirty at most, muted servers
+ * skipped) the way the web rail does after load, and live `channel-activity`
+ * frames add to the number between reads.
+ *
+ * WHEN IT READS. When the list comes back to the front, at most every
+ * [ServerUnreadRules.REFRESH_AFTER_MS], and at once for a server somebody just
+ * read a channel of ([markStale]): the moment it is most wrong is coming back
+ * from that server, which stamped itself read while the list sat behind it.
+ * A failed read keeps what was on screen: a badge one behind beats one that
+ * flickers away.
+ */
+class ServerUnreadStore(
+    private val scope: CoroutineScope,
+    private val readServer: suspend (String) -> Collection<ChannelUnread>,
+    /** The muted channel and server sets, asked for at each pass and frame. */
+    private val muted: () -> Pair<Set<String>, Set<String>>,
+    private val now: () -> Long = SystemClock::elapsedRealtime,
+) {
+    private val _unread = MutableStateFlow<Map<String, ServerUnreadSummary>>(emptyMap())
+    val unread: StateFlow<Map<String, ServerUnreadSummary>> = _unread.asStateFlow()
+
+    private val lock = Any()
+    private var lastPassAt: Long? = null
+    private val stale = HashSet<String>()
+
+    /** Bumped by [clear]: a read that started before it must not write after it. */
+    private var epoch = 0
+
+    /** Frames since a server was last read, so a pass in flight cannot erase them. */
+    private val generation = HashMap<String, Int>()
+
+    /** Somebody read (or may have read) something in [serverId]: read it again at the next pass. */
+    fun markStale(serverId: String) {
+        synchronized(lock) { stale += serverId }
+    }
+
+    /**
+     * Read the servers that need it. [force] ignores the interval (pull to
+     * refresh); a stale server is read whatever the interval says.
+     */
+    fun hydrate(servers: List<ServerSummary>, force: Boolean = false) {
+        val (_, mutedServers) = muted()
+        val wanted = ServerUnreadRules.targets(servers, mutedServers)
+        val toRead = synchronized(lock) {
+            val last = lastPassAt
+            val due = force || last == null || now() - last >= ServerUnreadRules.REFRESH_AFTER_MS
+            val picked = if (due) wanted else wanted.filter { it in stale }
+            if (picked.isEmpty()) return
+            if (due) lastPassAt = now()
+            stale -= picked.toSet()
+            picked
+        }
+        // Forget servers the account left, and the muted ones: they badge nothing.
+        _unread.value = _unread.value.filterKeys { it in wanted }
+        // A pass is never cancelled by the next one: a small "read this server
+        // again" must not cut a full pass short and leave its servers unread
+        // until the interval comes round.
+        scope.launch {
+            val gate = Semaphore(ServerUnreadRules.PARALLELISM)
+            toRead.map { serverId ->
+                async {
+                    gate.withPermit { readOne(serverId) }
+                }
+            }.awaitAll()
+        }
+    }
+
+    private suspend fun readOne(serverId: String) {
+        val (before, startedIn) = synchronized(lock) { (generation[serverId] ?: 0) to epoch }
+        val channels = try {
+            readServer(serverId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Asked again next time: a stale badge beats none.
+            synchronized(lock) { stale += serverId }
+            return
+        }
+        val summary = ServerUnreadRules.summarize(channels, muted().first)
+        synchronized(lock) {
+            if (epoch != startedIn) return
+            // A frame that landed while the request was out may or may not be in
+            // its answer; the larger of the two never loses one, and the next pass
+            // (nothing in flight) settles it, the way the channel list does.
+            val frames = generation[serverId] ?: 0
+            val merged = if (frames != before) {
+                val current = _unread.value[serverId]
+                ServerUnreadSummary(
+                    count = maxOf(summary.count, current?.count ?: 0),
+                    mentions = maxOf(summary.mentions, current?.mentions ?: 0),
+                )
+            } else {
+                summary
+            }
+            if (frames != before) stale += serverId
+            _unread.value = if (merged.hasUnread) {
+                _unread.value + (serverId to merged)
+            } else {
+                _unread.value - serverId
+            }
+        }
+    }
+
+    /** A live `channel-activity` frame for a server channel. */
+    fun bump(serverId: String, channelId: String, mention: Boolean) {
+        val (mutedChannels, mutedServers) = muted()
+        if (channelId in mutedChannels || serverId in mutedServers) return
+        synchronized(lock) {
+            generation[serverId] = (generation[serverId] ?: 0) + 1
+            _unread.value = _unread.value + (serverId to ServerUnreadRules.bumped(_unread.value[serverId], mention))
+        }
+    }
+
+    /** Sign-out: nothing of the previous account may show. */
+    fun clear() {
+        synchronized(lock) {
+            epoch += 1
+            _unread.value = emptyMap()
+            lastPassAt = null
+            stale.clear()
+            generation.clear()
+        }
+    }
+
+    companion object {
+        @Volatile
+        private var instance: ServerUnreadStore? = null
+
+        /** One store per process, built on first use, like [gg.pqp.app.social.SocialRepository]. */
+        fun of(session: SessionStore): ServerUnreadStore =
+            instance ?: synchronized(this) {
+                instance ?: ServerUnreadStore(
+                    scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+                    readServer = { serverId -> session.api.serverUnread(serverId).values },
+                    muted = {
+                        val levels = (session.phase.value as? SessionPhase.Ready)?.me?.preferences?.notifications
+                        mutedChannelIds(levels?.channels) to ServerUnreadRules.mutedServerIds(levels?.servers)
+                    },
+                ).also { instance = it }
+            }
+    }
+}

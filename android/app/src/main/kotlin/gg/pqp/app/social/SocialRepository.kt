@@ -116,10 +116,31 @@ class SocialRepository(
         scope.launch {
             _loadingFriends.value = true
             runCatching { session.api.friends() }
-                .onSuccess { _friends.value = it }
+                .onSuccess { answer ->
+                    // Somebody accepted a request this account sent: the moment to
+                    // say hi. The first snapshot is a baseline, never news.
+                    if (friendsLoadedOnce) {
+                        FriendsDiff.newlyAccepted(_friends.value, answer).lastOrNull()?.let { friend ->
+                            _friendAccepted.value = FriendAccepted(friend.asPublicUser(), SystemClock.elapsedRealtime())
+                        }
+                    }
+                    friendsLoadedOnce = true
+                    _friends.value = answer
+                }
                 .onFailure { Log.w(TAG, "friends failed: ${it.message}") }
             _loadingFriends.value = false
         }
+    }
+
+    private var friendsLoadedOnce = false
+
+    private val _friendAccepted = MutableStateFlow<FriendAccepted?>(null)
+
+    /** "Tu e Bia agora são amigos": set when a friendship starts, taken by the screen that shows it. */
+    val friendAccepted: StateFlow<FriendAccepted?> = _friendAccepted.asStateFlow()
+
+    fun clearFriendAccepted() {
+        _friendAccepted.value = null
     }
 
     /**
@@ -194,8 +215,11 @@ class SocialRepository(
     }
 
     suspend fun acceptFriend(userId: String): Outcome = act {
+        // Who it is, before the refresh moves them from `incoming` to `friends`.
+        val accepted = _friends.value.incoming.firstOrNull { it.id == userId }
         session.api.acceptFriendRequest(userId)
         refreshFriends()
+        accepted?.let { _friendAccepted.value = FriendAccepted(it.asPublicUser(), SystemClock.elapsedRealtime()) }
         Outcome.Accepted
     }
 
@@ -367,7 +391,17 @@ class SocialRepository(
         // API that predates it. A frame for a server channel belongs to the
         // sidebar's badges, not to this list, and filing one here would put a
         // public channel in somebody's inbox.
-        if (kind == "server" && !serverIsNull) return
+        if (kind == "server" && !serverIsNull) {
+            // A server channel is the server list's badge, not an inbox row.
+            frame.string("serverId")?.let { serverId ->
+                gg.pqp.app.unread.ServerUnreadStore.of(session).bump(
+                    serverId,
+                    channelId,
+                    mention = frame["mention"]?.jsonPrimitive?.booleanOrNull ?: false,
+                )
+            }
+            return
+        }
         if (kind != "dm" && kind != "group" && !serverIsNull) return
 
         val mention = frame["mention"]?.jsonPrimitive?.booleanOrNull ?: false

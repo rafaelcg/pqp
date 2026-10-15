@@ -77,6 +77,11 @@ data class MePreferences(
     val status: String? = null,
     /** Voice note transcription, both halves on unless turned off (see [VoiceTranscriptionPrefs]). */
     val voiceTranscription: VoiceTranscriptionPrefs? = null,
+    /**
+     * Fixadas: conversation (channel) ids pinned to the top of Conversas, newest
+     * pin first. The same key the web rail writes, replaced whole on a write.
+     */
+    val pinnedConversations: List<String>? = null,
 )
 
 /**
@@ -93,11 +98,13 @@ data class VoiceTranscriptionPrefs(
     val showOn: Boolean get() = show != false
 }
 
-/** `notificationPreferencesSchema`, the one key this client reads. */
+/** `notificationPreferencesSchema`, the two level maps this client reads. */
 @Serializable
 data class MeNotificationPreferences(
-    /** Channel id to `"all" | "mentions" | "none"`. */
+    /** Channel id to `"all" | "mentions" | "none"`. A conversation is a channel here too. */
     val channels: Map<String, String> = emptyMap(),
+    /** Server id to the same levels: a server set to `none` badges nothing on the list. */
+    val servers: Map<String, String> = emptyMap(),
 )
 
 // --- servers and channels ---
@@ -132,9 +139,14 @@ data class ServersResponse(val servers: List<ServerSummary> = emptyList())
 @Serializable
 data class CreateServerRequest(val name: String, val locale: String? = null)
 
-/** `PUT /api/servers/order`: the whole order this account sees, top to bottom. */
+/**
+ * `PUT /api/servers/order`: the whole order this account sees, top to bottom.
+ * `origin` names the sender (up to 64 characters) and comes back on the
+ * `server-order-update` frame, so a phone can tell its own echo from another
+ * tab's or device's change.
+ */
 @Serializable
-data class ServerOrderRequest(val serverIds: List<String>)
+data class ServerOrderRequest(val serverIds: List<String>, val origin: String? = null)
 
 /** The app's language as the server's `locale` enum spells it: `pt-BR`, `en` or `es`. */
 fun serverLocale(language: String = java.util.Locale.getDefault().language): String = when (language.lowercase()) {

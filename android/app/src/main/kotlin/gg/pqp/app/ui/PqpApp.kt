@@ -734,7 +734,11 @@ private fun SignedInNav(
                         val social = gg.pqp.app.social.SocialRepository.of(session)
                         androidx.compose.runtime.DisposableEffect(route.channelId) {
                             social.markRead(route.channelId)
-                            onDispose { social.markRead(route.channelId) }
+                            onDispose {
+                                social.markRead(route.channelId)
+                                // The server list reads this server's unread again when it comes back.
+                                route.serverId?.let { gg.pqp.app.unread.ServerUnreadStore.of(session).markStale(it) }
+                            }
                         }
                     }
 

@@ -15,6 +15,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import gg.pqp.app.ui.screens.ServerActions
 import gg.pqp.app.onboarding.markOnboarded
 import okhttp3.OkHttpClient
 
@@ -271,6 +275,7 @@ class SessionStore(
                 "passed" -> {
                     _phase.value = SessionPhase.Ready(me)
                     realtime.connect()
+                    followRemoteServerOrder()
                     refreshServers()
                 }
                 "blocked" -> _phase.value = SessionPhase.Blocked(me.ageGate)
@@ -300,6 +305,18 @@ class SessionStore(
         val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
         _phase.value = SessionPhase.Ready(
             updated.copy(ageGate = current.ageGate, preferences = current.preferences),
+        )
+    }
+
+    /**
+     * Change the stored preferences held by the session, at once. The writer
+     * (`ConversationPrefs`) owns the request; this is only the local half, so
+     * every screen reads one value.
+     */
+    fun updatePreferences(transform: (MePreferences) -> MePreferences) {
+        val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
+        _phase.value = SessionPhase.Ready(
+            current.copy(preferences = transform(current.preferences ?: MePreferences())),
         )
     }
 
@@ -422,7 +439,7 @@ class SessionStore(
                 orderSaves.withLock {
                     val ids = _servers.value.map { it.id }
                     if (ids == synchronized(orderLock) { confirmedOrder }) return@withLock
-                    runCatching { api.saveServerOrder(ids) }
+                    runCatching { api.saveServerOrder(ids, orderOrigin) }
                         .onSuccess { synchronized(orderLock) { confirmedOrder = ids } }
                         .onFailure {
                             synchronized(orderLock) {
@@ -446,6 +463,38 @@ class SessionStore(
     private val orderLock = Any()
     private var orderSavesPending = 0
     private var confirmedOrder: List<String>? = null
+
+    /** Named on every save, so this phone's own `server-order-update` echo is recognised. */
+    private val orderOrigin = "android-" + java.util.UUID.randomUUID().toString().take(8)
+
+    private var orderFollowJob: Job? = null
+
+    /**
+     * Follow the order this account drew on another tab or device, live. The
+     * server addresses the frame to every socket of the person; the list
+     * already answers in the saved order on open, so this is only about not
+     * waiting for the next open ([ServerActions.followRemoteOrder] is the rule).
+     */
+    private fun followRemoteServerOrder() {
+        orderFollowJob?.cancel()
+        orderFollowJob = scope.launch {
+            realtime.frames.collect { frame ->
+                when ((frame["type"] as? JsonPrimitive)?.contentOrNull) {
+                    "server-order-update" -> {
+                        val ids = (frame["serverIds"] as? JsonArray)
+                            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                            ?: return@collect
+                        val sender = (frame["origin"] as? JsonPrimitive)?.contentOrNull
+                        synchronized(orderLock) {
+                            ServerActions.followRemoteOrder(
+                                _servers.value, ids, sender, orderOrigin, saving = orderSavesPending > 0,
+                            )?.let { _servers.value = it }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /**
      * `idempotencyKey`, when given, is forwarded to [ApiClient.createServer]

@@ -424,7 +424,6 @@
     <string name="friends_request_sent">Request sent</string>
     <string name="friends_now_friends">You are friends</string>
     <string name="friends_nudge_request">Someone sent you a friend request.</string>
-    <string name="friends_nudge_accepted">Your friend request was accepted.</string>
 
     <!-- Status -->
     <string name="status_online">Online</string>
@@ -1418,4 +1417,26 @@
     <string name="follow_channel_description">The Baús this channel follows. New free posts arrive here as cards.</string>
     <string name="follow_channel_from">Baú of %1$s</string>
     <string name="follow_channel_load_failed">Couldn\'t load what this channel follows.</string>
+
+    <!-- Server list: channel unread -->
+    <string name="servers_unread">Unread messages</string>
+    <plurals name="servers_unread_mentions">
+        <item quantity="one">%1$d mention</item>
+        <item quantity="other">%1$d mentions</item>
+    </plurals>
+
+    <!-- Conversas: Fixadas, mute, swipe -->
+    <string name="conversas_section_pinned">Pinned</string>
+    <string name="conversas_section_recent">Recent</string>
+    <string name="conversas_pin">Pin</string>
+    <string name="conversas_unpin">Unpin</string>
+    <string name="conversas_mute">Mute</string>
+    <string name="conversas_unmute">Unmute</string>
+    <string name="conversas_close_action">Close conversation</string>
+    <string name="conversas_pinned_state">Pinned</string>
+    <string name="conversas_pin_limit">You can pin up to 15 conversations. Unpin one first.</string>
+
+    <!-- A friendship started -->
+    <string name="friend_accepted_title">You and %1$s are friends now</string>
+    <string name="friend_accepted_cta">Say hi</string>
 </resources>

@@ -416,7 +416,6 @@
     <string name="friends_request_sent">Pedido enviado</string>
     <string name="friends_now_friends">Vocês são amigos</string>
     <string name="friends_nudge_request">Alguém te enviou um pedido de amizade.</string>
-    <string name="friends_nudge_accepted">Seu pedido de amizade foi aceito.</string>
 
     <!-- Status -->
     <string name="status_online">Online</string>
@@ -1411,4 +1410,26 @@
     <string name="follow_channel_description">Os Baús que este canal segue. Os posts livres novos chegam aqui como cartões.</string>
     <string name="follow_channel_from">Baú de %1$s</string>
     <string name="follow_channel_load_failed">Não deu pra carregar o que este canal segue.</string>
+
+    <!-- Server list: channel unread -->
+    <string name="servers_unread">Mensagens não lidas</string>
+    <plurals name="servers_unread_mentions">
+        <item quantity="one">%1$d menção</item>
+        <item quantity="other">%1$d menções</item>
+    </plurals>
+
+    <!-- Conversas: Fixadas, mute, swipe -->
+    <string name="conversas_section_pinned">Fixadas</string>
+    <string name="conversas_section_recent">Recentes</string>
+    <string name="conversas_pin">Fixar</string>
+    <string name="conversas_unpin">Desafixar</string>
+    <string name="conversas_mute">Silenciar</string>
+    <string name="conversas_unmute">Reativar o som</string>
+    <string name="conversas_close_action">Fechar conversa</string>
+    <string name="conversas_pinned_state">Fixada</string>
+    <string name="conversas_pin_limit">Dá pra fixar até 15 conversas. Desafixa uma antes.</string>
+
+    <!-- A friendship started -->
+    <string name="friend_accepted_title">Tu e %1$s agora são amigos</string>
+    <string name="friend_accepted_cta">Mandar um oi</string>
 </resources>
