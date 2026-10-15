@@ -154,7 +154,8 @@ interface CardImage {
  */
 function coverVerdict(post: BauPostMeta): "large" | "small" | "unusable" {
   const { coverType, coverWidth, coverHeight, coverBytes } = post;
-  if (coverBytes != null && coverBytes > CARD_IMAGE_MAX_BYTES) {
+  // Empty is a fact, not an absence: an object with no bytes is not a picture.
+  if (coverBytes != null && (coverBytes === 0 || coverBytes > CARD_IMAGE_MAX_BYTES)) {
     return "unusable";
   }
   if (coverType != null && !CARD_IMAGE_TYPES.includes(coverType)) {

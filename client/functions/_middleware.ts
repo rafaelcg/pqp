@@ -484,6 +484,12 @@ async function fetchBauPost(
       typeof value === "number" && Number.isInteger(value) && value > 0
         ? value
         : null;
+    // A size in bytes, where ZERO is a fact (an empty object is not a picture)
+    // and not an absence.
+    const bytes = (value: unknown): number | null =>
+      typeof value === "number" && Number.isInteger(value) && value >= 0
+        ? value
+        : null;
     return {
       slug: target.slug,
       postId: target.postId,
@@ -495,7 +501,7 @@ async function fetchBauPost(
       coverType: text(post.coverType),
       coverWidth: count(post.coverWidth),
       coverHeight: count(post.coverHeight),
-      coverBytes: count(post.coverBytes),
+      coverBytes: bytes(post.coverBytes),
       publishedAt: text(post.publishedAt),
       community: {
         slug: community.slug,

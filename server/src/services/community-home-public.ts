@@ -7,12 +7,7 @@ import {
   type PublicBauPostResponse,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
-import { sniffImage } from "../lib/image-info.js";
-import {
-  getObjectPrefix,
-  headObject,
-  isStorageConfigured,
-} from "../lib/s3.js";
+import { isStorageConfigured } from "../lib/s3.js";
 import { toPublicCommunity, type PublicCommunityRow } from "./communities.js";
 import {
   bauPublicUrlFor,
@@ -20,6 +15,7 @@ import {
   postSelectSql,
   type PostRow,
 } from "./community-home.js";
+import { peekCoverInfo } from "./community-home-cover-info.js";
 import { teaserFromBody } from "./community-home-share.js";
 
 /**
@@ -357,110 +353,14 @@ export async function getPublicBauPostCover(
 }
 
 /**
- * The most a cover served from our own origin may weigh. X refuses a card
- * image above 5 MB (and so do most unfurlers' budgets), and a bigger one is
- * not worth streaming through this process: past it the route keeps redirecting
- * to the signed URL, which is how every cover answered before this.
- */
-export const PUBLIC_COVER_MAX_BYTES = 5 * 1024 * 1024;
-
-/**
- * The formats the route serves itself. The four X accepts for a card, plus
- * AVIF for a browser's own `<img>`. Deliberately NOT svg or anything
- * text-like: bytes served from this origin that a browser would render as a
- * document are an XSS on the API's address, and a redirect to the bucket's
- * origin (the fallback) is where those stay.
- */
-const SERVABLE_COVER_TYPES: ReadonlySet<string> = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/gif",
-  "image/avif",
-]);
-
-export function isServableCoverType(contentType: string): boolean {
-  return SERVABLE_COVER_TYPES.has(contentType);
-}
-
-export interface CoverInfo {
-  /** Verified by a HEAD against the bucket, not claimed by the uploader. */
-  length: number;
-  /** Lowercased, parameters stripped. */
-  contentType: string;
-  /** What the first bytes say, when they say anything we can read. */
-  image: ReturnType<typeof sniffImage>;
-}
-
-/** How much of the head of an image to read for its dimensions. */
-const SNIFF_BYTES = 64 * 1024;
-
-/**
- * What the bucket says about a cover, remembered for the life of the process.
- *
- * Keyed by storage key, which never changes what it names (see
- * `PublicBauCover`), so an entry cannot go stale and needs no expiry; it is
- * only bounded. The IN-FLIGHT promise is what is stored, so a link going viral
- * costs one HEAD and one ranged GET, not one per viewer. A failure is dropped
- * so the next caller tries again, and a missing object (null) is not
- * remembered at all: a post can be re-uploaded under the same row.
- */
-const COVER_INFO_MAX_ENTRIES = 500;
-const coverInfoCache = new Map<string, Promise<CoverInfo | null>>();
-
-export function getCoverInfo(key: string): Promise<CoverInfo | null> {
-  const known = coverInfoCache.get(key);
-  if (known) {
-    // Touched: a Map iterates in insertion order, so re-inserting is the LRU.
-    coverInfoCache.delete(key);
-    coverInfoCache.set(key, known);
-    return known;
-  }
-  const pending = (async (): Promise<CoverInfo | null> => {
-    const head = await headObject(key);
-    if (!head) {
-      return null;
-    }
-    let image: CoverInfo["image"] = null;
-    if (
-      head.contentLength > 0 &&
-      head.contentLength <= PUBLIC_COVER_MAX_BYTES &&
-      isServableCoverType(head.contentType)
-    ) {
-      try {
-        const prefix = await getObjectPrefix(key, SNIFF_BYTES);
-        image = prefix ? sniffImage(prefix) : null;
-      } catch {
-        // Dimensions are garnish. The bytes can still be served without them.
-        image = null;
-      }
-    }
-    return { length: head.contentLength, contentType: head.contentType, image };
-  })();
-  coverInfoCache.set(key, pending);
-  while (coverInfoCache.size > COVER_INFO_MAX_ENTRIES) {
-    coverInfoCache.delete(coverInfoCache.keys().next().value as string);
-  }
-  const forget = (): void => {
-    if (coverInfoCache.get(key) === pending) {
-      coverInfoCache.delete(key);
-    }
-  };
-  pending.then((info) => (info ? undefined : forget()), forget);
-  return pending;
-}
-
-/** For tests: the cache is process state and must not leak between cases. */
-export function resetCoverInfoCache(): void {
-  coverInfoCache.clear();
-}
-
-/**
  * How long the post page waits for the bucket to describe its cover. The page
  * is the product and the dimensions are a hint for an unfurler: past this the
- * card is built without them, exactly as before this existed.
+ * card is built without them, exactly as before this existed. Only a COLD cover
+ * pays it (the answer is remembered per storage key, see
+ * `community-home-cover-info.ts`), and it is the first scrape of a link that
+ * the hint exists for, so a wait on a miss is deliberate and a short one.
  */
-const COVER_FACTS_TIMEOUT_MS = 1500;
+const COVER_FACTS_BUDGET_MS = 1000;
 
 interface CoverFacts {
   type: string | null;
@@ -475,7 +375,8 @@ interface CoverFacts {
  * Null for a cover that is not ours (a YouTube poster), for a post with none,
  * and for ANY failure or a slow bucket: it fails OPEN, because a share card
  * without dimensions is what every card was until now, and a post page that
- * errors or stalls over a hint is worse than a card with no hint.
+ * errors or stalls over a hint is worse than a card with no hint. Giving up
+ * also cancels the bucket requests (see `peekCoverInfo`).
  */
 async function coverFacts(
   row: PostRow,
@@ -485,32 +386,16 @@ async function coverFacts(
   if (!cover) {
     return null;
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const info = await Promise.race([
-      getCoverInfo(cover.key),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), COVER_FACTS_TIMEOUT_MS);
-      }),
-    ]);
-    if (!info) {
-      return null;
-    }
-    return {
-      type: info.image?.type ?? null,
-      width: info.image?.width ?? null,
-      height: info.image?.height ?? null,
-      bytes: info.length,
-    };
-  } catch (error) {
-    console.error(
-      "[bau-public] cover facts failed, serving the post without them:",
-      error instanceof Error ? error.message : error,
-    );
+  const info = await peekCoverInfo(cover.key, COVER_FACTS_BUDGET_MS);
+  if (!info) {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
+  return {
+    type: info.image?.type ?? null,
+    width: info.image?.width ?? null,
+    height: info.image?.height ?? null,
+    bytes: info.length,
+  };
 }
 
 /**

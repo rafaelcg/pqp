@@ -444,9 +444,16 @@ carries the visitor through sign-up into the community (`?join=<slug>`).
 - **What the card is told about the picture.** The post's answer carries
   `coverType`, `coverWidth`, `coverHeight` and `coverBytes`, read from the
   picture's own first 64 KB (`server/src/lib/image-info.ts`, jpeg / png / webp /
-  gif, no dependency) and remembered per storage key. Null when unknown: a YouTube
-  poster, a format we do not read, or a bucket that took more than 1.5 s, because
-  the page never waits on storage for a hint. The edge turns them into
+  gif, no dependency) and remembered per storage key
+  (`server/src/services/community-home-cover-info.ts`). Null when unknown: a
+  YouTube poster, a format we do not read, or a bucket that took more than 1 s on
+  a cold cover, because the page never waits longer than that on storage for a
+  hint. The lookup is one HEAD and one ranged read sent together; when the page
+  gives up and nobody else is waiting on it (the cover route may be), both are
+  cancelled at the bucket, each has a 5 s deadline of its own, and the page does
+  not start more than 16 at once. The file's `Content-Type` is what the header
+  says the bytes are (the card advertises the same), falling back to the type the
+  object was stored under. The edge turns them into
   `og:image:type`, `width`, `height` and picks the card by X's rules (jpg / png /
   webp / gif, at most 5 MB; at least 300x157 for `summary_large_image`, 144x144 for
   `summary`; X crops a large card to about 2:1, so any aspect ratio stays large).

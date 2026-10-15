@@ -8,8 +8,8 @@ import {
   getCoverInfo,
   isServableCoverType,
   PUBLIC_COVER_MAX_BYTES,
-  type PublicBauCover,
-} from "../services/community-home-public.js";
+} from "../services/community-home-cover-info.js";
+import type { PublicBauCover } from "../services/community-home-public.js";
 
 /**
  * `GET|HEAD /api/public/communities/:slug/posts/:postId/cover`: the picture of
@@ -224,7 +224,20 @@ export async function serveCover(
     // A store that ignored `Range` and sent the whole object. Bounded by the
     // size cap above, so slicing it in memory is safe, and it is the only way
     // to honour the `Content-Length` already promised.
-    const whole = new Uint8Array(await upstream.arrayBuffer());
+    let whole: Uint8Array<ArrayBuffer>;
+    try {
+      whole = new Uint8Array(await upstream.arrayBuffer());
+    } catch (error) {
+      // The store failed mid-body, before a byte went to the viewer: the same
+      // controlled answer as a store that fails to open.
+      await upstream.body?.cancel().catch(() => undefined);
+      console.error(
+        "[bau-public] cover read failed:",
+        error instanceof Error ? error.message : error,
+      );
+      out.unavailable();
+      return;
+    }
     body = new Response(whole.subarray(start, end + 1)).body!;
   }
 

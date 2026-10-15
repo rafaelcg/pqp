@@ -200,6 +200,8 @@ describe("renderBauPostHead", () => {
     for (const facts of [
       { coverWidth: 100, coverHeight: 100, coverType: "image/png" },
       { coverBytes: 5 * 1024 * 1024 + 1, coverType: "image/png" },
+      // An empty object is not a picture.
+      { coverBytes: 0 },
       { coverType: "image/avif" },
       { coverType: "image/svg+xml" },
     ]) {
@@ -448,6 +450,21 @@ describe("the middleware on /c/<slug>/p/<postId>", () => {
     expect(body).not.toContain('og:image:width" content="1280"');
     expect(body).not.toContain('og:image:type" content="7"');
     expect(body).toContain('content="summary_large_image"');
+  });
+
+  it("reads an empty cover as a fact the card acts on, not as 'unknown'", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ ...API_ANSWER, post: { ...API_ANSWER.post, coverBytes: 0 } }),
+      ),
+    );
+    const body = await (await onRequest(ctx(`/c/mesa-da-tues/p/${POST_ID}`))).text();
+    // Passed over for the next picture (the room's banner), not advertised. (The
+    // embedded answer below the tags still names the cover: it is the API's own.)
+    const [tags] = body.split('<script type="application/json"');
+    expect(tags).not.toContain("/cover");
+    expect(tags).toContain('content="https://api.test/api/servers/abc/banner?v=1"');
   });
 
   it("writes the card for every crawler that unfurls links, whatever it sends", async () => {

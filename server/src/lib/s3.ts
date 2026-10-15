@@ -35,6 +35,12 @@ const INTERNAL_URL_TTL_SECONDS = 60;
 /** A hung bucket must not hold a request — or the sweeper — open forever. */
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/** The request deadline, joined with a caller's own cancellation when it has one. */
+function withTimeout(signal?: AbortSignal): AbortSignal {
+  const deadline = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  return signal ? AbortSignal.any([deadline, signal]) : deadline;
+}
+
 /** Storage reachable but unusable, or not configured at all. */
 export class StorageError extends Error {
   constructor(message: string) {
@@ -522,7 +528,11 @@ export interface ObjectHead {
  * object is not there; throws for anything else, so a caller can tell "never
  * uploaded" apart from "storage is down" and refuse the upload either way.
  */
-export async function headObject(key: string): Promise<ObjectHead | null> {
+export async function headObject(
+  key: string,
+  /** Lets a caller that stopped waiting stop the request too. */
+  signal?: AbortSignal,
+): Promise<ObjectHead | null> {
   const url = signRequest({
     method: "HEAD",
     key,
@@ -533,7 +543,7 @@ export async function headObject(key: string): Promise<ObjectHead | null> {
   try {
     response = await fetch(url, {
       method: "HEAD",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: withTimeout(signal),
     });
   } catch (error) {
     throw new StorageError(
@@ -576,6 +586,8 @@ export async function headObject(key: string): Promise<ObjectHead | null> {
 export async function getObjectPrefix(
   key: string,
   length: number,
+  /** Lets a caller that stopped waiting stop the request too. */
+  signal?: AbortSignal,
 ): Promise<Uint8Array | null> {
   const url = signRequest({
     method: "GET",
@@ -588,7 +600,7 @@ export async function getObjectPrefix(
     response = await fetch(url, {
       method: "GET",
       headers: { Range: `bytes=0-${length - 1}` },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: withTimeout(signal),
     });
   } catch (error) {
     throw new StorageError(
@@ -651,17 +663,27 @@ export async function openObject(
     ttlSeconds: INTERNAL_URL_TTL_SECONDS,
   }).url;
 
+  // The deadline covers getting a RESPONSE, not delivering it. A body that is
+  // piped to a viewer on a slow link is paced by that viewer (backpressure), and
+  // a fixed clock over the whole stream would cut a valid 5 MB image off
+  // mid-picture for anyone slower than ~4 Mbit/s. A bucket that stalls after its
+  // headers is still bounded by the fetch client's own body timeout, and a
+  // viewer that leaves cancels the read.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let response: Response;
   try {
     response = await fetch(url, {
       method: "GET",
       ...(range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {}),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: controller.signal,
     });
   } catch (error) {
     throw new StorageError(
       error instanceof Error ? error.message : "Storage unreachable",
     );
+  } finally {
+    clearTimeout(timer);
   }
   if (response.status === 404) {
     await response.body?.cancel().catch(() => undefined);

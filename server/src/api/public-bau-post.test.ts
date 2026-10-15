@@ -75,10 +75,41 @@ const storageCalls = { head: 0, prefix: 0, open: 0 };
 const storage = {
   fault: false,
   ignoresRange: false,
-  /** Resolves never: a bucket that does not answer. */
+  /** Resolves never: a bucket that does not answer (until its request is aborted). */
   hang: false,
+  /** Calls that were told to stop (their AbortSignal fired). */
+  aborted: 0,
+  /** A store that ignores Range, then dies partway through the whole body. */
+  bodyFails: false,
+  /** How long a lookup takes to answer, when it answers. */
+  delayMs: 0,
   cancelled: false,
 };
+
+/** Waits `storage.delayMs`, and notes (and obeys) a cancellation during it. */
+function answerAfterDelay(signal?: AbortSignal): Promise<void> {
+  if (!storage.delayMs) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, storage.delayMs);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      storage.aborted += 1;
+      reject(new Error("aborted"));
+    });
+  });
+}
+
+/** A call that never answers on its own, and notes when it is cancelled. */
+function hangUntilAborted(signal?: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    signal?.addEventListener("abort", () => {
+      storage.aborted += 1;
+      reject(new Error("aborted"));
+    });
+  });
+}
 
 vi.mock("../lib/s3.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/s3.js")>();
@@ -89,11 +120,12 @@ vi.mock("../lib/s3.js", async (importOriginal) => {
       signedTtls.push(options?.ttlSeconds ?? -1);
       return `https://storage.test/get/${key}?sig=abc`;
     },
-    headObject: async (key: string) => {
+    headObject: async (key: string, signal?: AbortSignal) => {
       storageCalls.head += 1;
       if (storage.hang) {
-        return new Promise(() => {});
+        return hangUntilAborted(signal);
       }
+      await answerAfterDelay(signal);
       if (storage.fault) {
         throw new actual.StorageError("storage is down");
       }
@@ -102,8 +134,12 @@ vi.mock("../lib/s3.js", async (importOriginal) => {
         ? { contentLength: object.bytes.length, contentType: object.type }
         : null;
     },
-    getObjectPrefix: async (key: string, length: number) => {
+    getObjectPrefix: async (key: string, length: number, signal?: AbortSignal) => {
       storageCalls.prefix += 1;
+      if (storage.hang) {
+        return hangUntilAborted(signal);
+      }
+      await answerAfterDelay(signal);
       if (storage.fault) {
         throw new actual.StorageError("storage is down");
       }
@@ -127,6 +163,10 @@ vi.mock("../lib/s3.js", async (importOriginal) => {
       let at = 0;
       const body = new ReadableStream<Uint8Array>({
         pull(controller) {
+          if (storage.bodyFails) {
+            controller.error(new Error("connection reset"));
+            return;
+          }
           if (at >= slice.length) {
             controller.close();
             return;
@@ -181,8 +221,9 @@ const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { upsertUser } = await import("../services/users.js");
 const { createServer: createChatServer, createChannel } = await import("../services/servers.js");
 const flags = await import("../lib/flags.js");
-const { getBauPublicUrl, resetCoverInfoCache } = await import(
-  "../services/community-home-public.js"
+const { getBauPublicUrl } = await import("../services/community-home-public.js");
+const { resetCoverInfoCache, coverProbesInFlight } = await import(
+  "../services/community-home-cover-info.js"
 );
 const {
   publicBauPostResponseSchema,
@@ -351,6 +392,9 @@ describeDb("public Baú post", () => {
     storage.fault = false;
     storage.ignoresRange = false;
     storage.hang = false;
+    storage.aborted = 0;
+    storage.delayMs = 0;
+    storage.bodyFails = false;
     storage.cancelled = false;
     process.env.COMMUNITIES_ENABLED = "true";
     process.env.COMMUNITY_HOME_ENABLED = "true";
@@ -847,6 +891,27 @@ describeDb("public Baú post", () => {
       expect(gone.headers.get("cache-control")).toBe(CACHE_MISS);
     });
 
+    it("says what the bytes are when the stored type disagrees: the header wins, in the file and on the card", async () => {
+      // Stored as a jpeg, but the bytes are a png.
+      const key = `community-home/${serverId}/mentiu.jpg`;
+      store.set(key, { bytes: pngBytes(1200, 630), type: "image/jpeg" });
+      const id = await seed({ mediaKind: "image", storageKey: key });
+      const cover = await rawGet(`${url(id)}/cover`);
+      expect(cover.status).toBe(200);
+      expect(cover.headers.get("content-type")).toBe("image/png");
+      const parsed = publicBauPostResponseSchema.parse((await get(url(id))).body);
+      expect(parsed.post.coverType).toBe("image/png");
+      expect(cover.headers.get("content-type")).toBe(parsed.post.coverType);
+    });
+
+    it("answers a controlled 503, not a crash, when a store that ignores Range dies mid-body", async () => {
+      storage.ignoresRange = true;
+      storage.bodyFails = true;
+      const res = await rawGet(coverPath, { Range: "bytes=10-19" });
+      expect(res.status).toBe(503);
+      expect(res.headers.get("content-type")).toBe("application/json");
+    });
+
     it("stops reading the bucket when the viewer hangs up mid-image", async () => {
       const key = `community-home/${serverId}/grande.png`;
       store.set(key, { bytes: pngBytes(4000, 2000, 4 * 1024 * 1024), type: "image/png" });
@@ -889,6 +954,49 @@ describeDb("public Baú post", () => {
       const silent = await get(url(id));
       expect(silent.status).toBe(200);
       expect(Date.now() - startedAt).toBeLessThan(4000);
+    });
+
+    it("cancels the bucket requests when the page stops waiting, and does not start more than it can afford", async () => {
+      storage.hang = true;
+      const ids: string[] = [];
+      for (let i = 0; i < 24; i += 1) {
+        const key = `community-home/${serverId}/lenta-${i}.png`;
+        store.set(key, { bytes: pngBytes(1200, 630), type: "image/png" });
+        ids.push(await seed({ mediaKind: "image", storageKey: key }));
+      }
+      const pages = await Promise.all(ids.map((id) => get(url(id))));
+      for (const page of pages) {
+        expect(page.status).toBe(200);
+      }
+      // A cap on probes started by the page: 24 distinct cold covers, a bucket that
+      // answers nothing, and never more than 16 of them were asked.
+      expect(storageCalls.head).toBeLessThanOrEqual(16);
+      expect(storageCalls.head).toBeGreaterThan(0);
+      // Every one of those was told to stop when the page gave up on it.
+      for (let i = 0; i < 50 && coverProbesInFlight() > 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(coverProbesInFlight()).toBe(0);
+      expect(storage.aborted).toBeGreaterThanOrEqual(storageCalls.head);
+    });
+
+    it("does not abort a lookup the cover route is still waiting on when the page gives up", async () => {
+      const key = `community-home/${serverId}/espera.png`;
+      store.set(key, { bytes: pngBytes(1200, 630, 3000), type: "image/png" });
+      const id = await seed({ mediaKind: "image", storageKey: key });
+      // A bucket slower than the page's budget and well inside the probe's own.
+      storage.delayMs = 1500;
+      // The cover route joins first and waits; the page then peeks at the same
+      // lookup, gives up, and must leave it running for the route.
+      const cover = rawGet(`${url(id)}/cover`);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const page = await get(url(id));
+      expect(page.status).toBe(200);
+      expect(publicBauPostResponseSchema.parse(page.body).post.coverWidth).toBeNull();
+      const done = await cover;
+      expect(done.status).toBe(200);
+      expect(done.bytes.length).toBe(3000);
+      expect(storage.aborted).toBe(0);
     });
 
     it("a picture whose header cannot be read is still served, with bytes but no size", async () => {
