@@ -251,6 +251,10 @@ struct CommunityHomePostCard: Decodable, Sendable, Equatable {
     let likeCount: Int
     let commentCount: Int
     let publishedAt: String?
+    /// The post's public page, when it has one (`CommunityHomePost.publicUrl`).
+    /// Decoded so the card carries it; the chat card itself draws no share
+    /// control, the same as the web's.
+    let publicUrl: String?
 
     var mediaKind: MediaKind? { mediaKindRaw.flatMap(MediaKind.init(rawValue:)) }
 
@@ -299,7 +303,7 @@ struct CommunityHomePostCard: Decodable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey {
         case postId, serverId, serverName, title, teaser, author
         case mediaKindRaw = "mediaKind"
-        case mediaUrl, posterUrl, visibility, locked, pinned, likeCount, commentCount, publishedAt
+        case mediaUrl, posterUrl, visibility, locked, pinned, likeCount, commentCount, publishedAt, publicUrl
     }
 
     init(from decoder: Decoder) throws {
@@ -320,13 +324,15 @@ struct CommunityHomePostCard: Decodable, Sendable, Equatable {
         likeCount = try c.decodeIfPresent(Int.self, forKey: .likeCount) ?? 0
         commentCount = try c.decodeIfPresent(Int.self, forKey: .commentCount) ?? 0
         publishedAt = try c.decodeIfPresent(String.self, forKey: .publishedAt)
+        // Absent on an older API; a wrong-typed value reads as no public page.
+        publicUrl = (try? c.decodeIfPresent(String.self, forKey: .publicUrl)) ?? nil
     }
 
     init(
         postId: String, serverId: String, serverName: String = "", title: String? = nil,
         teaser: String? = nil, author: Author? = nil, mediaKind: String? = nil, mediaUrl: String? = nil,
         posterUrl: String? = nil, visibility: String = "free", locked: Bool = false, pinned: Bool = false,
-        likeCount: Int = 0, commentCount: Int = 0, publishedAt: String? = nil
+        likeCount: Int = 0, commentCount: Int = 0, publishedAt: String? = nil, publicUrl: String? = nil
     ) {
         self.postId = postId
         self.serverId = serverId
@@ -343,6 +349,7 @@ struct CommunityHomePostCard: Decodable, Sendable, Equatable {
         self.likeCount = likeCount
         self.commentCount = commentCount
         self.publishedAt = publishedAt
+        self.publicUrl = publicUrl
     }
 }
 

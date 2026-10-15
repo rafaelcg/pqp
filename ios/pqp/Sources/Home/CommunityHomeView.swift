@@ -345,8 +345,42 @@ private struct PostCard: View {
             .accessibilityValue(Text(String(post.commentCount)))
 
             Spacer(minLength: 0)
+
+            // Only a post with a public page offers it, and only the server
+            // knows which those are (`publicUrl`); a locked post never does.
+            if let shareURL = BauPublicShare.shareURL(for: post) {
+                ShareButton(url: shareURL, title: BauPublicShare.shareTitle(for: post))
+            }
         }
         .padding(.top, 2)
+    }
+}
+
+/// Compartilhar: the system share sheet with the post's public page, campaign
+/// attached. The sheet is the system's own, so there is no motion of ours to
+/// make reduced-motion safe.
+private struct ShareButton: View {
+    let url: URL
+    let title: String
+
+    var body: some View {
+        ShareLink(
+            item: url,
+            subject: title.isEmpty ? nil : Text(verbatim: title),
+            preview: SharePreview(title.isEmpty ? url.absoluteString : title)
+        ) {
+            HStack(spacing: 5) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 15, weight: .semibold))
+                Text("Share")
+                    .font(Typography.caption)
+            }
+            .foregroundStyle(Palette.paperMuted)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Share this post"))
+        .accessibilityIdentifier("bau.share")
     }
 }
 

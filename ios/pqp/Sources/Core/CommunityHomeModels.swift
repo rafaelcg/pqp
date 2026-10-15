@@ -193,6 +193,12 @@ struct CommunityHomePost: Codable, Identifiable, Sendable, Hashable {
     var commentTeaser: [CommunityHomeComment]
     let publishedAt: Date?
     let createdAt: Date
+    /// The post's public page (`https://pqp.gg/c/<slug>/p/<id>`), set ONLY while
+    /// the post has one: published, free, in a community with a public address,
+    /// with the `bau_public_posts` flag on. Nil from an older API. The app never
+    /// builds this URL; Compartilhar shows only when the server sends it
+    /// (`BauPublicShare.shareURL`).
+    let publicUrl: String?
 
     var isMembersOnly: Bool { visibility == "members" }
 
@@ -202,7 +208,7 @@ struct CommunityHomePost: Codable, Identifiable, Sendable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, serverId, author, authorBadge, title, body, teaser, visibility
         case commentsEnabled, media, locked, likeCount, likedByMe, commentCount
-        case commentTeaser, publishedAt, createdAt
+        case commentTeaser, publishedAt, createdAt, publicUrl
     }
 
     init(from decoder: Decoder) throws {
@@ -224,6 +230,8 @@ struct CommunityHomePost: Codable, Identifiable, Sendable, Hashable {
         commentTeaser = try c.decodeIfPresent([CommunityHomeComment].self, forKey: .commentTeaser) ?? []
         publishedAt = try c.decodeIfPresent(Date.self, forKey: .publishedAt)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
+        // Absent on an older API; a wrong-typed value costs the share button only.
+        publicUrl = (try? c.decodeIfPresent(String.self, forKey: .publicUrl)) ?? nil
     }
 }
 

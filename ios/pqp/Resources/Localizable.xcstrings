@@ -7281,6 +7281,16 @@
         }
       }
     },
+    "Share this post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compartilhar esse post"
+          }
+        }
+      }
+    },
     "Share your screen" : {
       "localizations" : {
         "pt-BR" : {
