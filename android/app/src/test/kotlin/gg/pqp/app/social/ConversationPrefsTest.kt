@@ -51,8 +51,8 @@ class ConversationPrefsTest {
         assertEquals(listOf("a"), ConversationPins.applyOps(listOf("a", "b"), mapOf("b" to false)))
         // Asked in order: pin then unpin the same one is nothing.
         assertEquals(listOf("a"), ConversationPins.applyOps(listOf("a"), linkedMapOf("x" to true, "x" to false)))
-        // Already there stays where it is.
-        assertEquals(listOf("a", "b"), ConversationPins.applyOps(listOf("a", "b"), mapOf("b" to true)))
+        // Pinned again, it goes to the front.
+        assertEquals(listOf("b", "a"), ConversationPins.applyOps(listOf("a", "b"), mapOf("b" to true)))
     }
 
     @Test
@@ -202,6 +202,24 @@ class ConversationPrefsTest {
         // second tap came; the second sends what is on screen when its turn comes.
         assertEquals(listOf(listOf("a"), listOf("b", "a")), backend.pinSaves)
         assertEquals(listOf("b", "a"), backend.serverPins)
+    }
+
+    @Test
+    fun `pin, pin, unpin, pin again saves the order the person built`() {
+        val backend = FakeBackend()
+        val gate = CompletableDeferred<Unit>()
+        backend.gate = gate
+        backend.pins = listOf("x")
+        backend.serverPins = listOf("x")
+        val prefs = actor(backend)
+        prefs.togglePin("a") { }
+        prefs.togglePin("b") { }
+        prefs.togglePin("a") { }
+        prefs.togglePin("a") { }
+        assertEquals(listOf("a", "b", "x"), backend.pins)
+        gate.complete(Unit)
+        assertEquals(listOf("a", "b", "x"), backend.serverPins)
+        assertEquals(listOf("a", "b", "x"), backend.pins)
     }
 
     @Test

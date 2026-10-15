@@ -136,6 +136,13 @@ class ServerUnreadStore(
         account = signedIn
         val (_, mutedServers) = muted()
         val wanted = ServerUnreadRules.targets(servers, mutedServers)
+        // Forget servers the account left, and the muted ones: they badge nothing. The
+        // thirty-server cap limits what is READ, not what is kept: a live frame for the
+        // thirty-first still shows. Done on every call (a mute or a server change must
+        // show even when no read is due), and under the lock live frames take, so a frame
+        // that lands meanwhile is never overwritten by an older snapshot of the map.
+        val kept = servers.map { it.id }.filterNot { it in mutedServers }.toSet()
+        synchronized(lock) { _unread.value = _unread.value.filterKeys { it in kept } }
         val toRead = synchronized(lock) {
             val last = lastPassAt
             val due = force || last == null || now() - last >= ServerUnreadRules.REFRESH_AFTER_MS
@@ -145,11 +152,6 @@ class ServerUnreadStore(
             stale -= picked.toSet()
             picked
         }
-        // Forget servers the account left, and the muted ones: they badge nothing. The
-        // thirty-server cap limits what is READ, not what is kept: a live frame for the
-        // thirty-first still shows.
-        val kept = servers.map { it.id }.filterNot { it in mutedServers }.toSet()
-        _unread.value = _unread.value.filterKeys { it in kept }
         // A pass is never cancelled by the next one: a small "read this server
         // again" must not cut a full pass short and leave its servers unread
         // until the interval comes round.

@@ -223,6 +223,20 @@ class ServerUnreadTest {
     }
 
     @Test
+    fun `a mute shows at once even when no read is due`() {
+        val f = Fixture()
+        f.answers["a"] = listOf(unread("a1", 3))
+        val list = listOf(server("a"))
+        f.store.hydrate(list)
+        assertEquals(setOf("a"), f.store.unread.value.keys)
+
+        f.mutedServers = setOf("a")
+        f.store.hydrate(list)
+        assertEquals(1, f.reads.size)
+        assertTrue(f.store.unread.value.isEmpty())
+    }
+
+    @Test
     fun `an older read of a server cannot overwrite a newer one`() {
         val f = Fixture()
         f.answers["a"] = listOf(unread("a1", 5))

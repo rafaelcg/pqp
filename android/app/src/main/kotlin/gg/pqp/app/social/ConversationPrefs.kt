@@ -67,7 +67,8 @@ object ConversationPins {
         var out = base
         for ((id, wantPinned) in ops) {
             out = if (wantPinned) {
-                if (id in out) out else listOf(id) + out
+                // To the front, wherever it was: the newest pin is the first under Fixadas.
+                listOf(id) + (out - id)
             } else {
                 out - id
             }
@@ -132,6 +133,9 @@ suspend fun ApiClient.setChannelNotificationLevels(channels: Map<String, String>
     ).preferences
 }
 
+/** One unsaved pin or unpin: what was asked and when, so a later ask for the same channel is never mistaken for it. */
+private data class PinAsk(val pinned: Boolean, val seq: Long)
+
 /** Everything the actor reads and writes, so it can be driven in a JVM test. */
 interface ConversationPrefsBackend {
     /** Who is signed in. Work started for one account never lands on another. */
@@ -170,8 +174,13 @@ class SessionConversationPrefsBackend(private val session: SessionStore) : Conve
 
     override suspend fun savePinned(ids: List<String>) = session.api.setPinnedConversations(ids)
 
-    override suspend fun freshPinned(): List<String>? =
-        runCatching { session.api.me().preferences?.pinnedConversations.orEmpty() }.getOrNull()
+    override suspend fun freshPinned(): List<String>? = try {
+        session.api.me().preferences?.pinnedConversations.orEmpty()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
 
     override suspend fun freshChannelLevels(): Map<String, String> =
         session.api.me().preferences?.notifications?.channels.orEmpty()
@@ -206,7 +215,8 @@ class ConversationPrefs(
 
     /** The pins the server last confirmed, and the changes still waiting to be saved. */
     private var confirmedPins: List<String>? = null
-    private val pendingPins = LinkedHashMap<String, Boolean>()
+    private val pendingPins = LinkedHashMap<String, PinAsk>()
+    private var askSeq = 0L
 
     /** The same for the channel levels; a pending mute is `true`, an unmute `false`. */
     private var confirmedLevels: Map<String, String>? = null
@@ -219,7 +229,10 @@ class ConversationPrefs(
         val next = ConversationPins.toggled(local, channelId) ?: return PrefOutcome.PinLimit
         synchronized(pendingPins) {
             if (confirmedPins == null && pendingPins.isEmpty()) confirmedPins = local
-            pendingPins[channelId] = channelId in next
+            // The newest ask for a channel goes LAST: a pin after an unpin is a pin to the
+            // front now, whatever its place in the queue was before.
+            pendingPins.remove(channelId)
+            pendingPins[channelId] = PinAsk(channelId in next, ++askSeq)
         }
         backend.setPinned(next)
         val account = backend.userId()
@@ -232,7 +245,7 @@ class ConversationPrefs(
         val batch = synchronized(pendingPins) { LinkedHashMap(pendingPins) }
         val base = confirmedPins ?: return
         if (batch.isEmpty()) return
-        val wanted = ConversationPins.applyOps(base, batch)
+        val wanted = ConversationPins.applyOps(base, batch.mapValues { it.value.pinned })
         if (wanted == base) {
             settlePins(batch)
             backend.setPinned(ConversationPins.applyOps(base, pendingSnapshot()))
@@ -257,10 +270,15 @@ class ConversationPrefs(
         }
     }
 
-    private fun pendingSnapshot(): Map<String, Boolean> = synchronized(pendingPins) { LinkedHashMap(pendingPins) }
+    private fun pendingSnapshot(): Map<String, Boolean> =
+        synchronized(pendingPins) { LinkedHashMap(pendingPins).mapValues { it.value.pinned } }
 
-    private fun settlePins(batch: Map<String, Boolean>) = synchronized(pendingPins) {
-        batch.forEach { (id, wanted) -> if (pendingPins[id] == wanted) pendingPins.remove(id) }
+    /**
+     * Drop what a save covered. Matched by the ask's own number, not by its value: a pin that
+     * was asked AGAIN while the save was out is a newer ask and stays, in its newer place.
+     */
+    private fun settlePins(batch: Map<String, PinAsk>) = synchronized(pendingPins) {
+        batch.forEach { (id, ask) -> if (pendingPins[id]?.seq == ask.seq) pendingPins.remove(id) }
     }
 
     /** Silenciar / Reativar: the channel's level is `none`, or not there at all. */
