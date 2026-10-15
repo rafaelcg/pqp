@@ -44,6 +44,12 @@ data class ForwardInput(
      * the client cannot tell; the server is still the authority per target.
      */
     val restrictedToServerId: String? = null,
+    /**
+     * A server's channel list the caller already fetched (to decide the boundary
+     * above), as `serverId to channels`. The picker uses it instead of asking for
+     * the same list a second time, one after the other.
+     */
+    val knownChannels: Pair<String, List<Channel>>? = null,
 )
 
 /** One target that took the forward, for the "Encaminhado" line and its "Ver". */
@@ -170,6 +176,9 @@ class ForwardViewModel(
     /** Servers being read right now, so a second tap on the same retry does nothing. */
     private val loadingServers = HashSet<String>()
 
+    /** Servers asked for again by hand: the list the caller seeded is not reused for them. */
+    private val retrying = HashSet<String>()
+
     // LAST among the fields on purpose. `viewModelScope` runs on Main.immediate, so
     // this block executes `load()` right here, up to its first suspension, and a
     // field declared below it would still be null. That was the Encaminhar crash
@@ -211,7 +220,10 @@ class ForwardViewModel(
 
     /** One server's channels and permissions, asked for together. A failure is kept, not hidden. */
     private suspend fun loadServer(server: ServerSummary) = coroutineScope {
-        val channelsCall = async { runSuspendCatching { backend.channels(server.id) }.getOrNull() }
+        val known = input.knownChannels?.takeIf { it.first == server.id && !retrying.contains(server.id) }
+        val channelsCall = async {
+            known?.second ?: runSuspendCatching { backend.channels(server.id) }.getOrNull()
+        }
         // No permission answer is "do not filter": the server refuses per target.
         val permissionsCall = async {
             runSuspendCatching { backend.permissions(server.id) }.getOrNull()
@@ -240,6 +252,7 @@ class ForwardViewModel(
     /** Try a server that failed to load again. */
     fun retryServer(serverId: String) {
         val server = backend.servers.firstOrNull { it.id == serverId } ?: return
+        retrying += serverId
         viewModelScope.launch { loadServerBounded(server) }
     }
 

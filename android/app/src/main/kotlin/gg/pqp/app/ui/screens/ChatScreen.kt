@@ -984,6 +984,7 @@ fun ChatScreen(
                                 message = message,
                                 previewText = forwardPreviewText,
                                 privateChannelServerId = ForwardInputs.privateBoundary(serverId, channelId, channels),
+                                knownChannels = if (serverId != null && channels != null) serverId to channels else null,
                             ),
                         )
                     }

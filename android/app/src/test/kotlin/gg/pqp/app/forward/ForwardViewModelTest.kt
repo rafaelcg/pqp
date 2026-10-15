@@ -174,6 +174,27 @@ class ForwardViewModelTest {
         gate.complete(Unit)
     }
 
+    @Test
+    fun `a channel list the caller already fetched is not asked for again`() {
+        val backend = backendWith("s1", "s2")
+        var asked = mutableListOf<String>()
+        val counting = object : ForwardBackend by backend {
+            override suspend fun channels(serverId: String): List<Channel> {
+                asked += serverId
+                return backend.channels(serverId)
+            }
+        }
+        val seeded = input.copy(knownChannels = "s1" to backend.channelsByServer.getValue("s1"))
+        val model = ForwardViewModel(counting, seeded, NoRecents)
+
+        assertEquals(listOf("s2"), asked)
+        assertEquals(listOf("s1", "s2"), model.state.value.groups.map { it.serverId })
+
+        // A retry by hand reads fresh, not the seed.
+        model.retryServer("s1")
+        assertEquals(listOf("s2", "s1"), asked)
+    }
+
     // ---- sending
 
     @Test

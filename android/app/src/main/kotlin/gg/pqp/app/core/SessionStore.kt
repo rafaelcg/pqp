@@ -71,6 +71,13 @@ class SessionStore(
     val servers: StateFlow<List<ServerSummary>> = _servers.asStateFlow()
 
     /**
+     * Whether [servers] has ever been answered since sign-in. An account in no
+     * server and a list that has not arrived are both empty; this tells them apart.
+     */
+    private val _serversLoaded = MutableStateFlow(false)
+    val serversLoaded: StateFlow<Boolean> = _serversLoaded.asStateFlow()
+
+    /**
      * Why the last `pqp://` link went nowhere, in the server's own words.
      *
      * A followed link that silently does nothing is indistinguishable from a
@@ -249,6 +256,7 @@ class SessionStore(
         scope.launch {
             runCatching { api.servers() }
                 .onSuccess { fresh ->
+                    _serversLoaded.value = true
                     // A read that began before a move can land while that move's
                     // save is still queued or in the air: keep the order the
                     // person just chose over the one the read carries.
@@ -399,6 +407,7 @@ class SessionStore(
     fun signOutLocally() {
         realtime.disconnect()
         _servers.value = emptyList()
+        _serversLoaded.value = false
         _linkError.value = null
         _landing.value = null
         inviteJoin?.cancel()

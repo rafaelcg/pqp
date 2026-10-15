@@ -27,7 +27,12 @@ object ForwardInputs {
      * [privateChannelServerId] is [privateBoundary]'s answer for the channel the
      * message sits in.
      */
-    fun forMessage(message: Message, previewText: String, privateChannelServerId: String? = null): ForwardInput =
+    fun forMessage(
+        message: Message,
+        previewText: String,
+        privateChannelServerId: String? = null,
+        knownChannels: Pair<String, List<Channel>>? = null,
+    ): ForwardInput =
         ForwardInput(
             source = ForwardSource(kind = FORWARD_KIND_MESSAGE, id = message.id),
             preview = previewText,
@@ -35,6 +40,7 @@ object ForwardInputs {
             // (`restrictedToServerId ?: sourceServerId`), which is not necessarily the
             // channel it sits in; a message in a private channel stays in that server.
             restrictedToServerId = message.forward?.restrictedBoundary ?: privateChannelServerId,
+            knownChannels = knownChannels,
         )
 
     /**

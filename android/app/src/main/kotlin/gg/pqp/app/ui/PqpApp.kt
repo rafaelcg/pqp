@@ -322,11 +322,13 @@ private fun SignedInNav(
     var forwardNotice by remember { mutableStateOf<String?>(null) }
     val notMember = stringResource(R.string.forward_not_member)
     val servers by session.servers.collectAsStateWithLifecycle()
+    val serversLoaded by session.serversLoaded.collectAsStateWithLifecycle()
     // Not in the server a card came from: there is nothing here to open (a channel
     // list that 404s is a dead screen), and the card carries no public page yet, so
-    // say so. Only once the server list is known; an empty list is "not loaded".
+    // say so. Judged only once the server list has been answered, and then strictly:
+    // an account in no server at all cannot open any card. Before that, try it.
     val canOpen = { serverId: String ->
-        servers.isEmpty() || servers.any { it.id.equals(serverId, ignoreCase = true) }
+        !serversLoaded || servers.any { it.id.equals(serverId, ignoreCase = true) }
     }
     val openForward = rememberOpenForward { target ->
         when (target) {
@@ -340,7 +342,9 @@ private fun SignedInNav(
             is ForwardOpen.Message ->
                 if (canOpen(target.serverId)) {
                     forwardScope.launch {
-                        val channel = runCatching { session.api.channels(target.serverId) }
+                        // Cancellation-preserving: a sign-out while this is in the air
+                        // must not go on to navigate on a host that is gone.
+                        val channel = gg.pqp.app.core.runSuspendCatching { session.api.channels(target.serverId) }
                             .getOrNull()?.firstOrNull { it.id == target.channelId }
                         nav.navigate(
                             ChatRoute(
