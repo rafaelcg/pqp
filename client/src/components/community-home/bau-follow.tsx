@@ -403,6 +403,7 @@ export function BauFollowDialog({
             <Button
               type="submit"
               form={formId}
+              className="max-sm:min-h-11"
               disabled={busy || !channelId || full}
               data-bau-follow-submit
             >
