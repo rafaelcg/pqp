@@ -88,7 +88,9 @@ import {
   type ForwardedSummary,
 } from "@/components/forward/forward-picker";
 import { ForwardedToast } from "@/components/forward/forwarded-toast";
+import { NotInServerToast } from "@/components/forward/not-in-server-toast";
 import {
+  setForwardMemberServers,
   startForwardConfig,
   useForwardEnabled,
   type ForwardSourceRequest,
@@ -10019,6 +10021,12 @@ function MainAppContent({
     () => (funConfigUserId ? startFunConfig() : undefined),
     [funConfigUserId],
   );
+  // Encaminhar: which servers this account is in, so tapping a card from one it
+  // is not in says so instead of doing nothing. Unknown until the list loads.
+  useEffect(() => {
+    setForwardMemberServers(servers.length > 0 ? servers.map((one) => one.id) : null);
+    return () => setForwardMemberServers(null);
+  }, [servers]);
   // Encaminhar: whether the action exists (`forward_messages`), same refresh
   // pass and the same gate as the config above.
   useEffect(
@@ -13998,6 +14006,7 @@ function MainAppContent({
           setForwardedToast({ ...summary, key: Date.now() })
         }
       />
+      <NotInServerToast />
       <ForwardedToast
         summary={forwardedToast}
         onView={viewForwarded}

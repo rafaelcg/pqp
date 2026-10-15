@@ -92,6 +92,48 @@ export function setForwardEnabledForTests(on: boolean): void {
   applyEnabled(on);
 }
 
+// ------------------------------------------------- opening a card's source
+
+/**
+ * The servers this account is in, set by the app. A card whose source server
+ * is not among them has nothing to open for this reader: the tap says so
+ * instead of doing nothing. Null (not known yet) never blocks a tap, and there
+ * is no public page to fall back to until Part 2 puts one on the card.
+ */
+let memberServerIds: ReadonlySet<string> | null = null;
+
+export function setForwardMemberServers(ids: Iterable<string> | null): void {
+  memberServerIds = ids === null ? null : new Set(ids);
+}
+
+export function isKnownNonMember(serverId: string): boolean {
+  return memberServerIds !== null && !memberServerIds.has(serverId);
+}
+
+let notInServerCount = 0;
+const notInServerListeners = new Set<() => void>();
+
+/** "Tu não participa desse servidor": bumps a counter the toast watches. */
+export function announceNotInServer(): void {
+  notInServerCount += 1;
+  for (const listener of notInServerListeners) {
+    listener();
+  }
+}
+
+export function useNotInServerCount(): number {
+  return useSyncExternalStore(
+    (listener) => {
+      notInServerListeners.add(listener);
+      return () => {
+        notInServerListeners.delete(listener);
+      };
+    },
+    () => notInServerCount,
+    () => notInServerCount,
+  );
+}
+
 // ------------------------------------------------------------- the card
 
 /**

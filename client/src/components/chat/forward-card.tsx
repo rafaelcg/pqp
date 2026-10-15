@@ -4,7 +4,11 @@ import { useCallback, type MouseEvent } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { messageLinkState } from "@/lib/app-route";
-import { forwardUrlTarget } from "@/lib/forward";
+import {
+  announceNotInServer,
+  forwardUrlTarget,
+  isKnownNonMember,
+} from "@/lib/forward";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 
 /**
@@ -73,12 +77,12 @@ export function ForwardCardView({
             iconUrl={forward.sourceServerIconUrl}
           />
         </span>
-        <span className="min-w-0 truncate">
-          <span className="font-medium text-text-secondary">
-            {forward.sourceServerName}
-          </span>
-          {where ? ` · ${where}` : ""}
+        {/* The server name gives way first: "· Baú" / "· #canal" is what tells
+            a post from a message, and stays whole at a phone's width. */}
+        <span className="min-w-0 truncate font-medium text-text-secondary">
+          {forward.sourceServerName}
         </span>
+        {where && <span className="shrink-0 whitespace-nowrap">{`· ${where}`}</span>}
         {forward.restricted && (
           <Lock
             className="ml-auto h-3 w-3 shrink-0"
@@ -164,10 +168,16 @@ function NavigatingForwardCard({ forward }: { forward: MessageForward }) {
       }
       if (target?.kind === "app") {
         event.preventDefault();
+        // A server this account is not in has nothing to open: say so, rather
+        // than navigating to a screen that silently ends up where it started.
+        if (isKnownNonMember(forward.sourceServerId)) {
+          announceNotInServer();
+          return;
+        }
         navigate(target.path, { state: messageLinkState() });
       }
     },
-    [navigate, target],
+    [forward.sourceServerId, navigate, target],
   );
   return (
     <ForwardCardView

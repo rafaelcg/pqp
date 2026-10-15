@@ -1,4 +1,4 @@
-import { extractMentions } from "@pqp/shared";
+import { extractMentions, isForwardFallbackBody, type MessageForward } from "@pqp/shared";
 
 export interface MentionCheckMessage {
   body: string;
@@ -6,6 +6,8 @@ export interface MentionCheckMessage {
   mentionEveryone?: boolean;
   mentionHere?: boolean;
   replyTo?: { authorId?: string | null } | null;
+  /** Set on a forward: its body may be the server's fallback line, which names nobody. */
+  forward?: MessageForward | null;
 }
 
 function isOwnMessage(
@@ -38,7 +40,14 @@ export function messageMentionsYou(
   if (!username) {
     return false;
   }
-  return extractMentions(message.body).usernames.includes(username.toLowerCase());
+  // A forward's fallback body is built from the snapshot and mentions nobody,
+  // whatever it contains; only the forwarder's own comment can. (The server
+  // also makes the snapshot inert, this keeps an older card from lighting up.)
+  const text =
+    message.forward && isForwardFallbackBody(message.body, message.forward)
+      ? ""
+      : message.body;
+  return extractMentions(text).usernames.includes(username.toLowerCase());
 }
 
 /**

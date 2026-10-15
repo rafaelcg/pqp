@@ -8,6 +8,8 @@ import {
   mergeRecentForwardTargets,
   FORWARD_RECENTS_MAX,
   isForwardEnabled,
+  isKnownNonMember,
+  setForwardMemberServers,
   normalizeForSearch,
   setForwardEnabledForTests,
   targetAllowedFor,
@@ -121,5 +123,16 @@ describe("the picker rules", () => {
     expect(targetAllowedFor(restricted, { serverId: "s2" })).toBe(false);
     expect(targetAllowedFor(restricted, dm)).toBe(false);
     expect(targetAllowedFor({ restricted: false, serverId: "s1" }, dm)).toBe(true);
+  });
+});
+
+describe("opening a card from a server you are not in", () => {
+  it("is known only once the account's servers are", () => {
+    setForwardMemberServers(null);
+    expect(isKnownNonMember(ID)).toBe(false);
+    setForwardMemberServers([ID]);
+    expect(isKnownNonMember(ID)).toBe(false);
+    expect(isKnownNonMember("33333333-3333-4333-8333-333333333333")).toBe(true);
+    setForwardMemberServers(null);
   });
 });

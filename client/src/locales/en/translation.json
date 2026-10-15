@@ -3237,6 +3237,7 @@
   "forward.recent": "Recent",
   "forward.conversations": "Conversations",
   "forward.loading": "Loading your servers…",
+  "forward.notInServer": "You are not in that server",
   "forward.loadFailed": "Some servers did not load.",
   "forward.retry": "Try again",
   "forward.showMore": "Show more",

@@ -93,4 +93,15 @@ describe("ForwardCardView", () => {
   it("a restricted card says so", () => {
     expect(render(forward({ restricted: true }))).toContain("Members of that server only");
   });
+
+  it("keeps the Baú / channel part whole: only the server name truncates", () => {
+    const post = render(forward({ sourceServerName: "Uma comunidade com um nome muito comprido" }));
+    expect(post).toMatch(/<span class="shrink-0 whitespace-nowrap">· Baú<\/span>/);
+    expect(post).toMatch(/<span class="min-w-0 truncate[^"]*">Uma comunidade/);
+    const message = render(
+      forward({ kind: "message", sourceChannelName: "geral", title: undefined }),
+    );
+    expect(message).toMatch(/<span class="shrink-0 whitespace-nowrap">· #geral<\/span>/);
+  });
 });
+

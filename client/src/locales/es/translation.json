@@ -3283,6 +3283,7 @@
   "forward.recent": "Recientes",
   "forward.conversations": "Conversaciones",
   "forward.loading": "Cargando tus servidores…",
+  "forward.notInServer": "No participas en ese servidor",
   "forward.loadFailed": "Algunos servidores no cargaron.",
   "forward.retry": "Intentar de nuevo",
   "forward.showMore": "Mostrar más",
