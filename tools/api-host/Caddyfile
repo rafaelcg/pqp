@@ -36,6 +36,11 @@
  2a06:98c0::/29 \
  2c0f:f248::/32
 		client_ip_headers CF-Connecting-IP
+		# Cloudflare talks h1/h2 to the origin, never h3, and with HTTP/3 on
+		# Caddy logs "setting HTTP/3 Alt-Svc header: no port can be announced"
+		# at error level on every request now that this file is the one
+		# actually running (2026-10-15). Nothing is lost by turning it off.
+		protocols h1 h2
 	}
 }
 
