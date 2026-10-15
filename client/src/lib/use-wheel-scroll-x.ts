@@ -35,6 +35,12 @@ export function useWheelScrollX(ref: RefObject<HTMLElement | null>): void {
     }
     // Not a React `onWheel`: those are passive, and the default has to be cancelled.
     const onWheel = (event: WheelEvent) => {
+      // A right-to-left row counts `scrollLeft` from 0 down to negative numbers, which the end checks
+      // below do not model. No locale of the app is right-to-left; if one arrives, the browser's own
+      // scrolling (a trackpad, shift + wheel) keeps working and this stays out of the way.
+      if (getComputedStyle(row).direction === "rtl") {
+        return;
+      }
       const delta = wheelScrollDelta(event, row);
       if (delta !== 0) {
         event.preventDefault();
