@@ -511,6 +511,7 @@ describeDb("POST /api/forwards", () => {
 
     const snapshot = (same as Extract<Result, { ok: true }>).message.forward!;
     expect(snapshot.restricted).toBe(true);
+    expect(snapshot.restrictedToServerId).toBe(serverId);
     expect(snapshot.excerpt).toBe("só pra quem apoia");
     expect(snapshot.authorDisplayName).toBeUndefined();
     expect(JSON.stringify(res.body)).not.toContain("segredo-do-clip");
@@ -779,6 +780,49 @@ describeDb("POST /api/forwards", () => {
     ]);
   });
 
+  it("a free card forwarded into ANOTHER server's private channel is restricted to that server, on the card and in the rule", async () => {
+    const free = await publish({ title: "Livre" });
+    const otherPrivate = await createChannel(otherServerId, "diretoria-outra", "text", true);
+    await addChannelMember(otherPrivate.id, owner.id);
+    const otherPublic = (await createChannel(otherServerId, "publico-outra", "text")).id;
+    // Server A's free post, dropped into server B's private channel.
+    const inB = (
+      await forward(owner, postSource(free), [{ channelId: otherPrivate.id }])
+    ).body.results[0] as Extract<Result, { ok: true }>;
+    expect(inB.message.forward!.sourceServerId).toBe(serverId);
+    expect(inB.message.forward!.restricted).toBeUndefined();
+    // Carried on from B's private channel: restricted to B, not to its source A.
+    const carried = (
+      await forward(owner, { kind: "message", id: inB.message.id }, [
+        { channelId: generalId },
+        { userId: friend.id },
+        { channelId: otherPublic },
+      ])
+    ).body.results;
+    expect(carried.map((r) => (r.ok ? "ok" : r.reason))).toEqual([
+      "stays_in_server",
+      "stays_in_server",
+      "ok",
+    ]);
+    const stamped = (carried[2] as Extract<Result, { ok: true }>).message.forward!;
+    expect(stamped.sourceServerId).toBe(serverId);
+    expect(stamped.restricted).toBe(true);
+    expect(stamped.restrictedToServerId).toBe(otherServerId);
+    // The stamped copy, now in a PUBLIC channel of B, still cannot go to A or a DM, and still goes inside B.
+    const copy = (carried[2] as Extract<Result, { ok: true }>).message.id;
+    const again = await forward(owner, { kind: "message", id: copy }, [
+      { channelId: generalId },
+      { userId: friend.id },
+      { channelId: otherGeneralId },
+    ]);
+    expect(again.body.results.map((r) => (r.ok ? "ok" : r.reason))).toEqual([
+      "stays_in_server",
+      "stays_in_server",
+      "ok",
+    ]);
+    expect(await messageCount(generalId)).toBe(0);
+  });
+
   it("a retry of a request whose answer was lost gets the sent messages back, not rate_limited", async () => {
     const postId = await publish();
     const channels: string[] = [];
@@ -798,6 +842,45 @@ describeDb("POST /api/forwards", () => {
     const fresh = await forward(owner, postSource(postId), targets, { nonce: "C" });
     expect(fresh.body.results.every((r) => !r.ok && r.reason === "rate_limited")).toBe(true);
     expect(await messageCount(channels[0]!)).toBe(2);
+  });
+
+  it("partial success then a retry with the same nonce: the sent ones come back unchanged, the failed one goes out, nothing doubles", async () => {
+    const postId = await publish();
+    const a = (await createChannel(serverId, "parcial-a", "text")).id;
+    const b = (await createChannel(serverId, "parcial-b", "text")).id;
+    const c = (await createChannel(serverId, "parcial-c", "text")).id;
+    const targets = [a, b, c].map((channelId) => ({ channelId }));
+    // Make exactly the middle target fail before anything is stored there.
+    const real = chatModule.postChannelMessage;
+    const spy = vi.spyOn(chatModule, "postChannelMessage").mockImplementation(async (input) => {
+      if (input.channelId === b) {
+        throw new Error("database went away");
+      }
+      return real(input);
+    });
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    let first;
+    try {
+      first = await forward(owner, postSource(postId), targets, { nonce: "partial" });
+    } finally {
+      spy.mockRestore();
+      quiet.mockRestore();
+    }
+    expect(first.status).toBe(200);
+    expect(first.body.results.map((r) => (r.ok ? "ok" : r.reason))).toEqual([
+      "ok",
+      "unavailable",
+      "ok",
+    ]);
+    const retry = await forward(owner, postSource(postId), targets, { nonce: "partial" });
+    expect(retry.body.results.every((r) => r.ok)).toBe(true);
+    const ids = (res: typeof first) =>
+      res.body.results.map((r) => (r.ok ? r.message.id : null));
+    expect(ids(retry)[0]).toBe(ids(first)[0]);
+    expect(ids(retry)[2]).toBe(ids(first)[2]);
+    for (const channelId of [a, b, c]) {
+      expect(await messageCount(channelId)).toBe(1);
+    }
   });
 
   it("a target that throws is that target's answer; the others still go out and report", async () => {

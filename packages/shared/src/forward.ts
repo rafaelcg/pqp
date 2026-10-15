@@ -104,14 +104,20 @@ export const messageForwardSchema = z.object({
   createdAt: z.string(),
   /**
    * True when the source is members-only (VIP) or lives in a private channel.
-   * Such a card can only be forwarded again inside the server that holds it:
-   * for a members-only post that is `sourceServerId`; for a card that sits in
-   * a private channel it is the server of that channel (the server decides
-   * from the message it is forwarding, so a client asks the same question of
-   * the message's own server). It never gets a public page. Absent reads as
-   * false.
+   * Such a card can only be forwarded again inside ONE server, named by
+   * `restrictedToServerId`; it never gets a public page. Absent reads as false.
    */
   restricted: z.boolean().optional(),
+  /**
+   * With `restricted`: the only server this card may be forwarded into, and
+   * never a conversation. For a members-only post it is `sourceServerId`; for
+   * a card that was stamped inside a private channel it is the server of THAT
+   * channel, which can differ from `sourceServerId` (a free card from server A
+   * that someone forwarded into a private channel of server B is restricted to
+   * B). Clients offer only this server; the server enforces it. Absent on a
+   * restricted card from an older build: read it as `sourceServerId`.
+   */
+  restrictedToServerId: z.string().uuid().optional(),
 });
 
 export type MessageForward = z.infer<typeof messageForwardSchema>;

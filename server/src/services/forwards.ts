@@ -214,7 +214,7 @@ async function resolveBauPostSource(
     ...(mediaKind ? { mediaKind } : {}),
     url: `${origin}${bauPostPath(serverId, post.id)}`,
     createdAt: post.publishedAt ?? post.createdAt,
-    ...(restricted ? { restricted: true } : {}),
+    ...(restricted ? { restricted: true, restrictedToServerId: serverId } : {}),
   };
   if (!snapshot.title && !snapshot.excerpt && !snapshot.mediaKind) {
     throw new ForwardError(422, "source_empty");
@@ -286,11 +286,22 @@ async function resolveMessageSource(
   const earlier = messageForwardSchema.safeParse(row.forward);
   if (earlier.success) {
     const restricted = earlier.data.restricted === true || inPrivate;
+    // The one server a restricted card may travel inside. A private channel
+    // pins it to that channel's server (which can differ from the card's
+    // `sourceServerId`); a card already restricted keeps the server it was
+    // restricted to, and a restricted card that predates the field falls back
+    // to its source server. The same answer goes on the snapshot, so a client
+    // and this server never disagree about the boundary.
+    const boundary = inPrivate
+      ? row.server_id
+      : (earlier.data.restrictedToServerId ?? earlier.data.sourceServerId);
     return {
       // Stamped, so a copy made from THIS message in a public channel is
-      // still known to be restricted.
-      snapshot: restricted ? { ...earlier.data, restricted: true } : earlier.data,
-      stayInServerId: restricted ? row.server_id : null,
+      // still known to be restricted, and to which server.
+      snapshot: restricted
+        ? { ...earlier.data, restricted: true, restrictedToServerId: boundary }
+        : earlier.data,
+      stayInServerId: restricted ? boundary : null,
     };
   }
 
@@ -320,7 +331,7 @@ async function resolveMessageSource(
     ...(mediaKind ? { mediaKind } : {}),
     url: `${origin}${forwardMessagePath(row.server_id, row.channel_id, row.id)}`,
     createdAt: row.created_at.toISOString(),
-    ...(inPrivate ? { restricted: true } : {}),
+    ...(inPrivate ? { restricted: true, restrictedToServerId: row.server_id } : {}),
   };
   return { snapshot, stayInServerId: inPrivate ? row.server_id : null };
 }
