@@ -273,8 +273,28 @@ export const forwardDestinationChannelSchema = z.object({
 });
 export type ForwardDestinationChannel = z.infer<typeof forwardDestinationChannelSchema>;
 
+/**
+ * A thread is a place a forward may go too: `threads` lists the active threads
+ * the caller is in (the ones their channel list nests under a channel, see
+ * `listActiveThreadsByParent`) that they may post in, most recently active
+ * first, at most `FORWARD_DESTINATION_THREADS_MAX` per server. `parentId` and
+ * `parentName` are the text channel it hangs off, for the line under the name.
+ * It goes to `POST /api/forwards` as any other `{ channelId }`. An API that
+ * predates threads omits the key, which reads as no threads.
+ */
+export const FORWARD_DESTINATION_THREADS_MAX = 30;
+
+export const forwardDestinationThreadSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  parentId: z.string().uuid(),
+  parentName: z.string(),
+});
+export type ForwardDestinationThread = z.infer<typeof forwardDestinationThreadSchema>;
+
 export const forwardDestinationsSchema = z.object({
   channels: z.array(forwardDestinationChannelSchema),
+  threads: z.array(forwardDestinationThreadSchema).default([]),
 });
 export type ForwardDestinations = z.infer<typeof forwardDestinationsSchema>;
 

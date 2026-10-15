@@ -5,7 +5,16 @@ import {
   type DmSummary,
   type Server,
 } from "@pqp/shared";
-import { Forward, Hash, Loader2, Lock, Search, Users, Volume2 } from "lucide-react";
+import {
+  Forward,
+  Hash,
+  Loader2,
+  Lock,
+  MessageSquareText,
+  Search,
+  Users,
+  Volume2,
+} from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { CheckRow } from "@/components/ui/check-row";
@@ -156,8 +165,19 @@ function channelTarget(
 async function fetchServerTargets(server: Server): Promise<PickerTarget[]> {
   try {
     // One request: the server lists the channels this account can speak in.
-    const { channels } = await fetchForwardDestinations(server.id);
-    return channels.map((channel) => channelTarget(server, channel));
+    const { channels, threads } = await fetchForwardDestinations(server.id);
+    return [
+      ...channels.map((channel) => channelTarget(server, channel)),
+      // The threads you are in, most recent first, after the channels.
+      ...(threads ?? []).map((thread) => ({
+        id: thread.id,
+        kind: "channel" as const,
+        serverId: server.id,
+        serverName: server.name,
+        label: thread.name,
+        threadOf: thread.parentName,
+      })),
+    ];
   } catch (error) {
     // An API that predates the route: the same answer from the two older reads.
     if (!(error instanceof ApiError) || error.status !== 404) {
@@ -399,11 +419,19 @@ export function ForwardPicker({
           label={target.label}
           description={
             rowError ??
-            (withServer && target.serverName ? target.serverName : undefined)
+            (target.threadOf
+              ? withServer && target.serverName
+                ? `#${target.threadOf} \u00b7 ${target.serverName}`
+                : `#${target.threadOf}`
+              : withServer && target.serverName
+                ? target.serverName
+                : undefined)
           }
           icon={
             target.kind === "channel" ? (
-              target.voice ? (
+              target.threadOf !== undefined ? (
+                <MessageSquareText className="h-4 w-4" aria-hidden />
+              ) : target.voice ? (
                 <Volume2 className="h-4 w-4" aria-hidden />
               ) : (
                 <Hash className="h-4 w-4" aria-hidden />
