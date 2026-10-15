@@ -304,7 +304,7 @@ function notBlockedSql(viewerParam: string): string {
 }
 
 /** `$1` = viewer id in the liked_by_me subquery. Caller supplies the rest. */
-export function postSelectSql(viewerParam: string): string {
+export function postSelectSql(viewerParam: string, extraColumns = ""): string {
   return `
   p.id, p.server_id, p.author_id, p.title, p.body, p.teaser, p.visibility,
   p.status, p.comments_enabled, p.media_kind, p.media_name, p.media_content_type,
@@ -324,6 +324,7 @@ export function postSelectSql(viewerParam: string): string {
   ) AS liked_by_me,
   (SELECT COUNT(*)::text FROM community_home_comments c
     WHERE c.post_id = p.id ${notBlockedSql(viewerParam)}) AS comment_count
+  ${extraColumns ? `, ${extraColumns}` : ""}
   FROM community_home_posts p
   JOIN users u ON u.id = p.author_id
   JOIN servers s ON s.id = p.server_id

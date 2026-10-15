@@ -454,6 +454,10 @@ function ViewerCta({
 
   useEffect(() => {
     let cancelled = false;
+    // A new community starts as a stranger until it says otherwise: the page
+    // can be reused for another slug without unmounting, and the old room's id
+    // must not sit under the new room's button while the lookup is in flight.
+    setMember(null);
     // Null for every failure (see `lookupCommunityMembership`): not signed in,
     // banned, offline. The join button is still the truth for all of them.
     void lookupCommunityMembership(community.slug, getToken).then((found) => {

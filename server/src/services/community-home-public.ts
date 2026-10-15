@@ -7,7 +7,7 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { isStorageConfigured } from "../lib/s3.js";
-import { getPublicCommunity } from "./communities.js";
+import { toPublicCommunity, type PublicCommunityRow } from "./communities.js";
 import {
   bauPublicUrlFor,
   buildMedia,
@@ -50,11 +50,28 @@ import { teaserFromBody } from "./community-home-share.js";
 async function loadQualifyingRow(
   slug: string,
   postId: string,
-): Promise<PostRow | null> {
+): Promise<(PostRow & PublicCommunityRow) | null> {
   // `$3` is the viewer slot the shared select asks for (liked-by-me, blocked
   // authors). Nobody is viewing, so it is NULL and both read as "no".
-  const result = await getPool().query<PostRow>(
-    `SELECT ${postSelectSql("$3")}
+  //
+  // THE POSTER RIDES THE SAME STATEMENT (the `pc_` aliases, put back under
+  // their own names below): a shared link and an unfurl fetch both land here,
+  // and a second serial query on every cache miss is latency for nothing. The
+  // post's own columns keep their names; only the ones that collide are aliased.
+  const result = await getPool().query<
+    PostRow & Record<`pc_${string}`, unknown>
+  >(
+    `SELECT ${postSelectSql(
+      "$3",
+      `s.name AS pc_name, s.community_tagline AS pc_tagline,
+       s.community_about AS pc_about, s.community_links AS pc_links,
+       s.community_featured_kind AS pc_featured_kind,
+       s.community_featured_embed_url AS pc_featured_embed_url,
+       s.community_featured_url AS pc_featured_url,
+       s.community_category AS pc_category, s.member_count AS pc_member_count,
+       s.icon_url AS pc_icon_url, s.banner_url AS pc_banner_url,
+       s.created_at AS pc_created_at`,
+    )}
       WHERE s.community_slug = $1 AND p.id = $2`,
     [slug, postId, null],
   );
@@ -62,7 +79,24 @@ async function loadQualifyingRow(
   if (!row || bauPublicUrlFor(row) === null) {
     return null;
   }
-  return row;
+  return {
+    ...row,
+    // `row.id` is the POST's; the community's id is the post's `server_id`.
+    id: row.id,
+    name: row.pc_name as string,
+    community_slug: row.community_slug as string,
+    community_tagline: row.pc_tagline as string | null,
+    community_about: row.pc_about as string | null,
+    community_links: row.pc_links,
+    community_featured_kind: row.pc_featured_kind as string | null,
+    community_featured_embed_url: row.pc_featured_embed_url as string | null,
+    community_featured_url: row.pc_featured_url as string | null,
+    community_category: row.pc_category as PublicCommunityRow["community_category"],
+    member_count: row.pc_member_count as number,
+    icon_url: row.pc_icon_url as string | null,
+    banner_url: row.pc_banner_url as string | null,
+    created_at: row.pc_created_at as Date,
+  };
 }
 
 /** `<#id>` references out of a body, see the note on `BAU_PUBLIC_REDACTED_CHANNEL_ID`. */
@@ -86,10 +120,9 @@ export async function getPublicBauPost(
   if (!row) {
     return null;
   }
-  const community = await getPublicCommunity(slug);
-  if (!community) {
-    return null;
-  }
+  // The community's id (what the live-preview flag is asked about) is the
+  // post's `server_id`; the row's own `id` is the post's.
+  const community = toPublicCommunity({ ...row, id: row.server_id });
 
   // `unlocked = true` is the whole point of the free-only rule above: the one
   // thing `buildMedia` withholds is members-only media, and none can be here.
