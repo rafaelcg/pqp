@@ -118,11 +118,14 @@ rc=$?
 check "still stale after a recreate: returns non-zero" test "$rc" -ne 0
 check "still stale: says the config on disk is not what is live" grep -q 'NOT what is live' "$WORK/err"
 
-# 4. container does not answer exec at all (down, or sha256sum missing): same path
+# 4. the checksum read never works (sha256sum missing, exec broken): the deploy
+# fails loudly, but nothing was shown to be stale, so caddy is NOT recreated
 rm -f "$WORK/container"
 run_integrity dead
 rc=$?
-check "unanswering container: returns non-zero, does not pass silently" test "$rc" -ne 0
+check "unreadable container checksum: returns non-zero, does not pass silently" test "$rc" -ne 0
+check "unreadable container checksum: does not recreate caddy" bash -c "! grep -q 'force-recreate' '$WORK/calls'"
+check "unreadable container checksum: says why" grep -q 'is unknown' "$WORK/err"
 
 # 5. host file missing must never read as "in sync" with an empty container sum,
 # and a recreate would not fix it, so none is attempted

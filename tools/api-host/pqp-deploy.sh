@@ -495,15 +495,22 @@ verify_caddyfile_in_sync() {
   fi
   # A failed `exec` reads as an empty sum, and a single transient Docker or
   # exec error must not be taken for a stale file: recreating caddy cuts
-  # every open socket. So an EMPTY read is retried, and only a read that
-  # actually returned a different hash, or a container that never answers,
-  # leads to the recreate below.
+  # every open socket. So an EMPTY read is retried, and ONLY a read that
+  # actually returned a different hash leads to the recreate below. A read
+  # that stays empty is not evidence of a stale file (the reload just before
+  # this succeeded, so the container answers; what is broken is the
+  # checksum read itself, and a recreate would not fix that), so it fails
+  # the deploy without touching caddy.
   while (( tries < ${CADDY_PROBE_TRIES:-5} )); do
     cont="$(caddy_container_sum)"
     [[ -n "$cont" ]] && break
     tries=$((tries + 1))
     sleep "${CADDY_SYNC_SLEEP:-2}"
   done
+  if [[ -z "$cont" ]]; then
+    echo "could not read the Caddyfile checksum inside the caddy container after ${CADDY_PROBE_TRIES:-5} tries, so whether it matches $CADDY_DIR/Caddyfile is unknown; not recreating caddy on that basis" >&2
+    return 1
+  fi
   if [[ "$cont" == "$host" ]]; then
     echo "caddyfile-sync=ok (host and container sha256 agree)"
     return 0
