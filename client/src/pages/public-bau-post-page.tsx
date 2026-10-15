@@ -450,19 +450,19 @@ function ViewerCta({
   getToken,
 }: ViewerCtaProps & { getToken: () => Promise<string | null> }) {
   const { t } = useTranslation();
-  const [member, setMember] = useState<{ serverId: string } | null>(null);
+  // Keyed by the slug it was asked for, so a result can never be read under
+  // another community: a stale one is ignored on the very render that changes
+  // the slug, not one effect later.
+  const [found, setFound] = useState<{ slug: string; serverId: string } | null>(null);
+  const member = found && found.slug === community.slug ? found : null;
 
   useEffect(() => {
     let cancelled = false;
-    // A new community starts as a stranger until it says otherwise: the page
-    // can be reused for another slug without unmounting, and the old room's id
-    // must not sit under the new room's button while the lookup is in flight.
-    setMember(null);
     // Null for every failure (see `lookupCommunityMembership`): not signed in,
     // banned, offline. The join button is still the truth for all of them.
-    void lookupCommunityMembership(community.slug, getToken).then((found) => {
-      if (!cancelled && found?.joined) {
-        setMember({ serverId: found.serverId });
+    void lookupCommunityMembership(community.slug, getToken).then((result) => {
+      if (!cancelled && result?.joined) {
+        setFound({ slug: community.slug, serverId: result.serverId });
       }
     });
     return () => {
