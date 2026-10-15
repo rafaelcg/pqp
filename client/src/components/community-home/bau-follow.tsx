@@ -322,6 +322,9 @@ export function BauFollowDialog({
       await load();
     } catch (err) {
       setError(t(bauFollowErrorKey(err)));
+      // A lost response can hide a change that did commit: re-read what is true.
+      onChanged();
+      void load();
     } finally {
       setBusy(false);
     }
@@ -336,6 +339,8 @@ export function BauFollowDialog({
       await load();
     } catch {
       setError(t("bauFollow.error.action"));
+      onChanged();
+      void load();
     } finally {
       setRowBusy(null);
     }
@@ -349,6 +354,8 @@ export function BauFollowDialog({
       onChanged();
     } catch {
       setError(t("bauFollow.error.action"));
+      onChanged();
+      void load();
     } finally {
       setRowBusy(null);
     }
