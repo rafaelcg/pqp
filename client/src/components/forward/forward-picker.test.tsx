@@ -41,6 +41,7 @@ function channel(
   } as Channel;
 }
 
+let currentUser: string | null = "user-1";
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 const onClose = vi.fn();
@@ -60,6 +61,7 @@ function mount(source: Parameters<typeof ForwardPicker>[0]["source"], servers = 
             servers={servers}
             conversations={[] as DmSummary[]}
             currentServerId={SERVER_A.id}
+            userId={currentUser}
             onClose={onClose}
             onForwarded={onForwarded}
           />
@@ -84,6 +86,7 @@ const SOURCE = {
 };
 
 beforeEach(() => {
+  currentUser = "user-1";
   resetForwardTargetCacheForTests();
   vi.clearAllMocks();
   localStorage.clear();
@@ -125,6 +128,20 @@ describe("ForwardPicker destinations", () => {
     render(true);
     await flush();
     expect(api.fetchChannels).toHaveBeenCalledTimes(1);
+  });
+
+  it("never serves one account's destinations to another in the same page", async () => {
+    api.fetchChannels.mockResolvedValue({ channels: [channel(SERVER_A.id, 1)] });
+    let render = mount(SOURCE);
+    await flush();
+    expect(api.fetchChannels).toHaveBeenCalledTimes(1);
+    act(() => root?.unmount());
+    host?.remove();
+    currentUser = "user-2";
+    render = mount(SOURCE);
+    await flush();
+    void render;
+    expect(api.fetchChannels).toHaveBeenCalledTimes(2);
   });
 
   it("a server that fails is a retryable error, not an empty list", async () => {
@@ -189,6 +206,22 @@ describe("ForwardPicker sending", () => {
     // A valid (partial) answer: the next attempt is a new one.
     expect(nonces[2]).not.toBe(nonces[1]);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("a new opening starts idle even when the previous send never answered", async () => {
+    const a = channel(SERVER_A.id, 1);
+    api.fetchChannels.mockResolvedValue({ channels: [a] });
+    api.createForward.mockReturnValue(new Promise(() => {}));
+    const render = mount(SOURCE);
+    await flush();
+    click(rows()[0]!.querySelector("button"));
+    await act(async () => { sendButton().click(); await Promise.resolve(); });
+    expect(sendButton().disabled).toBe(true);
+    render(false);
+    render(true);
+    await flush();
+    click(rows()[0]!.querySelector("button"));
+    expect(sendButton().disabled).toBe(false);
   });
 
   it("cannot be dismissed while a send is in flight", async () => {

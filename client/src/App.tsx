@@ -13992,6 +13992,7 @@ function MainAppContent({
         servers={servers}
         conversations={conversations}
         currentServerId={selectedServerId}
+        userId={user?.id ?? null}
         onClose={() => setForwardSource(null)}
         onForwarded={(summary) =>
           setForwardedToast({ ...summary, key: Date.now() })

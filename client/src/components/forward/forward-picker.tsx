@@ -97,10 +97,24 @@ export interface ForwardedSummary {
  */
 const TARGET_CACHE_MS = 60_000;
 const targetCache = new Map<string, { at: number; targets: PickerTarget[] }>();
+/**
+ * Whose results the cache holds. A list is filtered by what THIS account may
+ * see and speak in, so it is never served to another account in the same page:
+ * a different (or no) user empties it.
+ */
+let targetCacheOwner: string | null = null;
+
+function scopeTargetCache(userId: string | null): void {
+  if (targetCacheOwner !== userId) {
+    targetCache.clear();
+    targetCacheOwner = userId;
+  }
+}
 
 /** Test seam. */
 export function resetForwardTargetCacheForTests(): void {
   targetCache.clear();
+  targetCacheOwner = null;
 }
 
 async function loadServerTargets(server: Server, force = false): Promise<PickerTarget[]> {
@@ -170,6 +184,7 @@ export function ForwardPicker({
   servers,
   conversations,
   currentServerId,
+  userId,
   onClose,
   onForwarded,
 }: {
@@ -178,6 +193,8 @@ export function ForwardPicker({
   servers: readonly Server[];
   conversations: readonly DmSummary[];
   currentServerId: string | null;
+  /** The signed-in account: what the cached destinations belong to. */
+  userId: string | null;
   onClose: () => void;
   onForwarded: (summary: ForwardedSummary) => void;
 }) {
@@ -253,6 +270,7 @@ export function ForwardPicker({
     setFailedServers([]);
     setShown(RENDER_STEP);
     sessionRef.current += 1;
+    scopeTargetCache(userId);
     nonceRef.current = newNonce();
     recentsRef.current = readRecentForwardTargets();
     loadServers(eligibleServers, false);
@@ -485,7 +503,13 @@ export function ForwardPicker({
       open={open && source !== null}
       title={t("forward.title")}
       size="md"
-      onClose={onClose}
+      // Whatever dismisses it (Escape, the backdrop, the X), a send in flight
+      // is not abandoned: its answer belongs to this picker.
+      onClose={() => {
+        if (!busy) {
+          onClose();
+        }
+      }}
       dismissible={!busy}
       footer={
         <>
