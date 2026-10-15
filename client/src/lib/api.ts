@@ -78,6 +78,7 @@ import type {
   CreateFeedbackRequest,
   CreateReportRequest,
   FeedbackItem,
+  PublicBauPostResponse,
   PublicCommunity,
   PublicProfile,
   PublicUser,
@@ -418,6 +419,33 @@ export async function fetchPublicCommunity(
       { signal: options.signal },
     );
     return community;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * A Baú post's public page, by community slug and post id: the third read in
+ * this file that works with no session. `GET /api/public/communities/:slug/posts/:postId`.
+ *
+ * `null` is the 404, and the server answers one 404 for every reason there is
+ * (draft, members-only, deleted, no address, a flag off), so the page draws one
+ * "not here" for all of them. Every other failure throws, for the reason
+ * `fetchPublicCommunity` does: a network drop is not "this post is gone".
+ */
+export async function fetchPublicBauPost(
+  slug: string,
+  postId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<PublicBauPostResponse | null> {
+  try {
+    return await apiFetch<PublicBauPostResponse>(
+      `/api/public/communities/${encodeURIComponent(slug)}/posts/${encodeURIComponent(postId)}`,
+      { signal: options.signal },
+    );
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
       return null;
