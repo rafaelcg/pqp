@@ -55,6 +55,7 @@ import type {
   ChannelKind,
   ChannelSession,
   ChannelType,
+  CommunityHomePost,
   CommunityListingNudge,
   DmSummary,
   MemberRole,
@@ -82,6 +83,16 @@ import { adoptVoiceTranscription } from "@/lib/voice-transcription-prefs";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
 import { BulkPurgeDialog } from "@/components/chat/bulk-purge-dialog";
 import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
+import {
+  ForwardPicker,
+  type ForwardedSummary,
+} from "@/components/forward/forward-picker";
+import { ForwardedToast } from "@/components/forward/forwarded-toast";
+import {
+  startForwardConfig,
+  useForwardEnabled,
+  type ForwardSourceRequest,
+} from "@/lib/forward";
 import { ThreadPanel } from "@/components/chat/thread-panel";
 import {
   ReportDialog,
@@ -2328,6 +2339,14 @@ function MainAppContent({
   const [serverMembers, setServerMembers] = useState<ServerMember[]>([]);
   const [serverRoles, setServerRoles] = useState<ServerRole[]>([]);
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
+  // Encaminhar (`forward_messages`): what is being forwarded, and the toast
+  // that follows. Off, `requestForward` below keeps the old quote-into-the-
+  // composer behaviour, so a self-host or a flag that is off loses nothing.
+  const forwardEnabled = useForwardEnabled();
+  const [forwardSource, setForwardSource] = useState<ForwardSourceRequest | null>(null);
+  const [forwardedToast, setForwardedToast] = useState<
+    (ForwardedSummary & { key: number }) | null
+  >(null);
   const unreadHoldRef = useRef(new Set<string>());
   const [unreadHeldIds, setUnreadHeldIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -6594,6 +6613,50 @@ function MainAppContent({
     [forwardMessage, selectChannel, selectConversation, selectedServerId, t],
   );
 
+  /**
+   * "Encaminhar" on a chat message. A message in a server channel opens the
+   * picker (the server refuses a conversation message as a source, so those,
+   * and everything while the flag is off, keep the quote-into-the-composer
+   * behaviour they always had).
+   */
+  const requestForward = useCallback(
+    (message: ChatMessage) => {
+      const inConversation = conversationsRef.current.some(
+        (one) => one.channelId === message.channelId,
+      );
+      if (!forwardEnabled || inConversation || !selectedServerId) {
+        setForwardMessage(message);
+        return;
+      }
+      const channel = channels.find((one) => one.id === message.channelId);
+      setForwardSource({
+        kind: "message",
+        id: message.id,
+        serverId: selectedServerId,
+        title:
+          message.forward?.title ||
+          buildReplyExcerpt(message.forward?.excerpt || message.body) ||
+          t("forward.messageFrom", { name: message.authorName }),
+        restricted: channel?.isPrivate === true || message.forward?.restricted === true,
+      });
+    },
+    [channels, forwardEnabled, selectedServerId, t],
+  );
+
+  /** "Encaminhar" on a Baú post: the picker, restricted when members-only. */
+  const requestForwardPost = useCallback(
+    (post: CommunityHomePost) => {
+      setForwardSource({
+        kind: "bau_post",
+        id: post.id,
+        serverId: post.serverId,
+        title: post.title?.trim() || post.teaser?.trim() || t("forward.postFallback"),
+        restricted: post.visibility === "members",
+      });
+    },
+    [t],
+  );
+
   /** Leave the conversation view open with nothing selected in it. */
   const selectHome = useCallback(() => {
     setSelection(HOME_SELECTION);
@@ -9803,6 +9866,21 @@ function MainAppContent({
     voiceState.voiceChannelId,
   ]);
 
+  /** "Ver" on the toast: the first place the forward went. */
+  const viewForwarded = useCallback(
+    (summary: ForwardedSummary) => {
+      const target = summary.first;
+      if (target.kind === "conversation") {
+        void selectConversation(target.id);
+        return;
+      }
+      if (target.serverId) {
+        void applyChannelRoute(target.serverId, target.id);
+      }
+    },
+    [applyChannelRoute, selectConversation],
+  );
+
   /**
    * Everything the notification path needs to name a channel, conversations
    * included. Built here rather than in a sidebar because a sidebar unmounts
@@ -9930,6 +10008,12 @@ function MainAppContent({
   const funConfigUserId = ageGate ? null : (user?.id ?? null);
   useEffect(
     () => (funConfigUserId ? startFunConfig() : undefined),
+    [funConfigUserId],
+  );
+  // Encaminhar: whether the action exists (`forward_messages`), same refresh
+  // pass and the same gate as the config above.
+  useEffect(
+    () => (funConfigUserId ? startForwardConfig() : undefined),
     [funConfigUserId],
   );
   const nudgeShake = useNudgeShake(
@@ -12362,7 +12446,7 @@ function MainAppContent({
         unreadSince={unreadSince}
         editMessageId={editMessageId}
         onEditMessageHandled={clearEditMessageId}
-        onForward={setForwardMessage}
+        onForward={requestForward}
         onMarkUnread={handleMarkUnread}
         onMarkRead={handleMarkRead}
         onLiveEndChange={handleMessageListLiveEnd}
@@ -13360,6 +13444,7 @@ function MainAppContent({
             refreshSignal={communityHomeUpdateNudge}
             channels={channels}
             onOpenChannel={(channelId) => void openChannel(channelId)}
+            onForwardPost={forwardEnabled ? requestForwardPost : undefined}
             canSendInChannel={(channelId) =>
               perms.serverBits === 0n ||
               perms.can(Permission.SEND_MESSAGES, channelId)
@@ -13514,7 +13599,7 @@ function MainAppContent({
                   subjectName: message.authorName,
                 })
               }
-              onForward={setForwardMessage}
+              onForward={requestForward}
               droppedFiles={forumDroppedFiles}
               onDroppedFilesTaken={() => setForumDroppedFiles(null)}
             />
@@ -13590,7 +13675,7 @@ function MainAppContent({
           roles={serverRoles}
           unreadHeld={unreadHeldIds.has(openThread.thread.channelId)}
           unreadSince={threadUnreadSince}
-          onForward={setForwardMessage}
+          onForward={requestForward}
           onMarkUnread={handleMarkUnread}
           onMarkRead={() => clearUnread(openThread.thread.channelId)}
           onSent={() => {
@@ -13890,6 +13975,23 @@ function MainAppContent({
           setServerSettingsSection("roles");
           setServerSettingsOpen(true);
         }}
+      />
+
+      <ForwardPicker
+        open={forwardSource !== null}
+        source={forwardSource}
+        servers={servers}
+        conversations={conversations}
+        currentServerId={selectedServerId}
+        onClose={() => setForwardSource(null)}
+        onForwarded={(summary) =>
+          setForwardedToast({ ...summary, key: Date.now() })
+        }
+      />
+      <ForwardedToast
+        summary={forwardedToast}
+        onView={viewForwarded}
+        onDismiss={() => setForwardedToast(null)}
       />
 
       <ForwardDialog

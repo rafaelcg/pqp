@@ -52,3 +52,10 @@ Request-level failures: 400 invalid body, 404 flag off or source not found or no
 ## Rolling it out
 
 Off by default. The dashboard flips `forward_messages` globally with no deploy. Turn it on after the web build that draws the card is live; the phones show the fallback line until their builds ship.
+
+## Web client
+
+- The card is `client/src/components/chat/forward-card.tsx`, drawn by `MessageList`, so it shows wherever messages render (channels, DMs, threads, forum posts). It reads the snapshot only and fetches nothing. A forward's fallback body is hidden (`forwardCommentOf` in `client/src/lib/forward.ts`) and the message is never also drawn as a Baú link card.
+- The action is "Encaminhar" in a chat message's menu and on every published Baú post (the button under the post for everyone, plus the staff menu). It opens `components/forward/forward-picker.tsx`: search, recent places first, up to five picks, optional comment, each refusal shown on its own row. A members-only post or a private-channel message is only offered its own server.
+- A message in a conversation, and every message while `forward_messages` is off, keeps the old behaviour (quote into the composer). The flag is read from `GET /api/forwards/config` (`startForwardConfig`), asked again on the config refresh pass.
+- Success shows a corner toast with "Ver", which opens the first place it went.

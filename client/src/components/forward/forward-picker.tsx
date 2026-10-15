@@ -1,0 +1,558 @@
+import {
+  hasPermission,
+  parsePermissions,
+  Permission,
+  type DmSummary,
+  type Server,
+} from "@pqp/shared";
+import { Forward, Hash, Loader2, Lock, Search, Users } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { CheckRow } from "@/components/ui/check-row";
+import { Dialog } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { ServerIcon } from "@/components/layout/server-identity";
+import { UserAvatar } from "@/components/user/user-avatar";
+import {
+  ApiError,
+  createForward,
+  fetchChannels,
+  fetchMemberPermissions,
+} from "@/lib/api";
+import { conversationTitle } from "@/lib/conversations";
+import {
+  MAX_FORWARD_TARGETS,
+  readRecentForwardTargets,
+  rememberForwardTargets,
+  targetAllowedFor,
+  targetMatches,
+  type ForwardSourceRequest,
+  type PickerTarget,
+} from "@/lib/forward";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
+
+/**
+ * "Encaminhar": pick up to five places (channels you can speak in, and your
+ * conversations), add a comment if you want one, send. Recent places first,
+ * search across every server you are in.
+ *
+ * The server decides for real (`POST /api/forwards`: access, SEND_MESSAGES,
+ * slow mode, AutoMod, a members-only post staying in its server). This only
+ * keeps the list honest, and shows each refusal on the row it belongs to, so a
+ * forward to five places where one is slow-moded is four sent and one
+ * explained, never a vague failure.
+ */
+
+const COMMENT_MAX = 1500;
+const FETCH_CONCURRENCY = 4;
+
+function newNonce(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+const REASON_KEY: Record<string, MessageKey> = {
+  no_access: "forward.error.noAccess",
+  cannot_send: "forward.error.cannotSend",
+  bad_target: "forward.error.badTarget",
+  stays_in_server: "forward.error.staysInServer",
+  unreachable: "forward.error.unreachable",
+  slow_mode: "forward.error.slowMode",
+  rate_limited: "forward.error.rateLimited",
+  automod: "forward.error.automod",
+  unavailable: "forward.error.generic",
+};
+
+export function forwardRequestErrorKey(error: unknown): MessageKey {
+  if (error instanceof ApiError) {
+    if (error.status === 404) {
+      return "forward.error.sourceGone";
+    }
+    if (error.status === 422) {
+      return "forward.error.notForwardable";
+    }
+    if (error.status === 429) {
+      return "forward.error.rateLimited";
+    }
+  }
+  return "forward.error.generic";
+}
+
+/** What the toast needs once something went out. */
+export interface ForwardedSummary {
+  count: number;
+  /** The first place it went, for "Ver". */
+  first: PickerTarget;
+}
+
+async function loadServerTargets(server: Server): Promise<PickerTarget[]> {
+  const [{ channels }, snapshot] = await Promise.all([
+    fetchChannels(server.id),
+    fetchMemberPermissions(server.id),
+  ]);
+  const serverBits = parsePermissions(snapshot.server);
+  return channels
+    .filter((channel) => {
+      if (channel.kind !== "server" || channel.type !== "text") {
+        return false;
+      }
+      const raw = snapshot.channels[channel.id];
+      const mask = raw !== undefined ? parsePermissions(raw) : serverBits;
+      return hasPermission(mask, Permission.SEND_MESSAGES);
+    })
+    .sort((a, b) => a.position - b.position)
+    .map((channel) => ({
+      id: channel.id,
+      kind: "channel" as const,
+      serverId: server.id,
+      serverName: server.name,
+      label: channel.name,
+    }));
+}
+
+/** Runs `worker` over `items`, `limit` at a time, calling `onEach` as each lands. */
+async function pool<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+  onEach: (result: R | null, item: T) => void,
+  alive: () => boolean,
+): Promise<void> {
+  let next = 0;
+  async function lane() {
+    while (alive() && next < items.length) {
+      const item = items[next++]!;
+      try {
+        onEach(await worker(item), item);
+      } catch {
+        onEach(null, item);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+}
+
+export function ForwardPicker({
+  open,
+  source,
+  servers,
+  conversations,
+  currentServerId,
+  onClose,
+  onForwarded,
+}: {
+  open: boolean;
+  source: ForwardSourceRequest | null;
+  servers: readonly Server[];
+  conversations: readonly DmSummary[];
+  currentServerId: string | null;
+  onClose: () => void;
+  onForwarded: (summary: ForwardedSummary) => void;
+}) {
+  const { t } = useTranslation();
+  const formId = useId();
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [serverTargets, setServerTargets] = useState<Record<string, PickerTarget[]>>({});
+  const [pending, setPending] = useState(0);
+  const nonceRef = useRef("");
+  const recentsRef = useRef<string[]>([]);
+  const serversRef = useRef(servers);
+  serversRef.current = servers;
+
+  // Order: the server you are in, then the rail's order. A members-only post
+  // only ever offers its own server.
+  const eligibleServers = useMemo(() => {
+    const list = servers.filter(
+      (server) => !source?.restricted || server.id === source.serverId,
+    );
+    return [...list].sort(
+      (a, b) =>
+        Number(b.id === currentServerId) - Number(a.id === currentServerId),
+    );
+  }, [servers, source, currentServerId]);
+
+  useEffect(() => {
+    if (!open || !source) {
+      return;
+    }
+    setQuery("");
+    setSelected([]);
+    setComment("");
+    setBusy(false);
+    setError(null);
+    setRowErrors({});
+    setServerTargets({});
+    nonceRef.current = newNonce();
+    recentsRef.current = readRecentForwardTargets();
+    let alive = true;
+    const list = eligibleServers;
+    setPending(list.length);
+    void pool(
+      list,
+      FETCH_CONCURRENCY,
+      loadServerTargets,
+      (result, server) => {
+        if (!alive) {
+          return;
+        }
+        if (result) {
+          setServerTargets((prev) => ({ ...prev, [server.id]: result }));
+        }
+        setPending((count) => Math.max(0, count - 1));
+      },
+      () => alive,
+    );
+    return () => {
+      alive = false;
+    };
+    // Opening is the trigger; the server list can move under an open dialog
+    // without restarting what was typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, source?.id]);
+
+  const conversationTargets = useMemo((): PickerTarget[] => {
+    if (!source || source.restricted) {
+      return [];
+    }
+    return conversations.map((conversation) => ({
+      id: conversation.channelId,
+      kind: "conversation" as const,
+      serverId: null,
+      serverName: null,
+      label: conversationTitle(conversation.participants),
+      ...(conversation.kind === "dm" && conversation.participants[0]
+        ? {
+            avatarName: conversation.participants[0].displayName,
+            avatarUrl: conversation.participants[0].avatarUrl,
+          }
+        : {}),
+    }));
+  }, [conversations, source]);
+
+  const allTargets = useMemo(() => {
+    const flat: PickerTarget[] = [];
+    for (const server of eligibleServers) {
+      flat.push(...(serverTargets[server.id] ?? []));
+    }
+    flat.push(...conversationTargets);
+    return flat.filter((target) => (source ? targetAllowedFor(source, target) : true));
+  }, [eligibleServers, serverTargets, conversationTargets, source]);
+
+  const byId = useMemo(
+    () => new Map(allTargets.map((target) => [target.id, target])),
+    [allTargets],
+  );
+
+  const searching = query.trim().length > 0;
+  const recents = useMemo(
+    () =>
+      recentsRef.current
+        .map((id) => byId.get(id))
+        .filter((target): target is PickerTarget => Boolean(target)),
+    // `byId` changes as servers load; recents resolve as soon as theirs does.
+    [byId],
+  );
+
+  const atLimit = selected.length >= MAX_FORWARD_TARGETS;
+
+  function toggle(target: PickerTarget, on: boolean) {
+    setError(null);
+    setRowErrors((prev) => {
+      if (!(target.id in prev)) {
+        return prev;
+      }
+      const { [target.id]: _dropped, ...rest } = prev;
+      return rest;
+    });
+    setSelected((prev) => {
+      if (on) {
+        return prev.includes(target.id) || prev.length >= MAX_FORWARD_TARGETS
+          ? prev
+          : [...prev, target.id];
+      }
+      return prev.filter((id) => id !== target.id);
+    });
+  }
+
+  function rowFor(target: PickerTarget, withServer: boolean) {
+    const checked = selected.includes(target.id);
+    const rowError = rowErrors[target.id];
+    return (
+      <li key={`${withServer ? "r" : "s"}-${target.id}`} data-forward-target={target.id}>
+        <CheckRow
+          checked={checked}
+          disabled={busy || (!checked && atLimit)}
+          onCheckedChange={(on) => toggle(target, on)}
+          label={target.label}
+          description={
+            rowError ??
+            (withServer && target.serverName ? target.serverName : undefined)
+          }
+          icon={
+            target.kind === "channel" ? (
+              <Hash className="h-4 w-4" aria-hidden />
+            ) : target.avatarName ? (
+              <UserAvatar
+                name={target.avatarName}
+                avatarUrl={target.avatarUrl ?? null}
+                className="h-5 w-5"
+                rounded="full"
+                fallbackClassName="bg-surface-3 text-[9px] text-text"
+              />
+            ) : (
+              <Users className="h-4 w-4" aria-hidden />
+            )
+          }
+          className={rowError ? "ring-1 ring-danger/60" : undefined}
+        />
+      </li>
+    );
+  }
+
+  const visibleRecents = searching
+    ? []
+    : recents.filter((target) => targetMatches(target, query));
+  const recentIds = new Set(visibleRecents.map((target) => target.id));
+
+  async function submit() {
+    if (!source || busy || selected.length === 0) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setRowErrors({});
+    try {
+      const response = await createForward({
+        source:
+          source.kind === "bau_post"
+            ? { kind: "bau_post", id: source.id, serverId: source.serverId }
+            : { kind: "message", id: source.id },
+        targets: selected.map((channelId) => ({ channelId })),
+        ...(comment.trim() ? { comment: comment.trim() } : {}),
+        nonce: nonceRef.current,
+      });
+      const sent: PickerTarget[] = [];
+      const failed: Record<string, string> = {};
+      const stillSelected: string[] = [];
+      for (const result of response.results) {
+        const id = "channelId" in result.target ? result.target.channelId : null;
+        if (!id) {
+          continue;
+        }
+        if (result.ok) {
+          const target = byId.get(id);
+          if (target) {
+            sent.push(target);
+          }
+        } else {
+          failed[id] = t(REASON_KEY[result.reason] ?? "forward.error.generic");
+          stillSelected.push(id);
+        }
+      }
+      if (sent.length > 0) {
+        rememberForwardTargets(sent.map((target) => target.id));
+        onForwarded({ count: sent.length, first: sent[0]! });
+      }
+      if (stillSelected.length === 0) {
+        onClose();
+        return;
+      }
+      // Some went out: what is left is what to fix or retry, each with its reason.
+      setSelected(stillSelected);
+      setRowErrors(failed);
+    } catch (err) {
+      setError(t(forwardRequestErrorKey(err)));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const groups = eligibleServers
+    .map((server) => ({
+      server,
+      targets: (serverTargets[server.id] ?? []).filter(
+        (target) =>
+          (source ? targetAllowedFor(source, target) : true) &&
+          targetMatches(target, query) &&
+          !recentIds.has(target.id),
+      ),
+    }))
+    .filter((group) => group.targets.length > 0);
+  const visibleConversations = conversationTargets.filter(
+    (target) => targetMatches(target, query) && !recentIds.has(target.id),
+  );
+  const nothing =
+    pending === 0 &&
+    visibleRecents.length === 0 &&
+    groups.length === 0 &&
+    visibleConversations.length === 0;
+
+  return (
+    <Dialog
+      open={open && source !== null}
+      title={t("forward.title")}
+      size="md"
+      onClose={onClose}
+      footer={
+        <>
+          <span
+            className="mr-auto text-xs tabular-nums text-text-tertiary"
+            aria-live="polite"
+            data-forward-count
+          >
+            {t("forward.selectedCount", {
+              selected: selected.length,
+              max: MAX_FORWARD_TARGETS,
+            })}
+          </span>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
+            {t("common.cancel")}
+          </Button>
+          <Button
+            type="submit"
+            form={formId}
+            disabled={busy || selected.length === 0}
+            data-forward-send
+          >
+            {busy ? (
+              <>
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" aria-hidden />
+                {t("forward.sending")}
+              </>
+            ) : (
+              <>
+                <Forward className="mr-1.5 h-4 w-4" aria-hidden />
+                {t("forward.send")}
+              </>
+            )}
+          </Button>
+        </>
+      }
+    >
+      <form
+        id={formId}
+        className="space-y-3 px-5 py-4"
+        data-forward-picker
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
+      >
+        {source && (
+          <p
+            className="flex items-center gap-2 rounded-[var(--radius-control)] bg-surface-1 px-3 py-2 text-sm text-text-secondary"
+            data-forward-source
+          >
+            {source.restricted ? (
+              <Lock className="h-4 w-4 shrink-0 text-text-tertiary" aria-hidden />
+            ) : (
+              <Forward className="h-4 w-4 shrink-0 text-text-tertiary" aria-hidden />
+            )}
+            <span className="min-w-0 truncate">{source.title}</span>
+          </p>
+        )}
+        {source?.restricted && (
+          <p className="text-xs text-text-tertiary" data-forward-restricted>
+            {t("forward.restrictedHint")}
+          </p>
+        )}
+
+        <label className="relative block">
+          <span className="sr-only">{t("forward.search")}</span>
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary"
+            aria-hidden
+          />
+          <Input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t("forward.search")}
+            className="pl-9"
+            autoComplete="off"
+            data-forward-search
+          />
+        </label>
+
+        <div
+          className="max-h-[min(22rem,42vh)] space-y-3 overflow-y-auto pr-1"
+          data-forward-list
+        >
+          {visibleRecents.length > 0 && (
+            <section aria-label={t("forward.recent")}>
+              <h3 className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+                {t("forward.recent")}
+              </h3>
+              <ul>{visibleRecents.map((target) => rowFor(target, true))}</ul>
+            </section>
+          )}
+          {visibleConversations.length > 0 && (
+            <section aria-label={t("forward.conversations")}>
+              <h3 className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+                {t("forward.conversations")}
+              </h3>
+              <ul>{visibleConversations.map((target) => rowFor(target, false))}</ul>
+            </section>
+          )}
+          {groups.map(({ server, targets }) => (
+            <section key={server.id} aria-label={server.name} data-forward-server={server.id}>
+              <h3 className="flex items-center gap-1.5 px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+                <span className="flex h-4 w-4 items-center justify-center overflow-hidden rounded bg-surface-3 text-[8px] text-text">
+                  <ServerIcon name={server.name} iconUrl={server.iconUrl} />
+                </span>
+                <span className="truncate">{server.name}</span>
+              </h3>
+              <ul>{targets.map((target) => rowFor(target, false))}</ul>
+            </section>
+          ))}
+          {pending > 0 && (
+            <p
+              className="flex items-center gap-2 px-2 py-1 text-xs text-text-tertiary"
+              role="status"
+            >
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+              {t("forward.loading")}
+            </p>
+          )}
+          {nothing && (
+            <p className="px-2 py-3 text-sm text-text-secondary" data-forward-empty>
+              {searching ? t("forward.noMatch") : t("forward.empty")}
+            </p>
+          )}
+        </div>
+
+        <label className="block">
+          <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary">
+            {t("forward.comment")}
+          </span>
+          <Textarea
+            value={comment}
+            onChange={(event) => setComment(event.target.value.slice(0, COMMENT_MAX))}
+            placeholder={t("forward.commentPlaceholder")}
+            className="min-h-16"
+            disabled={busy}
+            data-forward-comment
+          />
+        </label>
+
+        {error && (
+          <p className="text-sm text-danger" role="alert" data-forward-error>
+            {error}
+          </p>
+        )}
+        {atLimit && (
+          <p className="text-xs text-text-tertiary">
+            {t("forward.limit", { max: MAX_FORWARD_TARGETS })}
+          </p>
+        )}
+      </form>
+    </Dialog>
+  );
+}
