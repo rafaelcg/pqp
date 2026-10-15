@@ -213,6 +213,9 @@ fun ForwardSheet(
                                 }
                             }
                         }
+                        items(state.failedServers, key = { "f-" + it.serverId }) { failed ->
+                            FailedServerRow(failed.name) { model.retryServer(failed.serverId) }
+                        }
                         if (state.loading) {
                             item(key = "loading") {
                                 Box(Modifier.fillMaxWidth().padding(Spacing.lg), Alignment.Center) {
@@ -229,6 +232,28 @@ fun ForwardSheet(
                 onComment = model::setComment,
                 onSend = model::send,
             )
+        }
+    }
+}
+
+/** A server whose channels could not be read: the list is incomplete, and this says so. */
+@Composable
+private fun FailedServerRow(name: String, onRetry: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.gutter, vertical = Spacing.sm)
+            .testTag("forward.server.failed"),
+    ) {
+        Text(
+            text = stringResource(R.string.forward_server_failed, name),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.weight(1f),
+        )
+        androidx.compose.material3.TextButton(onClick = onRetry) {
+            Text(stringResource(R.string.forward_retry))
         }
     }
 }
@@ -449,7 +474,7 @@ private fun failureText(failure: ForwardFailure): String = when (failure) {
     ForwardFailure.NotForwardable -> stringResource(R.string.forward_failure_not_forwardable)
     ForwardFailure.Empty -> stringResource(R.string.forward_failure_empty)
     ForwardFailure.Slow -> stringResource(R.string.forward_failure_slow)
-    is ForwardFailure.Other -> stringResource(R.string.forward_failure_other)
+    is ForwardFailure.Other, is ForwardFailure.Rejected -> stringResource(R.string.forward_failure_other)
 }
 
 @Composable

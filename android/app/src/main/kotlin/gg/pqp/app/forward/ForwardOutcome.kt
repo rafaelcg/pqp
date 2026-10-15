@@ -37,7 +37,7 @@ sealed interface ForwardFailure {
     /**
      * Whether the request may have been carried out although no answer arrived:
      * only a failure that is not an answer from the server (a lost connection, a
-     * 5xx). A 404, 422 or 429 is an answer, and nothing went out.
+     * 5xx, a 408). A 4xx is an answer, and nothing went out.
      */
     val mayHaveLanded: Boolean get() = this is Other
 
@@ -53,7 +53,10 @@ sealed interface ForwardFailure {
     /** 429: the route's own burst limit. */
     data object Slow : ForwardFailure
 
-    /** Anything else, including a lost connection. Worth another try, same nonce. */
+    /** Any other 4xx (a rejected body, an expired session): answered, nothing went out. */
+    data class Rejected(val message: String?) : ForwardFailure
+
+    /** A lost connection, a timeout or a 5xx. Worth another try, same nonce. */
     data class Other(val message: String?) : ForwardFailure
 }
 
@@ -74,6 +77,9 @@ object ForwardOutcomes {
             error.status == 422 && said.contains("source_empty") -> ForwardFailure.Empty
             error.status == 422 -> ForwardFailure.NotForwardable
             error.status == 429 -> ForwardFailure.Slow
+            // Any other 4xx was answered by the server: nothing went out, so the
+            // request must not freeze. A 408 is a timeout, not an answer.
+            error.status in 400..499 && error.status != 408 -> ForwardFailure.Rejected(error.serverMessage)
             else -> ForwardFailure.Other(error.serverMessage)
         }
     }

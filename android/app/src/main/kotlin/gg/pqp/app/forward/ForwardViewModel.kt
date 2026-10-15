@@ -13,6 +13,7 @@ import gg.pqp.app.social.ui.titleOr
 import java.util.UUID
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -49,6 +50,9 @@ data class ForwardSent(
 
 data class ForwardDone(val sent: List<ForwardSent>)
 
+/** A server the picker could not list the channels of. */
+data class ForwardFailedServer(val serverId: String, val name: String)
+
 data class ForwardPickerState(
     val loading: Boolean = true,
     val groups: List<ForwardServerGroup> = emptyList(),
@@ -67,6 +71,8 @@ data class ForwardPickerState(
     val failure: ForwardFailure? = null,
     /** The cap on targets was hit by the last tap. */
     val capHit: Boolean = false,
+    /** Servers whose channels could not be read: the picker says so and offers a retry. */
+    val failedServers: List<ForwardFailedServer> = emptyList(),
     /**
      * A send whose outcome is unknown (the connection dropped before an answer):
      * the selection and the comment are frozen and the button retries that exact
@@ -129,28 +135,49 @@ class ForwardViewModel(
         }
 
         val servers = session.servers.value
+        serverOrder = servers.map { it.id }
         val gate = Semaphore(LOAD_PARALLELISM)
         val jobs: List<Deferred<Unit>> = servers.map { server ->
-            viewModelScope.async {
-                gate.withPermit {
-                    // The two reads are independent: ask for both at once.
-                    val channelsCall = async { runSuspendCatching { session.api.channels(server.id) }.getOrNull() }
-                    // No answer is "do not filter": the server refuses per target.
-                    val permissionsCall = async {
-                        runSuspendCatching { session.api.serverPermissions(server.id) }.getOrNull()
-                    }
-                    val channels = channelsCall.await()
-                    val permissions = permissionsCall.await()
-                    if (channels != null) {
-                        val group = ForwardTargets.channelsOf(server, channels, permissions)
-                        group.channels.forEach { byKey[it.key] = it }
-                        _state.update { it.copy(groups = (it.groups + group).orderedLike(servers.map { s -> s.id })) }
-                    }
-                }
-            }
+            viewModelScope.async { gate.withPermit { loadServer(server) } }
         }
         jobs.forEach { it.await() }
         _state.update { it.copy(loading = false) }
+    }
+
+    private var serverOrder: List<String> = emptyList()
+
+    /** One server's channels and permissions, asked for together. A failure is kept, not hidden. */
+    private suspend fun loadServer(server: gg.pqp.app.core.ServerSummary) = coroutineScope {
+        val channelsCall = async { runSuspendCatching { session.api.channels(server.id) }.getOrNull() }
+        // No permission answer is "do not filter": the server refuses per target.
+        val permissionsCall = async {
+            runSuspendCatching { session.api.serverPermissions(server.id) }.getOrNull()
+        }
+        val channels = channelsCall.await()
+        val permissions = permissionsCall.await()
+        if (channels == null) {
+            _state.update {
+                it.copy(
+                    failedServers = (it.failedServers.filterNot { f -> f.serverId == server.id } +
+                        ForwardFailedServer(server.id, server.name)),
+                )
+            }
+            return@coroutineScope
+        }
+        val group = ForwardTargets.channelsOf(server, channels, permissions)
+        group.channels.forEach { byKey[it.key] = it }
+        _state.update {
+            it.copy(
+                groups = (it.groups.filterNot { g -> g.serverId == server.id } + group).orderedLike(serverOrder),
+                failedServers = it.failedServers.filterNot { f -> f.serverId == server.id },
+            )
+        }
+    }
+
+    /** Try a server that failed to load again. */
+    fun retryServer(serverId: String) {
+        val server = session.servers.value.firstOrNull { it.id == serverId } ?: return
+        viewModelScope.launch { loadServer(server) }
     }
 
     private fun publishPeople(social: SocialRepository, selfId: String?) {

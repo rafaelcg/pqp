@@ -1277,6 +1277,7 @@
     <string name="forward_restricted_note">This stays in %1$s. You can only forward it to a channel there.</string>
     <string name="forward_send_none">Pick where to send it</string>
     <string name="forward_send">Forward (%1$d)</string>
+    <string name="forward_server_failed">Couldn\'t load the channels of %1$s</string>
     <string name="forward_retry">Try again</string>
     <string name="forward_sending">Forwarding</string>
     <string name="forward_cap">Up to 5 at a time.</string>

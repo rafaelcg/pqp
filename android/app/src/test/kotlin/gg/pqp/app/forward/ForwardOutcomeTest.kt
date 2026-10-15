@@ -67,6 +67,17 @@ class ForwardOutcomeTest {
         assertFalse(ForwardOutcomes.failureOf(ApiException(429, "Slow down")).mayHaveLanded)
     }
 
+    @Test
+    fun `any other 4xx is an answer and never locks the request, a 408 is not an answer`() {
+        for (status in listOf(400, 401, 403, 409, 413)) {
+            val failure = ForwardOutcomes.failureOf(ApiException(status, "no"))
+            assertTrue("$status", failure is ForwardFailure.Rejected)
+            assertFalse("$status", failure.mayHaveLanded)
+        }
+        assertTrue(ForwardOutcomes.failureOf(ApiException(408, "timeout")).mayHaveLanded)
+        assertTrue(ForwardOutcomes.failureOf(ApiException(500, "boom")).mayHaveLanded)
+    }
+
     // ---- the flag
 
     @Test

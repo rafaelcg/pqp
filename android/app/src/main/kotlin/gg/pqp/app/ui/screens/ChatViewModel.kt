@@ -913,14 +913,19 @@ class ChatViewModel(
 
     /**
      * The first page: around [aroundMessageId] when one was asked for and it
-     * answers, otherwise the newest. A jump to a message that was deleted, or
-     * that this account may not read, is the plain chat, never an error.
+     * answers, otherwise the newest. A message that was deleted, or that this
+     * account may not read (the server's 400/403/404), is the plain chat, never
+     * an error. Any other failure (a timeout, a 5xx, no network) is a failed
+     * load like the newest page's, with the screen's own error state, rather
+     * than a chat silently opened somewhere the person did not ask for.
      */
     private suspend fun fetchInitial(): Result<MessagesResponse> {
         val around = aroundMessageId
         if (around != null) {
-            val page = runSuspendCatching { session.api.messages(channelId, around = around) }.getOrNull()
-            if (page != null) return Result.success(page)
+            val attempt = runSuspendCatching { session.api.messages(channelId, around = around) }
+            val failure = attempt.exceptionOrNull()
+            val gone = failure is gg.pqp.app.core.ApiException && failure.status in AROUND_GONE_STATUSES
+            if (failure == null || !gone) return attempt
         }
         return runSuspendCatching { session.api.messages(channelId) }
     }
@@ -978,8 +983,11 @@ class ChatViewModel(
         val current = _state.value
         if (!current.hasMore) return 0
         val oldest = current.messages.firstOrNull()?.id ?: return 0
+        val generation = pagingGeneration
         _state.value = current.copy(loadingOlder = true)
         val page = runCatching { session.api.messages(channelId, before = oldest) }.getOrNull()
+        // A jump to latest replaced the window this page was asked about.
+        if (generation != pagingGeneration) return 0
         if (page == null) {
             _state.value = _state.value.copy(loadingOlder = false)
             return 0
@@ -999,10 +1007,13 @@ class ChatViewModel(
         if (current.loadingOlder || !current.hasMore) return
         val oldest = current.messages.firstOrNull()?.id ?: return
 
+        val generation = pagingGeneration
         _state.value = current.copy(loadingOlder = true)
         viewModelScope.launch {
             runCatching { session.api.messages(channelId, before = oldest) }
                 .onSuccess { page ->
+                    // A jump to latest replaced the window this page was asked about.
+                    if (generation != pagingGeneration) return@onSuccess
                     val known = _state.value.messages.map { it.id }.toSet()
                     _state.value = _state.value.copy(
                         messages = page.messages.filterNot { it.id in known } + _state.value.messages,
@@ -1010,7 +1021,11 @@ class ChatViewModel(
                         loadingOlder = false,
                     )
                 }
-                .onFailure { _state.value = _state.value.copy(loadingOlder = false) }
+                .onFailure {
+                    if (generation == pagingGeneration) {
+                        _state.value = _state.value.copy(loadingOlder = false)
+                    }
+                }
         }
     }
 
@@ -1070,6 +1085,7 @@ class ChatViewModel(
                             hasMore = page.hasMore,
                             hasNewer = false,
                             loadingNewer = false,
+                            loadingOlder = false,
                             latestToken = _state.value.latestToken + 1,
                         )
                         // Live messages were held back while `hasNewer` was true, and
@@ -1656,6 +1672,9 @@ class ChatViewModel(
 
     companion object {
         private const val TYPING_TTL_MS = 4_000L
+
+        /** What the server answers for a jump target that is deleted or not readable. */
+        private val AROUND_GONE_STATUSES = setOf(400, 403, 404)
 
         /** Extra tail messages the paging duplicate check looks at, beyond the page's own size. */
         private const val TAIL_DEDUPE_SLACK = 50

@@ -47,7 +47,15 @@ val LocalStartForward = staticCompositionLocalOf<(ForwardInput) -> Unit> { {} }
  */
 @Composable
 fun rememberForwardEnabled(api: ApiClient): Boolean {
-    val enabled by produceState(false, api) { value = ForwardConfigs.enabled(api) }
+    // Re-read every cache lifetime while the screen is composed: the flag is flipped
+    // from a dashboard, and a failed first read must not leave the action hidden
+    // until the screen is recreated. Between reads this is a cache hit.
+    val enabled by produceState(false, api) {
+        while (true) {
+            value = ForwardConfigs.enabled(api)
+            kotlinx.coroutines.delay(ForwardConfigs.TTL_MS)
+        }
+    }
     return enabled
 }
 
