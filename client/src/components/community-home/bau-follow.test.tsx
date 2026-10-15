@@ -110,3 +110,18 @@ describe("ChannelBauFollowsSection when the read failed", () => {
     expect(html).toContain("Retry");
   });
 });
+
+describe("a pause says why", () => {
+  it("names a ban as a ban, not as a lost permission", () => {
+    const paused = (reason: "permissions" | "banned") =>
+      renderToStaticMarkup(
+        <ChannelBauFollowsSection
+          follows={[follow({ status: "paused", pausedReason: reason, pausedAt: "2026-10-15T13:00:00.000Z" })]}
+          onChange={() => {}}
+        />,
+      );
+    expect(paused("banned")).toContain("banned the Baú");
+    expect(paused("banned")).not.toContain("lost permission");
+    expect(paused("permissions")).toContain("lost permission");
+  });
+});

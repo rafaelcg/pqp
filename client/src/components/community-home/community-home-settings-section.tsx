@@ -12,6 +12,7 @@ import {
   shouldShowCommunityHomeSettingsNew,
 } from "@/lib/community-home";
 import { useTranslation } from "@/lib/i18n";
+import { notifyBauFollowConfigChanged } from "./bau-follow";
 import { cn } from "@/lib/utils";
 
 export function CommunityHomeSettingsSection({
@@ -67,6 +68,7 @@ export function CommunityHomeSettingsSection({
     try {
       const res = await updateBauFollowConfig(serverId, next);
       setFollowAllowed(res.allowed);
+      notifyBauFollowConfigChanged(serverId);
     } catch {
       setFollowError(true);
     } finally {

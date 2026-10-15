@@ -91,7 +91,7 @@ export function ForwardCardView({
         )}
       </div>
 
-      <div className="flex gap-3 px-3 pb-3 pt-1.5">
+      <div className="flex gap-3 px-3 pb-3 pt-1.5 max-sm:flex-col">
         <div className="min-w-0 flex-1 space-y-1">
           {title && (
             <p
@@ -132,7 +132,7 @@ export function ForwardCardView({
         </div>
         {thumb && (
           <div
-            className="relative h-16 w-24 shrink-0 self-start overflow-hidden rounded-[var(--radius-control)] bg-surface-2"
+            className="relative h-16 w-24 shrink-0 self-start overflow-hidden rounded-[var(--radius-control)] bg-surface-2 max-sm:order-first max-sm:h-32 max-sm:w-full max-sm:self-stretch"
             data-forward-thumb=""
           >
             <img

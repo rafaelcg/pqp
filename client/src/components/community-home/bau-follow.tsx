@@ -52,7 +52,7 @@ function noEnterSubmit(event: React.KeyboardEvent) {
 const TOUCH = "max-sm:min-h-11 max-sm:px-4";
 
 const SELECT_CLASS =
-  "h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:opacity-40";
+  "h-[var(--control-md)] max-sm:h-11 w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:opacity-40";
 
 export function bauFollowErrorKey(error: unknown): MessageKey {
   if (error instanceof ApiError) {
@@ -84,6 +84,15 @@ export function bauFollowErrorKey(error: unknown): MessageKey {
  * with `refresh` after a change. A failed read is "not followable": a button
  * that cannot be trusted is better absent.
  */
+const CONFIG_EVENT = "pqp:bau-follow-config";
+
+/** The owner moved "Permitir seguir": every open Seguir button re-reads its state. */
+export function notifyBauFollowConfigChanged(serverId: string): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(CONFIG_EVENT, { detail: { serverId } }));
+  }
+}
+
 export function useBauFollowState(serverId: string, active: boolean) {
   const [state, setState] = useState<BauFollowState | null>(null);
   // A read answers only if no newer read started after it: a slow early answer
@@ -110,11 +119,19 @@ export function useBauFollowState(serverId: string, active: boolean) {
   useEffect(() => {
     setState(null);
     void refresh();
+    const onConfig = (event: Event) => {
+      const detail = (event as CustomEvent<{ serverId?: string }>).detail;
+      if (detail?.serverId === serverId) {
+        void refresh();
+      }
+    };
+    window.addEventListener(CONFIG_EVENT, onConfig);
     return () => {
+      window.removeEventListener(CONFIG_EVENT, onConfig);
       // Whatever is still in flight belongs to the server or switch we left.
       generation.current += 1;
     };
-  }, [refresh]);
+  }, [refresh, serverId]);
   return { state, refresh };
 }
 
@@ -182,7 +199,9 @@ function FollowRow({
           </p>
         )}
         {follow.status === "paused" && (
-          <p className="mt-0.5 text-xs text-warning">{t("bauFollow.pausedHint")}</p>
+          <p className="mt-0.5 text-xs text-warning">
+            {t(follow.pausedReason === "banned" ? "bauFollow.pausedHintBanned" : "bauFollow.pausedHint")}
+          </p>
         )}
       </div>
       {follow.status === "paused" && (
@@ -248,7 +267,7 @@ export function BauFollowDialog({
     null,
   );
   const [maxPerServer, setMaxPerServer] = useState(20);
-  const [loadError, setLoadError] = useState(false);
+  const [loadError, setLoadError] = useState<"failed" | "off" | null>(null);
   const [destinationId, setDestinationId] = useState("");
   const [channelId, setChannelId] = useState("");
   const [roleId, setRoleId] = useState("");
@@ -257,11 +276,13 @@ export function BauFollowDialog({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
   const loadGeneration = useRef(0);
   const load = useCallback(() => {
     loadGeneration.current += 1;
     const mine = loadGeneration.current;
-    setLoadError(false);
+    setLoadError(null);
     return fetchBauFollowDestinations(serverId)
       .then((res) => {
         if (loadGeneration.current !== mine) {
@@ -271,9 +292,15 @@ export function BauFollowDialog({
         setMaxPerServer(res.maxPerServer);
         return res.servers;
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (loadGeneration.current === mine) {
-          setLoadError(true);
+          // A 404 is "this Baú no longer accepts follows" (the owner switched it
+          // off): say so, and let the header drop its button.
+          const off = err instanceof ApiError && err.status === 404;
+          setLoadError(off ? "off" : "failed");
+          if (off) {
+            onChangedRef.current();
+          }
         }
         return null;
       });
@@ -378,7 +405,6 @@ export function BauFollowDialog({
   }
 
   const mine = state?.mine ?? [];
-  const noDestinations = destinations !== null && destinations.length === 0;
 
   return (
     <Dialog
@@ -397,7 +423,7 @@ export function BauFollowDialog({
             onClick={onClose}
             disabled={busy}
           >
-            {noDestinations ? t("bauFollow.close") : t("bauFollow.done")}
+            {t("bauFollow.close")}
           </Button>
           {destinations !== null && destinations.length > 0 && (
             <Button
@@ -433,9 +459,14 @@ export function BauFollowDialog({
           </section>
         )}
 
-        {loadError && (
+        {loadError === "failed" && (
           <p className="text-sm text-danger" role="alert">
             {t("bauFollow.loadFailed")}
+          </p>
+        )}
+        {loadError === "off" && (
+          <p className="text-sm text-text-secondary" role="status" data-bau-follow-off>
+            {t("bauFollow.unavailable")}
           </p>
         )}
         {destinations !== null && destinations.length === 0 && (
@@ -644,8 +675,8 @@ export function BauFollowersDialog({
       size="md"
       onClose={onClose}
       footer={
-        <Button type="button" variant="ghost" onClick={onClose}>
-          {t("bauFollow.done")}
+        <Button type="button" variant="ghost" className="max-sm:min-h-11" onClick={onClose}>
+          {t("bauFollow.close")}
         </Button>
       }
     >
@@ -669,7 +700,7 @@ export function BauFollowersDialog({
                 {data.followers.slice(0, shown).map((follower) => (
                   <li
                     key={follower.id}
-                    className="flex items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-1 px-3 py-2"
+                    className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-control)] border border-border bg-surface-1 px-3 py-2"
                     data-bau-follower-row
                   >
                     <span className="h-8 w-8 shrink-0 overflow-hidden rounded-lg">
@@ -678,8 +709,8 @@ export function BauFollowersDialog({
                         iconUrl={follower.targetServerIconUrl}
                       />
                     </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-text">
+                    <div className="min-w-0 flex-1 max-sm:basis-[calc(100%-2.75rem)]">
+                      <p className="break-words text-sm font-medium text-text sm:truncate">
                         {follower.targetServerName}
                       </p>
                       <p className="truncate text-xs text-text-tertiary">

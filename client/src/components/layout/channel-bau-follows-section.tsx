@@ -101,7 +101,7 @@ export function ChannelBauFollowsSection({
               )}
               {follow.status === "paused" && (
                 <p className="mt-0.5 text-xs text-warning">
-                  {t("bauFollow.pausedHint")}
+                  {t(follow.pausedReason === "banned" ? "bauFollow.pausedHintBanned" : "bauFollow.pausedHint")}
                 </p>
               )}
             </div>
