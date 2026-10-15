@@ -6565,3 +6565,7 @@ CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_message
   ON bau_follow_deliveries (message_id) WHERE message_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_delivered
   ON bau_follow_deliveries (post_id) WHERE status = 'delivered';
+-- The quota (what went out in the last minute) and the retract / edit passes
+-- (delivered in the last 90 days) read the ledger by time, not by post.
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_delivered_at
+  ON bau_follow_deliveries (delivered_at) WHERE delivered_at IS NOT NULL;

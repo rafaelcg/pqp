@@ -797,8 +797,13 @@ export async function announceServiceMessage(
       preview: null,
     });
   }
+  // The message is already out: a failure in the activity leg (unread dots,
+  // push) is logged, never thrown, so the caller cannot mistake a completed
+  // broadcast for a failed one and replay it.
   await notifyChannelActivity(message.channelId, message.authorId, [], null, {
     mentionedUserIds,
+  }).catch((error: unknown) => {
+    console.error("[chat] service message activity failed:", error);
   });
 }
 

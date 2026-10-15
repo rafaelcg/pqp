@@ -80,6 +80,13 @@ export const BAU_FOLLOW_MAX_ATTEMPTS = BAU_FOLLOW_BACKOFF_MS.length + 1;
 const DEFER_FLAG_OFF_MS = 5 * 60_000;
 const DEFER_PAUSED_MS = 60 * 60_000;
 const PRUNE_AFTER_DAYS = 30;
+/**
+ * How far back the retract and edit passes look at delivered cards. Posts are
+ * edited and deleted soon after they go out; looking only at the recent ledger
+ * keeps each tick from revisiting years of history. A card older than this is
+ * left as it was when the window passed.
+ */
+const RECONCILE_DAYS = 90;
 
 export interface BauFollowTickResult {
   retracted: number;
@@ -258,6 +265,7 @@ async function retractIneligible(serverId?: string): Promise<number> {
        JOIN messages m ON m.id = d.message_id
        LEFT JOIN community_home_posts p ON p.id = d.post_id
       WHERE d.status = 'delivered' AND d.message_id IS NOT NULL
+        AND d.delivered_at > NOW() - INTERVAL '${RECONCILE_DAYS} days'
         AND (p.id IS NULL OR p.status <> 'published' OR p.visibility <> 'free')
         ${scope}
       LIMIT $1`,
@@ -351,6 +359,7 @@ async function syncEditedPosts(serverId?: string): Promise<number> {
        JOIN bau_follows f ON f.id = d.follow_id
        LEFT JOIN roles r ON r.id = f.role_ping_id
       WHERE d.status = 'delivered' AND d.message_id IS NOT NULL
+        AND d.delivered_at > NOW() - INTERVAL '${RECONCILE_DAYS} days'
         AND p.status = 'published' AND p.visibility = 'free'
         AND (d.post_updated_at IS NULL OR p.updated_at > d.post_updated_at)
         ${serverId ? "AND d.source_server_id = $2" : ""}
@@ -393,13 +402,18 @@ async function syncOne(row: SyncRow): Promise<boolean> {
     `UPDATE messages
         SET body = $2, forward = $3::jsonb, edited_at = NOW(),
             webhook_username = $4, webhook_avatar_url = $5
-      WHERE id = $1`,
+      WHERE id = $1
+        AND EXISTS (
+          SELECT 1 FROM community_home_posts p
+           WHERE p.id = $6 AND p.status = 'published' AND p.visibility = 'free'
+        )`,
     [
       row.message_id,
       body,
       JSON.stringify(snapshot),
       snapshot.sourceServerName,
       snapshot.sourceServerIconUrl ?? null,
+      row.id,
     ],
   );
   await pool.query(
@@ -745,7 +759,7 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
           )
         : 0n;
     if (!mayManageFollow(permissions)) {
-      const paused = await recordPermissionFailure(claimed.follow_id, ctx);
+      const paused = await recordPermissionFailure(claimed, ctx);
       await settle(claimed, retryPatch(claimed, "permissions"));
       return paused ? "paused" : "failed";
     }
@@ -778,6 +792,10 @@ async function deliverOne(claimed: Claimed): Promise<Outcome> {
       (ctx.role_mentionable === true ||
         hasPermission(permissions, Permission.MENTION_EVERYONE));
     const committed = await commitDelivery(claimed, ctx, snapshot, pingable);
+    if (committed === "ineligible") {
+      await settle(claimed, { status: "retracted" });
+      return "skipped";
+    }
     if (!committed) {
       return "skipped";
     }
@@ -818,7 +836,9 @@ async function commitDelivery(
   ctx: DeliveryContext,
   snapshot: BauPostSnapshot,
   ping: boolean,
-): Promise<{ messageId: string; fresh: boolean; mentionedUserIds: string[] } | null> {
+): Promise<
+  { messageId: string; fresh: boolean; mentionedUserIds: string[] } | "ineligible" | null
+> {
   const authorId = await bauFollowAuthorFor(ctx.source_id, ctx.source_name);
   const client = await getPool().connect();
   try {
@@ -832,6 +852,21 @@ async function commitDelivery(
     if (guard.rows.length === 0) {
       await client.query("ROLLBACK");
       return null;
+    }
+    // The post, locked for the length of this transaction and checked AGAIN:
+    // the context was read a moment ago, and a post made members-only or
+    // unpublished since then must not be announced from that stale read. An
+    // edit that wants to change it now waits for this commit, and the retract
+    // pass then takes the card back.
+    const still = await client.query(
+      `SELECT 1 FROM community_home_posts
+        WHERE id = $1 AND status = 'published' AND visibility = 'free'
+        FOR SHARE`,
+      [claimed.post_id],
+    );
+    if (still.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return "ineligible";
     }
     const nonce = `bau-follow:${claimed.post_id}`;
     const body = composeBody(snapshot, ping ? ctx.role_name : null);
@@ -916,15 +951,24 @@ async function commitDelivery(
 
 /** Count a permission failure; at the limit, pause the follow and tell the destination's staff. Returns whether it paused. */
 async function recordPermissionFailure(
-  followId: string,
+  claimed: Claimed,
   ctx: DeliveryContext,
 ): Promise<boolean> {
+  const followId = claimed.follow_id;
   const pool = getPool();
+  // Only while this delivery's claim is still ours: a worker that lost its lease
+  // (a slow check) must not move the shared counter, or pause the follow, on a
+  // verdict a newer worker has already overtaken.
   const counted = await pool.query<{ permission_failures: number }>(
     `UPDATE bau_follows SET permission_failures = permission_failures + 1
       WHERE id = $1 AND paused_at IS NULL
+        AND EXISTS (
+          SELECT 1 FROM bau_follow_deliveries d
+           WHERE d.post_id = $2 AND d.follow_id = $1 AND d.claim_id = $3
+             AND d.status = 'delivering'
+        )
       RETURNING permission_failures`,
-    [followId],
+    [followId, claimed.post_id, claimed.claim_id],
   );
   const failures = counted.rows[0]?.permission_failures ?? 0;
   if (failures < BAU_FOLLOW_PAUSE_AFTER_FAILURES) {
