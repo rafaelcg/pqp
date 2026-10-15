@@ -44,8 +44,8 @@ export interface BauShareButtonProps {
   publicUrl: string;
   /** The post's title, or a line of its body: the words that travel with the link. */
   title: string;
-  /** Where the button sits, for the analytics line. */
-  surface: "card" | "page";
+  /** Where the button sits, for the analytics line. `forward` is a forwarded card in chat. */
+  surface: "card" | "page" | "forward";
   className?: string;
 }
 
@@ -55,7 +55,7 @@ const ShareTrigger = forwardRef<
     className?: string;
     copied: boolean;
     label: string;
-    surface: "card" | "page";
+    surface: "card" | "page" | "forward";
   } & React.ButtonHTMLAttributes<HTMLButtonElement>
 >(function ShareTrigger({ className, copied, label, surface, ...rest }, ref) {
   const Icon = copied ? Check : Share2;
@@ -68,7 +68,11 @@ const ShareTrigger = forwardRef<
         "inline-flex items-center gap-1.5 transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
         surface === "page"
           ? "h-12 rounded-full border border-ink-4 px-5 text-sm font-medium text-paper hover:border-signal/50"
-          : // The footer stays as compact as the like button beside it, but the
+          : surface === "forward"
+            ? // In a chat card the colours are the app's own, not the Baú's dark
+              // paper: the same compact size, the same 44px tap area.
+              "relative rounded-md px-2 py-1 text-xs text-text-tertiary hover:bg-surface-3 hover:text-text after:absolute after:-inset-x-1 after:-inset-y-2.5 after:content-['']"
+            : // The footer stays as compact as the like button beside it, but the
             // tap area is 44px tall (the pseudo-element reaches 10px past the
             // button above and below, and 4px to each side): a thumb target
             // the design guideline asks for, without a taller card.

@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import {
   FORWARD_MAX_TARGETS,
   forwardBodyComment,
+  parseBauPublicPostPath,
   type MessageForward,
 } from "@pqp/shared";
 import { fetchForwardConfig } from "@/lib/api";
@@ -177,6 +178,29 @@ export function forwardUrlTarget(
     // fall through
   }
   return null;
+}
+
+/**
+ * The link a card's Compartilhar button hands out, or null for no button.
+ *
+ * Only a free Baú post that HAD a public page when the card was made: the
+ * snapshot's `url` is that page (`/c/<slug>/p/<id>`, from `getBauPublicUrl`)
+ * and only then, so a url that parses as one is exactly the proof, and the
+ * client builds no address of its own (an in-app `/app/...` link is a dead end
+ * for anyone outside the source). A restricted card, a forwarded chat message
+ * and a post with no page get nothing. The snapshot does not follow its source,
+ * so a page taken down since reads as the page's own 404 for whoever opens the
+ * shared link, the same as any old link to it.
+ */
+export function forwardShareUrl(forward: MessageForward): string | null {
+  if (forward.kind !== "bau_post" || forward.restricted) {
+    return null;
+  }
+  try {
+    return parseBauPublicPostPath(new URL(forward.url).pathname) ? forward.url : null;
+  } catch {
+    return null;
+  }
 }
 
 // ------------------------------------------------------- recent targets
