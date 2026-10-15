@@ -332,7 +332,8 @@ export async function getPublicBauPostCoverTarget(
  * the one predicate (`bauPublicUrlFor`) about the post as it is NOW, so a
  * delivery made while the flag is on links the page and one made after a post
  * went members-only, was unpublished or deleted does not. Null for every
- * reason there is not to link, and never throws on a missing post.
+ * reason there is not to link, a failed query included (logged): it never
+ * throws, so the caller's fallback is always reachable.
  *
  * A caller that already holds the post row should call `bauPublicUrlFor`
  * directly and skip the query.
@@ -346,27 +347,37 @@ export async function getBauPublicUrl(
   if (!uuid.test(serverId) || !uuid.test(postId)) {
     return null;
   }
-  const { rows } = await getPool().query<
-    Pick<
-      PostRow,
-      | "id"
-      | "server_id"
-      | "status"
-      | "visibility"
-      | "is_community"
-      | "is_community_suspended"
-      | "community_slug"
-      | "community_home_enabled"
-    >
-  >(
-    `SELECT p.id, p.server_id, p.status, p.visibility,
-            s.is_community, s.is_community_suspended, s.community_slug,
-            s.community_home_enabled
-       FROM community_home_posts p
-       JOIN servers s ON s.id = p.server_id
-      WHERE p.id = $1 AND p.server_id = $2`,
-    [postId, serverId],
-  );
-  const row = rows[0];
-  return row ? bauPublicUrlFor(row) : null;
+  try {
+    const { rows } = await getPool().query<
+      Pick<
+        PostRow,
+        | "id"
+        | "server_id"
+        | "status"
+        | "visibility"
+        | "is_community"
+        | "is_community_suspended"
+        | "community_slug"
+        | "community_home_enabled"
+      >
+    >(
+      `SELECT p.id, p.server_id, p.status, p.visibility,
+              s.is_community, s.is_community_suspended, s.community_slug,
+              s.community_home_enabled
+         FROM community_home_posts p
+         JOIN servers s ON s.id = p.server_id
+        WHERE p.id = $1 AND p.server_id = $2`,
+      [postId, serverId],
+    );
+    const row = rows[0];
+    return row ? bauPublicUrlFor(row) : null;
+  } catch (error) {
+    // A transient database failure is "no page" to the caller, who then links
+    // the in-app permalink: a delivery must never fail over a nicety.
+    console.error(
+      "[bau-public] could not resolve the public url:",
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
 }

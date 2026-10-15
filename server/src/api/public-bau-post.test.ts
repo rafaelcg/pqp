@@ -757,6 +757,20 @@ describeDb("public Baú post", () => {
       expect(await getBauPublicUrl(serverId, id)).toBeNull();
     });
 
+    it("a failed query is null, not a throw, so the caller can fall back to the in-app link", async () => {
+      const id = await seed();
+      const pool = getPool();
+      const spy = vi.spyOn(pool, "query").mockRejectedValueOnce(new Error("connection reset"));
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        await expect(getBauPublicUrl(serverId, id)).resolves.toBeNull();
+      } finally {
+        spy.mockRestore();
+        quiet.mockRestore();
+      }
+      expect(await getBauPublicUrl(serverId, id)).toBe(`https://pqp.gg/c/${SLUG}/p/${id}`);
+    });
+
     it("is null for a draft, a deleted post, another server's pair and non-ids, and never throws", async () => {
       const draft = await seed({ status: "draft" });
       expect(await getBauPublicUrl(serverId, draft)).toBeNull();
