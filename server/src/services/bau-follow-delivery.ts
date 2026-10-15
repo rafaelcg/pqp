@@ -340,6 +340,12 @@ interface SyncRow extends PostForSnapshot {
   source_id: string;
   source_name: string;
   source_icon_url: string | null;
+  /**
+   * A card delivered while pings existed: its body opens with the `@Role` line.
+   * Selected whether or not its post changed, and rewritten without the line
+   * (and without its mention rows), because a delivery never pings now.
+   */
+  legacy_ping: boolean;
 }
 
 /** Pages of stale cards one tick works through (SWEEP_BATCH rows each). */
@@ -373,7 +379,8 @@ async function syncEditedPosts(serverId?: string): Promise<number> {
               p.updated_at::text AS post_updated_at,
               p.id, p.server_id, p.title, p.body, p.teaser, p.media_kind,
               p.media_youtube_url, p.published_at, p.created_at,
-              s.id AS source_id, s.name AS source_name, s.icon_url AS source_icon_url
+              s.id AS source_id, s.name AS source_name, s.icon_url AS source_icon_url,
+              (m.body LIKE '@%') AS legacy_ping
          FROM bau_follow_deliveries d
          JOIN messages m ON m.id = d.message_id
          JOIN community_home_posts p ON p.id = d.post_id
@@ -382,7 +389,8 @@ async function syncEditedPosts(serverId?: string): Promise<number> {
         WHERE d.status = 'delivered' AND d.message_id IS NOT NULL
           AND d.delivered_at > NOW() - INTERVAL '${RECONCILE_DAYS} days'
           AND p.status = 'published' AND p.visibility = 'free'
-          AND (d.post_updated_at IS NULL OR p.updated_at > d.post_updated_at)
+          AND (d.post_updated_at IS NULL OR p.updated_at > d.post_updated_at
+               OR m.body LIKE '@%')
           ${scope}
         ORDER BY d.post_id, d.follow_id
         LIMIT $1`,
@@ -420,7 +428,7 @@ async function syncOne(row: SyncRow): Promise<boolean> {
     { publicUrl: await getBauPublicUrl(row.server_id, row.id) },
   );
   const hash = snapshotHash(snapshot);
-  if (hash === row.snapshot_hash) {
+  if (hash === row.snapshot_hash && !row.legacy_ping) {
     await pool.query(
       `UPDATE bau_follow_deliveries SET post_updated_at = $3::timestamptz
         WHERE post_id = $1 AND follow_id = $2`,
@@ -455,6 +463,10 @@ async function syncOne(row: SyncRow): Promise<boolean> {
   );
   if ((changed.rowCount ?? 0) === 0) {
     return false;
+  }
+  if (row.legacy_ping) {
+    // The ping this card once made no longer counts as a mention for anyone.
+    await pool.query(`DELETE FROM message_mentions WHERE message_id = $1`, [row.message_id]);
   }
   invalidateLatestMessages(row.channel_id);
   const message = await getHydratedMessage(row.message_id).catch(() => null);

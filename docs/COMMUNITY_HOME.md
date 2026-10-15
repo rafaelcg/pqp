@@ -425,7 +425,9 @@ user and never in a member list.
   inert like a forward's (`defangSnapshot`: markup to plain words, a zero-width
   space after every `@name`), so the card and its fallback body hold nothing a
   client could scan into a mention. A card delivered while pings existed loses
-  its `@Role` line the next time its post is edited.
+  its `@Role` line and its mention rows on the next sweep (found by the body that
+  opens with `@`, no edit of the post needed); a card whose text held an `@word`
+  or mention markup is made inert the next time its post is edited.
 - **Auto-pause.** Delivery re-checks the authority the follow was made under
   (`created_by` must still manage webhooks or channels in the channel). Three
   consecutive failures pause the follow (`paused_reason: permissions`), write an

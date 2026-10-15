@@ -577,18 +577,27 @@ describeDb("Seguir: following a Baú into a channel", () => {
     expect(isForwardFallbackBody(first.body, parsed)).toBe(true);
   });
 
-  it("an edit of a card that once carried a role line rewrites it without the ping line", async () => {
+  it("a card delivered while pings existed loses its role line and its mention rows, with no edit of the post", async () => {
+    const role = await createRole(destId, { name: "novidades", permissions: Permission.VIEW_CHANNEL, mentionable: true });
+    await assignRole(destId, bob.id, role.id);
     await follow(alice, destChannelId);
-    const postId = await publish();
+    await publish();
     await tick();
     const [card] = await cards(destChannelId);
-    // A card delivered while pings existed: a mention line above the fallback.
+    // The card as the old code left it: a mention line above the fallback, and
+    // the role's member recorded as mentioned.
     await getPool().query(`UPDATE messages SET body = '@novidades' || chr(10) || body WHERE id = $1`, [card!.id]);
-    await call(qgOwner, "PATCH", `${home()}/posts/${postId}`, { title: "Sessão 11, corrigida" });
+    await getPool().query(`INSERT INTO message_mentions (message_id, user_id) VALUES ($1, $2)`, [card!.id, bob.id]);
+    // Nothing about the post changed: the sweep still finds the card by its body.
     await tick();
     const row = (await cards(destChannelId))[0]!;
     expect(row.body.startsWith("Encaminhado: ")).toBe(true);
+    expect(row.edited_at).not.toBeNull();
     expect((await getPool().query(`SELECT 1 FROM message_mentions`)).rowCount).toBe(0);
+    // And once fixed it is left alone.
+    const before = row.edited_at!.getTime();
+    await tick();
+    expect((await cards(destChannelId))[0]!.edited_at!.getTime()).toBe(before);
   });
 
   // ----------------------------------------------- edits, deletes, retraction
