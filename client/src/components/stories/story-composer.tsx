@@ -29,7 +29,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
-  STORY_BACKGROUNDS,
+  STORY_BACKGROUND_FAMILIES,
   STORY_CAPTION_MAX,
   STORY_LAYER_IMAGE_SHAPES,
   STORY_LAYER_IMAGES_MAX,
@@ -38,6 +38,9 @@ import {
   type StoriesConfig,
   type StoryAudienceOptions,
   type StoryBackground,
+  type StoryBackgroundFamily,
+  storyBackgroundFamily,
+  storyBackgroundsOf,
 } from "@pqp/shared";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -1271,7 +1274,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               className={cn(
                 "absolute inset-x-0 z-10 flex justify-center gap-1.5",
                 // In the text card the background picker holds the foot row.
-                barAtFoot ? (mode === "text" ? "bottom-[60px]" : "bottom-3") : "top-3",
+                barAtFoot ? (mode === "text" ? "bottom-[108px]" : "bottom-3") : "top-3",
               )}
             >
               {selected.type === "text" && (
@@ -1553,6 +1556,16 @@ function DiscardDialog({ onKeep, onDiscard }: { onKeep: () => void; onDiscard: (
   );
 }
 
+const BACKGROUND_FAMILY_KEY: Record<StoryBackgroundFamily, MessageKey> = {
+  glow: "stories.compose.backgroundGlow",
+  solid: "stories.compose.backgroundSolid",
+  gradient: "stories.compose.backgroundGradient",
+};
+
+/**
+ * The text card's backgrounds, one family at a time: a row of swatches under a small switch. The
+ * switch only changes which row is shown; the chosen key is the author's until they pick another.
+ */
 function BackgroundPicker({
   value,
   onChange,
@@ -1561,34 +1574,50 @@ function BackgroundPicker({
   onChange: (next: StoryBackground) => void;
 }) {
   const { t } = useTranslation();
+  const [family, setFamily] = useState<StoryBackgroundFamily>(() => storyBackgroundFamily(value));
   return (
-    <div
-      role="radiogroup"
-      aria-label={t("stories.compose.background")}
-      className="absolute inset-x-0 bottom-3 z-10 flex justify-center gap-2.5 px-3"
-    >
-      {STORY_BACKGROUNDS.map((key, index) => (
-        <button
-          key={key}
-          type="button"
-          role="radio"
-          aria-checked={value === key}
-          aria-label={t("stories.compose.backgroundOption", { n: index + 1 })}
-          data-story-bg={key}
-          onClick={() => onChange(key)}
-          className={cn(
-            "story-text-card h-8 w-8 rounded-full transition-transform duration-[var(--duration-fast)] motion-reduce:transition-none",
-            value === key ? "scale-110" : "hover:scale-105",
-          )}
-          style={{
-            boxShadow:
-              value === key
-                ? "0 0 0 2px var(--story-card), 0 0 0 4px var(--story-on-media)"
-                : "0 0 0 1.5px var(--story-field-edge)",
-          }}
-          data-bg={key}
-        />
-      ))}
+    <div className="absolute inset-x-0 bottom-3 z-10 flex flex-col items-center gap-2.5 px-3" data-story-bg-picker="">
+      <div role="group" aria-label={t("stories.compose.backgroundFamily")} className="flex gap-1.5">
+        {STORY_BACKGROUND_FAMILIES.map((key) => (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={family === key}
+            data-story-bg-family={key}
+            onClick={() => setFamily(key)}
+            className={cn(
+              "h-7 rounded-full px-3 text-xs font-semibold transition-colors duration-[var(--duration-fast)] motion-reduce:transition-none",
+              family === key ? "bg-[var(--story-on-media)] text-[var(--story-on-accent)]" : "bg-[var(--story-field-fill)] text-[var(--story-on-media-2)] hover:text-[var(--story-on-media)]",
+            )}
+          >
+            {t(BACKGROUND_FAMILY_KEY[key])}
+          </button>
+        ))}
+      </div>
+      <div role="radiogroup" aria-label={t("stories.compose.background")} className="flex justify-center gap-2.5">
+        {storyBackgroundsOf(family).map((key, index) => (
+          <button
+            key={key}
+            type="button"
+            role="radio"
+            aria-checked={value === key}
+            aria-label={`${t(BACKGROUND_FAMILY_KEY[family])} ${t("stories.compose.backgroundOption", { n: index + 1 })}`}
+            data-story-bg={key}
+            onClick={() => onChange(key)}
+            className={cn(
+              "story-text-card h-8 w-8 rounded-full transition-transform duration-[var(--duration-fast)] motion-reduce:transition-none",
+              value === key ? "scale-110" : "hover:scale-105",
+            )}
+            style={{
+              boxShadow:
+                value === key
+                  ? "0 0 0 2px var(--story-card), 0 0 0 4px var(--story-on-media)"
+                  : "0 0 0 1.5px var(--story-field-edge)",
+            }}
+            data-bg={key}
+          />
+        ))}
+      </div>
     </div>
   );
 }

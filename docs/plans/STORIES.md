@@ -1129,6 +1129,19 @@ bigger than `Math.PI`).
 `caption`, `text`, `background` and `sticker` keep working. `altText` (at most
 500) is the spoken version: clients write the text layers into it.
 
+**Text card background families (web, 2026-10-15).** `background` is still one
+palette key, now from three families: glow (`STORY_BACKGROUNDS`, the original six,
+what the phones ship), solid (`STORY_BACKGROUNDS_SOLID`: cobalt, crimson, pine,
+plum, teal, onyx) and gradient (`STORY_BACKGROUNDS_GRADIENT`: sunset, ocean,
+aurora, dusk, berry, lagoon). The new keys are additive: `storyBackgroundSchema`
+accepts all three, the column has no CHECK, and `STORY_BACKGROUNDS` itself did not
+change (Android pins it). A build that does not know a key draws its default dark
+card, so nothing fails to parse. Every key keeps 4.5:1 with white text (the lighter
+stop, for a gradient). The CSS source of truth is the `--story-bg-*` tokens and
+`.story-text-card[data-bg]` rules in `client/src/index.css`; a phone that wants the
+new keys adds them to its own table (solid is one flat colour, gradient is a
+160 degree two-stop linear gradient, stops in the CSS) and offers them in its picker.
+
 ### 17.2 One schema, read leniently and written strictly
 
 `createStorySchema` is strict. A bad layer (unknown `type`, a number out of
