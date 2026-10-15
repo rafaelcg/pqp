@@ -32,6 +32,9 @@ struct CommunityHomeView: View {
     /// API stores only an id; a channel that is not in this list gets no name.
     @State private var channels: [Channel] = []
     @State private var openedChannel: Channel?
+    /// Encaminhar: the flag, and the post whose picker is up.
+    @State private var forwardsEnabled = false
+    @State private var forwardSource: ForwardSource?
 
     var body: some View {
         ZStack {
@@ -70,7 +73,9 @@ struct CommunityHomeView: View {
                                 onToggleLike: { Task { await toggleLike(post) } },
                                 onLoadAll: { Task { await loadAllComments(post) } },
                                 onCollapse: { expanded.removeValue(forKey: post.id) },
-                                onComment: { body in await addComment(post, body: body) }
+                                onComment: { body in await addComment(post, body: body) },
+                                onForward: forwardsEnabled
+                                    ? { forwardSource = ForwardSource.bauPost(post) } : nil
                             )
                             .overlay {
                                 if highlightedPostId == post.id {
@@ -130,6 +135,8 @@ struct CommunityHomeView: View {
             BauPlayback.shared.stopAllUnlessFullScreen()
         }
         .communityHomeComposer(server: server, config: config, channels: channels) { Task { await load() } }
+        .forwardSheet($forwardSource)
+        .task { forwardsEnabled = await session.api.forwardConfig().enabled }
         .navigationDestination(item: $openedChannel) { channel in
             chatDestination?(channel) ?? AnyView(EmptyView())
         }
@@ -233,6 +240,8 @@ private struct PostCard: View {
     let onLoadAll: () -> Void
     let onCollapse: () -> Void
     let onComment: (String) async -> Bool
+    /// Encaminhar: nil while the flag is off, which is what hides the menu.
+    var onForward: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -311,7 +320,28 @@ private struct PostCard: View {
                     .foregroundStyle(Palette.paperMuted)
             }
             Spacer(minLength: 0)
+            if let onForward {
+                postMenu(onForward)
+            }
         }
+    }
+
+    /// The post's menu: Encaminhar today, the one place more actions would go.
+    private func postMenu(_ onForward: @escaping () -> Void) -> some View {
+        Menu {
+            Button(action: onForward) {
+                Label("Forward", systemImage: "arrowshape.turn.up.right")
+            }
+            .accessibilityIdentifier("bau.post.forward")
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Palette.paperMuted)
+                .frame(width: 44, height: 36)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(Text("More"))
+        .accessibilityIdentifier("bau.post.menu")
     }
 
     private var actions: some View {

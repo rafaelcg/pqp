@@ -32,6 +32,10 @@ enum PermissionBit {
     /// `Permission.MANAGE_MESSAGES` = `1n << 8n`.
     static let manageMessages: UInt64 = 1 << 8
 
+    /// `Permission.SEND_MESSAGES` = `1n << 7n`: what the forward picker asks
+    /// of each channel before offering it (the server asks again per target).
+    static let sendMessages: UInt64 = 1 << 7
+
     /// `Permission.START_WATCH_PARTY` = `1n << 23n` in
     /// `packages/shared/src/permissions.ts`: start the stream in a
     /// `watch_party` channel. Everyone else there is the audience.

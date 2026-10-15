@@ -187,7 +187,7 @@ enum BauShare {
 
     /// `scheme://host[:port]`, lowercased, default ports dropped: what
     /// `URL.origin` is in a browser.
-    private static func origin(of components: URLComponents) -> String? {
+    static func origin(of components: URLComponents) -> String? {
         guard let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = components.host?.lowercased(), !host.isEmpty
         else { return nil }

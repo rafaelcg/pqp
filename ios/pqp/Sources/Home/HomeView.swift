@@ -51,6 +51,9 @@ struct HomeView: View {
         /// Set when the link was a forum or one of its posts: the channel
         /// list pushes the forum, and the forum the post.
         var forum: ForumFocus? = nil
+        /// Set when the link was a message (a forwarded card): the channel
+        /// opens scrolled to it.
+        var jumpToMessageId: String? = nil
     }
 
     /// Conversas on a phone: which tab is up. Seeded by the landing rule once
@@ -194,7 +197,8 @@ struct HomeView: View {
             initialChannel: restored.channel,
             opensBau: restored.opensBau,
             initialBau: restored.bau,
-            initialForum: restored.forum
+            initialForum: restored.forum,
+            initialMessageId: restored.jumpToMessageId
         )
     }
 
@@ -222,6 +226,21 @@ struct HomeView: View {
     private func follow(_ request: DeepLinkTarget) async {
         defer { session.navigationHandled() }
 
+        // A place asked for while a place this stack opened is still up (a
+        // forwarded card tapped inside a channel a link brought us to). A
+        // `navigationDestination(item:)` only pushes on nil to a value, so
+        // swapping one value for another changes nothing on screen: go back to
+        // the hub first, then push. Nothing here is a place for an invite or a
+        // conversation.
+        switch request {
+        case .invite, .conversation: break
+        default:
+            if restoredChannel != nil {
+                restoredChannel = nil
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+
         switch request {
         case .invite:
             // Unreachable by construction; ignored rather than guessed at.
@@ -241,32 +260,11 @@ struct HomeView: View {
             openedConversation = conversation
 
         case .channel(let serverId, let channelId):
-            guard let server = await resolveServer(serverId),
-                  let channels = try? await session.api.channels(serverId: serverId)
-            else { return }
-            tab = .servidores
-            if let channel = channels.first(where: { $0.id == channelId }) {
-                if channel.isText {
-                    restoredChannel = RestoredChannel(server: server, channel: channel)
-                } else if channel.isForum {
-                    restoredChannel = RestoredChannel(
-                        server: server, channel: nil, forum: ForumFocus(forumId: channel.id)
-                    )
-                }
-                return
-            }
-            // Not in the list: a forum post (a push for a reply in one names
-            // the post's own channel). The post knows its forum; anything
-            // else, or a post this account cannot see, lands on the server.
-            if let detail = await forumPostOnce(channelId),
-               channels.contains(where: { $0.id == detail.post.forumId && $0.isForum }) {
-                restoredChannel = RestoredChannel(
-                    server: server, channel: nil,
-                    forum: ForumFocus(forumId: detail.post.forumId, postId: channelId)
-                )
-            } else {
-                restoredChannel = RestoredChannel(server: server, channel: nil)
-            }
+            await openChannel(serverId: serverId, channelId: channelId, messageId: nil)
+
+        case .message(let serverId, let channelId, let messageId):
+            // A forwarded message's card: the channel, scrolled to the message.
+            await openChannel(serverId: serverId, channelId: channelId, messageId: messageId)
 
         case .forumPost(let serverId, let forumId, let postId):
             guard let server = await resolveServer(serverId) else { return }
@@ -294,6 +292,38 @@ struct HomeView: View {
             guard let server = await resolveServer(serverId) else { return }
             tab = .servidores
             restoredChannel = RestoredChannel(server: server, channel: nil, bau: BauFocus(postId: postId))
+        }
+    }
+
+    /// A channel by id, optionally on one message. Not in the list: a forum
+    /// post (a push for a reply in one names the post's own channel). The post
+    /// knows its forum; anything else, or a post this account cannot see,
+    /// lands on the server.
+    private func openChannel(serverId: String, channelId: String, messageId: String?) async {
+        guard let server = await resolveServer(serverId),
+              let channels = try? await session.api.channels(serverId: serverId)
+        else { return }
+        tab = .servidores
+        if let channel = channels.first(where: { $0.id == channelId }) {
+            if channel.isText {
+                restoredChannel = RestoredChannel(
+                    server: server, channel: channel, jumpToMessageId: messageId
+                )
+            } else if channel.isForum {
+                restoredChannel = RestoredChannel(
+                    server: server, channel: nil, forum: ForumFocus(forumId: channel.id)
+                )
+            }
+            return
+        }
+        if let detail = await forumPostOnce(channelId),
+           channels.contains(where: { $0.id == detail.post.forumId && $0.isForum }) {
+            restoredChannel = RestoredChannel(
+                server: server, channel: nil,
+                forum: ForumFocus(forumId: detail.post.forumId, postId: channelId)
+            )
+        } else {
+            restoredChannel = RestoredChannel(server: server, channel: nil)
         }
     }
 

@@ -181,12 +181,32 @@
         }
       }
     },
+    "Add a comment" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escreve um comentário"
+          }
+        }
+      }
+    },
     "Add a story" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Adicionar um story"
+          }
+        }
+      }
+    },
+    "Channels" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canais"
           }
         }
       }
@@ -201,12 +221,42 @@
         }
       }
     },
+    "Couldn't load your servers." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar teus servidores."
+          }
+        }
+      }
+    },
     "Couldn't post your story" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Não deu pra postar teu story"
+          }
+        }
+      }
+    },
+    "Couldn't send right now. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra enviar agora. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Couldn't send to this person." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra mandar pra essa pessoa."
           }
         }
       }
@@ -227,6 +277,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Não postou. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Forward" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaminhar"
+          }
+        }
+      }
+    },
+    "Forwarded" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaminhado"
+          }
+        }
+      }
+    },
+    "Forwarded from %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaminhado de %@"
+          }
+        }
+      }
+    },
+    "Forwarded from %@ · #%@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaminhado de %@ · #%@"
+          }
+        }
+      }
+    },
+    "Forwarded from %@ · Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaminhado de %@ · Baú"
+          }
+        }
+      }
+    },
+    "Forwarded to %lld places" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaminhado para %lld lugares"
           }
         }
       }
@@ -641,6 +751,26 @@
         }
       }
     },
+    "Members-only content stays in this server." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conteúdo só pra membros fica neste servidor."
+          }
+        }
+      }
+    },
+    "Messages can't go here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aqui não dá pra mandar mensagem."
+          }
+        }
+      }
+    },
     "No connection" : {
       "localizations" : {
         "pt-BR" : {
@@ -657,6 +787,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sem conexão. É a lista da última vez, e o story posta quando tu voltar a ficar online."
+          }
+        }
+      }
+    },
+    "Nothing matches." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nada encontrado."
+          }
+        }
+      }
+    },
+    "Opens the original" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre o original"
           }
         }
       }
@@ -687,6 +837,136 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "(tu)"
+          }
+        }
+      }
+    },
+    "Search servers, channels and chats" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buscar servidores, canais e conversas"
+          }
+        }
+      }
+    },
+    "Send to %lld" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar para %lld"
+          }
+        }
+      }
+    },
+    "Slow mode is on here. Try again in %llds." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O modo lento tá ligado aqui. Tenta de novo em %llds."
+          }
+        }
+      }
+    },
+    "Slow mode is on here. Try again in a moment." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O modo lento tá ligado aqui. Tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "Stays in its server" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fica no próprio servidor"
+          }
+        }
+      }
+    },
+    "This can't be forwarded anymore." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isso não pode mais ser encaminhado."
+          }
+        }
+      }
+    },
+    "This can't be forwarded." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isso não pode ser encaminhado."
+          }
+        }
+      }
+    },
+    "This one stays in its own server." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse fica só no próprio servidor."
+          }
+        }
+      }
+    },
+    "This server's rules blocked it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As regras desse servidor bloquearam."
+          }
+        }
+      }
+    },
+    "Too many forwards. Try again in %llds." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muitos encaminhamentos. Tenta de novo em %llds."
+          }
+        }
+      }
+    },
+    "Too many forwards. Try again shortly." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muitos encaminhamentos. Tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "Too many messages. Try again shortly." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muitas mensagens. Tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "View" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver"
           }
         }
       }
@@ -9251,6 +9531,16 @@
         }
       }
     },
+    "You can pick up to 5." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dá pra escolher até 5."
+          }
+        }
+      }
+    },
     "You can pin up to 15 conversations. Unpin one first." : {
       "localizations" : {
         "pt-BR" : {
@@ -9291,12 +9581,32 @@
         }
       }
     },
+    "You can't see this channel." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não pode ver esse canal."
+          }
+        }
+      }
+    },
     "You can't send in this channel" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você não pode mandar mensagem neste canal"
+          }
+        }
+      }
+    },
+    "You can't send messages here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não pode mandar mensagem aqui."
           }
         }
       }
