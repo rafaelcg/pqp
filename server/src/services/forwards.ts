@@ -103,7 +103,16 @@ export async function listForwardDestinations(
       name: channel.name,
       type: channel.type as "text" | "voice" | "watch_party",
     })),
-    threads: await listForwardThreads(serverId, userId, sendable),
+    threads: await listForwardThreads(serverId, userId, sendable).catch((error) => {
+      // Threads are the optional half of this list: a failure reading them
+      // must not take the channels (which are the destinations most people
+      // want) down with it. The picker draws what it got.
+      console.error(
+        "[forwards] thread destinations failed:",
+        error instanceof Error ? error.message : error,
+      );
+      return [];
+    }),
   };
 }
 
