@@ -13090,6 +13090,7 @@ function MainAppContent({
           canManageMessages={canManageMessages}
           canManageSoundboard={canManageSoundboard && voiceConfig.soundboard === true}
           canManageEmoji={canManageEmoji}
+          canManageServer={canManageServer}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
           channelLive={voiceState.channelLive}

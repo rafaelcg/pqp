@@ -137,6 +137,12 @@ import {
   CommunityHomeStaffGuide,
 } from "./community-home-onboarding";
 import { OverviewStartHere } from "./overview-start-here";
+import {
+  BauFollowButton,
+  BauFollowDialog,
+  BauFollowersDialog,
+  useBauFollowState,
+} from "./bau-follow";
 import { CommunityHomeShareDialog } from "./community-home-share-dialog";
 import { pickAnnounceChannel, shareableChannels } from "@/lib/community-home/announce";
 
@@ -2312,6 +2318,7 @@ function StaffHomeTools({
   onDrafts,
   onInspector,
   onEditPage,
+  onFollowers,
   showCompose,
 }: {
   inspector: CommunityHomeViewerMode;
@@ -2320,6 +2327,8 @@ function StaffHomeTools({
   onDrafts: () => void;
   onInspector: (mode: CommunityHomeViewerMode) => void;
   onEditPage?: () => void;
+  /** Seguir: the follower list. Absent while the Baú is not followable. */
+  onFollowers?: () => void;
   showCompose: boolean;
 }) {
   const { t } = useTranslation();
@@ -2390,6 +2399,15 @@ function StaffHomeTools({
                   : t("communityHome.tabs.drafts"),
               onSelect: onDrafts,
             },
+            ...(onFollowers
+              ? [
+                  {
+                    id: "followers",
+                    label: t("bauFollow.followers.menu"),
+                    onSelect: onFollowers,
+                  },
+                ]
+              : []),
           ]}
         >
           <Button
@@ -2953,6 +2971,21 @@ export function CommunityHomeFeed({
     saveCommunityHomeViewerMode(mode);
   }
 
+  // Seguir: the button is drawn only while the flag is on for THIS Baú.
+  const { state: followState, refresh: refreshFollow } = useBauFollowState(
+    serverId,
+    Boolean(feedAvailable),
+  );
+  const [followOpen, setFollowOpen] = useState(false);
+  const [followersOpen, setFollowersOpen] = useState(false);
+  const followButton = (
+    <BauFollowButton state={followState} onOpen={() => setFollowOpen(true)} />
+  );
+  const openFollowers =
+    canManageServer && followState?.enabled
+      ? () => setFollowersOpen(true)
+      : undefined;
+
   const overlayOnCover = server.isCommunity && !identityEditing;
   const showPaneHeader = identityEditing || !server.isCommunity;
   const showStaffTools = canManageServer && feedAvailable;
@@ -2966,6 +2999,7 @@ export function CommunityHomeFeed({
         onDrafts={openDrafts}
         onInspector={setViewer}
         onEditPage={startIdentityEdit}
+        onFollowers={openFollowers}
         showCompose={Boolean(feedAvailable)}
       />
     ) : showStaffTools ? (
@@ -2975,6 +3009,7 @@ export function CommunityHomeFeed({
         onCompose={openCompose}
         onDrafts={openDrafts}
         onInspector={setViewer}
+        onFollowers={openFollowers}
         showCompose
       />
     ) : null;
@@ -3027,7 +3062,10 @@ export function CommunityHomeFeed({
               </Button>
             </div>
           ) : (
-            staffTools
+            <div className="flex shrink-0 items-center gap-2">
+              {followButton}
+              {staffTools}
+            </div>
           )}
         </header>
       )}
@@ -3063,7 +3101,14 @@ export function CommunityHomeFeed({
                 <HomeDrawerButton onOpenNav={onOpenNav} />
               ) : undefined
             }
-            bannerEnd={overlayOnCover ? staffTools : undefined}
+            bannerEnd={
+              overlayOnCover ? (
+                <>
+                  {followButton}
+                  {staffTools}
+                </>
+              ) : undefined
+            }
             edit={
               identityEditing
                 ? {
@@ -3390,6 +3435,22 @@ export function CommunityHomeFeed({
         />
       )}
     </div>
+      <BauFollowDialog
+        open={followOpen}
+        serverId={serverId}
+        serverName={serverName}
+        state={followState}
+        onClose={() => setFollowOpen(false)}
+        onChanged={() => void refreshFollow()}
+      />
+      {openFollowers && (
+        <BauFollowersDialog
+          open={followersOpen}
+          serverId={serverId}
+          onClose={() => setFollowersOpen(false)}
+          onChanged={() => void refreshFollow()}
+        />
+      )}
     </ChannelRefsProvider>
   );
 }

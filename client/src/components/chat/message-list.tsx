@@ -3648,7 +3648,7 @@ const MessageRow = memo(function MessageRow({
                         body={shownBody}
                         currentUsername={currentUsername}
                       />
-                      {attachments.length === 0 && (
+                      {attachments.length === 0 && !message.forward && (
                         <EditedMarker editedAt={message.editedAt} />
                       )}
                     </div>

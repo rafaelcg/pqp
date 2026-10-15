@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import {
   FORWARD_MAX_TARGETS,
-  isForwardFallbackBody,
+  forwardBodyComment,
   type MessageForward,
 } from "@pqp/shared";
 import { fetchForwardConfig } from "@/lib/api";
@@ -138,7 +138,10 @@ export function useNotInServerCount(): number {
 
 /**
  * What of `body` a forwarded message shows above its card: the forwarder's own
- * words, never the fallback line an older client reads.
+ * words, never the fallback line an older client reads. A followed Baú's
+ * delivery that pings a role writes `@Role` on its own line above the fallback;
+ * that mention line is what shows (`forwardBodyComment`), so the ping reads as
+ * a normal role mention over the card.
  */
 export function forwardCommentOf(message: {
   body: string;
@@ -147,7 +150,7 @@ export function forwardCommentOf(message: {
   if (!message.forward) {
     return message.body;
   }
-  return isForwardFallbackBody(message.body, message.forward) ? "" : message.body;
+  return forwardBodyComment(message.body, message.forward);
 }
 
 /**
