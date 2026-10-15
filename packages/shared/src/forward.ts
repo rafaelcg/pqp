@@ -257,6 +257,27 @@ export const forwardConfigSchema = z.object({
 });
 export type ForwardConfig = z.infer<typeof forwardConfigSchema>;
 
+/**
+ * `GET /api/servers/:serverId/forward-destinations`: the channels of one
+ * server the caller may post a forward into, in channel order, in ONE request
+ * (the destination picker used to ask for the channel list and the permission
+ * snapshot separately, two requests per server). A channel is listed when the
+ * caller can see it, it holds messages (text, a voice channel's chat, a watch
+ * party's chat) and they hold SEND_MESSAGES on it, which is the same check the
+ * send makes. Slow mode, AutoMod and the like are still decided per send.
+ */
+export const forwardDestinationChannelSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  type: z.enum(["text", "voice", "watch_party"]),
+});
+export type ForwardDestinationChannel = z.infer<typeof forwardDestinationChannelSchema>;
+
+export const forwardDestinationsSchema = z.object({
+  channels: z.array(forwardDestinationChannelSchema),
+});
+export type ForwardDestinations = z.infer<typeof forwardDestinationsSchema>;
+
 // -------------------------------------------------------------------- helpers
 
 /** Prefix of the body the server writes when the forwarder adds no comment. */

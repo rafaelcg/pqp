@@ -77,6 +77,7 @@ const {
   isForwardFallbackBody,
   extractMentions,
   FORWARD_EXCERPT_MAX,
+  forwardDestinationsSchema,
 } = await import("@pqp/shared");
 const { forwardExcerpt, dedupeForwardTargets, isStableYoutubePoster, defangMentionText } = await import(
   "../services/forwards.js"
@@ -638,6 +639,52 @@ describeDb("POST /api/forwards", () => {
     expect(await messageCount(privateId)).toBe(0);
     expect(await messageCount(noSend.id)).toBe(0);
     expect(await messageCount(generalId)).toBe(1);
+  });
+
+  it("forward-destinations lists exactly the channels a forward would be accepted into, in one request", async () => {
+    const noSend = await createChannel(serverId, "so-leitura", "text");
+    const role = await createRole(serverId, { name: "Leitor", permissions: Permission.VIEW_CHANNEL });
+    await assignRole(serverId, member.id, role.id);
+    await upsertChannelOverwrite(noSend.id, serverId, "role", role.id, 0n, Permission.SEND_MESSAGES);
+    await createChannel(serverId, "Categoria", "category");
+    const voice = await createChannel(serverId, "Sala", "voice");
+
+    const res = await call<{ channels: { id: string; name: string; type: string }[] }>(
+      member,
+      "GET",
+      `/api/servers/${serverId}/forward-destinations`,
+    );
+    expect(res.status).toBe(200);
+    const parsed = forwardDestinationsSchema.parse(res.body);
+    const ids = parsed.channels.map((channel) => channel.id);
+    // Visible and speakable: the general channel and the voice room's chat.
+    expect(ids).toContain(generalId);
+    expect(ids).toContain(voice.id);
+    // Not: a private channel the member cannot see, a read-only channel, a category.
+    expect(ids).not.toContain(privateId);
+    expect(ids).not.toContain(noSend.id);
+    expect(parsed.channels.every((channel) => ["text", "voice", "watch_party"].includes(channel.type))).toBe(
+      true,
+    );
+    // Every listed channel is one a forward is accepted into.
+    const postId = await publish();
+    const sent = await forward(
+      member,
+      postSource(postId),
+      parsed.channels.slice(0, 5).map((channel) => ({ channelId: channel.id })),
+    );
+    expect(sent.body.results.every((result) => result.ok)).toBe(true);
+
+    // A stranger is refused the way every server read refuses a non-member.
+    const outsider = await call(stranger, "GET", `/api/servers/${serverId}/forward-destinations`);
+    expect(outsider.status).toBe(404);
+    // The owner sees the private channel too.
+    const mine = await call<{ channels: { id: string }[] }>(
+      owner,
+      "GET",
+      `/api/servers/${serverId}/forward-destinations`,
+    );
+    expect(mine.body.channels.map((channel) => channel.id)).toContain(privateId);
   });
 
   it("slow mode applies as on a normal send: the second forward is refused with a retry time", async () => {
