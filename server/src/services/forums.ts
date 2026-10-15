@@ -24,6 +24,7 @@ import {
   type ListForumPostsQuery,
   type PutForumTagsRequest,
   type UpdateForumSettingsRequest,
+  type WebhookEmbed,
   stripMarkdownForPreview,
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
@@ -145,6 +146,7 @@ interface SummaryRow {
   resolved_message_id: string | null;
   om_id: string | null;
   om_body: string | null;
+  om_embeds: unknown;
   webhook_username: string | null;
   webhook_avatar_url: string | null;
   author_display_name: string | null;
@@ -168,7 +170,7 @@ const SUMMARY_SQL = `
   SELECT p.channel_id, p.forum_id, c.name AS title, p.author_id,
          p.created_at, p.last_activity_at, p.pinned_at, p.locked_at,
          p.resolved_at, p.resolved_message_id,
-         om.id AS om_id, om.body AS om_body,
+         om.id AS om_id, om.body AS om_body, om.webhook_embeds AS om_embeds,
          om.webhook_username, om.webhook_avatar_url,
          COALESCE(NULLIF(sm.nickname, ''), u.display_name) AS author_display_name,
          u.avatar_url AS author_avatar_url,
@@ -223,6 +225,43 @@ function flatten(body: string | null, max: number): string | null {
   return points.length > max ? points.slice(0, max).join("") : flat;
 }
 
+/**
+ * What a feed post says when its opening message has no text of its own: a
+ * monitoring alert or an RSS item often arrives as an embed and nothing else
+ * (`content` empty), and the card used to draw no preview line at all. The
+ * words come from the first embed that has any: its title, then the
+ * description, then each field as "name: value". A title that only repeats
+ * the post's own title is skipped, so the line never says the heading twice.
+ */
+export function embedPreviewText(embeds: unknown, postTitle: string): string {
+  if (!Array.isArray(embeds)) {
+    return "";
+  }
+  for (const raw of embeds) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const embed = raw as Partial<WebhookEmbed>;
+    const parts: string[] = [];
+    const title = typeof embed.title === "string" ? embed.title.trim() : "";
+    if (title && title !== postTitle.trim()) {
+      parts.push(title);
+    }
+    if (typeof embed.description === "string" && embed.description.trim()) {
+      parts.push(embed.description.trim());
+    }
+    for (const field of Array.isArray(embed.fields) ? embed.fields : []) {
+      if (field && typeof field.name === "string" && typeof field.value === "string") {
+        parts.push(`${field.name.trim()}: ${field.value.trim()}`);
+      }
+    }
+    if (parts.length > 0) {
+      return parts.join(" · ");
+    }
+  }
+  return "";
+}
+
 function toSummary(row: SummaryRow): Omit<
   ForumPostSummary,
   | "thumbnailUrl"
@@ -232,7 +271,10 @@ function toSummary(row: SummaryRow): Omit<
   | "thumbnailVideoUrl"
 > {
   const openingDeleted = row.om_id === null;
-  const preview = openingDeleted ? null : flatten(row.om_body, FORUM_PREVIEW_MAX);
+  const preview = openingDeleted
+    ? null
+    : (flatten(row.om_body, FORUM_PREVIEW_MAX) ??
+      flatten(embedPreviewText(row.om_embeds, row.title), FORUM_PREVIEW_MAX));
   const openingKind = openingDeleted
     ? null
     : row.opening_is_voice
