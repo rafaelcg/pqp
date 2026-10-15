@@ -41,6 +41,12 @@ import gg.pqp.app.R
 import gg.pqp.app.bau.CommunityHomeConfigs
 import gg.pqp.app.bau.ui.BauScreen
 import gg.pqp.app.ui.chat.BauPostTarget
+import gg.pqp.app.bau.BauPostRef
+import gg.pqp.app.forward.ForwardOpen
+import gg.pqp.app.forward.ForwardSent
+import gg.pqp.app.forward.ui.ForwardHost
+import gg.pqp.app.forward.ui.LocalOpenForward
+import gg.pqp.app.forward.ui.rememberOpenForward
 import gg.pqp.app.ui.chat.LocalOpenBauPost
 import gg.pqp.app.core.Permission
 import gg.pqp.app.core.PermissionsSnapshot
@@ -147,6 +153,12 @@ import kotlinx.serialization.Serializable
      * room gets (which draws nothing at all while no party is running).
      */
     val isWatchParty: Boolean = false,
+    /**
+     * A message to land on (a forward card's jump link): the chat loads the
+     * page around it, scrolls to it and marks it for a moment. Null opens the
+     * newest message like any other chat.
+     */
+    val focusMessageId: String? = null,
 )
 
 @Serializable object YouRoute
@@ -301,6 +313,48 @@ private fun SignedInNav(
     }
     val voiceState by voice.state.collectAsStateWithLifecycle()
     val callState by calls.state.collectAsStateWithLifecycle()
+
+    // Encaminhar. A tap on a forward card opens a Baú post or a message on this
+    // instance inside the app (anything else goes to a Custom Tab, see
+    // `rememberOpenForward`), and the "Ver" on the "Encaminhado" line opens the
+    // first place that took it.
+    val forwardScope = androidx.compose.runtime.rememberCoroutineScope()
+    val openForward = rememberOpenForward { target ->
+        when (target) {
+            is ForwardOpen.BauPost -> openBauPost(
+                BauPostTarget(BauPostRef(target.serverId, target.postId)),
+            )
+            is ForwardOpen.Message -> forwardScope.launch {
+                val channel = runCatching { session.api.channels(target.serverId) }
+                    .getOrNull()?.firstOrNull { it.id == target.channelId }
+                nav.navigate(
+                    ChatRoute(
+                        target.channelId,
+                        channel?.name.orEmpty(),
+                        channel?.slowmodeSeconds ?: 0,
+                        serverId = target.serverId,
+                        isVoiceChannel = channel?.isVoice == true,
+                        isWatchParty = channel?.type == "watch_party",
+                        focusMessageId = target.messageId,
+                    ),
+                )
+            }
+            is ForwardOpen.External -> Unit
+        }
+    }
+    val viewForwarded: (ForwardSent) -> Unit = { sent ->
+        if (sent.isConversation) {
+            nav.navigate(ConversationRoute(sent.channelId, sent.label))
+        } else {
+            nav.navigate(
+                ChatRoute(
+                    sent.channelId,
+                    sent.label.removePrefix("#"),
+                    serverId = sent.serverId,
+                ),
+            )
+        }
+    }
 
     // Asked for on the tap that starts a call, never before. The gate lives
     // here rather than in the conversation screen so that answering a ring and
@@ -480,7 +534,11 @@ private fun SignedInNav(
             // Compose's are the platform's, they cooperate with the predictive
             // back gesture the manifest opts into, and a bespoke slide would
             // break that cooperation.
-            CompositionLocalProvider(LocalOpenBauPost provides openBauPost) {
+            CompositionLocalProvider(
+                LocalOpenBauPost provides openBauPost,
+                LocalOpenForward provides openForward,
+            ) {
+            ForwardHost(session = session, onView = viewForwarded) {
             NavHost(navController = nav, startDestination = ServersRoute) {
                 composable<ServersRoute> {
                     // The start destination is the three-tab home (servers,
@@ -710,6 +768,7 @@ private fun SignedInNav(
                         slowmodeSeconds = route.slowmodeSeconds,
                         onBack = nav::popBackStack,
                         serverId = route.serverId,
+                        focusMessageId = route.focusMessageId,
                         onMessageAuthor = if (conversasConfig.home && route.serverId != null) {
                             { authorId ->
                                 messageScope.launch {
@@ -858,6 +917,7 @@ private fun SignedInNav(
                         onBack = { nav.popBackStack() },
                     )
                 }
+            }
             }
             }
 

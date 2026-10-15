@@ -2512,6 +2512,16 @@ does with it.
 
 Rules are pure and tested in `StoriesTest` (`stories/StoriesRules.kt`).
 
+## Encaminhar (forward)
+
+Contract: `packages/shared/src/forward.ts`, rules in `docs/FORWARD.md`. Code: `app/src/main/kotlin/gg/pqp/app/forward`.
+
+- **The card.** `Message.forward` is read with `LenientForwardSerializer`: a version or kind this build does not know, a missing required key or a wrong type is `null` and the message shows its `body`, never a failed page. `ForwardCard` draws it inside `MessageRow`, so channels, DMs, threads, forum posts and the pins sheet all get it. The server's fallback body (`Encaminhado: <title> <url>`) is hidden when it equals `forwardFallbackBody(forward)`, a byte-for-byte port of the shared helper (pinned in `ForwardModelsTest`); a comment that merely starts with the word stays.
+- **Tap.** `ForwardLinks.resolve`: a Baú post or message jump link on this instance (`Backend.appUrl` or `pqp.gg`) opens in the app (`BauRoute` with the post focused, `ChatRoute.focusMessageId`); any other URL or path goes to a Custom Tab, `http(s)` only. The jump loads `GET /channels/:id/messages?around=<id>`, scrolls, flashes the row, and while newer messages are unloaded (`hasNewer`) live messages are held back and "Ir pras mais recentes" returns to the end. A message that is gone falls back to the newest page.
+- **The action.** "Encaminhar" is on a server-channel message's long press (never a DM, nudge, blocked author, or a voice note alone: the server answers 422 for those) and on a Baú post's menu. It shows only while `GET /api/forwards/config` says enabled (`ForwardConfigs`, kept 60 s, off on any failure; cards in history keep drawing with the flag off).
+- **The picker.** One `ForwardSheet` owned by `ForwardHost` in `PqpApp`. Text channels you hold SEND_MESSAGES in (`GET /servers/:id/permissions`), DMs and groups, and friends with no DM yet; recent first (device-local), search ignores case and accents, up to five. A members-only post or a forward of a restricted card offers only its own server. It stays open on a per-target refusal with the reason on that row; a lost connection retries with the same nonce.
+- **Local QA.** Run the API from the server PR with `FORWARD_MESSAGES=true COMMUNITY_HOME_ENABLED=true`, build with `-Ppqp.appUrl=http://localhost:5173` (the origin the server writes into `url` when a phone sends no `Origin`), and use `pqp.devUser` for a second account.
+
 ## Attachments
 
 Sending a file is built and verified end to end. Receiving already worked: the

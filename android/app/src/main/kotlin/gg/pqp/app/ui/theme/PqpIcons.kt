@@ -362,6 +362,11 @@ private object Lucide {
         "M9 17 4 12 9 7",
         "M20 18v-2a4 4 0 0 0-4-4H4",
     )
+    // Encaminhar. Lucide's `forward`: the curved arrow, which is not the chevron.
+    val forward by lucide(
+        "m15 17 5-5-5-5",
+        "M4 18v-2a4 4 0 0 1 4-4h12",
+    )
     val screenShareOff by lucide(
         "M13 3H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-3",
         "M8 21h8",
@@ -587,6 +592,9 @@ object PqpIcons {
     val Close get() = Lucide.x
     val More get() = Lucide.ellipsisVertical
     val Forward get() = Lucide.chevronRight
+
+    /** Encaminhar: put this post or message into another channel or a DM. */
+    val ForwardMessage get() = Lucide.forward
     val Expand get() = Lucide.chevronDown
     val Confirm get() = Lucide.check
     val Add get() = Lucide.plus

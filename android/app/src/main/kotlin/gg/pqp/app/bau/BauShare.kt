@@ -87,6 +87,17 @@ object BauShare {
     }
 
     /**
+     * `(origin, path)` of an absolute http(s) URL, query and fragment dropped,
+     * or null when it is not one. The same normalisation a link found in text
+     * gets, for a caller that already holds one URL (a forward card's `url`).
+     */
+    fun splitUrl(url: String): Pair<String, String>? {
+        val parts = URL_PARTS_RE.find(url.trim()) ?: return null
+        val origin = originOf(parts.groupValues[1], parts.groupValues[2]) ?: return null
+        return origin to parts.groupValues[3]
+    }
+
+    /**
      * Every Baú post permalink in a message body, in order. Origin policy is
      * the caller's: this only says that the path is a Baú post. Query strings
      * and fragments are allowed and ignored, a trailing sentence mark is not

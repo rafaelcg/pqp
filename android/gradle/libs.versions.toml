@@ -14,6 +14,7 @@ coil = "3.5.0"
 media3 = "1.10.1"
 camerax = "1.6.2"
 splashscreen = "1.2.0"
+browser = "1.10.0"
 clerk = "1.1.4"
 webrtc = "144.7559.14"
 livekit = "2.28.1"
@@ -25,6 +26,7 @@ espresso = "3.7.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
 androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "splashscreen" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }

@@ -1255,4 +1255,58 @@
     <string name="you_open">Teu perfil</string>
     <!-- Sobrescreve o rótulo do fundo escuro do bottom sheet do Material, que em pt-BR diz "Fechar planilha". -->
     <string name="close_sheet">Fechar</string>
+
+    <!-- Encaminhar (forward) -->
+    <string name="chat_jump_latest">Ir pras mais recentes</string>
+    <string name="forward_action">Encaminhar</string>
+    <string name="forward_title">Encaminhar</string>
+    <string name="forward_search_hint">Procura servidor, canal ou pessoa</string>
+    <string name="forward_comment_hint">Escreve algo (opcional)</string>
+    <string name="forward_section_recent">Recentes</string>
+    <string name="forward_section_people">Conversas</string>
+    <string name="forward_group">Grupo</string>
+    <string name="forward_new_dm">Nova DM</string>
+    <string name="forward_private_channel">Canal privado</string>
+    <string name="forward_restricted_note">Isso fica só em %1$s. Só dá pra encaminhar pra um canal de lá.</string>
+    <string name="forward_send_none">Escolhe pra onde mandar</string>
+    <string name="forward_send">Encaminhar (%1$d)</string>
+    <string name="forward_sending">Encaminhando</string>
+    <string name="forward_cap">Até 5 por vez.</string>
+    <string name="forward_none_found">Nada encontrado.</string>
+    <string name="forward_loading">Carregando teus canais</string>
+    <string name="forward_sent_badge">Enviado</string>
+    <string name="forward_selected_count">%1$d selecionados</string>
+    <string name="forward_post_preview">Post do Baú: %1$s</string>
+    <string name="forward_message_preview">Mensagem de %1$s: %2$s</string>
+    <string name="forward_message_preview_bare">Mensagem de %1$s</string>
+    <string name="forward_sent_to">Encaminhado pra %1$s</string>
+    <plurals name="forward_sent_many">
+        <item quantity="one">Encaminhado pra %1$d lugar</item>
+        <item quantity="other">Encaminhado pra %1$d lugares</item>
+    </plurals>
+    <string name="forward_view">Ver</string>
+    <string name="forward_refusal_no_access">Tu não vê esse canal.</string>
+    <string name="forward_refusal_cannot_send">Tu não pode mandar mensagem aí.</string>
+    <string name="forward_refusal_bad_target">Aí não dá pra mandar mensagem.</string>
+    <string name="forward_refusal_stays_in_server">Isso só vai pra dentro do próprio servidor.</string>
+    <string name="forward_refusal_unreachable">Tu não pode mandar mensagem pra essa pessoa.</string>
+    <string name="forward_refusal_slow_mode">Modo lento ligado aí. Tenta de novo em %1$ds.</string>
+    <string name="forward_refusal_slow_mode_nowait">Modo lento ligado aí. Tenta de novo daqui a pouco.</string>
+    <string name="forward_refusal_rate_limited">Muita coisa seguida. Tenta de novo em %1$ds.</string>
+    <string name="forward_refusal_rate_limited_nowait">Muita coisa seguida. Tenta de novo daqui a pouco.</string>
+    <string name="forward_refusal_automod">O AutoMod desse servidor bloqueou.</string>
+    <string name="forward_refusal_unavailable">Não rolou agora. Tenta de novo.</string>
+    <string name="forward_failure_gone">Isso não está mais disponível pra encaminhar.</string>
+    <string name="forward_failure_not_forwardable">Essa mensagem não dá pra encaminhar.</string>
+    <string name="forward_failure_empty">Não tem nada aqui pra encaminhar.</string>
+    <string name="forward_failure_slow">Calma. Tenta de novo em alguns segundos.</string>
+    <string name="forward_failure_other">Não deu pra encaminhar. Tenta de novo.</string>
+    <string name="forward_card_from_bau">Encaminhado de %1$s · Baú</string>
+    <string name="forward_card_from_channel">Encaminhado de %1$s · #%2$s</string>
+    <string name="forward_card_from_server">Encaminhado de %1$s</string>
+    <string name="forward_card_aria">%1$s. %2$s</string>
+    <string name="forward_card_aria_empty">%1$s</string>
+    <string name="forward_card_restricted">Só dentro do servidor</string>
+    <string name="forward_card_empty">Abrir o original</string>
+    <string name="forward_post_menu">Opções do post</string>
 </resources>
