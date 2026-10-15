@@ -80,6 +80,36 @@ describe("publicBauPostResponseSchema", () => {
     });
     expect(parsed.post.posterUrl).toBeNull();
     expect(parsed.post.coverUrl).toBeNull();
+    // What an API from before the cover facts omits is "unknown", not a failure.
+    expect(parsed.post.coverType).toBeNull();
+    expect(parsed.post.coverWidth).toBeNull();
+    expect(parsed.post.coverHeight).toBeNull();
+    expect(parsed.post.coverBytes).toBeNull();
     expect(parsed.community.links).toEqual([]);
+  });
+
+  it("refuses a cover size that is not a positive whole number", () => {
+    const answer = (extra: Record<string, unknown>) => ({
+      post: {
+        id: POST,
+        title: null,
+        body: null,
+        teaser: null,
+        media: null,
+        likeCount: 0,
+        commentCount: 0,
+        publishedAt: null,
+        ...extra,
+      },
+      community: { slug: "mesa-da-tues", name: "Mesa", tagline: null, category: "geral", memberCount: 1 },
+    });
+    expect(
+      publicBauPostResponseSchema.parse(
+        answer({ coverType: "image/png", coverWidth: 1200, coverHeight: 630, coverBytes: 4096 }),
+      ).post.coverWidth,
+    ).toBe(1200);
+    for (const bad of [{ coverWidth: 0 }, { coverHeight: -1 }, { coverWidth: 1.5 }, { coverBytes: -5 }]) {
+      expect(publicBauPostResponseSchema.safeParse(answer(bad)).success).toBe(false);
+    }
   });
 });

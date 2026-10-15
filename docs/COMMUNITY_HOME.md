@@ -421,10 +421,37 @@ carries the visitor through sign-up into the community (`?join=<slug>`).
   (including a per-server override that says no). Pinned by
   `server/src/api/public-bau-post.test.ts`, which compares status, body and
   headers against the unknown post's.
-- **Cover.** `GET …/posts/:postId/cover` redirects (302, cached as above) to a fresh signed
-  GET of an uploaded image or a video's chosen cover. It is the stable image
-  address an unfurl card can keep for weeks; a YouTube post's cover is its public
-  poster. No picture, or a post that does not qualify: the same 404.
+- **Cover.** `GET …/posts/:postId/cover` is the post's own picture, an uploaded
+  image or a video's chosen cover, served from the API's own origin: 200 with
+  `Content-Type`, `Content-Length`, an `ETag`, `Accept-Ranges: bytes`,
+  `Cache-Control: public, max-age=3600, s-maxage=3600`, byte ranges (206 / 416)
+  and conditional GETs (304). It is the stable image address an unfurl card can
+  keep for weeks. It used to be a 302 to a presigned URL on the bucket's domain,
+  and X took that for "no image" (a small card with a placeholder): link
+  crawlers commonly validate an `og:image` with a HEAD or a ranged GET and want a
+  plain 200. Streamed from the bucket, never buffered; over 5 MB, or of a format
+  that is not an inert image (svg, html, anything unknown), it still answers the
+  old 302 to a fresh signed GET. The `ETag` is a hash of the object's key, which
+  is immutable (a replaced picture is a new key), so a 304 costs no storage call
+  and is only ever sent after the post has been proved public again. A YouTube
+  post's cover is its public poster (not ours, nothing is claimed about it). No
+  picture, or a post that does not qualify: the same 404. The code is
+  `server/src/api/public-bau-cover.ts`.
+- **HEAD.** Every public community read (`/api/public/communities/config`,
+  `/:slug`, `/:slug/posts/:postId` and `/cover`) answers HEAD exactly as GET minus
+  the body, refusals included, and `OPTIONS` is the usual 204. Before, a HEAD fell
+  into the authenticated router and answered 401.
+- **What the card is told about the picture.** The post's answer carries
+  `coverType`, `coverWidth`, `coverHeight` and `coverBytes`, read from the
+  picture's own first 64 KB (`server/src/lib/image-info.ts`, jpeg / png / webp /
+  gif, no dependency) and remembered per storage key. Null when unknown: a YouTube
+  poster, a format we do not read, or a bucket that took more than 1.5 s, because
+  the page never waits on storage for a hint. The edge turns them into
+  `og:image:type`, `width`, `height` and picks the card by X's rules (jpg / png /
+  webp / gif, at most 5 MB; at least 300x157 for `summary_large_image`, 144x144 for
+  `summary`; X crops a large card to about 2:1, so any aspect ratio stays large).
+  A picture below those lines moves to the small card or is passed over for the
+  banner; we cannot enlarge one at the edge.
 - **`publicUrl`.** Every Baú post a member reads (feed, single read, chat card)
   carries `publicUrl`, the page's absolute URL (origin from `PUBLIC_APP_URL`'s
   first entry, else `https://pqp.gg`), **only** while the page would answer. A

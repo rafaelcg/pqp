@@ -629,6 +629,52 @@ export async function getObjectPrefix(
 }
 
 /**
+ * An object's bytes as a stream, for a route that serves them itself (the
+ * public Baú cover, which a link crawler reads and a redirect to a signed URL
+ * on another domain does not satisfy). `range` is an inclusive byte span, passed
+ * to the store as `Range: bytes=a-b`; a store that honours it answers 206, and
+ * the caller must check `status` rather than assume it did.
+ *
+ * Returns the fetch `Response` untouched on 200 / 206 so the caller can pipe
+ * `body` and forward the length headers, and null when the object is not
+ * there. Anything else throws a `StorageError`, with the body cancelled first
+ * (undici keeps the connection checked out until a body is consumed or
+ * cancelled). THE CALLER OWNS THE BODY: it must pipe it or `cancel()` it.
+ */
+export async function openObject(
+  key: string,
+  range?: { start: number; end: number },
+): Promise<Response | null> {
+  const url = signRequest({
+    method: "GET",
+    key,
+    ttlSeconds: INTERNAL_URL_TTL_SECONDS,
+  }).url;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      ...(range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {}),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new StorageError(
+      error instanceof Error ? error.message : "Storage unreachable",
+    );
+  }
+  if (response.status === 404) {
+    await response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (!response.ok || !response.body) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new StorageError(`Storage returned HTTP ${response.status} for GET`);
+  }
+  return response;
+}
+
+/**
  * A whole object, streamed to a file on disk, for a job that has to hand the
  * bytes to ffmpeg (a Baú video's sound, for subtitles). Never buffered in
  * memory. Refuses past `maxBytes` (the file is left for the caller's

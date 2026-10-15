@@ -505,8 +505,9 @@ import { notifyStoriesUpdate, notifyStoryAudiences } from "../ws/stories.js";
 import { copyObject, deleteObject, StorageError } from "../lib/s3.js";
 import {
   getPublicBauPost,
-  getPublicBauPostCoverTarget,
+  getPublicBauPostCover,
 } from "../services/community-home-public.js";
+import { serveCover } from "./public-bau-cover.js";
 import {
   getCommunityHomePostCard,
   listLatestCommunityHomeCards,
@@ -1247,11 +1248,15 @@ function publicBauHeaders(
 
 /** The one 404 every refusal on the public post routes sends. */
 function sendPublicBauNotFound(req: IncomingMessage, res: ServerResponse): void {
+  const body = JSON.stringify({ error: "Not found" });
   res.writeHead(404, {
     "Content-Type": "application/json",
+    // Explicit, so a HEAD (which Node answers without a length of its own)
+    // carries the very header the GET does.
+    "Content-Length": String(Buffer.byteLength(body)),
     ...publicBauHeaders(req, PUBLIC_BAU_CACHE_MISS),
   });
-  res.end(JSON.stringify({ error: "Not found" }));
+  res.end(body);
 }
 /**
  * The public community page's read. Same posture as `publicProfileLimiter` and
@@ -13126,13 +13131,15 @@ async function servePublicCommunity(
   // credential, and shaped like a link going around a group chat. The 404 above
   // stays `no-store` — a community can be listed at any moment, and a cached
   // "no such page" would outlive the decision to publish it.
+  const payload = JSON.stringify({ community });
   res.writeHead(200, {
     "Content-Type": "application/json",
+    "Content-Length": String(Buffer.byteLength(payload)),
     "Cache-Control": "public, max-age=60",
     ...SECURITY_HEADERS,
     ...corsHeaders(req),
   });
-  res.end(JSON.stringify({ community }));
+  res.end(payload);
 }
 
 const PUBLIC_BAU_POST_PATH =
@@ -13207,26 +13214,28 @@ async function servePublicBauPost(
   }
 
   if (cover) {
-    let target: string | null;
+    let found;
     try {
-      target = await getPublicBauPostCoverTarget(slug, postId);
+      found = await getPublicBauPostCover(slug, postId);
     } catch (error) {
       console.error(`[bau-public] cover failed for ${slug}:`, error);
       sendError(res, 503, "Posts temporarily unavailable", req);
       return;
     }
-    if (!target) {
+    if (!found) {
       sendPublicBauNotFound(req, res);
       return;
     }
-    // Cached like the page (see `PUBLIC_BAU_CACHE_MISS`): a post taken down
-    // must not keep a cached redirect for longer than it keeps a cached page,
-    // and the target is signed for ten minutes.
-    res.writeHead(302, {
-      location: target,
-      ...publicBauHeaders(req, PUBLIC_BAU_CACHE_MISS),
+    // The picture itself, from this origin, for a crawler that checks an
+    // og:image with a HEAD or a ranged GET and takes a redirect to another
+    // domain for "no image" (X did). Over the size cap, or not an inert image,
+    // it still redirects to a fresh signature. See `serveCover`.
+    await serveCover(req, res, found, {
+      headers: (cacheControl) => publicBauHeaders(req, cacheControl),
+      notFound: () => sendPublicBauNotFound(req, res),
+      unavailable: () => sendError(res, 503, "Posts temporarily unavailable", req),
+      missCacheControl: PUBLIC_BAU_CACHE_MISS,
     });
-    res.end();
     return;
   }
 
@@ -13247,11 +13256,13 @@ async function servePublicBauPost(
   // `PUBLIC_BAU_CACHE_HIT`: identical for every caller by construction,
   // obtained with no credential, and shaped like a link going around a group
   // chat. The signed media URLs inside last ten minutes.
+  const payload = JSON.stringify(result);
   res.writeHead(200, {
     "Content-Type": "application/json",
+    "Content-Length": String(Buffer.byteLength(payload)),
     ...publicBauHeaders(req, PUBLIC_BAU_CACHE_HIT),
   });
-  res.end(JSON.stringify(result));
+  res.end(payload);
 }
 
 const PUBLIC_INVITE_PATH = /^\/api\/public\/invites\/([^/]{1,64})$/;
@@ -13361,8 +13372,8 @@ function servePublicCommunitiesConfig(
   req: IncomingMessage,
   res: ServerResponse,
 ): void {
-  if (req.method !== "GET") {
-    res.setHeader("Allow", "GET, OPTIONS");
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.setHeader("Allow", "GET, HEAD, OPTIONS");
     sendError(res, 405, "Method not allowed", req);
     return;
   }
@@ -13375,13 +13386,15 @@ function servePublicCommunitiesConfig(
     sendError(res, 429, "Too many requests", req);
     return;
   }
+  const payload = JSON.stringify({ enabled: isCommunitiesEnabled() });
   res.writeHead(200, {
     "Content-Type": "application/json",
+    "Content-Length": String(Buffer.byteLength(payload)),
     "Cache-Control": "public, max-age=60",
     ...SECURITY_HEADERS,
     ...corsHeaders(req),
   });
-  res.end(JSON.stringify({ enabled: isCommunitiesEnabled() }));
+  res.end(payload);
 }
 
 const WEBHOOK_EXECUTE_PATH =
@@ -13616,15 +13629,22 @@ export async function handleApi(
     return;
   }
 
-  const publicCommunityMatch =
-    req.method === "GET" ? PUBLIC_COMMUNITY_PATH.exec(pathname) : null;
+  // HEAD is answered exactly as GET is, minus the body (Node drops it), for
+  // every public community read. Link crawlers (X, LinkedIn, Slack, iMessage)
+  // probe an address with HEAD before they fetch it and read a 401 as "nothing
+  // here"; without this a HEAD fell through to the authenticated router.
+  const readsPublic = req.method === "GET" || req.method === "HEAD";
+  const publicCommunityMatch = readsPublic
+    ? PUBLIC_COMMUNITY_PATH.exec(pathname)
+    : null;
   if (publicCommunityMatch) {
     await servePublicCommunity(req, res, publicCommunityMatch[1]!);
     return;
   }
 
-  const publicBauPostMatch =
-    req.method === "GET" ? PUBLIC_BAU_POST_PATH.exec(pathname) : null;
+  const publicBauPostMatch = readsPublic
+    ? PUBLIC_BAU_POST_PATH.exec(pathname)
+    : null;
   if (publicBauPostMatch) {
     await servePublicBauPost(
       req,

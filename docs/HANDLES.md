@@ -130,7 +130,12 @@ for what that page may and may not carry.
 behind the `bau_public_posts` flag) is handled by `client/src/lib/bau-post-meta.ts`
 from `GET /api/public/communities/:slug/posts/:postId`. The card is the post's:
 its title and teaser, its picture (the API's stable `/cover` address or a YouTube
-poster, else the community banner) and `summary_large_image`. A post the API says
+poster, else the community banner) and `summary_large_image`, with
+`og:image:type` / `width` / `height` when the API knows them. A HEAD for the page
+is answered as its GET is, minus the body. The middleware has no user-agent
+branch on purpose: every crawler (Twitterbot, facebookexternalhit, LinkedInBot,
+Slackbot, WhatsApp, Discordbot, TelegramBot, Applebot) gets the same tags, pinned
+by `bau-post-meta.test.ts`. A post the API says
 is not public (404) serves the generic card with `noindex` and `no-store`; an API
 that cannot be reached serves the page untouched, so a down API never makes a
 live post look dead. See `docs/COMMUNITY_HOME.md` §"A public page per post".

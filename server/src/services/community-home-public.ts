@@ -7,7 +7,12 @@ import {
   type PublicBauPostResponse,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
-import { isStorageConfigured } from "../lib/s3.js";
+import { sniffImage } from "../lib/image-info.js";
+import {
+  getObjectPrefix,
+  headObject,
+  isStorageConfigured,
+} from "../lib/s3.js";
 import { toPublicCommunity, type PublicCommunityRow } from "./communities.js";
 import {
   bauPublicUrlFor,
@@ -249,6 +254,10 @@ export async function getPublicBauPost(
     coverUrl = coverPath(slug, row.id);
   }
 
+  // What the share card needs to know about our own cover before it is asked
+  // to fetch it. Never blocks the page: see `coverFacts`.
+  const facts = await coverFacts(row, media);
+
   // Which of the mentioned channels everybody can see. One query, and only when
   // a mention exists at all.
   const ids = mentionedChannelIds([row.title, row.body, row.teaser]);
@@ -287,6 +296,10 @@ export async function getPublicBauPost(
     media,
     posterUrl,
     coverUrl,
+    coverType: facts?.type ?? null,
+    coverWidth: facts?.width ?? null,
+    coverHeight: facts?.height ?? null,
+    coverBytes: facts?.bytes ?? null,
     likeCount: Number(row.like_count),
     commentCount: Number(row.comment_count),
     publishedAt: row.published_at?.toISOString() ?? null,
@@ -299,15 +312,40 @@ export async function getPublicBauPost(
 }
 
 /**
- * Where `GET …/posts/:postId/cover` sends the browser: a fresh signed GET of
- * the post's picture. Null (a 404) for a post that does not qualify AND for one
- * that qualifies but has no picture of its own, so the two cannot be told
- * apart either.
+ * The object a post's cover is, and where a signed copy of it lives. Null (a
+ * 404) for a post that does not qualify AND for one that qualifies but has no
+ * picture of its own, so the two cannot be told apart either.
+ *
+ * `key` is the bucket key, which is IMMUTABLE: a replaced picture is a new
+ * upload with a new key (both columns are unique per claimed upload), so a
+ * validator derived from it can never name two different pictures. `signedUrl`
+ * is what the route redirects to when it will not serve the bytes itself.
  */
-export async function getPublicBauPostCoverTarget(
+export interface PublicBauCover {
+  key: string;
+  signedUrl: string;
+}
+
+function coverOf(
+  row: PostRow,
+  media: ReturnType<typeof buildMedia>,
+): PublicBauCover | null {
+  // `buildMedia` is what decides a cover exists (storage configured, the
+  // custom-cover flag for a video's poster); the key is read from the row only
+  // once it has said so, so this cannot disagree with `coverUrl` above.
+  if (media?.kind === "image" && media.url && row.media_storage_key) {
+    return { key: row.media_storage_key, signedUrl: media.url };
+  }
+  if (media?.kind === "video" && media.posterUrl && row.poster_storage_key) {
+    return { key: row.poster_storage_key, signedUrl: media.posterUrl };
+  }
+  return null;
+}
+
+export async function getPublicBauPostCover(
   slug: string,
   postId: string,
-): Promise<string | null> {
+): Promise<PublicBauCover | null> {
   if (!isStorageConfigured()) {
     return null;
   }
@@ -315,14 +353,164 @@ export async function getPublicBauPostCoverTarget(
   if (!row) {
     return null;
   }
-  const media = buildMedia(row, true, BAU_PUBLIC_MEDIA_TTL_SECONDS);
-  if (media?.kind === "image") {
-    return media.url;
+  return coverOf(row, buildMedia(row, true, BAU_PUBLIC_MEDIA_TTL_SECONDS));
+}
+
+/**
+ * The most a cover served from our own origin may weigh. X refuses a card
+ * image above 5 MB (and so do most unfurlers' budgets), and a bigger one is
+ * not worth streaming through this process: past it the route keeps redirecting
+ * to the signed URL, which is how every cover answered before this.
+ */
+export const PUBLIC_COVER_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * The formats the route serves itself. The four X accepts for a card, plus
+ * AVIF for a browser's own `<img>`. Deliberately NOT svg or anything
+ * text-like: bytes served from this origin that a browser would render as a
+ * document are an XSS on the API's address, and a redirect to the bucket's
+ * origin (the fallback) is where those stay.
+ */
+const SERVABLE_COVER_TYPES: ReadonlySet<string> = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/avif",
+]);
+
+export function isServableCoverType(contentType: string): boolean {
+  return SERVABLE_COVER_TYPES.has(contentType);
+}
+
+export interface CoverInfo {
+  /** Verified by a HEAD against the bucket, not claimed by the uploader. */
+  length: number;
+  /** Lowercased, parameters stripped. */
+  contentType: string;
+  /** What the first bytes say, when they say anything we can read. */
+  image: ReturnType<typeof sniffImage>;
+}
+
+/** How much of the head of an image to read for its dimensions. */
+const SNIFF_BYTES = 64 * 1024;
+
+/**
+ * What the bucket says about a cover, remembered for the life of the process.
+ *
+ * Keyed by storage key, which never changes what it names (see
+ * `PublicBauCover`), so an entry cannot go stale and needs no expiry; it is
+ * only bounded. The IN-FLIGHT promise is what is stored, so a link going viral
+ * costs one HEAD and one ranged GET, not one per viewer. A failure is dropped
+ * so the next caller tries again, and a missing object (null) is not
+ * remembered at all: a post can be re-uploaded under the same row.
+ */
+const COVER_INFO_MAX_ENTRIES = 500;
+const coverInfoCache = new Map<string, Promise<CoverInfo | null>>();
+
+export function getCoverInfo(key: string): Promise<CoverInfo | null> {
+  const known = coverInfoCache.get(key);
+  if (known) {
+    // Touched: a Map iterates in insertion order, so re-inserting is the LRU.
+    coverInfoCache.delete(key);
+    coverInfoCache.set(key, known);
+    return known;
   }
-  if (media?.kind === "video") {
-    return media.posterUrl ?? null;
+  const pending = (async (): Promise<CoverInfo | null> => {
+    const head = await headObject(key);
+    if (!head) {
+      return null;
+    }
+    let image: CoverInfo["image"] = null;
+    if (
+      head.contentLength > 0 &&
+      head.contentLength <= PUBLIC_COVER_MAX_BYTES &&
+      isServableCoverType(head.contentType)
+    ) {
+      try {
+        const prefix = await getObjectPrefix(key, SNIFF_BYTES);
+        image = prefix ? sniffImage(prefix) : null;
+      } catch {
+        // Dimensions are garnish. The bytes can still be served without them.
+        image = null;
+      }
+    }
+    return { length: head.contentLength, contentType: head.contentType, image };
+  })();
+  coverInfoCache.set(key, pending);
+  while (coverInfoCache.size > COVER_INFO_MAX_ENTRIES) {
+    coverInfoCache.delete(coverInfoCache.keys().next().value as string);
   }
-  return null;
+  const forget = (): void => {
+    if (coverInfoCache.get(key) === pending) {
+      coverInfoCache.delete(key);
+    }
+  };
+  pending.then((info) => (info ? undefined : forget()), forget);
+  return pending;
+}
+
+/** For tests: the cache is process state and must not leak between cases. */
+export function resetCoverInfoCache(): void {
+  coverInfoCache.clear();
+}
+
+/**
+ * How long the post page waits for the bucket to describe its cover. The page
+ * is the product and the dimensions are a hint for an unfurler: past this the
+ * card is built without them, exactly as before this existed.
+ */
+const COVER_FACTS_TIMEOUT_MS = 1500;
+
+interface CoverFacts {
+  type: string | null;
+  width: number | null;
+  height: number | null;
+  bytes: number;
+}
+
+/**
+ * The size, format and pixels of this post's own cover, for `og:image:width`,
+ * `height` and `type` and for the decision between a large card and a small one.
+ * Null for a cover that is not ours (a YouTube poster), for a post with none,
+ * and for ANY failure or a slow bucket: it fails OPEN, because a share card
+ * without dimensions is what every card was until now, and a post page that
+ * errors or stalls over a hint is worse than a card with no hint.
+ */
+async function coverFacts(
+  row: PostRow,
+  media: ReturnType<typeof buildMedia>,
+): Promise<CoverFacts | null> {
+  const cover = coverOf(row, media);
+  if (!cover) {
+    return null;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const info = await Promise.race([
+      getCoverInfo(cover.key),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), COVER_FACTS_TIMEOUT_MS);
+      }),
+    ]);
+    if (!info) {
+      return null;
+    }
+    return {
+      type: info.image?.type ?? null,
+      width: info.image?.width ?? null,
+      height: info.image?.height ?? null,
+      bytes: info.length,
+    };
+  } catch (error) {
+    console.error(
+      "[bau-public] cover facts failed, serving the post without them:",
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

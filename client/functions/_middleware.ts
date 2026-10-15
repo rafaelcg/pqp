@@ -98,7 +98,12 @@ interface PagesContext {
     /** Pages' own static-asset binding. Absent in some runtimes; handled. */
     ASSETS?: { fetch: (input: Request | string | URL) => Promise<Response> };
   };
-  next: () => Promise<Response>;
+  /**
+   * Pages' own signature: with no argument it forwards the request it was
+   * given, with one it forwards that instead (how a HEAD is answered as a GET,
+   * see `answerHead`).
+   */
+  next: (input?: Request | string, init?: RequestInit) => Promise<Response>;
   /** Keeps background work alive after the response. Absent in tests. */
   waitUntil?: (promise: Promise<unknown>) => void;
 }
@@ -452,6 +457,10 @@ async function fetchBauPost(
         title?: unknown;
         teaser?: unknown;
         coverUrl?: unknown;
+        coverType?: unknown;
+        coverWidth?: unknown;
+        coverHeight?: unknown;
+        coverBytes?: unknown;
         publishedAt?: unknown;
       };
       community?: CommunityMeta;
@@ -469,6 +478,12 @@ async function fetchBauPost(
     }
     const text = (value: unknown): string | null =>
       typeof value === "string" && value.trim() ? value : null;
+    // A number the card will print into a tag: a positive whole number or
+    // nothing. An older API sends none of these, which is "unknown".
+    const count = (value: unknown): number | null =>
+      typeof value === "number" && Number.isInteger(value) && value > 0
+        ? value
+        : null;
     return {
       slug: target.slug,
       postId: target.postId,
@@ -477,6 +492,10 @@ async function fetchBauPost(
       title: text(post.title),
       teaser: text(post.teaser),
       coverUrl: text(post.coverUrl),
+      coverType: text(post.coverType),
+      coverWidth: count(post.coverWidth),
+      coverHeight: count(post.coverHeight),
+      coverBytes: count(post.coverBytes),
       publishedAt: text(post.publishedAt),
       community: {
         slug: community.slug,
@@ -809,6 +828,54 @@ async function handleRequest(context: PagesContext): Promise<Response> {
   );
 }
 
+/** Every path this middleware writes a card for. Pure string checks. */
+function isCardPath(pathname: string): boolean {
+  return Boolean(
+    handleFromMetaPath(pathname) ||
+      communitySlugFromMetaPath(pathname) ||
+      bauPostFromMetaPath(pathname) ||
+      marketingPageFromMetaPath(pathname) ||
+      blogTargetFromMetaPath(pathname) ||
+      inviteCodeFromMetaPath(pathname),
+  );
+}
+
+/**
+ * A HEAD for a page that has a card, answered as its GET would be, minus the
+ * body.
+ *
+ * Link crawlers and some CDNs probe an address with HEAD before they fetch it,
+ * and a probe that comes back with different headers (or with none of the
+ * ones the GET carries) is read as a page that is not what it says it is. The
+ * asset layer answers a HEAD for `index.html` on its own and never reaches the
+ * rewrite, so the headers a HEAD saw were the shell's, not the card's.
+ *
+ * The request is turned into a GET, run through the whole of `onRequest` (the
+ * API lookup, the locale, the caching headers, the hero strip), and the body
+ * dropped. `Content-Length` is left off because the rewrite removes it from
+ * the GET too: the length of a body that was never built is not a fact.
+ */
+async function answerHead(context: PagesContext): Promise<Response> {
+  const asGet = new Request(context.request.url, {
+    method: "GET",
+    headers: context.request.headers,
+  });
+  const response = await onRequest({
+    ...context,
+    request: asGet,
+    next: () => context.next(asGet),
+  });
+  // A body nobody will read would hold the connection to the asset layer open.
+  await response.body?.cancel().catch(() => undefined);
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 /**
  * `index.html` carries the landing page's first screen for the home route
  * (`src/lib/prerender-hero.ts`). The file is the same for every path, so every
@@ -819,6 +886,9 @@ async function handleRequest(context: PagesContext): Promise<Response> {
  * fall-throughs, because it wraps all of them.
  */
 export async function onRequest(context: PagesContext): Promise<Response> {
+  if (context.request.method === "HEAD" && isCardPath(new URL(context.request.url).pathname)) {
+    return answerHead(context);
+  }
   const response = await handleRequest(context);
   if (context.request.method !== "GET") {
     return response;
