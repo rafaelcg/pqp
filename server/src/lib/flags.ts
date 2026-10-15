@@ -787,6 +787,21 @@ export const FEATURE_FLAGS = {
     // No `(field)`: the clients that read `mixed` land after the server.
     clientVia: "GET /api/servers/:id/channel-layout",
   },
+  forward_messages: {
+    description:
+      "Encaminhar: mandar um post do Baú ou uma mensagem pra outro canal ou DM como um card que diz de onde veio. Desligado, o servidor recusa (404) e os apps escondem a ação; os cards que já foram enviados continuam aparecendo.",
+    env: "FORWARD_MESSAGES",
+    parseEnv: exactTrue,
+    // Off until the web and the phones draw the card: before that, an old
+    // client shows the plain fallback line, which is readable but not the
+    // feature.
+    codeDefault: false,
+    // A forward fans out to many servers and to conversations (no server), so
+    // a per-server override would never be read. Checked on every request, so
+    // off is a real kill switch whatever a stale client thinks.
+    perServer: false,
+    clientVia: "GET /api/forwards/config",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

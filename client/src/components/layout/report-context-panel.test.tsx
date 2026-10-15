@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReportContext } from "@pqp/shared";
 
 /**
@@ -131,7 +131,17 @@ async function mount(note = "") {
   });
 }
 
+// The panel prints ages ("created 3 days ago") against the real clock, and the
+// fixtures are fixed dates, so an unpinned run goes stale as the days pass: it
+// said "3 days" until 2026-10-15 00:00Z and "4 days" after. Pin Date only
+// (timers stay real) to half an hour after CREATED.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(CREATED).getTime() + 30 * 60_000);
+});
+
 afterEach(() => {
+  vi.useRealTimers();
   act(() => root?.unmount());
   host?.remove();
   root = null;

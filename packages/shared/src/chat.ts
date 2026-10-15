@@ -18,6 +18,7 @@ import {
   voiceNoteTranscriptSchema,
 } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
+import { messageForwardFieldSchema } from "./forward.js";
 import { friendActivitySchema } from "./friends.js";
 import { permissionsUpdateSchema } from "./permissions.js";
 import { communityHomeUpdateSchema } from "./community-home.js";
@@ -196,6 +197,8 @@ const broadcastMessageSchema = z.object({
   systemKind: messageSystemKindSchema,
   /** See `messageSchema.storyId`: the story a reply quotes. */
   storyId: z.string().uuid().nullable().optional(),
+  /** See `messageSchema.forward`: the snapshot a forwarded message carries. */
+  forward: messageForwardFieldSchema,
 });
 
 export const pollVoteMessageSchema = z.object({

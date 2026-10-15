@@ -6466,3 +6466,14 @@ CREATE INDEX IF NOT EXISTS idx_story_uploads_user_open
   ON story_uploads (user_id) WHERE claimed_story_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_story_uploads_created
   ON story_uploads (created_at);
+
+-- ------------------------------------------------------------------ forwards
+-- Encaminhar: a message that carries a SNAPSHOT of a Baú post or of another
+-- message, drawn as a card under the body (the forwarder's own comment, or a
+-- plain fallback line). The shape is `messageForwardSchema` in
+-- packages/shared/src/forward.ts. Nullable, no default, so adding it is a
+-- metadata-only change on a table this size and every ordinary message stays
+-- NULL. The column is only ever written by `createMessage` for a message the
+-- forward route built, and read back through `mapMessage`, which validates it:
+-- a value this build cannot parse leaves as an ordinary message.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS forward JSONB;
