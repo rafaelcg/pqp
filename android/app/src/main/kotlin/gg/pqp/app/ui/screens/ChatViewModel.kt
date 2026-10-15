@@ -1093,7 +1093,12 @@ class ChatViewModel(
                         // anything past its newest.
                         catchUp()
                     }
-                    .onFailure { _state.value = _state.value.copy(loadingNewer = false) }
+                    .onFailure {
+                        // The older request that was in flight was invalidated above and
+                        // its own failure handler stands down, so this is where its
+                        // "loading" state has to be cleared or older paging never restarts.
+                        _state.value = _state.value.copy(loadingNewer = false, loadingOlder = false)
+                    }
             } finally {
                 jumping = false
             }
@@ -1120,15 +1125,21 @@ class ChatViewModel(
         // In the middle of history the newest loaded message is not the newest
         // there is: `loadNewer` pages forward from it instead.
         if (_state.value.hasNewer) return
-        val newest = _state.value.messages.lastOrNull()?.id ?: return
-        runCatching { session.api.messages(channelId, after = newest) }
-            .onSuccess { page ->
-                if (page.messages.isEmpty()) return@onSuccess
+        // A failed read is tried again (a few times, a second apart): live messages
+        // were held back while `hasNewer` was true and are only recovered from here.
+        repeat(CATCH_UP_ATTEMPTS) { attempt ->
+            val newest = _state.value.messages.lastOrNull { it.id !in pending }?.id ?: return
+            val page = runSuspendCatching { session.api.messages(channelId, after = newest) }.getOrNull()
+            if (page != null) {
+                if (page.messages.isEmpty()) return
                 val known = _state.value.messages.map { it.id }.toSet()
                 _state.value = _state.value.copy(
                     messages = _state.value.messages + page.messages.filterNot { it.id in known },
                 )
+                return
             }
+            if (attempt < CATCH_UP_ATTEMPTS - 1) kotlinx.coroutines.delay(CATCH_UP_RETRY_MS)
+        }
     }
 
     private suspend fun listen() {
@@ -1672,6 +1683,9 @@ class ChatViewModel(
 
     companion object {
         private const val TYPING_TTL_MS = 4_000L
+
+        private const val CATCH_UP_ATTEMPTS = 3
+        private const val CATCH_UP_RETRY_MS = 1_000L
 
         /** What the server answers for a jump target that is deleted or not readable. */
         private val AROUND_GONE_STATUSES = setOf(400, 403, 404)
