@@ -329,7 +329,7 @@ struct ForwardPickerView: View {
                 searchField
 
                 if model.source.stayInServerId != nil {
-                    Text("Members-only content stays in this server.")
+                    Text("This can only go inside this server.")
                         .font(Typography.caption)
                         .foregroundStyle(Palette.paperMuted)
                         .padding(.horizontal, Metrics.hPadding)

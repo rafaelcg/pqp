@@ -1052,7 +1052,7 @@ struct ChatView: View {
             canPin: Moderation.canPin(inServer: server != nil, serverRole: server?.role),
             canReport: !model.isMine(message) && !message.isWebhook,
             canForward: canForward(message),
-            onForward: { forwardSource = ForwardSource.message(message) },
+            onForward: { startForward(message) },
             onReact: { emoji in
                 Task { await model.toggleReaction(emoji, on: message) }
             },
@@ -1105,6 +1105,19 @@ struct ChatView: View {
     private func canForward(_ message: Message) -> Bool {
         forwardsEnabled && conversation == nil && !message.isNudge
             && !message.isPending && !message.blocked
+    }
+
+    /// Opens the picker. Whether this message is stuck in its server is asked
+    /// of the channel list first (a cached read), so the picker never offers a
+    /// DM or another server for a private channel's message.
+    private func startForward(_ message: Message) {
+        let serverId = server?.id ?? flagsServerId
+        Task {
+            var channels: [Channel]?
+            if let serverId { channels = try? await session.api.channels(serverId: serverId) }
+            let stays = ForwardSource.messageStaysIn(message, serverId: serverId, channels: channels)
+            forwardSource = ForwardSource.message(message, stayInServerId: stays)
+        }
     }
 
     /// A forwarded message's card asked for one message: read back until the

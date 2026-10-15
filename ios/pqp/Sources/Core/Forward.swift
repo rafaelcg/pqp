@@ -239,8 +239,8 @@ struct ForwardCardContent: Equatable, Sendable {
         iconPath = forward.sourceServerIconUrl
         let title = forward.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let author = forward.authorDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        heading = !title.isEmpty ? title : (author.isEmpty ? nil : author)
-        excerpt = forward.excerpt.trimmingCharacters(in: .whitespacesAndNewlines)
+        heading = Self.plain(!title.isEmpty ? title : (author.isEmpty ? nil : author))
+        excerpt = Self.plain(forward.excerpt.trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
         thumbnail = Self.loadable(forward.mediaThumbUrl)
         if thumbnail == nil, let kind = forward.mediaKind {
             glyph = switch kind {
@@ -252,6 +252,21 @@ struct ForwardCardContent: Equatable, Sendable {
             glyph = nil
         }
         restricted = forward.restricted
+    }
+
+    /// The snapshot is plain text, but a server that has not been fixed yet may
+    /// leave chat markup in it (`<@uuid>`, `<@&uuid>`, `<#uuid>`, `<:name:uuid>`).
+    /// The card never shows ids: a person becomes "@alguém", a role "@cargo", a
+    /// channel "#canal", a custom emoji ":name:". Nothing here is resolved to a
+    /// real account, so nothing in the card can read as, or act as, a mention.
+    static func plain(_ text: String?) -> String? {
+        guard var text, !text.isEmpty else { return text }
+        let id = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+        text = text.replacingOccurrences(of: "<@&\(id)>", with: "@" + String(localized: "role"), options: .regularExpression)
+        text = text.replacingOccurrences(of: "<@!?\(id)>", with: "@" + String(localized: "someone"), options: .regularExpression)
+        text = text.replacingOccurrences(of: "<#\(id)>", with: "#" + String(localized: "channel"), options: .regularExpression)
+        text = text.replacingOccurrences(of: "<a?:([A-Za-z0-9_]+):\(id)>", with: ":$1:", options: .regularExpression)
+        return text
     }
 
     /// https only; plain http is a debug build talking to the local stack
@@ -346,6 +361,23 @@ struct ForwardSource: Equatable, Sendable {
             kind: .message, id: message.id, serverId: nil, summary: summary,
             stayInServerId: forward?.stayInServerId ?? stayInServerId
         )
+    }
+
+    /// Which server a message may only be forwarded inside, mirroring the web:
+    /// a restricted card names its own; otherwise a message in a private
+    /// channel, or in a channel the loaded list does not hold (a thread or a
+    /// forum post, whose own flag may not carry its parent's privacy, or a
+    /// list that could not be read), stays in its server. The server enforces
+    /// it anyway. A message with no server (nil) has nothing to stay in.
+    static func messageStaysIn(
+        _ message: Message, serverId: String?, channels: [Channel]?
+    ) -> String? {
+        if let own = message.forward?.stayInServerId { return own }
+        guard let serverId else { return nil }
+        guard let channels, let channel = channels.first(where: { $0.id == message.channelId }) else {
+            return serverId
+        }
+        return channel.isPrivate ? serverId : nil
     }
 
     static func bauPost(_ post: CommunityHomePost) -> ForwardSource {

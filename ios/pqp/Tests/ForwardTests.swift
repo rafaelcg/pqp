@@ -513,6 +513,70 @@ final class ForwardTests: XCTestCase {
         XCTAssertEqual(model.channelRows.map(\.id), ["c2"])
     }
 
+    // MARK: - Restriction for a message, and mention markup
+
+    private func channel(_ id: String, private isPrivate: Bool) throws -> Channel {
+        try Coding.decoder.decode(Channel.self, from: Data("""
+        {"id":"\(id)","serverId":"\(serverId)","kind":"channel","name":"x","type":"text",
+         "position":0,"isPrivate":\(isPrivate)}
+        """.utf8))
+    }
+
+    /// A message in a channel not visible to everyone, or in one the loaded
+    /// list does not hold (a thread, a forum post, a list that failed), stays
+    /// in its server; an ordinary channel's message goes anywhere.
+    func testAMessageInAPrivateOrUnlistedChannelStaysInItsServer() throws {
+        let message = try Coding.decoder.decode(Message.self, from: messageJSON(forward: nil))
+        let open = try channel(message.channelId, private: false)
+        let closed = try channel(message.channelId, private: true)
+        XCTAssertNil(ForwardSource.messageStaysIn(message, serverId: serverId, channels: [open]))
+        XCTAssertEqual(ForwardSource.messageStaysIn(message, serverId: serverId, channels: [closed]), serverId)
+        XCTAssertEqual(
+            ForwardSource.messageStaysIn(message, serverId: serverId, channels: [try channel("other", private: false)]),
+            serverId, "not in the list: a thread or a forum post"
+        )
+        XCTAssertEqual(ForwardSource.messageStaysIn(message, serverId: serverId, channels: nil), serverId, "list unreadable")
+        XCTAssertNil(ForwardSource.messageStaysIn(message, serverId: nil, channels: nil), "no server to stay in")
+
+        // A restricted card names its own server whatever the channel says.
+        let restricted = try Coding.decoder.decode(Message.self, from: messageJSON(
+            forward: cardJSON.replacingOccurrences(
+                of: #""restricted":true"#, with: #""restricted":true,"restrictedToServerId":"\#(otherServerId)""#)
+        ))
+        XCTAssertEqual(ForwardSource.messageStaysIn(restricted, serverId: serverId, channels: [open]), otherServerId)
+    }
+
+    func testThePickerForAPrivateMessageOffersOnlyItsServer() throws {
+        let message = try Coding.decoder.decode(Message.self, from: messageJSON(forward: nil))
+        let stays = ForwardSource.messageStaysIn(
+            message, serverId: "server-a", channels: [try channel(message.channelId, private: true)]
+        )
+        let model = ForwardPickerModel(
+            source: ForwardSource.message(message, stayInServerId: stays), recentIds: [],
+            conversations: [dmTarget("d", "Ana")],
+            channels: [channelTarget("c1", "a", server: "server-a"), channelTarget("c2", "b", server: "server-b")]
+        )
+        XCTAssertEqual(model.conversationRows.map(\.id), [])
+        XCTAssertEqual(model.channelRows.map(\.id), ["c1"])
+    }
+
+    /// The card never shows ids or markup, and nothing is resolved to an account.
+    func testChatMarkupInTheSnapshotIsPlainTextOnTheCard() {
+        let id = "11111111-1111-4111-8111-111111111111"
+        let content = ForwardCardContent(card(
+            title: "oi <@\(id)>",
+            excerpt: "<@\(id)> e <@!\(id)> viram <#\(id)> com <@&\(id)> <:pqp:\(id)> <a:dance:\(id)>"
+        ))
+        XCTAssertFalse(content.excerpt.contains("<"))
+        XCTAssertFalse(content.excerpt.contains(id))
+        XCTAssertTrue(content.excerpt.contains(":pqp:"))
+        XCTAssertTrue(content.excerpt.contains(":dance:"))
+        XCTAssertEqual(content.excerpt.filter { $0 == "@" }.count, 3)
+        XCTAssertFalse(content.heading?.contains(id) ?? true)
+        // Plain text is left exactly as it is, including a literal "@everyone".
+        XCTAssertEqual(ForwardCardContent(card(excerpt: "@everyone <b> 3 < 4")).excerpt, "@everyone <b> 3 < 4")
+    }
+
     // MARK: - The request and its answer
 
     func testTheRequestBodyIsTheContract() throws {

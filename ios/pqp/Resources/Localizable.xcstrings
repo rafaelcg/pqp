@@ -201,6 +201,16 @@
         }
       }
     },
+    "channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "canal"
+          }
+        }
+      }
+    },
     "Channels" : {
       "localizations" : {
         "pt-BR" : {
@@ -751,12 +761,12 @@
         }
       }
     },
-    "Members-only content stays in this server." : {
+    "This can only go inside this server." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conteúdo só pra membros fica neste servidor."
+            "value" : "Isso só pode ir pra dentro deste servidor."
           }
         }
       }
@@ -837,6 +847,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "(tu)"
+          }
+        }
+      }
+    },
+    "role" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "cargo"
           }
         }
       }
