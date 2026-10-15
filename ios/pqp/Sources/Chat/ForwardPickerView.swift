@@ -63,52 +63,84 @@ final class ForwardPickerModel {
 
     // MARK: Loading
 
-    /// Conversations first (one request, and what people forward to most),
-    /// then each server's channels and this account's permissions in them, one
-    /// server at a time so the list fills in rather than waiting on all of them.
+    /// Conversations first (one request, and what people forward to most), then
+    /// every server's channels and this account's permissions in them, a few
+    /// servers at a time so the list fills in rather than waiting on all of
+    /// them. Whatever loaded is kept; anything that did not sets `loadFailed`,
+    /// which the screen says out loud with a way to try again.
     func load(session: SessionStore) async {
         isLoading = true
+        loadFailed = false
+        conversations = []
+        channels = []
         let api = session.api
         let stay = source.stayInServerId
 
-        if stay == nil, let list = try? await api.conversations() {
-            conversations = list
-                .sorted { ($0.lastMessageAt ?? .distantPast) > ($1.lastMessageAt ?? .distantPast) }
-                .map { convo in
-                    ForwardTarget(
-                        channelId: convo.channelId, title: convo.title, serverId: nil,
-                        serverName: nil, iconUrl: convo.participants.first?.avatarUrl,
-                        seed: convo.participants.first?.id ?? convo.channelId,
-                        isConversation: true
-                    )
-                }
+        if stay == nil {
+            if let list = try? await api.conversations() {
+                conversations = list
+                    .sorted { ($0.lastMessageAt ?? .distantPast) > ($1.lastMessageAt ?? .distantPast) }
+                    .map { convo in
+                        ForwardTarget(
+                            channelId: convo.channelId, title: convo.title, serverId: nil,
+                            serverName: nil, iconUrl: convo.participants.first?.avatarUrl,
+                            seed: convo.participants.first?.id ?? convo.channelId,
+                            isConversation: true
+                        )
+                    }
+            } else {
+                loadFailed = true
+            }
         }
 
         guard let servers = try? await api.servers() else {
-            loadFailed = conversations.isEmpty
+            loadFailed = true
             isLoading = false
             return
         }
-        for server in servers where stay == nil || server.id == stay {
-            guard !Task.isCancelled else { return }
-            guard let list = try? await api.channels(serverId: server.id) else { continue }
-            // Where the server would refuse a send is not offered. A failed
-            // permissions read offers everything: the server is the authority
-            // and says `cannot_send` per target.
-            let permissions = try? await api.fetchMemberPermissions(serverId: server.id)
-            let targets = list
-                .filter { $0.isText && (permissions?.can(PermissionBit.sendMessages, channelId: $0.id) ?? true) }
-                .sorted { $0.position < $1.position }
-                .map { channel in
-                    ForwardTarget(
-                        channelId: channel.id, title: "#\(channel.name)", serverId: server.id,
-                        serverName: server.name, iconUrl: server.iconUrl, seed: server.id,
-                        isConversation: false
-                    )
-                }
-            channels.append(contentsOf: targets)
+        let wanted = servers.enumerated().filter { stay == nil || $0.element.id == stay }
+
+        // Bounded: a few servers in flight, results appended as they land but
+        // kept in the servers' own order.
+        var byIndex: [Int: [ForwardTarget]] = [:]
+        await withTaskGroup(of: (Int, [ForwardTarget]?).self) { group in
+            var next = 0
+            func start() {
+                guard next < wanted.count else { return }
+                let (index, server) = wanted[next]
+                next += 1
+                group.addTask { (index, await Self.targets(in: server, api: api)) }
+            }
+            for _ in 0..<min(Self.concurrency, wanted.count) { start() }
+            for await (index, targets) in group {
+                if let targets { byIndex[index] = targets } else { loadFailed = true }
+                channels = byIndex.keys.sorted().flatMap { byIndex[$0] ?? [] }
+                start()
+            }
         }
+        guard !Task.isCancelled else { return }
         isLoading = false
+    }
+
+    private static let concurrency = 4
+
+    /// One server's channels this account may send in, or nil when its channel
+    /// list could not be read. Where the server would refuse a send is not
+    /// offered; a failed permissions read offers everything, since the server is
+    /// the authority and says `cannot_send` per target.
+    private nonisolated static func targets(in server: Server, api: APIClient) async -> [ForwardTarget]? {
+        guard let list = try? await api.channels(serverId: server.id) else { return nil }
+        let permissions = try? await api.fetchMemberPermissions(serverId: server.id)
+        return list
+            .filter { $0.isText && (permissions?.can(PermissionBit.sendMessages, channelId: $0.id) ?? true) }
+            .sorted { $0.position < $1.position }
+            .map { channel in
+                ForwardTarget(
+                    channelId: channel.id, title: "#\(channel.name)", serverId: server.id,
+                    serverName: server.name, iconUrl: server.iconUrl, seed: server.id,
+                    isConversation: false
+                )
+            }
     }
 
     // MARK: What the list shows
@@ -293,11 +325,20 @@ struct ForwardPickerView: View {
                         .accessibilityIdentifier("forward.stays")
                 }
 
-                if model.loadFailed {
-                    Text("Couldn't load your servers.")
-                        .font(Typography.callout)
-                        .foregroundStyle(Palette.danger)
-                        .padding(Metrics.hPadding)
+                if model.loadFailed && !model.isLoading {
+                    HStack(spacing: 10) {
+                        Text("Couldn't load all your places.")
+                            .font(Typography.callout)
+                            .foregroundStyle(Palette.danger)
+                        Spacer(minLength: 0)
+                        Button("Try again") { Task { await model.load(session: session) } }
+                            .font(Typography.callout.weight(.semibold))
+                            .foregroundStyle(Palette.signal)
+                            .accessibilityIdentifier("forward.reload")
+                    }
+                    .padding(.horizontal, Metrics.hPadding)
+                    .padding(.vertical, 8)
+                    .accessibilityIdentifier("forward.loadFailed")
                 }
 
                 section(String(localized: "Recent"), rows: model.recentRows)

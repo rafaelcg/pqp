@@ -221,12 +221,12 @@
         }
       }
     },
-    "Couldn't load your servers." : {
+    "Couldn't load all your places." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu pra carregar teus servidores."
+            "value" : "Não deu pra carregar todos os teus lugares."
           }
         }
       }

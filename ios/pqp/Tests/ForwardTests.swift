@@ -577,6 +577,24 @@ final class ForwardTests: XCTestCase {
         XCTAssertNil(outcomes[0].serverId, "a conversation has no server")
     }
 
+    /// A row about a target we can name, with a field this build cannot read,
+    /// is recorded as unavailable instead of dropped: dropped, the place would
+    /// look unanswered although it may well have gone out.
+    func testAnIdentifiableRowWithAnUnreadableFieldIsKeptAsUnavailable() throws {
+        let json = """
+        {"results":[
+          {"ok":"yes","target":{"channelId":"c1"}},
+          {"target":{"channelId":"c2"},"reason":7},
+          {"ok":true,"target":{"channelId":"c3"},"channelId":"c3","retryAfterMs":"soon"}
+        ]}
+        """
+        let outcomes = try Coding.decoder.decode(ForwardResponse.self, from: Data(json.utf8)).outcomes
+        XCTAssertEqual(outcomes.map(\.channelId), ["c1", "c2", "c3"])
+        XCTAssertEqual(outcomes[0].refusal, .unavailable)
+        XCTAssertEqual(outcomes[1].refusal, .unavailable)
+        XCTAssertTrue(outcomes[2].ok, "a bad optional field does not cost an answer that said ok")
+    }
+
     func testEveryRefusalHasItsOwnSentence() {
         let reasons: [ForwardRefusal] = [
             .noAccess, .cannotSend, .badTarget, .staysInServer, .unreachable,

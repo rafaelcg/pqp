@@ -224,7 +224,10 @@ struct HomeView: View {
     /// first and then asks for the `.server` it turned into, so by this point
     /// every case is a place that either exists or does not.
     private func follow(_ request: DeepLinkTarget) async {
-        defer { session.navigationHandled() }
+        // A request that was superseded while this one waited is not
+        // "handled" by this call: the newer one is on its own task.
+        var superseded = false
+        defer { if !superseded { session.navigationHandled() } }
 
         // A place asked for while a place this stack opened is still up (a
         // forwarded card tapped inside a channel a link brought us to). A
@@ -238,6 +241,10 @@ struct HomeView: View {
             if restoredChannel != nil {
                 restoredChannel = nil
                 try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled, session.navigationRequest == request else {
+                    superseded = true
+                    return
+                }
             }
         }
 

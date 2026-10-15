@@ -549,14 +549,40 @@ struct ForwardOutcome: Sendable, Equatable {
 struct ForwardResponse: Decodable, Sendable {
     let outcomes: [ForwardOutcome]
 
+    /// Every field optional and read with `try?`: a row with one unreadable
+    /// field is still a row about a target we can name, and that target must
+    /// not look unanswered (it may well have gone out). The same `nonce` on a
+    /// retry is what keeps a retry from posting a second card.
     private struct Row: Decodable {
-        struct Target: Decodable { let channelId: String? }
-        let ok: Bool
+        struct Target: Decodable {
+            let channelId: String?
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                channelId = (try? c.decodeIfPresent(String.self, forKey: .channelId)) ?? nil
+            }
+            private enum CodingKeys: String, CodingKey { case channelId }
+        }
+
+        let ok: Bool?
         let target: Target?
         let channelId: String?
         let serverId: String?
         let reason: String?
         let retryAfterMs: Int?
+
+        private enum CodingKeys: String, CodingKey {
+            case ok, target, channelId, serverId, reason, retryAfterMs
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            ok = (try? c.decodeIfPresent(Bool.self, forKey: .ok)) ?? nil
+            target = (try? c.decodeIfPresent(Target.self, forKey: .target)) ?? nil
+            channelId = (try? c.decodeIfPresent(String.self, forKey: .channelId)) ?? nil
+            serverId = (try? c.decodeIfPresent(String.self, forKey: .serverId)) ?? nil
+            reason = (try? c.decodeIfPresent(String.self, forKey: .reason)) ?? nil
+            retryAfterMs = (try? c.decodeIfPresent(Int.self, forKey: .retryAfterMs)) ?? nil
+        }
     }
 
     private enum CodingKeys: String, CodingKey { case results }
@@ -570,10 +596,16 @@ struct ForwardResponse: Decodable, Sendable {
                 _ = try? list.decode(JSONValue.self)
                 continue
             }
+            let id = row.channelId ?? row.target?.channelId ?? ""
+            // Neither somebody to attach it to nor a plain answer: nothing to
+            // record. (A person target has no channel id and is kept.)
+            guard !id.isEmpty || row.ok != nil else { continue }
+            // An answer that does not say `ok: true` plainly is not claimed as
+            // sent; `unavailable` is the catch-all.
             rows.append(ForwardOutcome(
-                channelId: row.channelId ?? row.target?.channelId ?? "",
+                channelId: id,
                 serverId: row.serverId,
-                refusal: row.ok ? nil : ForwardRefusal(wire: row.reason ?? ""),
+                refusal: row.ok == true ? nil : ForwardRefusal(wire: row.reason ?? ""),
                 retryAfterMs: row.retryAfterMs
             ))
         }
