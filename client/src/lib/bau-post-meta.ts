@@ -98,6 +98,15 @@ export interface BauPostMeta extends BauPostTarget {
   teaser: string | null;
   /** This API's stable cover path, a YouTube poster, or null. */
   coverUrl: string | null;
+  /**
+   * What the API says its own cover is, each null when unknown (a YouTube
+   * poster, a slow bucket, an older API). Null means "unknown", never "wrong":
+   * a card built without them is the card this page always had.
+   */
+  coverType?: string | null;
+  coverWidth?: number | null;
+  coverHeight?: number | null;
+  coverBytes?: number | null;
   /** ISO instant, for the structured data. */
   publishedAt: string | null;
   community: CommunityMeta;
@@ -111,6 +120,57 @@ export interface BauPostMetaOptions {
   /** Where relative image paths resolve against. No trailing slash. */
   apiOrigin: string;
   locale: "pt-BR" | "en";
+}
+
+/**
+ * What X (and the unfurlers that follow its rules) will take as a card image:
+ * jpg, png, webp or gif, at most 5 MB, and for `summary_large_image` at least
+ * 300x157 (`summary`: 144x144). X crops a large card to about 2:1, so a picture
+ * that is not close to 1.91:1 is still a large card, just cropped; a picture
+ * BELOW the floor is not shown on one at all, which is the placeholder icon.
+ * We cannot enlarge a picture here (no image library in an edge worker), so a
+ * known-too-small cover is moved to the small card, and a known-unusable one
+ * (wrong format, over 5 MB) is passed over for the next image.
+ */
+const CARD_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const CARD_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const LARGE_MIN = { width: 300, height: 157 };
+const SMALL_MIN = { width: 144, height: 144 };
+
+/** The site's own card, whose size is written in `index.html`. */
+const SITE_CARD = { type: "image/jpeg", width: 1200, height: 630 };
+
+interface CardImage {
+  url: string;
+  large: boolean;
+  type: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+/**
+ * Whether the API's own cover can be this card's picture, and on which card.
+ * Unknown facts pass: only a fact that says "X will not show this" rejects.
+ */
+function coverVerdict(post: BauPostMeta): "large" | "small" | "unusable" {
+  const { coverType, coverWidth, coverHeight, coverBytes } = post;
+  // Empty is a fact, not an absence: an object with no bytes is not a picture.
+  if (coverBytes != null && (coverBytes === 0 || coverBytes > CARD_IMAGE_MAX_BYTES)) {
+    return "unusable";
+  }
+  if (coverType != null && !CARD_IMAGE_TYPES.includes(coverType)) {
+    return "unusable";
+  }
+  if (coverWidth != null && coverHeight != null) {
+    if (coverWidth >= LARGE_MIN.width && coverHeight >= LARGE_MIN.height) {
+      return "large";
+    }
+    if (coverWidth >= SMALL_MIN.width && coverHeight >= SMALL_MIN.height) {
+      return "small";
+    }
+    return "unusable";
+  }
+  return "large";
 }
 
 const TITLE_MAX = 90;
@@ -170,8 +230,37 @@ export function renderBauPostHead(
   // the site's card. A wide card only when the picture is wide: a banner and a
   // post image are both fit for it, and so is the site's own 1200x630 card; a
   // square icon is not, and gets the small one.
-  const image = cover ?? banner ?? icon ?? `${options.siteOrigin}/images/og-image.jpg`;
-  const large = Boolean(cover ?? banner) || !icon;
+  const verdict = cover ? coverVerdict(post) : "unusable";
+  let chosen: CardImage;
+  if (cover && verdict !== "unusable") {
+    chosen = {
+      url: cover,
+      large: verdict === "large",
+      type: post.coverType ?? null,
+      width: post.coverWidth ?? null,
+      height: post.coverHeight ?? null,
+    };
+  } else if (banner) {
+    chosen = { url: banner, large: true, type: null, width: null, height: null };
+  } else if (icon) {
+    chosen = { url: icon, large: false, type: null, width: null, height: null };
+  } else {
+    chosen = {
+      url: `${options.siteOrigin}/images/og-image.jpg`,
+      large: true,
+      ...SITE_CARD,
+    };
+  }
+  const image = chosen.url;
+  const large = chosen.large;
+  // The size and format only when they are KNOWN: a tag that guesses is worse
+  // than none, and an unfurler that has them can reserve the space and skip a
+  // picture it would refuse before it downloads anything.
+  const imageFacts = [
+    ...(chosen.type ? [`<meta property="og:image:type" content="${escapeHtml(chosen.type)}" />`] : []),
+    ...(chosen.width ? [`<meta property="og:image:width" content="${chosen.width}" />`] : []),
+    ...(chosen.height ? [`<meta property="og:image:height" content="${chosen.height}" />`] : []),
+  ];
   const e = escapeHtml;
 
   const jsonLd = JSON.stringify({
@@ -202,6 +291,7 @@ export function renderBauPostHead(
     `<meta property="og:title" content="${e(title)}" />`,
     `<meta property="og:description" content="${e(description)}" />`,
     `<meta property="og:image" content="${e(image)}" />`,
+    ...imageFacts,
     `<meta property="og:image:alt" content="${e(post.title?.trim() || post.community.name)}" />`,
     `<meta name="twitter:card" content="${large ? "summary_large_image" : "summary"}" />`,
     `<meta name="twitter:title" content="${e(title)}" />`,

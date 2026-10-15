@@ -89,6 +89,19 @@ export const publicBauPostSchema = z.object({
    * a video with a chosen cover), a YouTube poster, or null.
    */
   coverUrl: z.string().nullable().default(null),
+  /**
+   * What the API's own cover is, for an unfurl card that wants to say so
+   * (`og:image:type` / `width` / `height`) and to choose a large card or a small
+   * one. Each is null when it is not known, and all four are null for a cover
+   * that is not ours (a YouTube poster) or when the bucket was slow to answer:
+   * a consumer must treat null as "unknown", never as "wrong".
+   * `coverType` and the two sizes are read from the picture's own header, not
+   * from what the uploader declared; `coverBytes` is the object's size.
+   */
+  coverType: z.string().nullable().default(null),
+  coverWidth: z.number().int().positive().nullable().default(null),
+  coverHeight: z.number().int().positive().nullable().default(null),
+  coverBytes: z.number().int().nonnegative().nullable().default(null),
   likeCount: z.number().int().nonnegative(),
   commentCount: z.number().int().nonnegative(),
   publishedAt: z.string().nullable(),

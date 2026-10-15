@@ -15,6 +15,7 @@ import {
   postSelectSql,
   type PostRow,
 } from "./community-home.js";
+import { peekCoverInfo } from "./community-home-cover-info.js";
 import { teaserFromBody } from "./community-home-share.js";
 
 /**
@@ -249,6 +250,10 @@ export async function getPublicBauPost(
     coverUrl = coverPath(slug, row.id);
   }
 
+  // What the share card needs to know about our own cover before it is asked
+  // to fetch it. Never blocks the page: see `coverFacts`.
+  const facts = await coverFacts(row, media);
+
   // Which of the mentioned channels everybody can see. One query, and only when
   // a mention exists at all.
   const ids = mentionedChannelIds([row.title, row.body, row.teaser]);
@@ -287,6 +292,10 @@ export async function getPublicBauPost(
     media,
     posterUrl,
     coverUrl,
+    coverType: facts?.type ?? null,
+    coverWidth: facts?.width ?? null,
+    coverHeight: facts?.height ?? null,
+    coverBytes: facts?.bytes ?? null,
     likeCount: Number(row.like_count),
     commentCount: Number(row.comment_count),
     publishedAt: row.published_at?.toISOString() ?? null,
@@ -299,15 +308,40 @@ export async function getPublicBauPost(
 }
 
 /**
- * Where `GET …/posts/:postId/cover` sends the browser: a fresh signed GET of
- * the post's picture. Null (a 404) for a post that does not qualify AND for one
- * that qualifies but has no picture of its own, so the two cannot be told
- * apart either.
+ * The object a post's cover is, and where a signed copy of it lives. Null (a
+ * 404) for a post that does not qualify AND for one that qualifies but has no
+ * picture of its own, so the two cannot be told apart either.
+ *
+ * `key` is the bucket key, which is IMMUTABLE: a replaced picture is a new
+ * upload with a new key (both columns are unique per claimed upload), so a
+ * validator derived from it can never name two different pictures. `signedUrl`
+ * is what the route redirects to when it will not serve the bytes itself.
  */
-export async function getPublicBauPostCoverTarget(
+export interface PublicBauCover {
+  key: string;
+  signedUrl: string;
+}
+
+function coverOf(
+  row: PostRow,
+  media: ReturnType<typeof buildMedia>,
+): PublicBauCover | null {
+  // `buildMedia` is what decides a cover exists (storage configured, the
+  // custom-cover flag for a video's poster); the key is read from the row only
+  // once it has said so, so this cannot disagree with `coverUrl` above.
+  if (media?.kind === "image" && media.url && row.media_storage_key) {
+    return { key: row.media_storage_key, signedUrl: media.url };
+  }
+  if (media?.kind === "video" && media.posterUrl && row.poster_storage_key) {
+    return { key: row.poster_storage_key, signedUrl: media.posterUrl };
+  }
+  return null;
+}
+
+export async function getPublicBauPostCover(
   slug: string,
   postId: string,
-): Promise<string | null> {
+): Promise<PublicBauCover | null> {
   if (!isStorageConfigured()) {
     return null;
   }
@@ -315,14 +349,53 @@ export async function getPublicBauPostCoverTarget(
   if (!row) {
     return null;
   }
-  const media = buildMedia(row, true, BAU_PUBLIC_MEDIA_TTL_SECONDS);
-  if (media?.kind === "image") {
-    return media.url;
+  return coverOf(row, buildMedia(row, true, BAU_PUBLIC_MEDIA_TTL_SECONDS));
+}
+
+/**
+ * How long the post page waits for the bucket to describe its cover. The page
+ * is the product and the dimensions are a hint for an unfurler: past this the
+ * card is built without them, exactly as before this existed. Only a COLD cover
+ * pays it (the answer is remembered per storage key, see
+ * `community-home-cover-info.ts`), and it is the first scrape of a link that
+ * the hint exists for, so a wait on a miss is deliberate and a short one.
+ */
+const COVER_FACTS_BUDGET_MS = 500;
+
+interface CoverFacts {
+  type: string | null;
+  width: number | null;
+  height: number | null;
+  bytes: number;
+}
+
+/**
+ * The size, format and pixels of this post's own cover, for `og:image:width`,
+ * `height` and `type` and for the decision between a large card and a small one.
+ * Null for a cover that is not ours (a YouTube poster), for a post with none,
+ * and for ANY failure or a slow bucket: it fails OPEN, because a share card
+ * without dimensions is what every card was until now, and a post page that
+ * errors or stalls over a hint is worse than a card with no hint. Giving up
+ * also cancels the bucket requests (see `peekCoverInfo`).
+ */
+async function coverFacts(
+  row: PostRow,
+  media: ReturnType<typeof buildMedia>,
+): Promise<CoverFacts | null> {
+  const cover = coverOf(row, media);
+  if (!cover) {
+    return null;
   }
-  if (media?.kind === "video") {
-    return media.posterUrl ?? null;
+  const info = await peekCoverInfo(cover.key, COVER_FACTS_BUDGET_MS);
+  if (!info) {
+    return null;
   }
-  return null;
+  return {
+    type: info.image?.type ?? null,
+    width: info.image?.width ?? null,
+    height: info.image?.height ?? null,
+    bytes: info.length,
+  };
 }
 
 /**

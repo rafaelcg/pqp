@@ -139,6 +139,95 @@ describe("renderBauPostHead", () => {
     expect(nothing).toContain('<meta name="twitter:card" content="summary_large_image" />');
   });
 
+  it("says what the picture is when the API knows: type, width and height, once each", () => {
+    const head = renderBauPostHead(
+      { ...POST, coverType: "image/png", coverWidth: 1280, coverHeight: 720, coverBytes: 90_000 },
+      OPTIONS,
+    );
+    for (const tag of [
+      '<meta property="og:image:type" content="image/png" />',
+      '<meta property="og:image:width" content="1280" />',
+      '<meta property="og:image:height" content="720" />',
+    ]) {
+      expect(head.split(tag)).toHaveLength(2);
+    }
+    // Next to the image they describe, not scattered.
+    expect(head.indexOf("og:image:type")).toBeGreaterThan(head.indexOf('property="og:image"'));
+    expect(head).toContain('<meta name="twitter:card" content="summary_large_image" />');
+
+    // Unknown is not printed: a guessed size is worse than none.
+    const unknown = renderBauPostHead(POST, OPTIONS);
+    expect(unknown).not.toContain("og:image:width");
+    expect(unknown).not.toContain("og:image:height");
+    expect(unknown).not.toContain("og:image:type");
+    expect(unknown).toContain('<meta name="twitter:card" content="summary_large_image" />');
+  });
+
+  it("keeps a large card for a picture that is not 1.91:1: X crops it", () => {
+    for (const [width, height] of [
+      [1080, 1080],
+      [1080, 1920],
+      [3000, 500],
+      [1200, 630],
+    ] as const) {
+      const head = renderBauPostHead(
+        { ...POST, coverType: "image/jpeg", coverWidth: width, coverHeight: height },
+        OPTIONS,
+      );
+      expect(head, `${width}x${height}`).toContain('content="summary_large_image"');
+      expect(head).toContain(`og:image:width" content="${width}"`);
+    }
+  });
+
+  it("moves a picture X would not show on a large card to the small one, or passes it over", () => {
+    // Under 300x157 the large card shows the placeholder; 144x144 is the small card's floor.
+    const small = renderBauPostHead(
+      { ...POST, coverType: "image/png", coverWidth: 200, coverHeight: 200 },
+      OPTIONS,
+    );
+    expect(small).toContain('<meta name="twitter:card" content="summary" />');
+    expect(small).toContain(`/posts/${POST_ID}/cover"`);
+
+    // Exactly the large card's floor is still a large card.
+    expect(
+      renderBauPostHead({ ...POST, coverWidth: 300, coverHeight: 157, coverType: "image/png" }, OPTIONS),
+    ).toContain('content="summary_large_image"');
+    expect(
+      renderBauPostHead({ ...POST, coverWidth: 299, coverHeight: 157, coverType: "image/png" }, OPTIONS),
+    ).toContain('content="summary"');
+
+    // Below even that, and over 5 MB, and a format X refuses: the next picture, with no stale facts.
+    for (const facts of [
+      { coverWidth: 100, coverHeight: 100, coverType: "image/png" },
+      { coverBytes: 5 * 1024 * 1024 + 1, coverType: "image/png" },
+      // An empty object is not a picture.
+      { coverBytes: 0 },
+      { coverType: "image/avif" },
+      { coverType: "image/svg+xml" },
+    ]) {
+      const head = renderBauPostHead({ ...POST, ...facts }, OPTIONS);
+      expect(head, JSON.stringify(facts)).not.toContain("/cover");
+      expect(head).toContain('content="https://api.pqp.gg/api/servers/abc/banner?v=1"');
+      expect(head).not.toContain("og:image:width");
+      expect(head).not.toContain("og:image:type");
+    }
+
+    // The 5 MB line itself is allowed.
+    expect(
+      renderBauPostHead({ ...POST, coverBytes: 5 * 1024 * 1024, coverType: "image/webp" }, OPTIONS),
+    ).toContain("/cover");
+  });
+
+  it("states the site card's own size when it is the picture, which is known from index.html", () => {
+    const head = renderBauPostHead(
+      { ...POST, coverUrl: null, community: { ...POST.community, bannerUrl: null, iconUrl: null } },
+      OPTIONS,
+    );
+    expect(head).toContain('<meta property="og:image:width" content="1200" />');
+    expect(head).toContain('<meta property="og:image:height" content="630" />');
+    expect(head).toContain('<meta property="og:image:type" content="image/jpeg" />');
+  });
+
   it("takes a YouTube poster as it is and refuses anything that is not https", () => {
     const yt = renderBauPostHead(
       { ...POST, coverUrl: "https://i.ytimg.com/vi/abc/hqdefault.jpg" },
@@ -313,6 +402,176 @@ describe("the middleware on /c/<slug>/p/<postId>", () => {
     expect(body).not.toContain("Patch 1.2");
     expect(body).not.toContain("Mesa da Tues");
     expect(body).toContain('<div id="root">');
+  });
+
+  it("replaces the shell's own image size, so there is exactly one of each and it is the cover's", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ...API_ANSWER,
+          post: {
+            ...API_ANSWER.post,
+            coverType: "image/jpeg",
+            coverWidth: 1280,
+            coverHeight: 720,
+            coverBytes: 120_000,
+          },
+        }),
+      ),
+    );
+    const body = await (await onRequest(ctx(`/c/mesa-da-tues/p/${POST_ID}`))).text();
+    expect(body.match(/property="og:image:width"/g)).toHaveLength(1);
+    expect(body.match(/property="og:image:height"/g)).toHaveLength(1);
+    expect(body.match(/property="og:image:type"/g)).toHaveLength(1);
+    expect(body).toContain('<meta property="og:image:width" content="1280" />');
+    // The shell's 1200x630 is gone: it described a picture that is not on this page.
+    expect(body).not.toContain('og:image:width" content="1200"');
+  });
+
+  it("reads the cover facts only as positive whole numbers and plain strings", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ...API_ANSWER,
+          post: {
+            ...API_ANSWER.post,
+            coverType: 7,
+            coverWidth: "1280",
+            coverHeight: -3,
+            coverBytes: 1.5,
+          },
+        }),
+      ),
+    );
+    const body = await (await onRequest(ctx(`/c/mesa-da-tues/p/${POST_ID}`))).text();
+    // None of it reaches a tag, and the card is the one an older API gets.
+    expect(body).not.toContain('og:image:width" content="1280"');
+    expect(body).not.toContain('og:image:type" content="7"');
+    expect(body).toContain('content="summary_large_image"');
+  });
+
+  it("reads an empty cover as a fact the card acts on, not as 'unknown'", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ ...API_ANSWER, post: { ...API_ANSWER.post, coverBytes: 0 } }),
+      ),
+    );
+    const body = await (await onRequest(ctx(`/c/mesa-da-tues/p/${POST_ID}`))).text();
+    // Passed over for the next picture (the room's banner), not advertised. (The
+    // embedded answer below the tags still names the cover: it is the API's own.)
+    const [tags] = body.split('<script type="application/json"');
+    expect(tags).not.toContain("/cover");
+    expect(tags).toContain('content="https://api.test/api/servers/abc/banner?v=1"');
+  });
+
+  it("writes the card for every crawler that unfurls links, whatever it sends", async () => {
+    const crawlers = [
+      "Twitterbot/1.0",
+      "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+      "LinkedInBot/1.0 (compatible; Mozilla/5.0; Apache-HttpClient +http://www.linkedin.com)",
+      "Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)",
+      "WhatsApp/2.23.20.0 A",
+      "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
+      "TelegramBot (like TwitterBot)",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15 (Applebot/0.1)",
+      "redditbot/1.0",
+      "",
+    ];
+    // What they ask for varies as much as who they are: nothing, anything, HTML.
+    const accepts = [undefined, "*/*", "text/html,application/xhtml+xml", "text/html;q=0.9,*/*;q=0.8"];
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(API_ANSWER)));
+    for (const agent of crawlers) {
+      for (const accept of accepts) {
+        const headers: Record<string, string> = {};
+        if (agent) {
+          headers["user-agent"] = agent;
+        }
+        if (accept) {
+          headers.accept = accept;
+        }
+        const res = await onRequest(ctx(`/c/mesa-da-tues/p/${POST_ID}`, headers));
+        const body = await res.text();
+        const label = `${agent || "(none)"} / ${accept ?? "(none)"}`;
+        expect(res.status, label).toBe(200);
+        expect(body, label).toContain("<title>Patch 1.2 saiu · Mesa da Tues</title>");
+        expect(body, label).toContain('<meta name="twitter:card" content="summary_large_image" />');
+        expect(body, label).toContain(`/posts/${POST_ID}/cover" />`);
+      }
+    }
+  });
+
+  it("answers a HEAD for the page with the headers its GET carries, and no body", async () => {
+    const fetchMock = vi.fn(async () => Response.json(API_ANSWER));
+    vi.stubGlobal("fetch", fetchMock);
+    const path = `/c/mesa-da-tues/p/${POST_ID}`;
+    const got = await onRequest(ctx(path, { "accept-language": "en-US" }));
+    const head = await onRequest({
+      ...ctx(path, { "accept-language": "en-US" }),
+      request: new Request(`https://pqp.gg${path}`, {
+        method: "HEAD",
+        headers: { "accept-language": "en-US" },
+      }),
+    });
+    expect(head.status).toBe(got.status);
+    expect(head.status).toBe(200);
+    for (const name of ["content-type", "cache-control", "vary", "x-robots-tag"]) {
+      expect(head.headers.get(name), name).toBe(got.headers.get(name));
+    }
+    expect(head.headers.get("content-type")).toContain("text/html");
+    expect(head.headers.get("cache-control")).toBe("public, max-age=60");
+    expect(head.headers.get("content-length")).toBeNull();
+    expect(await head.text()).toBe("");
+    // It asked the API for this post, like the GET: the answer is the card's.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a HEAD for a post the API says is gone is the GET's noindex, and a HEAD while the API is down is still a 200", async () => {
+    const path = `/c/mesa-da-tues/p/${POST_ID}`;
+    const asHead = () => ({
+      ...ctx(path),
+      request: new Request(`https://pqp.gg${path}`, { method: "HEAD" }),
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Not found" }, { status: 404 })));
+    const gone = await onRequest(asHead());
+    expect(gone.status).toBe(200);
+    expect(gone.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    expect(gone.headers.get("cache-control")).toBe("no-store");
+
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
+    const down = await onRequest(asHead());
+    expect(down.status).toBe(200);
+    expect(await down.text()).toBe("");
+  });
+
+  it("forwards the GET it made, not the HEAD, to the asset layer; other methods and other paths are untouched", async () => {
+    const seen: string[] = [];
+    const spy = {
+      ...ctx(`/c/mesa-da-tues/p/${POST_ID}`),
+      request: new Request(`https://pqp.gg/c/mesa-da-tues/p/${POST_ID}`, { method: "HEAD" }),
+      next: async (input?: Request | string) => {
+        seen.push(input instanceof Request ? input.method : "(none)");
+        return new Response(INDEX_HTML, { headers: { "content-type": "text/html" } });
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(API_ANSWER)));
+    await onRequest(spy);
+    expect(seen).toEqual(["GET"]);
+
+    // A HEAD for something that has no card is passed straight through, as before.
+    seen.length = 0;
+    const other = {
+      ...spy,
+      request: new Request("https://pqp.gg/assets/app-abc123.js", { method: "HEAD" }),
+      next: async (input?: Request | string) => {
+        seen.push(input instanceof Request ? input.method : "(none)");
+        return new Response("", { headers: { "content-type": "text/javascript" } });
+      },
+    };
+    await onRequest(other);
+    expect(seen).toEqual(["(none)"]);
   });
 
   it("does not act on the community page, a malformed id or a POST", async () => {
