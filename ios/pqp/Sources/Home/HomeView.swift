@@ -2098,20 +2098,34 @@ struct ProfileView: View {
         }
     }
 
+    /// Sends a status and whatever was chosen meanwhile, one write at a time
+    /// (`OwnStatusMenu`), then reads the server when a frame from another device
+    /// arrived during them.
+    private func driveStatusWrites(_ first: String) async {
+        var next = OwnStatusMenu.Next.send(first)
+        while true {
+            switch next {
+            case .send(let value):
+                var ok = true
+                do { _ = try await session.api.setStatus(value) } catch { ok = false }
+                next = statusMenuState.completed(sent: value, ok: ok)
+            case .reread:
+                if let status = (try? await session.api.preferences())?.status {
+                    statusMenuState.serverStatus(status)
+                }
+                return
+            case .nothing:
+                return
+            }
+        }
+    }
+
     private var statusMenu: some View {
         Menu {
             ForEach(statusChoices, id: \.value) { choice in
                 Button {
-                    let token = statusMenuState.choose(choice.value)
-                    Task {
-                        do {
-                            _ = try await session.api.setStatus(choice.value)
-                            statusMenuState.succeeded(token, status: choice.value)
-                        } catch {
-                            // The server is the record; a failed set must not
-                            // leave the menu claiming a status nobody else sees.
-                            statusMenuState.failed(token)
-                        }
+                    if let first = statusMenuState.choose(choice.value) {
+                        Task { await driveStatusWrites(first) }
                     }
                 } label: {
                     Label(choice.label, systemImage: manualStatus == choice.value ? "checkmark" : "circle")

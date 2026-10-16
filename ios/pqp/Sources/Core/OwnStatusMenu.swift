@@ -1,26 +1,33 @@
 import Foundation
 
 /// What the status menu on the Tu screen shows, and what the server last
-/// confirmed. Several things move it at once: this device's own choices (each a
-/// write that can fail), the answer to those writes, and a frame from another
-/// device. The rules, in one place:
+/// confirmed. Several things move it: this device's own choices (each a write
+/// that can fail), and a frame from another device. The rules:
 ///
-///  - a choice shows at once; the LATEST choice is the one on screen, and only
-///    the latest write's outcome may change what is shown;
-///  - a write that succeeds confirms its value;
-///  - a write that fails, while it is still the latest, puts the menu back on the
-///    last CONFIRMED status (never on a neighbouring unconfirmed choice);
-///  - another device's status is confirmed the moment it arrives, and shown
-///    right away only when no write of ours is in the air (otherwise it flicks
-///    the menu mid-choice; it is what a failed latest write falls back to).
+///  - WRITES ARE SERIALISED. A choice made while a write is in the air is queued
+///    (only the latest queued choice is kept) and sent when that write answers, so
+///    the order the server applies them in is the order they were chosen in, and
+///    no response can be "older" than another;
+///  - the menu shows the latest choice at once; a write that fails puts it back on
+///    the last CONFIRMED status (unless a queued choice is about to be sent);
+///  - a status frame from another device while a write of ours is in the air is
+///    not trusted to be ahead of or behind it: it is remembered, and once the
+///    writes are done the server is READ for the truth;
+///  - with nothing in the air, a frame is confirmed and shown at once.
 struct OwnStatusMenu: Equatable {
     private(set) var shown: String
     private(set) var confirmed: String
-    private var latest = 0
-    /// The newest write that has succeeded. An older write answering after it is
-    /// history: the last choice made is the one the server is taken to hold.
-    private var confirmedToken = 0
-    private(set) var inFlight = 0
+    private(set) var writing = false
+    private var pending: String?
+    private var remoteDuringWrite = false
+
+    enum Next: Equatable {
+        case nothing
+        /// Send this status.
+        case send(String)
+        /// Read the account's status from the server and hand it to `serverStatus`.
+        case reread
+    }
 
     init(_ status: String = "online") {
         shown = status
@@ -28,37 +35,57 @@ struct OwnStatusMenu: Equatable {
     }
 
     /// The first read of the account's status.
-    mutating func loaded(_ status: String) {
+    mutating func loaded(_ status: String) { serverStatus(status) }
+
+    /// A read of the server's status (the first, or after overlapping updates).
+    mutating func serverStatus(_ status: String) {
         confirmed = status
-        if inFlight == 0 { shown = status }
+        if !writing { shown = status }
     }
 
-    /// A choice made on this device. The token identifies its write.
-    mutating func choose(_ status: String) -> Int {
-        latest += 1
-        inFlight += 1
+    /// A choice made on this device: shown now. Returns what to send right away,
+    /// or nil when a write is already in the air and this one waits its turn.
+    mutating func choose(_ status: String) -> String? {
         shown = status
-        return latest
-    }
-
-    mutating func succeeded(_ token: Int, status: String) {
-        inFlight = max(0, inFlight - 1)
-        if token >= confirmedToken {
-            confirmedToken = token
-            confirmed = status
+        if writing {
+            pending = status
+            return nil
         }
-        // The last write in the air has answered: the menu shows what the server
-        // holds (an older choice succeeding after a newer one failed).
-        if inFlight == 0 { shown = confirmed }
+        writing = true
+        return status
     }
 
-    mutating func failed(_ token: Int) {
-        inFlight = max(0, inFlight - 1)
-        if token == latest { shown = confirmed }
+    /// The write of `sent` answered.
+    mutating func completed(sent: String, ok: Bool) -> Next {
+        if ok { confirmed = sent }
+        if let queued = pending {
+            pending = nil
+            if queued == confirmed {
+                // The queued choice is what the server already holds.
+                return finish()
+            }
+            return .send(queued)
+        }
+        if !ok { shown = confirmed }
+        return finish()
+    }
+
+    private mutating func finish() -> Next {
+        writing = false
+        shown = confirmed
+        if remoteDuringWrite {
+            remoteDuringWrite = false
+            return .reread
+        }
+        return .nothing
     }
 
     mutating func remote(_ status: String) {
-        confirmed = status
-        if inFlight == 0 { shown = status }
+        if writing {
+            remoteDuringWrite = true
+        } else {
+            confirmed = status
+            shown = status
+        }
     }
 }

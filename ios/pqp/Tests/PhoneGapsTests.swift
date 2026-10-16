@@ -147,47 +147,43 @@ final class PhoneGapsTests: XCTestCase {
 
     // MARK: - The status menu
 
-    func testTheLatestFailedChoiceFallsBackToTheLastConfirmedStatus() {
+    func testAChoiceMadeWhileAWriteIsInTheAirWaitsItsTurn() {
         var menu = OwnStatusMenu("online")
-        let first = menu.choose("dnd")
-        let second = menu.choose("dnd")
-        menu.failed(first)
-        XCTAssertEqual(menu.shown, "dnd", "an older write failing leaves the newer choice alone")
-        menu.succeeded(second, status: "dnd")
-        XCTAssertEqual(menu.shown, "dnd")
-        XCTAssertEqual(menu.confirmed, "dnd")
+        XCTAssertEqual(menu.choose("dnd"), "dnd")
+        XCTAssertNil(menu.choose("invisible"), "queued, not sent beside the first")
+        XCTAssertNil(menu.choose("online"), "only the latest queued choice is kept")
+        XCTAssertEqual(menu.shown, "online")
+        XCTAssertEqual(menu.completed(sent: "dnd", ok: true), .send("online"))
     }
 
-    func testAFailureNeverRestoresAnUnconfirmedNeighbour() {
+    func testTheQueuedChoiceIsSentAfterTheFirstWriteAnswers() {
         var menu = OwnStatusMenu("online")
-        let a = menu.choose("dnd")
+        _ = menu.choose("dnd")
+        _ = menu.choose("invisible")
+        XCTAssertEqual(menu.completed(sent: "dnd", ok: true), .send("invisible"))
+        XCTAssertEqual(menu.completed(sent: "invisible", ok: true), .nothing)
+        XCTAssertEqual(menu.confirmed, "invisible")
+        XCTAssertEqual(menu.shown, "invisible")
+        XCTAssertFalse(menu.writing)
+    }
+
+    func testAFailedWriteFallsBackToTheLastConfirmedStatus() {
+        var menu = OwnStatusMenu("online")
+        _ = menu.choose("dnd")
+        XCTAssertEqual(menu.completed(sent: "dnd", ok: false), .nothing)
+        XCTAssertEqual(menu.shown, "online")
+        XCTAssertEqual(menu.confirmed, "online")
+    }
+
+    func testAFrameDuringAWriteIsReadBackFromTheServerAfterwards() {
+        var menu = OwnStatusMenu("online")
+        _ = menu.choose("dnd")
         menu.remote("invisible")
         XCTAssertEqual(menu.shown, "dnd", "a frame does not flick the menu mid-choice")
-        let b = menu.choose("online")
-        menu.failed(a)
-        menu.failed(b)
-        XCTAssertEqual(menu.shown, "invisible", "back to what the server confirmed, not to choice A")
-    }
-
-    func testAnOlderWriteSucceedingAfterANewerOneFailedShowsWhatTheServerHolds() {
-        var menu = OwnStatusMenu("online")
-        let dnd = menu.choose("dnd")
-        let online = menu.choose("online")
-        menu.failed(online)
-        XCTAssertEqual(menu.shown, "online", "the older write is still in the air, so nothing is settled yet")
-        menu.succeeded(dnd, status: "dnd")
-        XCTAssertEqual(menu.shown, "dnd")
-        XCTAssertEqual(menu.confirmed, "dnd")
-    }
-
-    func testAnOlderWriteAnsweringAfterANewerOneSucceededChangesNothing() {
-        var menu = OwnStatusMenu("online")
-        let dnd = menu.choose("dnd")
-        let online = menu.choose("online")
-        menu.succeeded(online, status: "online")
-        menu.succeeded(dnd, status: "dnd")
-        XCTAssertEqual(menu.confirmed, "online")
-        XCTAssertEqual(menu.shown, "online")
+        XCTAssertEqual(menu.completed(sent: "dnd", ok: true), .reread)
+        menu.serverStatus("invisible")
+        XCTAssertEqual(menu.shown, "invisible")
+        XCTAssertEqual(menu.confirmed, "invisible")
     }
 
     func testARemoteStatusShowsAtOnceWhenNothingIsInTheAir() {
