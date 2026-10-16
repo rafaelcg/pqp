@@ -887,13 +887,13 @@ function BannerRow({
     setCropping(file);
   }
 
-  function uploadCropped(file: File, region: CropRegion) {
+  function uploadCropped(file: File, region: CropRegion, picture: ImageBitmap) {
     setCropping(null);
     const failed = t("settings.profile.banner.failed");
     setAction("upload");
     void write.run(async () => {
       try {
-        onUserUpdated(await uploadUserBanner(file, region));
+        onUserUpdated(await uploadUserBanner(file, region, picture));
       } catch (error) {
         throw localizedUploadFailure(error, failed);
       }
@@ -1037,8 +1037,9 @@ function BannerRow({
       file={cropping}
       shape="banner"
       onCancel={() => setCropping(null)}
-      onConfirm={(region) => {
-        if (cropping) uploadCropped(cropping, region);
+      onConfirm={(region, picture) => {
+        if (cropping) uploadCropped(cropping, region, picture);
+        else picture.close();
       }}
     />
     </FileDropZone>

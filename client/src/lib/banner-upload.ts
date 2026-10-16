@@ -20,7 +20,8 @@ import type { CropRegion } from "@/lib/image-crop";
  *  3. `POST /api/me/banner/claim` HEADs the object and swaps the columns.
  *
  * `region` is what the person framed in the crop step; without one it is the
- * centre crop.
+ * centre crop. `picture` is the crop step's decoded bitmap: given, the file is
+ * not decoded a second time, and the bitmap is closed here.
  *
  * The crop happens before any of it, so what the server is asked to sign is the
  * length of the *cropped* JPEG — the browser cannot mint a URL for a 200 KB
@@ -34,11 +35,12 @@ import type { CropRegion } from "@/lib/image-crop";
 export async function uploadUserBanner(
   file: Blob,
   region: CropRegion | null = null,
+  picture: ImageBitmap | null = null,
 ): Promise<User> {
   let cropped: Blob;
   try {
     cropped = await cropImageToRect(
-      file,
+      picture ?? file,
       USER_BANNER_WIDTH,
       USER_BANNER_HEIGHT,
       region,

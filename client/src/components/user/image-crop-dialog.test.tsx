@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CropRegion } from "@/lib/image-crop";
-import { loadCropImage, stubCropStepBrowser } from "@/test/crop-step";
+import { failCropImage, loadCropImage, stubCropStepBrowser } from "@/test/crop-step";
 import { ImageCropDialog, type ImageCropShape } from "./image-crop-dialog";
 
 /**
@@ -29,7 +29,7 @@ Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 const onCancel = vi.fn();
-const onConfirm = vi.fn<(region: CropRegion) => void>();
+const onConfirm = vi.fn<(region: CropRegion, picture: ImageBitmap) => void>();
 
 beforeEach(() => {
   host = document.createElement("div");
@@ -93,21 +93,37 @@ describe("the crop step", () => {
     expect(region.height).toBeCloseTo(1);
   });
 
-  it("lets go of the preview before the upload decodes the file again", async () => {
-    const revoke = vi.spyOn(URL, "revokeObjectURL");
-    let previewAtConfirm: Element | null | undefined;
-    onConfirm.mockImplementation(() => {
-      previewAtConfirm = document.querySelector("[data-crop-image]");
-    });
+  it("decodes the picture once and hands that decode to the upload", async () => {
+    const decode = vi.spyOn(globalThis, "createImageBitmap");
     await open("avatar");
-    await loadCropImage(800, 600);
+    const bitmap = await loadCropImage(800, 600);
     await saved();
     // A full-resolution decode is hundreds of megabytes for a phone photo:
-    // two at once is how a tab gets evicted on a phone.
-    expect(previewAtConfirm).toBeNull();
-    expect(revoke).toHaveBeenCalledWith("blob:crop-step");
+    // the upload crops from this one instead of decoding the file again.
+    expect(decode).toHaveBeenCalledTimes(1);
+    expect(onConfirm.mock.calls[0][1]).toBe(bitmap);
+    expect(document.querySelector("[data-crop-image]")).toBeNull();
     expect(save().disabled).toBe(true);
-    revoke.mockRestore();
+    // Handed on, so closing it is the upload's job, not the dialog's.
+    await act(async () => {
+      root!.render(
+        <ImageCropDialog file={null} shape="avatar" onCancel={onCancel} onConfirm={onConfirm} />,
+      );
+    });
+    expect(bitmap.closed).toBe(false);
+    decode.mockRestore();
+  });
+
+  it("releases the decode when the step closes without saving", async () => {
+    await open("avatar");
+    const bitmap = await loadCropImage(800, 600);
+    await act(async () => {
+      root!.render(
+        <ImageCropDialog file={null} shape="avatar" onCancel={onCancel} onConfirm={onConfirm} />,
+      );
+    });
+    expect(bitmap.closed).toBe(true);
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 
   it("draws the banner's frame at the banner's shape", async () => {
@@ -166,10 +182,7 @@ describe("the crop step", () => {
 
   it("says when this browser cannot open the picture, and keeps Save off", async () => {
     await open("avatar", "image/heic");
-    const image = document.querySelector<HTMLImageElement>("[data-crop-image]")!;
-    await act(async () => {
-      image.dispatchEvent(new Event("error"));
-    });
+    await failCropImage();
     expect(document.querySelector('[role="alert"]')?.textContent).toMatch(
       /can't open|não consegue/,
     );

@@ -45,6 +45,14 @@ import { cn } from "@/lib/utils";
  * frame takes arrow keys, + and - and 0 when it has focus. The slider is a
  * plain Radix slider, so it has its own keys too.
  *
+ * ONE DECODE. The picture is decoded once, here, with the same
+ * `createImageBitmap(…, { imageOrientation: "from-image" })` the upload has
+ * always used, and the preview is drawn from that bitmap into a canvas the size
+ * of the frame. Save hands the bitmap itself to the upload, which crops from it
+ * and closes it. A full-resolution decode of a 48 MP phone photo is about
+ * 190 MB, so a preview `<img>` plus a second decode for the upload was two of
+ * them at once, which is how a tab gets evicted on a phone.
+ *
  * An animated GIF is decoded to its first frame by `createImageBitmap`, so it
  * is saved as a still. The dialog says so rather than letting the animation in
  * the preview promise otherwise.
@@ -67,8 +75,12 @@ interface ImageCropDialogProps {
   file: File | null;
   shape: ImageCropShape;
   onCancel: () => void;
-  /** The part of the picture the person framed, as fractions of it. */
-  onConfirm: (region: CropRegion) => void;
+  /**
+   * The part of the picture the person framed, as fractions of it, and the
+   * decoded picture itself. The bitmap is the receiver's from here on: pass it
+   * to the upload, which closes it, or close it yourself.
+   */
+  onConfirm: (region: CropRegion, picture: ImageBitmap) => void;
 }
 
 export function ImageCropDialog({
@@ -83,7 +95,11 @@ export function ImageCropDialog({
   // State rather than a ref, so measuring and the wheel listener follow the
   // frame element itself: the dialog may mount it a render after it opens.
   const [frame, setFrame] = useState<HTMLDivElement | null>(null);
-  const [src, setSrc] = useState<string | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  /** The decoded picture, while this dialog still owns it. */
+  const [picture, setPicture] = useState<ImageBitmap | null>(null);
+  /** The same bitmap, for the cleanup that closes it unless Save handed it on. */
+  const ownedRef = useRef<ImageBitmap | null>(null);
   const [view, setView] = useState<CropView | null>(null);
   const [unreadable, setUnreadable] = useState(false);
   const [frameWidth, setFrameWidth] = useState(0);
@@ -91,42 +107,47 @@ export function ImageCropDialog({
   const frameWidthRef = useRef(0);
   /** Every pointer that is down on the frame, where it was last seen. */
   const pointers = useRef(new Map<number, { x: number; y: number }>());
-  /**
-   * What Save framed, held for one commit. The preview is a full-resolution
-   * decode of the file and the upload decodes it again, which for a 48 MP
-   * phone photo is a few hundred megabytes twice over. So Save first takes the
-   * preview out of the page and drops its URL, and only after that commit is
-   * the region handed back and the upload's own decode started.
-   */
-  const [confirmed, setConfirmed] = useState<CropRegion | null>(null);
-  const onConfirmRef = useRef(onConfirm);
-  onConfirmRef.current = onConfirm;
+  /** Save was pressed for this file: the bitmap has been handed on. */
+  const [saved, setSaved] = useState(false);
 
-  // A fresh object URL per file, released when the file changes or the dialog
-  // closes. The `<img>` honours EXIF orientation, which is the same picture
-  // `createImageBitmap(…, { imageOrientation: "from-image" })` decodes later.
+  // One decode per file, closed when the file changes or the dialog closes,
+  // unless Save handed it to the upload first. EXIF orientation is applied
+  // here, so the frame and the upload see the same upright picture.
   useEffect(() => {
+    setPicture(null);
     setView(null);
     setUnreadable(false);
-    setConfirmed(null);
+    setSaved(false);
     if (!file) {
-      setSrc(null);
       return;
     }
-    const url = URL.createObjectURL(file);
-    setSrc(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
-
-  useEffect(() => {
-    if (!confirmed) {
-      return;
-    }
-    if (src) {
-      URL.revokeObjectURL(src);
-    }
-    onConfirmRef.current(confirmed);
-  }, [confirmed, src]);
+    let alive = true;
+    createImageBitmap(file, { imageOrientation: "from-image" })
+      .then((bitmap) => {
+        if (!alive) {
+          bitmap.close();
+          return;
+        }
+        if (bitmap.width <= 0 || bitmap.height <= 0) {
+          bitmap.close();
+          setUnreadable(true);
+          return;
+        }
+        ownedRef.current = bitmap;
+        setPicture(bitmap);
+        setView(initialCropView(bitmap.width, bitmap.height, aspect));
+      })
+      .catch(() => {
+        if (alive) {
+          setUnreadable(true);
+        }
+      });
+    return () => {
+      alive = false;
+      ownedRef.current?.close();
+      ownedRef.current = null;
+    };
+  }, [file, aspect]);
 
   useLayoutEffect(() => {
     if (!frame) {
@@ -277,6 +298,46 @@ export function ImageCropDialog({
   const layout = view && frameWidth > 0 ? imageLayout(view, frameWidth) : null;
   const isGif = file?.type === "image/gif";
 
+  // The preview: the bitmap drawn at the view's position into a canvas the
+  // frame's size (in device pixels, so it stays sharp), never a second copy of
+  // the full picture.
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !picture || !layout || saved) {
+      return;
+    }
+    const ratio = window.devicePixelRatio || 1;
+    const width = Math.max(1, Math.round(frameWidth * ratio));
+    const height = Math.max(1, Math.round((frameWidth / aspect) * ratio));
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+    context.imageSmoothingQuality = "medium";
+    context.clearRect(0, 0, width, height);
+    context.drawImage(
+      picture,
+      layout.left * ratio,
+      layout.top * ratio,
+      layout.width * ratio,
+      layout.height * ratio,
+    );
+  });
+
+  function save() {
+    const bitmap = ownedRef.current;
+    if (!view || !bitmap || saved) {
+      return;
+    }
+    // Ownership moves with the call: the cleanup must not close a bitmap the
+    // upload is about to draw from.
+    ownedRef.current = null;
+    setSaved(true);
+    onConfirm(cropRegion(view), bitmap);
+  }
+
   return (
     <Dialog
       open={file !== null}
@@ -301,14 +362,10 @@ export function ImageCropDialog({
           </Button>
           <Button
             type="button"
-            disabled={!view || confirmed !== null}
+            disabled={!view || saved}
             data-crop-save=""
             className="h-auto min-h-9 w-full min-w-0 whitespace-normal px-2 text-center max-sm:min-h-11"
-            onClick={() => {
-              if (view && !confirmed) {
-                setConfirmed(cropRegion(view));
-              }
-            }}
+            onClick={save}
           >
             {t("common.save")}
           </Button>
@@ -337,35 +394,12 @@ export function ImageCropDialog({
           onPointerCancel={onPointerEnd}
           onKeyDown={onKeyDown}
         >
-          {src && !unreadable && !confirmed ? (
-            <img
-              src={src}
-              alt=""
-              draggable={false}
-              decoding="async"
+          {picture && !saved ? (
+            <canvas
+              ref={canvasRef}
+              aria-hidden
               data-crop-image=""
-              className="pointer-events-none absolute max-w-none"
-              style={
-                layout
-                  ? {
-                      left: layout.left,
-                      top: layout.top,
-                      width: layout.width,
-                      height: layout.height,
-                    }
-                  : { visibility: "hidden" }
-              }
-              onLoad={(event) => {
-                const image = event.currentTarget;
-                if (image.naturalWidth > 0 && image.naturalHeight > 0) {
-                  setView(
-                    initialCropView(image.naturalWidth, image.naturalHeight, aspect),
-                  );
-                } else {
-                  setUnreadable(true);
-                }
-              }}
-              onError={() => setUnreadable(true)}
+              className="pointer-events-none absolute inset-0 h-full w-full"
             />
           ) : null}
           {shape === "avatar" ? (

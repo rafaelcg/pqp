@@ -124,6 +124,20 @@ function squareOf(rect: { x: number; y: number; width: number; height: number })
 const AVATAR_JPEG_QUALITY = 0.85;
 
 /**
+ * What a crop draws from: a file to decode, or a picture the crop step already
+ * decoded (`ImageCropDialog` hands its bitmap on, so a phone photo is never
+ * decoded twice). A bitmap passed in is the crop's to close.
+ */
+export type CropSource = Blob | ImageBitmap;
+
+function decodeForCrop(source: CropSource): Promise<ImageBitmap> {
+  if (typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap) {
+    return Promise.resolve(source);
+  }
+  return createImageBitmap(source, { imageOrientation: "from-image" });
+}
+
+/**
  * A picked file, centre-cropped to a square and scaled to 512, as a JPEG.
  *
  * Done in the browser rather than on the server, and deliberately: the API
@@ -145,16 +159,15 @@ const AVATAR_JPEG_QUALITY = 0.85;
  *
  * `region` is what the person chose in the crop step (`ImageCropDialog`), as
  * fractions of the oriented picture. Without one the centre crop above is
- * used, which is also what the crop step starts from.
+ * used, which is also what the crop step starts from. `source` may be the
+ * crop step's own bitmap, decoded the same way (`CropSource`).
  */
 export async function cropImageToSquare(
-  file: Blob,
+  source: CropSource,
   size: number = AVATAR_IMAGE_SIZE,
   region: CropRegion | null = null,
 ): Promise<Blob> {
-  const bitmap = await createImageBitmap(file, {
-    imageOrientation: "from-image",
-  });
+  const bitmap = await decodeForCrop(source);
   try {
     const crop = region
       ? squareOf(regionToRect(region, bitmap.width, bitmap.height))
@@ -205,17 +218,16 @@ export async function cropImageToSquare(
  * phone photo into 1024px — and the default box filter leaves visible aliasing
  * on any hard edge at that ratio, which an avatar at 40px never shows.
  *
- * `region` is the crop step's choice, exactly as for `cropImageToSquare`.
+ * `region` and `source` are the crop step's, exactly as for
+ * `cropImageToSquare`.
  */
 export async function cropImageToRect(
-  file: Blob,
+  source: CropSource,
   width: number,
   height: number,
   region: CropRegion | null = null,
 ): Promise<Blob> {
-  const bitmap = await createImageBitmap(file, {
-    imageOrientation: "from-image",
-  });
+  const bitmap = await decodeForCrop(source);
   try {
     const crop = region
       ? regionToRect(region, bitmap.width, bitmap.height)

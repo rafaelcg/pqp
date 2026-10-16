@@ -177,12 +177,12 @@ export function AvatarPicker({
     setCropping(file);
   }
 
-  function uploadCropped(file: File, region: CropRegion) {
+  function uploadCropped(file: File, region: CropRegion, picture: ImageBitmap) {
     setCropping(null);
     void upload.run(async () => {
       let user: User;
       try {
-        user = await uploadAvatar(file, region);
+        user = await uploadAvatar(file, region, picture);
       } catch (error) {
         throw localizedUploadFailure(error, labels.uploadFailed);
       }
@@ -410,8 +410,9 @@ export function AvatarPicker({
         file={cropping}
         shape="avatar"
         onCancel={() => setCropping(null)}
-        onConfirm={(region) => {
-          if (cropping) uploadCropped(cropping, region);
+        onConfirm={(region, picture) => {
+          if (cropping) uploadCropped(cropping, region, picture);
+          else picture.close();
         }}
       />
     </FileDropZone>

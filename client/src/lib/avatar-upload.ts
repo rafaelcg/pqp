@@ -15,7 +15,8 @@ import type { CropRegion } from "@/lib/image-crop";
  *  3. `POST /api/me/avatar/claim` HEADs the object and swaps the columns.
  *
  * `region` is what the person framed in the crop step; without one it is the
- * centre crop.
+ * centre crop. `picture` is the crop step's decoded bitmap: given, the file is
+ * not decoded a second time, and the bitmap is closed here.
  *
  * The crop happens before any of it. What the server is asked to sign is the
  * length of the *cropped* JPEG, so the browser cannot mint a URL for a 40 KB
@@ -28,10 +29,11 @@ import type { CropRegion } from "@/lib/image-crop";
 export async function uploadAvatar(
   file: Blob,
   region: CropRegion | null = null,
+  picture: ImageBitmap | null = null,
 ): Promise<User> {
   let cropped: Blob;
   try {
-    cropped = await cropImageToSquare(file, undefined, region);
+    cropped = await cropImageToSquare(picture ?? file, undefined, region);
   } catch {
     // `createImageBitmap` refuses anything that is not a decodable image, which
     // is the only validation this needs: the file picker's `accept` is a hint,
