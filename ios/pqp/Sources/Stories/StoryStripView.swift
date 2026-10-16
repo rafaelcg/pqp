@@ -327,18 +327,21 @@ struct StoryStripView: View {
         // new story. The badge keeps its size.
         .overlay(alignment: .topLeading) {
             if strip.canPost, job == nil {
+                // 48 pt around the badge while there is no story (the ring
+                // composes too, so nothing is stolen); once there is one,
+                // only a patch around the badge, so the ring's own centre
+                // and the caption's right half still play the story.
+                let target = StoryOwnPlusTarget.frame(hasStory: strip.own != nil)
                 Button {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     model.composing = true
                 } label: {
-                    // 48 pt around the badge, so the 44 pt of it that has to
-                    // work does at its very edges too.
                     Color.clear
-                        .frame(width: 48, height: 48)
+                        .frame(width: target.width, height: target.height)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .offset(x: 33, y: 32)
+                .offset(x: target.minX, y: target.minY)
                 .accessibilityLabel("Add a story")
                 .accessibilityIdentifier("stories.own.plus")
             }
@@ -362,6 +365,25 @@ struct StoryStripView: View {
             return job.failed ? Text("Your story didn't post. Double tap for options") : Text("Posting your story")
         }
         return strip.own != nil ? Text("Your story") : Text("Your story, post")
+    }
+}
+
+/// The touch target of the "+" on the own ring, in the cell's coordinates
+/// (the ring is 64 pt wide with its centre at 32,32; the badge is a 20 pt
+/// circle on its lower right, centred near 57,56).
+///
+/// With no story the ring composes too, so a 48 pt target costs nothing and is
+/// easy to hit. With one, a 48 pt target covered the ring's whole lower-right
+/// quarter, centre included, and the right half of the caption: tapping the
+/// avatar opened the camera instead of the story (QA S2). So the patch shrinks
+/// to the badge and its outside edge; the long press menu has "New story" too.
+enum StoryOwnPlusTarget {
+    static let ringCenter = CGPoint(x: 32, y: 32)
+
+    static func frame(hasStory: Bool) -> CGRect {
+        hasStory
+            ? CGRect(x: 42, y: 41, width: 34, height: 34)
+            : CGRect(x: 33, y: 32, width: 48, height: 48)
     }
 }
 
