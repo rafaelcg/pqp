@@ -80,6 +80,7 @@
     <string name="chat_reject_rate_limited_wait">You\'re sending too fast. Try again in %1$ds.</string>
     <string name="chat_reject_no_access">You can\'t send in this channel</string>
     <string name="chat_reject_cannot_send">You don\'t have permission to send here</string>
+    <string name="chat_read_only">You can read here, but you can\'t send messages.</string>
     <string name="chat_reject_undeliverable">This message wasn\'t delivered</string>
     <string name="chat_reject_slow_mode">Slow mode is on.</string>
     <string name="chat_reject_automod">AutoMod blocked this message.</string>
@@ -921,6 +922,7 @@
     <string name="forum_search_empty_post">Post \"%1$s\"</string>
     <string name="forum_mine_empty">Nothing in My posts yet.</string>
     <string name="forum_paused">New posts are paused in this forum.</string>
+    <string name="forum_read_only">You can read this forum, but you can\'t post in it.</string>
     <string name="forum_post_back">Back to list</string>
     <string name="forum_post_menu">More post options</string>
     <string name="forum_post_copy_link">Copy link</string>

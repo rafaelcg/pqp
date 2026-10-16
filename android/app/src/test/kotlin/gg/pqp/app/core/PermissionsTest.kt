@@ -63,4 +63,31 @@ class PermissionsTest {
         val snapshot = PermissionsSnapshot(server = allBits.toString())
         assertTrue(hasPermission(snapshot.channelBits("any-channel"), Permission.START_WATCH_PARTY))
     }
+
+    @Test
+    fun `an unknown snapshot still offers the composer, the server is the gate`() {
+        assertTrue(SendGate.canSend(null, "forum"))
+    }
+
+    @Test
+    fun `server bits answer when the channel has no entry`() {
+        assertTrue(SendGate.canSend(PermissionsSnapshot(server = Permission.SEND_MESSAGES.toString()), "forum"))
+        assertFalse(SendGate.canSend(PermissionsSnapshot(server = "0"), "forum"))
+    }
+
+    @Test
+    fun `a channel overwrite denying send wins over the server bits, only there`() {
+        val snapshot = PermissionsSnapshot(
+            server = Permission.SEND_MESSAGES.toString(),
+            channels = mapOf("forum" to "0"),
+        )
+        assertFalse(SendGate.canSend(snapshot, "forum"))
+        assertTrue(SendGate.canSend(snapshot, "general"))
+    }
+
+    @Test
+    fun `a channel overwrite granting send wins over the server bits`() {
+        val snapshot = PermissionsSnapshot(server = "0", channels = mapOf("forum" to Permission.SEND_MESSAGES.toString()))
+        assertTrue(SendGate.canSend(snapshot, "forum"))
+    }
 }

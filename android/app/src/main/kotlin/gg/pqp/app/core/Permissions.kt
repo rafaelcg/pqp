@@ -115,3 +115,16 @@ fun hasPermission(perms: Long, bit: Long): Boolean = (perms and bit) == bit
  */
 fun PermissionsSnapshot.channelBits(channelId: String): Long =
     channels[channelId]?.let(::parsePermissionBits) ?: parsePermissionBits(server)
+
+/**
+ * Whether a composer is offered at all: the snapshot's SEND_MESSAGES bit for
+ * [channelId], the channel's own entry winning over the server-wide bits.
+ * UNKNOWN IS ALLOWED. Taking the box away from somebody who may type in it is
+ * the worse mistake (every channel would lose its composer for a moment on each
+ * open, or for good when the read fails), and the server stays the gate for the
+ * other case. Web's `canSendHere` and iOS's `SendGate` follow the same rule.
+ */
+object SendGate {
+    fun canSend(snapshot: PermissionsSnapshot?, channelId: String): Boolean =
+        snapshot == null || hasPermission(snapshot.channelBits(channelId), Permission.SEND_MESSAGES)
+}
