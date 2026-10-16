@@ -387,10 +387,19 @@ interface MessageListProps {
  * chat line: a larger size and a looser line, set through the same variables
  * every message body already reads. `contents`, so the row's layout, its
  * measuring and its hover are exactly what they were.
+ *
+ * The reader's own chat text size (Appearance) is a floor, never a ceiling:
+ * `max()` keeps a bigger setting. A custom property cannot read itself on the
+ * same element, so the outer wrapper copies the inherited value under another
+ * name and the inner one derives the real variables from the copy.
  */
+const FORUM_OPENING_BASE_STYLE = {
+  "--forum-user-font-size": "var(--chat-font-size)",
+  "--forum-user-line-height": "var(--chat-line-height)",
+} as CSSProperties;
 const FORUM_OPENING_STYLE = {
-  "--chat-font-size": "17px",
-  "--chat-line-height": "27px",
+  "--chat-font-size": "max(17px, var(--forum-user-font-size))",
+  "--chat-line-height": "max(27px, var(--forum-user-line-height))",
 } as CSSProperties;
 
 function ForumOpeningScope({ active, children }: { active: boolean; children: ReactNode }) {
@@ -398,8 +407,10 @@ function ForumOpeningScope({ active, children }: { active: boolean; children: Re
     return <>{children}</>;
   }
   return (
-    <div className="contents" data-forum-opening="" style={FORUM_OPENING_STYLE}>
-      {children}
+    <div className="contents" style={FORUM_OPENING_BASE_STYLE}>
+      <div className="contents" data-forum-opening="" style={FORUM_OPENING_STYLE}>
+        {children}
+      </div>
     </div>
   );
 }
