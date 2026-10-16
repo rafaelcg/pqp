@@ -79,6 +79,8 @@ export interface ForumPostCardProps {
   registerLink?: (postId: string, node: HTMLAnchorElement | null) => void;
   /** Copies the post's link; the card draws a quiet button for it. */
   onCopyLink?: (postId: string) => void;
+  /** The viewer, so "be the first to reply" is not said about their own post. */
+  viewerId?: string | null;
 }
 
 const MAX_TAGS_CARD = 3;
@@ -213,6 +215,32 @@ function statusWord(t: Translator["t"], post: ForumPostSummary): string {
     post.resolvedAt ? t("forum.badge.resolved") : t("forum.card.srOpen"),
   ].filter(Boolean);
   return words.join(", ").toLowerCase();
+}
+
+/** What a screen reader hears for a post link: the summary, then new or unread. */
+function postSrName(
+  t: Translator["t"],
+  locale: string,
+  post: ForumPostSummary,
+  unread: ForumUnreadState,
+): string {
+  const newReplies = unread.kind === "unread" ? unread.count : 0;
+  return [
+    t("forum.card.sr", {
+      title: post.title,
+      status: statusWord(t, post),
+      author: forumAuthorName(t, post),
+      replies: t("forum.replies", { count: post.replyCount }),
+      time: formatRelativeShort(post.lastActivityAt, locale),
+    }),
+    unread.kind === "new"
+      ? t("forum.card.srNew")
+      : newReplies > 0
+        ? t("forum.card.srUnread", { count: newReplies })
+        : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 function hasMedia(post: ForumPostSummary): boolean {
@@ -429,6 +457,7 @@ export const ForumPostCard = memo(function ForumPostCard({
   onKeyDown,
   registerLink,
   onCopyLink,
+  viewerId,
 }: ForumPostCardProps) {
   const { t, locale } = useTranslation();
   const author = forumAuthorName(t, post);
@@ -438,22 +467,7 @@ export const ForumPostCard = memo(function ForumPostCard({
   const newReplies = unread.kind === "unread" ? unread.count : 0;
   const replies = t("forum.replies", { count: post.replyCount });
   const time = formatRelativeShort(post.lastActivityAt, locale);
-  const srName = [
-    t("forum.card.sr", {
-      title: post.title,
-      status: statusWord(t, post),
-      author,
-      replies,
-      time,
-    }),
-    unread.kind === "new"
-      ? t("forum.card.srNew")
-      : newReplies > 0
-        ? t("forum.card.srUnread", { count: newReplies })
-        : null,
-  ]
-    .filter(Boolean)
-    .join(", ");
+  const srName = postSrName(t, locale, post, unread);
 
   function handleClick(event: MouseEvent<HTMLAnchorElement>) {
     // A modified click is the browser's: a new tab, a new window.
@@ -711,7 +725,9 @@ export const ForumPostCard = memo(function ForumPostCard({
         <span className="inline-flex h-8 min-w-0 items-center gap-1.5 px-2.5">
           <MessageSquare className="h-4 w-4 shrink-0" aria-hidden />
           <span className="truncate">
-            {post.replyCount === 0 ? t("forum.card.noReplies") : replies}
+            {post.replyCount === 0 && !post.lockedAt && !(viewerId && post.authorId === viewerId)
+              ? t("forum.card.noReplies")
+              : replies}
           </span>
           {newReplies > 0 && (
             <span className="shrink-0 text-text">
@@ -786,15 +802,8 @@ export const ForumPinnedTile = memo(function ForumPinnedTile({
   "post" | "unread" | "href" | "open" | "tabIndex" | "onOpen" | "onFocus" | "onKeyDown" | "registerLink"
 >) {
   const { t, locale } = useTranslation();
-  const author = forumAuthorName(t, post);
   const isUnread = unread.kind !== "read";
-  const srName = t("forum.card.sr", {
-    title: post.title,
-    status: statusWord(t, post),
-    author,
-    replies: t("forum.replies", { count: post.replyCount }),
-    time: formatRelativeShort(post.lastActivityAt, locale),
-  });
+  const srName = postSrName(t, locale, post, unread);
   return (
     <article
       data-forum-post={post.id}

@@ -1091,8 +1091,12 @@ export function ForumPane({
   const copyPostLink = useCallback(
     (postId: string) => {
       const url = new URL(forumPostPath(server.id, forumId, postId), window.location.origin);
+      if (!navigator.clipboard?.writeText) {
+        notify(t("forum.saveFailed"));
+        return;
+      }
       navigator.clipboard
-        ?.writeText(url.toString())
+        .writeText(url.toString())
         .then(() => notify(t("forum.post.linkCopied")))
         .catch(() => notify(t("forum.saveFailed")));
     },
@@ -1325,6 +1329,7 @@ export function ForumPane({
           onKeyDown={onCardKeyDown}
           registerLink={registerLink}
           onCopyLink={copyPostLink}
+          viewerId={viewerId}
         />
       </li>
     );

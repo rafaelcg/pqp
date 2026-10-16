@@ -98,6 +98,33 @@ describe("ForumPostCard", () => {
     expect(html).toMatch(/<a [^>]*aria-label="Valorant fecha sozinho, /);
   });
 
+  it("names a pinned tile new or unread exactly like the card does", () => {
+    const tile = (unread: Parameters<typeof ForumPinnedTile>[0]["unread"]) =>
+      renderToStaticMarkup(
+        <ForumPinnedTile
+          post={POST}
+          unread={unread}
+          href="/app/server/s/channel/f/post/p"
+          tabIndex={0}
+          onOpen={() => {}}
+          onFocus={() => {}}
+        />,
+      );
+    expect(tile({ kind: "unread", count: 5 })).toMatch(/<a [^>]*aria-label="[^"]*, 5 new replies"/);
+    expect(tile({ kind: "new" })).toMatch(/<a [^>]*aria-label="[^"]*, new"/);
+    expect(tile({ kind: "read" })).not.toMatch(/<a [^>]*aria-label="[^"]*, (new|\d+ new repl)/);
+  });
+
+  it("invites a first reply only on an unlocked post the viewer did not write", () => {
+    const empty = { ...POST, replyCount: 0, lockedAt: null };
+    expect(render({ post: empty })).toContain("Be the first to reply");
+    expect(render({ post: empty, viewerId: "someone-else" })).toContain("Be the first to reply");
+    expect(render({ post: empty, viewerId: POST.authorId })).not.toContain("Be the first to reply");
+    expect(render({ post: { ...empty, lockedAt: POST.lockedAt } })).not.toContain(
+      "Be the first to reply",
+    );
+  });
+
   it("draws the tiny avatar's monogram on a disc", () => {
     expect(render()).toMatch(/rounded-full[^"]*bg-surface-3[^"]*">L</);
   });
