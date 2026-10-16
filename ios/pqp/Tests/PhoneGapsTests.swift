@@ -181,6 +181,7 @@ final class PhoneGapsTests: XCTestCase {
         menu.remote("invisible")
         XCTAssertEqual(menu.shown, "dnd", "a frame does not flick the menu mid-choice")
         XCTAssertEqual(menu.completed(sent: "dnd", ok: true), .reread)
+        XCTAssertEqual(menu.shown, "invisible", "the newer announcement stays on show while the read is out, or if it fails")
         menu.serverStatus("invisible")
         XCTAssertEqual(menu.shown, "invisible")
         XCTAssertEqual(menu.confirmed, "invisible")

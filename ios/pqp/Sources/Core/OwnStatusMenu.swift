@@ -11,15 +11,16 @@ import Foundation
 ///  - the menu shows the latest choice at once; a write that fails puts it back on
 ///    the last CONFIRMED status (unless a queued choice is about to be sent);
 ///  - a status frame from another device while a write of ours is in the air is
-///    not trusted to be ahead of or behind it: it is remembered, and once the
-///    writes are done the server is READ for the truth;
+///    not trusted to be ahead of or behind it: it is remembered, shown as soon as
+///    the writes are done, and the server is READ to settle which came last;
 ///  - with nothing in the air, a frame is confirmed and shown at once.
 struct OwnStatusMenu: Equatable {
     private(set) var shown: String
     private(set) var confirmed: String
     private(set) var writing = false
     private var pending: String?
-    private var remoteDuringWrite = false
+    /// The latest status another device announced while a write was in the air.
+    private var remoteDuringWrite: String?
 
     enum Next: Equatable {
         case nothing
@@ -72,17 +73,21 @@ struct OwnStatusMenu: Equatable {
 
     private mutating func finish() -> Next {
         writing = false
-        shown = confirmed
-        if remoteDuringWrite {
-            remoteDuringWrite = false
+        if let remote = remoteDuringWrite {
+            // The newer announcement stays on show while the server is read to
+            // settle the order; a read that fails leaves it, not the older value.
+            remoteDuringWrite = nil
+            confirmed = remote
+            shown = remote
             return .reread
         }
+        shown = confirmed
         return .nothing
     }
 
     mutating func remote(_ status: String) {
         if writing {
-            remoteDuringWrite = true
+            remoteDuringWrite = status
         } else {
             confirmed = status
             shown = status
