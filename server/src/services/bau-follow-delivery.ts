@@ -205,7 +205,6 @@ async function runOnce(options: { serverId?: string }): Promise<BauFollowTickRes
     if (any && !any.rows[0]?.busy) {
       return result;
     }
-    await guarded("announce-retry", drainPendingAnnounces);
     await guarded("retract", async () => {
       result.retracted = await retractIneligible(options.serverId);
     });
@@ -547,36 +546,14 @@ async function announceCardUpdate(messageId: string, channelId: string): Promise
       if (message) {
         broadcastToChannel(channelId, { type: "message-update", message: mapMessage(message) });
       }
-      pendingAnnounces.delete(messageId);
       return;
     } catch (error) {
       if (attempt === 3) {
         console.error("[bau-follow] card update announce failed:", error);
-        // Remembered, and tried again at the top of every tick until it lands
-        // or its hour is up (see `drainPendingAnnounces`).
-        if (pendingAnnounces.size < PENDING_ANNOUNCE_MAX) {
-          pendingAnnounces.set(messageId, { channelId, since: pendingAnnounces.get(messageId)?.since ?? Date.now() });
-        }
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
     }
-  }
-}
-
-/** Card updates whose announcement failed, by message id: retried each tick, dropped after an hour. */
-const pendingAnnounces = new Map<string, { channelId: string; since: number }>();
-const PENDING_ANNOUNCE_MAX = 1000;
-const PENDING_ANNOUNCE_TTL_MS = 60 * 60_000;
-
-async function drainPendingAnnounces(): Promise<void> {
-  const now = Date.now();
-  for (const [messageId, entry] of [...pendingAnnounces]) {
-    if (now - entry.since > PENDING_ANNOUNCE_TTL_MS) {
-      pendingAnnounces.delete(messageId);
-      continue;
-    }
-    await announceCardUpdate(messageId, entry.channelId);
   }
 }
 
