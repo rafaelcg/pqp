@@ -55,7 +55,7 @@ const NOT_IN_TEMPLATE_KEYS: Record<NotInTemplateReason, MessageKey> = {
   discordInvites: "importDiscord.dropped.discordInvites",
 };
 
-const MAPPED_AWAY_KEYS: Record<MappedAwayReason, MessageKey> = {
+export const MAPPED_AWAY_KEYS: Record<MappedAwayReason, MessageKey> = {
   permissionBits: "importDiscord.mapped.permissionBits",
   overwrites: "importDiscord.mapped.overwrites",
   nsfw: "importDiscord.mapped.nsfw",

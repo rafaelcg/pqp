@@ -145,6 +145,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   mixed_channel_list: (raw) => raw === "true",
   discord_bring_crew: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  discord_import_existing: (raw) => raw === "true",
 };
 
 const SAMPLES = [

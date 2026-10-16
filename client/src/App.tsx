@@ -214,6 +214,7 @@ import {
 } from "@/lib/whats-new-feed";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import { CreateServerDialog } from "@/components/layout/create-server-dialog";
+import { DiscordImportHost } from "@/components/layout/discord-import-host";
 import {
   applyRemotePreferences,
   defaultLocalSettings,
@@ -13957,6 +13958,29 @@ function MainAppContent({
           setServerSettingsOpen(false);
           setServerSettingsSection(undefined);
           void dropServer(serverId);
+        }}
+      />
+
+      {/* `openDiscordImport({ serverId })` from any surface lands here. */}
+      <DiscordImportHost
+        servers={servers}
+        onOpenCreate={(source) => {
+          setCreateServerStart({ mode: "import", source });
+          setShowCreateServer(true);
+        }}
+        onMerged={(serverId) => refreshChannelList(serverId)}
+        onOpenChannel={(serverId, channelId) => {
+          void (async () => {
+            try {
+              const { channels: list } = await fetchChannels(serverId);
+              if (selectedServerIdRef.current === serverId) {
+                setChannels(list);
+              }
+            } catch {
+              // The channels-update frame refreshes the list anyway.
+            }
+            await selectChannel(channelId, serverId);
+          })();
         }}
       />
 
