@@ -182,15 +182,29 @@ class ServerUnreadStore(
             }
         }
         if (!mine) return
+        var done = false
         try {
-            do {
+            while (!done) {
                 synchronized(lock) { askedAgain -= serverId }
                 gate.withPermit { readOne(serverId) }
-            } while (synchronized(lock) { serverId in askedAgain })
+                // Decided and released in ONE step: an ask that lands between "nothing is
+                // waiting" and "no longer in flight" would otherwise be wiped with the cleanup.
+                done = synchronized(lock) {
+                    if (serverId in askedAgain) {
+                        false
+                    } else {
+                        inFlight -= serverId
+                        true
+                    }
+                }
+            }
         } finally {
-            synchronized(lock) {
-                inFlight -= serverId
-                askedAgain -= serverId
+            // Only reached with `done` false on a failure or a cancellation.
+            if (!done) {
+                synchronized(lock) {
+                    inFlight -= serverId
+                    askedAgain -= serverId
+                }
             }
         }
     }

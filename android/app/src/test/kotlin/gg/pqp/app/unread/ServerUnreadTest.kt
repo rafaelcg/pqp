@@ -257,4 +257,18 @@ class ServerUnreadTest {
         assertEquals(2, f.reads.size)
         assertTrue(f.store.unread.value.isEmpty())
     }
+
+    @Test
+    fun `a server asked for again after its reads settle is read again`() {
+        val f = Fixture()
+        f.answers["a"] = listOf(unread("a1", 1))
+        val list = listOf(server("a"))
+        f.store.hydrate(list)
+        f.store.markStale("a")
+        f.answers["a"] = emptyList()
+        f.store.hydrate(list)
+        // Not in flight any more: the ask starts a read of its own, nothing was swallowed.
+        assertEquals(2, f.reads.size)
+        assertTrue(f.store.unread.value.isEmpty())
+    }
 }
