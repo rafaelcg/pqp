@@ -704,7 +704,10 @@ struct ChatView: View {
             next: { [model, notePlayer] finished in
                 model.nextUnheardVoiceNote(after: finished, heard: notePlayer.heardIds)
             },
-            refresh: { [model] in Task { await model.refreshMessages() } }
+            refresh: { [model] in Task { await model.refreshMessages() } },
+            requestTranscript: { [model] message, attachmentId in
+                await model.requestTranscript(message: message, attachmentId: attachmentId)
+            }
         )
     }
 

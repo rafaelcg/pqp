@@ -823,6 +823,9 @@ struct UserPreferences: Codable, Hashable, Sendable {
     /// Chamar a atenção. Absent reads as on. Off works in BOTH directions:
     /// nobody nudges this account and it nudges nobody.
     var allowNudges: Bool?
+    /// Voice note transcription, both halves on until turned off (absent reads
+    /// as on; see `VoiceTranscriptionPreferences`). Replaced as a whole on write.
+    var voiceTranscription: VoiceTranscriptionPreferences?
 }
 
 struct PreferencesResponse: Codable, Sendable { let preferences: UserPreferences }
