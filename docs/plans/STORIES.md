@@ -1074,6 +1074,32 @@ Setup:
 - [ ] `GET /api/admin/metrics` → `stories` shows the posts, views, reactions,
       replies and sweep lag the test just produced.
 
+**Android pass, 2026-10-15 (emulator, `adb input tap`/`swipe` and screenshots)**
+
+Pixel 10 Pro image (API 37.1) on a local API with MinIO, `stories` on for one
+server and `stories_friends` on. Real taps through the user's path:
+
+- Verified: camera permission, a photo from the live camera, a held shutter
+  recording a clip (mic prompt included), the photo picker and the 30 s
+  trimmer on a 45 s clip (window dragged to 0:15 to 0:45, re-encode with
+  progress), text card with background swatches, the layer editor (text,
+  mention, drawing, call sticker, drag, long press menu), "Who sees it" with
+  zero audiences disabling Post, a post to a server and to Amigos at once, the
+  ring and the viewer (layers drawn as made, mention sheet with Add friend,
+  tap to step, swipe across to the next person, swipe down to close,
+  "Seen by", delete menu, reply sent as a DM, live ring for another account's
+  story), the outbox on a dead API ("Didn't post", the retry sheet, "Try again"
+  posting once, no duplicate), and the viewer's own load failure.
+- Fixed in this pass: a story the viewer could not read (API unreachable) left
+  a black screen with one line of text and no way out but the system back
+  gesture; it now has Retry and Close. The outbox's failed sheet said "Your
+  photo or video is still saved" for a text card; it now says "story".
+- Not verifiable without a device: camera quality, front-lens mirroring and
+  torch, two-finger pinch and rotate (`adb input` has no multi-touch), TalkBack
+  reading, 60 fps on a mid phone, sound (the emulator microphone is silent),
+  uploads that outlive the app in the background, Data Saver, and the
+  Moto G class memory behaviour of the 720p re-encode.
+
 ---
 
 ## 16. Open questions for Rafael (each has a default, so nothing blocks)

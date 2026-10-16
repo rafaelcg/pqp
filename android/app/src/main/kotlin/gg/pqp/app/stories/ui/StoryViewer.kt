@@ -304,7 +304,9 @@ private fun DeckPage(
 
     var loaded by remember(deck) { mutableStateOf<List<Story>?>(null) }
     var failed by remember(deck) { mutableStateOf(false) }
-    LaunchedEffect(deck) {
+    // "Tentar de novo" on the failed screen asks again, for the same deck.
+    var attempt by remember(deck) { mutableIntStateOf(0) }
+    LaunchedEffect(deck, attempt) {
         // Through the preloader: what it already read to plan the next stories is not asked for twice.
         runCatching { preloader.stories(deck.storyIds, VIEWER_DETAILS_MAX_AGE_MS) }
             .onSuccess { list ->
@@ -435,11 +437,30 @@ private fun DeckPage(
         // The bar above and below the 9:16 canvas on a taller screen: the bars and the header sit inside it.
         val gap = gg.pqp.app.stories.editor.CanvasInsets.gap(maxWidth, maxHeight)
         when {
-            failed -> Text(
-                stringResource(R.string.error_network),
-                color = Color.White,
-                modifier = Modifier.align(Alignment.Center),
-            )
+            // A story that cannot be read must not be a dead end: the screen is black
+            // and has no header, so without these two buttons the only way out is the
+            // system back gesture.
+            failed -> Column(
+                Modifier.align(Alignment.Center).padding(horizontal = 32.dp).testTag("stories.viewer.failed"),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    stringResource(R.string.error_network),
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = { failed = false; attempt += 1 },
+                        modifier = Modifier.testTag("stories.viewer.retry"),
+                    ) { Text(stringResource(R.string.connection_retry), color = Color.White) }
+                    TextButton(
+                        onClick = onClose,
+                        modifier = Modifier.testTag("stories.viewer.failedClose"),
+                    ) { Text(stringResource(R.string.stories_viewer_close), color = Color.White) }
+                }
+            }
             story == null -> CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
             else -> {
                 // The story itself, with the gestures on it.
