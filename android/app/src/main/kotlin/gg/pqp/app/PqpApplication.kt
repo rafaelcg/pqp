@@ -106,6 +106,13 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
     lateinit var voiceNotes: gg.pqp.app.voicenotes.VoiceNotes
         private set
 
+    /**
+     * Application-scoped so a server's emoji are read once, not once per screen that draws a message
+     * from it. See `ServerEmojiStore`.
+     */
+    lateinit var serverEmoji: gg.pqp.app.core.ServerEmojiStore
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -145,6 +152,7 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
             .map { it.isActive }
             .distinctUntilChanged()
             .stateIn(appScope, SharingStarted.Eagerly, false)
+        serverEmoji = gg.pqp.app.core.ServerEmojiStore(appScope, fetch = { id -> session.api.serverEmoji(id) })
         voiceNotes = gg.pqp.app.voicenotes.VoiceNotes(
             context = this,
             scope = appScope,

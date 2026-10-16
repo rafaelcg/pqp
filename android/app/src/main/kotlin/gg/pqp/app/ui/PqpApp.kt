@@ -47,6 +47,7 @@ import gg.pqp.app.forward.ForwardSent
 import gg.pqp.app.forward.ui.ForwardHost
 import gg.pqp.app.forward.ui.LocalOpenForward
 import gg.pqp.app.forward.ui.rememberOpenForward
+import gg.pqp.app.ui.chat.LocalEmojiServerId
 import gg.pqp.app.ui.chat.LocalOpenBauPost
 import gg.pqp.app.core.Permission
 import gg.pqp.app.core.PermissionsSnapshot
@@ -634,6 +635,7 @@ private fun SignedInNav(
                 }
                 composable<ForumRoute> { entry ->
                     val route = entry.toRoute<ForumRoute>()
+                    CompositionLocalProvider(LocalEmojiServerId provides route.serverId) {
                     gg.pqp.app.forum.ui.ForumScreen(
                         session = session,
                         serverId = route.serverId,
@@ -651,17 +653,20 @@ private fun SignedInNav(
                             nav.navigate(ForumComposerRoute(route.serverId, route.forumId, title, route.forumName))
                         },
                     )
+                    }
                 }
                 composable<ForumPostRoute> { entry ->
                     val route = entry.toRoute<ForumPostRoute>()
-                    gg.pqp.app.forum.ui.ForumPostScreen(
-                        session = session,
-                        serverId = route.serverId,
-                        forumId = route.forumId,
-                        forumName = route.forumName,
-                        postId = route.postId,
-                        onBack = nav::popBackStack,
-                    )
+                    CompositionLocalProvider(LocalEmojiServerId provides route.serverId) {
+                        gg.pqp.app.forum.ui.ForumPostScreen(
+                            session = session,
+                            serverId = route.serverId,
+                            forumId = route.forumId,
+                            forumName = route.forumName,
+                            postId = route.postId,
+                            onBack = nav::popBackStack,
+                        )
+                    }
                 }
                 composable<ForumComposerRoute> { entry ->
                     val route = entry.toRoute<ForumComposerRoute>()
@@ -796,6 +801,8 @@ private fun SignedInNav(
                     // `hostState` itself is collected once, above, at
                     // `SignedInNav` level -- see the toast effect there.
 
+                    // The server's custom emoji draw in its messages; a conversation (no server) shows `:name:`.
+                    CompositionLocalProvider(LocalEmojiServerId provides route.serverId) {
                     ChatScreen(
                         session = session,
                         channelId = route.channelId,
@@ -936,6 +943,7 @@ private fun SignedInNav(
                             }
                         },
                     )
+                    }
                 }
                 composable<YouRoute> {
                     YouScreen(session = session, onBack = { nav.popBackStack() })
