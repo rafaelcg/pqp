@@ -145,6 +145,10 @@
     <string name="bau_media_file">Arquivo</string>
     <string name="bau_media_image">Imagem</string>
     <string name="bau_media_video">Ver vídeo</string>
+    <string name="bau_captions_on">Ligar legendas</string>
+    <string name="bau_captions_off">Desligar legendas</string>
+    <string name="bau_captions_auto">%1$s (automática)</string>
+    <string name="bau_captions_unknown">Áudio original</string>
     <string name="bau_media_youtube">Ver no YouTube</string>
     <string name="bau_media_youtube_open">Abrir no YouTube</string>
     <string name="bau_media_youtube_failed">Esse vídeo não toca aqui.</string>
