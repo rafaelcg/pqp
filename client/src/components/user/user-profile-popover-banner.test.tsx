@@ -163,6 +163,14 @@ describe("profile card banner", () => {
     // Decorative: the card is already labelled with the person's name.
     expect(image?.getAttribute("alt")).toBe("");
     expect(band(card).getAttribute("aria-hidden")).toBe("true");
+
+    // Hidden until the picture arrives, then faded in over the gradient.
+    expect(image?.className).toContain("opacity-0");
+    await act(async () => {
+      image!.dispatchEvent(new Event("load"));
+    });
+    expect(image?.className).toContain("opacity-100");
+    expect(image?.className).not.toContain("opacity-0");
   });
 
   it("keeps the generated band, at the same size, when there is no banner", async () => {

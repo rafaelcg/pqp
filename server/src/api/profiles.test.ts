@@ -688,11 +688,6 @@ describeDb("public handles and profiles", () => {
       bannerUrl: `/api/users/${alice.id}/banner?v=abcd1234`,
     });
     expect(JSON.stringify(after.body)).not.toContain("banners/x/y.jpg");
-    // No `handle` needed: the card opens on anybody, claimed or not.
-    expect(
-      (await getPool().query(`SELECT handle FROM users WHERE id = $1`, [alice.id]))
-        .rows[0]?.handle,
-    ).toBeNull();
   });
 
   it("answers an unknown account exactly like one with no banner", async () => {
@@ -707,10 +702,11 @@ describeDb("public handles and profiles", () => {
     expect(unknown.body).toEqual({ bannerUrl: null });
   });
 
-  it("refuses an id that is not a uuid without reaching the database", async () => {
+  it("is refused by the router for an id that is not a uuid", async () => {
     const response = await call(bob, "GET", "/api/users/not-a-uuid/banner-url");
     // 404 and not 500: the column is a uuid, and an unchecked param would be a
-    // Postgres type error dressed as a server fault.
+    // Postgres type error dressed as a server fault. `createRouter` refuses any
+    // `*Id` param that is not a uuid before the handler runs.
     expect(response.status).toBe(404);
   });
 

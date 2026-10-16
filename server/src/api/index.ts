@@ -1982,9 +1982,7 @@ router.delete("/api/me/avatar", async ({ user }) => {
  * router runs.
  */
 router.get("/api/users/:userId/banner-url", async (_ctx, { userId }) => {
-  if (!isUuid(userId!)) {
-    throw new NotFound("User not found");
-  }
+  // The router already answers 404 for a `userId` that is not a uuid.
   return { bannerUrl: await readUserBannerUrl(userId!) };
 });
 
