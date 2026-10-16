@@ -382,6 +382,39 @@ interface MessageListProps {
  * answer's green edge, "Marcar como solução" on replies for whoever may pick
  * one, and the Solução card right under the opening message.
  */
+/**
+ * A forum post's opening message reads as the post's body, not as one more
+ * chat line: a larger size and a looser line, set through the same variables
+ * every message body already reads. `contents`, so the row's layout, its
+ * measuring and its hover are exactly what they were.
+ *
+ * The reader's own chat text size (Appearance) is a floor, never a ceiling:
+ * `max()` keeps a bigger setting. A custom property cannot read itself on the
+ * same element, so the outer wrapper copies the inherited value under another
+ * name and the inner one derives the real variables from the copy.
+ */
+const FORUM_OPENING_BASE_STYLE = {
+  "--forum-user-font-size": "var(--chat-font-size)",
+  "--forum-user-line-height": "var(--chat-line-height)",
+} as CSSProperties;
+const FORUM_OPENING_STYLE = {
+  "--chat-font-size": "max(17px, var(--forum-user-font-size))",
+  "--chat-line-height": "max(27px, var(--forum-user-line-height))",
+} as CSSProperties;
+
+function ForumOpeningScope({ active, children }: { active: boolean; children: ReactNode }) {
+  if (!active) {
+    return <>{children}</>;
+  }
+  return (
+    <div className="contents" style={FORUM_OPENING_BASE_STYLE}>
+      <div className="contents" data-forum-opening="" style={FORUM_OPENING_STYLE}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export interface ForumPostDecor {
   /** The post's author: an OP badge on every one of their rows. */
   authorId: string | null;
@@ -1955,6 +1988,7 @@ export const MessageList = memo(function MessageList({
             }
             return (
             <Fragment key={elementKey}>
+            <ForumOpeningScope active={isOpening}>
             <MessageRow
               row={row}
               forumOp={
@@ -2226,6 +2260,7 @@ export const MessageList = memo(function MessageList({
                 rowId === firstUnreadId ? unreadDividerRef : undefined
               }
             />
+            </ForumOpeningScope>
             {isOpening && forumPost?.afterOpening}
             </Fragment>
             );

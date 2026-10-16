@@ -6,20 +6,20 @@ import {
 } from "@pqp/shared";
 import {
   AlertTriangle,
-  BookOpen,
-  ChevronRight,
-  ChevronUp,
+  ArrowUp,
+  CirclePause,
   Info,
+  ListFilter,
   Loader2,
   Menu as MenuIcon,
   MessagesSquare,
-  Pin,
   Plus,
   Search,
   SearchX,
-  ListFilter,
-  Sparkles,
+  SquarePen,
   Tag,
+  Trash2,
+  WifiOff,
   X,
 } from "lucide-react";
 import {
@@ -78,12 +78,13 @@ import {
   type ForumListState,
 } from "@/lib/forum-list";
 import {
+  readForumLayout,
   readForumView,
   readPostMaximized,
-  readRulesHidden,
+  writeForumLayout,
   writeForumView,
   writePostMaximized,
-  writeRulesHidden,
+  type ForumLayout,
 } from "@/lib/forum-prefs";
 import { forumTagLabel } from "@/lib/forum-tag-icons";
 import { starterTagsFor } from "@/lib/forum-tag-draft";
@@ -92,8 +93,13 @@ import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { cn } from "@/lib/utils";
 import { ForumComposerDialog } from "./forum-composer-dialog";
 import { ForumTagIcon } from "./forum-tag-icon";
-import { ForumFilterBar, describeActiveFilters } from "./forum-filter-bar";
-import { ForumPostCard } from "./forum-post-card";
+import {
+  ForumFilterBar,
+  ForumLayoutSwitch,
+  ForumSortMenu,
+  describeActiveFilters,
+} from "./forum-filter-bar";
+import { ForumPinnedTile, ForumPostCard } from "./forum-post-card";
 import { ForumPostView, type ForumPostViewProps } from "./forum-post-view";
 
 /**
@@ -165,10 +171,10 @@ export interface ForumPaneProps {
 
 /** The content area must be this wide for the post to sit beside the list. */
 const SPLIT_MIN_WIDTH = 900;
-/** The post pane beside the list (`md:w-[488px]` in the post view). */
-const POST_PANE_WIDTH = 488;
-/** From this list width on, the cards beside an open post keep every line. */
-const ROOMY_LIST_MIN_WIDTH = 640;
+/** From this content width on, the rules and numbers sit in a column beside the list. */
+const RAIL_MIN_WIDTH = 1080;
+/** Below this list-column width the filters scroll in one strip instead of wrapping. */
+const FILTER_STRIP_BELOW = 640;
 /** Infinite scroll asks for the next page this far before the end. */
 const NEXT_PAGE_MARGIN_PX = 600;
 const SEARCH_DEBOUNCE_MS = 250;
@@ -186,19 +192,20 @@ function reducedMotion(): boolean {
   );
 }
 
-function CardSkeleton() {
+function CardSkeleton({ short = false }: { short?: boolean }) {
   return (
-    <div
-      aria-hidden
-      className="rounded-[var(--radius-card)] border border-border bg-surface-1 px-3.5 py-3"
-    >
-      <Skeleton className="h-4 w-3/5" />
-      <Skeleton className="mt-2 h-3 w-11/12" />
-      <div className="mt-3 flex items-center gap-1.5">
-        <Skeleton className="h-5 w-14 rounded-full" />
-        <Skeleton className="h-5 w-16 rounded-full" />
-        <Skeleton className="ml-auto h-3 w-20" />
+    <div aria-hidden className="px-4 pb-4 pt-4">
+      <div className="flex items-center gap-2">
+        <Skeleton className="h-5 w-5 rounded-full" />
+        <Skeleton className="h-3 w-28" />
       </div>
+      <Skeleton className={cn("mt-3 h-4", short ? "w-1/2" : "w-4/5")} />
+      {!short && (
+        <>
+          <Skeleton className="mt-2.5 h-3 w-11/12" />
+          <Skeleton className="mt-1.5 h-3 w-3/5" />
+        </>
+      )}
     </div>
   );
 }
@@ -208,21 +215,21 @@ function EmptyBlock({
   title,
   body,
   children,
+  role,
 }: {
   icon: ReactNode;
   title: string;
   body?: string;
   children?: ReactNode;
+  role?: "alert" | "status";
 }) {
   return (
-    <div className="flex flex-col items-center px-6 py-14 text-center animate-fade-in">
-      <div className="grid h-14 w-14 place-items-center rounded-2xl bg-surface-2 text-text-secondary">
-        {icon}
-      </div>
-      <p className="mt-4 font-display text-lg font-bold text-text">{title}</p>
-      {body && <p className="mt-1 max-w-sm text-sm text-text-tertiary">{body}</p>}
+    <div role={role} className="flex flex-col items-center px-6 py-16 text-center animate-fade-in">
+      <div className="text-text-secondary">{icon}</div>
+      <p className="mt-4 font-display text-xl font-extrabold tracking-[-0.01em] text-text">{title}</p>
+      {body && <p className="mt-1.5 max-w-sm text-sm leading-5 text-text-secondary">{body}</p>}
       {children && (
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">{children}</div>
+        <div className="mt-5 flex flex-wrap items-center justify-center gap-2">{children}</div>
       )}
     </div>
   );
@@ -606,9 +613,42 @@ export function ForumPane({
   const fullOnce = postOpen && fullOnceId === openPostId;
   const postFull = postOpen && (!canSplit || maximized || fullOnce);
   const compactList = postOpen && !postFull;
-  // On a wide screen the list beside an open post has room for the whole
-  // card (author, preview, a full thumbnail); only a narrow one compacts.
-  const compactCards = compactList && width - POST_PANE_WIDTH < ROOMY_LIST_MIN_WIDTH;
+  // The reader's layout for this forum; beside an open post the list is
+  // always rows, the only shape that fits two columns.
+  const [layout, setLayout] = useState<ForumLayout>(() => readForumLayout(forumId));
+  useEffect(() => {
+    setLayout(readForumLayout(forumId));
+  }, [forumId]);
+  const changeLayout = useCallback(
+    (next: ForumLayout) => {
+      setLayout(next);
+      writeForumLayout(forumId, next);
+    },
+    [forumId],
+  );
+  const cardVariant = compactList
+    ? "row"
+    : layout === "compact"
+      ? "row"
+      : layout === "gallery"
+        ? "tile"
+        : "card";
+  // The list column's own width, which decides how many tags fit inline and
+  // whether the filters ride one scrolling strip instead of wrapping.
+  const railShown = (w: number) =>
+    !compactList &&
+    !postFull &&
+    !isPhone &&
+    w >= RAIL_MIN_WIDTH &&
+    (Boolean(channel.topic?.trim()) || (list.counts?.posts ?? 0) > 0);
+  const listColumnWidth = Math.min(width - (railShown(width) ? 320 : 0), 768) - 48;
+  const filterStrip = isPhone || (!compactList && listColumnWidth < FILTER_STRIP_BELOW);
+  const showRail =
+    !compactList &&
+    !postFull &&
+    !isPhone &&
+    width >= RAIL_MIN_WIDTH &&
+    (Boolean(channel.topic?.trim()) || (list.counts?.posts ?? 0) > 0);
 
   // ---------------------------------------------------------- live rules
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -748,22 +788,6 @@ export function ForumPane({
     return () => observer.disconnect();
   }, [loadMore, list.nextCursor, loadState]);
 
-  // FAB: hides on scroll down, back on scroll up (phone).
-  const [fabHidden, setFabHidden] = useState(false);
-  const lastScrollTop = useRef(0);
-  function onListScroll() {
-    const node = scrollRef.current;
-    if (!node) {
-      return;
-    }
-    const top = node.scrollTop;
-    const delta = top - lastScrollTop.current;
-    if (Math.abs(delta) > 6) {
-      setFabHidden(delta > 0 && top > 48);
-      lastScrollTop.current = top;
-    }
-  }
-
   // --------------------------------------------------------- open / close
   const linkRefs = useRef(new Map<string, HTMLAnchorElement>());
   const registerLink = useCallback((postId: string, node: HTMLAnchorElement | null) => {
@@ -878,12 +902,15 @@ export function ForumPane({
   }, [toast]);
 
   // ---------------------------------------------------------- guidelines
-  const [rulesHidden, setRulesHidden] = useState(() => readRulesHidden(forumId));
-  useEffect(() => {
-    setRulesHidden(readRulesHidden(forumId));
-  }, [forumId]);
+  // The forum's topic is its rules. One rule per line reads as a numbered
+  // list in the column beside the list; on a narrower screen the same text
+  // opens from the info button in the bar.
   const [rulesSheetOpen, setRulesSheetOpen] = useState(false);
   const rules = channel.topic?.trim() ? channel.topic.trim() : null;
+  const ruleLines = useMemo(
+    () => (rules ? rules.split(/\n+/).map((line) => line.trim()).filter(Boolean) : []),
+    [rules],
+  );
 
   // -------------------------------------------------------------- search
   const searchRef = useRef<HTMLInputElement>(null);
@@ -1002,13 +1029,6 @@ export function ForumPane({
 
   // ------------------------------------------------------------- render
   const counts = list.counts;
-  const subtitle = counts
-    ? counts.posts === 0
-      ? t("forum.header.count_zero")
-      : `${t("forum.header.count", { count: counts.posts })} · ${t("forum.header.open", {
-          count: counts.open,
-        })}`
-    : null;
   const forumEmpty =
     loadState === "ready" &&
     !forumFiltersActive(filters) &&
@@ -1068,18 +1088,36 @@ export function ForumPane({
     }
   }
 
+  const copyPostLink = useCallback(
+    (postId: string) => {
+      const url = new URL(forumPostPath(server.id, forumId, postId), window.location.origin);
+      if (!navigator.clipboard?.writeText) {
+        notify(t("forum.saveFailed"));
+        return;
+      }
+      navigator.clipboard
+        .writeText(url.toString())
+        .then(() => notify(t("forum.post.linkCopied")))
+        .catch(() => notify(t("forum.saveFailed")));
+    },
+    [forumId, notify, server.id, t],
+  );
+
   const newPostButton = canCompose ? (
     <div className="relative shrink-0">
       <Button
         onClick={() => openComposer()}
-        className="gap-1.5"
+        className={cn("gap-1.5", !compactList && "h-10 px-4")}
+        size={compactList ? "sm" : undefined}
         data-forum-new-post=""
       >
-        <Plus className="h-4 w-4" aria-hidden />
+        <Plus className="h-4 w-4" aria-hidden strokeWidth={2.5} />
         {t("forum.newPost")}
-        <kbd className="ml-0.5 hidden h-5 min-w-5 items-center justify-center rounded-[var(--radius-tick)] border border-on-accent/30 px-1 font-sans text-[10px] font-semibold lg:inline-flex">
-          C
-        </kbd>
+        {!compactList && (
+          <kbd className="ml-0.5 hidden h-5 min-w-5 items-center justify-center rounded-[var(--radius-tick)] bg-on-accent/10 px-1 font-sans text-[10px] font-semibold lg:inline-flex">
+            C
+          </kbd>
+        )}
       </Button>
       <div className="absolute right-0 top-full z-30 mt-2 w-72">
         <FeatureHint
@@ -1096,15 +1134,41 @@ export function ForumPane({
     canPost && !creationEnabled ? (
       <p
         role="status"
-        className="flex items-center gap-2 rounded-[var(--radius-card)] border border-border bg-surface-1 px-3 py-2 text-sm text-text-secondary"
+        className="flex items-center gap-2.5 rounded-[var(--radius-card)] bg-surface-1 px-3.5 py-3 text-sm text-text-secondary"
       >
-        <Info className="h-4 w-4 shrink-0" aria-hidden />
+        <CirclePause className="h-4 w-4 shrink-0" aria-hidden />
         {t("forum.paused")}
       </p>
     ) : null;
 
+  const rulesButton =
+    rules && !showRail ? (
+      <Tooltip label={t("forum.rules.show")}>
+        <button
+          type="button"
+          onClick={() => setRulesSheetOpen(true)}
+          aria-label={t("forum.rules.show")}
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-secondary hover:bg-surface-2 hover:text-text max-sm:h-11 max-sm:w-11"
+          data-forum-rules-button=""
+        >
+          <Info className="h-4 w-4 max-sm:h-5 max-sm:w-5" aria-hidden />
+        </button>
+      </Tooltip>
+    ) : null;
+
+  const countsLine = counts
+    ? counts.posts === 0
+      ? t("forum.header.count_zero")
+      : `${t("forum.header.count", { count: counts.posts })} · ${t("forum.header.open", {
+          count: counts.open,
+        })}`
+    : null;
+
+  // The bar is orientation and the shell's tiles. Beside an open post it also
+  // carries the forum's name and Novo post; otherwise the large title below
+  // does, the way an Apple large title sits under a quiet bar.
   const header = (
-    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/60 px-3 sm:px-4">
+    <header className="flex h-14 shrink-0 items-center gap-1.5 px-3 sm:px-4">
       <button
         type="button"
         className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] hover:bg-surface-2 md:hidden"
@@ -1113,24 +1177,24 @@ export function ForumPane({
       >
         <MenuIcon className="h-5 w-5" aria-hidden />
       </button>
-      <div className="min-w-0 flex-1">
-        <p className="flex min-w-0 items-center gap-1.5 font-display text-base font-bold text-text">
-          <MessagesSquare className="h-4 w-4 shrink-0" aria-hidden />
-          <span className="truncate">{channel.name}</span>
-          {!creationEnabled ? null : <BetaTag className="max-sm:hidden" />}
-        </p>
-        <p className="truncate text-[11px] tabular-nums text-text-tertiary">
-          {isPhone
-            ? [
-                server.name,
-                counts && counts.posts > 0
-                  ? t("forum.header.count", { count: counts.posts })
-                  : subtitle,
-              ]
-                .filter(Boolean)
-                .join(" · ")
-            : subtitle}
-        </p>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {compactList ? (
+          <>
+            <span className="truncate font-display text-lg font-extrabold text-text">
+              {channel.name}
+            </span>
+            {countsLine && (
+              <span className="truncate text-xs tabular-nums text-text-secondary max-lg:hidden">
+                {countsLine}
+              </span>
+            )}
+          </>
+        ) : isPhone ? null : (
+          <span className="flex min-w-0 items-center gap-1.5 text-[13px] text-text-secondary">
+            <MessagesSquare className="h-4 w-4 shrink-0" aria-hidden />
+            <span className="truncate">{t("forum.kind")}</span>
+          </span>
+        )}
       </div>
       {isPhone && !forumEmpty && (
         <button
@@ -1140,26 +1204,24 @@ export function ForumPane({
             setPhoneSearchOpen(true);
             window.setTimeout(() => searchRef.current?.focus(), 0);
           }}
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-secondary hover:bg-surface-2"
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text hover:bg-surface-2"
         >
           <Search className="h-5 w-5" aria-hidden />
         </button>
       )}
-      {rules && rulesHidden && !isPhone && (
-        <Tooltip label={t("forum.rules.show")}>
-          <button
-            type="button"
-            onClick={() => {
-              setRulesHidden(false);
-              writeRulesHidden(forumId, false);
-            }}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text"
-          >
-            <BookOpen className="h-4 w-4" aria-hidden />
-          </button>
-        </Tooltip>
+      {rulesButton}
+      {isPhone && canCompose && (
+        <button
+          type="button"
+          aria-label={t("forum.newPost")}
+          onClick={() => openComposer()}
+          data-forum-new-post=""
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-accent hover:bg-surface-2"
+        >
+          <SquarePen className="h-5 w-5" aria-hidden />
+        </button>
       )}
-      {compactList && newPostButton}
+      {compactList && !isPhone && newPostButton}
       {/* The shell's header tiles are 32px; on a phone the forum's header has
           room for a full finger target (forum QA P17). */}
       <span className="flex shrink-0 items-center gap-1 max-sm:gap-0 max-sm:[&_button]:h-11 max-sm:[&_button]:w-11">
@@ -1168,56 +1230,31 @@ export function ForumPane({
     </header>
   );
 
-  const guidelines =
-    rules && !isPhone && !rulesHidden ? (
-      <section
-        aria-label={t("forum.rules.title")}
-        className="flex items-start gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 px-3.5 py-3 animate-fade-in"
-      >
-        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-[var(--radius-control)] bg-accent-soft text-on-accent-soft">
-          <BookOpen className="h-4 w-4" aria-hidden />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
-            {t("forum.rules.title")}
+  // The large title: the forum's name, how much is in it, and the one primary
+  // action on the screen.
+  const hero = compactList ? null : (
+    <div className="flex items-end gap-4">
+      <div className="min-w-0 flex-1">
+        <h1 className="flex min-w-0 items-center gap-2 font-display text-[28px] font-extrabold leading-[34px] tracking-[-0.02em] text-text sm:text-[34px] sm:leading-10">
+          <span className="truncate">{channel.name}</span>
+          {creationEnabled && <BetaTag className="max-sm:hidden" />}
+        </h1>
+        {countsLine && (
+          <p className="mt-1 truncate text-[15px] leading-[22px] tabular-nums text-text-secondary">
+            {countsLine}
           </p>
-          <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-text-secondary">
-            {rules}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            setRulesHidden(true);
-            writeRulesHidden(forumId, true);
-          }}
-          className="inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-control)] px-1.5 py-0.5 text-xs text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-        >
-          {t("forum.rules.hide")}
-          <ChevronUp className="h-3.5 w-3.5" aria-hidden />
-        </button>
-      </section>
-    ) : rules && isPhone ? (
-      <button
-        type="button"
-        onClick={() => setRulesSheetOpen(true)}
-        className="flex min-h-11 w-full items-center gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 px-3 text-left text-sm text-text"
-      >
-        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-[var(--radius-control)] bg-accent-soft text-on-accent-soft">
-          <BookOpen className="h-4 w-4" aria-hidden />
-        </span>
-        <span className="flex-1 font-medium">{t("forum.rules.title")}</span>
-        <ChevronRight className="h-4 w-4 text-text-tertiary" aria-hidden />
-      </button>
-    ) : null;
+        )}
+      </div>
+      {/* An empty forum's own call to action is the one primary button. */}
+      {!isPhone && !forumEmpty && newPostButton}
+    </div>
+  );
 
   const searchField = (
     <label
-      className={cn(
-        "flex h-10 min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-1 px-3 text-sm transition-colors duration-[var(--duration-fast)] focus-within:border-border-strong focus-within:ring-2 focus-within:ring-focus-ring",
-      )}
+      className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-card)] bg-surface-1 px-3 text-sm text-text-secondary transition-shadow duration-[var(--duration-fast)] focus-within:ring-2 focus-within:ring-focus-ring"
     >
-      <Search className="h-4 w-4 shrink-0 text-text-tertiary" aria-hidden />
+      <Search className="h-4 w-4 shrink-0" aria-hidden />
       <input
         ref={searchRef}
         type="search"
@@ -1240,9 +1277,9 @@ export function ForumPane({
             openComposer(searchText.trim());
           }
         }}
-        placeholder={t("forum.search")}
+        placeholder={t("forum.search.placeholder", { name: channel.name })}
         aria-label={t("forum.search")}
-        className="min-w-0 flex-1 bg-transparent text-text placeholder:text-text-tertiary focus:outline-none [&::-webkit-search-cancel-button]:hidden"
+        className="min-w-0 flex-1 bg-transparent text-text placeholder:text-text-secondary focus:outline-none [&::-webkit-search-cancel-button]:hidden"
       />
       {searchText ? (
         <button
@@ -1252,35 +1289,37 @@ export function ForumPane({
             searchRef.current?.focus();
           }}
           aria-label={t("forum.search.clear")}
-          className="grid h-6 w-6 place-items-center rounded-[var(--radius-control)] text-text-tertiary hover:text-text max-sm:hit-44"
+          className="grid h-6 w-6 place-items-center rounded-[var(--radius-control)] hover:text-text max-sm:hit-44"
         >
           <X className="h-3.5 w-3.5" aria-hidden />
         </button>
       ) : (
-        <kbd className="hidden h-5 min-w-5 items-center justify-center rounded-[var(--radius-tick)] border border-border px-1 font-sans text-[10px] text-text-tertiary sm:inline-flex">
+        <kbd className="hidden h-5 min-w-5 items-center justify-center rounded-[var(--radius-tick)] bg-surface-2 px-1 font-sans text-[11px] font-semibold text-text-secondary sm:inline-flex">
           /
         </kbd>
       )}
     </label>
   );
 
-  function cardFor(post: ForumPostSummary, pinnedRow: boolean) {
+  const unreadFor = (post: ForumPostSummary) =>
+    forumUnreadState(
+      post,
+      list.viewer[post.id],
+      viewerId,
+      visitCursor ? visitCursor.previous : list.forumPreviousReadAt,
+    );
+
+  function cardFor(post: ForumPostSummary) {
     return (
       <li key={post.id} className="list-none">
         <ForumPostCard
           post={post}
-          unread={forumUnreadState(
-            post,
-            list.viewer[post.id],
-            viewerId,
-            visitCursor ? visitCursor.previous : list.forumPreviousReadAt,
-          )}
+          unread={unreadFor(post)}
           tagsById={tagsById}
           href={forumPostPath(server.id, forumId, post.id)}
-          compact={compactCards}
-          narrow={isPhone}
+          variant={cardVariant}
+          narrow={isPhone || compactList}
           open={post.id === openPostId}
-          pinnedRow={pinnedRow}
           entering={enteringIds.has(post.id)}
           leaving={leavingIds.has(post.id)}
           tabIndex={post.id === rovingId ? 0 : -1}
@@ -1289,6 +1328,8 @@ export function ForumPane({
           onFocus={setFocusedId}
           onKeyDown={onCardKeyDown}
           registerLink={registerLink}
+          onCopyLink={copyPostLink}
+          viewerId={viewerId}
         />
       </li>
     );
@@ -1298,148 +1339,150 @@ export function ForumPane({
   let listBody: ReactNode;
   if (loadState === "loading" && list.posts.length === 0) {
     listBody = (
-      <div className="flex flex-col gap-2" aria-busy="true" aria-label={t("forum.list.label")}>
+      <div className="flex flex-col" aria-busy="true" aria-label={t("forum.list.label")}>
         <CardSkeleton />
-        <CardSkeleton />
+        <CardSkeleton short />
         <CardSkeleton />
       </div>
     );
   } else if (loadState === "error" && list.posts.length === 0) {
     listBody = (
-      <div
+      <EmptyBlock
         role="alert"
-        className="flex items-center gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 px-3.5 py-3 text-sm text-text-secondary"
+        icon={<WifiOff className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
+        title={t("forum.loadError")}
+        body={t("forum.loadError.body")}
       >
-        <AlertTriangle className="h-4 w-4 shrink-0 text-warning" aria-hidden />
-        <span className="flex-1">{t("forum.loadError")}</span>
-        <Button size="sm" variant="ghost" onClick={() => setReloadToken((n) => n + 1)}>
+        <Button variant="secondary" onClick={() => setReloadToken((n) => n + 1)}>
           {t("forum.retry")}
         </Button>
-      </div>
+      </EmptyBlock>
     );
   } else if (forumEmpty) {
     listBody = (
       <EmptyBlock
-        icon={
-          <span className="relative">
-            <MessagesSquare className="h-7 w-7 text-on-accent-soft" aria-hidden />
-            <Sparkles className="absolute -right-3 -top-3 h-4 w-4 text-accent" aria-hidden />
-          </span>
-        }
+        icon={<MessagesSquare className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
         title={t("forum.empty")}
         body={t("forum.empty.body")}
       >
         {canCompose && (
-          <Button onClick={() => openComposer()} className="gap-1.5">
-            <Plus className="h-4 w-4" aria-hidden />
+          <Button onClick={() => openComposer()} className="h-10 gap-1.5 px-4">
+            <Plus className="h-4 w-4" aria-hidden strokeWidth={2.5} />
             {t("forum.empty.cta")}
           </Button>
         )}
-        {canManage && onOpenSettings && (
-          <Button variant="secondary" onClick={() => onOpenSettings("tags")} className="gap-1.5">
+        {canManage && onOpenSettings && tags.length > 0 && (
+          <Button variant="secondary" onClick={() => onOpenSettings("tags")} className="h-10 gap-1.5">
             <Tag className="h-4 w-4" aria-hidden />
-            {tags.length > 0 ? t("forum.empty.starterEdit") : t("forum.empty.setupTags")}
+            {t("forum.empty.starterEdit")}
           </Button>
         )}
         {pausedLine}
         {canManage && tagsLoaded && tags.length === 0 && (
-          <div className="mt-2 flex w-full flex-wrap items-center justify-center gap-1.5 text-xs text-text-tertiary">
-            <span>{t("forum.empty.starter")}</span>
+          <div className="mt-3 flex w-full flex-wrap items-center justify-center gap-1.5 text-xs text-text-secondary" data-forum-starter="">
+            <span className="mr-1">{t("forum.empty.starter")}</span>
             {starterKind.map((starter) => (
               <span
                 key={starter.preset}
-                className="inline-flex h-7 items-center gap-1 rounded-full border border-dashed border-border-strong px-2.5 text-text-secondary"
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-dashed border-border-strong px-3 text-[13px] text-text-secondary"
               >
                 <ForumTagIcon tag={{ icon: starter.icon, emoji: null }} className="h-3.5 w-3.5" />
                 {t(starter.nameKey)}
               </span>
             ))}
-            <button
-              type="button"
+            <Button
+              size="sm"
+              variant="ghost"
               disabled={starterBusy}
               onClick={() => void applyStarterTags()}
               aria-busy={starterBusy || undefined}
-              className="inline-flex items-center gap-1 rounded-[var(--radius-control)] px-1.5 py-1 font-semibold text-accent hover:underline disabled:opacity-50 max-sm:hit-44"
+              className="gap-1 font-semibold text-text"
             >
               {starterBusy && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
               {t("forum.empty.starterUse")}
-            </button>
+            </Button>
+            {onOpenSettings && (
+              <Button size="sm" variant="ghost" onClick={() => onOpenSettings("tags")} className="gap-1">
+                {t("forum.empty.setupTags")}
+              </Button>
+            )}
           </div>
         )}
       </EmptyBlock>
     );
   } else {
     const noResults = list.posts.length === 0 && (filters.q || list.pinned.length === 0 || forumFiltersActive(filters));
+    const listClass =
+      cardVariant === "tile"
+        ? "grid grid-cols-2 gap-1 sm:grid-cols-3"
+        : cn(
+            "flex flex-col",
+            // A hairline between posts, inset from the edges, instead of a
+            // box around each one.
+            "[&>li+li]:before:mx-4 [&>li+li]:before:block [&>li+li]:before:h-px [&>li+li]:before:bg-border/60 [&>li+li]:before:content-['']",
+            cardVariant === "row" && "[&>li+li]:before:mx-3",
+          );
     listBody = (
       <>
         {refreshFailed && (
           <div
             role="alert"
-            className="mb-3 flex items-center gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 px-3.5 py-2.5 text-sm text-text-secondary"
+            className="mb-3 flex items-center gap-3 rounded-[var(--radius-card)] bg-warning-soft px-3.5 py-2.5 text-sm text-on-warning-soft"
             data-forum-refresh-failed=""
           >
-            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" aria-hidden />
-            <span className="flex-1">{t("forum.loadError")}</span>
-            <Button size="sm" variant="ghost" onClick={() => setReloadToken((n) => n + 1)}>
-              {t("forum.retry")}
+            <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
+            <span className="flex-1">{t("forum.refreshFailed")}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-on-warning-soft"
+              onClick={() => setReloadToken((n) => n + 1)}
+            >
+              {t("forum.live.refresh")}
             </Button>
           </div>
-        )}
-        {!filters.q && list.pinned.length > 0 && (
-          <section aria-label={t("forum.pinned")} className="mb-3">
-            <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
-              <Pin className="h-3 w-3" aria-hidden />
-              {t("forum.pinned")}
-              <span aria-hidden className="ml-1 h-px flex-1 bg-border" />
-            </p>
-            <ul role="list" className="flex flex-col gap-2">
-              {list.pinned.map((post) => cardFor(post, true))}
-            </ul>
-          </section>
         )}
         {noResults && list.posts.length === 0 ? (
           filters.q ? (
             <EmptyBlock
-              icon={<SearchX className="h-7 w-7" aria-hidden />}
+              icon={<SearchX className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
               title={t("forum.searchEmpty", { query: filters.q })}
               body={t("forum.searchEmpty.body")}
             >
               {canCompose && (
-                // Secondary: Novo post in the toolbar stays the one primary
-                // button on the screen (forum QA P6, DESIGN.md).
+                // Secondary: Novo post stays the one primary button on the
+                // screen (forum QA P6, DESIGN.md).
                 <Button
                   variant="secondary"
                   onClick={() => openComposer(filters.q)}
-                  className="gap-1.5"
+                  className="h-10 gap-1.5"
                 >
                   <Plus className="h-4 w-4" aria-hidden />
                   {t("forum.searchEmpty.post", { query: filters.q })}
                 </Button>
               )}
-              <Button variant="ghost" onClick={() => setMessageSearch(filters.q)}>
+              <Button variant="ghost" className="h-10" onClick={() => setMessageSearch(filters.q)}>
                 {t("forum.searchEmpty.messages")}
               </Button>
             </EmptyBlock>
           ) : filters.mine && filters.tagIds.length === 0 && filters.status === null ? (
             <EmptyBlock
-              icon={<ListFilter className="h-7 w-7" aria-hidden />}
+              icon={<ListFilter className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
               title={t("forum.mineEmpty")}
             >
-              <Button variant="secondary" size="sm" onClick={() => changeFilters({ mine: false })}>
+              <Button variant="secondary" className="h-10" onClick={() => changeFilters({ mine: false })}>
                 {t("forum.filterEmpty.clear")}
               </Button>
             </EmptyBlock>
           ) : (
             <EmptyBlock
-              icon={<ListFilter className="h-7 w-7" aria-hidden />}
+              icon={<ListFilter className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
               title={t("forum.filterEmpty")}
-              body={t("forum.filterEmpty.body", {
-                filters: describeActiveFilters(filters, tags, t),
-              })}
+              body={describeActiveFilters(filters, tags, t)}
             >
               <Button
                 variant="secondary"
-                size="sm"
+                className="h-10"
                 onClick={() => changeFilters({ status: null, mine: false, tagIds: [] })}
               >
                 {t("forum.filterEmpty.clear")}
@@ -1451,7 +1494,8 @@ export function ForumPane({
             ref={listBoxRef}
             role="list"
             aria-label={t("forum.list.label")}
-            className="flex flex-col gap-2"
+            className={listClass}
+            data-forum-list={cardVariant}
             onFocus={() => {
               focusInListRef.current = true;
             }}
@@ -1461,20 +1505,19 @@ export function ForumPane({
               }
             }}
           >
-            {list.posts.map((post) => cardFor(post, false))}
+            {list.posts.map((post) => cardFor(post))}
           </ul>
         )}
         <div ref={sentinelRef} aria-hidden className="h-px" />
         {moreState === "loading" && (
-          <p className="flex items-center justify-center gap-2 py-4 text-xs text-text-tertiary">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+          <p className="flex items-center justify-center gap-2 py-5 text-xs text-text-secondary">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
           </p>
         )}
         {moreState === "error" && (
-          <div className="mt-2 flex items-center gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 px-3.5 py-2.5 text-sm text-text-secondary">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" aria-hidden />
-            <span className="flex-1">{t("forum.loadError")}</span>
-            <Button size="sm" variant="ghost" onClick={() => setMoreState("idle")}>
+          <div className="mt-2 flex items-center gap-3 rounded-[var(--radius-card)] bg-surface-1 px-3.5 py-2.5 text-sm text-text-secondary">
+            <span className="flex-1">{t("forum.loadMoreError")}</span>
+            <Button size="sm" variant="ghost" className="text-text" onClick={() => setMoreState("idle")}>
               {t("forum.retry")}
             </Button>
           </div>
@@ -1484,15 +1527,100 @@ export function ForumPane({
           list.posts.length > 0 &&
           counts &&
           !forumFiltersActive(filters) && (
-            <p className="flex items-center gap-3 py-5 text-xs text-text-tertiary">
-              <span aria-hidden className="h-px flex-1 bg-border" />
+            <p className="flex items-center gap-3 px-4 py-6 text-[13px] text-text-secondary">
+              <span aria-hidden className="h-px flex-1 bg-border/60" />
               {t("forum.end", { count: counts.posts })}
-              <span aria-hidden className="h-px flex-1 bg-border" />
+              <span aria-hidden className="h-px flex-1 bg-border/60" />
             </p>
           )}
       </>
     );
   }
+
+  const pinnedStrip =
+    !filters.q && list.pinned.length > 0 && !forumEmpty ? (
+      <section aria-label={t("forum.pinned")} className="min-w-0">
+        <ul
+          role="list"
+          className={cn(
+            "gap-2",
+            compactList
+              ? "flex flex-col"
+              : isPhone
+                ? "-mx-4 flex snap-x scroll-px-4 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>li]:w-[240px] [&>li]:shrink-0 [&>li]:snap-start"
+                : "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))]",
+          )}
+        >
+          {list.pinned.map((post) => (
+            <li key={post.id} className="list-none">
+              <ForumPinnedTile
+                post={post}
+                unread={unreadFor(post)}
+                href={forumPostPath(server.id, forumId, post.id)}
+                open={post.id === openPostId}
+                tabIndex={post.id === rovingId ? 0 : -1}
+                onOpen={openPostById}
+                onFocus={setFocusedId}
+                onKeyDown={onCardKeyDown}
+                registerLink={registerLink}
+              />
+            </li>
+          ))}
+        </ul>
+      </section>
+    ) : null;
+
+  // Beside the list on a wide screen: what this forum is for, its rules as a
+  // numbered list, and how much of it is solved.
+  const rail = showRail ? (
+    <aside
+      aria-label={t("forum.about.title")}
+      className="sticky top-4 w-[280px] shrink-0 self-start pt-1"
+      data-forum-rail=""
+    >
+      <div className="rounded-[var(--radius-panel)] bg-surface-1 p-[18px]">
+        {counts && counts.posts > 0 && (
+          <dl className="grid grid-cols-3 gap-2">
+            {[
+              { value: counts.posts, label: t("forum.about.posts", { count: counts.posts }) },
+              { value: counts.open, label: t("forum.about.open", { count: counts.open }) },
+              {
+                value: `${Math.round(((counts.posts - counts.open) / counts.posts) * 100)}%`,
+                label: t("forum.about.solved"),
+              },
+            ].map((stat) => (
+              <div key={stat.label} className="min-w-0">
+                <dd className="font-display text-lg font-extrabold tabular-nums text-text">{stat.value}</dd>
+                <dt className="truncate text-xs text-text-secondary">{stat.label}</dt>
+              </div>
+            ))}
+          </dl>
+        )}
+        {rules && (
+          <>
+            {counts && counts.posts > 0 && <div aria-hidden className="my-4 h-px bg-border/60" />}
+            <h2 className="font-display text-[15px] font-bold leading-5 text-text">
+              {t("forum.rules.title")}
+            </h2>
+            {ruleLines.length > 1 ? (
+              <ol className="mt-2.5 flex flex-col gap-2.5 text-[13px] leading-[18px] text-text-secondary">
+                {ruleLines.map((line, index) => (
+                  <li key={index} className="flex gap-2.5">
+                    <span className="w-3 shrink-0 font-bold tabular-nums text-text">{index + 1}</span>
+                    <span className="min-w-0 break-words">{line}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-[19px] text-text-secondary">
+                {rules}
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </aside>
+  ) : null;
 
   const listColumn = (
     <div
@@ -1506,87 +1634,94 @@ export function ForumPane({
       {header}
       <div
         ref={scrollRef}
-        onScroll={onListScroll}
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
       >
         <div
           className={cn(
-            "mx-auto flex w-full flex-col gap-3 px-4 pb-24 pt-4 sm:px-6",
-            compactList ? "max-w-none sm:px-4" : "max-w-4xl",
+            "mx-auto flex w-full gap-10 px-4 pb-24 sm:px-6",
+            compactList ? "pt-1" : "pt-2 sm:pt-3",
+            compactList ? "max-w-none" : showRail ? "max-w-[1080px]" : "max-w-3xl",
           )}
         >
-          {!compactList && guidelines}
-          {isPhone && phoneSearchOpen && (
-            <div className="flex items-center gap-2 animate-door-reveal">
-              {searchField}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setSearchText("");
-                  setPhoneSearchOpen(false);
-                }}
-              >
-                {t("forum.edit.cancel")}
-              </Button>
-            </div>
-          )}
-          {!forumEmpty && (
-            <>
-              {!isPhone && (
-                <div className="flex items-center gap-2">
-                  {searchField}
-                  {!compactList && newPostButton}
-                </div>
-              )}
-              {!compactList && pausedLine}
-              <ForumFilterBar
-                filters={filters}
-                tags={tags}
-                onChange={changeFilters}
-                inlineTags={
-                  compactList
-                    ? 0
-                    : Math.max(1, Math.min(8, Math.floor((Math.min(width, 896) - 520) / 100)))
-                }
-              />
-            </>
-          )}
-          {/* "N posts com novidade": the list never reorders under the
-              reader. Sticky over the cards, never over the toolbar: pinned to
-              the pane's top it sat on the search field, worst beside an open
-              post (forum QA P10). Zero height, so it never pushes the list. */}
-          {list.queued.length > 0 && (
-            <div className="pointer-events-none sticky top-2 z-20 -mb-3 flex h-0 justify-center">
-              <button
-                type="button"
-                onClick={flushQueue}
-                className="pointer-events-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-accent px-3.5 text-xs font-semibold text-on-accent shadow-[var(--shadow-2)] animate-pop-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset max-sm:hit-44"
-                data-forum-live-pill=""
-              >
-                <ChevronUp className="h-3.5 w-3.5" aria-hidden />
-                {t("forum.live", { count: list.queued.length })}
-                <span aria-hidden className="opacity-70">·</span>
-                {t("forum.live.refresh")}
-              </button>
-            </div>
-          )}
-          <div className="min-w-0">{listBody}</div>
+          <div className="flex min-w-0 flex-1 flex-col gap-3">
+            {hero}
+            {isPhone && phoneSearchOpen && (
+              <div className="flex items-center gap-2 animate-door-reveal">
+                {searchField}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setSearchText("");
+                    setPhoneSearchOpen(false);
+                  }}
+                >
+                  {t("forum.edit.cancel")}
+                </Button>
+              </div>
+            )}
+            {!forumEmpty && (
+              <div className={cn("flex flex-col gap-2.5", !compactList && "mt-2")}>
+                {!isPhone && (
+                  <div className="flex items-center gap-2">
+                    {searchField}
+                    {!compactList && (
+                      <>
+                        <ForumSortMenu
+                          sort={filters.sort}
+                          onChange={(sort) => changeFilters({ sort })}
+                          className="h-10 rounded-[var(--radius-card)]"
+                        />
+                        <ForumLayoutSwitch layout={layout} onChange={changeLayout} />
+                      </>
+                    )}
+                  </div>
+                )}
+                {!compactList && pausedLine}
+                <ForumFilterBar
+                  filters={filters}
+                  tags={tags}
+                  onChange={changeFilters}
+                  strip={filterStrip}
+                  leading={
+                    isPhone || compactList ? (
+                      <ForumSortMenu
+                        sort={filters.sort}
+                        onChange={(sort) => changeFilters({ sort })}
+                        short
+                      />
+                    ) : undefined
+                  }
+                  inlineTags={
+                    compactList
+                      ? 0
+                      : Math.max(1, Math.min(6, Math.floor((listColumnWidth - 360) / 100)))
+                  }
+                />
+              </div>
+            )}
+            {pinnedStrip}
+            {/* "N posts com novidade": the list never reorders under the
+                reader. Sticky over the cards, never over the toolbar (forum QA
+                P10). Zero height, so it never pushes the list. */}
+            {list.queued.length > 0 && (
+              <div className="pointer-events-none sticky top-2 z-20 -mb-3 flex h-0 justify-center">
+                <button
+                  type="button"
+                  onClick={flushQueue}
+                  className="pointer-events-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-text px-3.5 text-xs font-semibold text-surface-0 shadow-[var(--shadow-2)] animate-pop-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset max-sm:hit-44"
+                  data-forum-live-pill=""
+                >
+                  <ArrowUp className="h-3.5 w-3.5" aria-hidden />
+                  {t("forum.live", { count: list.queued.length })}
+                </button>
+              </div>
+            )}
+            <div className={cn("min-w-0", !compactList && (cardVariant === "tile" ? "-mx-2" : "-mx-4"))}>{listBody}</div>
+          </div>
+          {rail}
         </div>
       </div>
-      {/* Phone: the thumb's Novo post, out of the way while scrolling down. */}
-      {isPhone && canCompose && !forumEmpty && (
-        <Button
-          onClick={() => openComposer()}
-          className={cn(
-            "absolute bottom-5 right-4 z-20 h-12 gap-1.5 rounded-full px-5 text-[15px] shadow-[var(--shadow-2)] transition-[transform,opacity] duration-[var(--duration-base)] ease-[var(--ease-emphasized)] motion-reduce:transition-none",
-            fabHidden && "pointer-events-none translate-y-20 opacity-0",
-          )}
-        >
-          <Plus className="h-5 w-5" aria-hidden />
-          {t("forum.newPost")}
-        </Button>
-      )}
       <p role="status" aria-live="polite" className="sr-only">
         {liveAnnouncement}
       </p>
@@ -1667,10 +1802,11 @@ export function ForumPane({
         />
       )}
       {openPostId && !openPost && openFailed && (
-        <aside className="flex w-full flex-col items-center justify-center gap-3 border-l border-border/60 bg-surface-0 px-6 text-center max-md:fixed max-md:inset-0 max-md:z-30 md:w-[488px]">
-          <AlertTriangle className="h-6 w-6 text-warning" aria-hidden />
-          <p className="text-sm text-text-secondary">{t("forum.post.loadFailed")}</p>
-          <Button variant="secondary" onClick={closePost}>
+        <aside className="flex w-full flex-col items-center justify-center bg-surface-0 px-6 text-center shadow-[-1px_0_0_var(--color-border)] max-md:fixed max-md:inset-0 max-md:z-30 md:w-[520px]">
+          <Trash2 className="h-7 w-7 text-text-secondary" aria-hidden strokeWidth={1.5} />
+          <p className="mt-4 font-display text-xl font-extrabold text-text">{t("forum.post.loadFailed")}</p>
+          <p className="mt-1.5 max-w-xs text-sm text-text-secondary">{t("forum.post.loadFailed.body")}</p>
+          <Button variant="secondary" className="mt-5 h-10" onClick={closePost}>
             {t("forum.post.back")}
           </Button>
         </aside>
@@ -1746,16 +1882,27 @@ export function ForumPane({
         size="sm"
         onClose={() => setRulesSheetOpen(false)}
       >
-        <p className="whitespace-pre-wrap break-words px-5 py-4 text-sm text-text-secondary">
-          {rules}
-        </p>
+        {ruleLines.length > 1 ? (
+          <ol className="flex flex-col gap-3 px-5 py-4 text-sm leading-5 text-text-secondary">
+            {ruleLines.map((line, index) => (
+              <li key={index} className="flex gap-3">
+                <span className="w-3 shrink-0 font-bold tabular-nums text-text">{index + 1}</span>
+                <span className="min-w-0 break-words">{line}</span>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="whitespace-pre-wrap break-words px-5 py-4 text-sm text-text-secondary">
+            {rules}
+          </p>
+        )}
       </Dialog>
 
       {toast && (
         <div
           key={toast.id}
           role="status"
-          className="pointer-events-auto absolute bottom-5 left-1/2 z-40 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded-[var(--radius-card)] px-3.5 py-2.5 text-sm text-text elevation-3 animate-pop-in"
+          className="pointer-events-auto absolute bottom-5 left-1/2 z-40 flex min-h-11 max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded-[var(--radius-card)] bg-text px-4 py-2.5 text-sm text-surface-0 shadow-[var(--shadow-2)] animate-pop-in"
           data-forum-toast=""
         >
           <span className="min-w-0">{toast.text}</span>
@@ -1766,7 +1913,7 @@ export function ForumPane({
                 toast.action?.onClick();
                 setToast(null);
               }}
-              className="shrink-0 font-semibold text-accent hover:underline"
+              className="shrink-0 font-semibold underline underline-offset-2"
             >
               {toast.action.label}
             </button>
