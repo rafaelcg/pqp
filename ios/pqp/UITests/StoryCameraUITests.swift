@@ -191,6 +191,71 @@ final class StoryCameraUITests: XCTestCase {
         XCTAssertTrue(app.buttons["composer.next"].waitForExistence(timeout: 30), "The chosen part is the draft")
     }
 
+    /// A landscape clip is shown whole in the trimmer, over black, not cropped
+    /// to portrait. Needs a real file: `ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=15
+    /// -t 40 -pix_fmt yuv420p /tmp/pqp-landscape-40s.mp4`; skipped without it.
+    /// The check reads pixels: the band of the screen above the middle of the
+    /// preview is black when the whole 16:9 frame is shown, and picture when the
+    /// frame was cropped to fill.
+    func testALandscapeVideoIsShownWholeInTheTrimmer() throws {
+        let path = ProcessInfo.processInfo.environment["PQP_LANDSCAPE_FIXTURE"] ?? "/tmp/pqp-landscape-40s.mp4"
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: path), "No landscape fixture at \(path)")
+        let (app, serverId) = try launch(["PQP_STORY_CAMERA": "mock", "PQP_STORY_FIXTURE_VIDEO_FILE": path])
+        openComposer(app, serverId: serverId)
+        XCTAssertTrue(app.otherElements["trim.strip"].waitForExistence(timeout: 30), "A 40 s clip asks which 30 s")
+        sleep(3)
+        snap(app, "trim-landscape")
+        let image = try XCTUnwrap(app.screenshot().image.cgImage)
+        let width = image.width, height = image.height
+        // Rows at 30% and 50% of the screen height: the preview sits between the
+        // close button and the strip, so these land inside its frame. Count the
+        // pixels that are not near-black across the middle 60% of the width.
+        func litFraction(atRow fraction: Double) -> Double {
+            let y = Int(Double(height) * fraction)
+            guard let row = image.cropping(to: CGRect(x: Int(Double(width) * 0.2), y: y, width: Int(Double(width) * 0.6), height: 1)),
+                  let data = row.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { return 0 }
+            let perPixel = row.bitsPerPixel / 8
+            var lit = 0
+            for x in 0..<row.width {
+                let p = x * perPixel
+                if Int(bytes[p]) + Int(bytes[p + 1]) + Int(bytes[p + 2]) > 90 { lit += 1 }
+            }
+            return Double(lit) / Double(row.width)
+        }
+        let aboveMiddle = litFraction(atRow: 0.30)
+        let middle = litFraction(atRow: 0.40)
+        print("TRIM lit above=\(aboveMiddle) middle=\(middle)")
+        XCTAssertGreaterThan(middle, 0.5, "The picture is in the middle band")
+        XCTAssertLessThan(aboveMiddle, 0.1, "Above it the story canvas is black: the clip is not cropped to portrait")
+    }
+
+    /// The same clip carried through: trim, edit, post, and play it back from
+    /// the ring. Shots only; what to look for is the whole frame on black at
+    /// every step, never a portrait crop.
+    func testALandscapeClipIsPostedAndPlayedWhole() throws {
+        let path = ProcessInfo.processInfo.environment["PQP_LANDSCAPE_FIXTURE"] ?? "/tmp/pqp-landscape-40s.mp4"
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: path), "No landscape fixture at \(path)")
+        let (app, serverId) = try launch(["PQP_STORY_CAMERA": "mock", "PQP_STORY_FIXTURE_VIDEO_FILE": path])
+        openComposer(app, serverId: serverId)
+        XCTAssertTrue(app.otherElements["trim.strip"].waitForExistence(timeout: 30))
+        app.buttons["trim.use"].tap()
+        let next = app.buttons["composer.next"]
+        XCTAssertTrue(next.waitForExistence(timeout: 90), "The chosen part is the draft")
+        sleep(2)
+        snap(app, "landscape-editor")
+        next.tap()
+        let post = app.buttons["audience.post"]
+        XCTAssertTrue(post.waitForExistence(timeout: 10))
+        post.tap()
+        // Your own ring (its "+" is at the corner: tap the avatar's middle).
+        let own = app.buttons["stories.own"]
+        XCTAssertTrue(own.waitForExistence(timeout: 30), "The posted story is on your ring")
+        sleep(3)
+        own.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.3)).tap()
+        sleep(4)
+        snap(app, "landscape-viewer")
+    }
+
     /// No camera at all: the screen says so and still offers the gallery and files.
     func testNoCameraStillOffersTheGalleryAndFiles() throws {
         let (app, serverId) = try launch([:])
