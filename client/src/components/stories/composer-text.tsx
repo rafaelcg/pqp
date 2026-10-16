@@ -160,6 +160,8 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift, keepCl
   // re-renders only when what it would draw actually changes, so most keystrokes cost nothing extra.
   const inset = keepClearOfChrome ? STORY_SAFE_AREA : NO_INSET;
   const measured = useRef<{ natural: { width: number; height: number }; canvas: { width: number; height: number } } | null>(null);
+  // The words' own size when the edit opened: whether they fitted then decides how they are held.
+  const startNatural = useRef<{ width: number; height: number } | null>(null);
   const drawn = useRef<{ scale: number; maxScale: number; center: { x: number; y: number } } | null>(null);
   const [, redraw] = useReducer((count: number) => count + 1, 0);
   const fitFor = (requested: number) =>
@@ -170,6 +172,7 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift, keepCl
           scale: requested,
           center: { x: geometry.x, y: geometry.y },
           startScale: geometry.scale,
+          startNatural: startNatural.current ?? measured.current.natural,
           inset,
           isNew: keepClearOfChrome,
           maxScaleCap: STORY_LAYER_SCALE_MAX,
@@ -191,6 +194,7 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift, keepCl
       natural: { width: element.offsetWidth, height: element.offsetHeight },
       canvas: { width: canvas.clientWidth, height: canvas.clientHeight },
     };
+    startNatural.current ??= measured.current.natural;
     const next = latest.current.fitFor(latest.current.scale);
     const was = drawn.current;
     if (

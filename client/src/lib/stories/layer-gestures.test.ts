@@ -3,7 +3,7 @@ import {
   HANDLE_ROTATE_DEAD_ZONE,
   SNAP_DISTANCE,
   clampCenterInside,
-  fitTextEdit,
+  fitTextEdit as realFitTextEdit,
   clampScaleToFit,
   dragTo,
   handleDrag,
@@ -216,6 +216,9 @@ describe("keyboardTransform", () => {
 });
 
 describe("fitTextEdit", () => {
+  // Most cases start from the words as they are; the typed-longer case passes its own start.
+  const fitTextEdit = (input: Omit<Parameters<typeof realFitTextEdit>[0], "startNatural"> & { startNatural?: { width: number; height: number } }) =>
+    realFitTextEdit({ startNatural: input.natural, ...input });
   const safe = { x: 0.05, top: 0.1, bottom: 0.13 };
   const base = { canvas, rotation: 0, scale: 1, startScale: 1, maxScaleCap: 5 };
 
@@ -232,6 +235,21 @@ describe("fitTextEdit", () => {
     const fit = fitTextEdit({ ...base, natural: { width: 200, height: 300 }, center: { x: 0.5, y: 0.9 }, inset: { x: 0, top: 0, bottom: 0 }, isNew: false });
     expect(fit.scale).toBe(1);
     expect(fit.center).toEqual({ x: 0.5, y: 0.9 });
+  });
+
+  it("never shrinks existing words that fitted when the edit began, however much is typed", () => {
+    const fit = fitTextEdit({
+      ...base,
+      scale: 1.5,
+      startScale: 1.5,
+      startNatural: { width: 100, height: 40 },
+      natural: { width: 316, height: 600 },
+      center: { x: 0.5, y: 0.7 },
+      inset: { x: 0, top: 0, bottom: 0 },
+      isNew: false,
+    });
+    expect(fit.scale).toBe(1.5);
+    expect(fit.center).toEqual({ x: 0.5, y: 0.7 });
   });
 
   it("shrinks existing words bigger than the canvas until they fit, then lands them inside it", () => {

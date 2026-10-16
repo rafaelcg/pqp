@@ -171,10 +171,10 @@ export interface TextFit {
 /**
  * What the text editor shows for words of `natural` size (at scale 1) asked to be at `scale`, around
  * `center`. NEW words are fitted to the canvas less `inset` (the viewer's chrome band) and moved just
- * far enough to lie inside it. Words already on the canvas are held to the canvas itself: when they
- * are bigger than it (a long text, or an old story) they shrink until they fit and then have their
- * center clamped into it, so one pass always ends with the words inside; when they fit they stay
- * where the author put them, even partly off an edge, and only a change of size moves them.
+ * far enough to lie inside it. Words already on the canvas are the author's: if they fitted the
+ * canvas when the edit began they keep their size (never shrunk by typing more) and their place,
+ * even partly off an edge. If they did NOT fit then (a long text, an old story) they shrink until
+ * they do and have their center clamped into the canvas, so one pass ends with the words inside.
  */
 export function fitTextEdit(input: {
   natural: Natural;
@@ -184,16 +184,21 @@ export function fitTextEdit(input: {
   center: { x: number; y: number };
   /** The scale the words had when the edit began (an existing layer's own). */
   startScale: number;
+  /** The words' size at scale 1 when the edit began: whether they fitted then decides how they are held. */
+  startNatural: Natural;
   inset: Inset;
   isNew: boolean;
   maxScaleCap: number;
 }): TextFit {
   const limit = maxScaleToFit(input.natural, input.rotation, usableBox(input.canvas, input.inset));
-  const maxScale = Math.min(input.maxScaleCap, limit);
+  const startedOversized =
+    !input.isNew && input.startScale > maxScaleToFit(input.startNatural, input.rotation, input.canvas) + 1e-6;
+  // New words and words that began oversized are held to the room; words that fitted keep what they had.
+  const room = input.isNew || startedOversized ? limit : Math.max(limit, input.startScale);
+  const maxScale = Math.min(input.maxScaleCap, room);
   const scale = Math.min(input.scale, maxScale);
-  const changed = Math.abs(scale - input.startScale) > 1e-6 || scale < input.scale - 1e-6;
   const center =
-    input.isNew || changed
+    input.isNew || startedOversized
       ? clampCenterInside(input.center, input.natural, scale, input.rotation, input.canvas, input.inset)
       : input.center;
   return { maxScale, scale, center };
