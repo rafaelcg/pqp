@@ -121,6 +121,89 @@ export function maxScaleToFit(natural: Natural | null | undefined, rotation: num
   return clampScale(Math.min(canvas.width / turned.width, canvas.height / turned.height));
 }
 
+/** What a viewer's chrome can cover, as shares of the canvas (`STORY_SAFE_AREA`); none by default. */
+export interface Inset {
+  x: number;
+  top: number;
+  bottom: number;
+}
+export const NO_INSET: Inset = { x: 0, top: 0, bottom: 0 };
+
+/** The canvas less its inset: where a layer is meant to sit. */
+export function usableBox(canvas: Box, inset: Inset = NO_INSET): Box {
+  return { width: canvas.width * (1 - 2 * inset.x), height: canvas.height * (1 - inset.top - inset.bottom) };
+}
+
+/**
+ * The center (0..1 of the canvas) moved the least it takes for a layer of `natural` size at `scale`,
+ * turned by `rotation`, to lie inside the canvas less `inset`. A layer wider (or taller) than that
+ * is centered in it on that axis. Used for words that were sized to fit: a center chosen for a
+ * small layer would otherwise leave the big one hanging off the top.
+ */
+export function clampCenterInside(
+  center: { x: number; y: number },
+  natural: Natural,
+  scale: number,
+  rotation: number,
+  canvas: Box,
+  inset: Inset = NO_INSET,
+): { x: number; y: number } {
+  const turned = turnedSize(natural.width * scale, natural.height * scale, rotation);
+  const along = (value: number, size: number, span: number, from: number, to: number) => {
+    const half = size / 2 / span;
+    return half >= (to - from) / 2 ? (from + to) / 2 : clamp(value, from + half, to - half);
+  };
+  return {
+    x: along(center.x, turned.width, canvas.width, inset.x, 1 - inset.x),
+    y: along(center.y, turned.height, canvas.height, inset.top, 1 - inset.bottom),
+  };
+}
+
+export interface TextFit {
+  /** The biggest scale the words may have (the slider's end). */
+  maxScale: number;
+  /** The scale to draw: the one asked for, held to `maxScale`. */
+  scale: number;
+  /** Where to draw it. */
+  center: { x: number; y: number };
+}
+
+/**
+ * What the text editor shows for words of `natural` size (at scale 1) asked to be at `scale`, around
+ * `center`. NEW words are fitted to the canvas less `inset` (the viewer's chrome band) and moved just
+ * far enough to lie inside it. Words already on the canvas are the author's: if they fitted the
+ * canvas when the edit began they keep their size (never shrunk by typing more) and their place,
+ * even partly off an edge. If they did NOT fit then (a long text, an old story) they shrink until
+ * they do and have their center clamped into the canvas, so one pass ends with the words inside.
+ */
+export function fitTextEdit(input: {
+  natural: Natural;
+  canvas: Box;
+  rotation: number;
+  scale: number;
+  center: { x: number; y: number };
+  /** The scale the words had when the edit began (an existing layer's own). */
+  startScale: number;
+  /** The words' size at scale 1 when the edit began: whether they fitted then decides how they are held. */
+  startNatural: Natural;
+  inset: Inset;
+  isNew: boolean;
+  maxScaleCap: number;
+}): TextFit {
+  const limit = maxScaleToFit(input.natural, input.rotation, usableBox(input.canvas, input.inset));
+  const startedOversized =
+    !input.isNew && input.startScale > maxScaleToFit(input.startNatural, input.rotation, input.canvas) + 1e-6;
+  // New words and words that began oversized are held to the room; words that fitted keep what they had.
+  const room = input.isNew || startedOversized ? limit : Math.max(limit, input.startScale);
+  const maxScale = Math.min(input.maxScaleCap, room);
+  const scale = Math.min(input.scale, maxScale);
+  const center =
+    input.isNew || startedOversized
+      ? clampCenterInside(input.center, input.natural, scale, input.rotation, input.canvas, input.inset)
+      : input.center;
+  return { maxScale, scale, center };
+}
+
 /**
  * `start`: where the layer was when the gesture began. A layer that did not fit the canvas then
  * (an old story, a long text) is never forced smaller by a gesture that does not make it bigger:

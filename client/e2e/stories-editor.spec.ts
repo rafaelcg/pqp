@@ -211,6 +211,36 @@ test("Ctrl+Z and Escape still reach the composer when the text editor has left f
   await expect(composer.locator("[data-story-discard]")).toBeVisible();
 });
 
+test("280 characters of long unbroken words are sized to fit the canvas, clear of the viewer's chrome", async ({ page }) => {
+  const ctx = await setup();
+  const composer = await openTextComposer(page, ctx);
+  const long = ("A".repeat(80) + " https://example.com/very/long/path/that/never/ends/and/keeps/going?query=" + "x".repeat(40) + " " + "palavra".repeat(12)).slice(0, 280);
+  await addText(composer, long);
+  const canvas = (await composer.locator("[data-story-surface]").boundingBox())!;
+  const words = (await composer.locator('[data-layer-type="text"]').first().boundingBox())!;
+  // Inside the safe area: 10% off the top (progress bars, header), 13% off the bottom (reply row).
+  expect(words.y).toBeGreaterThanOrEqual(canvas.y + canvas.height * 0.1 - 1);
+  expect(words.y + words.height).toBeLessThanOrEqual(canvas.y + canvas.height * 0.87 + 1);
+  expect(words.x).toBeGreaterThanOrEqual(canvas.x);
+  expect(words.x + words.width).toBeLessThanOrEqual(canvas.x + canvas.width + 1);
+});
+
+test("the editor refits long text when the window is resized while it is open", async ({ page }) => {
+  const ctx = await setup();
+  const composer = await openTextComposer(page, ctx);
+  const long = ("palavra".repeat(12) + " ").repeat(3).slice(0, 280);
+  await composer.locator("[data-story-text]").waitFor({ state: "visible", timeout: 15_000 });
+  await composer.locator("[data-story-text]").fill(long);
+  const inside = async () => {
+    const canvas = (await composer.locator("[data-story-text-editor]").boundingBox())!;
+    const words = (await composer.locator("[data-story-text-box]").boundingBox())!;
+    return words.y >= canvas.y + canvas.height * 0.1 - 2 && words.y + words.height <= canvas.y + canvas.height * 0.87 + 2;
+  };
+  await expect.poll(inside).toBe(true);
+  await page.setViewportSize({ width: 390, height: 600 });
+  await expect.poll(inside).toBe(true);
+});
+
 test("posts a text card with layers and a mention; the server keeps them", async ({ page }) => {
   const ctx = await setup();
   const composer = await openTextComposer(page, ctx);
