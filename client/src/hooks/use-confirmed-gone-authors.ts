@@ -253,7 +253,9 @@ export function useConfirmedGoneAuthors(
     }
     current?.tracker.dispose();
     const tracker = createTracker(
-      () => refreshRef.current(),
+      // Only ever this server's roster: a retry must not read another one.
+      () =>
+        serverIdRef.current === id ? refreshRef.current() : Promise.resolve(null),
       (ids) => setPublished({ serverId: id, ids }),
     );
     held.current = { serverId: id, tracker };
@@ -273,6 +275,16 @@ export function useConfirmedGoneAuthors(
       current.tracker.seeInRoster(roster);
     }
   }, [roster]);
+
+  // Leaving a server ends its tracker, with any retry it has waiting. Only a
+  // tracker for another server goes: one made for this server while mounting
+  // is the one to keep.
+  useEffect(() => {
+    const current = held.current;
+    if (current && current.serverId !== serverId) {
+      current.tracker.dispose();
+    }
+  }, [serverId]);
 
   useEffect(
     () => () => {

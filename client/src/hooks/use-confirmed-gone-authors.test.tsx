@@ -303,6 +303,25 @@ describe("useConfirmedGoneAuthors", () => {
     expect(latest.confirmed.has("a")).toBe(true);
   });
 
+  it("does not retry a left server's check against the server on screen", async () => {
+    vi.useFakeTimers();
+    const first = vi.fn(async () => null);
+    const second = vi.fn(async () => held());
+    mount("s1", first);
+    act(() => latest.report([miss("a")]));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(first).toHaveBeenCalledTimes(1);
+    act(() => root!.render(<Probe serverId="s2" refresh={second} />));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600_000);
+    });
+    expect(second).not.toHaveBeenCalled();
+    act(() => root!.render(<Probe serverId="s1" refresh={first} />));
+    expect(latest.confirmed.size).toBe(0);
+  });
+
   it("drops a read that lands after the server changed", async () => {
     const read = deferred();
     const refresh: Refresh = () => read.promise;
