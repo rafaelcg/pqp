@@ -225,6 +225,22 @@ test("280 characters of long unbroken words are sized to fit the canvas, clear o
   expect(words.x + words.width).toBeLessThanOrEqual(canvas.x + canvas.width + 1);
 });
 
+test("the editor refits long text when the window is resized while it is open", async ({ page }) => {
+  const ctx = await setup();
+  const composer = await openTextComposer(page, ctx);
+  const long = ("palavra".repeat(12) + " ").repeat(3).slice(0, 280);
+  await composer.locator("[data-story-text]").waitFor({ state: "visible", timeout: 15_000 });
+  await composer.locator("[data-story-text]").fill(long);
+  const inside = async () => {
+    const canvas = (await composer.locator("[data-story-text-editor]").boundingBox())!;
+    const words = (await composer.locator("[data-story-text-box]").boundingBox())!;
+    return words.y >= canvas.y + canvas.height * 0.1 - 2 && words.y + words.height <= canvas.y + canvas.height * 0.87 + 2;
+  };
+  await expect.poll(inside).toBe(true);
+  await page.setViewportSize({ width: 390, height: 600 });
+  await expect.poll(inside).toBe(true);
+});
+
 test("posts a text card with layers and a mention; the server keeps them", async ({ page }) => {
   const ctx = await setup();
   const composer = await openTextComposer(page, ctx);

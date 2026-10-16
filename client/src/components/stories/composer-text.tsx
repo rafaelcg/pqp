@@ -1,5 +1,5 @@
 import { AlignCenter, AlignLeft, AlignRight, Check, PaintBucket, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import {
   STORY_LAYER_ALIGNS,
   STORY_LAYER_COLORS,
@@ -12,7 +12,7 @@ import {
 } from "@pqp/shared";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { useWheelScrollX } from "@/lib/use-wheel-scroll-x";
-import { NO_INSET, clampCenterInside, maxScaleToFit, usableBox } from "@/lib/stories/layer-gestures";
+import { NO_INSET, fitTextEdit } from "@/lib/stories/layer-gestures";
 import { layerStyle, type TextLayerFields } from "@/lib/stories/layers";
 
 /**
@@ -153,43 +153,70 @@ export function TextEditor({ initial, geometry, onDone, onCancel, onLift, keepCl
   const root = useRef<HTMLDivElement>(null);
   const patch = (change: Partial<TextLayerFields>) => setFields((current) => ({ ...current, ...change }));
 
-  // The biggest the words may be made. NEW words that do not fit at the size they were given (a long
-  // text, a long unbroken word) are made smaller until they fit the canvas less the chrome band, and
-  // their center is moved just enough to lie inside it, instead of running off the top and bottom.
-  // Words already on the canvas are never made smaller than they are (the author put them there; only
-  // growing is held to the canvas). Measured from the field's own size at scale 1, so it follows the
-  // words, the font and the size as they change.
-  const [maxScale, setMaxScale] = useState(STORY_LAYER_SCALE_MAX);
+  // What the words may be and where they sit (`fitTextEdit`): NEW words are fitted to the canvas less
+  // the chrome band; words already placed are held to the canvas and left where the author put them
+  // unless they are bigger than it. Measured from the field's own size at scale 1, so it follows the
+  // words, the font and the canvas as they change. The measurement lives in a ref and the editor
+  // re-renders only when what it would draw actually changes, so most keystrokes cost nothing extra.
   const inset = keepClearOfChrome ? STORY_SAFE_AREA : NO_INSET;
-  const [fit, setFit] = useState<{ natural: { width: number; height: number }; canvas: { width: number; height: number } } | null>(null);
-  useLayoutEffect(() => {
+  const measured = useRef<{ natural: { width: number; height: number }; canvas: { width: number; height: number } } | null>(null);
+  const drawn = useRef<{ scale: number; maxScale: number; center: { x: number; y: number } } | null>(null);
+  const [, redraw] = useReducer((count: number) => count + 1, 0);
+  const fitFor = (requested: number) =>
+    measured.current
+      ? fitTextEdit({
+          ...measured.current,
+          rotation: geometry.rotation,
+          scale: requested,
+          center: { x: geometry.x, y: geometry.y },
+          startScale: geometry.scale,
+          inset,
+          isNew: keepClearOfChrome,
+          maxScaleCap: STORY_LAYER_SCALE_MAX,
+        })
+      : { maxScale: STORY_LAYER_SCALE_MAX, scale: requested, center: { x: geometry.x, y: geometry.y } };
+  const fitNow = fitFor(scale);
+  const { maxScale, scale: shownScale, center } = fitNow;
+  drawn.current = fitNow;
+  const latest = useRef({ fitFor, scale });
+  latest.current = { fitFor, scale };
+  const remeasure = useRef(() => {});
+  remeasure.current = () => {
     const element = box.current;
     const canvas = root.current;
     if (!element || !canvas) {
       return;
     }
-    const natural = { width: element.offsetWidth, height: element.offsetHeight };
-    const size = { width: canvas.clientWidth, height: canvas.clientHeight };
-    // The same measurement again (most keystrokes) publishes nothing: no extra render per letter.
-    setFit((current) =>
-      current &&
-      current.natural.width === natural.width &&
-      current.natural.height === natural.height &&
-      current.canvas.width === size.width &&
-      current.canvas.height === size.height
-        ? current
-        : { natural, canvas: size },
-    );
-    const limit = maxScaleToFit(natural, geometry.rotation, usableBox(size, inset));
-    setMaxScale(Math.min(STORY_LAYER_SCALE_MAX, keepClearOfChrome ? limit : Math.max(limit, geometry.scale)));
-    // Everything that changes the words' natural size.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    measured.current = {
+      natural: { width: element.offsetWidth, height: element.offsetHeight },
+      canvas: { width: canvas.clientWidth, height: canvas.clientHeight },
+    };
+    const next = latest.current.fitFor(latest.current.scale);
+    const was = drawn.current;
+    if (
+      !was ||
+      Math.abs(next.scale - was.scale) > 1e-4 ||
+      Math.abs(next.maxScale - was.maxScale) > 1e-4 ||
+      Math.abs(next.center.x - was.center.x) > 1e-5 ||
+      Math.abs(next.center.y - was.center.y) > 1e-5
+    ) {
+      redraw();
+    }
+  };
+  // Everything that changes the words' natural size.
+  useLayoutEffect(() => {
+    remeasure.current();
   }, [fields.text, fields.font, fields.size, fields.align, fields.background, geometry.rotation]);
-  const shownScale = Math.min(scale, maxScale);
-  // Only new words are moved onto the canvas; words the author already placed stay exactly where they put them.
-  const center = fit && keepClearOfChrome
-    ? clampCenterInside({ x: geometry.x, y: geometry.y }, fit.natural, shownScale, geometry.rotation, fit.canvas, inset)
-    : { x: geometry.x, y: geometry.y };
+  // The canvas itself changing size (a rotated phone, a resized window) changes the room and the words' size.
+  useLayoutEffect(() => {
+    const canvas = root.current;
+    if (!canvas || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => remeasure.current());
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const element = area.current;

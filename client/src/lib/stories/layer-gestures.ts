@@ -159,6 +159,46 @@ export function clampCenterInside(
   };
 }
 
+export interface TextFit {
+  /** The biggest scale the words may have (the slider's end). */
+  maxScale: number;
+  /** The scale to draw: the one asked for, held to `maxScale`. */
+  scale: number;
+  /** Where to draw it. */
+  center: { x: number; y: number };
+}
+
+/**
+ * What the text editor shows for words of `natural` size (at scale 1) asked to be at `scale`, around
+ * `center`. NEW words are fitted to the canvas less `inset` (the viewer's chrome band) and moved just
+ * far enough to lie inside it. Words already on the canvas are held to the canvas itself: when they
+ * are bigger than it (a long text, or an old story) they shrink until they fit and then have their
+ * center clamped into it, so one pass always ends with the words inside; when they fit they stay
+ * where the author put them, even partly off an edge, and only a change of size moves them.
+ */
+export function fitTextEdit(input: {
+  natural: Natural;
+  canvas: Box;
+  rotation: number;
+  scale: number;
+  center: { x: number; y: number };
+  /** The scale the words had when the edit began (an existing layer's own). */
+  startScale: number;
+  inset: Inset;
+  isNew: boolean;
+  maxScaleCap: number;
+}): TextFit {
+  const limit = maxScaleToFit(input.natural, input.rotation, usableBox(input.canvas, input.inset));
+  const maxScale = Math.min(input.maxScaleCap, limit);
+  const scale = Math.min(input.scale, maxScale);
+  const changed = Math.abs(scale - input.startScale) > 1e-6 || scale < input.scale - 1e-6;
+  const center =
+    input.isNew || changed
+      ? clampCenterInside(input.center, input.natural, scale, input.rotation, input.canvas, input.inset)
+      : input.center;
+  return { maxScale, scale, center };
+}
+
 /**
  * `start`: where the layer was when the gesture began. A layer that did not fit the canvas then
  * (an old story, a long text) is never forced smaller by a gesture that does not make it bigger:

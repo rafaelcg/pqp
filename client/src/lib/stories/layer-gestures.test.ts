@@ -3,6 +3,7 @@ import {
   HANDLE_ROTATE_DEAD_ZONE,
   SNAP_DISTANCE,
   clampCenterInside,
+  fitTextEdit,
   clampScaleToFit,
   dragTo,
   handleDrag,
@@ -211,6 +212,43 @@ describe("keyboardTransform", () => {
 
   it("ignores keys it does not own", () => {
     expect(keyboardTransform(start, "a", false)).toBeNull();
+  });
+});
+
+describe("fitTextEdit", () => {
+  const safe = { x: 0.05, top: 0.1, bottom: 0.13 };
+  const base = { canvas, rotation: 0, scale: 1, startScale: 1, maxScaleCap: 5 };
+
+  it("fits new words to the safe area and keeps them inside it", () => {
+    const fit = fitTextEdit({ ...base, natural: { width: 316, height: 900 }, center: { x: 0.5, y: 0.4 }, inset: safe, isNew: true });
+    expect(fit.scale).toBeCloseTo(fit.maxScale, 6);
+    expect(fit.scale).toBeLessThan(1);
+    const half = (900 * fit.scale) / 711 / 2;
+    expect(fit.center.y - half).toBeGreaterThanOrEqual(safe.top - 1e-9);
+    expect(fit.center.y + half).toBeLessThanOrEqual(1 - safe.bottom + 1e-9);
+  });
+
+  it("leaves existing words that fit exactly where they are, even partly off an edge", () => {
+    const fit = fitTextEdit({ ...base, natural: { width: 200, height: 300 }, center: { x: 0.5, y: 0.9 }, inset: { x: 0, top: 0, bottom: 0 }, isNew: false });
+    expect(fit.scale).toBe(1);
+    expect(fit.center).toEqual({ x: 0.5, y: 0.9 });
+  });
+
+  it("shrinks existing words bigger than the canvas until they fit, then lands them inside it", () => {
+    const fit = fitTextEdit({ ...base, natural: { width: 316, height: 1000 }, center: { x: 0.5, y: 0.4 }, inset: { x: 0, top: 0, bottom: 0 }, isNew: false });
+    expect(fit.scale).toBeCloseTo(711 / 1000, 6);
+    expect(fit.center.y).toBeCloseTo(0.5, 6);
+    // Running it again on its own result changes nothing: it has converged.
+    const again = fitTextEdit({ ...base, natural: { width: 316, height: 1000 }, scale: fit.scale, startScale: fit.scale, center: fit.center, inset: { x: 0, top: 0, bottom: 0 }, isNew: false });
+    expect(again.scale).toBeCloseTo(fit.scale, 9);
+    expect(again.center).toEqual(fit.center);
+  });
+
+  it("follows the canvas when it changes size", () => {
+    const words = { ...base, natural: { width: 316, height: 800 }, center: { x: 0.5, y: 0.4 }, inset: safe, isNew: true };
+    const tall = fitTextEdit(words);
+    const short = fitTextEdit({ ...words, canvas: { width: 400, height: 500 } });
+    expect(short.maxScale).toBeLessThan(tall.maxScale);
   });
 });
 
