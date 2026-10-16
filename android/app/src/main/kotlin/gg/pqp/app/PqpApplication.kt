@@ -44,6 +44,10 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
     lateinit var voice: gg.pqp.app.voice.VoiceController
         private set
 
+    /** See `AttentionReporter`: the lifecycle half of the push attention gate. */
+    lateinit var attention: gg.pqp.app.core.AttentionReporter
+        private set
+
     /**
      * Application-scoped because a push can arrive, be drawn and be tapped with
      * no Activity in the process at all.
@@ -117,6 +121,9 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
         session = SessionStore(appScope, http)
         // The socket reconnects the moment a network is back, not when its backoff next wakes up.
         gg.pqp.app.core.NetworkReconnect.register(this, session)
+        // Tells the server whether the app is in front of the person, so a backgrounded phone is
+        // pushed (`push_attention_gate`). Application-scoped: the socket outlives every Activity.
+        attention = gg.pqp.app.core.AttentionReporter(this, session.realtime, appScope)
         voice = gg.pqp.app.voice.VoiceController(this, session, appScope)
         push = gg.pqp.app.push.PushController(this, session, appScope)
         calls = gg.pqp.app.voice.CallController(this, session, voice, appScope)
