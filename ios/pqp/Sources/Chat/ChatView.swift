@@ -1219,7 +1219,10 @@ struct ChatView: View {
         let suggestions = mentionSuggestions
         // The members are read the first time a `@` is typed, not on every open.
         Color.clear.frame(height: 0)
-            .task(id: forumPost == nil && MentionAutocomplete.findAtEnd(of: model.draft) != nil) {
+            // Keyed on the draft's length while a token is open, so a members read
+            // that failed is tried again on the next keystroke (`mentionsLoaded`
+            // keeps a read that worked from repeating).
+            .task(id: forumPost == nil && MentionAutocomplete.findAtEnd(of: model.draft) != nil ? model.draft.count : -1) {
                 if forumPost == nil, MentionAutocomplete.findAtEnd(of: model.draft) != nil {
                     await loadMentionCandidates()
                 }

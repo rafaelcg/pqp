@@ -68,7 +68,10 @@ enum MentionAutocomplete {
     /// dropped: there is nothing to insert for them.
     static func filter(_ candidates: [MentionCandidate], query: String, limit: Int = maxSuggestions) -> [MentionCandidate] {
         let needle = query.lowercased()
-        var scored: [(MentionCandidate, Int)] = []
+        // Only the best `limit` are kept, in order, as the candidates go by: a
+        // server's member list is not paged, and sorting all of it on every
+        // keystroke to show eight is work for nothing.
+        var best: [(rank: Int, key: String, candidate: MentionCandidate)] = []
         for candidate in candidates {
             guard let username = candidate.username?.lowercased(), !username.isEmpty else { continue }
             let displayName = candidate.displayName.lowercased()
@@ -84,15 +87,15 @@ enum MentionAutocomplete {
             } else {
                 continue
             }
-            scored.append((candidate, rank))
+            // Ties break on the name as a person reads it, accents folded.
+            let key = candidate.displayName.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            if best.count == limit, let last = best.last, (rank, key) >= (last.rank, last.key) { continue }
+            var at = best.count
+            while at > 0, (rank, key) < (best[at - 1].rank, best[at - 1].key) { at -= 1 }
+            best.insert((rank, key, candidate), at: at)
+            if best.count > limit { best.removeLast() }
         }
-        return scored
-            .sorted {
-                $0.1 != $1.1 ? $0.1 < $1.1
-                    : $0.0.displayName.localizedCaseInsensitiveCompare($1.0.displayName) == .orderedAscending
-            }
-            .prefix(limit)
-            .map(\.0)
+        return best.map(\.candidate)
     }
 
     /// Replace the active token with `@username ` and keep the rest of the draft.
