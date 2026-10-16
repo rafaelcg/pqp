@@ -324,10 +324,15 @@ export function apiFetch<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const isGet = (options.method ?? "GET").toUpperCase() === "GET";
-  // A caller that passes a signal can cancel; sharing its request would let it
-  // cancel somebody else's read.
-  if (!isGet || options.signal || !SHARED_IN_FLIGHT_READS.has(path)) {
+  // Only the plain read: a GET with no other option at all. A caller that passes
+  // a signal can cancel (sharing its request would let it cancel somebody
+  // else's read), and headers, a cache mode or anything else would be silently
+  // dropped for every caller after the first.
+  const plainGet = Object.keys(options).every(
+    (key) =>
+      key === "method" && (options.method ?? "GET").toUpperCase() === "GET",
+  );
+  if (!plainGet || !SHARED_IN_FLIGHT_READS.has(path)) {
     return apiFetchOnce<T>(path, options);
   }
   let shared = inFlightReads.get(path) as Promise<T> | undefined;

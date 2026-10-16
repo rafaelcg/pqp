@@ -144,6 +144,18 @@ describe("apiFetch shares a switch read that is already in flight", () => {
     await settleAll();
   });
 
+  it("never shares a read that carries any option of its own (headers, a cache mode)", async () => {
+    deferredFetch(() => ({}));
+    void apiFetch("/api/fun/config", { headers: { "X-Probe": "1" } });
+    void apiFetch("/api/fun/config", { cache: "no-store" });
+    void apiFetch("/api/fun/config");
+    void apiFetch("/api/fun/config", { method: "GET" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The two plain ones (no options, and an explicit GET) share one request.
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    await settleAll();
+  });
+
   it("never shares a write, or a read whose caller can cancel it", async () => {
     deferredFetch(() => ({}));
     void apiFetch("/api/gifs/config", { method: "POST", body: "{}" });
