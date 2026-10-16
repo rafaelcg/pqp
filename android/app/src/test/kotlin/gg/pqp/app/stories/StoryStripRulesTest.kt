@@ -36,4 +36,28 @@ class StoryStripRulesTest {
         assertTrue(StoryStripRules.BADGE_RIGHT <= 68f)
         assertTrue(StoryStripRules.BADGE_LEFT >= 0f)
     }
+
+    @Test
+    fun `with a story up the ring centre and the avatar body play it, not compose`() {
+        assertFalse(StoryStripRules.inBadge(StoryStripRules.RING_CENTER_X, StoryStripRules.RING_CENTER_Y, hasStory = true))
+        // Just right of and below the avatar's middle, where a thumb lands.
+        assertFalse(StoryStripRules.inBadge(40f, 40f, hasStory = true))
+        assertFalse(StoryStripRules.inBadge(40f, 50f, hasStory = true))
+        // The caption under the ring, right half.
+        assertFalse(StoryStripRules.inBadge(50f, 75f, hasStory = true))
+    }
+
+    @Test
+    fun `with a story up the badge itself and its outside edge still add`() {
+        assertTrue(StoryStripRules.inBadge(57f, 55f, hasStory = true))
+        assertTrue(StoryStripRules.inBadge(46f, 44f, hasStory = true))
+        assertTrue(StoryStripRules.inBadge(67f, 66f, hasStory = true))
+        assertTrue(StoryStripRules.OWN_BADGE_RIGHT <= 68f)
+    }
+
+    @Test
+    fun `with no story the big target stays, the ring composes there anyway`() {
+        assertTrue(StoryStripRules.inBadge(StoryStripRules.RING_CENTER_X, 40f, hasStory = false))
+        assertTrue(StoryStripRules.inBadge(57f, 55f))
+    }
 }
