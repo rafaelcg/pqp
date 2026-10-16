@@ -230,6 +230,19 @@ describe("profile card banner", () => {
     expect(card.textContent).toContain("Carla");
     expect(band(card).dataset.profileBanner).toBe("generated");
     expect(band(card).querySelector("img")).toBeNull();
+
+    // Back to Bruno, and this read fails too: the picture from his first
+    // visit is not drawn again.
+    vi.mocked(fetchUserBannerUrl).mockRejectedValueOnce(new Error("404"));
+    await act(async () => {
+      host!.querySelector<HTMLButtonElement>('[data-opener="Bruno"]')!.click();
+    });
+    await settle();
+
+    expect(fetchUserBannerUrl).toHaveBeenLastCalledWith(BRUNO);
+    const again = document.body.querySelector<HTMLElement>("[data-profile-card]")!;
+    expect(again.textContent).toContain("Bruno");
+    expect(band(again).dataset.profileBanner).toBe("generated");
   });
 
   it("refuses a banner address that is neither ours nor https", async () => {

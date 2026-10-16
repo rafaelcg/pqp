@@ -670,7 +670,9 @@ function UserProfileCard({
    * that `Promise.all` would empty the depoimentos, medals, communities and
    * accounts too. The web client also ships before the API it talks to, so for
    * a few minutes after a deploy this route can 404 on the old API, and that
-   * must cost the card nothing but the picture. Any failure is "no banner".
+   * must cost the card nothing but the picture. Any failure is "no banner",
+   * recorded for this person, so a picture read on an earlier visit is not
+   * drawn after the read that should have replaced it failed.
    */
   useEffect(() => {
     let alive = true;
@@ -681,7 +683,11 @@ function UserProfileCard({
           setBanner({ userId, url: result.bannerUrl ?? null });
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (alive) {
+          setBanner({ userId, url: null });
+        }
+      });
     return () => {
       alive = false;
     };
