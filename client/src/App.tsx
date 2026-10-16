@@ -12931,6 +12931,7 @@ function MainAppContent({
       )}
 
       <ServerRail
+        communitiesEnabled={communitiesEnabled}
         streamAlertInfo={streamAlerts.byServer}
         onServerMenuOpen={streamAlerts.ensure}
         liveServerIds={watchParties.liveServerIds}
@@ -13149,6 +13150,7 @@ function MainAppContent({
         />
       ) : (
         <ChannelList
+          communitiesEnabled={communitiesEnabled}
           channelSidebarToggle={
             columnLayout
               ? { iconsOnly: sidebarIconsOnly, onToggle: toggleChannelSidebar }

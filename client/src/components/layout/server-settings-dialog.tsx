@@ -1083,6 +1083,7 @@ export function ServerSettingsDialog({
             <CommunitySettingsSection
               bare
               serverId={serverId}
+              serverName={server.name}
               canListPublicly={isOwner}
               onIdentitySaved={(patch) => onRenamed({ ...server, ...patch })}
             />
