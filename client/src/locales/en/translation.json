@@ -3373,6 +3373,7 @@
   "chat.reject.rateLimited": "You're sending too fast",
   "chat.reject.noAccess": "You can't send in this channel",
   "chat.reject.cannotSend": "You don't have permission to send here",
+  "chat.readOnly": "You can read here, but you can't send messages.",
   "chat.reject.undeliverable": "This message wasn't delivered",
   "chat.reject.slowMode": "Slow mode is on.",
   "chat.reject.automod": "AutoMod blocked this message.",
