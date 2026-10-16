@@ -1907,8 +1907,18 @@ struct MessageBodyText: View {
             Text(attributed)
         } else {
             Self.compose(prepared.text, tokens: prepared.tokens)
-                .accessibilityLabel(Text(verbatim: CustomEmoji.asText(raw)))
-                .task(id: prepared.tokens.map(\.id)) { await EmojiImages.shared.load(prepared.tokens.map(\.id)) }
+                .accessibilityLabel(Text(verbatim: CustomEmoji.spoken(Self.attributed(prepared.text), tokens: prepared.tokens)))
+                .task(id: prepared.tokens.map(\.id)) {
+                    let ids = prepared.tokens.map(\.id)
+                    // A fetch that failed in a way worth another try is asked
+                    // again after its pause while the message stays on screen.
+                    for _ in 0..<4 {
+                        await EmojiImages.shared.load(ids)
+                        guard EmojiImages.shared.hasRetryPending(ids) else { break }
+                        try? await Task.sleep(for: .seconds(EmojiImages.retryDelay + 1))
+                        if Task.isCancelled { break }
+                    }
+                }
         }
     }
 

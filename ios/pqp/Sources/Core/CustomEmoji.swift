@@ -61,6 +61,22 @@ enum CustomEmoji {
         return (text, tokens)
     }
 
+    /// What VoiceOver reads for a parsed body: the text as rendered (no Markdown
+    /// delimiters), each stand-in character replaced by its `:name:`.
+    static func spoken(_ parsed: AttributedString, tokens: [Token]) -> String {
+        var out = ""
+        var next = 0
+        for character in parsed.characters {
+            if character == placeholder, next < tokens.count {
+                out += ":\(tokens[next].name):"
+                next += 1
+            } else {
+                out.append(character)
+            }
+        }
+        return out
+    }
+
     /// Every token as the `:name:` a person typed, for plain-text surfaces (a
     /// reply's excerpt, an accessibility label).
     static func asText(_ body: String) -> String {
@@ -84,7 +100,10 @@ enum CustomEmoji {
 /// turn instead of opening a connection each.
 private actor EmojiFetchGate {
     private var available = 4
+    // A queue with a moving head: taking the next waiter is O(1), not a shift of
+    // the whole array.
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var head = 0
 
     func acquire() async {
         if available > 0 {
@@ -95,7 +114,17 @@ private actor EmojiFetchGate {
     }
 
     func release() {
-        if waiters.isEmpty { available += 1 } else { waiters.removeFirst().resume() }
+        guard head < waiters.count else {
+            available += 1
+            return
+        }
+        let next = waiters[head]
+        head += 1
+        if head > 64, head * 2 > waiters.count {
+            waiters.removeFirst(head)
+            head = 0
+        }
+        next.resume()
     }
 }
 
@@ -115,7 +144,14 @@ final class EmojiImages {
     @ObservationIgnored private var retryAt: [String: Date] = [:]
     @ObservationIgnored private var order: [String] = []
     private static let cap = 256
-    private static let retryDelay: TimeInterval = 20
+    static let retryDelay: TimeInterval = 20
+    /// Most distinct pictures one message asks for at once; the rest are
+    /// drawn as `:name:`. A message cannot make the client queue a download per id.
+    private static let maxPerLoad = 24
+    /// Confirmed-bad ids are remembered, but only this many: a member cannot
+    /// grow the set with made-up ids.
+    private static let failedCap = 512
+    @ObservationIgnored private var failedOrder: [String] = []
     /// An emoji is a small picture; anything past this is not one.
     private nonisolated static let maxBytes = 512 * 1024
     private static let gate = EmojiFetchGate()
@@ -130,20 +166,27 @@ final class EmojiImages {
 
     func image(for id: String) -> UIImage? { images[id] }
 
+    /// Some of `ids` failed in a way worth another try and have no picture yet.
+    func hasRetryPending(_ ids: [String]) -> Bool {
+        ids.contains { images[$0] == nil && !failed.contains($0) && retryAt[$0] != nil }
+    }
+
     /// Starts the fetch for each id that is not here, in flight or known bad.
     func load(_ ids: [String]) async {
         let now = Date()
-        let wanted = Set(ids).filter {
+        var seen = Set<String>()
+        let wanted = Set(ids.filter { seen.insert($0).inserted }.filter {
             images[$0] == nil && !inFlight.contains($0) && !failed.contains($0)
                 && (retryAt[$0].map { $0 <= now } ?? true)
-        }
+        }.prefix(Self.maxPerLoad))
         guard !wanted.isEmpty else { return }
         inFlight.formUnion(wanted)
         await withTaskGroup(of: (String, Outcome).self) { group in
             for id in wanted {
                 group.addTask {
                     await Self.gate.acquire()
-                    let outcome = await Self.fetch(id)
+                    // A view that went away while this waited its turn costs no request.
+                    let outcome: Outcome = Task.isCancelled ? .transient : await Self.fetch(id)
                     await Self.gate.release()
                     return (id, outcome)
                 }
@@ -160,7 +203,10 @@ final class EmojiImages {
                         images.removeValue(forKey: oldest)
                     }
                 case .rejected:
-                    failed.insert(id)
+                    if failed.insert(id).inserted {
+                        failedOrder.append(id)
+                        if failedOrder.count > Self.failedCap { failed.remove(failedOrder.removeFirst()) }
+                    }
                 case .transient:
                     retryAt[id] = Date().addingTimeInterval(Self.retryDelay)
                 }

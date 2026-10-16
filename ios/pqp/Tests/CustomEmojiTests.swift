@@ -62,4 +62,12 @@ final class CustomEmojiTests: XCTestCase {
         XCTAssertFalse(EmojiImages.fitsDecodeBudget(width: 4096, height: 8))
         XCTAssertFalse(EmojiImages.fitsDecodeBudget(width: 0, height: 10))
     }
+
+    func testTheSpokenLabelHasNoMarkdownAndNamesEachEmoji() {
+        let prepared = CustomEmoji.prepare("festa <:party:d768f98d-9eda-4718-92ff-c813b4ab76c2> **negrito** fim")
+        let parsed = (try? AttributedString(
+            markdown: prepared.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(prepared.text)
+        XCTAssertEqual(CustomEmoji.spoken(parsed, tokens: prepared.tokens), "festa :party: negrito fim")
+    }
 }
