@@ -1007,7 +1007,7 @@ final class ChatModel {
               let attachment = messages[index].attachments.firstIndex(where: { $0.id == attachmentId }),
               var voice = messages[index].attachments[attachment].voice
         else { return }
-        voice.transcript = transcript
+        voice.transcript = VoiceNoteTranscript.merged(current: voice.transcript, incoming: transcript)
         messages[index].attachments[attachment].voice = voice
     }
 

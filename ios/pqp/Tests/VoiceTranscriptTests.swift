@@ -5,6 +5,17 @@ import XCTest
 /// what a frame does to a transcript. The web's `voice-note-transcript.tsx` and
 /// `voice-transcription-prefs.ts`, case for case.
 final class VoiceTranscriptTests: XCTestCase {
+    func testALatePendingAnswerDoesNotRevertAFinishedTranscript() {
+        let done = VoiceNoteTranscript(status: "done", text: "oi", language: "pt")
+        let pending = VoiceNoteTranscript(status: "pending", text: nil, language: nil)
+        XCTAssertEqual(VoiceNoteTranscript.merged(current: done, incoming: pending), done)
+        XCTAssertEqual(VoiceNoteTranscript.merged(current: nil, incoming: pending), pending)
+        // A failed one asked for again does go back to pending, and a settled one is replaced by a settled one.
+        let failed = VoiceNoteTranscript(status: "failed", text: nil, language: nil)
+        XCTAssertEqual(VoiceNoteTranscript.merged(current: failed, incoming: pending), pending)
+        XCTAssertEqual(VoiceNoteTranscript.merged(current: pending, incoming: done), done)
+    }
+
     private func transcript(_ status: String, _ text: String? = nil) -> VoiceNoteTranscript {
         VoiceNoteTranscript(status: status, text: text, language: nil)
     }

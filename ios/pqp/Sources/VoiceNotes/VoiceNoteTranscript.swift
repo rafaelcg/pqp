@@ -26,6 +26,18 @@ struct VoiceNoteTranscript: Codable, Hashable, Sendable {
 
     var kind: Kind { Kind(rawValue: status) ?? .unknown }
 
+    /// What a note shows once `incoming` arrives. The answer to "Transcrever" and
+    /// the frame from the worker travel separately and either can land first: a
+    /// quick worker's `done` frame before the request's `pending` answer must not
+    /// be put back to "transcribing" by the older answer, with no later frame to
+    /// repair it. Text that was read stays; everything else takes the newest.
+    static func merged(current: VoiceNoteTranscript?, incoming: VoiceNoteTranscript) -> VoiceNoteTranscript {
+        guard let current, [Kind.done, .noSpeech].contains(current.kind),
+              [Kind.pending, .none].contains(incoming.kind)
+        else { return incoming }
+        return current
+    }
+
     enum Kind: String, Sendable {
         case none, pending, done, noSpeech = "no_speech", failed, unavailable, unknown
     }

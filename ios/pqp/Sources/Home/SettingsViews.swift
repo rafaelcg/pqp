@@ -178,7 +178,14 @@ struct AccountSettingsView: View {
             .task {
                 // The global value, which is what a conversation reads; the
                 // switches are about the account, not one server.
-                transcriptionAvailable = (try? await session.api.attachmentConfig(serverId: nil))?.offersTranscription ?? false
+                // A read that FAILED keeps the switches: hiding the opt-out
+                // because the network blinked is the wrong way to be wrong.
+                // Only an answer that says "not offered" removes them.
+                if let config = try? await session.api.attachmentConfig(serverId: nil) {
+                    transcriptionAvailable = config.offersTranscription
+                } else {
+                    transcriptionAvailable = true
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
