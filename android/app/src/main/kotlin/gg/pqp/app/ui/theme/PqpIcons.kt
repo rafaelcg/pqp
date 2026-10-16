@@ -518,6 +518,13 @@ private object Lucide {
         "M7 11h10",
         "M7 7h6",
     )
+    val captions by lucide(
+        "M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z",
+        "M7 15h4",
+        "M15 15h2",
+        "M7 11h2",
+        "M13 11h4",
+    )
     val type by lucide(
         "M12 4v16",
         "M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2",
@@ -711,6 +718,7 @@ object PqpIcons {
     // The story editor.
     val AddText get() = Lucide.type
     val Describe get() = Lucide.messageSquareText
+    val Captions get() = Lucide.captions
     val AddPhoto get() = Lucide.imagePlus
     val Stickers get() = Lucide.sticker
     val Draw get() = Lucide.brush

@@ -167,6 +167,12 @@ data class BauPost(
      * never builds the address itself ([BauPublicShare]).
      */
     val publicUrl: String? = null,
+    /**
+     * Automatic subtitles of an uploaded video, or null: none made yet, the
+     * `community_home_video_captions` flag is off for the server, not a video,
+     * or an older API. The words are fetched when the video is played.
+     */
+    val captions: BauPostCaptions? = null,
 ) {
     val isMembersOnly: Boolean get() = visibility == "members"
 

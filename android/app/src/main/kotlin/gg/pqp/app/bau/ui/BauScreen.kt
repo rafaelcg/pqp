@@ -68,6 +68,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import gg.pqp.app.R
 import gg.pqp.app.attachments.formatAttachmentSize
+import gg.pqp.app.bau.BauCaptionsSource
 import gg.pqp.app.bau.BauComment
 import gg.pqp.app.bau.BauMedia
 import gg.pqp.app.bau.BauPost
@@ -419,7 +420,19 @@ private fun PostCard(
             }
             post.media?.let { media ->
                 Spacer(Modifier.height(Spacing.md))
-                MediaView(media)
+                MediaView(
+                    media,
+                    captions = post.captions?.let {
+                        BauCaptionsSource(
+                            serverId = post.serverId,
+                            postId = post.id,
+                            sourceLang = it.sourceLang,
+                            durationMs = it.durationMs,
+                            // The vertical cut is what plays when the post has one: its length must agree.
+                            mustMatchDuration = media.videoUrl != null && media.videoUrl == media.mobile?.url,
+                        )
+                    },
+                )
             }
         }
 
@@ -561,7 +574,7 @@ private fun LockedBox() {
  * in their apps. Nothing plays on scroll, which is the web's `preload="none"`.
  */
 @Composable
-private fun MediaView(media: BauMedia) {
+private fun MediaView(media: BauMedia, captions: BauCaptionsSource? = null) {
     val context = LocalContext.current
     val callActive = LocalBauCallActive.current
     val target = media.openUrl
@@ -657,7 +670,7 @@ private fun MediaView(media: BauMedia) {
         }
 
         media.canPlayInApp && target != null && BauPlayback.activeKey == target ->
-            BauActiveVideo(key = target, open = open)
+            BauActiveVideo(key = target, open = open, captions = captions)
 
         media.canPlayInApp -> Box(
             modifier = Modifier
