@@ -118,7 +118,7 @@ interface DialogProps {
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
-  size?: "sm" | "md" | "lg" | "xl";
+  size?: "sm" | "md" | "lg" | "xl" | "2xl" | "full";
   /**
    * Give the panel the whole layer's height and stop the body scrolling itself.
    *
@@ -413,7 +413,11 @@ export function Dialog({
         ? "sm:max-w-2xl"
         : size === "xl"
           ? "sm:max-w-4xl"
-          : "sm:max-w-lg";
+          : size === "2xl"
+            ? "sm:max-w-5xl"
+            : size === "full"
+              ? "sm:max-w-7xl"
+              : "sm:max-w-lg";
 
   // `right`/`bottom` are cleared because Tailwind's `inset-0` — the fallback
   // when there is no `visualViewport` — would otherwise over-constrain the box.
@@ -473,6 +477,9 @@ export function Dialog({
             // no corners to round.
             !phoneFullScreen && "rounded-t-[var(--radius-panel)]",
             fill && "h-[calc(100%-1.5rem)] sm:h-full",
+            // Settings: a fixed height so the rail stays put between panes,
+            // but not the whole of a tall monitor.
+            fill && size === "2xl" && "sm:h-[min(100%,56rem)]",
             phoneFullScreen && "max-sm:h-full max-sm:max-h-full max-sm:border-0",
             width,
           )}

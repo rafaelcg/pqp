@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { parseBotFaceAvatar, type BotFace as BotFaceName } from "@pqp/shared";
+import { BotFace } from "@/components/bots/bot-face";
 import { resolveAvatarUrl } from "@/lib/avatar";
 import { cn } from "@/lib/utils";
 
@@ -23,6 +25,11 @@ interface UserAvatarProps {
   rounded?: "md" | "lg" | "full";
   /** Muted people are drawn dimmer in the voice roster. */
   dimmed?: boolean;
+  /**
+   * A server bot's face for this moment (focused while it works, asleep while
+   * it is off), drawn over the face its avatar URL names. Ignored for people.
+   */
+  botFace?: BotFaceName;
 }
 
 /**
@@ -46,7 +53,9 @@ interface UserAvatarProps {
  *  - `referrerPolicy="no-referrer"`, because a typed avatar URL is a credible
  *    tracking pixel aimed at everybody who can see this person, and it should
  *    at least not also learn which page they were on;
- *  - `loading="lazy"`, since a member list is a hundred of these.
+ *  - `loading="lazy"`, since a member list is a hundred of these;
+ *  - a server bot's avatar is its Breu PNG (`/api/bot-faces/...`), which is
+ *    drawn here inline instead, alive, in its own shape rather than cropped.
  */
 export function UserAvatar({
   name,
@@ -55,8 +64,19 @@ export function UserAvatar({
   fallbackClassName = "bg-signal text-xs text-ink",
   rounded = "md",
   dimmed = false,
+  botFace,
 }: UserAvatarProps) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const bot = parseBotFaceAvatar(avatarUrl);
+  if (bot) {
+    return (
+      <BotFace
+        color={bot.color}
+        face={botFace ?? bot.face}
+        className={cn(className, dimmed && "opacity-50")}
+      />
+    );
+  }
   const resolved = resolveAvatarUrl(avatarUrl);
   const shape =
     rounded === "full"

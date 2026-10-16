@@ -686,6 +686,135 @@
     return { state: state, queue: queue, rate: rate, budget: budget, items: items };
   }
 
+  /* ---------------- server bots: the verdict on "bots · beta" ----------------
+     Reads `/api/admin/bots`. One sentence: are the bots healthy, spending
+     fast, or failing a lot. Pure, like the three above, and tested.
+
+     The money here is real: it is the deployment's own spend table (a call
+     reserves its worst case and settles to the real cost), against the
+     ceiling the API reports. It is not an estimate this file makes.
+
+     THE RULES.
+      1. **A sample before a rate.** A bot that failed once in two runs is not
+         "failing a lot". Under BOTS_MIN_RUNS runs there is no failure verdict.
+      2. **Spending fast is about the ceiling, not about dollars.** US$ 3 is
+         fine under a ceiling of 50 and an emergency under 4. Three signals, any
+         of which is enough: 70% of the ceiling is gone; at this pace the day
+         ends over it (only once four hours of the day are behind us and a
+         quarter of the ceiling is spent, because a dollar at 00:20 projects to
+         nonsense); or today is three times the previous seven days' average.
+      3. **The ceiling being hit is bad, not slow.** A refused call is a member
+         whose bot did not answer.
+      4. **Quiet is not broken.** No bots, or nobody called one in seven days,
+         is `off`, and says so instead of drawing a healthy row of zeroes.
+     Shape: { state: "ok" | "warn" | "bad" | "off" | "raw", head, body, figs, items } */
+  var BOTS_MIN_RUNS = 10;
+  var BOTS_FAIL_WARN = 0.1;
+  var BOTS_FAIL_BAD = 0.25;
+  var BOTS_SPEND_WARN_SHARE = 0.7;
+  var BOTS_PACE_MIN_HOURS = 4;
+  var BOTS_PACE_MIN_SHARE = 0.25;
+  var BOTS_SPIKE_FACTOR = 3;
+  var BOTS_SPIKE_MIN_USD = 0.5;
+
+  function botsUsd(n) {
+    return "US$ " + dec(n, 2);
+  }
+
+  function botsHealth(report, now) {
+    var raw = { state: "raw", head: "", body: "", figs: [], items: [] };
+    if (!report || !report.usage || !Array.isArray(report.usage.days) || !report.usage.days.length ||
+        !report.cost || !Array.isArray(report.cost.days) || !report.adoption) {
+      return raw;
+    }
+    var days = report.usage.days;
+    var today = days[days.length - 1];
+    var week = days.slice(-7);
+    var runs7 = 0, failed7 = 0, windowRuns = 0;
+    week.forEach(function (d) { runs7 += d.runs || 0; failed7 += d.failed || 0; });
+    days.forEach(function (d) { windowRuns += d.runs || 0; });
+    var items = [];
+    var cost = report.cost;
+    var ceiling = Number(cost.ceilingUsd) || 0;
+    var spent = Number(cost.todayUsd) || 0;
+    var refused = Number(report.limits && report.limits.refusedCallsToday) || 0;
+    var figs = [
+      ["gasto hoje", botsUsd(spent) + (ceiling > 0 ? " de " + botsUsd(ceiling) : " (sem teto)")],
+      ["respostas hoje", String(today.replies || 0)],
+      ["falhas · 7 dias", runs7 ? pct((failed7 / runs7) * 100) + "% (" + failed7 + " de " + runs7 + ")" : "sem execuções"]
+    ];
+
+    if (!report.adoption.bots && !windowRuns) {
+      return { state: "off", head: "nenhum bot ainda",
+        body: "nenhum servidor criou um bot e nenhum rodou nos últimos 31 dias.", figs: figs, items: [] };
+    }
+    if (!runs7) {
+      return { state: "off", head: "ninguém chamou um bot em 7 dias",
+        body: report.adoption.bots + (report.adoption.bots === 1 ? " bot existe" : " bots existem") +
+          " e nenhum foi chamado na última semana. sem uso não há o que avaliar.", figs: figs, items: [] };
+    }
+
+    // Money.
+    if (ceiling > 0) {
+      var share = spent / ceiling;
+      if (refused > 0 || share >= 1) {
+        items.push({ key: "ceiling", state: "bad",
+          text: "o teto de gasto do dia foi atingido (" + botsUsd(spent) + " de " + botsUsd(ceiling) +
+            (refused ? ", " + refused + (refused === 1 ? " chamada recusada" : " chamadas recusadas") : "") +
+            "). os bots ficam sem responder até virar o dia" });
+      } else {
+        if (share >= BOTS_SPEND_WARN_SHARE) {
+          items.push({ key: "share", state: "warn",
+            text: pct(share * 100) + "% do teto do dia já foi gasto (" + botsUsd(spent) + " de " + botsUsd(ceiling) + ")" });
+        }
+        var reset = Date.parse(cost.nextResetAt);
+        var current = typeof now === "number" ? now : Date.now();
+        var elapsedH = isFinite(reset) ? (current - (reset - 86400000)) / 3600000 : 0;
+        if (elapsedH >= BOTS_PACE_MIN_HOURS && share >= BOTS_PACE_MIN_SHARE && !items.length) {
+          var projected = spent / (elapsedH / 24);
+          if (projected > ceiling) {
+            items.push({ key: "pace", state: "warn",
+              text: "neste ritmo o dia fecha em " + botsUsd(projected) + ", acima do teto de " + botsUsd(ceiling) });
+          }
+        }
+      }
+    }
+    var before = cost.days.slice(-8, -1);
+    var beforeTotal = 0;
+    before.forEach(function (d) { beforeTotal += d.usd || 0; });
+    var average = before.length ? beforeTotal / before.length : 0;
+    if (average > 0 && spent >= BOTS_SPIKE_MIN_USD && spent >= average * BOTS_SPIKE_FACTOR &&
+        !items.some(function (i) { return i.key === "ceiling" || i.key === "share"; })) {
+      items.push({ key: "spike", state: "warn",
+        text: "hoje já são " + botsUsd(spent) + ", " + dec(spent / average) + "× a média dos 7 dias anteriores (" + botsUsd(average) + ")" });
+    }
+
+    // Failures: the week, and today on its own so a bad day is not averaged away.
+    function failure(key, label, runs, failed) {
+      if (runs < BOTS_MIN_RUNS) return;
+      var rate = failed / runs;
+      if (rate < BOTS_FAIL_WARN) return;
+      items.push({ key: key, state: rate >= BOTS_FAIL_BAD ? "bad" : "warn",
+        text: label + ": " + failed + (failed === 1 ? " falha" : " falhas") + " em " + runs + " execuções (" + pct(rate * 100) + "%)" });
+    }
+    failure("fail-week", "últimos 7 dias", runs7, failed7);
+    failure("fail-today", "hoje", today.runs || 0, today.failed || 0);
+
+    items.sort(function (a, b) { return STATE_RANK[b.state] - STATE_RANK[a.state]; });
+    var worst = items.length ? items[0].state : "ok";
+    var headByKey = { ceiling: "teto de gasto do dia atingido", share: "gastando rápido", pace: "gastando rápido",
+      spike: "gastando rápido" };
+    return {
+      state: worst,
+      head: items.length ? (headByKey[items[0].key] || "falhando muito") : "bots saudáveis",
+      body: items.length
+        ? items[0].text
+        : "respondem sem falhar e o gasto está longe do teto: " + runs7 + (runs7 === 1 ? " execução" : " execuções") + " em 7 dias.",
+      figs: figs,
+      items: items
+    };
+  }
+
   /** The three, in incident order, always three, always in these slots. */
   function buildInsights(input) {
     return [
@@ -710,6 +839,7 @@
     waitlistBucketHistogram: waitlistBucketHistogram,
     waitlistStatusLabel: waitlistStatusLabel,
     voiceNoteHealth: voiceNoteHealth,
+    botsHealth: botsHealth,
     ageLabel: ageLabel
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);

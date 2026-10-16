@@ -213,6 +213,9 @@ import {
   rememberWhatsNewFeed,
 } from "@/lib/whats-new-feed";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
+import { BotWizard } from "@/components/bots/bot-wizard";
+import { BotIntroHint } from "@/components/bots/bot-intro-hint";
+import { useBotInvite } from "@/lib/use-bot-invite";
 import { CreateServerDialog } from "@/components/layout/create-server-dialog";
 import {
   applyRemotePreferences,
@@ -1766,8 +1769,16 @@ function MainAppContent({
   }, []);
   const [membersOpen, setMembersOpen] = useState(false);
   const [serverSettingsSection, setServerSettingsSection] = useState<
-    "roles" | undefined
+    "roles" | "bots" | undefined
   >(undefined);
+  // Creating a server bot is its own full-size flow, opened from the Bots
+  // pane or the member list, never on top of settings.
+  const [botWizardOpen, setBotWizardOpen] = useState(false);
+  const openBotWizard = useCallback(() => {
+    setServerSettingsOpen(false);
+    setServerSettingsSection(undefined);
+    setBotWizardOpen(true);
+  }, []);
   // The always-there roster down the right. Its own hook because the state is a
   // per-device preference plus a media query, and the button that flips it lives
   // in the channel header rather than in the panel.
@@ -2350,6 +2361,8 @@ function MainAppContent({
     Array<Pick<ServerRole, "id" | "name" | "mentionable" | "isEveryone">>
   >([]);
   const [serverMembers, setServerMembers] = useState<ServerMember[]>([]);
+  /** The server whose whole roster `serverMembers` holds, once loaded. */
+  const [rosterServerId, setRosterServerId] = useState<string | null>(null);
   const [serverRoles, setServerRoles] = useState<ServerRole[]>([]);
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
   // Encaminhar (`forward_messages`): what is being forwarded, and the toast
@@ -3068,6 +3081,15 @@ function MainAppContent({
     [startScreenShareGated],
   );
   const perms = usePermissions(selectedServerId);
+  const rosterBotCount = serverMembers.filter((member) => member.isCharacter).length;
+  // Before any early return: the member list's "create a bot" row.
+  const botInviteOffered = useBotInvite(
+    selection.kind === "server" ? selectedServerId : null,
+    perms.can(Permission.MANAGE_SERVER),
+    // Asked again when either place a bot is made or deleted closes, and when
+    // the roster's bots change (one made or deleted from another tab).
+    `${botWizardOpen}:${serverSettingsOpen}:${rosterBotCount}`,
+  );
   const permsRef = useRef(perms);
   permsRef.current = perms;
   /**
@@ -3930,6 +3952,7 @@ function MainAppContent({
   // The composer completes `@` against this server's members, which is also the
   // only place a handle can be learned from without asking for it.
   useEffect(() => {
+    setRosterServerId(null);
     if (conversationParticipants) {
       setMentionableRoles([]);
       setServerMembers([]);
@@ -3951,6 +3974,7 @@ function MainAppContent({
       .then(([{ members }, { roles }]) => {
         if (!cancelled) {
           setServerMembers(members);
+          setRosterServerId(selectedServerId);
           setServerRoles(roles);
           setMemberRoles(
             new Map(members.map((member) => [member.id, member.role])),
@@ -4040,6 +4064,11 @@ function MainAppContent({
     t,
   ]);
 
+  // The roster above is the whole server once it has loaded, so a message
+  // author missing from it is somebody who is no longer a member.
+  const messageAuthorsComplete =
+    !conversationParticipants && !!selectedServerId && rosterServerId === selectedServerId;
+
   const messageAuthors = useMemo(() => {
     const map = new Map<string, MessageAuthorInfo>();
     for (const member of serverMembers) {
@@ -4051,6 +4080,7 @@ function MainAppContent({
         isCharacter: member.isCharacter,
         handle: member.handle ?? null,
         customStatus: member.customStatus ?? null,
+        avatarUrl: member.avatarUrl ?? null,
       });
     }
     for (const person of conversationParticipants ?? []) {
@@ -5444,7 +5474,8 @@ function MainAppContent({
             message.type === "presence-delta" ||
             message.type === "typing-broadcast" ||
             message.type === "poll-update" ||
-            message.type === "message-rejected"
+            message.type === "message-rejected" ||
+            message.type === "bot-notice"
           ) {
             // Somebody else's message landed in the channel on screen. It is
             // read once the reader can see it (tab visible, list at its live
@@ -12460,6 +12491,8 @@ function MainAppContent({
         isLoadingOlder={chat.isLoadingOlder()}
         isLoadingNewer={chat.isLoadingNewer()}
         typingUsers={chat.getTypingUsers()}
+        botNotice={chat.getBotNotice()}
+        onDismissBotNotice={chat.dismissBotNotice}
         canModerate={canManageMessages}
         blockedAuthorIds={blockedUserIds}
         highlightMessageId={highlightMessageId}
@@ -12506,6 +12539,7 @@ function MainAppContent({
         unreadThreadIds={unreadThreadIds}
         activeThreadId={openThread?.thread.channelId ?? null}
         authors={messageAuthors}
+        authorsComplete={messageAuthorsComplete}
         roles={serverRoles}
         unreadHeld={unreadHeldIds.has(selectedChannel.id)}
         unreadSince={unreadSince}
@@ -12541,6 +12575,15 @@ function MainAppContent({
       {/* Against the composer it explains, not floating in a corner: the frame
           names the channel the refused action happened in, so a notice from
           another room would be answering a question nobody asked here. */}
+      {/* Staff made the bot; the tip is for everybody else. */}
+      {selection.kind === "server" && selectedServerId && !canManageServer && (
+        <BotIntroHint
+          serverId={selectedServerId}
+          messages={chat.getMessages()}
+          members={serverMembers}
+          onSayHi={(username) => setComposerInsert(`@${username} oi!`)}
+        />
+      )}
       {sanctionNotice && sanctionNotice.channelId === selectedChannel.id && (
         <SanctionNoticeBar
           notice={sanctionNotice}
@@ -13656,6 +13699,7 @@ function MainAppContent({
               mentionCandidates={mentionCandidates}
               blockedAuthorIds={blockedUserIds}
               authors={messageAuthors}
+        authorsComplete={messageAuthorsComplete}
               roles={serverRoles}
               showLinkEmbeds={localSettings.showLinkEmbeds}
               slashContext={{
@@ -13753,6 +13797,7 @@ function MainAppContent({
             })
           }
           authors={messageAuthors}
+        authorsComplete={messageAuthorsComplete}
           roles={serverRoles}
           unreadHeld={unreadHeldIds.has(openThread.thread.channelId)}
           unreadSince={threadUnreadSince}
@@ -13799,6 +13844,7 @@ function MainAppContent({
           open={memberSidebar.open}
           wide={memberSidebar.wide}
           onClose={memberSidebar.close}
+          onCreateBot={botInviteOffered ? openBotWizard : null}
           serverId={
             selection.kind === "server" ? selectedServerId : null
           }
@@ -13879,6 +13925,18 @@ function MainAppContent({
         }}
       />
 
+      {selectedServer && (
+        <BotWizard
+          open={botWizardOpen}
+          serverId={selectedServer.id}
+          serverName={selectedServer.name}
+          onClose={() => setBotWizardOpen(false)}
+          onAdjust={() => {
+            setServerSettingsSection("bots");
+            setServerSettingsOpen(true);
+          }}
+        />
+      )}
       <ServerSettingsDialog
         open={serverSettingsOpen}
         server={selectedServer ?? null}
@@ -13895,6 +13953,7 @@ function MainAppContent({
         }
         canManageMessages={canManageMessages}
         requestedSection={serverSettingsSection}
+        onCreateBot={openBotWizard}
         onClose={() => {
           setServerSettingsOpen(false);
           setServerSettingsSection(undefined);

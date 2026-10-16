@@ -1,0 +1,332 @@
+import { z } from "zod";
+import { BOT_BASE_FACES, BOT_COLORS, type BotBaseFace, type BotColor } from "./bot-face.js";
+import { customStatusSchema } from "./status.js";
+
+/**
+ * Server bots: an AI member a server's staff create, name and brief, which
+ * answers when somebody mentions it or replies to it. pqp runs the model; the
+ * server brings only the persona and the knowledge. See docs/plans/CUSTOM_BOTS.md.
+ */
+
+/** One bot per server while pqp pays for every reply. */
+export const SERVER_BOTS_MAX = 1;
+
+export const SERVER_BOT_NAME_MAX = 32;
+export const SERVER_BOT_PERSONA_MAX = 2000;
+export const SERVER_BOT_KNOWLEDGE_MAX = 20000;
+/** The channels a bot may answer in. Empty means it answers nowhere. */
+export const SERVER_BOT_CHANNELS_MAX = 50;
+
+/**
+ * The welcome a bot posts when somebody joins, written by staff. `{membro}`
+ * becomes an @mention of the new member and `{servidor}` the server's name.
+ * Posted as written: no model is called.
+ */
+export const SERVER_BOT_WELCOME_DEFAULT = "Bem-vindo(a), {membro}! 👋";
+export const SERVER_BOT_WELCOME_MAX = 500;
+/** At most this many welcomes per server per hour, so a raid is not a flood. */
+export const SERVER_BOT_WELCOMES_PER_HOUR = 20;
+
+/**
+ * What a bot may do, grouped the way the settings page shows them. Each one is
+ * a switch staff turn on or off per bot; the bot still needs the permission
+ * on its role, and so does the member asking. Moderation starts off.
+ */
+export const SERVER_BOT_TOOL_GROUPS = {
+  // Not tools the model calls: what it may take in. Images cost input tokens;
+  // a voice note is read through its transcript, when the server has those on.
+  senses: ["see_images", "hear_voice_notes"],
+  lookup: [
+    "list_channels",
+    "list_members",
+    "read_channel",
+    "catch_up",
+    "search_messages",
+    "list_forum_posts",
+    "read_poll",
+  ],
+  channels: ["create_channel", "edit_channel", "move_channel", "delete_channel"],
+  reminders: ["create_reminder", "list_reminders", "cancel_reminder"],
+  posting: [
+    "post_message",
+    "pin_message",
+    "create_thread",
+    "create_forum_post",
+    "reply_forum_post",
+    "create_poll",
+    "vote_poll",
+    "create_bau_post",
+    "create_invite",
+  ],
+  moderation: [
+    "delete_message",
+    "timeout_member",
+    "remove_timeout",
+    "kick_member",
+    "ban_member",
+    "list_bans",
+    "unban_member",
+  ],
+} as const;
+export type ServerBotToolGroup = keyof typeof SERVER_BOT_TOOL_GROUPS;
+export const SERVER_BOT_TOOLS = Object.values(SERVER_BOT_TOOL_GROUPS).flat();
+export type ServerBotTool = (typeof SERVER_BOT_TOOL_GROUPS)[ServerBotToolGroup][number];
+export const SERVER_BOT_DEFAULT_TOOLS: ServerBotTool[] = SERVER_BOT_TOOLS.filter(
+  (tool) => !(SERVER_BOT_TOOL_GROUPS.moderation as readonly string[]).includes(tool),
+);
+const botToolsSchema = z
+  .array(z.enum(SERVER_BOT_TOOLS as [ServerBotTool, ...ServerBotTool[]]))
+  .max(SERVER_BOT_TOOLS.length * 2)
+  .transform((tools) => [...new Set(tools)]);
+
+/** NUL, other control characters and bidi overrides: never part of a name or a prompt. */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const UNSAFE_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u202A-\u202E\u2066-\u2069]/;
+/** Lone surrogates come from broken clients and turn into U+FFFD in Postgres. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const safeText = (max: number) =>
+  z
+    .string()
+    .max(max)
+    .refine((value) => !UNSAFE_CHARS.test(value) && !LONE_SURROGATE.test(value), "Unsupported characters");
+
+const botName = z
+  .string()
+  .trim()
+  .min(2)
+  .max(SERVER_BOT_NAME_MAX)
+  // One line, and at least two letters or digits: not an emoji alone, not
+  // zero-width characters that render as nothing.
+  .refine((value) => !/[\r\n]/.test(value), "One line")
+  .refine((value) => (value.match(/[\p{L}\p{N}]/gu) ?? []).length >= 2, "At least two letters")
+  .refine((value) => !UNSAFE_CHARS.test(value) && !LONE_SURROGATE.test(value), "Unsupported characters");
+
+/** An empty or blank status line is no status line. */
+const botTagline = customStatusSchema
+  .nullable()
+  .optional()
+  .transform((value) => (value === undefined ? undefined : value && value.trim() ? value : null));
+
+/** "" is the default model, the same as null. */
+const botModel = z
+  .string()
+  .max(200)
+  .nullable()
+  .optional()
+  .transform((value) => (value === "" ? null : value));
+
+export const createServerBotSchema = z.object({
+  name: botName,
+  persona: safeText(SERVER_BOT_PERSONA_MAX).default(""),
+  knowledge: safeText(SERVER_BOT_KNOWLEDGE_MAX).default(""),
+  channelIds: z.array(z.string().uuid()).max(SERVER_BOT_CHANNELS_MAX).default([]),
+  answerToName: z.boolean().default(false),
+  model: botModel,
+  tools: botToolsSchema.optional(),
+  color: z.enum(BOT_COLORS).optional(),
+  face: z.enum(BOT_BASE_FACES).optional(),
+  /** The line under its name in the member list (its recado). */
+  tagline: botTagline,
+});
+export type CreateServerBotRequest = z.input<typeof createServerBotSchema>;
+
+export const updateServerBotSchema = z.object({
+  name: botName.optional(),
+  persona: safeText(SERVER_BOT_PERSONA_MAX).optional(),
+  knowledge: safeText(SERVER_BOT_KNOWLEDGE_MAX).optional(),
+  channelIds: z.array(z.string().uuid()).max(SERVER_BOT_CHANNELS_MAX).optional(),
+  enabled: z.boolean().optional(),
+  answerToName: z.boolean().optional(),
+  /** `null` goes back to the default model. */
+  model: botModel,
+  tools: botToolsSchema.optional(),
+  color: z.enum(BOT_COLORS).optional(),
+  face: z.enum(BOT_BASE_FACES).optional(),
+  /** `null` clears it. */
+  tagline: botTagline,
+  /** The fixed welcome for new members: on or off, where, and its text (`null` is the default text). */
+  welcomeEnabled: z.boolean().optional(),
+  welcomeChannelId: z.string().uuid().nullable().optional(),
+  welcomeMessage: safeText(SERVER_BOT_WELCOME_MAX)
+    .transform((value) => value.trim() || null)
+    .nullable()
+    .optional(),
+});
+export type UpdateServerBotRequest = z.input<typeof updateServerBotSchema>;
+
+export interface ServerBotDto {
+  id: string;
+  serverId: string;
+  /** The bot's member account: what its messages are authored by. */
+  userId: string;
+  name: string;
+  /** What people type after `@` to call it. Follows the name on a rename. */
+  username: string;
+  /** Its Breu PNG (`/api/bot-faces/...`): the phone apps draw this, the web client draws `color` and `face`. */
+  avatarUrl: string | null;
+  color: BotColor;
+  face: BotBaseFace;
+  tagline: string | null;
+  persona: string;
+  knowledge: string;
+  channelIds: string[];
+  enabled: boolean;
+  /** Also answers its name said as a whole word, not only its @handle. */
+  answerToName: boolean;
+  /** The picked model's id (`provider:model`), or null for the default. */
+  model: string | null;
+  /** The tools switched on. */
+  tools: ServerBotTool[];
+  createdAt: string;
+  /**
+   * The role the bot acts through, made when staff save its tools; null when
+   * somebody deleted it (saving the tools again makes a new one).
+   */
+  roleId: string | null;
+  /** Replies posted today (São Paulo day) and today's cap, for the settings page. */
+  repliesToday: number;
+  repliesPerDay: number;
+  /** The fixed welcome for new members. `welcomeMessage` null is `SERVER_BOT_WELCOME_DEFAULT`. */
+  welcomeEnabled: boolean;
+  welcomeChannelId: string | null;
+  welcomeMessage: string | null;
+}
+
+/** One line of a bot's recent activity, for its settings overview. */
+export interface ServerBotActivityItem {
+  kind: "action" | "cancelled";
+  /** The step's tool, or null for a cancelled plan. */
+  tool: string | null;
+  /** The step's own words (code-built, pt-BR), or the plan's step count. */
+  label: string;
+  status: "running" | "done" | "failed" | "cancelled";
+  requesterName: string | null;
+  /** Whether the step waited for a "sim" before it ran. */
+  confirmed: boolean;
+  at: string;
+}
+
+/** `GET /api/servers/:id/bots/:botId/overview`: the settings page's first tab. */
+export interface ServerBotOverview {
+  creatorName: string | null;
+  repliesToday: number;
+  repliesPerDay: number;
+  actionsToday: number;
+  /** Plans that waited for a "sim" today and got it. */
+  confirmedToday: number;
+  recent: ServerBotActivityItem[];
+}
+
+/**
+ * The card a bot's message carries when it acts: the plan waiting for "sim",
+ * or what each step did. Written by server code only, never by a client or
+ * the model, and drawn only for a bot author. `lead` is the model's sentence;
+ * the message body keeps a plain-text copy of everything for clients that do
+ * not draw cards.
+ */
+export const botActionItemSchema = z.object({
+  tool: z.string().max(40),
+  label: z.string().max(300),
+  status: z.enum(["pending", "ok", "failed", "unknown"]),
+  detail: z.string().max(200).nullable().default(null),
+});
+export type BotActionItem = z.infer<typeof botActionItemSchema>;
+
+export const botActionCardSchema = z.object({
+  /** `ask` is a question to the member, answered by one of `options`. */
+  kind: z.enum(["plan", "result", "ask"]),
+  lead: z.string().max(2000).nullable().default(null),
+  items: z.array(botActionItemSchema).max(20),
+  /** A plan's: who may answer "sim", and until when. */
+  confirmBy: z.string().max(64).nullable().default(null),
+  expiresAt: z.string().nullable().default(null),
+  /** A plan's: what its Confirm and Cancel buttons answer, and who may press them. */
+  planId: z.string().uuid().nullable().default(null),
+  confirmById: z.string().uuid().nullable().default(null),
+  /** A plan's or a question's outcome once decided; null while it waits. */
+  state: z.enum(["confirmed", "cancelled", "expired", "answered"]).nullable().default(null),
+  /** A question's choices, and the index the member picked. */
+  options: z.array(z.string().max(80)).max(4).nullable().default(null),
+  answer: z.number().int().min(0).max(3).nullable().default(null),
+});
+export type BotActionCard = z.infer<typeof botActionCardSchema>;
+
+/** `POST /api/servers/:id/bots/:botId/intro`: staff post the bot's hello, as the bot. */
+export const botIntroSchema = z.object({
+  channelId: z.string().uuid(),
+  body: safeText(1900).refine((value) => value.trim().length > 0, "Empty"),
+});
+
+/** `POST /api/bots/plans/:planId/decision`: a plan card's buttons. */
+export const botPlanDecisionSchema = z.object({ decision: z.enum(["yes", "no"]) });
+
+/** How long a question card's buttons stay live. */
+export const SERVER_BOT_ASK_TTL_MS = 10 * 60_000;
+
+/** `POST /api/bots/asks/:messageId/answer`: a question card's buttons. */
+export const botAskAnswerSchema = z.object({ option: z.number().int().min(0).max(3) });
+
+/**
+ * Why a bot did not answer somebody who called it:
+ * - `busy`: it is still answering their earlier questions (two may wait).
+ * - `member-hour`: they asked it the most questions allowed in an hour.
+ * - `server-day`: the server used its answers for the day.
+ * - `budget`: the deployment's daily model spend is used up.
+ */
+export const botNoticeReasonSchema = z.enum(["busy", "member-hour", "server-day", "budget"]);
+export type BotNoticeReason = z.infer<typeof botNoticeReasonSchema>;
+
+/**
+ * `bot-notice`: sent only to the member the bot did not answer, on their own
+ * sockets, so silence is never the only answer. Nothing is posted in the
+ * channel; the client shows it as a row only that member sees.
+ */
+export const botNoticeSchema = z.object({
+  type: z.literal("bot-notice"),
+  channelId: z.string().uuid(),
+  botUserId: z.string().uuid(),
+  botName: z.string().max(100),
+  reason: botNoticeReasonSchema,
+  /** The limit that was reached, for `member-hour` and `server-day`. */
+  limit: z.number().int().positive().nullable(),
+  /** When the bot will answer again, when that is known. */
+  retryAt: z.string().nullable(),
+});
+export type BotNotice = z.infer<typeof botNoticeSchema>;
+
+/** `GET /api/bots/config?serverId=`: whether bots exist here at all. */
+export interface ServerBotModelChoice {
+  id: string;
+  label: string;
+}
+
+export interface ServerBotsConfig {
+  enabled: boolean;
+  maxBots: number;
+  /** The models a bot may be set to; the first is the default. */
+  models: ServerBotModelChoice[];
+  /** The wizard's practice chat (flag `bot_test_chat`), and how many turns a person gets a day. */
+  testChat: boolean;
+  testTurnsPerDay: number;
+}
+
+/**
+ * `POST /api/servers/:id/bots/test`: one turn of the wizard's practice chat
+ * with a bot that does not exist yet. No tools, no channel, nothing stored
+ * but the count.
+ */
+export const botTestSchema = z.object({
+  name: botName,
+  persona: safeText(SERVER_BOT_PERSONA_MAX).default(""),
+  knowledge: safeText(SERVER_BOT_KNOWLEDGE_MAX).default(""),
+  model: botModel,
+  messages: z
+    .array(z.object({ from: z.enum(["member", "bot"]), text: safeText(500) }))
+    .min(1)
+    .max(12),
+});
+export type BotTestRequest = z.input<typeof botTestSchema>;
+export interface BotTestResponse {
+  reply: string;
+  turnsLeft: number;
+}

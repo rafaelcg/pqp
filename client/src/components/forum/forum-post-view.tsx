@@ -126,6 +126,8 @@ export interface ForumPostViewProps {
   mentionCandidates: MentionCandidate[];
   blockedAuthorIds: ReadonlySet<string>;
   authors?: ReadonlyMap<string, MessageAuthorInfo>;
+  /** `authors` is the server's whole roster: see MessageList. */
+  authorsComplete?: boolean;
   roles?: readonly MessageRoleColor[];
   showLinkEmbeds: boolean;
   slashContext?: Omit<
@@ -431,6 +433,7 @@ export function ForumPostView({
   mentionCandidates,
   blockedAuthorIds,
   authors,
+  authorsComplete,
   roles,
   showLinkEmbeds,
   slashContext,
@@ -1207,6 +1210,7 @@ export function ForumPostView({
         onClose={onClose}
         onReportMessage={onReportMessage}
         authors={authors}
+        authorsComplete={authorsComplete}
         roles={roles}
         unreadSince={unreadSince}
         onForward={onForward}

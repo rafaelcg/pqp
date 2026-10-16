@@ -28,7 +28,9 @@ import {
   type ProfileCommunityList,
   type VisibleConnection,
   type WatchParty,
+  parseBotFaceAvatar,
 } from "@pqp/shared";
+import { ServerBotTags } from "@/components/bots/server-bot-tags";
 import {
   cohostActionFor,
   type ProfileCohostAction,
@@ -371,6 +373,7 @@ function UserProfileCard({
   onReportUser,
   lastConversationAt = null,
 }: UserProfileCardProps) {
+  const serverBot = parseBotFaceAvatar(subject.avatarUrl);
   const { t } = useTranslation();
   // The friends feature's own state logic, reused whole — the same fetch, the
   // same optimistic refresh, the same generation guard. Mounting it here (and
@@ -447,7 +450,9 @@ function UserProfileCard({
     data,
     blockedUserIds,
   );
-  const action = primaryAction(state);
+  // A server bot cannot be befriended, messaged or called: you call it by
+  // name in a channel, so its card leads with that instead.
+  const action = serverBot ? "none" : primaryAction(state);
   // Never against yourself, whatever the roster says — `canModerateMember`
   // refuses it too, but "self" short-circuits before any of this is asked.
   const modActions =
@@ -1057,8 +1062,8 @@ function UserProfileCard({
   const publicHref = publicProfileHref(subject.handle);
   const tilePublic = Boolean(publicHref);
   const tileMore = overflowItems.length > 0;
-  const tileMessage = canMessage(state);
-  const tileCall = canCall(state) && Boolean(onStartCall);
+  const tileMessage = canMessage(state) && !serverBot;
+  const tileCall = canCall(state) && Boolean(onStartCall) && !serverBot;
   const tileMention = Boolean(onMention && mentionUsername);
   const lastConversationLine =
     lastConversationAt && tileMessage ? (
@@ -1264,8 +1269,10 @@ function UserProfileCard({
         aria-hidden="true"
         className="h-20 rounded-t-2xl"
         style={{
-          background:
-            "linear-gradient(150deg, color-mix(in oklab, var(--color-accent) 20%, var(--color-surface-2)) 0%, var(--color-surface-2) 55%, color-mix(in oklab, var(--color-accent) 7%, var(--color-surface-1)) 100%)",
+          // A server bot's band is its own colour, the way its face is.
+          background: serverBot
+            ? `var(--color-bot-${serverBot.color})`
+            : "linear-gradient(150deg, color-mix(in oklab, var(--color-accent) 20%, var(--color-surface-2)) 0%, var(--color-surface-2) 55%, color-mix(in oklab, var(--color-accent) 7%, var(--color-surface-1)) 100%)",
         }}
       />
 
@@ -1287,13 +1294,19 @@ function UserProfileCard({
               `resolveAvatarUrl` is what prefixes the API base, and the
               `onError` fallback is what turns a dead URL into the monogram
               instead of a broken image. See `e2e/profile-popover-avatar.spec.ts`. */}
-          <UserAvatar
-            name={subject.displayName}
-            avatarUrl={subject.avatarUrl}
-            rounded="full"
-            className="h-20 w-20 ring-4 ring-ink-2"
-            fallbackClassName="bg-ink-3 text-2xl text-paper"
-          />
+          {serverBot ? (
+            <span className="grid h-20 w-20 place-items-center rounded-full bg-surface-1 ring-4 ring-ink-2">
+              <UserAvatar name={subject.displayName} avatarUrl={subject.avatarUrl} className="h-14 w-14" />
+            </span>
+          ) : (
+            <UserAvatar
+              name={subject.displayName}
+              avatarUrl={subject.avatarUrl}
+              rounded="full"
+              className="h-20 w-20 ring-4 ring-ink-2"
+              fallbackClassName="bg-ink-3 text-2xl text-paper"
+            />
+          )}
           {presence && (
             <StatusDot
               status={presence}
@@ -1312,10 +1325,11 @@ function UserProfileCard({
             size="card"
             marks={identityMarks({
               rank: subject.rank,
-              isCharacter: subject.isCharacter,
+              isCharacter: serverBot ? false : subject.isCharacter,
               ...rankBadges(heldIds, roles ?? []),
             })}
           />
+          {serverBot && <ServerBotTags />}
         </p>
         {subject.tag && (
           <p className="truncate text-center font-mono text-xs text-paper-muted">
@@ -1340,6 +1354,22 @@ function UserProfileCard({
           >
             {subject.customStatus}
           </p>
+        )}
+        {serverBot && (
+          <div className="mt-3 space-y-2 text-left">
+            <p className="text-xs text-warning">{t("bots.profile.beta")}</p>
+            <div className="rounded-[var(--radius-card)] border border-border bg-surface-card p-2.5">
+              <p className="text-xs font-semibold text-text">
+                {t("bots.profile.seesTitle", { name: subject.displayName })}
+              </p>
+              <p className="mt-0.5 text-xs text-text-secondary">{t("bots.profile.seesBody")}</p>
+            </div>
+            {subject.username && (
+              <p className="text-xs text-text-tertiary">
+                {t("bots.profile.callWith", { handle: `@${subject.username}` })}
+              </p>
+            )}
+          </div>
         )}
         {publicHref && subject.handle && (
           <a
@@ -1426,6 +1456,22 @@ function UserProfileCard({
                 request splits the row in two: answering should cost one tap
                 either way. Community management sits in the grouped list
                 below. Block and report stay behind the ellipsis. */}
+            {serverBot ? (
+              <div className="mt-4">
+                <Button
+                  size="sm"
+                  className="h-9 w-full rounded-full"
+                  disabled={!onMention || !mentionUsername}
+                  data-profile-call-bot=""
+                  onClick={() => {
+                    if (mentionUsername) onMention?.(mentionUsername);
+                    onClose();
+                  }}
+                >
+                  {t("bots.profile.call", { name: subject.displayName })}
+                </Button>
+              </div>
+            ) : (
             <div
               className={cn(
                 "mt-4",
@@ -1465,6 +1511,7 @@ function UserProfileCard({
                 </Button>
               )}
             </div>
+            )}
             {actionStrip}
             {lastConversationLine}
             {cargosSection}

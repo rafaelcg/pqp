@@ -5,7 +5,8 @@ import type {
   ThreadSummary,
   WebhookEmbed,
 } from "@pqp/shared";
-import { MESSAGE_BULK_DELETE_MAX } from "@pqp/shared";
+import { ServerBotTags } from "@/components/bots/server-bot-tags";
+import { MESSAGE_BULK_DELETE_MAX, parseBotFaceAvatar } from "@pqp/shared";
 import {
   AlertCircle,
   CircleCheck,
@@ -62,6 +63,7 @@ import { StatusDot } from "@/components/user/status-dot";
 import { AttachmentGrid } from "@/components/chat/attachment-grid";
 import { VoiceNoteNamesContext } from "@/components/chat/voice-note-card";
 import { MessageBody } from "@/components/chat/message-body";
+import { BotActionCard, BotNoticeRow } from "@/components/chat/bot-action-card";
 import { ChanceCard } from "@/components/chat/chance-card";
 import { PollCard } from "@/components/chat/poll-card";
 import { BauPostCard } from "@/components/chat/bau-post-card";
@@ -83,6 +85,7 @@ import {
   expandCustomEmoji,
 } from "@/lib/server-emoji";
 import { ThreadChip } from "@/components/chat/thread-chip";
+import { Reveal } from "@/components/ui/reveal";
 import {
   ContextMenu,
   type ContextMenuItemDef,
@@ -100,7 +103,7 @@ import {
   type ChatMessage,
   type TypingUser,
 } from "@/hooks/use-chat";
-import type { MemberRole, UserStatus } from "@pqp/shared";
+import type { BotNotice, MemberRole, UserStatus } from "@pqp/shared";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { messageRoutePath } from "@/lib/app-route";
 import { QUICK_REACTIONS } from "@/lib/emoji-shortcodes";
@@ -119,7 +122,7 @@ import {
   placeAnchoredPanel,
 } from "@/lib/anchored-panel";
 import { formatReactionWho } from "@/lib/reaction-who";
-import { translateMessage, useTranslation } from "@/lib/i18n";
+import { translateMessage, useTranslation, type MessageKey } from "@/lib/i18n";
 import { toggleMessageSelection } from "@/lib/message-selection";
 import { splitArrivals } from "@/lib/message-arrivals";
 import { scrollWithin } from "@/lib/scroll-within";
@@ -229,6 +232,8 @@ export interface MessageAuthorInfo {
    * that quietly drops a field.
    */
   customStatus?: string | null;
+  /** The roster's picture: a server bot's Breu, for its activity row. */
+  avatarUrl?: string | null;
 }
 
 export interface MessageRoleColor {
@@ -276,6 +281,9 @@ interface MessageListProps {
   isLoadingOlder?: boolean;
   isLoadingNewer?: boolean;
   typingUsers?: TypingUser[];
+  /** Why a server bot did not answer this member here, for them alone. */
+  botNotice?: BotNotice | null;
+  onDismissBotNotice?: () => void;
   canModerate?: boolean;
   /**
    * Authors this reader has blocked. Their messages are collapsed here rather
@@ -337,6 +345,12 @@ interface MessageListProps {
   activeThreadId?: string | null;
   /** Roster lookup for name colour, rank glyph, and presence. */
   authors?: ReadonlyMap<string, MessageAuthorInfo>;
+  /**
+   * `authors` is this server's whole roster, loaded: an author missing from it
+   * is no longer a member (left, kicked, banned) and gets a quiet "saiu" tag.
+   * False while it loads, in a conversation, or anywhere the map is partial.
+   */
+  authorsComplete?: boolean;
   /** Painted roles, for the highest-position colour on a name. */
   roles?: readonly MessageRoleColor[];
   /** True while Mark unread is holding this channel's read cursor. */
@@ -563,6 +577,8 @@ export const MessageList = memo(function MessageList({
   isLoadingOlder = false,
   isLoadingNewer = false,
   typingUsers = [],
+  botNotice = null,
+  onDismissBotNotice,
   canModerate = false,
   blockedAuthorIds = EMPTY_BLOCKED,
   highlightMessageId = null,
@@ -589,6 +605,7 @@ export const MessageList = memo(function MessageList({
   unreadThreadIds = EMPTY_BLOCKED,
   activeThreadId = null,
   authors = EMPTY_AUTHORS,
+  authorsComplete = false,
   roles = EMPTY_ROLES,
   unreadHeld = false,
   onForward,
@@ -2192,6 +2209,7 @@ export const MessageList = memo(function MessageList({
                 },
               )}
               authors={authors}
+              authorsComplete={authorsComplete}
               roles={roles}
               unreadHeld={unreadHeld}
               onForward={
@@ -2311,7 +2329,10 @@ export const MessageList = memo(function MessageList({
         onClose={() => setBulkConfirmOpen(false)}
       />
 
-      <TypingIndicator users={typingUsers} />
+      <Reveal show={!!botNotice}>
+        {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
+      </Reveal>
+      <TypingIndicator users={typingUsers} authors={authors} />
 
       {jumpNotice && (
         <p
@@ -2604,7 +2625,13 @@ function EmptyState({
   );
 }
 
-function TypingIndicator({ users }: { users: TypingUser[] }) {
+function TypingIndicator({
+  users,
+  authors,
+}: {
+  users: TypingUser[];
+  authors: ReadonlyMap<string, MessageAuthorInfo>;
+}) {
   const { t } = useTranslation();
   const retro = useRetroLook();
   if (retro) {
@@ -2620,20 +2647,25 @@ function TypingIndicator({ users }: { users: TypingUser[] }) {
       </p>
     );
   }
-  if (users.length === 0) {
-    return null;
-  }
-  const names = users.map((user) => user.displayName);
+  const bots = users.filter((user) => user.activity);
+  const people = users.filter((user) => !user.activity);
+  const names = people.map((user) => user.displayName);
   const label =
-    names.length === 1
-      ? t("chat.typing_one", { name: names[0]! })
-      : names.length === 2
-        ? t("chat.typing_two", { name: names[0]!, other: names[1]! })
-        : t("chat.typing_other", { count: names.length });
+    names.length === 0
+      ? ""
+      : names.length === 1
+        ? t("chat.typing_one", { name: names[0]! })
+        : names.length === 2
+          ? t("chat.typing_two", { name: names[0]!, other: names[1]! })
+          : t("chat.typing_other", { count: names.length });
 
+  // Both open and close their own height, so the log above slides rather
+  // than jumps when somebody starts or stops typing.
   return (
+    <>
+    <Reveal show={people.length > 0}>
     <p
-      className="shrink-0 px-4 pb-1 text-xs text-paper-muted"
+      className="px-4 pb-1 text-xs text-paper-muted"
       aria-live="polite"
     >
       <span className="inline-flex items-center gap-1.5">
@@ -2649,6 +2681,132 @@ function TypingIndicator({ users }: { users: TypingUser[] }) {
         {label}…
       </span>
     </p>
+    </Reveal>
+    <Reveal show={bots.length > 0}>
+      <BotActivityRows users={bots} authors={authors} />
+    </Reveal>
+    </>
+  );
+}
+
+/** Translation keys for a bot's tools; anything else reads as "working". */
+const BOT_ACTIVITY_KEYS: Record<string, MessageKey> = {
+  list_channels: "chat.botActivity.list_channels",
+  list_members: "chat.botActivity.list_members",
+  create_channel: "chat.botActivity.create_channel",
+  edit_channel: "chat.botActivity.edit_channel",
+  move_channel: "chat.botActivity.move_channel",
+  delete_channel: "chat.botActivity.delete_channel",
+  post_message: "chat.botActivity.post_message",
+  pin_message: "chat.botActivity.pin_message",
+  create_thread: "chat.botActivity.create_thread",
+  create_forum_post: "chat.botActivity.create_forum_post",
+  create_bau_post: "chat.botActivity.create_bau_post",
+  delete_message: "chat.botActivity.delete_message",
+  timeout_member: "chat.botActivity.timeout_member",
+  kick_member: "chat.botActivity.kick_member",
+  ban_member: "chat.botActivity.ban_member",
+  read_channel: "chat.botActivity.read_channel",
+  list_bans: "chat.botActivity.list_bans",
+  create_invite: "chat.botActivity.create_invite",
+  remove_timeout: "chat.botActivity.remove_timeout",
+  unban_member: "chat.botActivity.unban_member",
+  ask_member: "chat.botActivity.ask_member",
+  list_forum_posts: "chat.botActivity.list_forum_posts",
+  reply_forum_post: "chat.botActivity.reply_forum_post",
+  create_poll: "chat.botActivity.create_poll",
+  read_poll: "chat.botActivity.read_poll",
+  search_messages: "chat.botActivity.search_messages",
+  catch_up: "chat.botActivity.catch_up",
+  create_reminder: "chat.botActivity.create_reminder",
+  list_reminders: "chat.botActivity.list_reminders",
+  cancel_reminder: "chat.botActivity.cancel_reminder",
+  vote_poll: "chat.botActivity.vote_poll",
+};
+
+/**
+ * A server bot at work, in place of "typing": what it is doing right now, with
+ * a shimmer while it runs. Driven by the `activity` on its typing frames.
+ */
+/** Past this a bot's thinking says so, so a slow answer does not read as a hang. */
+const BOT_SLOW_MS = 15_000;
+
+/**
+ * A server bot at work, drawn as the start of its reply: its face (focused on
+ * a tool, curious while it thinks), its name with BOT and BETA, and what it is
+ * doing now. Replaced by the message itself when it posts.
+ */
+function BotActivityRows({
+  users,
+  authors,
+}: {
+  users: TypingUser[];
+  authors: ReadonlyMap<string, MessageAuthorInfo>;
+}) {
+  const { t } = useTranslation();
+  const started = useRef(new Map<string, number>());
+  const [, tick] = useState(0);
+  const now = Date.now();
+  for (const user of users) {
+    if (!started.current.has(user.userId)) started.current.set(user.userId, now);
+  }
+  for (const id of [...started.current.keys()]) {
+    if (!users.some((user) => user.userId === id)) started.current.delete(id);
+  }
+  useEffect(() => {
+    if (users.length === 0) return;
+    const timer = setTimeout(() => tick((n) => n + 1), 1000);
+    return () => clearTimeout(timer);
+  });
+  return (
+    <div className="flex flex-col gap-2 px-4 pb-2 pt-1" aria-live="polite">
+      {users.map((user) => {
+        const tool = user.activity?.tool ?? null;
+        const slow = tool === null && now - (started.current.get(user.userId) ?? now) > BOT_SLOW_MS;
+        const key =
+          tool === null
+            ? slow
+              ? "chat.botActivity.stillThinking"
+              : "chat.botActivity.thinkingPill"
+            : (BOT_ACTIVITY_KEYS[tool] ?? "chat.botActivity.working");
+        const avatarUrl = authors.get(user.userId)?.avatarUrl ?? null;
+        return (
+          <div key={user.userId} className="flex items-center gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full ring-2 ring-[var(--color-accent-soft)]">
+              <UserAvatar
+                name={user.displayName}
+                avatarUrl={avatarUrl}
+                className="h-8 w-8"
+                rounded="full"
+                fallbackClassName="bg-ink-3 text-xs"
+                botFace={tool === null ? "oi" : "focado"}
+              />
+            </span>
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 text-sm font-bold text-text">
+                {user.displayName}
+                <ServerBotTags />
+              </p>
+              {/* Keyed by what it says: a new step fades in over the last. */}
+              {tool === null ? (
+                <p key={key} className="chat-swap-in text-sm text-text-secondary">
+                  <span className="bot-shimmer">{t(key, { name: user.displayName })}</span>
+                  {slow && <span className="block text-xs text-text-tertiary">{t("chat.botActivity.slowHint")}</span>}
+                </p>
+              ) : (
+                <span
+                  key={key}
+                  className="chat-swap-in mt-0.5 inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-sm text-text-secondary"
+                >
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" aria-hidden />
+                  <span className="bot-shimmer">{t(key, { name: user.displayName })}</span>
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -2817,6 +2975,7 @@ interface MessageRowProps {
    * somewhere more useful (reply, edit, add-reaction all move it themselves). */
   onMenuClose: (refocus: boolean) => void;
   authors: ReadonlyMap<string, MessageAuthorInfo>;
+  authorsComplete: boolean;
   roles: readonly MessageRoleColor[];
   unreadHeld: boolean;
   onForward?: () => void;
@@ -2891,6 +3050,7 @@ const MessageRow = memo(function MessageRow({
   onMenuOpenRow,
   onMenuClose,
   authors,
+  authorsComplete,
   roles,
   unreadHeld,
   onForward,
@@ -2943,6 +3103,24 @@ const MessageRow = memo(function MessageRow({
       : message.body;
   const hideBodyForBauCard = shownBody === "";
   const authorInfo = authors.get(message.authorId);
+  // A server bot's avatar is its Breu face URL, which nobody else's can be.
+  const serverBot = parseBotFaceAvatar(message.authorAvatarUrl) !== null;
+  // A bot's reply that just arrived lands with a hop; one already there is still.
+  const [freshBotReply] = useState(
+    () => serverBot && Date.now() - new Date(message.createdAt).getTime() < 10_000,
+  );
+  // Any message that just arrived rises in; history, a channel opened on old
+  // messages, and a row that remounts later are drawn still. Read once per
+  // mount, so the optimistic copy turning into the real one does not replay it.
+  const [arrived] = useState(() => Date.now() - new Date(message.createdAt).getTime() < 8_000);
+  // A server bot's action card replaces its plain-text copy in the body. Only
+  // for a bot author: the field is server-written, and this keeps it that way
+  // on screen too.
+  const botCard = message.botCard && authorInfo?.isCharacter ? message.botCard : null;
+  // Not in a loaded roster: the author left, was removed or banned. Webhooks
+  // and AutoMod were never members, so they are never "gone".
+  const authorGone =
+    authorsComplete && !authorInfo && !message.isWebhook && !message.isAutomod;
   const mentionsYou = messageMentionsYou(
     message,
     currentUsername,
@@ -3399,6 +3577,7 @@ const MessageRow = memo(function MessageRow({
           data-group-start={startsGroup ? "" : undefined}
           className={cn(
             "group relative flex items-start gap-0 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+            arrived && "chat-msg-in",
             stream ? "px-3" : "px-5",
             zebra && "bg-surface-1/60",
             stream ? "py-0.5" : startsGroup ? "mt-[var(--chat-group-gap)] pt-1" : "pt-px",
@@ -3478,8 +3657,9 @@ const MessageRow = memo(function MessageRow({
                         name={message.authorName}
                         avatarUrl={message.authorAvatarUrl}
                         rounded="lg"
-                        className="h-9 w-9"
+                        className={cn("h-9 w-9", freshBotReply && "bot-face-pop")}
                         fallbackClassName="bg-ink-3 text-sm"
+                        botFace={serverBot && (authorGone || authorInfo?.status === "offline") ? "dormindo" : undefined}
                       />
                     )}
                   </AuthorButton>
@@ -3548,10 +3728,12 @@ const MessageRow = memo(function MessageRow({
                       marks={identityMarks({
                         rank: authorInfo?.rank,
                         isWebhook: message.isWebhook,
-                        isCharacter: authorInfo?.isCharacter,
+                        // A server bot says so in words (BOT, BETA) instead.
+                        isCharacter: serverBot ? false : authorInfo?.isCharacter,
                         ...rankBadges(authorInfo?.roleIds, roles),
                       })}
                     />
+                    {serverBot && <ServerBotTags gone={authorGone} />}
                   </span>
                   {forumOp && (
                     <span
@@ -3559,6 +3741,14 @@ const MessageRow = memo(function MessageRow({
                       title={t("forum.badge.opHint")}
                     >
                       {t("forum.badge.op")}
+                    </span>
+                  )}
+                  {authorGone && !serverBot && (
+                    <span
+                      className="self-center rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-text-tertiary"
+                      title={t("chat.authorGoneHint", { name: message.authorName })}
+                    >
+                      {t("chat.authorGone")}
                     </span>
                   )}
                   {message.isAutomod ? (
@@ -3627,7 +3817,16 @@ const MessageRow = memo(function MessageRow({
                       currentUserId={currentUserId}
                     />
                   ) : null}
-                  {message.chance ? (
+                  {botCard ? (
+                    <>
+                      {botCard.lead && (
+                        <div className="markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90">
+                          <MessageBody body={botCard.lead} currentUsername={currentUsername} />
+                        </div>
+                      )}
+                      <BotActionCard card={botCard} messageId={message.id} createdAt={message.createdAt} currentUserId={currentUserId} botName={message.authorName} />
+                    </>
+                  ) : message.chance ? (
                     <ChanceCard result={message.chance} />
                   ) : message.poll ? (
                     <PollCard

@@ -114,6 +114,8 @@ interface ThreadPanelProps {
   onClose: () => void;
   onReportMessage?: (message: ChatMessage) => void;
   authors?: ReadonlyMap<string, MessageAuthorInfo>;
+  /** `authors` is the server's whole roster: see MessageList. */
+  authorsComplete?: boolean;
   roles?: readonly MessageRoleColor[];
   unreadHeld?: boolean;
   unreadSince?: string | null;
@@ -148,6 +150,7 @@ export function ThreadPanel({
   onClose,
   onReportMessage,
   authors,
+  authorsComplete,
   roles,
   unreadHeld,
   unreadSince = null,
@@ -422,6 +425,8 @@ export function ThreadPanel({
         isLoadingOlder={controller.isLoadingOlder()}
         isLoadingNewer={controller.isLoadingNewer()}
         typingUsers={controller.getTypingUsers()}
+        botNotice={controller.getBotNotice()}
+        onDismissBotNotice={() => controller.dismissBotNotice()}
         canModerate={canModerate}
         blockedAuthorIds={blockedAuthorIds}
         onReplyTo={setReplyTarget}
@@ -446,6 +451,7 @@ export function ThreadPanel({
         onDiscardMessage={(nonce) => controller.discardMessage(nonce)}
         showLinkEmbeds={showLinkEmbeds}
         authors={authors}
+        authorsComplete={authorsComplete}
         roles={roles}
         unreadHeld={unreadHeld}
         unreadSince={unreadSince}

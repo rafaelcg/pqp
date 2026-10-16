@@ -1636,6 +1636,7 @@ export interface DbMessage {
   mention_everyone?: boolean;
   mention_here?: boolean;
   chance?: unknown;
+  bot_card?: unknown;
   /** `messages.system_kind`: `nudge`, or null for an ordinary message. */
   system_kind?: string | null;
   /** The story a DM reply quotes (`messages.story_id`). */

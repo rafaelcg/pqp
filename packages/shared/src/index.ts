@@ -63,5 +63,7 @@ export * from "./watch-party-waitlist.js";
 export * from "./automod.js";
 export * from "./age.js";
 export * from "./live-preview.js";
+export * from "./bots.js";
 export * from "./nudge.js";
+export * from "./bot-face.js";
 export * from "./server-order.js";
