@@ -1,17 +1,11 @@
 package gg.pqp.app.stories.ui
 
-import android.content.Context
-import android.content.Intent
-import android.graphics.Bitmap
-import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.provider.MediaStore
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,15 +15,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -37,100 +27,93 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.RadioButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil3.compose.AsyncImage
 import gg.pqp.app.R
-import gg.pqp.app.core.Channel
+import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
-import gg.pqp.app.stories.CreateStoryRequest
+import gg.pqp.app.social.friends
 import gg.pqp.app.stories.PrepResult
 import gg.pqp.app.stories.PreparedMedia
+import gg.pqp.app.stories.EagerSession
 import gg.pqp.app.stories.StoriesRules
 import gg.pqp.app.stories.StoriesStore
-import gg.pqp.app.stories.StoryCallRoom
+import gg.pqp.app.stories.StoryOutbox
+import gg.pqp.app.stories.StoryPostInput
 import gg.pqp.app.stories.StoryAudienceOptions
 import gg.pqp.app.stories.StoryAudienceTargets
-import gg.pqp.app.stories.StoryMediaInput
 import gg.pqp.app.stories.StoryMediaPrep
-import gg.pqp.app.stories.StorySticker
-import gg.pqp.app.stories.createStory
-import gg.pqp.app.stories.publishStory
+import gg.pqp.app.stories.VideoPrep
+import gg.pqp.app.stories.camera.StoryCameraScreen
+import gg.pqp.app.stories.editor.CallLayer
+import gg.pqp.app.stories.editor.CallRoomOption
+import gg.pqp.app.stories.editor.CallRoomSheet
+import gg.pqp.app.stories.editor.EditorEnv
+import gg.pqp.app.stories.editor.EditorSession
+import gg.pqp.app.stories.editor.LayerFile
+import gg.pqp.app.stories.editor.LayerOps
+import gg.pqp.app.stories.editor.MentionLayer
+import gg.pqp.app.stories.editor.MentionPerson
+import gg.pqp.app.stories.editor.MentionSheet
+import gg.pqp.app.stories.editor.PhotoLayer
+import gg.pqp.app.stories.editor.StoryBaseImage
+import gg.pqp.app.stories.editor.StoryBaseVideo
+import gg.pqp.app.stories.editor.StoryEditor
 import gg.pqp.app.stories.storyAudiences
-import gg.pqp.app.stories.uploadStoryMedia
 import gg.pqp.app.ui.theme.Palette
-import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
-import java.io.File
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 private enum class ComposeMode { Text, Camera, Call }
 
-private enum class CaptureKind { Photo, Video }
-
-private sealed interface PostState {
-    data object Idle : PostState
-    data object Posting : PostState
-    data object Failed : PostState
-}
+/** The first wait before the audience list is read again after a failure; it doubles up to [StoriesRules.RETRY_MAX_MS]. */
+private const val AUDIENCE_RETRY_FIRST_MS = 1_000L
 
 /**
- * Making a story: TEXTO / CÂMERA / CALL, then "Quem vê".
+ * Making a story: the camera first (or TEXTO and CALL for a card with no
+ * picture), then the editor, then "Quem vê".
  *
- * The camera is the system's (a photo, or a video stopped at 30 s) and the
- * gallery is the photo picker, so the app asks for no camera or storage
- * permission. A photo is re-encoded on the phone (long side 1440 px, EXIF
- * gone); a video over 30 s or 25 MB is refused with the reason before any
- * byte leaves.
+ * The picture is the base and everything else is a layer on top of it (text,
+ * photos, ink, a call card, a mention), placed on a 9:16 canvas and posted as
+ * data next to the base, not burned into it. A photo is re-encoded on the
+ * phone (long side 1440 px, EXIF gone); a video comes from the camera or is
+ * trimmed to 30 s and shrunk first.
  *
- * Posting is three calls: create (which answers a signed PUT for media), the
- * PUT straight to storage, then publish. A text card is live at create.
+ * Posting is: create (which answers a signed PUT for the base and one for
+ * each photo or drawing layer), the PUTs straight to storage, then publish. A
+ * card of only words, stickers and mentions is live at create.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -145,18 +128,19 @@ fun StoryComposer(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val config by store.config.collectAsStateWithLifecycle()
+    val layersEnabled = config.layersMax > 0
 
     var mode by remember { mutableStateOf(if (config.mediaEnabled) ComposeMode.Camera else ComposeMode.Text) }
     var media by remember { mutableStateOf<PreparedMedia?>(null) }
     var refusal by remember { mutableStateOf<String?>(null) }
     var preparing by remember { mutableStateOf(false) }
-    var text by remember { mutableStateOf("") }
-    var background by remember { mutableStateOf("night") }
-    var caption by remember { mutableStateOf("") }
-    var callChannel by remember { mutableStateOf<Channel?>(null) }
-    // Who sits in which voice room, for the call sticker: it is live only
-    // while its author is in the room.
+    var cardBackground by remember { mutableStateOf("night") }
+    var muted by remember { mutableStateOf(false) }
+    var openCallAtStart by remember { mutableStateOf(false) }
+    // Who sits in which voice room, for the call card's preview and for the
+    // room the picker starts on. An empty room is fine to post.
     val phase by session.phase.collectAsStateWithLifecycle()
+    val meId = (phase as? SessionPhase.Ready)?.me?.id
     val voice = (context.applicationContext as? gg.pqp.app.PqpApplication)?.voice
     val occupancy by (voice?.rooms?.rooms ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap()) })
         .collectAsStateWithLifecycle()
@@ -165,167 +149,253 @@ fun StoryComposer(
     var options by remember { mutableStateOf<StoryAudienceOptions?>(null) }
     var targets by remember { mutableStateOf(StoryAudienceTargets()) }
     var replies by remember { mutableStateOf(true) }
-    var post by remember { mutableStateOf<PostState>(PostState.Idle) }
 
-    // Who may see the story. Without this list "Seguir" cannot open "Quem vê",
+    // The layers are rebuilt from nothing whenever the base changes: another
+    // picture is another story (and the editor asked before throwing layers away).
+    val editor = remember(media, mode) { EditorSession() }
+    // Prepared photo layers, by layer id: the bytes that will be PUT.
+    val layerFiles = remember(editor) { mutableMapOf<String, LayerFile>() }
+    var layerCamera by remember { mutableStateOf(false) }
+    // The clip with its sound taken out, made once if "mute" is on when posting.
+    var mutedUri by remember(media) { mutableStateOf<Uri?>(null) }
+
+    // Who may see the story. Without this list the audience cannot be chosen,
     // so a failed read says so and offers a retry instead of leaving a button
     // that never wakes up.
     var audienceAttempt by remember { mutableStateOf(0) }
     var audienceFailed by remember { mutableStateOf(false) }
-    LaunchedEffect(audienceAttempt) {
-        if (audienceAttempt == 0) store.refreshConfig()
-        audienceFailed = false
-        runCatching { session.api.storyAudiences() }
-            .onSuccess {
-                options = it
-                targets = StoriesRules.defaultAudience(it, contextServerId, fromFriends = contextServerId == null)
+    // A composer opened with the API unreachable must not stay dead: the read is retried with
+    // backoff, straight away when the live connection comes back, and by hand ("Tentar de novo").
+    // The photo and the words the person already made are untouched meanwhile.
+    val realtimeState by session.realtime.state.collectAsStateWithLifecycle()
+    val connected = realtimeState == RealtimeState.Ready
+    LaunchedEffect(audienceAttempt, connected) {
+        if (options != null) return@LaunchedEffect
+        store.refreshConfig()
+        var wait = AUDIENCE_RETRY_FIRST_MS
+        while (true) {
+            val loaded = runCatching { session.api.storyAudiences() }.getOrNull()
+            if (loaded != null) {
+                audienceFailed = false
+                options = loaded
+                targets = StoriesRules.defaultAudience(loaded, contextServerId, fromFriends = contextServerId == null)
+                break
             }
-            .onFailure { audienceFailed = true }
+            audienceFailed = true
+            delay(wait)
+            wait = StoriesRules.nextRetryDelay(wait)
+        }
     }
 
     val tooLong = { seconds: Long -> context.getString(R.string.stories_compose_too_long, (seconds / 1000).toInt()) }
+    // A video that needs cutting (longer than 30 s) opens the trim screen; one
+    // that only needs shrinking goes straight to the cutter.
+    var trimming by remember { mutableStateOf<PrepResult.NeedsWork?>(null) }
+    var working by remember { mutableStateOf<Float?>(null) }
+    var workJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+
+    val show: (PrepResult) -> Unit = { result ->
+        when (result) {
+            is PrepResult.Ready -> media = result.media
+            is PrepResult.Refused -> refusal = when (result.reason) {
+                StoriesRules.MediaRefusal.TooLong -> tooLong(result.durationMs ?: 0)
+                StoriesRules.MediaRefusal.TooBig -> context.getString(R.string.stories_compose_too_big)
+                StoriesRules.MediaRefusal.WrongType -> context.getString(R.string.stories_compose_wrong_type)
+            }
+            PrepResult.Unreadable -> refusal = context.getString(R.string.stories_compose_unreadable)
+            // Cut and shrunk once already and still not a story: say so, do not loop.
+            is PrepResult.NeedsWork -> refusal = context.getString(R.string.stories_compose_too_big)
+        }
+    }
+    val cutVideo: (PrepResult.NeedsWork, Long, Long) -> Unit = { work, startMs, endMs ->
+        trimming = null
+        working = 0f
+        workJob = scope.launch {
+            try {
+                val out = VideoPrep.export(context, work.uri, startMs, endMs, work.width, work.height) { working = it }
+                show(
+                    StoryMediaPrep.prepare(context, out, config.maxBytes).let {
+                        if (it is PrepResult.NeedsWork) PrepResult.Refused(StoriesRules.MediaRefusal.TooBig) else it
+                    },
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                refusal = context.getString(R.string.stories_trim_failed)
+            } finally {
+                working = null
+                workJob = null
+            }
+        }
+    }
     val accept: (Uri?) -> Unit = { uri ->
         if (uri != null) {
             preparing = true
             refusal = null
             scope.launch {
-                when (val result = StoryMediaPrep.prepare(context, uri, config.maxBytes)) {
-                    is PrepResult.Ready -> media = result.media
-                    is PrepResult.Refused -> refusal = when (result.reason) {
-                        StoriesRules.MediaRefusal.TooLong -> tooLong(result.durationMs ?: 0)
-                        StoriesRules.MediaRefusal.TooBig -> context.getString(R.string.stories_compose_too_big)
-                        StoriesRules.MediaRefusal.WrongType -> context.getString(R.string.stories_compose_wrong_type)
-                    }
-                    PrepResult.Unreadable -> refusal = context.getString(R.string.stories_compose_unreadable)
-                }
+                val result = StoryMediaPrep.prepare(context, uri, config.maxBytes)
                 preparing = false
+                if (result is PrepResult.NeedsWork) {
+                    if (result.tooLong) {
+                        trimming = result
+                    } else {
+                        cutVideo(result, 0L, result.durationMs.coerceAtMost(StoriesRules.MAX_VIDEO_MS))
+                    }
+                } else {
+                    show(result)
+                }
             }
         }
     }
-    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), accept)
-    var captureUri by remember { mutableStateOf<Uri?>(null) }
-    val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        if (ok) accept(captureUri)
+    // The picker is asked for one item, but a long press on a thumbnail selects several in recent versions
+    // of it, whatever the request said. A story has one picture, so the first is used, and the person is told.
+    val onePerStory = stringResource(R.string.stories_picker_one_only)
+    val pick = rememberLauncherForActivityResult(PickVisualMediaList()) { uris ->
+        accept(uris.firstOrNull())
+        if (uris.size > 1) Toast.makeText(context, onePerStory, Toast.LENGTH_SHORT).show()
     }
-    val recordVideo = rememberLauncherForActivityResult(CaptureShortVideo()) { ok ->
-        if (ok) accept(captureUri)
+    val openGallery: () -> Unit = {
+        pick.launch(
+            PickVisualMediaRequest(
+                if (config.videoEnabled) {
+                    ActivityResultContracts.PickVisualMedia.ImageAndVideo
+                } else {
+                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                },
+            ),
+        )
     }
 
-    // The app declares CAMERA (calls use it), and Android then refuses
-    // ACTION_IMAGE_CAPTURE / VIDEO_CAPTURE with a SecurityException until the
-    // permission is granted, even though the camera app is the one shooting.
-    // So: ask first, and never let a refused launch take the app down.
-    val unreadable = context.getString(R.string.stories_compose_unreadable)
-    val launchCapture: (CaptureKind) -> Unit = { kind ->
-        captureUri = captureTarget(context, if (kind == CaptureKind.Photo) "jpg" else "mp4")
-        captureUri?.let { uri ->
-            runCatching {
-                if (kind == CaptureKind.Photo) takePhoto.launch(uri) else recordVideo.launch(uri)
-            }.onFailure { refusal = unreadable }
+    // A photo placed on the story: prepared (1440 px, EXIF gone) and kept for the PUT.
+    val photoFailed = stringResource(R.string.stories_editor_photo_failed)
+    val photosDidNotFit = stringResource(R.string.stories_picker_some_did_not_fit)
+    val limitPhotosText = stringResource(R.string.stories_editor_limit_photos)
+    val limitLayersText = stringResource(R.string.stories_editor_limit_layers)
+    // Each photo picked becomes a layer, one after the other, up to the limits; what does not fit is said, not dropped.
+    val addPhotoLayers: (List<Uri>) -> Unit = { uris ->
+        if (uris.isNotEmpty()) {
+            scope.launch {
+                var failed = false
+                var refusedWith: LayerOps.Refusal? = null
+                uris.forEach { uri ->
+                    // Check before the work: a photo that cannot be placed is not prepared for nothing.
+                    val probe = PhotoLayer(id = "probe", source = "", width = 1, height = 1)
+                    val full = LayerOps.canAdd(editor.layers, probe)
+                    if (full != null) {
+                        refusedWith = full
+                        return@forEach
+                    }
+                    val result = try {
+                        StoryMediaPrep.prepare(context, uri, gg.pqp.app.stories.StoriesRules.MAX_BYTES)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        PrepResult.Unreadable
+                    }
+                    if (result is PrepResult.Ready && !result.media.isVideo) {
+                        val id = editor.newId()
+                        val at = gg.pqp.app.stories.editor.LayerMath.startPosition(editor.layers.size)
+                        val refused = editor.add(
+                            PhotoLayer(
+                                id = id, x = at.x, y = at.y, source = result.media.previewUri.toString(),
+                                width = result.media.width, height = result.media.height,
+                            ),
+                        )
+                        if (refused == null) {
+                            layerFiles[id] = LayerFile(id, result.media.contentType, result.media.bytes, result.media.width, result.media.height)
+                        } else {
+                            refusedWith = refused
+                        }
+                    } else {
+                        failed = true
+                    }
+                }
+                val message = when {
+                    failed -> photoFailed
+                    refusedWith == LayerOps.Refusal.TooMany -> if (uris.size > 1) photosDidNotFit else limitLayersText
+                    refusedWith != null -> if (uris.size > 1) photosDidNotFit else limitPhotosText
+                    else -> null
+                }
+                if (message != null) Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            }
         }
     }
-    var pendingCapture by remember { mutableStateOf<CaptureKind?>(null) }
-    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        val kind = pendingCapture
-        pendingCapture = null
-        if (granted && kind != null) launchCapture(kind)
-    }
-    val withCamera: (CaptureKind) -> Unit = { kind ->
-        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
-            context,
-            android.Manifest.permission.CAMERA,
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        if (granted) {
-            launchCapture(kind)
-        } else {
-            pendingCapture = kind
-            cameraPermission.launch(android.Manifest.permission.CAMERA)
-        }
-    }
+    val addPhotoLayer: (Uri?) -> Unit = { uri -> if (uri != null) addPhotoLayers(listOf(uri)) }
+    val pickPhotoLayer = rememberLauncherForActivityResult(PickVisualMediaList(), addPhotoLayers)
 
-    val ready = when (mode) {
-        ComposeMode.Camera -> media != null
-        ComposeMode.Text -> text.isNotBlank()
-        ComposeMode.Call -> callChannel != null && text.isNotBlank()
-    }
-
-    // One id per story the person means to post, the same on a retry after a
-    // failure (so a lost answer never posts it twice) and new as soon as
-    // anything about it changes (so an edited retry is not answered with the
-    // story it replaced).
-    val requestId = remember(mode, media, text, background, caption, callChannel, targets, replies) {
-        java.util.UUID.randomUUID().toString()
-    }
-    // A call sticker has to go to the server its room is in (the contract
-    // refuses anything else). That server is ticked the moment the room is
-    // picked, where the person can see it, and locked in "Quem vê" with a line
-    // saying why: never added behind their back at send time.
-    val stickerServerId = callChannel?.takeIf { mode == ComposeMode.Call }?.serverId
+    // A call card has to go to the server its room is in (the contract refuses
+    // anything else). That server is ticked the moment the room is placed,
+    // where the person can see it, and locked in "Quem vê" with a line saying
+    // why: never added behind their back at send time.
+    val callLayer = editor.layers.firstOrNull { it is CallLayer } as? CallLayer
+    val stickerServerId = callLayer?.serverId
     LaunchedEffect(stickerServerId) {
         targets = StoriesRules.withSticker(targets, stickerServerId)
     }
 
-    val doPost: () -> Unit = {
-        post = PostState.Posting
-        scope.launch {
-            val sticker = callChannel?.takeIf { mode == ComposeMode.Call }?.let {
-                StorySticker(type = "call", serverId = it.serverId, channelId = it.id)
-            }
-            // Already ticked and shown (see above); this only keeps what is
-            // sent identical to what the sheet showed.
-            val audience = StoriesRules.withSticker(targets, stickerServerId)
-            val prepared = media.takeIf { mode == ComposeMode.Camera }
-            val request = if (prepared != null) {
-                CreateStoryRequest(
-                    kind = if (prepared.isVideo) "video" else "image",
-                    caption = caption.trim().ifBlank { null },
-                    repliesEnabled = replies,
-                    audiences = audience,
-                    requestId = requestId,
-                    media = StoryMediaInput(
-                        contentType = prepared.contentType,
-                        byteSize = prepared.bytes.size.toLong(),
-                        width = prepared.width,
-                        height = prepared.height,
-                        durationMs = prepared.durationMs,
-                    ),
-                )
-            } else {
-                CreateStoryRequest(
-                    kind = "text",
-                    text = text.trim(),
-                    background = background,
-                    sticker = sticker,
-                    repliesEnabled = replies,
-                    audiences = audience,
-                    requestId = requestId,
-                )
-            }
-            val ok = runCatching {
-                val created = session.api.createStory(request)
-                if (prepared != null) {
-                    created.upload?.let { session.api.uploadStoryMedia(it, prepared.contentType, prepared.bytes) }
-                    session.api.publishStory(created.story.id)
-                }
-            }.isSuccess
-            if (ok) {
-                contextServerId?.let { store.refresh(store.serverKey(it)) }
-                audience.serverIds.forEach { store.refresh(store.serverKey(it)) }
-                store.refresh(StoriesStore.FRIENDS)
-                post = PostState.Idle
-                onPosted()
-            } else {
-                post = PostState.Failed
-            }
-        }
+    val editing = media != null || mode != ComposeMode.Camera || !config.mediaEnabled
+    val hasWords = LayerOps.hasContent(editor.layers)
+    val ready = if (media != null) true else hasWords
+
+    // "Postar" hands the story to the outbox and closes the composer: the files, the request, the
+    // upload and the publish all happen there, with the own ring showing how far along it is.
+    val outbox = remember(session, context) { StoryOutbox.of(context, session, store) }
+
+    // Files go ahead of the story: sent the moment their bytes are final, thrown away if the person changes their mind.
+    val eager = remember(outbox) { EagerSession(outbox.eager) }
+    // The composer closing without a post (X, back, discard) takes everything it started with it; after "Postar" there is nothing left to take.
+    DisposableEffect(eager) { onDispose { eager.discardAll() } }
+    LaunchedEffect(media, config.eagerUploads) { if (config.eagerUploads) eager.syncBase(media) }
+    LaunchedEffect(editor, editor.layers, editor.drawingOpen, config.eagerUploads) {
+        if (layersEnabled && config.eagerUploads) eager.syncLayers(editor.layers, layerFiles, editor.drawingOpen)
+    }
+    // A second tap before the composer has gone must not hand the same story over twice.
+    val handedOver = remember { booleanArrayOf(false) }
+    val doPost: () -> Unit = post@{
+        val userId = meId ?: return@post
+        if (handedOver[0]) return@post
+        handedOver[0] = true
+        // A muted clip is a different file from the one sent ahead: that one goes, the muted one is sent at "Postar".
+        val eagerFiles = eager.handOver(baseIsUsable = !(muted && media?.isVideo == true))
+        // Already ticked and shown (see above); this only keeps what is sent identical to what the sheet showed.
+        val audience = StoriesRules.withSticker(targets, stickerServerId)
+        outbox.enqueue(
+            StoryPostInput(
+                userId = userId,
+                media = media,
+                muted = muted,
+                mutedUri = mutedUri,
+                cardBackground = cardBackground,
+                description = editor.description,
+                layers = editor.layers,
+                layerFiles = layerFiles.toMap(),
+                layersEnabled = layersEnabled,
+                replies = replies,
+                audience = audience,
+                maxBytes = config.maxBytes,
+                eager = eagerFiles,
+                refreshKeys = buildList {
+                    contextServerId?.let { add(store.serverKey(it)) }
+                    audience.serverIds.forEach { add(store.serverKey(it)) }
+                    add(StoriesStore.FRIENDS)
+                },
+            ),
+        )
+        onPosted()
+    }
+
+    // The live camera owns the whole screen until there is something to edit.
+    val showingCamera = !editing
+    val suspendCamera = showingCamera && (trimming != null || working != null)
+
+    val audienceLabel = when {
+        options != null -> audienceLabel(options, targets)
+        audienceFailed -> stringResource(R.string.stories_audience_load_failed)
+        else -> stringResource(R.string.stories_audience_loading)
     }
 
     Dialog(
-        // Not while posting: closing mid-post would cancel the upload or the
-        // publish and leave a story that never goes live (the server sweeps
-        // those, but the person would think it was posted). A failed post
-        // unlocks it, and a retry reuses the same requestId.
-        onDismissRequest = { if (post != PostState.Posting) onDismiss() },
+        onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         Box(
@@ -334,157 +404,156 @@ fun StoryComposer(
                 .background(Color.Black)
                 .testTag("stories.composer"),
         ) {
-            // The canvas: what the story will look like.
             when {
-                mode == ComposeMode.Camera && media != null -> MediaPreview(media!!)
-                mode == ComposeMode.Camera -> Box(Modifier.fillMaxSize().background(Color(0xFF15191E)))
-                else -> Box(Modifier.fillMaxSize().background(backgroundBrush(background)))
-            }
-            // Controls stay legible over a bright photo or clip.
-            if (mode == ComposeMode.Camera && media != null) {
-                Box(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(320.dp)
-                        .background(
-                            androidx.compose.ui.graphics.Brush.verticalGradient(
-                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f)),
-                            ),
-                        ),
-                )
-            }
-
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .imePadding(),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(Spacing.sm)) {
-                    IconButton(
-                        onClick = onDismiss,
-                        enabled = post != PostState.Posting,
-                        modifier = Modifier.testTag("stories.composer.close"),
-                    ) {
-                        Icon(PqpIcons.Close, contentDescription = stringResource(R.string.stories_viewer_close), tint = Color.White)
-                    }
-                    Text(
-                        stringResource(R.string.stories_compose_title),
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (mode == ComposeMode.Camera && media != null) {
-                        androidx.compose.material3.TextButton(
-                            onClick = {
-                                media = null
-                                caption = ""
-                            },
-                            modifier = Modifier.testTag("stories.composer.change"),
-                        ) { Text(stringResource(R.string.stories_compose_change), color = Color.White) }
-                    }
+                suspendCamera -> {
+                    // The trim card or the export owns the screen: nothing is drawn and the
+                    // camera is released, so its privacy indicator is not lit for a video job.
+                    Box(Modifier.fillMaxSize().background(Color.Black))
                 }
-
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    when (mode) {
-                        ComposeMode.Camera -> if (media == null) {
-                            CameraChoices(
-                                videoEnabled = config.videoEnabled,
-                                preparing = preparing,
-                                refusal = refusal,
-                                onPhoto = { withCamera(CaptureKind.Photo) },
-                                onVideo = { withCamera(CaptureKind.Video) },
-                                onGallery = {
-                                    pick.launch(
-                                        PickVisualMediaRequest(
-                                            if (config.videoEnabled) {
-                                                ActivityResultContracts.PickVisualMedia.ImageAndVideo
-                                            } else {
-                                                ActivityResultContracts.PickVisualMedia.ImageOnly
-                                            },
+                showingCamera -> StoryCameraScreen(
+                    videoEnabled = config.videoEnabled,
+                    busy = preparing,
+                    message = refusal,
+                    onClose = onDismiss,
+                    onGallery = openGallery,
+                    onCaptured = { accept(it) },
+                    modeTabs = {
+                        ModeTabs(
+                            mode = mode,
+                            mediaEnabled = config.mediaEnabled,
+                            onMode = {
+                                refusal = null
+                                openCallAtStart = it == ComposeMode.Call
+                                mode = if (it == ComposeMode.Call) ComposeMode.Text else it
+                            },
+                        )
+                    },
+                )
+                else -> {
+                    val current = media
+                    StoryEditor(
+                        session = editor,
+                        env = EditorEnv(
+                            layersEnabled = layersEnabled,
+                            isVideo = current?.isVideo == true,
+                            muted = muted,
+                            cardBackground = if (current == null) cardBackground else null,
+                            audienceLabel = audienceLabel,
+                            audienceError = options == null && audienceFailed,
+                            hasAudio = current?.hasAudio != false,
+                            canPost = ready && options != null,
+                            occupancy = occupancy,
+                        ),
+                        base = {
+                            when {
+                                current == null -> Unit
+                                current.isVideo -> StoryBaseVideo(current.previewUri, current.width, current.height, muted)
+                                else -> StoryBaseImage(current.previewUri, current.width, current.height)
+                            }
+                        },
+                        onClose = {
+                            // Back out of the editor: to the camera when there was a picture, else out.
+                            if (media != null) {
+                                media = null
+                            } else if (config.mediaEnabled) {
+                                mode = ComposeMode.Camera
+                            } else {
+                                onDismiss()
+                            }
+                        },
+                        onToggleMute = { muted = !muted },
+                        onCardBackground = { cardBackground = it },
+                        onPickGalleryPhoto = {
+                            pickPhotoLayer.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
+                        onTakePhoto = { layerCamera = true },
+                        // Nothing to choose from until the list is there: tapping the pill reads it again.
+                        onAudience = { if (options == null) audienceAttempt += 1 else choosingAudience = true },
+                        onRetryAudience = { audienceAttempt += 1 },
+                        onPost = {
+                            gg.pqp.app.stories.StoryPerf.mark("post")
+                            when {
+                                StoriesRules.canPost(targets) -> doPost()
+                                else -> choosingAudience = true
+                            }
+                        },
+                        callSheet = { onPick, onDismissSheet ->
+                            val rooms = rememberCallRooms(session, options)
+                            CallRoomSheet(
+                                rooms = rooms,
+                                occupancy = occupancy,
+                                meId = meId,
+                                selectedChannelId = callLayer?.channelId,
+                                onPick = { room ->
+                                    onPick(
+                                        CallLayer(
+                                            id = callLayer?.id ?: editor.newId(),
+                                            x = callLayer?.x ?: 0.5f,
+                                            y = callLayer?.y ?: 0.7f,
+                                            scale = callLayer?.scale ?: 1f,
+                                            rotation = callLayer?.rotation ?: 0f,
+                                            serverId = room.serverId,
+                                            channelId = room.channelId,
+                                            roomName = room.channelName,
+                                            serverName = room.serverName,
+                                            serverIconUrl = room.serverIconUrl,
                                         ),
                                     )
                                 },
+                                onDismiss = onDismissSheet,
                             )
-                        }
-                        ComposeMode.Text, ComposeMode.Call -> CardEditor(
-                            text = text,
-                            onText = { text = it.take(StoriesRules.TEXT_MAX) },
-                            background = background,
-                        )
-                    }
-                }
-
-                if (mode == ComposeMode.Camera && media != null) {
-                    TextField(
-                        value = caption,
-                        onValueChange = { caption = it.take(StoriesRules.CAPTION_MAX) },
-                        placeholder = { Text(stringResource(R.string.stories_compose_caption)) },
-                        singleLine = true,
-                        colors = darkFieldColors(),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = Spacing.gutter)
-                            .testTag("stories.composer.caption"),
+                        },
+                        mentionSheet = { onPick, onDismissSheet ->
+                            val directory = rememberMentionPeople(session, targets, meId)
+                            MentionSheet(
+                                people = directory.people,
+                                incomplete = directory.failed,
+                                onRetry = directory.retry,
+                                onPick = { person ->
+                                    onPick(MentionLayer(id = editor.newId(), userId = person.userId, name = person.name, avatarUrl = person.avatarUrl))
+                                },
+                                onDismiss = onDismissSheet,
+                            )
+                        },
+                        openCallSheetAtStart = openCallAtStart && editor.layers.none { it is CallLayer },
                     )
                 }
-                if (mode != ComposeMode.Camera) {
-                    BackgroundSwatches(selected = background, onPick = { background = it })
-                }
-                if (mode == ComposeMode.Call) {
-                    CallPicker(
-                        session = session,
-                        options = options,
-                        selected = callChannel,
-                        onPick = { callChannel = it },
-                        meId = (phase as? SessionPhase.Ready)?.me?.id,
-                        occupancy = occupancy,
-                    )
-                }
-
-                ModeTabs(
-                    mode = mode,
-                    mediaEnabled = config.mediaEnabled,
-                    onMode = {
-                        mode = it
-                        if (it == ComposeMode.Call && text.isBlank()) {
-                            text = context.getString(R.string.stories_call_default_text)
-                        }
-                    },
-                )
-                if (audienceFailed && options == null) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = Spacing.gutter)
-                            .testTag("stories.composer.audienceFailed"),
-                    ) {
-                        Text(
-                            stringResource(R.string.stories_audience_failed),
-                            color = Color.White,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f),
-                        )
-                        androidx.compose.material3.TextButton(
-                            onClick = { audienceAttempt += 1 },
-                            modifier = Modifier.testTag("stories.composer.audienceRetry"),
-                        ) { Text(stringResource(R.string.connection_retry), color = Palette.Signal) }
-                    }
-                }
-                Button(
-                    onClick = { choosingAudience = true },
-                    enabled = ready && options != null,
-                    shape = MaterialTheme.shapes.small,
-                    colors = ButtonDefaults.buttonColors(containerColor = Palette.Signal, contentColor = Palette.Ink),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.gutter, vertical = Spacing.sm)
-                        .testTag("stories.composer.next"),
-                ) { Text(stringResource(R.string.stories_compose_next)) }
             }
+
+            if (layerCamera) {
+                Dialog(
+                    onDismissRequest = { layerCamera = false },
+                    properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+                ) {
+                    StoryCameraScreen(
+                        videoEnabled = false,
+                        busy = false,
+                        message = null,
+                        onClose = { layerCamera = false },
+                        onGallery = {
+                            layerCamera = false
+                            pickPhotoLayer.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
+                        onCaptured = {
+                            layerCamera = false
+                            addPhotoLayer(it)
+                        },
+                        modeTabs = {},
+                    )
+                }
+            }
+        }
+
+        trimming?.let { work ->
+            StoryTrimScreen(
+                uri = work.uri,
+                durationMs = work.durationMs,
+                onConfirm = { startMs, endMs -> cutVideo(work, startMs, endMs) },
+                onCancel = { trimming = null },
+            )
+        }
+        working?.let { progress ->
+            StoryVideoWorking(progress = progress, onCancel = { workJob?.cancel() })
         }
 
         if (choosingAudience) {
@@ -495,137 +564,89 @@ fun StoryComposer(
                 lockedServerId = stickerServerId,
                 replies = replies,
                 onReplies = { replies = it },
-                post = post,
-                onPost = doPost,
-                onDismiss = { if (post != PostState.Posting) choosingAudience = false },
+                onPost = { doPost() },
+                onDismiss = { choosingAudience = false },
             )
         }
     }
 }
 
+/** "Quem vê: QG, Amigos": where the story is going, in a line. */
 @Composable
-private fun CameraChoices(
-    videoEnabled: Boolean,
-    preparing: Boolean,
-    refusal: String?,
-    onPhoto: () -> Unit,
-    onVideo: () -> Unit,
-    onGallery: () -> Unit,
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(Spacing.md),
-        modifier = Modifier.padding(Spacing.xl),
-    ) {
-        if (preparing) {
-            CircularProgressIndicator(color = Color.White)
-            return@Column
+private fun audienceLabel(options: StoryAudienceOptions?, targets: StoryAudienceTargets): String {
+    val parts = StoriesRules.audienceParts(options, targets)
+    if (parts.serverNames.isEmpty() && !parts.friends) return stringResource(R.string.stories_editor_audience_none)
+    val names = buildList {
+        when (parts.serverNames.size) {
+            0 -> Unit
+            1 -> add(parts.serverNames.first())
+            else -> add(pluralStringResource(R.plurals.stories_editor_audience_servers, parts.serverNames.size, parts.serverNames.size))
         }
-        ChoiceButton(stringResource(R.string.stories_compose_take_photo), "stories.composer.photo", onPhoto)
-        if (videoEnabled) ChoiceButton(stringResource(R.string.stories_compose_record_video), "stories.composer.video", onVideo)
-        ChoiceButton(stringResource(R.string.stories_compose_gallery), "stories.composer.gallery", onGallery)
-        refusal?.let {
-            Text(
-                it,
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.testTag("stories.composer.refusal"),
-            )
-        }
+        if (parts.friends) add(stringResource(R.string.stories_audience_friends))
     }
+    return stringResource(R.string.stories_editor_audience, names.joinToString(", "))
 }
 
+/** Every voice room in a server this person may post to, loaded once when the call sheet opens. */
 @Composable
-private fun ChoiceButton(label: String, tag: String, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        shape = MaterialTheme.shapes.small,
-        // The scheme's outline is drawn for a page, not for a black camera
-        // canvas, where it disappears; a white hairline reads on both.
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(52.dp)
-            .testTag(tag),
-    ) { Text(label, color = Color.White) }
-}
-
-@Composable
-private fun CardEditor(text: String, onText: (String) -> Unit, background: String) {
-    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
-    // The card's own face, so what is typed looks like what will be posted.
-    val family = MaterialTheme.typography.headlineLarge.fontFamily
-    val hint = stringResource(R.string.stories_compose_text_hint)
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .fillMaxSize()
-            // The whole card is the field: a one-line box in the middle of an
-            // empty screen is a target nobody hits first time.
-            .clickable(
-                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                indication = null,
-            ) { focus.requestFocus() }
-            .padding(Spacing.xl),
-    ) {
-        if (text.isEmpty()) {
-            Text(
-                stringResource(R.string.stories_compose_text_hint),
-                color = textOn(background).copy(alpha = 0.6f),
-                fontSize = 30.sp,
-                fontFamily = family,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-            )
-        }
-        BasicTextField(
-            value = text,
-            onValueChange = onText,
-            textStyle = TextStyle(
-                color = textOn(background),
-                fontSize = 30.sp,
-                lineHeight = 36.sp,
-                fontFamily = family,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-            ),
-            cursorBrush = SolidColor(textOn(background)),
-            modifier = Modifier
-                .fillMaxWidth()
-                .focusRequester(focus)
-                .semantics { contentDescription = hint }
-                .testTag("stories.composer.text"),
-        )
-    }
-}
-
-@Composable
-private fun BackgroundSwatches(selected: String, onPick: (String) -> Unit) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.CenterHorizontally),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = Spacing.sm),
-    ) {
-        StoriesRules.BACKGROUNDS.forEachIndexed { position, key ->
-            val label = stringResource(R.string.stories_compose_background, position + 1)
-            Box(
-                Modifier
-                    .semantics {
-                        role = Role.RadioButton
-                        this.selected = key == selected
-                        contentDescription = label
-                    }
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(backgroundBrush(key))
-                    .border(if (key == selected) 3.dp else 1.dp, if (key == selected) Color.White else Color.White.copy(alpha = 0.4f), CircleShape)
-                    .clickable { onPick(key) }
-                    .testTag("stories.composer.bg.$key"),
-            )
+private fun rememberCallRooms(session: SessionStore, options: StoryAudienceOptions?): List<CallRoomOption>? {
+    var rooms by remember { mutableStateOf<List<CallRoomOption>?>(null) }
+    LaunchedEffect(options) {
+        val servers = options?.servers?.filter { it.canPost } ?: return@LaunchedEffect
+        rooms = servers.flatMap { server ->
+            runCatching { session.api.channels(server.serverId) }.getOrDefault(emptyList())
+                .filter { it.type == "voice" }
+                .map { CallRoomOption(it.serverId ?: server.serverId, server.serverName, it.id, it.name, server.iconUrl) }
         }
     }
+    return rooms
 }
+
+/**
+ * Who can be mentioned: members of the servers the story goes to, and friends
+ * when it goes to friends. The server refuses a mention of anybody who could
+ * not see the story, so the list is only ever those people.
+ */
+@Composable
+private fun rememberMentionPeople(
+    session: SessionStore,
+    targets: StoryAudienceTargets,
+    meId: String?,
+): MentionDirectory {
+    var people by remember { mutableStateOf<List<MentionPerson>?>(null) }
+    var failed by remember { mutableStateOf(false) }
+    var attempt by remember { mutableStateOf(0) }
+    LaunchedEffect(targets.serverIds, targets.friends, attempt) {
+        failed = false
+        // Rosters in parallel but four at a time: not the sum of the round trips, and not a burst of one request per server either.
+        val (found, lost) = kotlinx.coroutines.coroutineScope {
+            val friends = if (targets.friends) async { runCatching { session.api.friends().friends } } else null
+            val gate = kotlinx.coroutines.sync.Semaphore(4)
+            val servers = targets.serverIds.map { id -> async { gate.withPermit { runCatching { session.api.serverMembers(id) } } } }
+            val people = linkedMapOf<String, MentionPerson>()
+            var lost = false
+            friends?.await()?.let { result ->
+                result.onFailure { lost = true }
+                result.getOrNull()?.forEach { people[it.id] = MentionPerson(it.id, it.displayName, it.username, it.avatarUrl) }
+            }
+            servers.forEach { call ->
+                val result = call.await()
+                result.onFailure { lost = true }
+                result.getOrNull()?.forEach {
+                    people.putIfAbsent(it.id, MentionPerson(it.id, it.nickname ?: it.displayName, it.username, it.avatarUrl))
+                }
+            }
+            people to lost
+        }
+        people = found.values.filter { it.userId != meId }.sortedBy { it.name.lowercase() }
+        // A list that is missing somebody says so, with a way to try again: not "nobody found".
+        failed = lost
+    }
+    return MentionDirectory(people, failed) { attempt += 1 }
+}
+
+/** The people a mention can name, and whether the list is known to be incomplete. */
+private class MentionDirectory(val people: List<MentionPerson>?, val failed: Boolean, val retry: () -> Unit)
 
 @Composable
 private fun ModeTabs(mode: ComposeMode, mediaEnabled: Boolean, onMode: (ComposeMode) -> Unit) {
@@ -659,86 +680,6 @@ private fun ModeTabs(mode: ComposeMode, mediaEnabled: Boolean, onMode: (ComposeM
     }
 }
 
-/** "Chama pra call": a voice room in one of the servers this person may post to. */
-@Composable
-private fun CallPicker(
-    session: SessionStore,
-    options: StoryAudienceOptions?,
-    selected: Channel?,
-    onPick: (Channel) -> Unit,
-    meId: String?,
-    occupancy: Map<String, List<gg.pqp.app.core.VoiceParticipant>>,
-) {
-    var rooms by remember { mutableStateOf<List<Pair<String, Channel>>?>(null) }
-    val liveOccupancy by rememberUpdatedState(occupancy)
-    val liveMeId by rememberUpdatedState(meId)
-    LaunchedEffect(options) {
-        val servers = options?.servers?.filter { it.canPost } ?: return@LaunchedEffect
-        val found = servers.flatMap { server ->
-            runCatching { session.api.channels(server.serverId) }.getOrDefault(emptyList())
-                .filter { it.type == "voice" }
-                .map { server.serverName to it.copy(serverId = it.serverId ?: server.serverId) }
-        }
-        rooms = found
-        // Start on the room the author is in: it is the only sticker that is
-        // open once posted. Never overrides a room they already picked.
-        if (selected == null) {
-            StoryCallRoom.defaultRoom(found.map { it.second }, liveMeId, liveOccupancy)?.let(onPick)
-        }
-    }
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.gutter)
-            .clip(MaterialTheme.shapes.medium)
-            .background(Color.Black.copy(alpha = 0.55f))
-            .padding(Spacing.md)
-            .height(180.dp)
-            .verticalScroll(rememberScrollState())
-            .testTag("stories.composer.callPicker"),
-    ) {
-        Text(stringResource(R.string.stories_sticker_call), color = Color.White, style = MaterialTheme.typography.titleSmall)
-        Text(
-            stringResource(R.string.stories_call_picker_body),
-            color = Color.White.copy(alpha = 0.7f),
-            style = MaterialTheme.typography.bodySmall,
-        )
-        if (selected != null && !StoryCallRoom.authorIn(selected.id, meId, occupancy)) {
-            Text(
-                stringResource(R.string.stories_call_not_in_room, selected.name),
-                color = Palette.Warning,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = Spacing.xs).testTag("stories.composer.callNotInRoom"),
-            )
-        }
-        val list = rooms
-        when {
-            list == null -> CircularProgressIndicator(color = Color.White, modifier = Modifier.padding(Spacing.sm).size(20.dp))
-            list.isEmpty() -> Text(
-                stringResource(R.string.stories_call_picker_none),
-                color = Color.White.copy(alpha = 0.7f),
-                modifier = Modifier.padding(top = Spacing.sm),
-            )
-            else -> list.forEach { (serverName, channel) ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onPick(channel) }
-                        .padding(vertical = Spacing.xs)
-                        .testTag("stories.composer.room"),
-                ) {
-                    RadioButton(selected = selected?.id == channel.id, onClick = { onPick(channel) })
-                    Column {
-                        Text(channel.name, color = Color.White, style = MaterialTheme.typography.bodyLarge)
-                        Text(serverName, color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-        }
-    }
-}
-
 /**
  * "Quem vê": every server this person may post to plus Amigos, ticked where
  * they were. A server where they may not post is drawn greyed with the
@@ -754,7 +695,6 @@ private fun AudienceSheet(
     lockedServerId: String?,
     replies: Boolean,
     onReplies: (Boolean) -> Unit,
-    post: PostState,
     onPost: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -817,29 +757,14 @@ private fun AudienceSheet(
             }
             Button(
                 onClick = onPost,
-                enabled = StoriesRules.canPost(targets) && post != PostState.Posting,
+                enabled = StoriesRules.canPost(targets),
                 shape = MaterialTheme.shapes.small,
                 colors = ButtonDefaults.buttonColors(containerColor = Palette.Signal, contentColor = Palette.Ink),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("stories.audience.post"),
             ) {
-                if (post == PostState.Posting) {
-                    CircularProgressIndicator(Modifier.size(18.dp), color = Palette.Ink, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(Spacing.sm))
-                    Text(stringResource(R.string.stories_upload_posting))
-                } else {
-                    Text(stringResource(R.string.stories_audience_post))
-                }
-            }
-            if (post == PostState.Failed) {
-                Text(
-                    stringResource(R.string.stories_upload_failed),
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier
-                        .padding(top = Spacing.sm)
-                        .testTag("stories.audience.failed"),
-                )
+                Text(stringResource(R.string.stories_audience_post))
             }
             Text(
                 stringResource(R.string.stories_audience_footer),
@@ -869,6 +794,8 @@ private fun AudienceRow(title: String, subtitle: String?, checked: Boolean, enab
             onCheckedChange = if (enabled) ({ onToggle() }) else null,
             enabled = enabled,
             colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary, checkmarkColor = MaterialTheme.colorScheme.onPrimary),
+            // A row that cannot be toggled still keeps the box's full size, so its label lines up with the rest.
+            modifier = Modifier.minimumInteractiveComponentSize(),
         )
         Column {
             Text(
@@ -881,57 +808,4 @@ private fun AudienceRow(title: String, subtitle: String?, checked: Boolean, enab
             }
         }
     }
-}
-
-@Composable
-private fun MediaPreview(media: PreparedMedia) {
-    if (!media.isVideo) {
-        AsyncImage(model = media.previewUri, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-        return
-    }
-    val context = LocalContext.current
-    var frame by remember(media) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(media) {
-        frame = withContext(Dispatchers.IO) {
-            runCatching {
-                val retriever = MediaMetadataRetriever()
-                try {
-                    retriever.setDataSource(context, media.previewUri)
-                    retriever.getFrameAtTime(0)
-                } finally {
-                    retriever.release()
-                }
-            }.getOrNull()
-        }
-    }
-    frame?.let {
-        Image(bitmap = it.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-    }
-}
-
-@Composable
-private fun darkFieldColors() = TextFieldDefaults.colors(
-    focusedContainerColor = Color.Black.copy(alpha = 0.45f),
-    unfocusedContainerColor = Color.Black.copy(alpha = 0.45f),
-    focusedIndicatorColor = Color.Transparent,
-    unfocusedIndicatorColor = Color.Transparent,
-    focusedTextColor = Color.White,
-    unfocusedTextColor = Color.White,
-    focusedPlaceholderColor = Color.White.copy(alpha = 0.6f),
-    unfocusedPlaceholderColor = Color.White.copy(alpha = 0.6f),
-)
-
-/** A file in the app's cache for the system camera to write into. */
-private fun captureTarget(context: Context, extension: String): Uri? = runCatching {
-    val dir = File(context.cacheDir, "stories").apply { mkdirs() }
-    val file = File(dir, "capture-${System.currentTimeMillis()}.$extension")
-    FileProvider.getUriForFile(context, "${context.packageName}.stories", file)
-}.getOrNull()
-
-/** The system camera, told to stop at 30 s, the story limit. */
-private class CaptureShortVideo : ActivityResultContracts.CaptureVideo() {
-    override fun createIntent(context: Context, input: Uri): Intent =
-        super.createIntent(context, input)
-            .putExtra(MediaStore.EXTRA_DURATION_LIMIT, (StoriesRules.MAX_VIDEO_MS / 1000).toInt())
-            .putExtra(MediaStore.EXTRA_VIDEO_QUALITY, 1)
 }

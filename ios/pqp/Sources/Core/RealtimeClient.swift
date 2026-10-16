@@ -87,6 +87,10 @@ enum RealtimeEvent: Sendable {
     /// the worker has made the AAC copy of an Opus note. The frame carries no
     /// message: the answer is to read the message again for `voice.playbackUrl`.
     case voiceNoteUpdated(channelId: String, messageId: String, attachmentId: String, playbackReady: Bool)
+    /// A note's transcript settled, or was asked for and is now `pending`. Fanned
+    /// out to the note's channel, so exactly the people who can hear the audio
+    /// see the text. Merged into the attachment's `voice.transcript`.
+    case voiceNoteTranscript(channelId: String, messageId: String, attachmentId: String, transcript: VoiceNoteTranscript)
 
     // Voice signalling. The server is a pure relay for offer/answer/candidate;
     // everything else here is room membership.
@@ -1215,6 +1219,16 @@ actor RealtimeClient {
                 scope: frame.scope, serverId: frame.serverId,
                 removedStoryIds: frame.removedStoryIds ?? []
             )))
+            return
+        }
+
+        if probe.type == "voice-note-transcript" {
+            guard let frame = try? Coding.decoder.decode(VoiceNoteTranscriptFrame.self, from: data)
+            else { return }
+            continuation?.yield(.voiceNoteTranscript(
+                channelId: frame.channelId, messageId: frame.messageId,
+                attachmentId: frame.attachmentId, transcript: frame.transcript
+            ))
             return
         }
 

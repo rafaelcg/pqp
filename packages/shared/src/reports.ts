@@ -328,3 +328,225 @@ export const REPORT_REASON_LABELS: Record<ReportReason, string> = {
   minor_sexual: "A minor in sexual content",
   other: "Something else",
 };
+
+// ------------------------------------------------------------ report context
+//
+// `GET /api/reports/:id/context`: what a moderator needs to JUDGE a report
+// rather than only read it. A report about an account (`subjectType: "user"`)
+// carries no message and no details, so the queue row alone says "the account
+// X, reported by Y" and nothing else. This is the read behind the card's
+// "Contexto" panel.
+//
+// Two lenses, decided by the server from who is asking, never by the client:
+//
+//   * `instance`: an instance moderator. Sees the account across the whole
+//     instance, and the one DM thread the reporter shared by filing.
+//   * `server`: a manager of the report's server. Sees ONLY what happened in
+//     that server. Every field that reaches outside it is null or empty.
+//
+// Nothing here ever carries the content of a conversation between the
+// reported user and a third party. Those are counts and timestamps.
+
+export const reportContextLensSchema = z.enum(["instance", "server"]);
+export type ReportContextLens = z.infer<typeof reportContextLensSchema>;
+
+export const reportContextMessageSchema = z.object({
+  id: z.string().uuid(),
+  authorId: z.string().uuid(),
+  authorName: z.string(),
+  /** `name#1234`, for a tooltip. The name is never replaced by it. */
+  authorTag: z.string().nullable(),
+  /** Which side of the report wrote it, so the panel can chip the speaker. */
+  party: z.enum(["reporter", "reported", "other"]),
+  body: z.string(),
+  createdAt: z.string(),
+  /** A call record ("Missed call") rather than something typed. */
+  isCall: z.boolean(),
+});
+export type ReportContextMessage = z.infer<typeof reportContextMessageSchema>;
+
+export const reportContextServerMessageSchema = z.object({
+  id: z.string().uuid(),
+  serverId: z.string().uuid(),
+  serverName: z.string(),
+  channelName: z.string(),
+  isPrivate: z.boolean(),
+  body: z.string(),
+  attachmentCount: z.number().int().nonnegative(),
+  createdAt: z.string(),
+});
+export type ReportContextServerMessage = z.infer<
+  typeof reportContextServerMessageSchema
+>;
+
+const contactCountSchema = z.object({
+  total: z.number().int().nonnegative(),
+  firstHour: z.number().int().nonnegative(),
+  /** Newest first, capped. A timestamp per event; never a name. */
+  times: z.array(z.string()),
+});
+
+export const reportContextSchema = z.object({
+  reportId: z.string(),
+  lens: reportContextLensSchema,
+
+  /** Null when the reported account no longer exists (or the report names none). */
+  account: z
+    .object({
+      id: z.string().uuid(),
+      displayName: z.string(),
+      tag: z.string().nullable(),
+      avatarUrl: z.string().nullable(),
+      createdAt: z.string(),
+      /** Set once the account has started deleting itself. */
+      deletionStartedAt: z.string().nullable(),
+      /** Instance lens only. A country code from the last connection. */
+      lastCountry: z.string().nullable(),
+    })
+    .nullable(),
+
+  /**
+   * Instance lens only (null for a server's staff): behaviour that spans the
+   * instance. Counts and timestamps, never names and never content.
+   *
+   * `dmsStarted`: 1:1 conversations whose FIRST message is theirs, with
+   * somebody who is not an accepted friend. `callsPlaced`: missed-call records
+   * they left in such conversations. An ANSWERED call leaves no record, so
+   * this undercounts by exactly the calls that worked.
+   */
+  signals: z
+    .object({
+      dmsStarted: contactCountSchema,
+      callsPlaced: contactCountSchema,
+      blockedByCount: z.number().int().nonnegative(),
+      /** When the reporter blocked them, if they did. The reporter is a party. */
+      reporterBlockedAt: z.string().nullable(),
+    })
+    .nullable(),
+
+  otherReports: z.array(
+    z.object({
+      id: z.string(),
+      status: reportStatusSchema,
+      reason: reportReasonSchema,
+      subjectType: reportSubjectTypeSchema,
+      createdAt: z.string(),
+      /** Null for a report in the instance queue. */
+      serverName: z.string().nullable(),
+    }),
+  ),
+
+  sanctions: z.object({
+    bans: z.array(
+      z.object({
+        serverId: z.string().uuid(),
+        serverName: z.string(),
+        reason: z.string().nullable(),
+        createdAt: z.string(),
+      }),
+    ),
+    timeouts: z.array(
+      z.object({
+        serverId: z.string().uuid(),
+        serverName: z.string(),
+        reason: z.string().nullable(),
+        expiresAt: z.string(),
+        createdAt: z.string(),
+      }),
+    ),
+  }),
+
+  /**
+   * Instance lens, human-filed report only: the last messages of the one
+   * conversation between the reporter and the reported user, oldest first.
+   * Null when there is none, or when the viewer is a server's staff.
+   */
+  conversation: z.array(reportContextMessageSchema).nullable(),
+
+  /**
+   * Whole-thread counts of TYPED messages (call records excluded) for that
+   * same conversation, not just the 20 shown. "11 from the reporter, 0 from
+   * the reported account" is the line that says a report may be in bad faith.
+   */
+  conversationCounts: z
+    .object({
+      fromReporter: z.number().int().nonnegative(),
+      fromReported: z.number().int().nonnegative(),
+      /** The newest 1000 messages were counted and the thread is longer. */
+      capped: z.boolean(),
+    })
+    .nullable(),
+
+  /**
+   * Instance lens, human-filed report only: who filed it, to spot a serial
+   * reporter. Counts every report they have filed on the instance.
+   */
+  reporter: z
+    .object({
+      displayName: z.string(),
+      tag: z.string().nullable(),
+      createdAt: z.string(),
+      filed: z.number().int().nonnegative(),
+      actioned: z.number().int().nonnegative(),
+      dismissed: z.number().int().nonnegative(),
+    })
+    .nullable(),
+
+  /**
+   * Where a reported MESSAGE lives, whatever queue the report was routed to.
+   * A `minor_sexual` report goes to the instance queue by design, with no
+   * server on the row, but the message still belongs to one.
+   */
+  messageServer: z
+    .object({
+      id: z.string().uuid(),
+      name: z.string(),
+      channelName: z.string(),
+    })
+    .nullable(),
+
+  /** Newest first. Every server for the instance lens, one for the server lens. */
+  serverMessages: z.array(reportContextServerMessageSchema),
+
+  ownedServers: z.array(
+    z.object({
+      id: z.string().uuid(),
+      name: z.string(),
+      memberCount: z.number().int().nonnegative(),
+      createdAt: z.string(),
+    }),
+  ),
+
+  /**
+   * A message report's neighbours in its channel: up to five on each side,
+   * oldest first. `withheld` says why there are none, so the panel can say so
+   * rather than look broken: a group conversation has third parties in it.
+   */
+  surrounding: z
+    .object({
+      /** The reported message itself, in its place between the two lists. */
+      reported: reportContextMessageSchema.nullable(),
+      before: z.array(reportContextMessageSchema),
+      after: z.array(reportContextMessageSchema),
+      withheld: z.enum(["group", "no_access"]).nullable(),
+    })
+    .nullable(),
+
+  /** What this viewer may do about the reported account, from the card. */
+  actions: z.object({
+    /** Instance lens: `DELETE /api/admin/users/:id`. There is no softer instance ban. */
+    canTerminate: z.boolean(),
+    /** The report's own server, when it has one and the account is in play. */
+    server: z
+      .object({
+        id: z.string().uuid(),
+        name: z.string(),
+        canBan: z.boolean(),
+        canTimeout: z.boolean(),
+        /** Already banned there: the ban button is not offered. */
+        alreadyBanned: z.boolean(),
+      })
+      .nullable(),
+  }),
+});
+export type ReportContext = z.infer<typeof reportContextSchema>;

@@ -23,6 +23,7 @@ import {
   RotateCcw,
   Send,
   Share2,
+  Forward,
   Smile,
   Trash2,
   Upload,
@@ -126,6 +127,7 @@ import {
 import { ComposeCover } from "./community-home-compose-cover";
 import { ComposeMobileRendition } from "./community-home-compose-mobile";
 import { UnlockedMedia } from "./community-home-media";
+import { BauShareButton } from "./community-home-share-public";
 import {
   ComposeTranslationNote,
   TranslationNote,
@@ -135,6 +137,12 @@ import {
   CommunityHomeStaffGuide,
 } from "./community-home-onboarding";
 import { OverviewStartHere } from "./overview-start-here";
+import {
+  BauFollowButton,
+  BauFollowDialog,
+  BauFollowersDialog,
+  useBauFollowState,
+} from "./bau-follow";
 import { CommunityHomeShareDialog } from "./community-home-share-dialog";
 import { pickAnnounceChannel, shareableChannels } from "@/lib/community-home/announce";
 
@@ -198,6 +206,11 @@ type Props = {
    * announce default honest; the server still decides for real.
    */
   canSendInChannel?: (channelId: string) => boolean;
+  /**
+   * Encaminhar (`forward_messages`): opens the forward picker for a post.
+   * Absent while the flag is off, which hides the action for everybody.
+   */
+  onForwardPost?: (post: CommunityHomePost) => void;
   /**
    * A post to scroll to and highlight (a Baú permalink or a card in chat).
    * `focusNonce` changes on every follow, so the same card clicked twice
@@ -728,6 +741,8 @@ type PostCardProps = {
   /** Staff: post this into a channel as a card. */
   onShare?: (post: CommunityHomePost) => void;
   onCopyLink?: (post: CommunityHomePost) => void;
+  /** Encaminhar: any reader, any published post. Absent while the flag is off. */
+  onForward?: (post: CommunityHomePost) => void;
   /** Followed from a permalink or a chat card: ring it for a moment. */
   highlighted?: boolean;
 };
@@ -759,6 +774,7 @@ export function PostCard({
   onToggleLock,
   onShare,
   onCopyLink,
+  onForward,
   highlighted = false,
 }: PostCardProps) {
   const { t, locale } = useTranslation();
@@ -796,7 +812,8 @@ export function PostCard({
         onUnpublish ||
         onToggleLock ||
         onShare ||
-        onCopyLink,
+        onCopyLink ||
+        onForward,
     );
 
   useEffect(() => {
@@ -906,6 +923,20 @@ export function PostCard({
                 title={t("communityHome.drafts.unscheduleHint")}
               >
                 {t("communityHome.drafts.unschedule")}
+              </button>
+            )}
+            {onForward && post.status === "published" && (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onForward(post);
+                }}
+                data-home-forward-menu
+              >
+                <Forward className="h-3.5 w-3.5" aria-hidden />
+                {t("forward.action")}
               </button>
             )}
             {onShare && post.status === "published" && (
@@ -1147,6 +1178,29 @@ export function PostCard({
               <MessageCircle className="h-4 w-4" aria-hidden />
               <span className="tabular-nums">{post.commentCount}</span>
             </span>
+            {((interactive && !locked && post.publicUrl) ||
+              (onForward && post.status === "published")) && (
+              <span className="ml-auto flex items-center gap-1">
+                {onForward && post.status === "published" && (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-ink-4 hover:text-paper"
+                    onClick={() => onForward(post)}
+                    data-home-forward
+                  >
+                    <Forward className="h-4 w-4" aria-hidden />
+                    {t("forward.action")}
+                  </button>
+                )}
+                {interactive && !locked && post.publicUrl && (
+                  <BauShareButton
+                    publicUrl={post.publicUrl}
+                    title={view.title?.trim() || summary || ""}
+                    surface="card"
+                  />
+                )}
+              </span>
+            )}
           </footer>
         )}
 
@@ -2264,6 +2318,7 @@ function StaffHomeTools({
   onDrafts,
   onInspector,
   onEditPage,
+  onFollowers,
   showCompose,
 }: {
   inspector: CommunityHomeViewerMode;
@@ -2272,6 +2327,8 @@ function StaffHomeTools({
   onDrafts: () => void;
   onInspector: (mode: CommunityHomeViewerMode) => void;
   onEditPage?: () => void;
+  /** Seguir: the follower list. Absent while the Baú is not followable. */
+  onFollowers?: () => void;
   showCompose: boolean;
 }) {
   const { t } = useTranslation();
@@ -2342,6 +2399,15 @@ function StaffHomeTools({
                   : t("communityHome.tabs.drafts"),
               onSelect: onDrafts,
             },
+            ...(onFollowers
+              ? [
+                  {
+                    id: "followers",
+                    label: t("bauFollow.followers.menu"),
+                    onSelect: onFollowers,
+                  },
+                ]
+              : []),
           ]}
         >
           <Button
@@ -2384,6 +2450,7 @@ export function CommunityHomeFeed({
   channels = [],
   onOpenChannel,
   canSendInChannel,
+  onForwardPost,
   focusPostId = null,
   focusNonce = 0,
   composeNonce = 0,
@@ -2904,6 +2971,21 @@ export function CommunityHomeFeed({
     saveCommunityHomeViewerMode(mode);
   }
 
+  // Seguir: the button is drawn only while the flag is on for THIS Baú.
+  const { state: followState, refresh: refreshFollow } = useBauFollowState(
+    serverId,
+    Boolean(feedAvailable),
+  );
+  const [followOpen, setFollowOpen] = useState(false);
+  const [followersOpen, setFollowersOpen] = useState(false);
+  const followButton = (
+    <BauFollowButton state={followState} onOpen={() => setFollowOpen(true)} />
+  );
+  const openFollowers =
+    canManageServer && followState?.enabled
+      ? () => setFollowersOpen(true)
+      : undefined;
+
   const overlayOnCover = server.isCommunity && !identityEditing;
   const showPaneHeader = identityEditing || !server.isCommunity;
   const showStaffTools = canManageServer && feedAvailable;
@@ -2917,6 +2999,7 @@ export function CommunityHomeFeed({
         onDrafts={openDrafts}
         onInspector={setViewer}
         onEditPage={startIdentityEdit}
+        onFollowers={openFollowers}
         showCompose={Boolean(feedAvailable)}
       />
     ) : showStaffTools ? (
@@ -2926,6 +3009,7 @@ export function CommunityHomeFeed({
         onCompose={openCompose}
         onDrafts={openDrafts}
         onInspector={setViewer}
+        onFollowers={openFollowers}
         showCompose
       />
     ) : null;
@@ -2978,7 +3062,10 @@ export function CommunityHomeFeed({
               </Button>
             </div>
           ) : (
-            staffTools
+            <div className="flex shrink-0 items-center gap-2">
+              {followButton}
+              {staffTools}
+            </div>
           )}
         </header>
       )}
@@ -3014,7 +3101,14 @@ export function CommunityHomeFeed({
                 <HomeDrawerButton onOpenNav={onOpenNav} />
               ) : undefined
             }
-            bannerEnd={overlayOnCover ? staffTools : undefined}
+            bannerEnd={
+              overlayOnCover ? (
+                <>
+                  {followButton}
+                  {staffTools}
+                </>
+              ) : undefined
+            }
             edit={
               identityEditing
                 ? {
@@ -3282,6 +3376,7 @@ export function CommunityHomeFeed({
                       : undefined
                   }
                   onShare={canManageServer ? setShareTarget : undefined}
+                  onForward={onForwardPost}
                   onCopyLink={
                     canManageServer ? (target) => void copyPostLink(target) : undefined
                   }
@@ -3340,6 +3435,22 @@ export function CommunityHomeFeed({
         />
       )}
     </div>
+      <BauFollowDialog
+        open={followOpen}
+        serverId={serverId}
+        serverName={serverName}
+        state={followState}
+        onClose={() => setFollowOpen(false)}
+        onChanged={() => void refreshFollow()}
+      />
+      {openFollowers && (
+        <BauFollowersDialog
+          open={followersOpen}
+          serverId={serverId}
+          onClose={() => setFollowersOpen(false)}
+          onChanged={() => void refreshFollow()}
+        />
+      )}
     </ChannelRefsProvider>
   );
 }

@@ -240,14 +240,26 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # THE DIRECTORY, never the single file. A single-file bind mount pins
+      # the file's INODE at container creation, and every normal way of
+      # replacing a file (`install`, `mv`, `sed -i`, an editor's save, the
+      # deploy script) writes a new inode and renames it over the old name:
+      # the host path moves on, the container keeps reading the old inode.
+      # That is exactly what happened here, for four weeks (the container
+      # held the 2026-09-16 Caddyfile, 4660 bytes, while the host file was
+      # 8323), and `caddy reload --force` said "config is unchanged".
+      # A directory mount looks the name up on every access, so a rename
+      # is seen. The Caddyfile is /opt/pqp/caddy/Caddyfile; the Origin CA
+      # pair of the Caddyfile's Mode A is /opt/pqp/caddy/certs/origin.{pem,key}
+      # (same /etc/caddy/certs/... path inside the container, so the
+      # Caddyfile is unchanged). pqp-deploy.sh creates the directory and
+      # seeds it from the old /opt/pqp/{Caddyfile,certs} when it is missing,
+      # and checks after every reload that the container's Caddyfile is
+      # byte-identical to the host's. Do not add a second single-file mount
+      # here for anything that gets replaced by rename.
+      - ./caddy:/etc/caddy:ro
       - caddy_data:/data
       - caddy_config:/config
-      # Only present in the Origin-CA mode of the Caddyfile (see that file's
-      # header comment); harmless bind of an empty/absent dir otherwise is
-      # NOT safe with Docker (a missing host path is created as an empty
-      # dir), so provision.sh always creates it, even when unused.
-      - ./certs:/etc/caddy/certs:ro
     depends_on:
       # api-a only, deliberately: api-b is profile-gated (API_REPLICAS=1
       # means it never starts at all), and Caddy's own active health

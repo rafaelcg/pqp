@@ -217,6 +217,23 @@ export const AUDIT_ACTIONS = [
   "soundboard.create",
   "soundboard.update",
   "soundboard.delete",
+  /**
+   * Seguir (following a Baú into a channel). Written in the DESTINATION server
+   * for a follow set up or removed there, and for one that paused itself
+   * (`actorId` null: the system). Target is the follow; `changes` names the
+   * source server and the channel, because either may be gone later.
+   */
+  "bau_follow.create",
+  "bau_follow.delete",
+  "bau_follow.pause",
+  "bau_follow.resume",
+  /** Written in the SOURCE server: a follower removed, a server blocked or unblocked. */
+  "bau_follow.remove_follower",
+  "bau_follow.block",
+  "bau_follow.unblock",
+  /** Written in the SOURCE server: the owner's "Permitir seguir" switch moved. */
+  "bau_follow.allow",
+  "bau_follow.disallow",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

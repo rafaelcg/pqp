@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { forwardFallbackBody } from "@pqp/shared";
 import { messageMentionsYou, messagePingsYou } from "./message-mentions-you";
 
 const ME = "11111111-1111-4111-8111-111111111111";
@@ -136,3 +137,28 @@ describe("messagePingsYou", () => {
     ).toBe(false);
   });
 });
+
+describe("a forward", () => {
+  const card = {
+    v: 1 as const,
+    kind: "message" as const,
+    sourceServerId: "11111111-1111-4111-8111-111111111111",
+    sourceServerName: "QG",
+    sourceId: "22222222-2222-4222-8222-222222222222",
+    excerpt: "oi @rafa",
+    url: "https://pqp.gg/app/server/x/channel/y/message/z",
+    createdAt: "2026-10-15T12:00:00.000Z",
+  };
+
+  it("never lights up from its fallback body, only from the forwarder's own comment", () => {
+    const fallback = forwardFallbackBody(card);
+    expect(fallback).toContain("@rafa");
+    expect(messageMentionsYou({ body: fallback, forward: card }, "rafa", "other")).toBe(false);
+    expect(messagePingsYou({ body: fallback, forward: card }, "rafa", "other")).toBe(false);
+    // The forwarder's own words still count.
+    expect(messageMentionsYou({ body: "ei @rafa", forward: card }, "rafa", "other")).toBe(true);
+    // An ordinary message with the same words is unchanged.
+    expect(messageMentionsYou({ body: fallback }, "rafa", "other")).toBe(true);
+  });
+});
+

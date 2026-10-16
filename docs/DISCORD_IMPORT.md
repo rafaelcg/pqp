@@ -45,6 +45,106 @@ the paste step:
   door) and `joinedViaImportInvite7d` (of those, `join_ref = 'discord'`).
   `product.invites.joinsByRef7d` is the same tag counted across all servers.
 
+## Bring your people ("Traz tua galera")
+
+Behind the runtime flag `discord_bring_crew` (per server, default off, env
+`DISCORD_BRING_CREW`; see [`FEATURE_FLAGS.md`](./FEATURE_FLAGS.md)). Off, the
+import ends exactly as described above.
+
+### Why
+
+Production, 30 days to 2026-10-10 (read-only role, `audit_log` +
+`server_members`):
+
+- 120 imports finished, by 116 owners, 93 of them accounts made that day.
+  About 4 a day, steady. Starts were not recorded anywhere (the preview is
+  stateless), so abandoned imports cannot be counted; the API now logs
+  `import.discordPreview outcome=ok|<error>` for that.
+- Of the 86 imports at least 7 days old: 17 got nobody in week one, 17 got one
+  person, 34 got 2 or 3, 17 got 4 to 10, and 1 got more than 10. So 52 had
+  more than 1, 18 more than 3, 1 more than 10.
+- 15 of the 86 got anybody through the import's own `?ref=discord` link (36
+  people of 207).
+- Of the 49 imports at least 14 days old, 11 (22%) had any message in their
+  second week.
+- 3 of the 116 owners have push turned on; about 60% are back within 3 days.
+
+Importing works. Bringing the group over is where it stops, and the owner is
+the only person who can do it, inside the app, the next day.
+
+### What it does
+
+- **The import's last screen** becomes "Traz tua galera": an announcement
+  written for the old Discord, in Portuguese, English or Spanish (a chip picks
+  the old server's language, defaulting to the app's), drawn the way Discord
+  shows it, with **Copiar anúncio** and, where the device has one, the share
+  sheet. It names what is free on pqp (screen share in 1080p60, watch parties)
+  and ends with the import's invite: no expiry, no use cap, tagged
+  `?ref=discord`, so it can sit pinned for months and every join through it is
+  counted. The text lives in `client/src/lib/discord-announcement.ts`, not in
+  `translation.json`, because its language is the old server's.
+- **A counter over the server** for whoever may manage it, for 7 days:
+  "12 pessoas da tua galera já chegaram", with the same copy button. It
+  replaces the owner's arrival strip on that server and yields to a live
+  stream, like it. Counted: memberships created after the import by anybody
+  but the owner, a webhook or a character, by any door. It refreshes every
+  30 s, on focus and when the member list changes (debounced 2 s, so a burst
+  of joins is one request). Losing Manage Server takes it down at once. The
+  server finds the import through the partial index
+  `idx_audit_log_discord_import_server`, so a server that was never imported
+  costs an empty index lookup rather than a walk of its audit log.
+- **One reminder a day later** if fewer than 3 people arrived: the same strip
+  says "Só 1 pessoa chegou até agora" and suggests pasting again or pinning.
+  In the app, not a push, because 3 of 116 importers could receive one.
+  Closing the first-day strip still lets the reminder through once; closing
+  the reminder is final (per browser, `pqp:bring-crew-dismissed:<serverId>`).
+
+The rules (window, reminder time, threshold) are `bringCrewPhase` in
+`packages/shared/src/discord-bring-crew.ts`; the server answers the phase so a
+future mobile client cannot disagree.
+
+API: `GET /api/servers/:serverId/import-arrivals` (MANAGE_SERVER) →
+`{ enabled, importedAt, phase, arrived, viaLink, inviteCode }`. `phase` is
+`fresh`, `reminder`, `over`, or null for a server that was not imported.
+`POST /api/import/discord/apply` adds `bringCrew` (the flag for the new
+server).
+
+Web only for now. iOS and Android do not import.
+
+### Not built: mapping Discord roles onto arrivals
+
+A pqp account is not linked to a Discord account, and a template carries no
+members or role assignments, so there is nothing to match an arrival
+against. Asking people "who were you on Discord?" would let anybody claim a
+staff role. Not cheap, not safe.
+
+### Spec only, not built: an announcement bot
+
+A pqp Discord bot the owner adds to their old server, which posts the
+announcement and pins it. Rafael decides whether it exists.
+
+- **Needs:** a Discord application registration (bot user, token), and
+  somewhere to run it. It only answers an interaction, so a Cloudflare Worker
+  receiving Discord's HTTP interactions (no gateway connection) is enough; no
+  always-on process.
+- **Flow:** the done step gets "Postar com o bot". It opens Discord's OAuth2
+  install URL with `scope=bot applications.commands` and the smallest
+  permission set: View Channels, Send Messages, Manage Messages (to pin). The
+  owner picks the server in Discord's own screen. Then, in Discord, the owner
+  runs `/pqp anunciar` in the channel they want; the bot posts the same text
+  this step copies (the import's link, `?ref=discord`) and pins it. The text
+  comes from a signed pqp URL, so no pqp account data lives in the bot.
+- **Rules:** one post per command, only in the channel where an
+  administrator ran it. **No DMs to members, no mass mentions, no scraping the
+  member list** (Discord's Developer Terms and Policy forbid unsolicited DMs
+  and using member data for anything but the bot's function). `@everyone` only
+  if the owner adds it by hand. The bot can leave the server right after.
+- **Cost:** a free Worker and a free Discord app; no paid service.
+- **Why it might not be worth it:** copying and pinning by hand takes the
+  owner ten seconds, and the bot needs Manage Messages on their server, which
+  is a lot of trust to ask of somebody who arrived ten minutes ago. Measure
+  `bring_crew_copy` first.
+
 ## What is copied
 
 - Server name

@@ -5,6 +5,7 @@ import {
 } from "@pqp/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ReportContextPanel } from "@/components/layout/report-context-panel";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
@@ -226,7 +227,7 @@ export function AllReportsSection() {
 
       {loading && (
         <p role="status" aria-live="polite" className="text-sm text-paper-muted">
-          Loading…
+          {t("common.loading")}
         </p>
       )}
       {error && (
@@ -239,7 +240,7 @@ export function AllReportsSection() {
       )}
 
       {reports.length > 0 && (
-        <ul className="max-h-96 space-y-2 overflow-y-auto">
+        <ul className="space-y-2">
           {reports.map((report) => {
             const canRemoveMessage =
               report.subjectType === "message" &&
@@ -255,7 +256,7 @@ export function AllReportsSection() {
                     <span className="font-semibold">
                       {REPORT_REASON_LABELS[report.reason]}
                     </span>
-                    {" — "}
+                    {" · "}
                     {t(
                       report.subjectType === "message"
                         ? "reports.subjectMessage"
@@ -352,6 +353,11 @@ export function AllReportsSection() {
                   </div>
                 )}
 
+                <ReportContextPanel
+                  report={report}
+                  note={notes[report.id] ?? ""}
+                />
+
                 {report.status === "open" ? (
                   <div className="space-y-2">
                     <label className="block text-xs text-paper-muted">
@@ -420,7 +426,7 @@ export function AllReportsSection() {
                           : "",
                       },
                     )}
-                    {report.resolutionNote ? ` — ${report.resolutionNote}` : ""}
+                    {report.resolutionNote ? ` · ${report.resolutionNote}` : ""}
                   </p>
                 )}
               </li>

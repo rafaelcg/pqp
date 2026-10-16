@@ -4,12 +4,25 @@ import { messageSchema } from "./api.js";
 import { createReportSchema, REPORT_REASONS } from "./reports.js";
 import { Permission, PERMISSION_DEFAULT_EVERYONE, hasPermission } from "./permissions.js";
 import {
+  STORY_BACKGROUNDS,
+  STORY_BACKGROUND_FAMILIES,
+  STORY_CARD_BACKGROUNDS,
+  STORY_LAYER_ALT_MAX,
+  STORY_LAYERS_MAX,
+  STORY_LAYER_IMAGES_MAX,
+  STORY_LAYER_MAX_BYTES,
   STORY_MAX_BYTES,
   STORY_MAX_SERVER_AUDIENCES,
   STORY_MAX_VIDEO_MS,
   STORY_REACTIONS,
+  STORY_TEXT_MAX,
   STORY_VIEWS_BATCH_MAX,
+  createStoryResponseSchema,
   createStorySchema,
+  storiesConfigSchema,
+  storyBackgroundFamily,
+  storyBackgroundsOf,
+  storyLayerInputSchema,
   sniffStoryMediaType,
   storiesUpdateSchema,
   storyReactionSchema,
@@ -32,6 +45,39 @@ const photo = {
   audiences: { serverIds: [SERVER] },
   media: { contentType: "image/jpeg", byteSize: 400_000, width: 1080, height: 1440 },
 };
+
+describe("text card backgrounds", () => {
+  const card = (background: string) => ({
+    kind: "text",
+    text: "oi",
+    background,
+    audiences: { serverIds: [SERVER] },
+  });
+
+  it("takes every key of every family, and nothing else", () => {
+    for (const key of STORY_CARD_BACKGROUNDS) {
+      expect(createStorySchema.safeParse(card(key)).success, key).toBe(true);
+    }
+    expect(createStorySchema.safeParse(card("hotpink")).success).toBe(false);
+  });
+
+  it("keeps the first family exactly as the phones know it, and the keys unique", () => {
+    // Android pins STORY_BACKGROUNDS to its own copy: a new key belongs in a new family.
+    expect([...STORY_BACKGROUNDS]).toEqual(["lime", "night", "ember", "grape", "sand", "ink"]);
+    expect(new Set(STORY_CARD_BACKGROUNDS).size).toBe(STORY_CARD_BACKGROUNDS.length);
+  });
+
+  it("tells each key's family, an unknown one reading as the first", () => {
+    for (const family of STORY_BACKGROUND_FAMILIES) {
+      for (const key of storyBackgroundsOf(family)) {
+        expect(storyBackgroundFamily(key)).toBe(family);
+      }
+    }
+    expect(storyBackgroundFamily("lime")).toBe("glow");
+    expect(storyBackgroundFamily(null)).toBe("glow");
+    expect(storyBackgroundFamily("from-a-newer-build")).toBe("glow");
+  });
+});
 
 describe("createStorySchema", () => {
   it("takes a photo to one server, replies on by default, no friends", () => {
@@ -314,7 +360,8 @@ describe("sniffing and pacing", () => {
     expect(sniffStoryMediaType(ftyp("heic"))).toBeNull();
     expect(sniffStoryMediaType(ftyp("mif1"))).toBeNull();
     expect(sniffStoryMediaType(ftyp("avif"))).toBeNull();
-    expect(sniffStoryMediaType(ftyp("qt  "))).toBeNull();
+    // A QuickTime movie (.mov) is a video; the video job still refuses anything but H.264.
+    expect(sniffStoryMediaType(ftyp("qt  "))).toBe("video/mp4");
     expect(sniffStoryMediaType(new TextEncoder().encode("GIF89a......"))).toBeNull();
   });
 
@@ -322,5 +369,237 @@ describe("sniffing and pacing", () => {
     expect(storyTextDisplayMs("")).toBe(5_000);
     expect(storyTextDisplayMs("a".repeat(20))).toBe(6_000);
     expect(storyTextDisplayMs("a".repeat(280))).toBe(10_000);
+  });
+});
+
+// ------------------------------------------------------------------ composer v2: layers
+
+const LAYER_ID = "66666666-6666-4666-8666-666666666666";
+const geometry = (id = LAYER_ID) => ({ id, x: 0.5, y: 0.5, scale: 1, rotation: 0 });
+const nextId = (n: number) => `66666666-6666-4666-8666-6666666666${String(n).padStart(2, "0")}`;
+
+describe("story layers on create (strict)", () => {
+  const text = { ...geometry(), type: "text", text: "bora" };
+  const upload = { contentType: "image/png", byteSize: 1000, width: 100, height: 100 };
+
+  it("fills the text defaults and keeps the legacy fields working", () => {
+    const parsed = createStorySchema.parse({
+      kind: "text",
+      background: "lime",
+      audiences: { serverIds: [SERVER] },
+      layers: [text],
+    });
+    expect(parsed.layers[0]).toMatchObject({
+      font: "classic",
+      color: "white",
+      background: "none",
+      align: "center",
+      size: 1,
+    });
+    // `text` is optional for a text card that has a layer, not for one without.
+    expect(parsed.text).toBeUndefined();
+    expect(
+      createStorySchema.safeParse({
+        kind: "text",
+        background: "lime",
+        audiences: { serverIds: [SERVER] },
+      }).success,
+    ).toBe(false);
+    // A photo with no layers is as it always was.
+    expect(createStorySchema.parse(photo).layers).toEqual([]);
+  });
+
+  it("refuses an unknown type, a bad bound and a free hex color, whole", () => {
+    const parse = (layer: unknown) =>
+      createStorySchema.safeParse({ ...photo, layers: [layer] }).success;
+    expect(parse(text)).toBe(true);
+    expect(parse({ ...geometry(), type: "sparkle" })).toBe(false);
+    expect(parse({ ...text, scale: 0.19 })).toBe(false);
+    expect(parse({ ...text, scale: 5.1 })).toBe(false);
+    expect(parse({ ...text, x: -0.01 })).toBe(false);
+    expect(parse({ ...text, rotation: 3.2 })).toBe(false);
+    expect(parse({ ...text, color: "#ffffff" })).toBe(false);
+    expect(parse({ ...text, size: 3.1 })).toBe(false);
+    expect(parse({ ...text, text: "x".repeat(STORY_TEXT_MAX + 1) })).toBe(false);
+    expect(parse({ ...text, id: "not-a-uuid" })).toBe(false);
+    // A 32-bit float pi, which is what a phone sends for "upside down".
+    expect(parse({ ...text, rotation: Math.fround(Math.PI) })).toBe(true);
+  });
+
+  it("holds the per-type counts and unique ids", () => {
+    const many = (n: number, make: (id: string) => object) =>
+      createStorySchema.safeParse({
+        ...photo,
+        layers: Array.from({ length: n }, (_, i) => make(nextId(i))),
+      }).success;
+    const aText = (id: string) => ({ ...geometry(id), type: "text", text: "a" });
+    const anImage = (id: string) => ({ ...geometry(id), type: "image", upload });
+    expect(many(STORY_LAYERS_MAX, aText)).toBe(true);
+    expect(many(STORY_LAYERS_MAX + 1, aText)).toBe(false);
+    expect(many(STORY_LAYER_IMAGES_MAX, anImage)).toBe(true);
+    expect(many(STORY_LAYER_IMAGES_MAX + 1, anImage)).toBe(false);
+    expect(many(2, (id) => ({ ...geometry(id), type: "drawing", upload }))).toBe(false);
+    expect(createStorySchema.safeParse({ ...photo, layers: [text, text] }).success).toBe(false);
+  });
+
+  it("takes the call as a layer or a sticker, and makes them agree", () => {
+    const callLayer = { ...geometry(), type: "call", serverId: SERVER, channelId: CHANNEL };
+    expect(createStorySchema.safeParse({ ...photo, layers: [callLayer] }).success).toBe(true);
+    // A call into a server the story does not go to.
+    expect(
+      createStorySchema.safeParse({ ...photo, layers: [{ ...callLayer, serverId: OTHER }] })
+        .success,
+    ).toBe(false);
+    // Both given: one room.
+    expect(
+      createStorySchema.safeParse({
+        ...photo,
+        layers: [callLayer],
+        sticker: { type: "call", serverId: SERVER, channelId: OTHER },
+      }).success,
+    ).toBe(false);
+    expect(
+      createStorySchema.safeParse({
+        ...photo,
+        layers: [callLayer],
+        sticker: { type: "call", serverId: SERVER, channelId: CHANNEL },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("takes an optional description on a placed photo, trimmed and bounded", () => {
+    const photoLayer = { ...geometry(), type: "image", upload: { ...upload, contentType: "image/jpeg" } };
+    expect(storyLayerInputSchema.parse(photoLayer)).not.toHaveProperty("alt");
+    expect(storyLayerInputSchema.parse({ ...photoLayer, alt: "  um gato  " })).toMatchObject({ alt: "um gato" });
+    expect(storyLayerInputSchema.safeParse({ ...photoLayer, alt: "x".repeat(STORY_LAYER_ALT_MAX) }).success).toBe(true);
+    expect(storyLayerInputSchema.safeParse({ ...photoLayer, alt: "x".repeat(STORY_LAYER_ALT_MAX + 1) }).success).toBe(false);
+    expect(storyLayerInputSchema.safeParse({ ...photoLayer, alt: "   " }).success).toBe(false);
+    // A drawing and a text layer have no description: the field is not theirs.
+    expect(storyLayerInputSchema.parse({ ...geometry(), type: "text", text: "oi", alt: "x" })).not.toHaveProperty("alt");
+  });
+
+  it("limits what an image or a drawing may be, and mentions each person once", () => {
+    const jpeg = { ...upload, contentType: "image/jpeg" };
+    expect(storyLayerInputSchema.safeParse({ ...geometry(), type: "image", upload: jpeg }).success).toBe(true);
+    expect(storyLayerInputSchema.safeParse({ ...geometry(), type: "drawing", upload: jpeg }).success).toBe(false);
+    expect(storyLayerInputSchema.safeParse({ ...geometry(), type: "drawing", upload }).success).toBe(true);
+    expect(
+      storyLayerInputSchema.safeParse({
+        ...geometry(),
+        type: "image",
+        upload: { ...upload, byteSize: STORY_LAYER_MAX_BYTES + 1 },
+      }).success,
+    ).toBe(false);
+    expect(
+      storyLayerInputSchema.safeParse({
+        ...geometry(),
+        type: "image",
+        upload: { ...upload, contentType: "video/mp4" },
+      }).success,
+    ).toBe(false);
+    expect(
+      createStorySchema.safeParse({
+        ...photo,
+        layers: [
+          { ...geometry(nextId(1)), type: "mention", userId: USER },
+          { ...geometry(nextId(2)), type: "mention", userId: USER },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("story layers on read (lenient)", () => {
+  const known = { ...geometry(), type: "text", text: "oi" };
+  const story = {
+    id: STORY,
+    author: { id: USER, displayName: "Alice", avatarUrl: null },
+    kind: "text",
+    caption: null,
+    text: "oi",
+    background: "lime",
+    media: null,
+    sticker: null,
+    call: null,
+    publishedAt: null,
+    expiresAt: null,
+    audiences: [],
+    viewer: {
+      seen: false,
+      reaction: null,
+      canReply: false,
+      replyBlockedReason: null,
+      canModerate: [],
+    },
+    own: null,
+  };
+
+  it("reads a placed photo's description, null for a story from before it", () => {
+    const photoLayer = { ...geometry(), type: "image", url: "https://x/y.jpg", width: 10, height: 10 };
+    const parsed = storySchema.parse({
+      ...story,
+      layers: [photoLayer, { ...photoLayer, id: nextId(1), alt: "um gato" }],
+    });
+    expect(parsed.layers.map((layer) => (layer.type === "image" ? layer.alt : "x"))).toEqual([null, "um gato"]);
+  });
+
+  it("keeps what it understands, in order, and drops the rest", () => {
+    const parsed = storySchema.parse({
+      ...story,
+      layers: [
+        known,
+        { ...geometry(nextId(1)), type: "hologram", depth: 3 },
+        { ...geometry(nextId(2)), type: "text", text: "dois", scale: 99 },
+        { ...geometry(nextId(3)), type: "text", text: "tres" },
+        "not even an object",
+        null,
+      ],
+    });
+    expect(parsed.layers.map((layer) => (layer.type === "text" ? layer.text : layer.type))).toEqual([
+      "oi",
+      "tres",
+    ]);
+  });
+
+  it("reads a server that predates layers as no layers and no alt text", () => {
+    const parsed = storySchema.parse(story);
+    expect(parsed.layers).toEqual([]);
+    expect(parsed.altText).toBeNull();
+  });
+
+  it("reads an image layer with its url and a mention with its person", () => {
+    const parsed = storySchema.parse({
+      ...story,
+      layers: [
+        { ...geometry(nextId(1)), type: "image", url: "https://x/y.jpg", width: 10, height: 20 },
+        {
+          ...geometry(nextId(2)),
+          type: "mention",
+          userId: USER,
+          user: { id: USER, displayName: "Bob", avatarUrl: null },
+        },
+        { ...geometry(nextId(3)), type: "image", width: 10, height: 20 },
+      ],
+    });
+    // The third has no url, so it does not parse and is skipped.
+    expect(parsed.layers.map((layer) => layer.type)).toEqual(["image", "mention"]);
+    expect(parsed.layers[0]).toMatchObject({ shape: "rect" });
+  });
+
+  it("answers a create with its layer uploads, empty by default, and a config from an old server with no layersMax", () => {
+    expect(
+      createStoryResponseSchema.parse({ story: { ...story, layers: [] }, upload: null }).layerUploads,
+    ).toEqual([]);
+    expect(
+      storiesConfigSchema.parse({
+        enabled: true,
+        friendsEnabled: false,
+        mediaEnabled: true,
+        videoEnabled: true,
+        maxVideoMs: 30000,
+        maxBytes: 1,
+        ttlHours: 24,
+      }).layersMax,
+    ).toBeUndefined();
   });
 });

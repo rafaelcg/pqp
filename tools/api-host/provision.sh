@@ -23,7 +23,7 @@
 # exactly one thing — see "the pqp-deploy user" below and
 # tools/api-host/pqp-deploy.sh.
 #
-# Secrets (.env, certs/origin.{pem,key}) are NEVER written by this script
+# Secrets (.env, caddy/certs/origin.{pem,key}) are NEVER written by this script
 # beyond an empty template on first run. See docs/deploy-vultr.md "Secrets"
 # for how they actually get onto the box (scp'd by hand once, not by CI, not
 # by cloud-init user data). The nightly backup (below) reads its secrets
@@ -198,12 +198,29 @@ fi
 ufw status | grep -q '^Status: active' || ufw --force enable
 
 echo "== /opt/pqp layout"
-mkdir -p "$DEST/certs"
-chown pqp:pqp "$DEST" "$DEST/certs"
+# Everything Caddy reads from the host lives in ONE directory, bind-mounted
+# whole at /etc/caddy (compose.yaml says why: a single-file mount pins an
+# inode and went four weeks stale). An existing box has the old layout,
+# /opt/pqp/Caddyfile and /opt/pqp/certs; copy the certs across when the new
+# directory has none yet, and leave the old ones in place (key material is
+# never deleted by a provisioning script).
+mkdir -p "$DEST/caddy"
+chown pqp:pqp "$DEST" "$DEST/caddy"
 chmod 0750 "$DEST"
+if [[ ! -e "$DEST/caddy/certs" ]]; then
+  if [[ -d "$DEST/certs" ]]; then
+    # Copy aside and rename into place, so an interrupted copy is redone on
+    # the next run instead of being mistaken for a finished one.
+    rm -rf -- "$DEST/caddy/.certs.migrating"
+    cp -a -- "$DEST/certs" "$DEST/caddy/.certs.migrating"
+    mv -- "$DEST/caddy/.certs.migrating" "$DEST/caddy/certs"
+  else
+    install -d -m 0755 -o pqp -g pqp "$DEST/caddy/certs"
+  fi
+fi
 
 install -m 0644 -o pqp -g pqp "$HERE/compose.yaml" "$DEST/compose.yaml"
-install -m 0644 -o pqp -g pqp "$HERE/Caddyfile" "$DEST/Caddyfile"
+install -m 0644 -o pqp -g pqp "$HERE/Caddyfile" "$DEST/caddy/Caddyfile"
 
 if [[ ! -f "$DEST/.env" ]]; then
   cat >"$DEST/.env" <<'ENVEOF'

@@ -14,50 +14,126 @@ import UniformTypeIdentifiers
 struct StoryComposer: View {
     @Environment(SessionStore.self) private var session
     @Environment(\.dismiss) private var dismiss
+    @Environment(VoiceModel.self) private var voice
+    @Environment(CallModel.self) private var callModel
 
     /// Pre-ticked in "Quem vê": where the composer was opened from.
     let preselectedServerId: String?
     let preselectsFriends: Bool
     let onPosted: () -> Void
 
+    /// The tab the camera screen shows at the bottom. "Text" and "Call" skip
+    /// straight to the editor on a card background; "Camera" is the source
+    /// step, and a shot or a picked file moves it on to the editor.
     enum Mode: String, CaseIterable { case text, media, call }
 
-    @State private var mode: Mode = .text
+    /// Opens on the camera, like the phone's own: the common story is a photo
+    /// taken right now. Falls back to text when media is off for this server.
+    @State private var mode: Mode = .media
     @State private var config = StoriesConfig.off
-    @State private var text = ""
+    @State private var configLoaded = false
+    /// The config could not be asked (the API is down, no network): said out
+    /// loud with a retry, never read as "stories are off".
+    @State private var configFailed = false
+    @State private var configAttempts = 0
     @State private var background = "night"
-    @State private var caption = ""
     @State private var draft: StoryDraftMedia?
+    @State private var muted = false
+    @State private var editor = StoryEditorModel()
     @State private var pickerItem: PhotosPickerItem?
     @State private var showingPicker = false
-    @State private var showingCamera = false
+    @State private var showingFiles = false
+    @State private var trimRequest: StoryTrimRequest?
     @State private var preparing = false
-    @State private var call: StoryCallChoice?
     @State private var showingAudience = false
+    @State private var finalMedia: StoryDraftMedia?
+    @State private var builtRequest = StoryDraftRequest(kind: "text", text: nil, background: nil, caption: nil, sticker: nil)
     @State private var error: String?
-    @FocusState private var editingText: Bool
+    /// The files going up ahead of Post, when the server offers it.
+    @State private var eager: StoryEagerUploads?
 
     var body: some View {
         ZStack {
-            canvas.ignoresSafeArea()
-
-            VStack(spacing: 0) {
-                topBar
-                Spacer(minLength: 0)
+            Color.black.ignoresSafeArea()
+            if isEditing {
+                StoryEditorView(
+                    model: editor, base: editorBase, muted: $muted, background: $background,
+                    preselectedServerId: preselectedServerId,
+                    opensText: mode == .text, opensCall: mode == .call,
+                    onClose: leaveEditor,
+                    onNext: { Task { await advance() } },
+                    canAdvance: canAdvance && !preparing
+                )
+                .id(editorIdentity)
                 if let error {
-                    Text(verbatim: error)
-                        .font(Typography.callout)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Capsule().fill(Palette.danger.opacity(0.85)))
-                        .padding(.bottom, 10)
-                        .accessibilityIdentifier("composer.error")
+                    VStack {
+                        Spacer()
+                        errorPill(error).padding(.bottom, 80)
+                    }
                 }
-                bottomBar
+                if preparing {
+                    Color.black.opacity(0.4).ignoresSafeArea()
+                    ProgressView().tint(.white)
+                }
+            } else {
+                cameraStep
             }
         }
-        .task { config = await session.api.storiesConfig(serverId: preselectedServerId) }
+        .onDisappear {
+            StoryMetrics.mark("composer.closed")
+            // Closed without posting: whatever went up ahead is thrown away
+            // (a post has already taken its files, so this finds none).
+            eager?.discardAll()
+        }
+        .onChange(of: editor.filesRevision) { _, _ in syncEager() }
+        .task {
+            await loadConfig()
+            #if DEBUG
+            // A known composition, for comparing what the editor shows with what
+            // the viewer draws: text moved, scaled and turned, and a photo layer.
+            if ProcessInfo.processInfo.environment["PQP_STORY_FIXTURE_LAYERS"] == "1" {
+                mode = .text
+                editor.clear()
+                var title = StoryTextData(text: "posicao", font: .bold, color: .lime)
+                title.size = 1
+                if let id = editor.addText(title, x: 0.30, y: 0.30, scale: 1.7) {
+                    editor.setGeometry(id: id, x: 0.30, y: 0.30, scale: 1.7, rotation: 0.35)
+                }
+                let box = StoryTextData(text: "caixa", font: .serif, color: .pink, background: .solid, align: .center, size: 1)
+                if let id = editor.addText(box, x: 0.68, y: 0.55, scale: 0.8) {
+                    editor.setGeometry(id: id, x: 0.68, y: 0.55, scale: 0.8, rotation: -0.5)
+                }
+                let size = CGSize(width: 600, height: 400)
+                let picture = UIGraphicsImageRenderer(size: size).image { context in
+                    UIColor(red: 1, green: 0.58, blue: 0, alpha: 1).setFill()
+                    context.fill(CGRect(origin: .zero, size: size))
+                }
+                if let draft = StoryMediaPrep.image(picture),
+                   let id = editor.addImage(
+                    StoryLayerFile(data: draft.data, contentType: draft.contentType, width: draft.width, height: draft.height),
+                    preview: draft.preview
+                   ) {
+                    editor.setGeometry(id: id, x: 0.45, y: 0.80, scale: 0.9, rotation: 0.2)
+                }
+                editor.selectedId = nil
+            }
+            // A picked video, for a simulator whose photo library has none and
+            // whose picker a UI test cannot drive: a synthetic clip of this
+            // many seconds goes down the same path a picked one does.
+            if let seconds = ProcessInfo.processInfo.environment["PQP_STORY_FIXTURE_VIDEO"].flatMap(Double.init),
+               let url = try? await StoryTestVideo.write(duration: seconds, size: CGSize(width: 180, height: 320), fps: 5) {
+                await accept(videoAt: url)
+            }
+            // The same with a real file, for a clip of a realistic size: it is
+            // copied first, because the composer deletes what it was handed.
+            if let path = ProcessInfo.processInfo.environment["PQP_STORY_FIXTURE_VIDEO_FILE"] {
+                let copy = FileManager.default.temporaryDirectory.appendingPathComponent("story-\(UUID().uuidString).mp4")
+                if (try? FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: copy)) != nil {
+                    await accept(videoAt: copy)
+                }
+            }
+            #endif
+        }
         .photosPicker(isPresented: $showingPicker, selection: $pickerItem,
                       matching: config.videoEnabled ? .any(of: [.images, .videos]) : .images,
                       preferredItemEncoding: .current)
@@ -65,22 +141,34 @@ struct StoryComposer: View {
             guard let item else { return }
             Task { await load(item) }
         }
-        .fullScreenCover(isPresented: $showingCamera) {
-            StoryCameraPicker(allowsVideo: config.videoEnabled) { result in
-                showingCamera = false
-                Task { await accept(cameraResult: result) }
+        .fileImporter(isPresented: $showingFiles, allowedContentTypes: config.videoEnabled ? [.image, .movie] : [.image]) { result in
+            switch result {
+            case .success(let url): Task { await load(fileAt: url) }
+            case .failure: error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
             }
-            .ignoresSafeArea()
+        }
+        .fullScreenCover(item: $trimRequest) { request in
+            StoryTrimView(request: request) { startMs in
+                trimRequest = nil
+                Task { await accept(videoAt: request.url, trimStartMs: startMs) }
+            } onCancel: {
+                trimRequest = nil
+                StoryImport.remove(request.url)
+            }
         }
         .sheet(isPresented: $showingAudience) {
             StoryAudienceSheet(
                 preselectedServerId: preselectedServerId,
                 preselectsFriends: preselectsFriends,
-                callServerId: call?.serverId,
-                request: request,
-                media: draft
+                callServerId: builtRequest.callServerId,
+                request: builtRequest,
+                media: finalMedia,
+                eager: eager
             ) {
-                showingAudience = false
+                // Posted: the temporary exports are no longer needed.
+                StoryImport.remove(finalMedia?.fileURL)
+                StoryImport.remove(draft?.fileURL)
+                // Dismissing the composer takes the sheet with it: one animation, not two.
                 onPosted()
                 dismiss()
             }
@@ -89,166 +177,149 @@ struct StoryComposer: View {
         }
     }
 
-    // MARK: - Canvas
-
-    @ViewBuilder
-    private var canvas: some View {
-        switch mode {
-        case .text, .call:
-            ZStack {
-                LinearGradient(colors: StoryRules.backgroundColors(background), startPoint: .top, endPoint: .bottom)
-                VStack(spacing: 18) {
-                    TextField("", text: $text,
-                              prompt: Text(mode == .call ? "Who's coming to the call?" : "Say something").foregroundStyle(.white.opacity(0.5)),
-                              axis: .vertical)
-                        .font(.system(size: 32, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .focused($editingText)
-                        .lineLimit(1...6)
-                        .padding(.horizontal, 28)
-                        .onChange(of: text) { _, value in
-                            if value.count > StoryLimits.textMax { text = String(value.prefix(StoryLimits.textMax)) }
-                        }
-                        .accessibilityIdentifier("composer.text")
-                    if mode == .call {
-                        callPicker
-                    }
-                }
+    private func loadConfig() async {
+        configAttempts += 1
+        do {
+            #if DEBUG
+            // A UI test's way to make the first ask fail once.
+            if ProcessInfo.processInfo.environment["PQP_STORY_CONFIG_FAIL"] == "once", configAttempts == 1 {
+                throw APIError.transport("simulated")
             }
-        case .media:
-            ZStack {
-                Color.black
-                if let draft {
-                    Image(uiImage: draft.preview)
-                        .resizable()
-                        .scaledToFit()
-                    if draft.isVideo {
-                        Image(systemName: "play.circle.fill")
-                            .font(.system(size: 54))
-                            .foregroundStyle(.white.opacity(0.85))
-                    }
-                    VStack {
-                        Spacer()
-                        TextField("", text: $caption, prompt: Text("Add a caption").foregroundStyle(.white.opacity(0.6)), axis: .vertical)
+            #endif
+            config = try await session.api.storiesConfigOrThrow(serverId: preselectedServerId)
+            if eager == nil {
+                eager = session.storyPosts.makeEagerUploads(enabled: config.eagerUploadsEnabled)
+            }
+            configLoaded = true
+            configFailed = false
+            if !config.mediaEnabled, mode == .media { mode = .text }
+        } catch {
+            configFailed = true
+        }
+    }
+
+    // MARK: - Steps
+
+    /// The edit step: a shot or picked file, or a card (text and call).
+    private var isEditing: Bool {
+        (mode == .media && draft != nil) || mode == .text || mode == .call
+    }
+
+    private var editorBase: StoryEditorBase {
+        if mode == .media, let draft { return .media(draft) }
+        return .card(background: background)
+    }
+
+    /// A new editor each time a different base is opened, so a draft discarded
+    /// and a new one shot never inherit each other's layers.
+    @State private var editorSerial = 0
+    private var editorIdentity: String { "\(mode.rawValue)-\(editorSerial)" }
+
+    /// The source step.
+    private var cameraStep: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            StoryCameraView(
+                isActive: cameraActive,
+                recordsAudio: !callActive,
+                blockedByCall: callCameraOn,
+                // Until the server answers, assume yes: the result is checked
+                // again in `accept(cameraResult:)`.
+                allowsVideo: !configLoaded || config.videoEnabled,
+                onCapture: { result in Task { await accept(cameraResult: result) } },
+                onGallery: { showingPicker = true },
+                onFiles: { showingFiles = true }
+            )
+            if preparing {
+                Color.black.opacity(0.5).ignoresSafeArea()
+                ProgressView().tint(.white)
+            }
+            VStack(spacing: 0) {
+                HStack {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(.white)
-                            .lineLimit(1...3)
-                            .padding(12)
-                            .background(RoundedRectangle(cornerRadius: 12).fill(.black.opacity(0.5)))
-                            .padding(.horizontal, 20)
-                            .padding(.bottom, 180)
-                            .onChange(of: caption) { _, value in
-                                if value.count > StoryLimits.captionMax { caption = String(value.prefix(StoryLimits.captionMax)) }
-                            }
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(.black.opacity(0.35)))
+                            .decorative()
                     }
-                } else if preparing {
-                    ProgressView().tint(.white)
-                } else {
-                    VStack(spacing: 14) {
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .font(.system(size: 40, weight: .light))
-                            .foregroundStyle(.white.opacity(0.8))
-                        Text(config.videoEnabled ? "A photo, or a video up to 30 s" : "A photo")
-                            .font(Typography.bodyMedium)
-                            .foregroundStyle(.white.opacity(0.85))
-                        HStack(spacing: 12) {
-                            Button { showingPicker = true } label: {
-                                Label("Gallery", systemImage: "photo")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Palette.signal)
-                            .foregroundStyle(Palette.inkDeep)
-                            .accessibilityIdentifier("composer.gallery")
-                            if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                                Button { showingCamera = true } label: {
-                                    Label("Camera", systemImage: "camera")
-                                }
-                                .buttonStyle(.bordered)
-                                .tint(.white)
-                            }
-                        }
-                    }
+                    .accessibilityLabel(Text("Close"))
+                    .accessibilityIdentifier("composer.close")
+                    Spacer()
                 }
+                .padding(.horizontal, 14)
+                .padding(.top, 6)
+                Spacer(minLength: 0)
+                // Both banners sit ABOVE the zoom pill and the shutter row, which
+                // sit over the mode bar: an error never covers the shutter.
+                if let error { errorPill(error).padding(.horizontal, 12).padding(.bottom, configFailed ? 8 : 262) }
+                if configFailed { configFailedBanner.padding(.horizontal, 12).padding(.bottom, 262) }
+                modeBar
             }
         }
     }
 
-    private var topBar: some View {
-        HStack {
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(Circle().fill(.black.opacity(0.35)))
-            }
-            .accessibilityLabel("Close")
-            Spacer()
-            Text("New story")
-                .font(Typography.bodyMedium)
-                .foregroundStyle(.white)
-            Spacer()
-            if mode != .media {
-                Menu {
-                    ForEach(StoryRules.backgrounds, id: \.self) { key in
-                        Button { background = key } label: {
-                            Label(backgroundName(key), systemImage: background == key ? "checkmark.circle.fill" : "circle.fill")
-                        }
-                    }
-                } label: {
-                    Circle()
-                        .fill(LinearGradient(colors: StoryRules.backgroundColors(background), startPoint: .top, endPoint: .bottom))
-                        .frame(width: 30, height: 30)
-                        .overlay(Circle().strokeBorder(.white, lineWidth: 2))
-                        .frame(width: 40, height: 40)
-                }
-                .accessibilityLabel("Background")
-                .accessibilityIdentifier("composer.background")
-            } else {
-                Color.clear.frame(width: 40, height: 40)
-            }
+    /// "Could not reach pqp", with the way out: the camera still works while
+    /// it is shown, and posting asks again.
+    private var configFailedBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "wifi.exclamationmark").decorative()
+            Text("Couldn't reach pqp. Check your connection.")
+                .font(Typography.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Try again") { Task { await loadConfig() } }
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(Palette.signal)
+                .accessibilityIdentifier("composer.retry")
         }
+        .foregroundStyle(.white)
         .padding(.horizontal, 14)
-        .padding(.top, 6)
+        .padding(.vertical, 8)
+        .background(Capsule().fill(.black.opacity(0.7)))
     }
 
-    private var bottomBar: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 22) {
-                modeButton(.text, title: "Text")
-                if config.mediaEnabled {
-                    modeButton(.media, title: "Camera")
-                }
-                modeButton(.call, title: "Call")
+    private func errorPill(_ text: String) -> some View {
+        Text(verbatim: text)
+            .font(Typography.callout)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Palette.danger.opacity(0.85)))
+            .accessibilityIdentifier("composer.error")
+    }
+
+    /// The camera runs only while it is what is on screen: a draft, a sheet,
+    /// the picker or the trimmer all release it.
+    private var cameraActive: Bool {
+        mode == .media && draft == nil && !preparing && !showingPicker && !showingFiles
+            && !showingAudience && trimRequest == nil
+    }
+
+    private var callActive: Bool { voice.holdsSeat || callModel.phase.isInRoom }
+    private var callCameraOn: Bool { voice.isCameraOn || callModel.isCameraOn }
+
+    private var modeBar: some View {
+        HStack(spacing: 22) {
+            modeButton(.text, title: "Text")
+            if !configLoaded || config.mediaEnabled {
+                modeButton(.media, title: "Camera")
             }
-            Button {
-                editingText = false
-                error = nil
-                guard validate() else { return }
-                showingAudience = true
-            } label: {
-                HStack(spacing: 8) {
-                    Text("Next")
-                    Image(systemName: "arrow.right")
-                }
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(Palette.inkDeep)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(Capsule().fill(canAdvance ? Palette.signal : Palette.signal.opacity(0.4)))
-            }
-            .disabled(!canAdvance)
-            .padding(.horizontal, 20)
-            .accessibilityIdentifier("composer.next")
+            modeButton(.call, title: "Call")
         }
         .padding(.bottom, 12)
+        .frame(maxWidth: .infinity)
         .background(LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .top, endPoint: .bottom).ignoresSafeArea())
     }
 
     private func modeButton(_ value: Mode, title: LocalizedStringKey) -> some View {
         Button {
+            error = nil
+            guard value != mode else { return }
+            if value != .media { editor.clear(); editorSerial += 1 }
             withAnimation(Motion.standard) { mode = value }
-            if value == .media, draft == nil { showingPicker = true }
         } label: {
             VStack(spacing: 4) {
                 Text(title)
@@ -261,63 +332,98 @@ struct StoryComposer: View {
         .accessibilityIdentifier("composer.mode.\(value.rawValue)")
     }
 
-    // MARK: - Call
-
-    @ViewBuilder
-    private var callPicker: some View {
-        StoryCallPicker(selection: $call)
-            .padding(.horizontal, 20)
+    /// The X in the editor: a draft goes back to the camera, a card goes back
+    /// to the camera tab.
+    private func leaveEditor() {
+        error = nil
+        eager?.discardAll()
+        StoryImport.remove(draft?.fileURL)
+        editor.clear()
+        editorSerial += 1
+        withAnimation(Motion.standard) {
+            draft = nil
+            muted = false
+            mode = config.mediaEnabled || !configLoaded ? .media : mode
+        }
+        if !config.mediaEnabled, configLoaded { dismiss() }
     }
 
     // MARK: - Rules
 
-    private var trimmedText: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
-
     private var canAdvance: Bool {
         switch mode {
-        case .text: !trimmedText.isEmpty
-        case .media: draft != nil
-        case .call: call != nil && !trimmedText.isEmpty
-        }
-    }
-
-    private func validate() -> Bool {
-        if mode == .media, let draft, draft.isVideo,
-           let problem = StoryRules.videoProblem(durationMs: draft.durationMs ?? 0, byteSize: draft.data.count, maxVideoMs: config.maxVideoMs) {
-            error = problem
-            return false
-        }
-        return canAdvance
-    }
-
-    /// What `POST /api/stories` gets, minus the audience (the sheet adds it).
-    private var request: StoryDraftRequest {
-        switch mode {
-        case .text:
-            StoryDraftRequest(kind: "text", text: trimmedText, background: background, caption: nil, sticker: nil)
-        case .call:
-            StoryDraftRequest(
-                kind: "text", text: trimmedText, background: background, caption: nil,
-                sticker: call.map { StoryCallSticker(type: "call", serverId: $0.serverId, channelId: $0.channelId) }
-            )
         case .media:
-            StoryDraftRequest(
-                kind: draft?.isVideo == true ? "video" : "image", text: nil, background: nil,
-                caption: caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : caption.trimmingCharacters(in: .whitespacesAndNewlines),
-                sticker: nil
+            guard let draft else { return false }
+            if draft.isVideo,
+               StoryRules.videoProblem(durationMs: draft.durationMs ?? 0, byteSize: draft.data.count, maxVideoMs: config.maxVideoMs) != nil {
+                return false
+            }
+            return true
+        case .text, .call:
+            return editor.hasContent
+        }
+    }
+
+    /// Everything the create request needs, from what is on the canvas.
+    private func buildRequest(media: StoryDraftMedia?) -> StoryDraftRequest {
+        let layers = editor.layers.map { layer -> StoryLayerInput in
+            guard let file = editor.files[layer.id] else { return StoryLayerInput(layer: layer, upload: nil) }
+            return StoryLayerInput(layer: layer, upload: StoryLayerUploadDeclaration(
+                contentType: file.contentType, byteSize: file.data.count, width: file.width, height: file.height
+            ))
+        }
+        // The base picture's description is only for a photo or video (a text card
+        // has no picture to describe).
+        let altText = StoryAltText.make(
+            layers: editor.layers, callRoomName: editor.callInfo?.roomName, caption: nil,
+            baseAlt: media == nil ? nil : editor.baseAlt
+        )
+        // Old builds show the caption and nothing else: the text the author
+        // typed travels there too.
+        let spoken = editor.layers.sorted { $0.y < $1.y }.compactMap { layer -> String? in
+            if case .text(let data) = layer.content { return data.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            return nil
+        }.filter { !$0.isEmpty }.joined(separator: " ")
+        var callServer: String?
+        for layer in editor.layers {
+            if case .call(let serverId, _) = layer.content { callServer = serverId }
+        }
+        switch mode {
+        case .media:
+            return StoryDraftRequest(
+                kind: media?.isVideo == true ? "video" : "image", text: nil, background: nil,
+                caption: spoken.isEmpty ? nil : String(spoken.prefix(StoryLimits.captionMax)),
+                sticker: nil, layers: layers, altText: altText,
+                layerFiles: editor.files, callServerId: callServer
+            )
+        case .text, .call:
+            return StoryDraftRequest(
+                kind: "text", text: nil, background: background, caption: nil, sticker: nil,
+                layers: layers, altText: altText, layerFiles: editor.files, callServerId: callServer
             )
         }
     }
 
-    private func backgroundName(_ key: String) -> String {
-        switch key {
-        case "lime": String(localized: "Lime")
-        case "night": String(localized: "Night")
-        case "ember": String(localized: "Ember")
-        case "grape": String(localized: "Grape")
-        case "sand": String(localized: "Sand")
-        default: String(localized: "Ink")
+    /// Next: a video muted in the editor is re-exported without its sound
+    /// first, then the audience sheet opens.
+    private func advance() async {
+        error = nil
+        guard canAdvance else { return }
+        var media = draft
+        if mode == .media, muted, let current = draft, current.isVideo {
+            preparing = true
+            defer { preparing = false }
+            do {
+                media = try await StoryMediaPrep.silenced(current, maxVideoMs: config.maxVideoMs)
+            } catch {
+                self.error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
+                return
+            }
         }
+        finalMedia = mode == .media ? media : nil
+        builtRequest = buildRequest(media: finalMedia)
+        syncEager()
+        showingAudience = true
     }
 
     // MARK: - Media
@@ -335,7 +441,8 @@ struct StoryComposer: View {
                 return
             }
             await accept(videoAt: movie.url)
-        } else if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
+        } else if let data = try? await item.loadTransferable(type: Data.self),
+                  let image = await StoryImport.downsampledImage(data: data, maxEdge: StoryLimits.imageMaxEdge) {
             accept(image: image)
         } else {
             error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
@@ -345,7 +452,13 @@ struct StoryComposer: View {
     private func accept(cameraResult: StoryCameraResult?) async {
         switch cameraResult {
         case .image(let image): accept(image: image)
-        case .video(let url): await accept(videoAt: url)
+        case .video(let url):
+            guard config.videoEnabled || !configLoaded else {
+                StoryImport.remove(url)
+                error = String(localized: "Videos are off here. Take a photo instead.")
+                return
+            }
+            await accept(videoAt: url)
         case nil: break
         }
     }
@@ -355,21 +468,89 @@ struct StoryComposer: View {
             error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
             return
         }
+        open(draft)
+    }
+
+    private func open(_ draft: StoryDraftMedia) {
+        // A new photo or clip is a fresh start: the refusal of the one before
+        // (a bad file from Files) does not follow it into the editor.
+        error = nil
+        editor.clear()
+        editorSerial += 1
+        muted = false
         withAnimation(Motion.standard) {
             mode = .media
             self.draft = draft
         }
+        syncEager()
     }
 
-    private func accept(videoAt url: URL) async {
+    /// Starts uploading what is final and abandons what is gone: the base the
+    /// moment there is one (a clip once it is trimmed), each placed photo the
+    /// moment it is added, the drawing as it stands. Never blocks the editor.
+    private func syncEager() {
+        guard let eager, eager.enabled else { return }
+        var wants: [StoryEagerWant] = []
+        if mode == .media, let media = finalMedia ?? draft {
+            wants.append(StoryEagerWant(
+                key: StoryEagerWant.baseKey(), kind: "base", contentType: media.contentType, byteSize: media.data.count,
+                fingerprint: StoryEagerWant.fingerprint(of: media.data),
+                data: media.isVideo ? nil : media.data, fileURL: media.isVideo ? media.fileURL : nil
+            ))
+        }
+        for (layerId, file) in editor.files {
+            wants.append(StoryEagerWant(
+                key: StoryEagerWant.layerKey(layerId), kind: "layer", contentType: file.contentType, byteSize: file.data.count,
+                fingerprint: StoryEagerWant.fingerprint(of: file.data), data: file.data
+            ))
+        }
+        eager.sync(wants)
+    }
+
+    /// A file from the Files app. The copy of a movie and the decode of a
+    /// picture both run off the main actor: either can be gigabytes.
+    private func load(fileAt url: URL) async {
         preparing = true
+        error = nil
         defer { preparing = false }
-        do {
-            let draft = try await StoryMediaPrep.video(at: url, maxVideoMs: config.maxVideoMs)
-            withAnimation(Motion.standard) {
-                mode = .media
-                self.draft = draft
+        let type = UTType(filenameExtension: url.pathExtension)
+        if type?.conforms(to: .movie) == true {
+            guard let copy = try? await StoryImport.copyMovie(url) else {
+                error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
+                return
             }
+            await accept(videoAt: copy)
+        } else if let image = await StoryImport.downsampledImage(at: url, maxEdge: StoryLimits.imageMaxEdge) {
+            accept(image: image)
+        } else {
+            error = String(localized: "That format won't work. Use JPG, PNG, WebP or MP4.")
+        }
+    }
+
+    /// `url` is a temporary file this composer owns (a shot, a picked movie, a
+    /// copy from Files): it is deleted once the export has made its own, or the
+    /// trimmer is cancelled.
+    private func accept(videoAt url: URL, trimStartMs: Int? = nil) async {
+        preparing = true
+        var keepSource = false
+        defer {
+            preparing = false
+            if !keepSource { StoryImport.remove(url) }
+        }
+        do {
+            if trimStartMs == nil {
+                let duration = try await AVURLAsset(url: url).load(.duration)
+                let ms = Int((duration.seconds * 1000).rounded())
+                // Past the limit the person chooses which 30 s; they are not
+                // sent away with a refusal.
+                if StoryTrim.needsTrim(durationMs: ms, maxMs: config.maxVideoMs) {
+                    keepSource = true
+                    trimRequest = StoryTrimRequest(url: url, durationMs: ms, maxMs: config.maxVideoMs)
+                    return
+                }
+            }
+            let draft = try await StoryMediaPrep.video(at: url, trimStartMs: trimStartMs, maxVideoMs: config.maxVideoMs)
+            open(draft)
         } catch let failure as StoryMediaPrep.Failure {
             error = failure.message
         } catch {
@@ -385,6 +566,12 @@ struct StoryDraftRequest: Sendable {
     let background: String?
     let caption: String?
     let sticker: StoryCallSticker?
+    var layers: [StoryLayerInput] = []
+    var altText: String? = nil
+    /// The bytes behind each picture layer, by layer id.
+    var layerFiles: [String: StoryLayerFile] = [:]
+    /// The server a call layer belongs to: it has to be one of the audiences.
+    var callServerId: String? = nil
 }
 
 /// A picked or shot file, already prepared for upload.
@@ -395,6 +582,8 @@ struct StoryDraftMedia: Sendable {
     let height: Int
     let durationMs: Int?
     let preview: UIImage
+    /// Where a video lives on disk, for playing it back in the editor.
+    var fileURL: URL? = nil
 
     var isVideo: Bool { contentType.hasPrefix("video/") }
 }
@@ -405,13 +594,15 @@ struct StoryCallChoice: Identifiable, Hashable, Sendable {
     let serverName: String
     let channelId: String
     let channelName: String
+    var serverIconUrl: String? = nil
     var id: String { channelId }
 }
 
-/// Which room "Chama pra call" starts on, and whether the sticker will be open
-/// once posted. The server keeps a call sticker live only while its AUTHOR is
-/// in the room, so a sticker for a room the author is not in is posted already
-/// closed ("A call acabou") for everyone. Pure so it is tested, not eyeballed.
+/// Which room "Chama pra call" starts on. A call sticker is live whenever the
+/// room exists and its author can still use it, with nobody in it too ("Ninguém
+/// na call agora" and the door), so there is no warning about the author being
+/// outside the room. Nothing is picked for them unless they are in one. Pure so
+/// it is tested, not eyeballed.
 enum StoryCallRoom {
     static func authorIn(_ channelId: String, userId: String?, occupants: (String) -> [VoiceParticipant]) -> Bool {
         guard let userId else { return false }
@@ -476,15 +667,40 @@ enum StoryMediaPrep {
         return CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
     }
 
+    /// A video as it is now, without its sound: the editor's mute toggle.
+    static func silenced(_ draft: StoryDraftMedia, maxVideoMs: Int) async throws -> StoryDraftMedia {
+        guard let url = draft.fileURL else { return draft }
+        return try await video(at: url, trimStartMs: 0, stripAudio: true, maxVideoMs: maxVideoMs)
+    }
+
     /// 720p H.264 MP4, metadata dropped, refused past the limit before any
     /// byte is uploaded.
-    static func video(at url: URL, maxVideoMs: Int) async throws -> StoryDraftMedia {
-        let asset = AVURLAsset(url: url)
-        let duration = try await asset.load(.duration)
-        let durationMs = Int((duration.seconds * 1000).rounded())
-        if durationMs > maxVideoMs {
-            throw Failure(message: StoryRules.videoProblem(durationMs: durationMs, byteSize: 0, maxVideoMs: maxVideoMs) ?? "")
+    ///
+    /// `trimStartMs` is where the kept window starts when the clip is longer
+    /// than the limit (the trimmer chooses it). Without one, a clip past the
+    /// limit plus a second of slack is refused, and up to a second over is
+    /// cut to the limit: a recording stops a frame or two late.
+    static func video(at url: URL, trimStartMs: Int? = nil, stripAudio: Bool = false, maxVideoMs: Int) async throws -> StoryDraftMedia {
+        let source = AVURLAsset(url: url)
+        let duration = try await source.load(.duration)
+        var asset: AVAsset = source
+        if stripAudio {
+            // Only the picture track goes into the composition, so what is
+            // exported has no sound at all.
+            let composition = AVMutableComposition()
+            if let video = try await source.loadTracks(withMediaType: .video).first,
+               let track = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) {
+                try track.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: video, at: .zero)
+                track.preferredTransform = try await video.load(.preferredTransform)
+            }
+            asset = composition
         }
+        let totalMs = Int((duration.seconds * 1000).rounded())
+        if trimStartMs == nil, StoryTrim.needsTrim(durationMs: totalMs, maxMs: maxVideoMs) {
+            throw Failure(message: StoryRules.videoProblem(durationMs: totalMs, byteSize: 0, maxVideoMs: maxVideoMs) ?? "")
+        }
+        let range = StoryTrim.keptRange(startMs: trimStartMs ?? 0, durationMs: totalMs, maxMs: maxVideoMs)
+        let durationMs = range.lengthMs
         guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1280x720) else {
             throw Failure(message: String(localized: "That format won't work. Use JPG, PNG, WebP or MP4."))
         }
@@ -492,6 +708,10 @@ enum StoryMediaPrep {
         export.outputURL = out
         export.outputFileType = .mp4
         export.shouldOptimizeForNetworkUse = true
+        export.timeRange = CMTimeRange(
+            start: CMTime(value: CMTimeValue(range.startMs), timescale: 1000),
+            duration: CMTime(value: CMTimeValue(range.lengthMs), timescale: 1000)
+        )
         // No location, no device, no creation date: nothing but the picture.
         export.metadata = []
         export.metadataItemFilter = .forSharing()
@@ -518,54 +738,15 @@ enum StoryMediaPrep {
             .map { UIImage(cgImage: $0) } ?? UIImage()
         return StoryDraftMedia(
             data: data, contentType: "video/mp4", width: width, height: height,
-            durationMs: max(1, durationMs), preview: poster
+            durationMs: max(1, durationMs), preview: poster, fileURL: out
         )
     }
 }
 
-/// Tap for a photo, hold for a video that stops at 30 s: the system camera,
-/// wrapped. Absent on a simulator, which has no camera.
+/// What the story camera hands back: a photo, or a video file it just wrote.
 enum StoryCameraResult {
     case image(UIImage)
     case video(URL)
-}
-
-struct StoryCameraPicker: UIViewControllerRepresentable {
-    let allowsVideo: Bool
-    let onDone: (StoryCameraResult?) -> Void
-
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController()
-        picker.sourceType = .camera
-        picker.mediaTypes = allowsVideo ? [UTType.image.identifier, UTType.movie.identifier] : [UTType.image.identifier]
-        picker.videoMaximumDuration = TimeInterval(StoryLimits.maxVideoMs / 1000)
-        picker.videoQuality = .typeIFrame1280x720
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(onDone: onDone) }
-
-    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-        let onDone: (StoryCameraResult?) -> Void
-        init(onDone: @escaping (StoryCameraResult?) -> Void) { self.onDone = onDone }
-
-        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            if let url = info[.mediaURL] as? URL {
-                onDone(.video(url))
-            } else if let image = info[.originalImage] as? UIImage {
-                onDone(.image(image))
-            } else {
-                onDone(nil)
-            }
-        }
-
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            onDone(nil)
-        }
-    }
 }
 
 /// "Chama pra call": the voice rooms of the servers this account can post
@@ -589,49 +770,62 @@ struct StoryCallPicker: View {
                     .font(Typography.caption)
                     .foregroundStyle(.white.opacity(0.75))
             }
-            if let selection, !StoryCallRoom.authorIn(
-                selection.channelId, userId: session.currentUser?.id,
-                occupants: { session.voiceOccupancy.participants(in: $0) }
-            ) {
-                Text(verbatim: String(localized: "You're not in \(selection.channelName). The card only lets people in while you're in the call."))
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("composer.call.notInRoom")
-            }
             ScrollView {
                 VStack(spacing: 6) {
                     ForEach(rooms) { room in
                         let inside = session.voiceOccupancy.participants(in: room.channelId)
                         Button { selection = room } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "speaker.wave.2")
-                                    .foregroundStyle(.white.opacity(0.8))
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(verbatim: room.channelName)
-                                        .font(Typography.bodyMedium)
-                                        .foregroundStyle(.white)
-                                    Text(verbatim: inside.isEmpty
-                                         ? String(localized: "\(room.serverName) · empty")
-                                         : "\(room.serverName) · \(inside.prefix(3).map(\.displayName).joined(separator: ", "))")
+                            HStack(spacing: 12) {
+                                Avatar(name: room.serverName, seed: room.serverId, size: 38, url: room.serverIconUrl)
+                                    .decorative()
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "speaker.wave.2.fill")
+                                            .font(.system(size: 11, weight: .bold))
+                                            .decorative()
+                                        Text(verbatim: room.channelName)
+                                            .font(Typography.bodyMedium)
+                                            .lineLimit(1)
+                                    }
+                                    .foregroundStyle(.white)
+                                    Text(verbatim: room.serverName)
                                         .font(Typography.caption)
                                         .foregroundStyle(.white.opacity(0.7))
                                         .lineLimit(1)
+                                    if inside.isEmpty {
+                                        Text("Nobody in the call right now")
+                                            .font(Typography.caption)
+                                            .foregroundStyle(.white.opacity(0.55))
+                                    }
                                 }
                                 Spacer()
+                                if !inside.isEmpty {
+                                    HStack(spacing: -8) {
+                                        ForEach(inside.prefix(3), id: \.userId) { person in
+                                            Avatar(name: person.displayName, seed: person.userId, size: 24)
+                                                .overlay(Circle().strokeBorder(Palette.ink, lineWidth: 2))
+                                                .decorative()
+                                        }
+                                    }
+                                    Text(verbatim: "\(inside.count)")
+                                        .font(Typography.caption)
+                                        .monospacedDigit()
+                                        .foregroundStyle(Palette.signal)
+                                }
                                 Image(systemName: selection == room ? "largecircle.fill.circle" : "circle")
                                     .foregroundStyle(selection == room ? Palette.signal : .white.opacity(0.6))
+                                    .decorative()
                             }
                             .padding(10)
                             .background(RoundedRectangle(cornerRadius: 12).fill(.black.opacity(selection == room ? 0.55 : 0.35)))
                             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(selection == room ? Palette.signal : .clear, lineWidth: 1.5))
                         }
                         .buttonStyle(.plain)
+                        .accessibilityAddTraits(selection == room ? .isSelected : [])
                         .accessibilityIdentifier("composer.call.\(room.channelId)")
                     }
                 }
             }
-            .frame(maxHeight: 240)
         }
         .task { await load() }
     }
@@ -645,7 +839,8 @@ struct StoryCallPicker: View {
             for channel in channels where channel.isVoice {
                 found.append(StoryCallChoice(
                     serverId: server.serverId, serverName: server.serverName,
-                    channelId: channel.id, channelName: channel.name
+                    channelId: channel.id, channelName: channel.name,
+                    serverIconUrl: server.iconUrl
                 ))
             }
         }
@@ -665,6 +860,62 @@ struct StoryCallPicker: View {
     }
 }
 
+/// Where this account last posted a story, and the list it was offered, kept
+/// so that Post still works with no connection: the list cannot load, so the
+/// last one stands in, and the story waits in the queue for a connection.
+enum StoryAudienceMemory {
+    struct Choice: Codable, Equatable {
+        var serverIds: [String]
+        var friends: Bool
+        var repliesEnabled: Bool
+    }
+
+    private static func key(_ name: String, _ userId: String?) -> String {
+        "pqp.stories.\(name).\(userId ?? "anon")"
+    }
+
+    static func save(options: StoryAudienceOptions, userId: String?) {
+        if let data = try? JSONEncoder().encode(options) {
+            UserDefaults.standard.set(data, forKey: key("audienceOptions", userId))
+        }
+    }
+
+    static func options(_ userId: String?) -> StoryAudienceOptions? {
+        UserDefaults.standard.data(forKey: key("audienceOptions", userId))
+            .flatMap { try? JSONDecoder().decode(StoryAudienceOptions.self, from: $0) }
+    }
+
+    static func save(choice: Choice, userId: String?) {
+        if let data = try? JSONEncoder().encode(choice) {
+            UserDefaults.standard.set(data, forKey: key("lastAudience", userId))
+        }
+    }
+
+    static func lastChoice(_ userId: String?) -> Choice? {
+        UserDefaults.standard.data(forKey: key("lastAudience", userId))
+            .flatMap { try? JSONDecoder().decode(Choice.self, from: $0) }
+    }
+
+    /// What to tick when the list is the remembered one: where it was last
+    /// posted, as far as that is still on offer; else where the composer was
+    /// opened from.
+    static func selection(
+        last: Choice?, options: StoryAudienceOptions?, preselectedServerId: String?, preselectsFriends: Bool
+    ) -> (servers: Set<String>, friends: Bool) {
+        var servers = Set(last?.serverIds ?? [])
+        var friends = last?.friends ?? false
+        if let options {
+            servers = servers.intersection(options.servers.filter(\.canPost).map(\.serverId))
+            if !(options.friends.enabled && options.friends.canPost) { friends = false }
+        }
+        if servers.isEmpty, !friends {
+            if let preselectedServerId { servers.insert(preselectedServerId) }
+            friends = preselectsFriends
+        }
+        return (servers, friends)
+    }
+}
+
 /// "Quem vê": every server with stories on where this account may post,
 /// plus Amigos, pre-ticked where the composer opened; replies on or off;
 /// and the post itself, with real upload progress.
@@ -676,6 +927,8 @@ struct StoryAudienceSheet: View {
     let callServerId: String?
     let request: StoryDraftRequest
     let media: StoryDraftMedia?
+    /// Files already going up; the post takes them over.
+    var eager: StoryEagerUploads?
     let onPosted: () -> Void
 
     @State private var options: StoryAudienceOptions?
@@ -683,9 +936,10 @@ struct StoryAudienceSheet: View {
     @State private var friends = false
     @State private var repliesEnabled = true
     @State private var posting = false
-    @State private var failed = false
+    /// The list on screen is the remembered one: there was no connection.
+    @State private var offline = false
     @State private var error: String?
-    /// One per story this sheet posts, reused by "Tentar de novo", so a retry
+    /// One per story this sheet posts, kept in the post's record, so a retry
     /// after a lost answer is the same story and not a second one.
     @State private var requestId = UUID().uuidString
 
@@ -746,14 +1000,20 @@ struct StoryAudienceSheet: View {
             if let error {
                 Text(verbatim: error)
                     .font(Typography.callout)
-                    .foregroundStyle(Palette.danger)
+                    .foregroundStyle(offline ? Palette.paperMuted : Palette.danger)
                     .accessibilityIdentifier("audience.error")
+                if options == nil || offline {
+                    Button("Try again") { Task { await load() } }
+                        .font(Typography.bodyMedium)
+                        .foregroundStyle(Palette.signal)
+                        .accessibilityIdentifier("audience.retry")
+                }
             }
 
             Button {
-                Task { await post() }
+                post()
             } label: {
-                Text(posting ? String(localized: "Posting…") : (failed ? String(localized: "Didn't upload. Try again") : String(localized: "Post story")))
+                Text("Post story")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(PrimaryButtonStyle(isEnabled: canPost && !posting))
@@ -782,6 +1042,7 @@ struct StoryAudienceSheet: View {
                 Image(systemName: checked ? "checkmark.square.fill" : "square")
                     .font(.system(size: 20))
                     .foregroundStyle(checked ? Palette.signal : Palette.border)
+                    .decorative()
                 VStack(alignment: .leading, spacing: 1) {
                     Text(verbatim: title)
                         .font(Typography.bodyMedium)
@@ -799,13 +1060,17 @@ struct StoryAudienceSheet: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityAddTraits(checked ? .isSelected : [])
     }
 
     private func load() async {
+        error = nil
         guard let loaded = try? await session.api.storyAudiences() else {
-            error = String(localized: "Couldn't load where you can post.")
+            useRememberedAudience()
             return
         }
+        offline = false
+        StoryAudienceMemory.save(options: loaded, userId: session.currentUser?.id)
         options = loaded
         let postable = Set(loaded.servers.filter(\.canPost).map(\.serverId))
         if let preselectedServerId, postable.contains(preselectedServerId) {
@@ -819,52 +1084,63 @@ struct StoryAudienceSheet: View {
         }
     }
 
-    /// Create, PUT the bytes with exactly the signed headers, publish.
-    private func post() async {
-        posting = true
-        failed = false
-        error = nil
-        defer { posting = false }
-        let body = CreateStoryRequest(
-            requestId: requestId,
-            kind: request.kind,
-            caption: request.caption,
-            text: request.text,
-            background: request.background,
-            sticker: request.sticker,
-            repliesEnabled: repliesEnabled,
-            audiences: StoryAudienceTargets(serverIds: Array(servers), friends: friends),
-            media: media.map {
-                StoryMediaInput(contentType: $0.contentType, byteSize: $0.data.count,
-                                width: $0.width, height: $0.height, durationMs: $0.durationMs)
-            }
+    /// No connection: the list from the last time stands in, with where the
+    /// last story went ticked, so Post still works and the story waits in the
+    /// queue for a connection. With nothing remembered, the place the composer
+    /// was opened from.
+    private func useRememberedAudience() {
+        let user = session.currentUser?.id
+        let last = StoryAudienceMemory.lastChoice(user)
+        let remembered = StoryAudienceMemory.options(user)
+        let chosen = StoryAudienceMemory.selection(
+            last: last, options: remembered, preselectedServerId: preselectedServerId, preselectsFriends: preselectsFriends
         )
+        if let remembered { options = remembered }
+        servers = chosen.servers
+        friends = chosen.friends
+        if let last { repliesEnabled = last.repliesEnabled }
+        offline = true
+        error = remembered != nil
+            ? String(localized: "No connection. This is the list from last time, and the story posts when you're back online.")
+            : String(localized: "Couldn't load where you can post.")
+    }
+
+    /// Hands the story to the posting queue and closes: the create, the PUTs and
+    /// the publish run behind the person's own ring, with a progress fraction,
+    /// and a failure keeps the draft for "Tentar de novo" or "Descartar".
+    private func post() {
+        StoryMetrics.mark("post.tap")
+        guard canPost, !posting else { return }
+        posting = true
+        error = nil
         do {
-            let created = try await session.api.createStory(body)
-            if let upload = created.upload, let media {
-                try await StoryUploader.put(media.data, to: upload)
-                _ = try await session.api.publishStory(id: created.story.id)
-            }
+            let body = CreateStoryRequest(
+                requestId: requestId,
+                kind: request.kind,
+                caption: request.caption,
+                text: request.text,
+                background: request.background,
+                sticker: request.sticker,
+                repliesEnabled: repliesEnabled,
+                audiences: StoryAudienceTargets(serverIds: Array(servers), friends: friends),
+                media: media.map {
+                    StoryMediaInput(contentType: $0.contentType, byteSize: $0.data.count,
+                                    width: $0.width, height: $0.height, durationMs: $0.durationMs)
+                },
+                layers: request.layers.isEmpty ? nil : try request.layers.map { try JSONValue(encoding: $0) },
+                altText: request.altText
+            )
+            let base = media.map { StoryPostBytes(contentType: $0.contentType, data: $0.data, fileURL: $0.fileURL) }
+            let layers = request.layerFiles.mapValues { StoryPostBytes(contentType: $0.contentType, data: $0.data) }
+            try session.storyPosts.enqueue(request: body, base: base, layers: layers, userId: session.currentUser?.id, eager: eager)
+            StoryAudienceMemory.save(
+                choice: .init(serverIds: Array(servers), friends: friends, repliesEnabled: repliesEnabled),
+                userId: session.currentUser?.id
+            )
             onPosted()
         } catch {
-            failed = true
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-}
-
-/// The presigned PUT: exactly the headers the server signed, nothing else.
-enum StoryUploader {
-    static func put(_ data: Data, to upload: StoryUpload) async throws {
-        guard let url = URL(string: upload.url) else { throw APIError.transport("Bad upload URL") }
-        var request = URLRequest(url: url)
-        request.httpMethod = upload.method
-        for (name, value) in upload.headers {
-            request.setValue(value, forHTTPHeaderField: name)
-        }
-        let (_, response) = try await URLSession.shared.upload(for: request, from: data)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw APIError.transport(String(localized: "Didn't upload. Try again"))
+            posting = false
+            self.error = String(localized: "Couldn't keep your story to post it. Check your free space.")
         }
     }
 }

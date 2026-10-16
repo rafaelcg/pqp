@@ -1103,6 +1103,19 @@ second one, because a projection and the microphone narrating it are one
 session. `startForeground` is called again with the reduced type set when the
 share stops, which is how a type is dropped.
 
+**Android 10 to 13 needed the type too, and did not get it (fixed 2026-10-13).**
+The service declared no foreground type below Android 14, on the theory that
+older releases fall back to the manifest. They do not: `startForeground(id, n, 0)`
+means "no type" and only `-1` reads the manifest. `getMediaProjection` checks the
+*running* type from Android 10, so on every Android 10, 11, 12 and 13 phone a share
+died inside the capturer with "Media projections require a foreground service of
+type ... MEDIA_PROJECTION" and the call bar said "Android would not start the
+screen capture". Everything above was verified on an API 37 emulator only, which is
+why nobody saw it; a user on the app reported it. Reproduced and fixed on an API 33
+emulator (`voiceForegroundTypes`, pinned for every API level by
+`ForegroundTypesTest`). The same applies to anything else that needs a typed
+foreground service: test on an Android 13 image, not only on the newest one.
+
 ### A bitrate ceiling is not a resolution
 
 The web client shipped a quality menu whose lower rungs all still arrived at
@@ -2262,6 +2275,17 @@ home above, unchanged.
 
 The rules are pure and tested in `ConversasTest` (`social/ConversationList.kt`).
 
+## Phone gaps closed (2026-10-16)
+
+The phone gaps listed in `docs/HANDOVER.md` ("Phones"), each against what the web and iOS do.
+
+- **Conversas: Fixadas, mute and swipe.** `social/ConversationPrefs.kt`. A row swipes right to pin or unpin (iOS does the same) and left to close (the existing confirmation), and a long press opens Fixar, Silenciar and Fechar conversa. The pin is the web rail's own `pinnedConversations` (the whole array, newest pin first like iOS, 15 at most, a snackbar says so at the limit), drawn as a **Fixadas** section over **Recentes** with a pin glyph. A mute is the per-channel notification level `none` (a conversation is a channel in that map), the same one the web's notification menu writes: the row dims, loses its badge and shows a bell-off, and the Chats tab badge and the Não lidas chip stop counting it. Both are optimistic and saved one at a time (the last tap wins, a refused save puts back what the server last confirmed, in the server's own sentence). **A mute reads the levels fresh before it writes**, because the server replaces `notifications.channels` whole (it merges `notifications` one level deep): sending the sign-in copy would erase a mute set on the web a minute ago.
+- **Unread on the server list.** `unread/ServerUnread.kt`. There is no all-servers endpoint, so the list reads `GET /api/servers/:id/unread` per server like the web rail (two at a time, thirty at most, a server muted as a whole skipped), when it comes to the front (at most every 30 s, and at once for a server whose channel was just read) and keeps it right with live `channel-activity` frames in between. The row shows a lime `@N` at the icon's bottom corner when somebody pinged this person, otherwise a dot, and the name goes bold; the Baú keeps the top corner. A failed read keeps what was on screen.
+- **Collapsed category.** A folded category adds up the mentions inside (muted channels left out) and shows the lime `@N` the rows show, instead of the plain dot; a mention with no unread count (a forum) still counts as news.
+- **Server order follows live.** The `server-order-update` frame is handled in `SessionStore`: another tab's or device's drag reorders the list at once. The phone names its own saves (`origin`) and ignores its echo, and ignores a frame while one of its own saves is in flight.
+- **"Mandar um oi".** When a friendship starts, a snackbar says "Tu e Bia agora são amigos" with **Mandar um oi**, which opens (or reuses) the conversation. It shows after the person accepts a request, and when somebody accepts one they sent (the web's rule, `newlyAcceptedFriends`: the friends list gained somebody who was not an incoming request), on Conversas or Friends, once, and not at all if it is more than two minutes old.
+- **Spanish for Compartilhar: not done, on purpose.** Neither phone ships Spanish at all (`localeFilters` on Android, `knownRegions` on iOS). Adding `values-es` for one feature would give Spanish phones an English app with one translated menu, and adding `es` to the filters promises a language nobody has translated. A whole-app pass (about 1,100 Android strings) is the real fix and is its own piece of work.
+
 ## Stories
 
 `stories/` and `stories/ui/`, against `packages/shared/src/stories.ts`. The
@@ -2280,22 +2304,247 @@ does with it.
 - **Viewer.** A full-screen dialog over whatever opened it: tap to step, hold
   to pause, swipe across for the next person (a deck: the outgoing card
   recedes), swipe down to close. Clocks are linear (photo 5 s, text 5 s plus
-  50 ms a character, call sticker 8 s, video its own length). Replies become a
+  50 ms a character, call card 8 s, video its own length; words on any story
+  stretch its clock the same way, ten seconds at most). Replies become a
   DM quoting the story; reactions stay on the story. The menu has mute, report
   (`subjectType: "story"`, `minor_sexual` included), delete for the author and
   "Tirar do {servidor}" for each server the viewer moderates.
-- **Composer.** TEXTO / CÂMERA / CALL, then "Quem vê". The system camera and the
-  photo picker, so no storage permission; the camera permission is asked for
-  first because the app declares it (Android refuses `IMAGE_CAPTURE` from an
-  app that declares CAMERA without holding it, and that crash was found in QA).
-  A photo is re-encoded (1440 px long side, EXIF gone). A video is measured,
-  not transcoded: MP4, at most 30 s and 25 MB, refused with the reason before
-  any upload.
+  - **Layers.** `StoryCanvas` draws the base and then each layer in order on a
+    9:16 canvas as wide as the screen allows, clipped at its edge, through the
+    same `PlacedLayer` and layer drawings as the editor, so a story reads as it
+    was made. The author's canvas is never cropped: on a screen taller or
+    wider than 9:16 it is shown whole and the rest of the screen is the story's
+    own base, softened (a clip's poster, the photo, decoded at 48 px and stretched,
+    which costs no render effect; a card's gradient end colours). The progress bars, the header and
+    the reply row sit inside the canvas (`CanvasInsets`), never across its edge. `Story.layers` is decoded one element at a time
+    (`StoryLayersSerializer`): a layer this build cannot read (a type a later
+    server added, a field that does not decode) is dropped, order kept, and the
+    story is never lost to it. A story from before layers is drawn as it always
+    was: its photo, its centred text, its call card where the sticker sat
+    (`visibleLayers` synthesises the call layer for a server that does not).
+  - **When the story cannot be read** (the API is unreachable) the viewer shows the one line and **Tentar de novo** and **Fechar**; it used to be a black screen with no way out but the system back gesture.
+  - **What is tappable.** Mentions (a sheet with the person, "Adicionar amigo"
+    and, when they have a handle, "Ver perfil" on their public page) and the
+    call card (joins, then closes the viewer). Text and photos are not: a tap on
+    them steps the story. The story waits while the sheet is up.
+  - **The call card** is one drawing for the editor's preview and the viewer's
+    result (`StoryCallCard`): the server's icon, the room, up to three live
+    faces and "+n", the head count, a live dot that pulses while people are in,
+    and "Entrar" when the server says it can be joined. Five states from the
+    live `call` object (`callCardState`, #1210 semantics): in the call; live
+    with nobody in it ("Ninguém na call agora" and still "Entrar", the room is
+    the author's and open); live but `joinable` false for this viewer (no
+    button, "Tu não pode entrar nessa sala"); full (a mesh room at its seat
+    limit, no button); and a quiet dimmed "A call acabou" only when the channel
+    was deleted (its name is then blank and the card leaves the line out) or the
+    author lost CONNECT. The ring badge on the strip follows `hasCall`, which is
+    true only while somebody is in the room. The whole card is one TalkBack button ("Na call agora: Lobby,
+    Sandbox, 3 pessoas na call. Entrar").
+  - **TalkBack.** The base carries the story's `altText` (its text layers, in
+    order, else its caption) as its description, and the text layers are hidden
+    from the reader when it is there, so nothing is read twice.
+- **Posting is the outbox's, not the composer's.** "Postar" hands the story to
+  `StoryOutbox` (app-scoped) and the composer closes at once. The outbox makes
+  the files and the request ready, writes them as a draft under
+  `files/story-outbox/<id>/` (`StoryDraftStore`), creates the story, PUTs every
+  file streamed from disk with a running byte count, and publishes. The own
+  ring on every strip draws that count as a progress ring (`PostingRing`,
+  capped at 96% until the story is live; no number for a card of only words;
+  a fixed arc, not a spinning one, with "Remove animations" on). A failure
+  turns the ring red ("Não postou"); tapping it offers "Tentar de novo" (same
+  request id, so a lost answer never posts twice) or "Descartar". Red is for a
+  real answer from the server, or for a link error that a second try (two
+  seconds later, with a connection) did not fix. A post that stopped because
+  there is **no connection** is not a failure: its ring is grey ("Esperando
+  conexão", `StoryOutboxRules.outcome`), and it goes on by itself when the
+  system reports a validated network (a `NetworkCallback` in the outbox) and
+  whenever the app comes to the front; tapping it offers "Tentar agora" or
+  "Descartar". Tapping a ring that is still posting offers "Descartar" too,
+  which stops the upload and deletes the story the server had already made.
+  The draft survives leaving the composer and the app; a draft found on disk
+  after the process died comes back waiting and is sent again by itself (red
+  only if that fails). Signing out wipes drafts. There is
+  no foreground service: a post is a few seconds of upload, and one that loses
+  its process is a draft, not a loss. The one gap is the moment between "Postar"
+  and the draft reaching disk (the files being made ready: milliseconds for a
+  photo, seconds for a clip whose sound is taken out): a process that dies in it
+  loses that post.
+- **Files go ahead of the story (eager uploads).** Where the server says
+  `eagerUploads` in `GET /api/stories/config`, `EagerSession` (one per composer)
+  starts each file the moment its bytes are final: the base when the composer
+  holds the picked, taken or trimmed-and-cut media, a photo layer when it is
+  placed, a drawing when its tool closes ("Pronto"; not stroke by stroke). Each
+  is `POST /api/stories/uploads` then a PUT from memory (`StoryEagerUploads`,
+  app-scoped, so it outlives the composer). Backing out, removing a layer,
+  redrawing or re-trimming stops that PUT and `DELETE`s the upload; closing the
+  composer does the same for everything it started. At "Postar" the outbox waits
+  for any still going (the ring follows them), names the finished ones by
+  `uploadId` in the create (`EagerRequest`), and asks for `publish: true` when
+  every file is eager, which is one round trip. A mix works: eager where the
+  bytes were ready, the old per-file URLs for the rest. A file whose eager
+  upload failed (link down, no budget) simply goes the old way. A create that
+  answers 409 or 404/400 for an upload (not finished, gone, a mismatch) is sent
+  once more after a short wait and then every file goes the old way: each create
+  counts against the story budget, so it is not hammered. The ids are kept on
+  the draft the moment it is made (those finished by then), so a retry after
+  the process died still claims them. A clip posted
+  muted is a different file from the one sent ahead: that one is thrown away and
+  the muted clip is sent at "Postar".
+- **The "+" on the own ring** is drawn at 22 dp and touched at 48 dp
+  (`StoryStripRules.inBadge`, kept inside the 68 dp bubble): a tap in that square
+  makes a story, wherever the ring would have opened the stories, and holding the
+  ring is the other way to "Novo story" (also a TalkBack custom action).
+- **Preload.** `StoryPreloader` has the next story ready before the tap: with a
+  story open, the next two of the queue (across authors, from where the viewer
+  would open each deck) and the first of the next author; with the tray
+  showing, the first unseen story of its first three rings. Pictures go through
+  Coil (memory and disk) and clips through a Media3 cache writer into
+  `StoryVideoCache` (first 1 MB and last 256 KB, so a clip with its index at
+  the end starts too), all under stable per-story keys (`StoryPreloadRules`),
+  which is what lets a freshly signed link for the same picture still hit. At
+  most two stories at a time, cancelled when they leave the window, clips
+  skipped with Data Saver on, and everything pauses while the story on screen is
+  still loading, so a slow link is that story's alone. Debug builds log the
+  numbers under `adb logcat -s pqp.perf` (`StoryPerf`) and `files/no-preload`
+  turns the preloader off to measure the same build without it.
+  - **One finished picture.** A story is held behind the veil until everything
+    it is drawn from is decoded (`StoryAssets`: the base, each photo layer, the
+    drawing, the faces and icon of a call card, the author's face), then the base
+    and every layer go on the canvas together and the veil fades in one frame.
+    The preloader fetches the same list, so a preloaded story appears at once. A
+    clip starts buffering straight away and its layers wait for the assets.
+    Words, mentions and call cards are laid out at their final size (`CrispLayer`:
+    canvas width times scale) and only turned, never scaled, so they are crisp at
+    any scale.
+  - **The clock waits for the picture.** A story's bar, its "seen" count and the
+    preloader all start at its first frame, not at the tap: while it has none the
+    viewer shows the author's colour over black, and a small spinner after 300
+    ms (`stories.viewer.waiting`), so a 5 s photo that arrives 3 s late is still
+    5 s on screen. A clip keeps its bar with its position (a stall pauses both)
+    and shows the player's own spinner mid-clip. A clip also holds the preloader
+    while it is still loading, buffers at most 10 s ahead, and a preloaded clip
+    keeps only its first megabyte when its index is up front (`indexFirst`),
+    its end too only when the index is last.
+- **Composer.** TEXTO / CÂMERA / CALL, then "Quem vê". CÂMERA opens on a live
+  camera (`stories/camera/`, CameraX), not on buttons: a 9:16 preview, a
+  shutter that takes a photo on a tap and records while it is held (a ring
+  fills over 30 s, sliding up zooms), front and back lens (the button or a
+  double tap, with a blurred still covering the swap), flash (the screen
+  lights up on the front lens, which has no unit; the torch lights while
+  filming), pinch to zoom, tap to focus. Photo, preview and clip share one 9:16
+  view port, so the file is cropped to what the screen showed, and a front shot
+  is mirrored into the file (EXIF flip, honoured by hand below API 28) so it
+  matches the preview. The gallery is the system photo picker (photos and
+  videos), so no storage permission. The camera permission has its own states:
+  asked on first open, "allow" while the system will still ask, "open settings"
+  once it will not (re-read on resume), and a photo-picker fallback in every
+  one of them. **Only the camera is asked for on open.** The microphone is
+  asked the first time a hold turns into a recording (the dialog takes that
+  touch, so nothing is filmed; the next hold films), never on a plain tap, so a
+  tap on the shutter always takes the photo. No microphone permission records
+  a silent clip and says so; a clip with no audio track has no mute button in
+  the editor (`PreparedMedia.hasAudio`) and no sound button in the viewer
+  (read from the player's tracks).
+  A photo is re-encoded (1440 px long side, EXIF gone). A video that fits goes
+  as it is; one over 30 s opens "Escolhe os 30 segundos" (a 30 s window to slide
+  over a filmstrip, looping while it moves) and one over 25 MB or sharper than
+  1080p is shrunk, both by Media3 Transformer to 720p H.264/AAC
+  (`VideoPrep`, rules in `TrimRules`). A refusal still happens before any byte
+  leaves.
+- **Editor and layers.** After the camera (or the TEXTO and CALL tabs, which
+  open a card with no picture) comes the editor, `stories/editor/`: a 9:16
+  canvas with the base under it and up to 20 layers on top, posted as data next
+  to the base (`layers` and `altText` on `POST /api/stories`), never burned in.
+  The layers are text (five fonts, twelve color tokens, no / solid / soft
+  background, alignment, size), photos from the gallery or the camera (rect,
+  rounded or circle), freehand ink (pen, marker, highlighter, eraser; one
+  layer, exported as a transparent PNG by the same renderer that draws it
+  on screen), a mention and the call card. **Layer order is creation order, for
+  every type, the drawing included**: a new drawing is added at the top, whatever
+  is made after it goes above it, and "bring forward" works on it like any layer.
+  There is one drawing per story, so a new drawing session that starts with
+  layers above it brings it back to the top (one undo step) rather than
+  drawing under a photo placed since (`LayerOps.inkToFront`, `withStroke`). The
+  earlier rule, "ink is always the lowest layer", made a stroke over a photo
+  invisible. A text card is `kind: "text"`, a
+  `background` and layers, with no `text`.
+  - **Tools stay on the canvas.** On a screen taller than 9:16 the tool buttons
+    sit inside the canvas, a little in from its edge, instead of straddling it
+    (a translucent disc across the edge reads as a dark half circle on the
+    picture): `CanvasInsets`, used by the editor, the camera, the text tool and
+    the viewer. On a 9:16 screen they sit under the system bars as before.
+  - **Limits say so.** At 20 layers, or 6 photos, the text, photo and sticker
+    tools are drawn faint and a tap says why (the draw tool stays while a
+    drawing exists). A tap on empty canvas opens the text tool; an empty text
+    card says "Toca pra escrever". "Trazer pra frente" is only offered on a
+    layer with something above it.
+  - **Gestures.** One finger drags, two scale and turn, and once a layer has
+    been touched a pinch anywhere on the canvas turns it. It clicks onto the
+    middle lines and quarter turns with a light haptic and lets go again when
+    the finger moves on (the finger's own numbers are kept unsnapped); a trash
+    circle appears while one is held and deletes it on release; a tap on text
+    edits it; a long press opens bring forward / shape / delete. Undo steps
+    back one action at a time (a whole drag is one step). `StoryEditorGestureTest`
+    (instrumented, `connectedDebugAndroidTest`) sends real pinches.
+  - **Sizes are shares of the canvas width**, never dp, so a story reads the
+    same on any phone: a text layer's `size` 1 is 7% of the width, a photo at
+    scale 1 is 40% (the schema's own rule), text wraps at 84%. A picture near
+    9:16 fills the canvas, anything else is shown whole over a blurred copy of
+    itself (a video gets black bars): `BaseFit`.
+  - **Accessibility.** Every layer is a node with its own description and
+    TalkBack actions (move up, down, left, right, bigger, smaller, turn, bring
+    forward, edit, delete), since a drag cannot be done without sight. The
+    story's `altText` is its text layers read in order.
+  - **The audience list recovers.** The composer reads "who sees it" with a
+    backoff (1 s doubling to 15 s), again the moment the live connection is back
+    and from a "Tentar de novo" button on the pill, so a composer opened while
+    the API is down keeps the photo and the words and posts once it is back.
+    A call card for an empty room, or one its author is not in, posts without a
+    question: the server keeps it live while the room exists.
+  - **The photo picker** is asked for one item through `PickVisualMediaList`,
+    which hands back everything that came back (a long press on a thumbnail
+    starts a selection in recent pickers, though with one item allowed the
+    picker keeps only the last tap). The story's base takes the first and
+    says so; each photo picked for a layer becomes a layer, up to the limits,
+    and what did not fit is said.
+  - **Call card.** Picking the room is a sheet whose header is fixed and whose
+    list scrolls on its own (the old picker was one fixed-height scroll, and the
+    "you are not in the room" line pushed the second room under the edge). Each
+    room says who is in it now. The server stays ticked and locked in "Quem vê".
+  - A server that predates layers (`layersMax` 0) gets the old shape: the words
+    folded into the card's `text`, or a photo's `caption`, with only the text
+    tool left.
+  - Muting a video story drops its audio track with Media3 before the upload.
 - **Motion.** All Compose, so it follows the animator duration scale; at zero
   the deck transform and the drag shrink are skipped and the gestures keep
-  working.
+  working. The recording clock and the trim loop read the wall clock, never an
+  animation, so a clip still stops at 30 s with "Remove animations" on
+  (`CameraTest` pins it), and the long press that opens a layer's menu is
+  timed against the clock too.
 
 Rules are pure and tested in `StoriesTest` (`stories/StoriesRules.kt`).
+
+## Encaminhar (forward)
+
+Contract: `packages/shared/src/forward.ts`, rules in `docs/FORWARD.md`. Code: `app/src/main/kotlin/gg/pqp/app/forward`.
+
+- **The card.** `Message.forward` is read with `LenientForwardSerializer`: a version or kind this build does not know, a missing required key or a wrong type is `null` and the message shows its `body`, never a failed page. `ForwardCard` draws it inside `MessageRow`, so channels, DMs, threads, forum posts and the pins sheet all get it. The server's fallback body (`Encaminhado: <title> <url>`) is hidden when it equals `forwardFallbackBody(forward)`, a byte-for-byte port of the shared helper (pinned in `ForwardModelsTest`); a comment that merely starts with the word stays.
+- **Tap.** `ForwardLinks.resolve`: a Baú post or message jump link on this instance (`Backend.appUrl` or `pqp.gg`) opens in the app (`BauRoute` with the post focused, `ChatRoute.focusMessageId`); any other URL or path goes to a Custom Tab, `http(s)` only. The jump loads `GET /channels/:id/messages?around=<id>`, scrolls, flashes the row, and while newer messages are unloaded (`hasNewer`) live messages are held back and "Ir pras mais recentes" returns to the end. A message that is gone (400/403/404) falls back to the newest page; any other failure is the chat's normal load error. Newer pages load only once the reader scrolls (loading on arrival appended a page under the list's anchor and carried the view away from the target). A card for a server this account is not in shows "Tu não participa desse servidor" instead of opening a screen that cannot load (the snapshot carries no public URL yet).
+- **The action.** "Encaminhar" is on a server-channel message's long press (never a DM, nudge, blocked author, or a voice note alone: the server answers 422 for those) and on a Baú post's menu. It shows only while `GET /api/forwards/config` says enabled (`ForwardConfigs`, kept 60 s, off on any failure; cards in history keep drawing with the flag off).
+- **The picker.** One `ForwardSheet` owned by `ForwardHost` in `PqpApp`. Text channels you hold SEND_MESSAGES in (`GET /servers/:id/permissions`), DMs and groups, and friends with no DM yet; recent first (device-local), search ignores case and accents, up to five. A message in a private channel, or in a channel this client cannot place in the loaded list (a thread, a forum post, a failed load), is restricted to its server before the picker opens (`ForwardInputs.privateBoundary`). A members-only post offers only its own server, and a forward of a restricted card offers only `restrictedToServerId ?? sourceServerId` (never a DM or another server). It stays open on a per-target refusal with the reason on that row; a lost connection retries with the same nonce.
+- **Tests.** `ForwardViewModelTest` builds the view model for real (through `ForwardBackend`, on an unconfined Main): an earlier push crashed the picker because `init` ran `load()` before its own fields existed, and no pure-function test could see it.
+- **Local QA.** Run the API from the server PR with `FORWARD_MESSAGES=true COMMUNITY_HOME_ENABLED=true`, build with `-Ppqp.appUrl=http://localhost:5173` (the origin the server writes into `url` when a phone sends no `Origin`), and use `pqp.devUser` for a second account.
+
+## Seguir (follow a Baú into a channel)
+
+Contract: `packages/shared/src/bau-follow.ts`, rules in `docs/COMMUNITY_HOME.md` §"Seguir". Code: `app/src/main/kotlin/gg/pqp/app/follow`. The phone sets follows up and takes them down; the delivery is the server's, and the card it posts is the forward card the app already draws.
+
+- **The button.** `FollowButton` on the Baú top bar, "Seguir" or "Seguindo" once the viewer follows it somewhere. Drawn only while `GET /api/servers/:id/home/follow` says `enabled` (the `bau_follow` flag for that source, the owner's switch, and the viewer being allowed); a failed read is "not followable", so a button that cannot be trusted is absent. The state is read again when the sheet opens.
+- **The picker.** `BauFollowSheet`: what the viewer already follows of this Baú (Deixar de seguir, Retomar when paused, with the reason), then the server (`.../home/follow/destinations`, the viewer's own servers where they hold MANAGE_WEBHOOKS or MANAGE_CHANNELS), a free text channel, and an optional role to mention. A server at its cap, or with every channel already following, says so and offers no submit. Errors are the web's table (`FollowFailures.ofCreate`): 429 slow down, 403 "not that channel" versus "this community does not accept that server" (told apart by the server's sentence), 409 "already follows" versus the cap of 20, 400 the role, 404 "no longer accepts follows" (and the button goes). A lost response re-reads what is true instead of guessing.
+- **The staff side.** For a viewer who manages the server and where the flag is on (`GET .../home/followers` answers `flagOn`), a menu on the Baú bar opens `BauFollowersSheet`: **Permitir seguir** (the owner's switch, `PATCH .../home/follow-config`; it lives here because the phone has no server settings, and the button on the header follows it at once), the follower count and list (server and channel names, never people; fifty at a time), **Remover**, **Remover e bloquear** (asks first), and Desbloquear. Changes show at once and a read reconciles.
+- **The channel.** `ChannelFollowsAction` puts a bell-ring in a text channel's top bar, only for somebody who holds MANAGE_WEBHOOKS or MANAGE_CHANNELS in that channel (the permissions snapshot, asked before the follows read, so members never ask) and only when the channel follows something or the read failed (403 and 404 are quiet). It opens the list with Deixar de seguir and Retomar.
+- **Tests.** `FollowContractTest` pins every model against the shared schema and the routes against the server; `FollowOutcomeTest` the status and sentence table; `FollowViewModelsTest` drives the three view models for real through `FollowBackend`.
+- **Local QA.** `COMMUNITIES_ENABLED=true COMMUNITY_HOME_ENABLED=true`, an `INSERT INTO feature_flags (key, enabled) VALUES ('bau_follow', true)` in the scratch database, the Baú on for a community you own, then switch **Permitir seguir** on from the phone. `POST .../home/follow` as another dev-bypass account is the quickest way to give the follower list rows.
 
 ## Attachments
 

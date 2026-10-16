@@ -25,6 +25,12 @@ export interface ViewerRequest {
   originRect: DOMRect | null;
   /** `data-story-ring` of the opening ring, looked up again at close. */
   originRingId: string | null;
+  /**
+   * Opened with Enter or Space (a click with `detail === 0`). Only then does
+   * closing paint a focus ring on the ring it returns to; after a mouse or a
+   * touch the focus goes back quietly, so nothing stays highlighted.
+   */
+  originByKeyboard?: boolean;
 }
 
 export interface ComposerRequest {
@@ -41,11 +47,22 @@ export interface PostingState {
   audienceKeys: string[];
   /** 0..1 while the bytes go up; null for a text card or once they are up. */
   progress: number | null;
-  status: "uploading" | "processing" | "failed" | "done";
+  /**
+   * `waiting`: there is no connection. Nothing is wrong with the story: it posts by itself when the
+   * connection is back (the window's `online`, or the tab becoming visible), and a tap on the ring
+   * offers "try now" or discard. `failed` is for a real refusal, or an automatic retry that failed.
+   */
+  status: "uploading" | "processing" | "waiting" | "failed" | "done";
   /** Why it failed, while `status` is "failed" (see `PostFailure`). */
   failure: PostFailure | null;
   /** Post again; null when posting again cannot work and a tap only dismisses. */
   retry: (() => void) | null;
+  /**
+   * Throw the draft away: its uploads abort and the objects already stored are
+   * deleted on the server, and the ring goes back to what it was. Always there
+   * while the post is on screen; a failed ring offers it beside "Tentar de novo".
+   */
+  discard: (() => void) | null;
 }
 
 /**

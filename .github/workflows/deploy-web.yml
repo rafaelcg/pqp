@@ -155,6 +155,23 @@ jobs:
           FARO_SOURCEMAP_STACK_ID: ${{ vars.FARO_SOURCEMAP_STACK_ID }}
         run: pnpm --filter @pqp/client build
 
+      # "What changed" for the update popover (client/src/lib/update-changes.ts).
+      # Writes dist/changes.json from the merged work that touched the web
+      # client since the build that is live now, plus what is already listed, so
+      # a window that has been open for a week is told everything since ITS
+      # build. A person-facing line only exists where the author wrote an
+      # "Update note (pt-BR): ..." line in a commit message; the rest are
+      # counted. A nicety: the script never fails (network, a shallow history,
+      # a first run) and `continue-on-error` is the second belt, so this can
+      # never be the reason a deploy does not ship.
+      - name: Write what changed
+        continue-on-error: true
+        run: |
+          git fetch --no-tags --depth=400 origin main || true
+          node client/scripts/build-changes.mjs \
+            --out "$GITHUB_WORKSPACE/client/dist/changes.json" \
+            --live https://pqp.gg
+
       # Install wrangler outside the pnpm workspace (npm + workspace:* fails in client/)
       #
       # RUN IT FROM `client/`, not from the temp directory. `wrangler pages

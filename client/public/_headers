@@ -37,6 +37,13 @@
 /version.json
   Cache-Control: no-store
 
+# What changed, for the update popover (`src/lib/update-changes.ts`). Written by
+# the deploy workflow beside the build (`scripts/build-changes.mjs`), read only
+# when somebody opens the popover, and absent on a build that did not run that
+# step. Never cached: it is wrong the minute the next deploy lands.
+/changes.json
+  Cache-Control: no-store
+
 # The page that names the bundle. Pages already sends
 # `public, max-age=0, must-revalidate` for HTML with no rule at all; it is stated
 # here because a stale index.html is the other way to pin somebody to an old

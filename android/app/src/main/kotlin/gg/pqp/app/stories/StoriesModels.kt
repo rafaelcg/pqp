@@ -22,6 +22,17 @@ data class StoriesConfig(
     val maxVideoMs: Long = 30_000,
     val maxBytes: Long = 25L * 1024 * 1024,
     val ttlHours: Int = 24,
+    /**
+     * How many layers a story may carry. 0 (or absent) is a server that
+     * predates layers, which would silently strip them on create: the editor
+     * hides its layer tools against it.
+     */
+    val layersMax: Int = 0,
+    /**
+     * `POST /api/stories/uploads` is on (a runtime kill switch server side) and storage is configured. Absent
+     * from a server that predates it, which reads as off: files then go the old way, at "Postar".
+     */
+    val eagerUploads: Boolean = false,
 )
 
 @Serializable
@@ -105,6 +116,14 @@ data class Story(
     val media: StoryMedia? = null,
     val sticker: StorySticker? = null,
     val call: StoryCallLive? = null,
+    /**
+     * The layers drawn over the base, back to front. Decoded one by one: a
+     * layer this build cannot read is dropped, never a reason to lose the story.
+     */
+    @Serializable(with = StoryLayersSerializer::class)
+    val layers: List<StoryLayer> = emptyList(),
+    /** The story's words read out, for a screen reader. */
+    val altText: String? = null,
     val publishedAt: String? = null,
     val expiresAt: String? = null,
     val audiences: List<StoryAudience> = emptyList(),
@@ -161,6 +180,8 @@ data class StoryMediaInput(
     val width: Int,
     val height: Int,
     val durationMs: Long? = null,
+    /** An eager upload (`POST /api/stories/uploads`) this file was already sent through. */
+    val uploadId: String? = null,
 )
 
 @Serializable
@@ -179,13 +200,43 @@ data class CreateStoryRequest(
     val repliesEnabled: Boolean = true,
     val audiences: StoryAudienceTargets,
     val media: StoryMediaInput? = null,
+    /** `storyLayerInputSchema`, back to front. Built by `StoryLayers`, never from free text. */
+    val layers: List<kotlinx.serialization.json.JsonObject> = emptyList(),
+    /** The text layers read out, for a screen reader. */
+    val altText: String? = null,
     /**
      * Made once per story the person means to post and resent on a retry: a
      * second create with the same id answers the first story instead of
      * posting a second one.
      */
     val requestId: String? = null,
+    /**
+     * Create and publish in one call. Only when every file is an eager upload; the server
+     * refuses it otherwise. The answer is the published story, with no upload slots.
+     */
+    val publish: Boolean? = null,
 )
+
+/** `createStoryUploadSchema`: start a file before the story exists. */
+@Serializable
+data class CreateStoryUploadRequest(
+    /** `base` or `layer`. */
+    val kind: String,
+    val contentType: String,
+    val byteLength: Long,
+)
+
+/** `createStoryUploadResponseSchema`: the signed PUT, and the id the create will name. */
+@Serializable
+data class CreateStoryUploadResponse(
+    val uploadId: String,
+    val url: String,
+    val method: String = "PUT",
+    val headers: Map<String, String> = emptyMap(),
+    val expiresAt: String? = null,
+) {
+    fun asUpload(): StoryUpload = StoryUpload(url = url, method = method, headers = headers, expiresAt = expiresAt)
+}
 
 @Serializable
 data class StoryUpload(
@@ -196,7 +247,12 @@ data class StoryUpload(
 )
 
 @Serializable
-data class CreateStoryResponse(val story: Story, val upload: StoryUpload? = null)
+data class CreateStoryResponse(
+    val story: Story,
+    val upload: StoryUpload? = null,
+    /** One per photo and drawing layer. Every one is PUT before the story is published. */
+    val layerUploads: List<StoryLayerUploadSlot> = emptyList(),
+)
 
 @Serializable
 data class PublishStoryResponse(val story: Story)

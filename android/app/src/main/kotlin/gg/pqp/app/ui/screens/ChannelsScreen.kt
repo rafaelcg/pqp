@@ -307,6 +307,8 @@ fun ChannelsScreen(
             if (snapshot != null) {
                 permissions = snapshot
                 permissionsConfirmed = true
+                // Opening a channel from here must not ask the same question again (Seguir's icon).
+                gg.pqp.app.follow.FollowPermissions.offer(session.api, serverId, snapshot)
             } else {
                 delay(RealtimeClient.backoffMillis(attempt))
             }

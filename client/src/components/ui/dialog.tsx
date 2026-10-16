@@ -555,10 +555,12 @@ export function Dialog({
               <button
                 type="button"
                 aria-label={t("a11y.closeDialog")}
-                // 28px drawn, 44px to a finger on a phone: the hit area grows,
-                // the icon does not.
+                // The icon button of the control ladder (`--control-md`, what `Button size="icon"`
+                // draws), 36px, not a one-off 28. The negative margins hand back the 8px it adds, so
+                // the glyph sits where it always did and the header does not grow. 44px to a finger
+                // on a phone: the pseudo-element reaches 4px past the box on every side.
                 className={cn(
-                  "relative shrink-0 rounded-[var(--radius-control)] p-1.5 text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text max-sm:after:absolute max-sm:after:-inset-2 max-sm:after:content-['']",
+                  "relative -my-1 -mr-1 grid h-[var(--control-md)] w-[var(--control-md)] shrink-0 place-items-center rounded-[var(--radius-control)] text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text max-sm:after:absolute max-sm:after:-inset-1 max-sm:after:content-['']",
                   // A full-screen phone dialog closes from the left.
                   phoneFullScreen && "max-sm:hidden",
                 )}

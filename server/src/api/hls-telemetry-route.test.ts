@@ -59,26 +59,6 @@ vi.mock("../voice/hls-playlist-proxy.js", async (importOriginal) => {
   return { ...actual, resolveHlsSessionId: resolveHlsSessionIdSpy };
 });
 
-/**
- * A clock the route's rate limiters can be frozen on. `createRateLimiter`
- * captures `Date.now` when `./index.js` is first evaluated, so spying on
- * `Date.now` later does not reach it. This wrapper is installed BEFORE that
- * import and follows the real clock until a test freezes it. Without it, the
- * per-session limiter (120 tokens, 10 refilled a second) refilled while 130
- * sequential requests ran on a slow CI runner, and the last one got through.
- */
-const realDateNow = Date.now.bind(Date);
-const clock = {
-  frozenAt: null as number | null,
-  freeze() {
-    clock.frozenAt = realDateNow();
-  },
-  thaw() {
-    clock.frozenAt = null;
-  },
-};
-Date.now = () => clock.frozenAt ?? realDateNow();
-
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
@@ -112,6 +92,64 @@ async function post(
   });
   const text = await response.text();
   return { status: response.status, json: text ? JSON.parse(text) : null };
+}
+
+/** Mirrors `liveHlsTelemetrySessionLimiter` in `api/index.ts`. */
+const SESSION_LIMIT_CAPACITY = 120;
+const SESSION_LIMIT_REFILL_PER_SECOND = 10;
+
+/**
+ * Many accounts, one verified session, each under its own per-user budget
+ * (one request apiece), until the per-session limiter says 429.
+ *
+ * The bucket refills on the wall clock (10 tokens a second), so a fixed
+ * count of 130 requests only trips it when the loop finishes inside about a
+ * second: it did on a quiet machine (~0.5 s) and not on a loaded CI runner,
+ * where one run saw 130 straight 200s. Looping until the first refusal
+ * removes the dependence on speed: the net drain is positive at any rate
+ * above ten requests a second. The bound of 2000 only exists so a broken
+ * limiter fails the test instead of hanging it.
+ */
+async function driveOneSessionUntilLimited(userPrefix: string): Promise<{
+  total: number;
+  accepted: number;
+  rejected: number;
+  lastStatus: number;
+  elapsedMs: number;
+}> {
+  const startedAt = performance.now();
+  let accepted = 0;
+  let rejected = 0;
+  let total = 0;
+  let lastStatus = 200;
+  while (rejected === 0 && total < 2_000) {
+    const fakeViewer = { id: `${userPrefix}-${total}`, clerk_id: `${userPrefix}-${total}` };
+    const token = mintHlsViewerToken({
+      userId: fakeViewer.id,
+      channelId: TOKEN_CHANNEL,
+      startedAt: TOKEN_STARTED_AT,
+    })!;
+    const result = await post(
+      {
+        sessionId: "irrelevant-because-verified",
+        sessionToken: token,
+        samples: [{ rung: "720p30", latencyMs: 1_000 }],
+      },
+      fakeViewer,
+    );
+    total += 1;
+    lastStatus = result.status;
+    if (result.status === 200) {
+      accepted += 1;
+    } else if (result.status === 429) {
+      rejected += 1;
+    } else {
+      // Not the limiter's doing (a 400, 401, 500): more of the same proves
+      // nothing, so hand it back for the assertions to name.
+      break;
+    }
+  }
+  return { total, accepted, rejected, lastStatus, elapsedMs: performance.now() - startedAt };
 }
 
 describeDb("POST /api/live-hls/telemetry", () => {
@@ -153,11 +191,6 @@ describeDb("POST /api/live-hls/telemetry", () => {
 
   afterEach(() => {
     actor = null;
-    clock.thaw();
-  });
-
-  afterAll(() => {
-    Date.now = realDateNow;
   });
 
   it("refuses an unauthenticated batch", async () => {
@@ -735,36 +768,13 @@ describeDb("POST /api/live-hls/telemetry", () => {
       // Many different accounts (each under its OWN per-user budget, one
       // request apiece) sharing the SAME verified session, past the
       // per-session limiter's capacity (120). If the limiter ran AFTER the
-      // lookup, every one of these 130 would still call it before being
-      // refused; if it gates the lookup as intended, the calls that got a
-      // 429 make no call to it at all.
-      clock.freeze();
-      let rejected = 0;
-      for (let i = 0; i < 130; i++) {
-        const fakeViewer = {
-          id: `guard-order-user-${i}`,
-          clerk_id: `guard-order-${i}`,
-        };
-        const token = mintHlsViewerToken({
-          userId: fakeViewer.id,
-          channelId: TOKEN_CHANNEL,
-          startedAt: TOKEN_STARTED_AT,
-        })!;
-        const result = await post(
-          {
-            sessionId: "irrelevant",
-            sessionToken: token,
-            samples: [{ rung: "720p30", latencyMs: 1_000 }],
-          },
-          fakeViewer,
-        );
-        if (result.status === 429) {
-          rejected += 1;
-        }
-      }
-      expect(rejected).toBeGreaterThan(0);
-      expect(resolveHlsSessionIdSpy.mock.calls.length).toBeLessThan(130);
-      expect(resolveHlsSessionIdSpy.mock.calls.length).toBe(130 - rejected);
+      // lookup, every request would still call it before being refused; if
+      // it gates the lookup as intended, the calls that got a 429 make no
+      // call to it at all.
+      const run = await driveOneSessionUntilLimited("guard-order-user");
+      expect(run.rejected).toBeGreaterThan(0);
+      expect(resolveHlsSessionIdSpy.mock.calls.length).toBeLessThan(run.total);
+      expect(resolveHlsSessionIdSpy.mock.calls.length).toBe(run.total - run.rejected);
     });
   });
 
@@ -776,33 +786,16 @@ describeDb("POST /api/live-hls/telemetry", () => {
    * limiter can be what trips.
    */
   it("rate-limits a session receiving far more batches than one real party would, across many accounts", async () => {
-    // Frozen so no tokens refill between requests: exactly the 120 the bucket
-    // holds are accepted, however slow the machine running this is.
-    clock.freeze();
-    let lastStatus = 200;
-    let accepted = 0;
-    for (let i = 0; i < 130; i++) {
-      const fakeViewer = { id: `session-limit-user-${i}`, clerk_id: `session-limit-${i}` };
-      const token = mintHlsViewerToken({
-        userId: fakeViewer.id,
-        channelId: TOKEN_CHANNEL,
-        startedAt: TOKEN_STARTED_AT,
-      })!;
-      const result = await post(
-        {
-          sessionId: "irrelevant-because-verified",
-          sessionToken: token,
-          samples: [{ rung: "720p30", latencyMs: 1_000 }],
-        },
-        fakeViewer,
-      );
-      lastStatus = result.status;
-      if (result.status === 200) {
-        accepted += 1;
-      }
-    }
-    expect(lastStatus).toBe(429);
-    expect(accepted).toBe(120);
+    const run = await driveOneSessionUntilLimited("session-limit-user");
+    expect(run.lastStatus).toBe(429);
+    // The bucket starts full, so the capacity is always honoured ...
+    expect(run.accepted).toBeGreaterThanOrEqual(SESSION_LIMIT_CAPACITY);
+    // ... and it cannot admit more than the capacity plus what the refill
+    // earned while the loop ran, however slow the machine was.
+    expect(run.accepted).toBeLessThanOrEqual(
+      SESSION_LIMIT_CAPACITY +
+        Math.ceil((run.elapsedMs / 1000) * SESSION_LIMIT_REFILL_PER_SECOND),
+    );
     expect(hlsTelemetryActivity().batchesRejectedRateLimit).toBeGreaterThan(0);
   });
 });

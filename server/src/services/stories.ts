@@ -6,17 +6,25 @@ import {
   parsePermissions,
   STORY_COMMUNITY_MIN_ACCOUNT_AGE_HOURS,
   STORY_IDS_MAX,
+  STORY_LAYER_DRAWING_TYPES,
+  STORY_LAYER_MAX_BYTES,
+  STORY_LAYERS_MAX,
   STORY_MAX_BYTES,
   STORY_MAX_VIDEO_MS,
   STORY_POSTS_PER_DAY,
   STORY_SNIFF_BYTES,
   STORY_STRIP_MAX_AUTHORS,
+  STORY_TEXT_MAX,
   STORY_TTL_HOURS,
+  STORY_UPLOADS_OUTSTANDING_MAX,
   STORY_VIEWERS_PAGE_SIZE,
   hasPermission,
   isStoryImageType,
+  isStoryVideoType,
   sniffStoryMediaType,
-  type CreateStoryRequest,
+  type CreateStoryParsed,
+  type CreateStoryUploadParsed,
+  type CreateStoryUploadResponse,
   type StoriesConfig,
   type Story,
   type StoryAudience,
@@ -28,6 +36,9 @@ import {
   type StoryCard,
   type StoryContentType,
   type StoryKind,
+  type StoryLayer,
+  type StoryLayerInputParsed,
+  type StoryLayerUpload,
   type StoryNotice,
   type StoryReaction,
   type StoryReplyBlockedReason,
@@ -53,6 +64,7 @@ import { isFfmpegAvailable } from "../speech/transcode.js";
 import { checkAutomod } from "./automod.js";
 import { noBlockBetweenSql } from "./blocks.js";
 import {
+  combineScans,
   isContentScanConfigured,
   quarantineDays,
   scanAllowsAttachment,
@@ -146,7 +158,9 @@ export class StoryError extends Error {
       | "not_verified"
       | "refused"
       | "dm_closed"
-      | "replies_off",
+      | "replies_off"
+      /** An eager upload already backs another story. */
+      | "claimed",
     message: string,
   ) {
     super(message);
@@ -175,6 +189,28 @@ export function storyMediaKey(
   return `${storyPrefix(authorId, storyId)}${randomUUID()}${EXTENSION[contentType]}`;
 }
 
+/** An object behind an image or drawing layer: `layer-<uuid>.<ext>` under the story's prefix. */
+export function storyLayerKey(
+  authorId: string,
+  storyId: string,
+  contentType: StoryContentType,
+): string {
+  return `${storyPrefix(authorId, storyId)}layer-${randomUUID()}${EXTENSION[contentType]}`;
+}
+
+/**
+ * Where an eager upload (`POST /api/stories/uploads`) lands before any story
+ * exists. Its own prefix, never a story's: `isStoryKey` is false for it, so
+ * nothing can publish or serve it as a story object, and the claim copies it.
+ */
+export function storyUploadKey(
+  authorId: string,
+  uploadId: string,
+  contentType: StoryContentType,
+): string {
+  return `stories/${authorId}/uploads/${uploadId}${EXTENSION[contentType]}`;
+}
+
 export function storyPosterKey(authorId: string, storyId: string): string {
   return `${storyPrefix(authorId, storyId)}poster.jpg`;
 }
@@ -187,6 +223,11 @@ export function storyPosterKey(authorId: string, storyId: string): string {
 export function isStoryKey(authorId: string, storyId: string, key: string): boolean {
   const prefix = storyPrefix(authorId, storyId);
   return key.startsWith(prefix) && !key.includes("..") && key.length > prefix.length;
+}
+
+/** A key `pinStoryUpload` minted: the verified copy, which no upload URL may be issued for. */
+function isPinnedKey(key: string): boolean {
+  return /\/pinned-[^/]+$/.test(key);
 }
 
 function readUrlTtlSeconds(expiresAt: Date | null): number {
@@ -253,6 +294,8 @@ export async function storiesConfig(serverId: string | null): Promise<StoriesCon
     maxVideoMs: STORY_MAX_VIDEO_MS,
     maxBytes: STORY_MAX_BYTES,
     ttlHours: STORY_TTL_HOURS,
+    layersMax: STORY_LAYERS_MAX,
+    eagerUploads: mediaEnabled && isEnabled("stories_eager_uploads"),
   };
 }
 
@@ -402,6 +445,36 @@ export async function listStoryAudienceOptions(userId: string): Promise<StoryAud
 
 // ------------------------------------------------------------------ rows
 
+/**
+ * A layer as stored in `stories.layers`: what the client sent, validated, with
+ * one change. An image or drawing layer holds `mediaKey` (the server-minted
+ * object key) and what the client declared about the file instead of `upload`.
+ * Every other type is stored as sent.
+ */
+type StoredObjectLayer = {
+  type: "image" | "drawing";
+  id: string;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+  /** Image layers only. */
+  shape?: "rect" | "rounded" | "circle";
+  /** Image layers only: the author's description of the photo. Absent on a story posted without one. */
+  alt?: string;
+  mediaKey: string;
+  contentType: StoryContentType;
+  byteSize: number;
+  width: number;
+  height: number;
+};
+
+type StoredLayer = Exclude<StoryLayerInputParsed, { type: "image" | "drawing" }> | StoredObjectLayer;
+
+function isObjectLayer(layer: StoredLayer): layer is StoredObjectLayer {
+  return layer.type === "image" || layer.type === "drawing";
+}
+
 interface StoryRow {
   id: string;
   author_id: string;
@@ -411,6 +484,9 @@ interface StoryRow {
   text_body: string | null;
   background: string | null;
   sticker: StorySticker | null;
+  layers: StoredLayer[];
+  alt_text: string | null;
+  layer_keys: string[];
   replies_enabled: boolean;
   media_storage_key: string | null;
   media_content_type: string | null;
@@ -430,7 +506,8 @@ interface StoryRow {
 
 const STORY_COLUMNS = `
   s.id, s.author_id, s.kind, s.status, s.caption, s.text_body, s.background,
-  s.sticker, s.replies_enabled, s.media_storage_key, s.media_content_type,
+  s.sticker, s.layers, s.alt_text, s.layer_keys, s.replies_enabled,
+  s.media_storage_key, s.media_content_type,
   s.media_byte_size, s.media_width, s.media_height, s.media_duration_ms,
   s.poster_storage_key, s.published_at, s.expires_at, s.created_at,
   u.display_name AS author_name, u.avatar_url AS author_avatar,
@@ -694,13 +771,15 @@ interface CallRoom {
  * with no faces, no count and no join button. The voice module is imported
  * lazily; a read with no call never loads it.
  */
+type CallRow = Pick<StoryRow, "id" | "author_id" | "sticker">;
+
 async function resolveCalls(
   viewerId: string,
-  rows: StoryRow[],
+  rows: CallRow[],
 ): Promise<Map<string, StoryCallLive>> {
   const out = new Map<string, StoryCallLive>();
   const stickered = rows.filter(
-    (row): row is StoryRow & { sticker: StorySticker } => row.sticker?.type === "call",
+    (row): row is CallRow & { sticker: StorySticker } => row.sticker?.type === "call",
   );
   if (stickered.length === 0) {
     return out;
@@ -778,13 +857,75 @@ async function resolveCalls(
       )
     : { rows: [] };
   const byId = new Map(people.rows.map((person) => [person.id, person]));
+  // Whether the AUTHOR can still use the room: one permission read per distinct author and room,
+  // run together (bounded) before the cards are built, and only for cards a viewer can get that far
+  // with. A read that fails is UNKNOWN: that card is left out of this read, never the whole read.
+  const authorKey = (authorId: string, channelId: string) => `${authorId}:${channelId}`;
+  const authorAccess = new Map<string, boolean | null>();
+  const wanted = new Map<string, { authorId: string; room: CallRoom }>();
   for (const row of stickered) {
     const room = rooms.get(row.sticker.channelId);
+    if (room && room.serverId === row.sticker.serverId && room.viewerCanJoin && room.rosterKnown) {
+      wanted.set(authorKey(row.author_id, room.channelId), { authorId: row.author_id, room });
+    }
+  }
+  await mapLimit([...wanted.entries()], PER_REQUEST_CONCURRENCY, async ([key, { authorId, room }]) => {
+    try {
+      const perms = await computeMemberPermissions(room.serverId, authorId, room.channelId);
+      authorAccess.set(
+        key,
+        hasPermission(perms, Permission.VIEW_CHANNEL) && hasPermission(perms, Permission.CONNECT),
+      );
+    } catch (error) {
+      authorAccess.set(key, null);
+      console.error(
+        "[stories] call author permission read failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  });
+  for (const row of stickered) {
+    const room = rooms.get(row.sticker.channelId);
+    if (!room) {
+      // The channel is gone: the one thing, with the author losing access, that ends a card.
+      out.set(row.id, {
+        serverId: row.sticker.serverId,
+        channelId: row.sticker.channelId,
+        channelName: "",
+        participants: [],
+        count: 0,
+        state: "ended",
+        joinable: false,
+      });
+      continue;
+    }
     // A room the viewer cannot see is not named to them at all: no call.
-    if (!room || room.serverId !== row.sticker.serverId || !room.viewerCanSee) {
+    if (room.serverId !== row.sticker.serverId || !room.viewerCanSee) {
       continue;
     }
     if (!room.viewerCanJoin) {
+      // Named, but the roster is theirs to see only with CONNECT: no faces, no count, no way in.
+      // That is not "ended": nothing ended, they just cannot enter.
+      out.set(row.id, {
+        serverId: room.serverId,
+        channelId: room.channelId,
+        channelName: room.name,
+        participants: [],
+        count: 0,
+        state: "live",
+        joinable: false,
+      });
+      continue;
+    }
+    if (!room.rosterKnown) {
+      continue;
+    }
+    const authorCan = authorAccess.get(authorKey(row.author_id, room.channelId));
+    if (authorCan === null || authorCan === undefined) {
+      continue;
+    }
+    if (!authorCan) {
+      // The author can no longer connect to the room (removed, or the role lost): the card is over.
       out.set(row.id, {
         serverId: room.serverId,
         channelId: room.channelId,
@@ -796,12 +937,10 @@ async function resolveCalls(
       });
       continue;
     }
-    if (!room.rosterKnown) {
-      continue;
-    }
-    const live = room.seated.includes(row.author_id);
-    const full = live && room.transport === "mesh" && room.seated.length >= MESH_VOICE_LIMIT;
-    const state: StoryCallLive["state"] = !live ? "ended" : full ? "full" : "live";
+    // An EMPTY room is not an ended call: the card reads "nobody in the call right now" and still
+    // offers the way in (joining an empty room is fine). `full` is only a mesh room at its limit.
+    const full = room.transport === "mesh" && room.seated.length >= MESH_VOICE_LIMIT;
+    const state: StoryCallLive["state"] = full ? "full" : "live";
     out.set(row.id, {
       serverId: room.serverId,
       channelId: room.channelId,
@@ -845,6 +984,137 @@ function mediaOf(row: StoryRow): Story["media"] {
 }
 
 /**
+ * The layers of each story as THIS viewer gets them. Image and drawing layers
+ * become presigned URLs (the stored key never leaves the server); a mention
+ * carries the person it names, and is dropped when that person is gone or a
+ * block stands between them and the viewer (the name must not be served across
+ * a block); a call layer is kept only while the story's call is resolved for
+ * this viewer (`calls`), which is also what keeps a call into a server the
+ * viewer does not share from naming its room. A story that has a call sticker
+ * and no call layer (posted by a build that predates layers) gets one
+ * synthesised at the bottom center, with the story's id as the layer id.
+ */
+async function resolveLayers(
+  viewerId: string,
+  rows: StoryRow[],
+  calls: Map<string, StoryCallLive>,
+  audiences: Map<string, StoryAudience[]>,
+): Promise<Map<string, StoryLayer[]>> {
+  const out = new Map<string, StoryLayer[]>();
+  const mentioned = [
+    ...new Set(
+      rows.flatMap((row) =>
+        (row.layers ?? []).flatMap((layer) => (layer.type === "mention" ? [layer.userId] : [])),
+      ),
+    ),
+  ];
+  const people = new Map<string, StoryAuthor>();
+  if (mentioned.length > 0) {
+    const found = await getPool().query<{
+      id: string;
+      display_name: string;
+      avatar_url: string | null;
+      handle: string | null;
+    }>(
+      `SELECT u.id, u.display_name, u.avatar_url, u.handle FROM users u
+        WHERE u.id = ANY($1::uuid[]) AND ${noBlockBetweenSql("u.id", "$2::uuid")}`,
+      [mentioned, viewerId],
+    );
+    for (const person of found.rows) {
+      people.set(person.id, {
+        id: person.id,
+        displayName: person.display_name,
+        avatarUrl: person.avatar_url,
+        handle: person.handle,
+      });
+    }
+  }
+  for (const row of rows) {
+    const ttlSeconds = readUrlTtlSeconds(row.expires_at);
+    const layers: StoryLayer[] = [];
+    let hasCall = false;
+    for (const layer of row.layers ?? []) {
+      switch (layer.type) {
+        case "image":
+          layers.push({
+            type: "image",
+            id: layer.id,
+            x: layer.x,
+            y: layer.y,
+            scale: layer.scale,
+            rotation: layer.rotation,
+            shape: layer.shape ?? "rect",
+            alt: layer.alt ?? null,
+            url: presignGet(layer.mediaKey, { ttlSeconds }),
+            width: layer.width,
+            height: layer.height,
+          });
+          break;
+        case "drawing":
+          layers.push({
+            type: "drawing",
+            id: layer.id,
+            x: layer.x,
+            y: layer.y,
+            scale: layer.scale,
+            rotation: layer.rotation,
+            url: presignGet(layer.mediaKey, { ttlSeconds }),
+            width: layer.width,
+            height: layer.height,
+          });
+          break;
+        case "mention": {
+          const user = people.get(layer.userId);
+          if (user) {
+            layers.push({ ...layer, user });
+          }
+          break;
+        }
+        case "call":
+          hasCall = true;
+          if (callIsShown(row, audiences, calls)) {
+            layers.push(layer);
+          }
+          break;
+        default:
+          layers.push(layer);
+      }
+    }
+    if (!hasCall && row.sticker?.type === "call" && callIsShown(row, audiences, calls)) {
+      layers.push({
+        type: "call",
+        id: row.id,
+        x: 0.5,
+        y: 0.8,
+        scale: 1,
+        rotation: 0,
+        serverId: row.sticker.serverId,
+        channelId: row.sticker.channelId,
+      });
+    }
+    out.set(row.id, layers);
+  }
+  return out;
+}
+
+/** The story's call is resolved for this viewer and its server is one they see the story through. */
+function callIsShown(
+  row: StoryRow,
+  audiences: Map<string, StoryAudience[]>,
+  calls: Map<string, StoryCallLive>,
+): boolean {
+  const call = row.sticker?.type === "call" ? row.sticker : null;
+  if (!call) {
+    return false;
+  }
+  const through = audiences.get(row.id) ?? [];
+  return (
+    through.some((audience) => audience.kind === "server" && audience.serverId === call.serverId) &&
+    calls.has(row.id)
+  );
+}
+
+/**
  * Rows to wire stories, for one viewer. `audiences` is what this viewer sees
  * each through (the author: all of them).
  */
@@ -880,6 +1150,7 @@ async function hydrate(
   const bauOn = own.length > 0 && isEnabled("community_home");
   // Call stickers resolved together rather than one after another.
   const calls = await resolveCalls(viewerId, rows);
+  const layersByStory = await resolveLayers(viewerId, rows, calls, audiences);
 
   const stories: Story[] = [];
   for (const row of rows) {
@@ -910,11 +1181,15 @@ async function hydrate(
       author: authorOf(row),
       kind: row.kind,
       caption: row.caption,
-      text: row.text_body,
+      // A text card made of layers alone has an empty body (the column is
+      // NOT NULL for the kind); the wire says null rather than "".
+      text: row.text_body || null,
       background: (row.background as StoryBackground | null) ?? null,
       media: mediaOf(row),
       sticker: row.sticker,
       call,
+      layers: layersByStory.get(row.id) ?? [],
+      altText: row.alt_text,
       publishedAt: row.published_at?.toISOString() ?? null,
       expiresAt: row.expires_at?.toISOString() ?? null,
       audiences: seenThrough,
@@ -968,6 +1243,8 @@ interface StripRow {
   latest_at: Date;
   expires_at: Date;
   unseen: boolean;
+  /** The call stickers in the author's live stories here (resolved to `has_call` after the query). */
+  call_stickers: CallRow[];
   has_call: boolean;
   author_name: string;
   author_avatar: string | null;
@@ -1004,16 +1281,19 @@ async function stripRows(
               max(l.published_at) AS latest_at,
               max(l.expires_at) AS expires_at,
               bool_or(v.story_id IS NULL) AS unseen,
-              -- COALESCE: a story with no sticker compares NULL, and bool_or
-              -- over nothing but NULLs is NULL, which the contract says is a
-              -- boolean (hasCall).
-              COALESCE(bool_or(l.sticker->>'type' = 'call'), FALSE) AS has_call
+              -- The call stickers themselves, so the ring can say whether anyone is IN the
+              -- room right now (a sticker in the row is content, not liveness).
+              COALESCE(
+                jsonb_agg(jsonb_build_object('id', l.id, 'author_id', l.author_id, 'sticker', l.sticker))
+                  FILTER (WHERE l.sticker->>'type' = 'call'),
+                '[]'::jsonb
+              ) AS call_stickers
          FROM live l
          LEFT JOIN story_views v ON v.story_id = l.id AND v.viewer_id = $1
         GROUP BY l.author_id
      )
      SELECT g.author_id, g.story_ids, g.latest_at, g.expires_at,
-            (g.unseen AND g.author_id <> $1) AS unseen, g.has_call,
+            (g.unseen AND g.author_id <> $1) AS unseen, g.call_stickers,
             u.display_name AS author_name, u.avatar_url AS author_avatar,
             u.handle AS author_handle
        FROM grouped g
@@ -1033,7 +1313,18 @@ async function stripRows(
       LIMIT ${STORY_STRIP_MAX_AUTHORS + 1}`,
     params,
   );
-  return result.rows;
+  // The "em call" badge is liveness: only while somebody is in the room, as this viewer may see it.
+  const live = await resolveCalls(
+    String(params[0]),
+    result.rows.flatMap((row) => row.call_stickers),
+  );
+  return result.rows.map((row) => ({
+    ...row,
+    has_call: row.call_stickers.some((entry) => {
+      const call = live.get(entry.id);
+      return Boolean(call && call.state !== "ended" && call.count > 0);
+    }),
+  }));
 }
 
 /** The viewer is not blocked either way, and has not muted the author. */
@@ -1156,12 +1447,14 @@ export async function listFriendsStrip(viewer: DbUser): Promise<StoryStrip> {
 export interface CreatedStory {
   story: Story;
   upload: StoryUpload | null;
+  /** One per image or drawing layer; the client PUTs each, then publishes. */
+  layerUploads: StoryLayerUpload[];
   /** Server ids a live text story went to, for the WS nudge. */
   liveServerIds: string[];
   liveFriends: boolean;
 }
 
-async function assertCanPost(user: DbUser, input: CreateStoryRequest): Promise<PosterRow> {
+async function assertCanPost(user: DbUser, input: CreateStoryParsed): Promise<PosterRow> {
   const poster = await loadPoster(user.id);
   if (!poster) {
     throw new StoryError("not_found", "Not found");
@@ -1187,6 +1480,61 @@ async function assertCanPost(user: DbUser, input: CreateStoryRequest): Promise<P
   return poster;
 }
 
+/** The call this story points at, from the call layer or the legacy sticker. */
+function callOf(input: CreateStoryParsed): StorySticker | undefined {
+  const layer = input.layers.find((candidate) => candidate.type === "call");
+  return layer?.type === "call"
+    ? { type: "call", serverId: layer.serverId, channelId: layer.channelId }
+    : input.sticker;
+}
+
+/**
+ * The words of the text layers, in layer order, joined by a newline. Cut to
+ * `STORY_TEXT_MAX` characters by default, which is what a text card's body
+ * column holds; AutoMod passes `Infinity` so nothing a person typed is skipped.
+ */
+function layerWords(
+  layers: ReadonlyArray<{ type: string; text?: string }>,
+  limit = STORY_TEXT_MAX,
+): string {
+  const all = layers
+    .flatMap((layer) => (layer.type === "text" && layer.text ? [layer.text] : []))
+    .join("\n");
+  return (Number.isFinite(limit) ? [...all].slice(0, limit).join("") : all).trim();
+}
+
+/** What the author wrote to describe their placed photos, one per line: a viewer hears it, so AutoMod reads it. */
+function layerAlts(layers: ReadonlyArray<{ type: string; alt?: string }>): string {
+  return layers.flatMap((layer) => (layer.type === "image" && layer.alt ? [layer.alt] : [])).join("\n");
+}
+
+/**
+ * Everybody a mention layer names must be able to see this story: a member of
+ * one of the servers it goes to, or an accepted friend of the author when it
+ * goes to friends, and not blocked either way. One answer for every refusal
+ * (nobody learns whether a person is blocked or just not there).
+ */
+async function assertMentions(authorId: string, input: CreateStoryParsed): Promise<void> {
+  const mentioned = input.layers.flatMap((layer) => (layer.type === "mention" ? [layer.userId] : []));
+  if (mentioned.length === 0) {
+    return;
+  }
+  const allowed = await getPool().query<{ id: string }>(
+    `SELECT u.id FROM users u
+      WHERE u.id = ANY($1::uuid[])
+        AND ${noBlockBetweenSql("u.id", "$2::uuid")}
+        AND (
+          EXISTS (SELECT 1 FROM server_members m
+                   WHERE m.user_id = u.id AND m.server_id = ANY($3::uuid[]))
+          OR ($4::boolean AND ${areFriendsSql("u.id", "$2::uuid")})
+        )`,
+    [mentioned, authorId, input.audiences.serverIds, input.audiences.friends],
+  );
+  if (allowed.rows.length !== new Set(mentioned).size) {
+    throw new StoryError("invalid", "You cannot mention that person here");
+  }
+}
+
 async function assertSticker(userId: string, sticker: StorySticker | undefined): Promise<void> {
   if (!sticker) {
     return;
@@ -1209,8 +1557,10 @@ async function assertSticker(userId: string, sticker: StorySticker | undefined):
  * AutoMod reads a story's words the way it reads a message's, per target
  * server. A staff member exempt from AutoMod in chat is exempt here too.
  */
-async function assertAutomod(userId: string, input: CreateStoryRequest): Promise<void> {
-  const body = [input.text, input.caption].filter(Boolean).join("\n");
+async function assertAutomod(userId: string, input: CreateStoryParsed): Promise<void> {
+  const body = [input.text, input.caption, layerWords(input.layers, Infinity), layerAlts(input.layers), input.altText]
+    .filter(Boolean)
+    .join("\n");
   if (!body) {
     return;
   }
@@ -1273,8 +1623,9 @@ async function replayCreate(userId: string, requestId: string): Promise<CreatedS
     media_storage_key: string | null;
     media_content_type: string | null;
     media_byte_size: number | null;
+    layers: StoredLayer[];
   }>(
-    `SELECT id, status, media_storage_key, media_content_type, media_byte_size
+    `SELECT id, status, media_storage_key, media_content_type, media_byte_size, layers
        FROM stories WHERE author_id = $1 AND request_id = $2`,
     [userId, requestId],
   );
@@ -1285,21 +1636,453 @@ async function replayCreate(userId: string, requestId: string): Promise<CreatedS
   if (row.status === "deleted" || row.status === "expired") {
     throw new StoryError("not_found", "That story is gone");
   }
+  // Files the first attempt claimed from eager uploads are already in place:
+  // no URL for those, so a replay never hands out a way to write to them.
+  const eagerKeys = new Set(
+    (
+      await getPool().query<{ claimed_key: string }>(
+        `SELECT claimed_key FROM story_uploads
+          WHERE claimed_story_id = $1 AND claimed_key IS NOT NULL`,
+        [row.id],
+      )
+    ).rows.map((claimed) => claimed.claimed_key),
+  );
   return {
     story: await getStoryForViewer(userId, row.id),
     upload:
       row.status === "pending" &&
       row.media_storage_key &&
+      !eagerKeys.has(row.media_storage_key) &&
+      !isPinnedKey(row.media_storage_key) &&
       row.media_content_type &&
       row.media_byte_size
         ? uploadFor(row.media_storage_key, row.media_content_type, row.media_byte_size)
         : null,
+    layerUploads: row.status === "pending" ? layerUploadsOf(row.layers, eagerKeys) : [],
     liveServerIds: [],
     liveFriends: false,
   };
 }
 
-export async function createStory(user: DbUser, input: CreateStoryRequest): Promise<CreatedStory> {
+/** A fresh upload URL for every image and drawing layer of a story still waiting for its bytes. */
+function layerUploadsOf(
+  layers: StoredLayer[],
+  /** Keys the claim filled from an eager upload: already in place, so no URL. */
+  skipKeys: ReadonlySet<string> = new Set(),
+): StoryLayerUpload[] {
+  // Never a PUT URL for an object publish already pinned: that key is the
+  // verified and scanned copy, and nothing may be able to write to it.
+  return layers
+    .filter(isObjectLayer)
+    .filter((layer) => !isPinnedKey(layer.mediaKey) && !skipKeys.has(layer.mediaKey))
+    .map((layer) => ({
+      layerId: layer.id,
+      ...uploadFor(layer.mediaKey, layer.contentType, layer.byteSize),
+    }));
+}
+
+/**
+ * The layers as they are stored: image and drawing layers swap the client's
+ * `upload` declaration for a freshly minted object key, so a key is never
+ * something a client chose.
+ */
+function storedLayersOf(
+  authorId: string,
+  storyId: string,
+  layers: StoryLayerInputParsed[],
+  /** Layer id to the key an eager upload was copied to. */
+  eagerKeys: ReadonlyMap<string, string> = new Map(),
+): StoredLayer[] {
+  return layers.map((layer): StoredLayer => {
+    if (layer.type === "image") {
+      const { upload, ...rest } = layer;
+      return {
+        ...rest,
+        mediaKey: eagerKeys.get(layer.id) ?? storyLayerKey(authorId, storyId, upload.contentType),
+        contentType: upload.contentType,
+        byteSize: upload.byteSize,
+        width: upload.width,
+        height: upload.height,
+      };
+    }
+    if (layer.type === "drawing") {
+      const { upload, ...rest } = layer;
+      return {
+        ...rest,
+        mediaKey: eagerKeys.get(layer.id) ?? storyLayerKey(authorId, storyId, upload.contentType),
+        contentType: upload.contentType,
+        byteSize: upload.byteSize,
+        width: upload.width,
+        height: upload.height,
+      };
+    }
+    return layer;
+  });
+}
+
+// ------------------------------------------------------------------ eager uploads
+
+/**
+ * `POST /api/stories/uploads`: a presigned PUT for a file whose story does not
+ * exist yet. The row is the only thing that ties the object to its owner, and
+ * `createStory` the only thing that turns it into part of a story.
+ */
+export async function createStoryUpload(
+  user: DbUser,
+  input: CreateStoryUploadParsed,
+): Promise<CreateStoryUploadResponse> {
+  if (!isStorageConfigured()) {
+    throw new StoryError("storage_off", "Media uploads are not configured");
+  }
+  // The kill switch: the same 404 a server that predates the route gives, which
+  // every client already answers with the plain flow (create, PUT, publish).
+  if (!isEnabled("stories_eager_uploads")) {
+    throw new StoryError("not_found", "Not found");
+  }
+  const poster = await loadPoster(user.id);
+  if (!poster) {
+    throw new StoryError("not_found", "Not found");
+  }
+  if (poster.is_character) {
+    throw new StoryError("forbidden", "Characters do not post stories");
+  }
+  // Stories off everywhere this account could post is the same 404 the other
+  // routes answer, and no bucket space for it.
+  if (!(await storiesAvailableTo(user.id))) {
+    throw new StoryError("not_found", "Not found");
+  }
+  if (isStoryVideoType(input.contentType) && !(await videoEnabled())) {
+    throw new StoryError("video_off", "Video stories are off here");
+  }
+
+  const uploadId = randomUUID();
+  const key = storyUploadKey(user.id, uploadId, input.contentType);
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    // Serialised per account, so two mints at once cannot both read a count
+    // under the cap. Signing is local: nothing here touches the network.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('story-uploads:' || $1::text))`, [
+      user.id,
+    ]);
+    const open = await client.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM story_uploads
+        WHERE user_id = $1 AND claimed_story_id IS NULL AND discarded_at IS NULL`,
+      [user.id],
+    );
+    if (Number(open.rows[0]?.n ?? 0) >= STORY_UPLOADS_OUTSTANDING_MAX) {
+      throw new StoryError("budget", "Too many unfinished uploads");
+    }
+    await client.query(
+      `INSERT INTO story_uploads (id, user_id, kind, storage_key, content_type, byte_size)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [uploadId, user.id, input.kind, key, input.contentType, input.byteLength],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  bumpStoryStat("uploadsMinted");
+  return {
+    uploadId,
+    ...uploadFor(key, input.contentType, input.byteLength),
+  };
+}
+
+/** Whether this account has anywhere it could post a story: friends on, or a member of a server with stories on. */
+async function storiesAvailableTo(userId: string): Promise<boolean> {
+  if (storiesFriendsOn()) {
+    return true;
+  }
+  const servers = await getPool().query<{ server_id: string }>(
+    `SELECT server_id FROM server_members WHERE user_id = $1`,
+    [userId],
+  );
+  return servers.rows.some((row) => storiesOnForServer(row.server_id));
+}
+
+/**
+ * `DELETE /api/stories/uploads/:uploadId`: the author threw the file away
+ * (discarded the draft, removed the photo, re-trimmed). The upload is marked
+ * discarded FIRST, which is what stops a create from claiming it, and the
+ * object goes now, best effort.
+ *
+ * The row stays, discarded, until the sweep removes it two hours on. That is
+ * deliberate: an aborted browser PUT can still land after this delete (the
+ * presigned URL lives 15 minutes), and with the row gone nothing would ever
+ * name that object again. The sweep deletes the object a second time, once the
+ * URL has certainly expired, and only then the row.
+ *
+ * Somebody else's upload and one that does not exist answer the same not
+ * found. A repeat is harmless. An upload a story already claimed is a no-op:
+ * that story owns its own copy, and deleting a story is what removes it.
+ */
+export async function deleteStoryUpload(userId: string, uploadId: string): Promise<boolean> {
+  const marked = await getPool().query<{ storage_key: string }>(
+    `UPDATE story_uploads SET discarded_at = COALESCE(discarded_at, now())
+      WHERE id = $1 AND user_id = $2 AND claimed_story_id IS NULL
+      RETURNING storage_key`,
+    [uploadId, userId],
+  );
+  const row = marked.rows[0];
+  if (!row) {
+    const exists = await getPool().query(
+      `SELECT 1 FROM story_uploads WHERE id = $1 AND user_id = $2`,
+      [uploadId, userId],
+    );
+    // Claimed by a story: nothing to throw away. Anything else: not found.
+    return (exists.rowCount ?? 0) > 0;
+  }
+  try {
+    await deleteObject(row.storage_key);
+  } catch (error) {
+    console.error(
+      `[stories] could not delete upload ${uploadId} now, the sweep will:`,
+      error instanceof Error ? error.message : error,
+    );
+    return true;
+  }
+  bumpStoryStat("uploadsDiscarded");
+  return true;
+}
+
+interface EagerUploads {
+  /** The story-side key for the base file, when it came from an upload. */
+  baseKey: string | null;
+  /** Layer id to the story-side key of its photo or drawing. */
+  layerKeys: Map<string, string>;
+  /** The claims to stamp inside the story's transaction. */
+  pairs: Array<{ id: string; key: string }>;
+  /** Where the bytes came from, deleted once the story exists. */
+  sources: string[];
+}
+
+const NO_EAGER: EagerUploads = { baseKey: null, layerKeys: new Map(), pairs: [], sources: [] };
+
+/**
+ * Everything about claiming eager uploads that touches storage, BEFORE the
+ * story's transaction (nothing between BEGIN and COMMIT may use the network):
+ * ownership, not claimed, kind, and the declared size and type against the
+ * upload's own; then HEAD each stored object the way publish does (size and
+ * type exactly) and copy it, server side, to a key under the story's prefix,
+ * which no URL was ever signed for. Publish then runs its usual checks on the
+ * copy: the real file type from the bytes, the scan, the video job.
+ *
+ * On any refusal the copies already made are deleted before it throws.
+ */
+async function prepareEagerUploads(
+  userId: string,
+  storyId: string,
+  input: CreateStoryParsed,
+): Promise<EagerUploads> {
+  const wanted: Array<{
+    id: string;
+    kind: "base" | "layer";
+    layerId: string | null;
+    contentType: StoryContentType;
+    byteSize: number;
+  }> = [];
+  if (input.media?.uploadId) {
+    wanted.push({
+      id: input.media.uploadId,
+      kind: "base",
+      layerId: null,
+      contentType: input.media.contentType,
+      byteSize: input.media.byteSize,
+    });
+  }
+  for (const layer of input.layers) {
+    if ((layer.type === "image" || layer.type === "drawing") && layer.upload.uploadId) {
+      wanted.push({
+        id: layer.upload.uploadId,
+        kind: "layer",
+        layerId: layer.id,
+        contentType: layer.upload.contentType,
+        byteSize: layer.upload.byteSize,
+      });
+    }
+  }
+  if (wanted.length === 0) {
+    return NO_EAGER;
+  }
+
+  const found = await getPool().query<{
+    id: string;
+    user_id: string | null;
+    kind: string;
+    storage_key: string;
+    content_type: string;
+    byte_size: number;
+    claimed_story_id: string | null;
+    discarded_at: Date | null;
+  }>(
+    `SELECT id, user_id, kind, storage_key, content_type, byte_size, claimed_story_id, discarded_at
+       FROM story_uploads WHERE id = ANY($1::uuid[])`,
+    [wanted.map((entry) => entry.id)],
+  );
+  const rows = new Map(found.rows.map((row) => [row.id, row]));
+  for (const entry of wanted) {
+    const row = rows.get(entry.id);
+    // Not there and not yours are one answer: an id is never a probe.
+    if (!row || row.user_id !== userId || row.discarded_at) {
+      throw new StoryError("not_found", "Upload not found");
+    }
+    if (row.claimed_story_id) {
+      throw new StoryError("claimed", "That upload is already part of a story");
+    }
+    if (
+      row.kind !== entry.kind ||
+      row.content_type !== entry.contentType ||
+      row.byte_size !== entry.byteSize
+    ) {
+      throw new StoryError("invalid", "The upload is not the file this story describes");
+    }
+  }
+
+  const eager: EagerUploads = {
+    baseKey: null,
+    layerKeys: new Map(),
+    pairs: [],
+    sources: [],
+  };
+  const destinations = new Map(
+    wanted.map((entry) => [
+      entry.id,
+      entry.kind === "base"
+        ? storyMediaKey(userId, storyId, entry.contentType)
+        : storyLayerKey(userId, storyId, entry.contentType),
+    ]),
+  );
+  // WRITE THE INTENT FIRST. A copy made before the story's transaction has no
+  // story row yet to be swept by, so each destination is recorded on the upload
+  // row before a byte is copied: a process that dies mid-copy, or a cleanup that
+  // fails, leaves a row that names every object it might have made, and the
+  // sweep deletes them with it. (A database write, never the network.) The same
+  // statement refuses an upload that was claimed, discarded or swept meanwhile.
+  //
+  // Not while the sweep has the row (`delete_claimed_at`): it has already read
+  // the keys it will delete, and a destination added after that would never be
+  // found. The row lock makes the two statements strictly ordered, so whichever
+  // comes second sees the other. The list is bounded (refused attempts that
+  // cleaned up after themselves are taken out again, see `discardKeys`), so a
+  // loop of refused creates cannot grow what the sweep has to delete.
+  const intents = await getPool().query(
+    `UPDATE story_uploads u SET copy_keys = array_append(u.copy_keys, c.key)
+       FROM unnest($1::uuid[], $2::text[]) AS c(id, key)
+      WHERE u.id = c.id AND u.user_id = $3
+        AND u.claimed_story_id IS NULL AND u.discarded_at IS NULL
+        AND u.delete_claimed_at IS NULL
+        AND cardinality(u.copy_keys) < ${COPY_KEYS_MAX}`,
+    [[...destinations.keys()], [...destinations.values()], userId],
+  );
+  if ((intents.rowCount ?? 0) !== wanted.length) {
+    throw new StoryError("claimed", "That upload is no longer available");
+  }
+  const copied: string[] = [];
+  const outcomes = await mapLimit(wanted, PER_REQUEST_CONCURRENCY, async (entry) => {
+    const row = rows.get(entry.id)!;
+    try {
+      let head;
+      try {
+        head = await headObject(row.storage_key);
+      } catch (error) {
+        console.error(
+          `[stories] HEAD failed for upload ${row.id}:`,
+          error instanceof Error ? error.message : error,
+        );
+        return new StoryError("not_verified", "Upload could not be verified");
+      }
+      if (!head || head.contentLength <= 0) {
+        return new StoryError("not_verified", "Upload missing");
+      }
+      if (head.contentLength !== row.byte_size || head.contentType !== row.content_type) {
+        return new StoryError("not_verified", "Upload size does not match");
+      }
+      const destination = destinations.get(entry.id)!;
+      // Counted as attempted BEFORE the copy: a copy whose answer is lost (a timeout) may still have
+      // made the object, so it is deleted like the others, and forgotten only if that delete works.
+      // Only a destination never reached (a HEAD that found nothing) is "never made".
+      copied.push(destination);
+      try {
+        await copyObject(row.storage_key, destination);
+      } catch (error) {
+        console.error(
+          `[stories] could not claim upload ${row.id}:`,
+          error instanceof Error ? error.message : error,
+        );
+        return new StoryError("not_verified", "Upload could not be verified");
+      }
+      if (entry.layerId === null) {
+        eager.baseKey = destination;
+      } else {
+        eager.layerKeys.set(entry.layerId, destination);
+      }
+      eager.pairs.push({ id: row.id, key: destination });
+      eager.sources.push(row.storage_key);
+      return null;
+    } catch (error) {
+      return error instanceof StoryError ? error : new StoryError("not_verified", "Upload could not be verified");
+    }
+  });
+  const failure = outcomes.find((outcome) => outcome !== null);
+  if (failure) {
+    // The intents of copies that were never started (a HEAD that found nothing yet) name no object:
+    // they come off the list with the ones deleted for certain, or a client retrying while its
+    // upload finishes would fill the list and be refused for good.
+    await discardKeys(copied, {
+      forgetFrom: wanted.map((entry) => entry.id),
+      neverMade: [...destinations.values()].filter((key) => !copied.includes(key)),
+    });
+    throw failure;
+  }
+  return eager;
+}
+
+/**
+ * Best effort. A copy no story took is named by its upload row's `copy_keys`
+ * (written before the copy), which is what the sweep deletes it by if this
+ * fails or the process dies first; the log says so when it happens.
+ */
+async function discardKeys(
+  keys: readonly string[],
+  /** The uploads these copies were made from: the ones that deleted for certain are taken off their lists. */
+  options: { forgetFrom?: readonly string[]; neverMade?: readonly string[] } = {},
+): Promise<void> {
+  const gone: string[] = [...(options.neverMade ?? [])];
+  await Promise.all(
+    keys.map(async (key) => {
+      try {
+        await deleteObject(key);
+        gone.push(key);
+      } catch (error) {
+        console.error(
+          `[stories] leaked ${key}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }),
+  );
+  if (options.forgetFrom && options.forgetFrom.length > 0 && gone.length > 0) {
+    // ONE statement, on the uploads themselves (primary key): what is deleted for
+    // certain (or was never made) need not be remembered for the sweep any more.
+    await getPool()
+      .query(
+        `UPDATE story_uploads
+            SET copy_keys = ARRAY(SELECT k FROM unnest(copy_keys) AS k WHERE k <> ALL($2::text[]))
+          WHERE id = ANY($1::uuid[])`,
+        [options.forgetFrom, gone],
+      )
+      .catch(() => undefined);
+  }
+}
+
+/** Refused attempts one upload remembers at most (each is one key for the sweep to delete). */
+const COPY_KEYS_MAX = 8;
+
+export async function createStory(user: DbUser, input: CreateStoryParsed): Promise<CreatedStory> {
   if (input.requestId) {
     const replay = await replayCreate(user.id, input.requestId);
     if (replay) {
@@ -1307,24 +2090,44 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
     }
   }
   await assertCanPost(user, input);
-  if (input.kind !== "text") {
+  const hasLayerObjects = input.layers.some((layer) => layer.type === "image" || layer.type === "drawing");
+  if (input.kind !== "text" || hasLayerObjects) {
     if (!isStorageConfigured()) {
       throw new StoryError("storage_off", "Media uploads are not configured");
     }
-    if (input.kind === "video" && !(await videoEnabled())) {
-      throw new StoryError("video_off", "Video stories are off here");
-    }
   }
-  await assertSticker(user.id, input.sticker);
+  if (input.kind === "video" && !(await videoEnabled())) {
+    throw new StoryError("video_off", "Video stories are off here");
+  }
+  // The call layer and the legacy sticker are one thing: the layer wins, and
+  // the sticker column mirrors it for builds that only know `sticker`.
+  const sticker = callOf(input);
+  await assertSticker(user.id, sticker);
+  await assertMentions(user.id, input);
   await assertAutomod(user.id, input);
 
   const storyId = randomUUID();
   const media = input.kind === "text" ? null : input.media!;
   const contentType = media?.contentType ?? null;
-  const key = contentType ? storyMediaKey(user.id, storyId, contentType) : null;
-  const live = input.kind === "text";
+  // Eager uploads are verified and copied to their story keys here, before the
+  // transaction, so nothing between BEGIN and COMMIT touches the network.
+  const eager = await prepareEagerUploads(user.id, storyId, input);
+  const key = eager.baseKey ?? (contentType ? storyMediaKey(user.id, storyId, contentType) : null);
+  const layers = storedLayersOf(user.id, storyId, input.layers, eager.layerKeys);
+  const layerKeys = layers.filter(isObjectLayer).map((layer) => layer.mediaKey);
+  // A text card with nothing to upload is live at once; any object still has
+  // to arrive, be checked and be scanned first.
+  const live = input.kind === "text" && layerKeys.length === 0;
+  // What an older build draws for a text card: `text`, or the words of the
+  // text layers when the author only used layers.
+  const textBody = input.kind === "text" ? (input.text ?? layerWords(input.layers)) : null;
 
-  const client = await getPool().connect();
+  const client = await getPool()
+    .connect()
+    .catch(async (error: unknown) => {
+      await discardKeys(eager.pairs.map((pair) => pair.key), { forgetFrom: eager.pairs.map((pair) => pair.id) });
+      throw error;
+    });
   try {
     await client.query("BEGIN");
     await assertBudget(client, user.id);
@@ -1333,13 +2136,13 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
          id, author_id, kind, status, caption, text_body, background, sticker,
          replies_enabled, media_storage_key, media_content_type, media_byte_size,
          media_width, media_height, media_duration_ms, scan_status,
-         published_at, expires_at, request_id
+         published_at, expires_at, request_id, layers, alt_text, layer_keys
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14, $15,
          $16,
          CASE WHEN $17 THEN now() END,
          CASE WHEN $17 THEN now() + make_interval(hours => $18) END,
-         $19
+         $19, $20::jsonb, $21, $22::text[]
        ) RETURNING expires_at`,
       [
         storyId,
@@ -1347,9 +2150,9 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
         input.kind,
         live ? "live" : "pending",
         input.kind === "text" ? null : input.caption || null,
-        input.kind === "text" ? input.text : null,
+        textBody,
         input.kind === "text" ? input.background : null,
-        input.sticker ? JSON.stringify(input.sticker) : null,
+        sticker ? JSON.stringify(sticker) : null,
         input.repliesEnabled,
         key,
         contentType,
@@ -1362,13 +2165,45 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
         live,
         STORY_TTL_HOURS,
         input.requestId ?? null,
+        JSON.stringify(layers),
+        input.altText || null,
+        layerKeys,
       ],
     );
     const expiresAt = inserted.rows[0]?.expires_at ?? null;
     await insertAudiences(client, storyId, input, expiresAt);
+    if (eager.pairs.length > 0) {
+      // The claim. Row-locked, so two creates racing for one upload cannot
+      // both win: the loser re-reads a claimed row, matches nothing, and the
+      // whole transaction (its story too) rolls back.
+      const claimed = await client.query(
+        `UPDATE story_uploads u
+            SET claimed_story_id = $1, claimed_at = now(), claimed_key = c.key
+           FROM unnest($2::uuid[], $3::text[]) AS c(id, key)
+          WHERE u.id = c.id AND u.user_id = $4
+            AND u.claimed_story_id IS NULL AND u.discarded_at IS NULL`,
+        [storyId, eager.pairs.map((pair) => pair.id), eager.pairs.map((pair) => pair.key), user.id],
+      );
+      if ((claimed.rowCount ?? 0) !== eager.pairs.length) {
+        throw new StoryError("claimed", "That upload is already part of a story");
+      }
+    }
     await client.query("COMMIT");
   } catch (error) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => undefined);
+    // The copies made for this attempt belong to no story now, UNLESS the failure was a COMMIT whose
+    // answer was lost on the wire and the story is in fact there: then they are its files. Only a
+    // story that is certainly absent lets them go; if that cannot be told, they stay, named by the
+    // upload rows for the sweep.
+    if (eager.pairs.length > 0) {
+      const absent = await getPool()
+        .query(`SELECT 1 FROM stories WHERE id = $1`, [storyId])
+        .then((found) => (found.rowCount ?? 0) === 0)
+        .catch(() => false);
+      if (absent) {
+        await discardKeys(eager.pairs.map((pair) => pair.key), { forgetFrom: eager.pairs.map((pair) => pair.id) });
+      }
+    }
     // Two attempts with one key raced: the other one won, answer its story.
     if (
       input.requestId &&
@@ -1399,15 +2234,35 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
         .catch((cleanup: unknown) => {
           console.error(`[stories] could not take back ${storyId} after a failed answer:`, cleanup);
         });
+      if (eager.pairs.length > 0) {
+        // Back to unclaimed, so the retry can use the same uploads; the copies are no one's.
+        await getPool()
+          .query(
+            `UPDATE story_uploads SET claimed_story_id = NULL, claimed_at = NULL, claimed_key = NULL
+              WHERE claimed_story_id = $1`,
+            [storyId],
+          )
+          .catch((cleanup: unknown) => {
+            console.error(`[stories] could not release the uploads of ${storyId}:`, cleanup);
+          });
+        await discardKeys(eager.pairs.map((pair) => pair.key), { forgetFrom: eager.pairs.map((pair) => pair.id) });
+      }
     }
     throw error;
   }
   if (live) {
     bumpStoryStat("published");
   }
+  if (eager.pairs.length > 0) {
+    bumpStoryStat("uploadsClaimed", eager.pairs.length);
+    // The story owns its copy; the source has no further use. The sweep takes
+    // what this misses (a claimed row is deleted with its object after an hour).
+    void discardKeys(eager.sources);
+  }
   return {
     story,
-    upload: key && media ? uploadFor(key, media.contentType, media.byteSize) : null,
+    upload: key && media && !eager.baseKey ? uploadFor(key, media.contentType, media.byteSize) : null,
+    layerUploads: layerUploadsOf(layers, new Set(eager.layerKeys.values())),
     liveServerIds: live ? input.audiences.serverIds : [],
     liveFriends: live && input.audiences.friends,
   };
@@ -1416,7 +2271,7 @@ export async function createStory(user: DbUser, input: CreateStoryRequest): Prom
 async function insertAudiences(
   client: PoolClient,
   storyId: string,
-  input: CreateStoryRequest,
+  input: CreateStoryParsed,
   expiresAt: Date | null,
 ): Promise<void> {
   if (input.audiences.serverIds.length > 0) {
@@ -1635,8 +2490,16 @@ async function escalateStoryScan(
  * every read, points at. The same fix the Baú claim has (`pinCommunityHomeUpload`).
  * The original is deleted best effort; a PUT through the old URL can recreate
  * it as a stray object no row names, bounded by the signed length and the TTL.
+ *
+ * `target` says which pointer moves: the story's base media, or the object
+ * behind one layer (its `mediaKey` inside `layers`, and its entry in
+ * `layer_keys`, which is what the sweep deletes by).
  */
-async function pinStoryUpload(storyId: string, sourceKey: string): Promise<string> {
+async function pinStoryUpload(
+  storyId: string,
+  sourceKey: string,
+  target: { layerId: string | null } = { layerId: null },
+): Promise<string> {
   const extension = /\.[a-z0-9]+$/i.exec(sourceKey)?.[0] ?? "";
   const pinnedKey = `${sourceKey.slice(0, sourceKey.lastIndexOf("/") + 1)}pinned-${randomUUID()}${extension}`;
   try {
@@ -1649,11 +2512,26 @@ async function pinStoryUpload(storyId: string, sourceKey: string): Promise<strin
     void deleteObject(pinnedKey).catch(() => undefined);
     throw new StoryError("not_verified", "Upload could not be verified");
   }
-  const moved = await getPool().query(
-    `UPDATE stories SET media_storage_key = $3
-      WHERE id = $1 AND media_storage_key = $2 AND status = 'pending'`,
-    [storyId, sourceKey, pinnedKey],
-  );
+  const moved =
+    target.layerId === null
+      ? await getPool().query(
+          `UPDATE stories SET media_storage_key = $3
+            WHERE id = $1 AND media_storage_key = $2 AND status = 'pending'`,
+          [storyId, sourceKey, pinnedKey],
+        )
+      : await getPool().query(
+          `UPDATE stories
+              SET layers = (
+                    SELECT jsonb_agg(
+                             CASE WHEN e->>'id' = $4 AND e->>'mediaKey' = $2
+                                  THEN jsonb_set(e, '{mediaKey}', to_jsonb($3::text))
+                                  ELSE e END
+                             ORDER BY ord)
+                      FROM jsonb_array_elements(layers) WITH ORDINALITY AS t(e, ord)),
+                  layer_keys = array_replace(layer_keys, $2, $3)
+            WHERE id = $1 AND status = 'pending' AND $2 = ANY(layer_keys)`,
+          [storyId, sourceKey, pinnedKey, target.layerId],
+        );
   if ((moved.rowCount ?? 0) === 0) {
     void deleteObject(pinnedKey).catch(() => undefined);
     throw new StoryError("not_verified", "Upload could not be verified");
@@ -1667,6 +2545,50 @@ async function pinStoryUpload(storyId: string, sourceKey: string): Promise<strin
   return pinnedKey;
 }
 
+/**
+ * What `HEAD` and the first bytes of a stored upload say, after it has been
+ * pinned: the size must be the declared one, and the real file type (read off
+ * the bytes, never the declared one) is returned for the caller to judge.
+ * Throws `not_verified` for anything transient or missing, so the author can
+ * retry the publish; the caller decides what a wrong TYPE means.
+ */
+async function verifyStoredUpload(
+  storyId: string,
+  key: string,
+  declaredBytes: number | null,
+  maxBytes: number,
+  target: { layerId: string | null },
+): Promise<{ pinned: string; sniffed: StoryContentType | null; headType: string }> {
+  let head;
+  try {
+    head = await headObject(key);
+  } catch (error) {
+    console.error(
+      `[stories] HEAD failed for ${key}:`,
+      error instanceof Error ? error.message : error,
+    );
+    throw new StoryError("not_verified", "Upload could not be verified");
+  }
+  if (!head || head.contentLength <= 0) {
+    throw new StoryError("not_verified", "Upload missing");
+  }
+  if (head.contentLength > maxBytes || head.contentLength !== declaredBytes) {
+    throw new StoryError("not_verified", "Upload size does not match");
+  }
+  // Everything from here on judges the PINNED copy, which no URL can write.
+  const pinned = await pinStoryUpload(storyId, key, target);
+  let bytes: Uint8Array | null = null;
+  try {
+    bytes = await getObjectPrefix(pinned, STORY_SNIFF_BYTES);
+  } catch {
+    bytes = null;
+  }
+  if (!bytes) {
+    throw new StoryError("not_verified", "Upload could not be verified");
+  }
+  return { pinned, sniffed: sniffStoryMediaType(bytes), headType: head.contentType };
+}
+
 export interface PublishedStory {
   story: Story;
   /** True when the story went live in this call (and the audience is to be told). */
@@ -1678,8 +2600,12 @@ export interface PublishedStory {
  *
  * The HEAD and the prefix read run before anything is written, and outside
  * any transaction; the scan too. An image is scanned BEFORE it is live, so
- * the window in which an unsafe one is visible is zero. A video goes to
- * `processing` and the stories job takes it from there (`story-media.ts`).
+ * the window in which an unsafe one is visible is zero, and so is every image
+ * and drawing LAYER: they are checked, pinned and scanned together with the
+ * base, as one verdict (the worst of them). A video goes to `processing` and
+ * the stories job takes it from there (`story-media.ts`); its layers were
+ * already checked and scanned here. A text card whose only objects are layers
+ * goes live here like an image does.
  */
 export async function publishStory(user: DbUser, storyId: string): Promise<PublishedStory> {
   const result = await getPool().query<StoryRow>(
@@ -1697,72 +2623,102 @@ export async function publishStory(user: DbUser, storyId: string): Promise<Publi
     return { story: await getStoryForViewer(user.id, storyId), wentLive: false };
   }
   const key = row.media_storage_key;
-  if (!key || !row.media_content_type || !isStoryKey(user.id, storyId, key)) {
+  const layerObjects = (row.layers ?? []).filter(isObjectLayer);
+  if (row.kind !== "text") {
+    if (!key || !row.media_content_type || !isStoryKey(user.id, storyId, key)) {
+      throw new StoryError("invalid", "Nothing to publish");
+    }
+  } else if (layerObjects.length === 0) {
+    throw new StoryError("invalid", "Nothing to publish");
+  }
+  if (layerObjects.some((layer) => !isStoryKey(user.id, storyId, layer.mediaKey))) {
     throw new StoryError("invalid", "Nothing to publish");
   }
   if (!isStorageConfigured()) {
     throw new StoryError("storage_off", "Media uploads are not configured");
   }
 
-  let head;
-  try {
-    head = await headObject(key);
-  } catch (error) {
-    console.error(
-      `[stories] HEAD failed for ${key}:`,
-      error instanceof Error ? error.message : error,
-    );
-    throw new StoryError("not_verified", "Upload could not be verified");
-  }
-  if (!head || head.contentLength <= 0) {
-    throw new StoryError("not_verified", "Upload missing");
-  }
-  if (head.contentLength > STORY_MAX_BYTES || head.contentLength !== row.media_byte_size) {
-    throw new StoryError("not_verified", "Upload size does not match");
-  }
-  // Everything from here on judges the PINNED copy, which no URL can write.
-  const pinned = await pinStoryUpload(storyId, key);
-  let read: { ok: true; bytes: Uint8Array | null } | { ok: false };
-  try {
-    read = { ok: true, bytes: await getObjectPrefix(pinned, STORY_SNIFF_BYTES) };
-  } catch {
-    read = { ok: false };
-  }
-  if (!read.ok || !read.bytes) {
-    throw new StoryError("not_verified", "Upload could not be verified");
-  }
-  const sniffed = sniffStoryMediaType(read.bytes);
-  const isImage = row.kind === "image";
-  const typeOk = isImage
-    ? sniffed !== null && isStoryImageType(sniffed) && isStoryImageType(head.contentType)
-    : sniffed === "video/mp4" && head.contentType === "video/mp4";
-  if (!typeOk || !sniffed) {
-    await refuseStory(storyId, { until: "none" }, "not the type it said");
-    throw new StoryError("not_verified", "The file is not what it said it was");
-  }
-  if (sniffed !== row.media_content_type) {
-    // A real JPEG saved as `.png` is a fine picture: keep what the bytes are.
-    await getPool().query(`UPDATE stories SET media_content_type = $2 WHERE id = $1`, [
+  // Every image that must be scanned before anything goes live: the base photo
+  // and every layer object. (A video's frames are the job's.)
+  const toScan: Array<{ key: string; contentType: StoryContentType }> = [];
+
+  if (row.kind !== "text") {
+    const main = await verifyStoredUpload(
       storyId,
-      sniffed,
-    ]);
+      key!,
+      row.media_byte_size,
+      STORY_MAX_BYTES,
+      { layerId: null },
+    );
+    const isImage = row.kind === "image";
+    const typeOk = isImage
+      ? main.sniffed !== null && isStoryImageType(main.sniffed) && isStoryImageType(main.headType)
+      : main.sniffed === "video/mp4" && main.headType === "video/mp4";
+    if (!typeOk || !main.sniffed) {
+      await refuseStory(storyId, { until: "none" }, "not the type it said");
+      throw new StoryError("not_verified", "The file is not what it said it was");
+    }
+    if (main.sniffed !== row.media_content_type) {
+      // A real JPEG saved as `.png` is a fine picture: keep what the bytes are.
+      await getPool().query(`UPDATE stories SET media_content_type = $2 WHERE id = $1`, [
+        storyId,
+        main.sniffed,
+      ]);
+    }
+    if (isImage) {
+      toScan.push({ key: main.pinned, contentType: main.sniffed });
+    }
   }
 
-  if (isImage) {
-    const scan = isContentScanConfigured()
-      ? await scanImage({
-          imageUrl: presignGet(pinned, { ttlSeconds: SCAN_URL_TTL_SECONDS }),
-          contentType: sniffed,
-        })
-      : null;
-    if (scan) {
-      bumpStoryStat("imagesScanned");
-      const allowed = await applyStoryScan(row, scan, "image");
-      if (!allowed) {
-        // No reason leaks to the author: "Não subiu", like a failed upload.
-        throw new StoryError("refused", "This story could not be posted");
-      }
+  // Layer objects: the storage round trips (HEAD, copy, prefix read) run a few
+  // at a time. Each pin then rewrites the `layers` array in one UPDATE that
+  // re-reads the row under its lock, so the pins queue on the row, never clobber.
+  const checked = await mapLimit(layerObjects, PER_REQUEST_CONCURRENCY, async (layer) => ({
+    layer,
+    verified: await verifyStoredUpload(
+      storyId,
+      layer.mediaKey,
+      layer.byteSize,
+      STORY_LAYER_MAX_BYTES,
+      { layerId: layer.id },
+    ),
+  }));
+  for (const { layer, verified } of checked) {
+    const allowedTypes: readonly string[] =
+      layer.type === "drawing" ? STORY_LAYER_DRAWING_TYPES : ["image/jpeg", "image/webp", "image/png"];
+    if (
+      !verified.sniffed ||
+      !allowedTypes.includes(verified.sniffed) ||
+      !isStoryImageType(verified.headType)
+    ) {
+      await refuseStory(storyId, { until: "none" }, "a layer is not the type it said");
+      throw new StoryError("not_verified", "The file is not what it said it was");
     }
+    toScan.push({ key: verified.pinned, contentType: verified.sniffed });
+  }
+
+  if (toScan.length > 0 && isContentScanConfigured()) {
+    const results = await Promise.all(
+      toScan.map((target) =>
+        scanImage({
+          imageUrl: presignGet(target.key, { ttlSeconds: SCAN_URL_TTL_SECONDS }),
+          contentType: target.contentType,
+        }),
+      ),
+    );
+    bumpStoryStat("imagesScanned", results.length);
+    const allowed = await applyStoryScan(
+      row,
+      combineScans(results),
+      row.kind === "image" && layerObjects.length === 0 ? "image" : "image and layers",
+    );
+    if (!allowed) {
+      // No reason leaks to the author: "Não subiu", like a failed upload.
+      throw new StoryError("refused", "This story could not be posted");
+    }
+  }
+
+  if (row.kind !== "video") {
     const wentLive = await goLive(storyId);
     return { story: await getStoryForViewer(user.id, storyId), wentLive };
   }
@@ -2042,14 +2998,19 @@ export async function retireAuthorStories(authorId: string): Promise<void> {
   await getPool().query(
     `WITH dropped AS (
        DELETE FROM stories s
-        WHERE s.author_id = $1 AND s.kind = 'text' AND NOT ${held}
+        -- A text card that holds layer objects is NOT dropped here: its row is
+        -- what tells the media sweep which objects to delete.
+        WHERE s.author_id = $1 AND s.kind = 'text' AND cardinality(s.layer_keys) = 0
+          AND NOT ${held}
         RETURNING s.id
      )
      UPDATE stories s
         SET status = 'deleted', deleted_at = COALESCE(deleted_at, now()),
             processing_claimed_at = NULL,
             caption = CASE WHEN ${held} THEN caption ELSE NULL END,
-            sticker = CASE WHEN ${held} THEN sticker ELSE NULL END
+            sticker = CASE WHEN ${held} THEN sticker ELSE NULL END,
+            layers = CASE WHEN ${held} THEN layers ELSE '[]'::jsonb END,
+            alt_text = CASE WHEN ${held} THEN alt_text ELSE NULL END
       WHERE s.author_id = $1 AND s.id NOT IN (SELECT id FROM dropped)`,
     [authorId],
   );
@@ -2200,6 +3161,14 @@ export async function getStoryCard(viewerId: string, storyId: string): Promise<S
 
 // ------------------------------------------------------------------ reports
 
+function reportSnapshot(row: StoryRow): string | null {
+  const first = row.text_body || row.caption || "";
+  const extra = (row.layers ?? []).flatMap((layer) =>
+    layer.type === "text" && !first.includes(layer.text) ? [layer.text] : [],
+  );
+  return [first, ...extra].filter(Boolean).join("\n").slice(0, 2000) || null;
+}
+
 /**
  * What a story report needs, if the reporter can see the story through the
  * audience they name. Not visible is one answer, like every report subject.
@@ -2227,7 +3196,9 @@ export async function resolveStoryForReport(
   }
   return {
     authorId: row.author_id,
-    snapshot: row.text_body ?? row.caption ?? null,
+    // Everything a person typed onto it: the card's text or the caption, and
+    // the words of every text layer, so a report carries what was on screen.
+    snapshot: reportSnapshot(row),
     serverId: through.kind === "server" ? through.serverId : null,
   };
 }

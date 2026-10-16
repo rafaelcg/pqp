@@ -18,16 +18,22 @@ import { startPagesServer, type PagesServer } from "./pages-server";
 
 const OLD = "fixture-old";
 const NEW = "fixture-new";
-const CARD = '[data-corner-card="update"]';
+const INDICATOR = "[data-update-indicator]";
+const POPOVER = "[data-update-popover]";
 
 let server: PagesServer;
 let oldDir: string;
 let newDir: string;
 /** A worker from BEFORE the fix: it waits instead of taking over, and answers navigations from its precache. */
 let legacyDir: string;
+/** The old build, with the daily announcement ON (09:00 UTC), as production ships it. */
+let oldGatedDir: string;
 
 test.beforeAll(async () => {
   oldDir = buildFixture("old", OLD);
+  oldGatedDir = buildFixture("old-gated", "fixture-old-gated", {
+    announceHourUtc: "9",
+  });
   newDir = buildFixture("new", NEW);
   legacyDir = buildFixture("legacy", "fixture-legacy", { legacyWorker: true });
   server = await startPagesServer({
@@ -90,7 +96,7 @@ async function startTyping(page: Page) {
   });
 }
 
-test("a deploy under an open page becomes the card, and one click lands on the new build", async ({
+test("a deploy under an open page becomes a quiet indicator, and the popover's button lands on the new build", async ({
   page,
 }) => {
   await page.clock.install();
@@ -100,33 +106,74 @@ test("a deploy under an open page becomes the card, and one click lands on the n
   server.serve(newDir);
   // Past the twelve-minute timer and its jitter. Nothing navigated, nothing
   // reloaded: the page finds out by itself.
-  await ageUntilVisible(page, page.locator(CARD));
+  await ageUntilVisible(page, page.locator(INDICATOR));
 
-  const card = page.locator(CARD);
-  await expect(card).toBeVisible();
-  await expect(card).toContainText("Nova versão do pqp disponível.");
+  const indicator = page.locator(INDICATOR);
+  await expect(indicator).toBeVisible();
+  await expect(indicator).toHaveAttribute("aria-label", "Nova versão pronta");
+  // It does not open by itself, and there is no dialog and no card.
+  await expect(page.locator(POPOVER)).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator('[data-corner-card="update"]')).toHaveCount(0);
   // Still the old build: somebody was typing, and nothing reloads under them.
   expect(await buildOf(page)).toBe(OLD);
 
-  await card.getByRole("button", { name: "Atualizar agora" }).click();
+  await indicator.click();
+  const popover = page.locator(POPOVER);
+  await expect(popover).toBeVisible();
+  await expect(popover).toContainText("Nova versão pronta");
+  await expect(popover).toContainText("O que mudou");
+  await popover.getByRole("button", { name: "Atualizar", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
-  await expect(page.locator(CARD)).toHaveCount(0);
+  await expect(page.locator(INDICATOR)).toHaveCount(0);
 });
 
-test("Later hides the card and it comes back", async ({ page }) => {
+test("the popover closes on Escape, the indicator stays, and it never comes back on its own", async ({
+  page,
+}) => {
   await page.clock.install();
   await openOn(page, OLD);
   await startTyping(page);
   server.serve(newDir);
-  await ageUntilVisible(page, page.locator(CARD));
+  await ageUntilVisible(page, page.locator(INDICATOR));
 
-  const card = page.locator(CARD);
-  await expect(card).toBeVisible();
-  await card.getByRole("button", { name: "Depois", exact: true }).click();
-  await expect(card).toHaveCount(0);
+  await page.locator(INDICATOR).click();
+  await expect(page.locator(POPOVER)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(POPOVER)).toHaveCount(0);
+  await expect(page.locator(INDICATOR)).toBeVisible();
 
+  // Twenty minutes was the old card's snooze: nothing pops back up.
   await page.clock.fastForward("21:00");
-  await expect(card).toBeVisible();
+  await expect(page.locator(POPOVER)).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+test("a build is not announced the minute it lands: the daily announcement holds it, then lets it out", async ({
+  page,
+}) => {
+  server.serve(oldGatedDir);
+  await page.clock.install();
+  await openOn(page, "fixture-old-gated");
+  await startTyping(page);
+
+  server.serve(newDir);
+  await page.clock.fastForward("11:50");
+  for (let i = 0; i < 12; i += 1) {
+    await page.clock.fastForward(5_000);
+    await page.waitForTimeout(100);
+  }
+  // Twelve minutes on, and the page knows about the new build and says nothing.
+  await expect(page.locator(INDICATOR)).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(await buildOf(page)).toBe("fixture-old-gated");
+
+  // The next 09:00 UTC (and the page's own few minutes of jitter) is at most
+  // a day and an hour away.
+  await page.clock.fastForward("26:00:00");
+  await ageUntilVisible(page, page.locator(INDICATOR));
+  await expect(page.locator(INDICATOR)).toBeVisible();
+  expect(await buildOf(page)).toBe("fixture-old-gated");
 });
 
 test("an idle page takes the new build by itself", async ({ page }) => {
@@ -161,47 +208,61 @@ test("a plain reload reaches the new build once its worker has taken over", asyn
     .toBe(NEW);
 });
 
-test("an operator-forced update blocks with one button, and the button lands on the new build", async ({
+test("the operator's force switch announces at once and draws the indicator louder, and blocks nobody", async ({
   page,
 }) => {
+  // `client_force_update` used to put a blocking screen up for everybody on
+  // every deploy. It now means "announce this one now, with emphasis".
   await page.route("**/api/client-update/config", (route) =>
     route.fulfill({ json: { forceUpdate: true, minBuiltAt: null } }),
   );
   await page.clock.install();
-  await openOn(page, OLD);
+  server.serve(oldGatedDir);
+  await openOn(page, "fixture-old-gated");
   await startTyping(page);
 
   server.serve(newDir);
-  await ageUntilVisible(page, page.getByRole("dialog"));
+  await ageUntilVisible(page, page.locator(INDICATOR));
 
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("Atualização necessária");
-  await expect(dialog.getByRole("button")).toHaveCount(1);
-
-  // No way out: not Escape, not a click outside.
+  const indicator = page.locator(INDICATOR);
+  // Even on a bundle that holds new builds for the morning: the operator asked.
+  await expect(indicator).toBeVisible();
+  await expect(indicator).toHaveAttribute("data-update-emphasis", "");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await page.mouse.click(5, 5);
-  await expect(dialog).toBeVisible();
-  expect(await buildOf(page)).toBe(OLD);
-
-  await dialog.getByRole("button", { name: "Atualizar agora" }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(await buildOf(page)).toBe("fixture-old-gated");
+  // The page is fully usable: nothing sits over it.
+  await expect(page.locator("textarea")).toBeVisible();
 });
 
-test("a forced update shows nothing while the server says no", async ({ page }) => {
+test("a CRITICAL update reloads by itself, once, even with somebody typing", async ({
+  page,
+}) => {
   await page.route("**/api/client-update/config", (route) =>
-    route.fulfill({ json: { forceUpdate: false, minBuiltAt: null } }),
+    route.fulfill({
+      json: {
+        forceUpdate: false,
+        minBuiltAt: null,
+        interruptCalls: false,
+        criticalMinBuiltAt: Date.now() + 86_400_000,
+      },
+    }),
   );
   await page.clock.install();
   await openOn(page, OLD);
   await startTyping(page);
-  server.serve(newDir);
-  await ageUntilVisible(page, page.locator(CARD));
 
-  await expect(page.locator(CARD)).toBeVisible();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  server.serve(newDir);
+  await page.clock.fastForward("11:50");
+  for (let i = 0; i < 100; i += 1) {
+    if ((await buildOf(page).catch(() => OLD)) === NEW) {
+      break;
+    }
+    await page.clock.fastForward(5_000).catch(() => {});
+    await page.waitForTimeout(100);
+  }
+  await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW);
 });
 
 test("when the CDN keeps serving the OLD worker, the update still lands (caches purged, page reloaded)", async ({
@@ -217,11 +278,14 @@ test("when the CDN keeps serving the OLD worker, the update still lands (caches 
 
   server.pin("/sw.js", path.join(oldDir, "sw.js"));
   server.serve(newDir);
-  await ageUntilVisible(page, page.locator(CARD));
+  await ageUntilVisible(page, page.locator(INDICATOR));
 
-  const card = page.locator(CARD);
-  await expect(card).toBeVisible();
-  await card.getByRole("button", { name: "Atualizar agora" }).click();
+  await expect(page.locator(INDICATOR)).toBeVisible();
+  await page.locator(INDICATOR).click();
+  await page
+    .locator(POPOVER)
+    .getByRole("button", { name: "Atualizar", exact: true })
+    .click();
 
   await expect(page.locator("html")).toHaveAttribute("data-pqp-build", NEW, {
     timeout: 30_000,
@@ -490,29 +554,28 @@ test("exactly one handler answers a navigation: Workbox's own navigation route i
 
 // ------------------------------------------------- a forced update that FAILS
 
-test("a forced update with no network says so, gives the button back, and lands once the network is back", async ({
+test("an update with no network says so, gives the button back, and lands once the network is back", async ({
   browser,
 }) => {
   const context = await browser.newContext({ locale: "pt-BR" });
   const page = await context.newPage();
-  await page.route("**/api/client-update/config", (route) =>
-    route.fulfill({ json: { forceUpdate: true, minBuiltAt: null } }),
-  );
   await page.clock.install();
   server.serve(oldDir);
   await openOn(page, OLD);
+  await startTyping(page);
   server.serve(newDir);
-  await ageUntilVisible(page, page.getByRole("dialog"));
+  await ageUntilVisible(page, page.locator(INDICATOR));
 
-  const dialog = page.getByRole("dialog");
+  await page.locator(INDICATOR).click();
+  const dialog = page.locator(POPOVER);
   await expect(dialog).toBeVisible();
 
   await context.setOffline(true);
   // `navigator.onLine` follows a moment after the emulation does.
   await page.waitForFunction(() => navigator.onLine === false);
-  await dialog.getByRole("button", { name: "Atualizar agora" }).click();
+  await dialog.getByRole("button", { name: "Atualizar", exact: true }).click();
   await expect(dialog.getByRole("alert")).toContainText("sem internet");
-  // The blocking screen is still blocking, and the button is the person's again.
+  // The button is the person's again, and the page is still the old one.
   const retry = dialog.getByRole("button", { name: "Tentar de novo" });
   await expect(retry).toBeEnabled();
   expect(await buildOf(page)).toBe(OLD);

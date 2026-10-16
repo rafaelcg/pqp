@@ -54,6 +54,18 @@ object MessagePermissions {
     fun canDelete(message: Message, meId: String?, role: String?, isServerChannel: Boolean): Boolean =
         (meId != null && message.authorId == meId) || (isServerChannel && canManage(role))
 
+    /**
+     * Encaminhar. Only a message in a server channel is a source (the server
+     * answers 422 for a DM or a group), never a nudge, never a blocked author's
+     * row, and only one with something to show: words, a picture or a video, or
+     * a forward card of its own. A voice note alone has no excerpt and would be
+     * refused as empty.
+     */
+    fun canForward(message: Message, isServerChannel: Boolean): Boolean =
+        isServerChannel && !isSystemLine(message) && !message.blocked &&
+            (message.forward != null || message.body.isNotBlank() ||
+                message.attachments.any { it.isImage || it.isVideo })
+
     fun canPin(role: String?, isServerChannel: Boolean): Boolean =
         !isServerChannel || canManage(role)
 }

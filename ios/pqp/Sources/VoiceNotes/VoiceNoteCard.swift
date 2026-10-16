@@ -8,6 +8,8 @@ struct VoiceNoteContext {
     var next: @MainActor (VoicePlayable) -> VoicePlayable? = { _ in nil }
     /// Ask for the message again: an Opus note is waiting on its AAC copy.
     var refresh: @MainActor () -> Void = {}
+    /// Ask for a transcript of a note somebody else sent.
+    var requestTranscript: @MainActor (Message, String) async -> VoiceTranscriptRequest = { _, _ in .failed }
 
     static let empty = VoiceNoteContext()
 }
@@ -35,6 +37,17 @@ struct VoiceNoteCard: View {
 
     let message: Message
     let attachment: Attachment
+
+    /// "Transcrever" in flight, or what became of it.
+    @State private var transcriptRequest: VoiceTranscriptRequest = .idle
+    @State private var transcriptExpanded = false
+
+    private var transcriptLine: VoiceTranscriptLine {
+        VoiceTranscriptLine.resolve(
+            transcript: voice.transcript, shows: session.preferences.showsTranscripts,
+            isMine: isMine, request: transcriptRequest
+        )
+    }
 
     private var voice: VoiceNote { attachment.voice ?? VoiceNote(durationMs: 0) }
     private var playable: VoicePlayable? { VoicePlayable(message: message, attachment: attachment) }
@@ -107,9 +120,86 @@ struct VoiceNoteCard: View {
                 .foregroundStyle(Palette.signalDim)
                 .accessibilityIdentifier("voice.heard")
             }
+
+            transcriptView
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("voice.card")
+    }
+
+    // MARK: The transcript
+
+    /// What goes under the card: the text (two lines, "ver mais" when there is
+    /// more), a quiet "transcrevendo" while one is on its way, or a small
+    /// "Transcrever" in a note that has none. See `VoiceTranscriptLine`.
+    @ViewBuilder
+    private var transcriptView: some View {
+        switch transcriptLine {
+        case .none:
+            EmptyView()
+        case .text(let text):
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: text)
+                    .font(Typography.callout)
+                    .foregroundStyle(Palette.paperSubtle)
+                    .lineLimit(transcriptExpanded ? nil : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("voice.transcript.text")
+                if VoiceTranscriptLine.isLong(text) {
+                    Button(transcriptExpanded ? "Show less" : "Show more") {
+                        withAnimation(Motion.standard) { transcriptExpanded.toggle() }
+                    }
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.paperMuted)
+                    .buttonStyle(.plain)
+                    .frame(minHeight: 28, alignment: .leading)
+                    .accessibilityIdentifier("voice.transcript.more")
+                }
+            }
+            .frame(maxWidth: 270, alignment: .leading)
+            .padding(.top, 2)
+        case .pending:
+            Text("Transcribing…")
+                .font(Typography.caption)
+                .foregroundStyle(Palette.paperMuted)
+                .accessibilityIdentifier("voice.transcript.pending")
+        case .noSpeech:
+            Text("No speech in this message")
+                .font(Typography.caption)
+                .foregroundStyle(Palette.paperMuted)
+        case .failed:
+            Text("Could not transcribe this message")
+                .font(Typography.caption)
+                .foregroundStyle(Palette.paperMuted)
+        case .request(let state):
+            HStack(spacing: 8) {
+                Button {
+                    guard transcriptRequest != .asking else { return }
+                    transcriptRequest = .asking
+                    Task {
+                        transcriptRequest = await context.requestTranscript(message, attachment.id)
+                    }
+                } label: {
+                    Text("Transcribe")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Palette.paperSubtle)
+                        .underline()
+                        .frame(minHeight: 28)
+                }
+                .buttonStyle(.plain)
+                .disabled(state == .asking)
+                .accessibilityIdentifier("voice.transcript.request")
+                if state == .slow {
+                    Text("Easy, try again in a moment")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.paperMuted)
+                } else if state == .failed {
+                    Text("That did not work. Try again.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.paperMuted)
+                }
+            }
+        }
     }
 
     // MARK: Pieces

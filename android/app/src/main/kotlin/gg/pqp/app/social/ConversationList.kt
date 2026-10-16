@@ -65,9 +65,11 @@ object ConversationList {
 
     /**
      * The Conversas tab badge: how many CONVERSATIONS are waiting, not how many
-     * messages. Three people writing forty lines is "3".
+     * messages. Three people writing forty lines is "3". A muted conversation
+     * is not counted: it badges nothing anywhere else either.
      */
-    fun waiting(list: List<DmSummary>): Int = list.count { it.unread.count > 0 }
+    fun waiting(list: List<DmSummary>, muted: Set<String> = emptySet()): Int =
+        list.count { it.unread.count > 0 && it.channelId !in muted }
 
     /**
      * The row's count. The server caps a conversation's unread at 100 (S3), so
@@ -121,7 +123,8 @@ object ConversationList {
             // A frame for an attachment-only message carries an empty preview
             // and no flags at all. Empty is never a message anybody typed.
             message.preview.isBlank() -> words.attachment
-            else -> message.preview
+            // A custom emoji token reads as the `:name:` it was typed as on a line of plain text.
+            else -> gg.pqp.app.core.CustomEmoji.asText(message.preview)
         }
         if (viewerId != null && message.authorId == viewerId) return words.you(body)
         if (isGroup && message.authorName.isNotBlank()) {

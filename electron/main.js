@@ -2727,7 +2727,8 @@ if (probingShareAudio) {
     });
     recreateWindow = () => createWindow(appUrl, allowedOrigin);
     createWindow(appUrl, allowedOrigin);
-    initAutoUpdate(() => mainWindow);
+    // The box never goes over a call: `voiceState` is what the page reports.
+    initAutoUpdate(() => mainWindow, () => voiceState.inCall);
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {

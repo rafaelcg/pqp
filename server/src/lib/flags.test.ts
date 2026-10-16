@@ -71,6 +71,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   ws_auth_admission: offWords,
   community_home: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  forward_messages: (raw) => raw === "true",
   community_home_vip: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   community_home_translation: (raw) => raw === "true",
@@ -80,6 +82,9 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   bau_custom_cover: offWords,
   community_home_video_captions: (raw) => raw === "true",
   bau_post_push: (raw) => raw === "true",
+  bau_follow: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  bau_public_posts: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   bau_latest_preview: offWords,
   // New with the flag, so there was no old reader: this is its definition.
@@ -135,8 +140,11 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   stories: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   stories_friends: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition. A kill switch: on unless off.
+  stories_eager_uploads: offWords,
   // New with the flag, so there was no old reader: this is its definition.
   mixed_channel_list: (raw) => raw === "true",
+  discord_bring_crew: (raw) => raw === "true",
 };
 
 const SAMPLES = [
