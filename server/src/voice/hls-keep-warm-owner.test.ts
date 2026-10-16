@@ -228,6 +228,17 @@ describeDb("the keep-warm loop runs only on the machine that owns the session", 
       () => frames.some((f) => f.topic === "voice.hlsKeepWarm"),
       "the first hand-over",
     );
+    // LET THE TICK THAT ASKED FINISH BEFORE ANSWERING. The tick publishes the
+    // ask and then goes on to render, and the frame is visible to this test a
+    // poll earlier than that render is done. Answering mid-render stands the
+    // loop down with one render still in flight, and that render lands in the
+    // counter afterwards: the "nothing is rendered while stood down" check
+    // below then sees one it never started. The answer is still seconds ahead
+    // of the next tick, so this does not change what the test is about.
+    await waitFor(
+      () => hlsKeepWarmRenders() > 0,
+      "the asking tick to finish its render",
+    );
     ownerAnswers(STARTED_AT);
     expect(hlsKeepWarmLoopsActive()).toBe(0);
 
