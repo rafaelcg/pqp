@@ -6,6 +6,19 @@ Snapshot: Search Console on 2026-09-14 (49 indexed, 40 not, plus a fresh
 every claim below is checked against that and the docs it points at, not
 invented.
 
+## 2026-10-16: the comparison pages are feature-first and sourced
+
+`/vs-discord` and `/tela` no longer carry the Brazil suspension framing (title,
+description, card, chips, FAQ, the "(funciona no BR)" unfurl). They compare
+features, and every claim about another product lives in
+`client/src/content/compare-facts.ts` with its source URLs and the day it was
+checked (`FACTS_CHECKED`). `compare-facts.test.ts` fails when a fact has no
+source or date, and `marketing-meta.test.ts` fails if either page's copy ever
+mentions a suspension, a regulator, a ban or a VPN. Re-check the facts and move
+`FACTS_CHECKED` when you touch a row; a cell nobody verified says "not verified"
+instead of guessing. The older sections below that describe the suspension
+window are history.
+
 ## What this PR fixes
 
 ### 1. `/app/*` was indexed with no content, and `robots.txt` could not stop it
