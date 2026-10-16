@@ -309,7 +309,7 @@ export async function listBauFollowDestinations(
       const text = visible.filter((channel) => channel.type === "text");
       const channelPermissions = await permissionsForChannelsOf(
         context,
-        text.map((channel) => channel.id),
+        text.map((channel) => ({ id: channel.id, type: channel.type, parent_id: null })),
       );
       const channels = text.filter((channel) =>
         mayManageFollow(channelPermissions.get(channel.id) ?? 0n),

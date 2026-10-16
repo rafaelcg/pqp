@@ -371,7 +371,11 @@ describeDb("Seguir: following a Baú into a channel", () => {
     ]);
     // The batched read is the one-channel read, channel for channel, for everyone.
     for (const who of [alice, bob, carol]) {
-      const batched = await computeMemberPermissionsForChannels(destId, who.id, [destChannelId, destOwnerOnlyChannel]);
+      const batched = await computeMemberPermissionsForChannels(
+        destId,
+        who.id,
+        [destChannelId, destOwnerOnlyChannel].map((id) => ({ id, type: "text", parent_id: null })),
+      );
       for (const channel of [destChannelId, destOwnerOnlyChannel]) {
         expect(batched.get(channel)).toBe(await computeMemberPermissions(destId, who.id, channel));
       }
