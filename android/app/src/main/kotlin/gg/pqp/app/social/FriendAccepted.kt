@@ -8,6 +8,8 @@ package gg.pqp.app.social
  */
 data class FriendAccepted(
     val person: PublicUser,
+    /** The signed-in account this friendship belongs to: another account never sees it. */
+    val account: String?,
     /** When it was noticed ([android.os.SystemClock.elapsedRealtime]), so an old one is not shown late. */
     val at: Long,
 )

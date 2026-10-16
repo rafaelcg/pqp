@@ -388,6 +388,22 @@ class SessionStore(
     fun startInviteJoin(code: String): kotlinx.coroutines.Deferred<JoinInviteResponse?> =
         inviteJoin ?: scope.async { redeemInvite(code) }.also { inviteJoin = it }
 
+    /**
+     * An API client that speaks for [account] and only for it, or null when somebody else is
+     * (or nobody is) signed in. The session's own [api] follows whoever signs in next, so a
+     * write that outlives a sign-out could go out with the NEXT account's credentials; this one
+     * carries the token that was current for [account] and nothing else. The account is read
+     * on both sides of fetching the token, so a switch in between is seen and refused.
+     */
+    suspend fun apiFor(account: String?): ApiClient? {
+        if (account == null || currentUserId() != account) return null
+        val token = tokens.currentToken()
+        if (currentUserId() != account) return null
+        return ApiClient(TokenProvider { token }, http)
+    }
+
+    private fun currentUserId(): String? = (_phase.value as? SessionPhase.Ready)?.me?.id
+
     fun refreshServers() {
         scope.launch {
             runCatching { api.servers() }

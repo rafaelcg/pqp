@@ -41,6 +41,8 @@ fun FriendAcceptedEffect(
             // Taken now, so a second screen coming to the front does not offer it again.
             social.clearFriendAccepted()
             if (FriendsDiff.isStale(offer, SystemClock.elapsedRealtime())) return@collect
+            // Another account's friendship is nobody else's news.
+            if (!social.offerIsMine(offer)) return@collect
             val result = snackbars.showSnackbar(
                 message = context.getString(R.string.friend_accepted_title, offer.person.displayName),
                 actionLabel = context.getString(R.string.friend_accepted_cta),

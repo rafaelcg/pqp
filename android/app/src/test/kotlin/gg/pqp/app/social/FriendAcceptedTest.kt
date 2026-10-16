@@ -37,7 +37,7 @@ class FriendAcceptedTest {
 
     @Test
     fun `an offer goes stale`() {
-        val offer = FriendAccepted(PublicUser("a", "A"), at = 1_000L)
+        val offer = FriendAccepted(PublicUser("a", "A"), account = "me", at = 1_000L)
         assertFalse(FriendsDiff.isStale(offer, 1_000L + FriendsDiff.STALE_AFTER_MS))
         assertTrue(FriendsDiff.isStale(offer, 1_001L + FriendsDiff.STALE_AFTER_MS))
     }

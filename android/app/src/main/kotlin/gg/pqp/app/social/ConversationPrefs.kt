@@ -149,15 +149,22 @@ interface ConversationPrefsBackend {
     fun setPinned(ids: List<String>)
     fun setChannelLevels(levels: Map<String, String>)
 
-    suspend fun savePinned(ids: List<String>): MePreferences
+    /**
+     * The requests below are made AS [account]: with credentials bound to it, or not at all
+     * (they throw [AccountChanged]) when somebody else is signed in by then.
+     */
+    suspend fun savePinned(account: String?, ids: List<String>): MePreferences
 
     /** What the server holds right now, or null when it could not be read. */
-    suspend fun freshPinned(): List<String>?
+    suspend fun freshPinned(account: String?): List<String>?
 
     /** The levels the server holds right now. Throws when they cannot be read. */
-    suspend fun freshChannelLevels(): Map<String, String>
-    suspend fun saveChannelLevels(levels: Map<String, String>): MePreferences
+    suspend fun freshChannelLevels(account: String?): Map<String, String>
+    suspend fun saveChannelLevels(account: String?, levels: Map<String, String>): MePreferences
 }
+
+/** The account a write was for is not the one signed in any more. Nothing was sent. */
+class AccountChanged : Exception("The account changed")
 
 class SessionConversationPrefsBackend(private val session: SessionStore) : ConversationPrefsBackend {
     private val me get() = (session.phase.value as? SessionPhase.Ready)?.me
@@ -172,21 +179,24 @@ class SessionConversationPrefsBackend(private val session: SessionStore) : Conve
         it.copy(notifications = (it.notifications ?: MeNotificationPreferences()).copy(channels = levels))
     }
 
-    override suspend fun savePinned(ids: List<String>) = session.api.setPinnedConversations(ids)
+    private suspend fun bound(account: String?): ApiClient = session.apiFor(account) ?: throw AccountChanged()
 
-    override suspend fun freshPinned(): List<String>? = try {
-        session.api.me().preferences?.pinnedConversations.orEmpty()
+    override suspend fun savePinned(account: String?, ids: List<String>) =
+        bound(account).setPinnedConversations(ids)
+
+    override suspend fun freshPinned(account: String?): List<String>? = try {
+        bound(account).me().preferences?.pinnedConversations.orEmpty()
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {
         null
     }
 
-    override suspend fun freshChannelLevels(): Map<String, String> =
-        session.api.me().preferences?.notifications?.channels.orEmpty()
+    override suspend fun freshChannelLevels(account: String?): Map<String, String> =
+        bound(account).me().preferences?.notifications?.channels.orEmpty()
 
-    override suspend fun saveChannelLevels(levels: Map<String, String>) =
-        session.api.setChannelNotificationLevels(levels)
+    override suspend fun saveChannelLevels(account: String?, levels: Map<String, String>) =
+        bound(account).setChannelNotificationLevels(levels)
 }
 
 /**
@@ -243,8 +253,13 @@ class ConversationPrefs(
     private suspend fun savePins(account: String?, onError: (String) -> Unit) {
         if (backend.userId() != account) return
         val batch = synchronized(pendingPins) { LinkedHashMap(pendingPins) }
-        val base = confirmedPins ?: return
-        if (batch.isEmpty()) return
+        if (confirmedPins == null || batch.isEmpty()) return
+        // The server replaces the whole list, so what is sent is built on what it holds NOW:
+        // a pin set on another device since sign-in survives this one. If it cannot be read,
+        // the last confirmed list is the best there is (the save will most likely fail too).
+        val base = backend.freshPinned(account)?.also { if (backend.userId() == account) confirmedPins = it }
+            ?: confirmedPins ?: return
+        if (backend.userId() != account) return
         val wanted = ConversationPins.applyOps(base, batch.mapValues { it.value.pinned })
         if (wanted == base) {
             settlePins(batch)
@@ -252,7 +267,7 @@ class ConversationPrefs(
             return
         }
         try {
-            val saved = backend.savePinned(wanted)
+            val saved = backend.savePinned(account, wanted)
             if (backend.userId() != account) return
             confirmedPins = saved.pinnedConversations.orEmpty()
             settlePins(batch)
@@ -261,7 +276,8 @@ class ConversationPrefs(
             throw cancelled
         } catch (failure: Exception) {
             // The write may have landed with its answer lost: ask before rolling back.
-            val truth = backend.freshPinned()
+            if (failure is AccountChanged) return
+            val truth = backend.freshPinned(account)
             if (backend.userId() != account) return
             if (truth != null) confirmedPins = truth
             settlePins(batch)
@@ -302,11 +318,11 @@ class ConversationPrefs(
         // holds NOW. If that cannot be read, nothing is sent: a stale copy would erase a mute
         // set on another device since.
         val fresh = try {
-            backend.freshChannelLevels()
+            backend.freshChannelLevels(account)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            if (backend.userId() != account) return
+            if (failure is AccountChanged || backend.userId() != account) return
             settleMutes(batch)
             backend.setChannelLevels(applyMutes(confirmedLevels ?: backend.channelLevels(), pendingMutesSnapshot()))
             onError(readable(failure))
@@ -315,7 +331,7 @@ class ConversationPrefs(
         if (backend.userId() != account) return
         val wanted = applyMutes(fresh, batch)
         try {
-            val saved = backend.saveChannelLevels(wanted)
+            val saved = backend.saveChannelLevels(account, wanted)
             if (backend.userId() != account) return
             confirmedLevels = saved.notifications?.channels.orEmpty()
             settleMutes(batch)
@@ -323,8 +339,9 @@ class ConversationPrefs(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
+            if (failure is AccountChanged) return
             val truth = try {
-                backend.freshChannelLevels()
+                backend.freshChannelLevels(account)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {

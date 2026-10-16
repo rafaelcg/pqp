@@ -112,7 +112,8 @@ class ConversationPrefsTest {
             this.levels = levels
         }
 
-        override suspend fun savePinned(ids: List<String>): MePreferences {
+        override suspend fun savePinned(account: String?, ids: List<String>): MePreferences {
+            if (account != user) throw AccountChanged()
             gate?.await()
             if (commitThenFail) {
                 serverPins = ids
@@ -127,14 +128,19 @@ class ConversationPrefsTest {
             return MePreferences(pinnedConversations = serverPins)
         }
 
-        override suspend fun freshPinned(): List<String>? = if (freshFails) null else serverPins
+        override suspend fun freshPinned(account: String?): List<String>? {
+            if (account != user) throw AccountChanged()
+            return if (freshFails) null else serverPins
+        }
 
-        override suspend fun freshChannelLevels(): Map<String, String> {
+        override suspend fun freshChannelLevels(account: String?): Map<String, String> {
+            if (account != user) throw AccountChanged()
             if (freshFails) throw IOException("offline")
             return serverLevels
         }
 
-        override suspend fun saveChannelLevels(levels: Map<String, String>): MePreferences {
+        override suspend fun saveChannelLevels(account: String?, levels: Map<String, String>): MePreferences {
+            if (account != user) throw AccountChanged()
             gate?.await()
             if (commitThenFail) {
                 serverLevels = levels
@@ -360,5 +366,35 @@ class ConversationPrefsTest {
         backend.levels = mapOf("theirs" to "none")
         gate.complete(Unit)
         assertEquals(mapOf("theirs" to "none"), backend.levels)
+    }
+
+    @Test
+    fun `a pin is saved on top of the list the server holds now, not the one from sign in`() {
+        val backend = FakeBackend()
+        backend.pins = listOf("a")
+        // Pinned on the web a minute ago: the phone has not heard.
+        backend.serverPins = listOf("fromWeb", "a")
+        actor(backend).togglePin("b") { error(it) }
+        assertEquals(listOf(listOf("b", "fromWeb", "a")), backend.pinSaves)
+        assertEquals(listOf("b", "fromWeb", "a"), backend.pins)
+    }
+
+    @Test
+    fun `a request for one account never goes out as another`() {
+        val backend = FakeBackend()
+        backend.pins = listOf("a")
+        backend.serverPins = listOf("a")
+        val gate = CompletableDeferred<Unit>()
+        backend.gate = gate
+        val prefs = actor(backend)
+        prefs.togglePin("b") { error("no error for another account's save: $it") }
+        // The first request is already out for account "me"; now somebody else signs in and
+        // the mute for "me" reaches its turn.
+        prefs.toggleMute("c1", muted = true) { error("no error: $it") }
+        backend.user = "somebody-else"
+        backend.levels = emptyMap()
+        gate.complete(Unit)
+        assertTrue("nothing was sent for the old account after the switch", backend.levelSaves.isEmpty())
+        assertEquals(emptyMap<String, String>(), backend.levels)
     }
 }

@@ -112,16 +112,37 @@ class SocialRepository(
 
     // --- reads ---
 
+    private fun signedInAccount(): String? = (session.phase.value as? SessionPhase.Ready)?.me?.id
+
+    /** Whose friends [_friends] holds: another account starts from nothing, and no offer carries over. */
+    private var friendsOwner: String? = null
+
+    private fun adoptFriendsOwner(account: String?) {
+        if (account != friendsOwner) {
+            friendsOwner = account
+            friendsLoadedOnce = false
+            _friendAccepted.value = null
+        }
+    }
+
+    /** Whether an offer belongs to the account signed in now. */
+    fun offerIsMine(offer: FriendAccepted): Boolean = offer.account != null && offer.account == signedInAccount()
+
     fun refreshFriends() {
+        val account = signedInAccount()
         scope.launch {
             _loadingFriends.value = true
             runCatching { session.api.friends() }
                 .onSuccess { answer ->
+                    // Asked for one account, answered after another signed in: not this one's list.
+                    if (signedInAccount() != account) return@onSuccess
+                    adoptFriendsOwner(account)
                     // Somebody accepted a request this account sent: the moment to
                     // say hi. The first snapshot is a baseline, never news.
                     if (friendsLoadedOnce) {
                         FriendsDiff.newlyAccepted(_friends.value, answer).lastOrNull()?.let { friend ->
-                            _friendAccepted.value = FriendAccepted(friend.asPublicUser(), SystemClock.elapsedRealtime())
+                            _friendAccepted.value =
+                                FriendAccepted(friend.asPublicUser(), account, SystemClock.elapsedRealtime())
                         }
                     }
                     friendsLoadedOnce = true
@@ -216,10 +237,13 @@ class SocialRepository(
 
     suspend fun acceptFriend(userId: String): Outcome = act {
         // Who it is, before the refresh moves them from `incoming` to `friends`.
+        val account = signedInAccount()
         val accepted = _friends.value.incoming.firstOrNull { it.id == userId }
         session.api.acceptFriendRequest(userId)
         refreshFriends()
-        accepted?.let { _friendAccepted.value = FriendAccepted(it.asPublicUser(), SystemClock.elapsedRealtime()) }
+        if (signedInAccount() == account) {
+            accepted?.let { _friendAccepted.value = FriendAccepted(it.asPublicUser(), account, SystemClock.elapsedRealtime()) }
+        }
         Outcome.Accepted
     }
 

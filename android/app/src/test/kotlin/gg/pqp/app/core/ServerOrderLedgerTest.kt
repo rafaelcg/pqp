@@ -36,6 +36,16 @@ class ServerOrderLedgerTest {
     }
 
     @Test
+    fun `a remote order that arrives after the last save that landed wins even when no save failed`() {
+        val ledger = ServerOrderLedger()
+        ledger.saveSucceeded()
+        // A queued save then finds nothing to send (the order collapsed back): no failure,
+        // no success, and a remote order arrived meanwhile.
+        ledger.ignored(remote)
+        assertEquals(remote, ledger.settle(list)!!.map { it.id })
+    }
+
+    @Test
     fun `settling starts the next burst clean`() {
         val ledger = ServerOrderLedger()
         ledger.ignored(remote)
