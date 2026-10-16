@@ -61,6 +61,20 @@ struct HomeView: View {
     @State private var tab: PhoneTab = PhoneTab.stored() ?? .servidores
     @State private var hasPickedLandingTab = false
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// "Mandar um oi": opens (or reuses) the conversation with the new friend.
+    /// A refusal (their DM privacy) is the server's sentence in the usual alert.
+    private func sayHi(to friend: Friend) async {
+        model.acceptedFriend = nil
+        do {
+            let conversation = try await session.api.openConversation(userIds: [friend.id])
+            tab = .conversas
+            openedConversation = conversation
+        } catch {
+            if let shown = error.userFacingMessage { model.error = shown }
+        }
+    }
 
     var body: some View {
         Group {
@@ -76,6 +90,22 @@ struct HomeView: View {
             }
         }
         .tint(Palette.signal)
+        // Somebody accepted a request of ours: offer to say hi. Over the root, so
+        // it shows on the hub and on every tab; a screen pushed on top covers it
+        // and it is there when the person comes back.
+        .overlay(alignment: .top) {
+            if let friend = model.acceptedFriend {
+                FriendAcceptedCard(
+                    friend: friend,
+                    onSayHi: { Task { await sayHi(to: friend) } },
+                    onDismiss: { model.acceptedFriend = nil }
+                )
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(reduceMotion ? nil : Motion.standard, value: model.acceptedFriend?.id)
         .task {
             pickLandingTab()
             await model.load(session: session)
@@ -108,6 +138,9 @@ struct HomeView: View {
                 // so what the rows and Nova conversa show was true when the
                 // app last looked. Look again when it comes forward.
                 await model.refreshFriendBadge()
+                // A phone that was asleep for an hour has missed the activity
+                // frames of every server it was not looking at.
+                await model.hydrateServerUnread()
             }
         }
         // And while Conversas is what is on screen, look every so often, the
@@ -455,6 +488,11 @@ final class HomeModel {
     /// row. Read off the same fetch the badge above uses — one request answers
     /// both questions.
     var friendCount = 0
+    /// Somebody who just accepted a request this account sent: the card that
+    /// offers "Mandar um oi". Cleared by the card (its button, its X, its
+    /// twelve seconds).
+    var acceptedFriend: Friend?
+    @ObservationIgnored private var friendsSnapshot: FriendsResponse?
     /// Whether this deployment has a directory at all. False until the config
     /// route says otherwise, and false forever on a deployment with the flag off
     /// — a compass with nothing behind it is worse than no compass.
@@ -505,6 +543,11 @@ final class HomeModel {
                 Task { await self.refreshFriendBadge() }
                 return
             }
+            // The account's other device or tab moved its servers: follow it.
+            if case .serverOrderUpdate(let ids, let origin) = event {
+                self.followRemoteServerOrder(ids, origin: origin)
+                return
+            }
             self.handleConversationEvent(event)
         }
         await refresh()
@@ -516,7 +559,10 @@ final class HomeModel {
     func handleConversationEvent(_ event: RealtimeEvent) {
         switch event {
         case .activity(let channelId, let serverId, let mention, let preview):
-            guard serverId == nil else { return }
+            if let serverId {
+                countServerActivity(channelId: channelId, serverId: serverId, mention: mention)
+                return
+            }
             if let author = preview?.authorId, typing.clear(channelId: channelId, userId: author) {
                 typingRevision += 1
             }
@@ -679,6 +725,13 @@ final class HomeModel {
         }
         isLoading = false
         hasLoadedOnce = true
+        // After the lists are up and off this call's path: the badges are a
+        // nicety and must never hold the hub back.
+        // A pass cancelled half way must not leave its replacement waiting out
+        // the throttle with the other servers never read.
+        if unreadPassRunningId != nil { unreadPassAt = nil }
+        unreadTask?.cancel()
+        unreadTask = Task { await self.hydrateServerUnread() }
     }
 
     /// The lime Baú badges on the server tiles: one read for all servers, asked
@@ -742,6 +795,11 @@ final class HomeModel {
         async let friendsResponse = try? await api.friends()
         async let queue = try? await api.pendingDepoimentos()
         if let friends = await friendsResponse {
+            // Somebody said yes to a request of ours: offer to say hi.
+            if let person = FriendsDigest.newlyAccepted(before: friendsSnapshot, after: friends).last {
+                acceptedFriend = person
+            }
+            friendsSnapshot = friends
             pendingFriendRequests = FriendsDigest.pendingActionCount(friends)
             friendCount = friends.friends.count
             self.friends = FriendsDigest.onlineFirst(friends.friends)
@@ -753,6 +811,105 @@ final class HomeModel {
         if let pending = await queue {
             pendingDepoimentos = pending.count
         }
+    }
+
+    // MARK: - Unread on the server list
+
+    @ObservationIgnored private var unreadTask: Task<Void, Never>?
+    @ObservationIgnored private var unreadPassAt: Date?
+    @ObservationIgnored private var unreadPass = 0
+    /// The pass that is running, by identity: an older pass unwinding after a newer
+    /// one started must not mark the newer one as finished.
+    @ObservationIgnored private var unreadPassRunningId: Int?
+    /// When a live frame last touched each server, in the order frames came,
+    /// so a read that began earlier cannot overwrite what a frame just said.
+    @ObservationIgnored private var activitySeq = 0
+    @ObservationIgnored private var activityAt: [String: Int] = [:]
+
+    /// Fills `session.serverUnread` for the servers that are not open: two reads
+    /// at a time, muted servers skipped, fifteen at most, one retry for the ones
+    /// that failed (`ServerUnread`). Not repeated within a minute of the last
+    /// pass, because the hub re-reads on every return from a channel.
+    func hydrateServerUnread(force: Bool = false) async {
+        guard let session,
+              ServerUnread.needsPass(last: unreadPassAt, now: Date(), force: force)
+        else { return }
+        unreadPassAt = Date()
+        unreadPass += 1
+        let pass = unreadPass
+        unreadPassRunningId = pass
+        defer { if unreadPassRunningId == pass { unreadPassRunningId = nil } }
+        let preferences = session.preferences
+        let ids = ServerUnread.serversToHydrate(servers, skipping: session.openedServerId) {
+            ServerUnread.isServerMuted($0.id, preferences: preferences)
+        }
+        let failed = await readUnread(ids, pass: pass)
+        guard !failed.isEmpty, pass == unreadPass, !Task.isCancelled else { return }
+        try? await Task.sleep(for: ServerUnread.retryDelay)
+        guard pass == unreadPass, !Task.isCancelled else { return }
+        _ = await readUnread(failed, pass: pass)
+    }
+
+    /// Returns the ids whose read failed.
+    private func readUnread(_ ids: [String], pass: Int) async -> [String] {
+        guard let session else { return [] }
+        let api = session.api
+        let startedAt = activitySeq
+        let epoch = session.unreadEpoch
+        let listsStart = session.listPublishCount
+        var failed: [String] = []
+        await withTaskGroup(of: (String, [UnreadEntry]?).self) { group in
+            var next = 0
+            func start() {
+                guard next < ids.count else { return }
+                let id = ids[next]
+                next += 1
+                group.addTask { (id, try? await api.unread(serverId: id)) }
+            }
+            for _ in 0..<min(ServerUnread.concurrency, ids.count) { start() }
+            for await (id, entries) in group {
+                if pass == unreadPass, !Task.isCancelled, epoch == session.unreadEpoch {
+                    if let entries {
+                        applyUnread(entries, serverId: id, startedAt: startedAt, listsStart: listsStart)
+                    } else {
+                        failed.append(id)
+                    }
+                }
+                start()
+            }
+        }
+        return failed
+    }
+
+    private func applyUnread(_ entries: [UnreadEntry], serverId: String, startedAt: Int, listsStart: Int) {
+        guard let session,
+              // The server's own list published after this read began: it is newer,
+              // whether or not the list is still open.
+              !session.listPublished(serverId, since: listsStart),
+              // A frame that landed after the read began is newer than it, and
+              // the open server's own list is the authority for itself.
+              (activityAt[serverId] ?? 0) <= startedAt,
+              session.openedServerId != serverId
+        else { return }
+        let preferences = session.preferences
+        session.noteServerUnread(serverId, ServerUnread.totals(from: entries) {
+            ChannelMute.isMuted(channelId: $0, serverId: serverId, preferences: preferences)
+        })
+    }
+
+    /// A `channel-activity` frame for a server channel: one more unread on that
+    /// server's tile, unless its own list is open (it counts for itself), the
+    /// channel or server is muted, or the frame is not about this account.
+    private func countServerActivity(channelId: String, serverId: String, mention: Bool) {
+        guard let session, session.openedServerId != serverId,
+              !ChannelMute.isMuted(channelId: channelId, serverId: serverId, preferences: session.preferences)
+        else { return }
+        activitySeq += 1
+        activityAt[serverId] = activitySeq
+        session.noteServerUnread(
+            serverId,
+            ServerUnread.applyingActivity(session.serverUnread[serverId], mention: mention)
+        )
     }
 
     /// Move one server a place up or down in this person's own list, and save
@@ -781,12 +938,16 @@ final class HomeModel {
         defer {
             serverOrderSaving = false
             confirmedServerOrder = nil
+            if remoteOrderSeen {
+                remoteOrderSeen = false
+                Task { await self.reloadServerOrder() }
+            }
         }
         while true {
             let ids = servers.map(\.id)
             if ids == confirmedServerOrder { return }
             do {
-                try await session.api.saveServerOrder(ids)
+                try await session.api.saveServerOrder(ids, origin: orderOrigin)
                 confirmedServerOrder = ids
             } catch {
                 if let confirmed = confirmedServerOrder {
@@ -800,6 +961,48 @@ final class HomeModel {
 
     private var serverOrderSaving = false
     private var confirmedServerOrder: [String]?
+    /// Random per launch: rides every save so this phone can skip the frame the
+    /// server sends about it.
+    private let orderOrigin = UUID().uuidString.lowercased()
+    /// A frame from another device arrived while a save of ours was in the air.
+    private var remoteOrderSeen = false
+    /// Bumped by every remote order frame, so a re-read that began before one is
+    /// known to be older than it (`reloadServerOrder`).
+    private var remoteOrderGeneration = 0
+
+    /// Another device of this account moved its server list: this one follows,
+    /// unless the frame is the echo of its own save, or a save of its own is
+    /// still in the air (then the list is read again once the saves drain, so
+    /// the server's answer wins, never a frame applied out of order).
+    func followRemoteServerOrder(_ ids: [String], origin: String?) {
+        switch ServerOrder.remoteAction(origin: origin, ownOrigin: orderOrigin, saving: serverOrderSaving) {
+        case .ignore: return
+        case .resyncAfterSave:
+            remoteOrderSeen = true
+            remoteOrderGeneration += 1
+        case .apply:
+            remoteOrderGeneration += 1
+            servers = ServerOrder.applying(ids, to: servers)
+        }
+    }
+
+    /// The server list as the server has it now: only the ORDER is taken, every
+    /// other field on the rows stays as it is.
+    private func reloadServerOrder() async {
+        guard let session else { return }
+        let generation = remoteOrderGeneration
+        // One more try after a pause: the order the other device made is only
+        // known from this read, and a single dropped request would otherwise
+        // leave the list as it was until some later event happened to fix it.
+        var fresh = try? await session.api.servers()
+        if fresh == nil, !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(3))
+            if !Task.isCancelled { fresh = try? await session.api.servers() }
+        }
+        // A frame that arrived while this was in the air is newer than the answer.
+        guard let fresh, generation == remoteOrderGeneration else { return }
+        servers = ServerOrder.applying(fresh.map(\.id), to: servers)
+    }
 
     /// One membership's badge opt-out, flipped from the rail's own menu.
     ///
@@ -1304,11 +1507,19 @@ struct HubView: View {
                                     server: server,
                                     bauUnread: server.communityHomeEnabled
                                         ? BauBadge.unread(for: server.id, in: model.bauUnread)
-                                        : 0
+                                        : 0,
+                                    unread: ServerUnread.indicator(
+                                        session.serverUnread[server.id],
+                                        muted: ServerUnread.isServerMuted(server.id, preferences: session.preferences)
+                                    )
                                 )
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("hub.server.\(server.id)")
+                            .accessibilityValue(ServerUnread.spokenValue(
+                                session.serverUnread[server.id],
+                                muted: ServerUnread.isServerMuted(server.id, preferences: session.preferences)
+                            ))
                             // Only for a LISTED community. A private server is
                             // never chipped onto anybody's card, so offering the
                             // switch there would offer a no-op — and worse, imply
@@ -1495,11 +1706,19 @@ struct HubView: View {
                         server: server,
                         bauUnread: server.communityHomeEnabled
                             ? BauBadge.unread(for: server.id, in: model.bauUnread)
-                            : 0
+                            : 0,
+                        unread: ServerUnread.indicator(
+                            session.serverUnread[server.id],
+                            muted: ServerUnread.isServerMuted(server.id, preferences: session.preferences)
+                        )
                     )
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("servers.server.\(server.id)")
+                .accessibilityValue(ServerUnread.spokenValue(
+                    session.serverUnread[server.id],
+                    muted: ServerUnread.isServerMuted(server.id, preferences: session.preferences)
+                ))
                 .contextMenu { serverMoveButtons(server) }
             }
 
@@ -1553,13 +1772,17 @@ struct HubView: View {
 struct ServerRow: View {
     let server: Server
     var bauUnread: Int = 0
+    /// Unread channel messages, already resolved for the mute (`ServerUnread`).
+    var unread: ServerUnread.Indicator = .none
 
     var body: some View {
         HStack(spacing: 14) {
             Avatar(name: server.name, seed: server.id, size: 48, url: server.iconUrl)
             VStack(alignment: .leading, spacing: 2) {
+                // Semibold with the tick, like a channel row with something new.
                 Text(server.name)
                     .font(Typography.bodyMedium)
+                    .fontWeight(unread.showsPill ? .bold : .medium)
                     .foregroundStyle(Palette.paper)
                     .lineLimit(1)
                 if bauUnread > 0 {
@@ -1572,6 +1795,14 @@ struct ServerRow: View {
             Spacer(minLength: 0)
             if let label = BauBadge.label(count: bauUnread) {
                 UnreadBadge(label: label, isMention: true)
+            }
+            if unread.mentions > 0 {
+                MentionPill(count: unread.mentions)
+            } else if unread.showsPill {
+                Circle()
+                    .fill(Palette.paper)
+                    .frame(width: 8, height: 8)
+                    .accessibilityHidden(true)
             }
         }
         .padding(.vertical, 8)
@@ -1620,6 +1851,8 @@ struct ServerTile: View {
     /// Unread Baú posts, drawn as a lime count at the tile's corner. Zero is
     /// nothing at all.
     var bauUnread: Int = 0
+    /// Unread channel messages, already resolved for the mute (`ServerUnread`).
+    var unread: ServerUnread.Indicator = .none
 
     var body: some View {
         VStack(spacing: 7) {
@@ -1631,12 +1864,31 @@ struct ServerTile: View {
                 .overlay(alignment: .topTrailing) {
                     if let label = BauBadge.label(count: bauUnread) {
                         // Lime, the brand signal: a new Baú post is news for
-                        // the whole server, and nothing else on this tile uses
-                        // the colour for "unread".
+                        // the whole server. The only other lime here is the
+                        // "@N" of a mention, which is told apart by its glyph
+                        // and its corner.
                         UnreadBadge(label: label, isMention: true)
                             .overlay(Capsule().strokeBorder(Palette.ink, lineWidth: 2))
                             .offset(x: 6, y: -4)
                             .accessibilityIdentifier("hub.server.bau.\(server.id)")
+                    }
+                }
+                // Unread channel messages: the pill on the leading edge (the
+                // web rail's), and "@N" at the foot when somebody named you.
+                .overlay(alignment: .leading) {
+                    if unread.showsPill {
+                        Capsule()
+                            .fill(Palette.paper)
+                            .frame(width: 5, height: unread.mentions > 0 ? 22 : 10)
+                            .offset(x: -9)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if unread.mentions > 0 {
+                        MentionPill(count: unread.mentions)
+                            .overlay(Capsule().strokeBorder(Palette.ink, lineWidth: 2))
+                            .offset(x: 6, y: 4)
                     }
                 }
 

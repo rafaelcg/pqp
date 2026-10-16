@@ -482,6 +482,20 @@ final class WireDecodingTests: XCTestCase {
         XCTAssertNil(version)
     }
 
+    /// `server-order-update`: this account's other device moved its server list.
+    /// The `origin` is what lets the device that saved skip its own echo.
+    func testServerOrderUpdateDecodes() async throws {
+        let json = """
+        {"type":"server-order-update","serverIds":["b","a"],"origin":"web-1"}
+        """
+        let event = await firstEvent(from: json)
+        guard case .serverOrderUpdate(let ids, let origin) = event else {
+            return XCTFail("Expected serverOrderUpdate, got \(String(describing: event))")
+        }
+        XCTAssertEqual(ids, ["b", "a"])
+        XCTAssertEqual(origin, "web-1")
+    }
+
     /// `channels-update` is what makes an open channel list re-read itself and
     /// which list to draw. As `.other` (what it was before the mixed list), a
     /// reorder somebody else made, or the mixed list switching on, never

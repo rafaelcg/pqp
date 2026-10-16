@@ -69,6 +69,13 @@ struct ChannelListView: View {
 
     @State private var channels: [Channel] = []
     @State private var unread: [String: UnreadEntry] = [:]
+    /// The counts above came from a read, not from the empty starting value:
+    /// only then do they say anything about the hub's tile for this server.
+    @State private var unreadFetched = false
+    /// The sign-out epoch the counts were read in, and the newest request:
+    /// a read from an earlier account or an older request never lands.
+    @State private var unreadEpochFetched = -1
+    @State private var unreadRequestSeq = 0
     @State private var isLoading = true
     @State private var error: String?
     /// The Baú's instance flags. Nil until asked; off on any failure. The row
@@ -959,6 +966,28 @@ struct ChannelListView: View {
         // Coming back from a chat re-reads the counts: the chat marked itself
         // read on the server, and this is what clears its badge locally.
         .onAppear { Task { await refreshUnread() } }
+        // The hub's tile for this server: while this list is up it is the
+        // authority, and it keeps what it knew when it goes (`ServerUnread`).
+        .onAppear { session.openedServerId = server.id }
+        .onDisappear {
+            if session.openedServerId == server.id { session.openedServerId = nil }
+        }
+        // The empty value before the first read is not a count (it would wipe
+        // the badge the hub hydrated), and a mute changes the total with no
+        // unread change at all.
+        .onChange(of: unread, initial: true) { _, _ in publishServerUnread() }
+        .onChange(of: unreadFetched) { _, _ in publishServerUnread() }
+        .onChange(of: session.preferences) { _, _ in publishServerUnread() }
+    }
+
+    private func publishServerUnread() {
+        // Counts read for another account (a sign-out while this list is still
+        // mounted) are not published into the next one's tiles.
+        guard unreadFetched, unreadEpochFetched == session.unreadEpoch else { return }
+        let preferences = session.preferences
+        session.noteServerUnreadFromList(server.id, ServerUnread.totals(from: Array(unread.values)) {
+            ChannelMute.isMuted(channelId: $0, serverId: server.id, preferences: preferences)
+        })
     }
 
     /// Where a row goes: a forum's list, or a chat.
@@ -1010,8 +1039,16 @@ struct ChannelListView: View {
 
     private func refreshUnread() async {
         guard !channels.isEmpty else { return }
-        if let entries = try? await session.api.unread(serverId: server.id) {
+        // An answer that outlives a sign-out is the previous account's: it is
+        // neither shown nor published into the next one's tiles.
+        let epoch = session.unreadEpoch
+        unreadRequestSeq += 1
+        let request = unreadRequestSeq
+        if let entries = try? await session.api.unread(serverId: server.id),
+           epoch == session.unreadEpoch, request == unreadRequestSeq {
             unread = Dictionary(uniqueKeysWithValues: entries.map { ($0.channelId, $0) })
+            unreadEpochFetched = epoch
+            unreadFetched = true
         }
         await refreshBau()
     }
