@@ -429,6 +429,30 @@ describe("LivePreviewPanel", () => {
     }
   });
 
+  it("ignores a late 404 that answers after a newer poll found the party live", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await mount();
+      expect(host!.querySelector("[data-live-preview='idle']")).not.toBeNull();
+      const live = await vi.mocked(fetchLivePreviewListing).getMockImplementation()!(
+        { kind: "community", slug: COMMUNITY.slug! },
+        {},
+      );
+
+      let answerSlow: (value: "absent") => void = () => {};
+      vi.mocked(fetchLivePreviewListing)
+        .mockImplementationOnce(() => new Promise((resolve) => (answerSlow = resolve)))
+        .mockResolvedValueOnce(live);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await act(async () => answerSlow("absent"));
+      expect(host!.querySelector("[data-live-preview='idle']")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts the restart budget over after the visitor leaves and watches again", async () => {
     await mount();
     await watchNow();

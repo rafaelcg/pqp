@@ -173,9 +173,15 @@ function LivePreviewPanelForSource({
   // count under the player stays current. Cached 10 s at the edge.
   useEffect(() => {
     const controller = new AbortController();
+    // Polls can overlap on a slow network. Only an answer newer than the last
+    // one applied may draw, so a late reply never undoes a fresher one.
+    let sent = 0;
+    let applied = 0;
     const load = () => {
+      sent += 1;
+      const poll = sent;
       void fetchLivePreviewListing(source, { signal: controller.signal }).then((answer) => {
-        if (controller.signal.aborted) {
+        if (controller.signal.aborted || poll < applied) {
           return;
         }
         // A failed poll (network, 429, 503) says nothing about the party:
@@ -184,6 +190,7 @@ function LivePreviewPanelForSource({
         if (!answer) {
           return;
         }
+        applied = poll;
         // A 404 is different: the preview is gone for this page (switched
         // off, suspended, the invite expired or ran out of uses), so nothing
         // is live any more. A visitor already watching keeps the page until
