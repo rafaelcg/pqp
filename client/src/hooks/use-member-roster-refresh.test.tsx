@@ -15,8 +15,16 @@ const { useMemberRosterRefresh, nudgeFloorMs } = await import(
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
 
+let refreshNow: () => Promise<ReadonlySet<string> | null>;
+let applied: unknown[][] = [];
+
 function Probe(props: { nudge: number; size: number }) {
-  useMemberRosterRefresh("s1", props.nudge, () => {}, props.size);
+  refreshNow = useMemberRosterRefresh(
+    "s1",
+    props.nudge,
+    (members) => applied.push(members),
+    props.size,
+  );
   return null;
 }
 
@@ -37,6 +45,7 @@ async function advance(ms: number) {
 beforeEach(() => {
   vi.useFakeTimers();
   fetchMembersMock.mockReset().mockResolvedValue({ members: [] });
+  applied = [];
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", {
     configurable: true,
@@ -83,5 +92,24 @@ describe("useMemberRosterRefresh", () => {
     render(1, 5);
     await advance(20_000);
     expect(fetchMembersMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshNow reads at once, past the nudge floor, and says who the read held", async () => {
+    render(0, 5);
+    fetchMembersMock.mockResolvedValueOnce({ members: [{ id: "u1" }, { id: "u2" }] });
+    let held: ReadonlySet<string> | null = null;
+    await act(async () => {
+      held = await refreshNow();
+    });
+    expect(held).toEqual(new Set(["u1", "u2"]));
+    expect(fetchMembersMock).toHaveBeenCalledTimes(1);
+    expect(applied).toEqual([[{ id: "u1" }, { id: "u2" }]]);
+
+    fetchMembersMock.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => {
+      held = await refreshNow();
+    });
+    expect(held).toBeNull();
+    expect(applied).toHaveLength(1);
   });
 });

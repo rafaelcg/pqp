@@ -666,6 +666,7 @@ import {
   setSoundOutput,
 } from "@/lib/sounds";
 import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
+import { useConfirmedGoneAuthors } from "@/hooks/use-confirmed-gone-authors";
 import { useStableCallback } from "@/hooks/use-stable-callback";
 import { useChannelLayoutConfig } from "@/hooks/use-channel-layout-config";
 import type { ApplyLayoutResult } from "@/components/layout/channel-list";
@@ -3980,7 +3981,7 @@ function MainAppContent({
   const applyRosterPayload = useCallback((incoming: ServerMember[]) => {
     setServerMembers((prev) => mergeMemberStatuses(prev, incoming));
   }, []);
-  useMemberRosterRefresh(
+  const refreshMemberRoster = useMemberRosterRefresh(
     conversationParticipants ? null : selectedServerId,
     memberRosterNudge,
     applyRosterPayload,
@@ -4073,6 +4074,12 @@ function MainAppContent({
     }
     return map;
   }, [conversationParticipants, serverMembers]);
+
+  const authorGoneCheck = useConfirmedGoneAuthors(
+    conversationParticipants ? null : selectedServerId,
+    refreshMemberRoster,
+    messageAuthors,
+  );
 
   const forwardTargets = useMemo((): ForwardTarget[] => {
     const currentId = selectedChannelId;
@@ -12516,6 +12523,7 @@ function MainAppContent({
         activeThreadId={openThread?.thread.channelId ?? null}
         authors={messageAuthors}
         authorsComplete={messageAuthorsComplete}
+        authorGoneCheck={authorGoneCheck}
         roles={serverRoles}
         unreadHeld={unreadHeldIds.has(selectedChannel.id)}
         unreadSince={unreadSince}
@@ -13666,7 +13674,8 @@ function MainAppContent({
               mentionCandidates={mentionCandidates}
               blockedAuthorIds={blockedUserIds}
               authors={messageAuthors}
-        authorsComplete={messageAuthorsComplete}
+              authorsComplete={messageAuthorsComplete}
+              authorGoneCheck={authorGoneCheck}
               roles={serverRoles}
               showLinkEmbeds={localSettings.showLinkEmbeds}
               slashContext={{
@@ -13764,7 +13773,8 @@ function MainAppContent({
             })
           }
           authors={messageAuthors}
-        authorsComplete={messageAuthorsComplete}
+          authorsComplete={messageAuthorsComplete}
+          authorGoneCheck={authorGoneCheck}
           roles={serverRoles}
           unreadHeld={unreadHeldIds.has(openThread.thread.channelId)}
           unreadSince={threadUnreadSince}

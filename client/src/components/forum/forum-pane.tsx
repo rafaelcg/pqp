@@ -1,3 +1,4 @@
+import type { AuthorGoneCheck } from "@/hooks/use-confirmed-gone-authors";
 import {
   forumTagIconEmoji,
   forumTagNameKey,
@@ -153,6 +154,7 @@ export interface ForumPaneProps {
   authors?: ReadonlyMap<string, MessageAuthorInfo>;
   /** `authors` is the server's whole roster: see MessageList. */
   authorsComplete?: boolean;
+  authorGoneCheck?: AuthorGoneCheck;
   roles?: readonly MessageRoleColor[];
   showLinkEmbeds: boolean;
   slashContext?: Omit<
@@ -257,6 +259,7 @@ export function ForumPane({
   blockedAuthorIds,
   authors,
   authorsComplete,
+  authorGoneCheck,
   roles,
   showLinkEmbeds,
   slashContext,
@@ -1770,6 +1773,7 @@ export function ForumPane({
           blockedAuthorIds={blockedAuthorIds}
           authors={authors}
           authorsComplete={authorsComplete}
+          authorGoneCheck={authorGoneCheck}
           roles={roles}
           showLinkEmbeds={showLinkEmbeds}
           slashContext={slashContext}

@@ -1,3 +1,4 @@
+import type { AuthorGoneCheck } from "@/hooks/use-confirmed-gone-authors";
 import {
   FORUM_ERRORS,
   FORUM_MAX_PINNED,
@@ -132,6 +133,7 @@ export interface ForumPostViewProps {
   authors?: ReadonlyMap<string, MessageAuthorInfo>;
   /** `authors` is the server's whole roster: see MessageList. */
   authorsComplete?: boolean;
+  authorGoneCheck?: AuthorGoneCheck;
   roles?: readonly MessageRoleColor[];
   showLinkEmbeds: boolean;
   slashContext?: Omit<
@@ -440,6 +442,7 @@ export function ForumPostView({
   blockedAuthorIds,
   authors,
   authorsComplete,
+  authorGoneCheck,
   roles,
   showLinkEmbeds,
   slashContext,
@@ -1292,6 +1295,7 @@ export function ForumPostView({
         onReportMessage={onReportMessage}
         authors={authors}
         authorsComplete={authorsComplete}
+        authorGoneCheck={authorGoneCheck}
         roles={roles}
         unreadSince={unreadSince}
         onForward={onForward}
