@@ -88,6 +88,11 @@ function channelRejectionMessage(
     if (reason === "forums_off") {
       return [t("integrations.channelForumsOff", { name })];
     }
+    if (reason === "forum_not_visible" || reason === "channel_not_visible") {
+      // The server sends the id as the name for these, so the message names
+      // nothing.
+      return [t("integrations.channelNotVisible")];
+    }
     if (reason === "type") {
       return [t("integrations.channelNotText", { name, type: t(channelKindKey(type)) })];
     }

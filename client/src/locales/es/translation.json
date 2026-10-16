@@ -4109,6 +4109,7 @@
   "integrations.channelNotText": "#{name} es {type}, no un canal de texto ni un foro.",
   "integrations.channelNotHere": "#{name} no es un canal de texto ni un foro de este servidor.",
   "integrations.channelForumsOff": "#{name} es un foro, y los foros están apagados en este servidor.",
+  "integrations.channelNotVisible": "No puedes ver uno de los canales elegidos, así que no puede ser un destino.",
   "integrations.channelKind.voice": "un canal de voz",
   "integrations.channelKind.thread": "un hilo",
   "integrations.channelKind.category": "una categoría",

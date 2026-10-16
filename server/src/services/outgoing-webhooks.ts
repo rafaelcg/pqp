@@ -266,8 +266,14 @@ export type OutgoingWebhookChannelProblem = {
    * `forum_not_visible`: a forum the acting user cannot view (a private one),
    * newly added in this save. `name` is the id then, so a crafted request
    * learns nothing about a channel it cannot see.
+   * `channel_not_visible`: the same rule for a text channel.
    */
-  reason: "type" | "server" | "forums_off" | "forum_not_visible";
+  reason:
+    | "type"
+    | "server"
+    | "forums_off"
+    | "forum_not_visible"
+    | "channel_not_visible";
 };
 
 type Sql = Pick<PoolClient, "query">;
@@ -317,6 +323,9 @@ function describeChannelProblem(problem: OutgoingWebhookChannelProblem): string 
   if (problem.reason === "forum_not_visible") {
     return `You cannot view the forum ${name}, so it cannot be a target.`;
   }
+  if (problem.reason === "channel_not_visible") {
+    return `You cannot view the channel ${name}, so it cannot be a target.`;
+  }
   if (problem.reason === "server") {
     return `#${name} is not a text or forum channel in this server.`;
   }
@@ -340,17 +349,18 @@ function describeChannelProblem(problem: OutgoingWebhookChannelProblem): string 
  * (`alreadySelected`), so editing the hook does not drop it. Threads, posts,
  * voice, categories and watch parties are rejected.
  *
- * A forum added in this save (not in `alreadySelected`) must be one `actorId`
- * can view: deliveries carry message bodies, so a Manage Webhooks holder
- * without VIEW_CHANNEL on a private forum must not subscribe to it.
+ * A text channel or forum added in this save (not in `alreadySelected`) must
+ * be one `actorId` can view: deliveries carry message bodies, so a Manage
+ * Webhooks holder without VIEW_CHANNEL on a private channel must not
+ * subscribe to it.
  */
 async function validateTextChannelIds(
   serverId: string,
+  actorId: string,
   channelIds: string[],
   db: Sql = getPool(),
   share = false,
   alreadySelected: ReadonlySet<string> = new Set(),
-  actorId?: string,
 ): Promise<string[]> {
   const seen = new Set<string>();
   const unique: string[] = [];
@@ -387,28 +397,27 @@ async function validateTextChannelIds(
   const byId = new Map(
     result.rows.map((row) => [row.id.toLowerCase(), row]),
   );
-  // Forums this save newly adds, checked in one statement with the same
+  // Channels this save newly adds, checked in one statement with the same
   // predicate the channel list uses (owner, Administrator, overwrites).
-  let viewableForums: Set<string> | null = null;
-  if (actorId && forumChannelsEnabled(serverId)) {
-    const added = result.rows
-      .filter(
-        (row) =>
-          row.kind === "server" &&
-          row.type === "forum" &&
-          !alreadySelected.has(row.id.toLowerCase()),
-      )
-      .map((row) => row.id);
-    if (added.length > 0) {
-      const visible = await db.query<{ id: string }>(
-        `SELECT c.id FROM channels c
-           LEFT JOIN server_members sm
-             ON sm.server_id = c.server_id AND sm.user_id = $2
-          WHERE c.id = ANY($1::uuid[]) AND ${channelVisibleSql("$2")}`,
-        [added, actorId],
-      );
-      viewableForums = new Set(visible.rows.map((row) => row.id.toLowerCase()));
-    }
+  let viewable: Set<string> | null = null;
+  const forumsOn = forumChannelsEnabled(serverId);
+  const added = result.rows
+    .filter(
+      (row) =>
+        row.kind === "server" &&
+        (row.type === "text" || (row.type === "forum" && forumsOn)) &&
+        !alreadySelected.has(row.id.toLowerCase()),
+    )
+    .map((row) => row.id);
+  if (added.length > 0) {
+    const visible = await db.query<{ id: string }>(
+      `SELECT c.id FROM channels c
+         LEFT JOIN server_members sm
+           ON sm.server_id = c.server_id AND sm.user_id = $2
+        WHERE c.id = ANY($1::uuid[]) AND ${channelVisibleSql("$2")}`,
+      [added, actorId],
+    );
+    viewable = new Set(visible.rows.map((row) => row.id.toLowerCase()));
   }
   const kept: string[] = [];
   const problems: OutgoingWebhookChannelProblem[] = [];
@@ -418,6 +427,19 @@ async function validateTextChannelIds(
       continue;
     }
     if (row.kind === "server" && row.type === "text") {
+      if (
+        viewable &&
+        !alreadySelected.has(id.toLowerCase()) &&
+        !viewable.has(row.id.toLowerCase())
+      ) {
+        problems.push({
+          id,
+          name: row.id,
+          type: row.type,
+          reason: "channel_not_visible",
+        });
+        continue;
+      }
       kept.push(row.id);
       continue;
     }
@@ -428,7 +450,7 @@ async function validateTextChannelIds(
         continue;
       }
       if (forumsOn) {
-        if (viewableForums && !viewableForums.has(row.id.toLowerCase())) {
+        if (viewable && !viewable.has(row.id.toLowerCase())) {
           problems.push({
             id,
             name: row.id,
@@ -679,11 +701,10 @@ export async function createOutgoingWebhook(
     // and the insert, then fail to see the new row in its cleanup.
     const channelIds = await validateTextChannelIds(
       serverId,
+      createdBy,
       body.channelIds,
       client,
       true,
-      new Set(),
-      createdBy,
     );
     const result = await client.query<OutgoingWebhookRow>(
       `INSERT INTO outgoing_webhooks (
@@ -720,7 +741,7 @@ export async function createOutgoingWebhook(
 export async function updateOutgoingWebhook(
   id: string,
   body: UpdateOutgoingWebhookBody,
-  actorId?: string,
+  actorId: string,
 ): Promise<OutgoingWebhook | null> {
   if (body.url !== undefined) {
     await assertOutgoingWebhookUrl(body.url.trim());
@@ -749,11 +770,11 @@ export async function updateOutgoingWebhook(
       body.channelIds !== undefined || body.status === "active"
         ? await validateTextChannelIds(
             existing.server_id,
+            actorId,
             body.channelIds ?? existing.channel_ids,
             client,
             false,
             new Set(existing.channel_ids.map((channelId) => channelId.toLowerCase())),
-            actorId,
           )
         : existing.channel_ids;
     const skipUserIds =
