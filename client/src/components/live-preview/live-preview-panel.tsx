@@ -143,6 +143,8 @@ function LivePreviewPanelForSource({
   const { t } = useTranslation();
   const [channels, setChannels] = useState<LivePreviewListedChannel[] | null>(null);
   const [upcoming, setUpcoming] = useState<LivePreviewUpcoming[]>([]);
+  // The last listing answered 404: there is no preview here any more.
+  const [absent, setAbsent] = useState(false);
   const [windowSeconds, setWindowSeconds] = useState<number | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [phase, setPhase] = useState<LivePreviewPhase>({ kind: "idle" });
@@ -161,6 +163,9 @@ function LivePreviewPanelForSource({
   // Bumped by every start, by leaving the page and by picking a channel: an
   // answer that comes back after any of those is stale and must not draw.
   const generation = useRef(0);
+  // The channel being watched keeps its latest listing row (title, count),
+  // and stays drawn when it drops out of a later listing mid-window.
+  const lastShown = useRef<LivePreviewListedChannel | null>(null);
   const sourceKey = source.kind === "community" ? `c:${source.slug}` : `i:${source.code}`;
 
   // The listing: on mount and every 30 s, watching or not, so a party that
@@ -168,16 +173,39 @@ function LivePreviewPanelForSource({
   // count under the player stays current. Cached 10 s at the edge.
   useEffect(() => {
     const controller = new AbortController();
+    // Polls can overlap on a slow network. Only an answer newer than the last
+    // one applied may draw, so a late reply never undoes a fresher one.
+    let sent = 0;
+    let applied = 0;
     const load = () => {
+      sent += 1;
+      const poll = sent;
       void fetchLivePreviewListing(source, { signal: controller.signal }).then((answer) => {
-        if (controller.signal.aborted) {
+        if (controller.signal.aborted || poll < applied) {
           return;
         }
-        setChannels(answer?.livePreview.channels ?? []);
-        setUpcoming(answer?.livePreview.upcoming ?? []);
-        if (answer) {
-          setWindowSeconds(answer.livePreview.seconds);
+        // A failed poll (network, 429, 503) says nothing about the party:
+        // keep what was last known, or the live card would vanish and the
+        // page around it would take its banner back while it is still live.
+        if (!answer) {
+          return;
         }
+        applied = poll;
+        // A 404 is different: the preview is gone for this page (switched
+        // off, suspended, the invite expired or ran out of uses), so nothing
+        // is live any more. A visitor already watching keeps the page until
+        // their window ends or they leave (see `shown` below): somebody else
+        // using up the invite must not cut off a film in progress.
+        if (answer === "absent") {
+          setAbsent(true);
+          setChannels([]);
+          setUpcoming([]);
+          return;
+        }
+        setAbsent(false);
+        setChannels(answer.livePreview.channels);
+        setUpcoming(answer.livePreview.upcoming);
+        setWindowSeconds(answer.livePreview.seconds);
       });
     };
     load();
@@ -191,15 +219,15 @@ function LivePreviewPanelForSource({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey]);
 
-  // The channel being watched keeps its latest listing row (title, count),
-  // and stays drawn when it drops out of a later listing mid-window.
-  const lastShown = useRef<LivePreviewListedChannel | null>(null);
   const listed =
     (channelId ? channels?.find((row) => row.id === channelId) : channels?.[0]) ?? null;
   if (listed) {
     lastShown.current = listed;
   }
-  const shown = listed ?? (channelId ? lastShown.current : null);
+  // Once the preview is gone (404), the last row is kept only while the page
+  // is open, so the card does not come back from it after the visitor leaves.
+  const keepLastShown = channelId !== null && (!absent || previewShowsPage(phase));
+  const shown = listed ?? (keepLastShown ? lastShown.current : null);
   const live = (channels?.length ?? 0) > 0;
 
   useEffect(() => {
@@ -306,6 +334,8 @@ function LivePreviewPanelForSource({
   // state and refs, so it is safe to call from the effect below.
   const leave = useCallback(() => {
     generation.current += 1;
+    // The next watch starts with a fresh budget of player restarts.
+    restarts.current = 0;
     setParts(EMPTY_DATE_PARTS);
     setAgeError(false);
     setPhase({ kind: "idle" });
@@ -317,6 +347,12 @@ function LivePreviewPanelForSource({
   // the page. A Back that lands on this open's own entry (a sign-up form step
   // inside the page) does not. Each open has its own id, so an entry left by
   // an earlier open is never mistaken for this one.
+  //
+  // Every way the page closes ends in this effect's cleanup (the control, a
+  // remount, an unmount), and the cleanup takes the entry back off the stack
+  // when it is still the current one. The logo link replaces it instead
+  // (`replace` on the link), and an entry stranded under a later step (the
+  // sign-up form's hash steps) is skipped by the listener further down.
   const pushedEntry = useRef<string | null>(null);
   useEffect(() => {
     if (!pageShown) {
@@ -333,8 +369,36 @@ function LivePreviewPanelForSource({
       leave();
     };
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      pushedEntry.current = null;
+      if (window.history.state?.[HISTORY_MARK] === entryId) {
+        window.history.back();
+      }
+    };
   }, [pageShown, leave]);
+
+  // An entry an earlier open left behind (closed from under a sign-up hash
+  // step, so it was not the current one) is a page that looks the same as the
+  // one below it. Landing on it with Back would seem to do nothing, so step
+  // over it. One step at a time: the pending flag keeps a repeated event from
+  // stepping twice.
+  useEffect(() => {
+    let skipping = false;
+    const onStale = () => {
+      const mark = window.history.state?.[HISTORY_MARK];
+      if (!mark || mark === pushedEntry.current) {
+        skipping = false;
+        return;
+      }
+      if (!skipping) {
+        skipping = true;
+        window.history.back();
+      }
+    };
+    window.addEventListener("popstate", onStale);
+    return () => window.removeEventListener("popstate", onStale);
+  }, []);
 
   if (!shown) {
     return null;
@@ -342,6 +406,7 @@ function LivePreviewPanelForSource({
 
   const watch = (target: LivePreviewListedChannel) => {
     generation.current += 1;
+    restarts.current = 0;
     setChannelId(target.id);
     const next = phaseOnWatch(readPreviewAgeMemory(safeSession(), safeLocal()));
     setPhase(next);
@@ -350,19 +415,8 @@ function LivePreviewPanelForSource({
     }
   };
 
-  const exit = () => {
-    // Take the entry this page pushed back off the stack, so closing with the
-    // control leaves no dangling entry behind. Only when it is still the
-    // current one.
-    if (pushedEntry.current !== null) {
-      const entryId = pushedEntry.current;
-      pushedEntry.current = null;
-      if (window.history.state?.[HISTORY_MARK] === entryId) {
-        window.history.back();
-      }
-    }
-    leave();
-  };
+  // The effect above takes the pushed entry back off when the page closes.
+  const exit = leave;
 
   const submitAge = () => {
     const verdict = judgePreviewAge(toIsoDate(parts));
@@ -474,7 +528,7 @@ function LivePreviewPanelForSource({
           >
             <ArrowLeft aria-hidden className="size-5" />
           </button>
-          <Link to="/" className="font-brand text-2xl leading-none tracking-tight text-accent">
+          <Link to="/" replace className="font-brand text-2xl leading-none tracking-tight text-accent">
             pqp
           </Link>
           <BetaTag />

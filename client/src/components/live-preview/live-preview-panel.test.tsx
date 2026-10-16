@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter } from "react-router-dom";
+import { BrowserRouter, MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LivePreviewStartResult } from "@/lib/api";
+import { fetchLivePreviewListing, type LivePreviewStartResult } from "@/lib/api";
 import { PREVIEW_AGE_OK_KEY } from "@/lib/live-preview";
 import { devLivePreviewAuth } from "./live-preview-auth";
 import { LivePreviewPanel, type LivePreviewCommunity } from "./live-preview-panel";
@@ -81,6 +81,7 @@ let host: HTMLElement | null = null;
 let siteRoot: HTMLElement | null = null;
 
 beforeEach(() => {
+  window.history.replaceState(null, "", "/");
   api.starts.length = 0;
   api.failures.length = 0;
   player.unavailable = null;
@@ -91,8 +92,13 @@ beforeEach(() => {
   document.body.append(siteRoot);
 });
 
-afterEach(() => {
-  act(() => root?.unmount());
+afterEach(async () => {
+  // Closing an open page takes its history entry back, and jsdom runs that
+  // traversal on a timer: let it land before the next test starts.
+  await act(async () => {
+    root?.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  });
   host?.remove();
   siteRoot?.remove();
   root = null;
@@ -102,17 +108,22 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-function render(slug: string) {
+function render(
+  slug: string,
+  options: { browserRouter?: boolean; onLiveChange?: (live: boolean) => void } = {},
+) {
+  const Router = options.browserRouter ? BrowserRouter : MemoryRouter;
   root!.render(
-    <MemoryRouter>
+    <Router>
       <LivePreviewPanel
         source={{ kind: "community", slug }}
         landing={`/c/${slug}`}
         surface="community"
         community={{ ...COMMUNITY, slug }}
         auth={devLivePreviewAuth(() => {})}
+        onLiveChange={options.onLiveChange}
       />
-    </MemoryRouter>,
+    </Router>,
   );
 }
 
@@ -283,16 +294,10 @@ describe("LivePreviewPanel", () => {
 
   it("closes the page on the browser's Back and leaves no extra entry on the control", async () => {
     await mount();
-    // jsdom's history is shared by every test in the file. An earlier test that
-    // ended on Back leaves the cursor in the middle of the list, and a push from
-    // there drops the entries ahead of it, so the length would not grow by one.
-    // Push from the tip so "exactly one entry" is what is measured.
-    window.history.pushState(null, "");
-    const before = window.history.length;
     await watchNow();
     await answerStart(0, okResult());
     expect(page()).not.toBeNull();
-    expect(window.history.length).toBe(before + 1);
+    expect(window.history.state?.pqpLivePreview).toBeTruthy();
 
     await goBack();
     expect(page()).toBeNull();
@@ -307,5 +312,168 @@ describe("LivePreviewPanel", () => {
     expect(page()).toBeNull();
     // Back on the entry the visitor started from, not on the one the page pushed.
     expect(window.history.state).toEqual(resting);
+  });
+  it("takes its history entry back when the page unmounts while open", async () => {
+    await mount();
+    const resting = window.history.state;
+    await watchNow();
+    await answerStart(0, okResult());
+    expect(window.history.state?.pqpLivePreview).toBeTruthy();
+
+    await act(async () => root!.render(<></>));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    expect(page()).toBeNull();
+    expect(window.history.state).toEqual(resting);
+  });
+
+  it("leaves no entry of its own behind when the logo link closes the page", async () => {
+    window.history.replaceState(null, "", "/c/sala-do-rafa");
+    await mount(() => render(COMMUNITY.slug!, { browserRouter: true }));
+    await watchNow();
+    await answerStart(0, okResult());
+    const logo = document.querySelector<HTMLAnchorElement>("[data-live-preview] header a[href='/']");
+    expect(logo).not.toBeNull();
+    await act(async () => logo!.click());
+    expect(window.location.pathname).toBe("/");
+
+    // Back lands on the page the visitor came from, not on an entry the
+    // panel pushed.
+    await goBack();
+    expect(window.location.pathname).toBe("/c/sala-do-rafa");
+    expect(window.history.state?.pqpLivePreview).toBeUndefined();
+  });
+
+  it("steps over an entry stranded under a sign-up hash step", async () => {
+    await mount();
+    const resting = window.history.state;
+    await watchNow();
+    await answerStart(0, okResult());
+    // The inline sign-up form moves on by hash, after the page's own entry.
+    window.history.pushState(null, "", "#/factor-one");
+    await act(async () => exitControl()!.click());
+    expect(page()).toBeNull();
+
+    // Back over the hash step, then over the stranded entry in one go.
+    await goBack();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+    expect(window.history.state).toEqual(resting);
+  });
+
+  it("keeps the live card when a later listing poll fails", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const onLiveChange = vi.fn();
+      await mount(() => render(COMMUNITY.slug!, { onLiveChange }));
+      expect(host!.querySelector("[data-live-preview='idle']")).not.toBeNull();
+      expect(onLiveChange).toHaveBeenLastCalledWith(true);
+      onLiveChange.mockClear();
+
+      // The next poll fails (network, 429, 503).
+      const polls = vi.mocked(fetchLivePreviewListing).mock.calls.length;
+      vi.mocked(fetchLivePreviewListing).mockResolvedValueOnce(null);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(fetchLivePreviewListing).toHaveBeenCalledTimes(polls + 1);
+      expect(host!.querySelector("[data-live-preview='idle']")).not.toBeNull();
+      expect(onLiveChange).not.toHaveBeenCalledWith(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("takes the live card away when the listing says the preview is gone (404)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const onLiveChange = vi.fn();
+      await mount(() => render(COMMUNITY.slug!, { onLiveChange }));
+      expect(host!.querySelector("[data-live-preview='idle']")).not.toBeNull();
+
+      // Switched off, suspended or the invite expired while the page was open.
+      vi.mocked(fetchLivePreviewListing).mockResolvedValueOnce("absent");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(host!.querySelector("[data-live-preview='idle']")).toBeNull();
+      expect(onLiveChange).toHaveBeenLastCalledWith(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a visitor who is watching finish when the preview goes away, then drops the card", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await mount();
+      await watchNow();
+      await answerStart(0, okResult());
+      expect(page()).not.toBeNull();
+
+      // Somebody else used the invite's last slot, or the host switched it off.
+      vi.mocked(fetchLivePreviewListing).mockResolvedValueOnce("absent");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(page()).not.toBeNull();
+
+      await untilPopstate(() => exitControl()!.click());
+      expect(page()).toBeNull();
+      expect(host!.querySelector("[data-live-preview='idle']")).toBeNull();
+      expect(siteRoot!.inert).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a late 404 that answers after a newer poll found the party live", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await mount();
+      expect(host!.querySelector("[data-live-preview='idle']")).not.toBeNull();
+      const live = await vi.mocked(fetchLivePreviewListing).getMockImplementation()!(
+        { kind: "community", slug: COMMUNITY.slug! },
+        {},
+      );
+
+      let answerSlow: (value: "absent") => void = () => {};
+      vi.mocked(fetchLivePreviewListing)
+        .mockImplementationOnce(() => new Promise((resolve) => (answerSlow = resolve)))
+        .mockResolvedValueOnce(live);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await act(async () => answerSlow("absent"));
+      expect(host!.querySelector("[data-live-preview='idle']")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts the restart budget over after the visitor leaves and watches again", async () => {
+    await mount();
+    await watchNow();
+    await answerStart(0, okResult());
+    // Two failures with no picture in between use up the budget.
+    await act(async () => player.unavailable!());
+    await answerStart(1, okResult());
+    await act(async () => player.unavailable!());
+    await answerStart(2, okResult());
+    expect(page()?.dataset.livePreview).toBe("watching");
+
+    await act(async () => exitControl()!.click());
+    expect(page()).toBeNull();
+
+    await watchNow();
+    await answerStart(3, okResult());
+    expect(page()?.dataset.livePreview).toBe("watching");
+    // The first failure of this new watch is a restart, not the error.
+    await act(async () => player.unavailable!());
+    expect(page()?.dataset.livePreview).toBe("starting");
+    await answerStart(4, okResult());
+    expect(page()?.dataset.livePreview).toBe("watching");
   });
 });

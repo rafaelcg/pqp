@@ -570,12 +570,16 @@ export type LivePreviewSource =
  * NO AUTH HEADER, on purpose (a bare `fetch`), for `fetchPublicInvitePreview`'s
  * reason: a stale token must not be able to turn a public read into a 401.
  * Asked only when the page's own answer said `livePreview: true`, so with the
- * flag off this request is never made. Every failure is "nothing live".
+ * flag off this request is never made. A 404 is the server saying there is
+ * nothing to preview here any more (flag off, community suspended or
+ * unlisted, invite expired) and comes back as `"absent"`. Every other failure
+ * (network, 429, 5xx, a body that does not parse) says nothing about the
+ * party and comes back as `null`.
  */
 export async function fetchLivePreviewListing(
   source: LivePreviewSource,
   options: { signal?: AbortSignal } = {},
-): Promise<LivePreviewListing | null> {
+): Promise<LivePreviewListing | "absent" | null> {
   const path =
     source.kind === "community"
       ? `/api/public/live-preview/communities/${encodeURIComponent(source.slug)}`
@@ -585,6 +589,9 @@ export async function fetchLivePreviewListing(
       headers: { Accept: "application/json" },
       signal: options.signal,
     });
+    if (response.status === 404) {
+      return "absent";
+    }
     if (!response.ok) {
       return null;
     }
