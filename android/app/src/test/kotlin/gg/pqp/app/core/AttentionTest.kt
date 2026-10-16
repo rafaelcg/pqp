@@ -172,6 +172,39 @@ class AttentionTest {
     }
 
     @Test
+    fun `a send that did not leave is tried again on its own, a few times, with no event to prompt it`() {
+        val rig = Rig()
+        rig.tracker.setConnected(true)
+        rig.foreground = false
+        rig.tracker.evaluate()
+        rig.failSends = true
+        rig.advance(GRACE)
+        rig.failSends = false
+        // Nothing else happens: no lifecycle event, no reconnect. The retry is what tells the server.
+        rig.advance(AttentionTracker.RETRY_BASE_MS)
+        assertEquals(listOf(true, false), rig.sent)
+        // And once it is through it stops asking.
+        rig.advance(AttentionTracker.RETRY_BASE_MS * 40)
+        assertEquals(listOf(true, false), rig.sent)
+    }
+
+    @Test
+    fun `retries are bounded, and a reconnect starts fresh`() {
+        val rig = Rig()
+        rig.tracker.setConnected(true)
+        rig.failSends = true
+        rig.foreground = false
+        rig.tracker.evaluate()
+        rig.advance(GRACE)
+        rig.advance(AttentionTracker.RETRY_BASE_MS * 100)
+        assertEquals(listOf(true), rig.sent)
+        rig.failSends = false
+        rig.tracker.setConnected(false)
+        rig.tracker.setConnected(true)
+        assertEquals(listOf(true, false), rig.sent)
+    }
+
+    @Test
     fun `the frame is the shared one`() {
         val frame = AttentionReporter.attentionFrame(false).toString()
         assertEquals("""{"type":"set-attention","foreground":false}""", frame)

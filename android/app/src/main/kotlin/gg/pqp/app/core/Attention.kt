@@ -62,6 +62,8 @@ class AttentionTracker(
     private var reported: Boolean? = null
     private var connected = false
     private var timer: Job? = null
+    private var retry: Job? = null
+    private var retryAttempts = 0
 
     /** Something changed (an Activity started or stopped): look again. */
     fun evaluate() = synchronized(lock) {
@@ -91,11 +93,16 @@ class AttentionTracker(
         connected = next
         // A new socket knows nothing and an old one is gone: either way the next declaration has to go out.
         reported = null
+        retryAttempts = 0
+        retry?.cancel()
+        retry = null
         if (next) declare(declared)
     }
 
     fun dispose() = synchronized(lock) {
         cancelTimer()
+        retry?.cancel()
+        retry = null
         connected = false
     }
 
@@ -108,13 +115,43 @@ class AttentionTracker(
         declared = next
         if (connected && reported != next) {
             // Recorded only once the send went through.
-            reported = if (runCatching { send(next) }.getOrDefault(false)) next else null
+            val sent = runCatching { send(next) }.getOrDefault(false)
+            reported = if (sent) next else null
+            if (sent) {
+                retryAttempts = 0
+                retry?.cancel()
+                retry = null
+            } else {
+                scheduleRetry()
+            }
+        }
+    }
+
+    /**
+     * A frame that did not leave while the socket stays ready (it was closing under the send) must not wait for
+     * the next lifecycle event: a backgrounded phone may never get one, and the server would go on reading it as
+     * in front of the person. Tried again a few times with a growing wait; a reconnect re-announces anyway.
+     */
+    private fun scheduleRetry() {
+        if (retry != null || retryAttempts >= RETRY_LIMIT) return
+        val wait = RETRY_BASE_MS shl retryAttempts
+        retryAttempts += 1
+        retry = scope.launch {
+            delay(wait)
+            synchronized(lock) {
+                retry = null
+                if (connected && reported != declared) declare(declared)
+            }
         }
     }
 
     companion object {
         /** How long the app must stay out of the person's way before it says so. */
         const val BACKGROUND_GRACE_MS = 5_000L
+
+        /** A send that did not leave is tried again after 1 s, 2 s, 4 s, 8 s, 16 s, then left to the next event or reconnect. */
+        const val RETRY_BASE_MS = 1_000L
+        const val RETRY_LIMIT = 5
     }
 }
 
