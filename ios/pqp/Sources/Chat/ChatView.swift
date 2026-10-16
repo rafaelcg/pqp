@@ -547,10 +547,15 @@ struct ChatView: View {
             }
         }
         .task(id: sendGateServerId) {
+            // A snapshot belongs to the server it was read for: drop it when
+            // the destination changes, and accept an answer only while it is
+            // still the active one (a failed read must not leave the previous
+            // server's bits gating this channel).
+            sendPermissions = nil
             guard let serverId = sendGateServerId else { return }
-            if let permissions = try? await session.api.fetchMemberPermissions(serverId: serverId) {
-                sendPermissions = permissions
-            }
+            let permissions = try? await session.api.fetchMemberPermissions(serverId: serverId)
+            guard !Task.isCancelled, serverId == sendGateServerId else { return }
+            sendPermissions = permissions
         }
         .animation(Motion.standard, value: call.isCollapsed)
         .animation(Motion.standard, value: actionTarget?.id)
