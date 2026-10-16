@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 
 // ENCAMINHAR, the picker: where does this go?
@@ -126,6 +127,11 @@ final class ForwardPickerModel {
     }
 
     private static let concurrency = 4
+    /// `GET /api/servers/:id/forward-destinations` answered 404 (an older API),
+    /// remembered until this moment and then asked again: the API can be
+    /// upgraded under a running app, and threads should appear without a relaunch.
+    private nonisolated static let routeMissingUntil = OSAllocatedUnfairLock<Date?>(initialState: nil)
+    private nonisolated static let routeRecheck: TimeInterval = 300
 
     private struct ServerTargets: Sendable {
         let targets: [ForwardTarget]
@@ -138,6 +144,30 @@ final class ForwardPickerModel {
     /// list could not be read. Both reads depend only on the server, so they
     /// run together.
     private nonisolated static func targets(in server: Server, api: APIClient) async -> ServerTargets? {
+        // One request that also carries the threads. An API that predates the
+        // route answers 404 and falls through to the two older reads (no
+        // threads there).
+        // Once one server has answered 404 the whole API predates the route:
+        // the rest skip the probe instead of each paying a round trip for it.
+        if !routeMissingUntil.withLock({ ($0 ?? .distantPast) > Date() }) {
+            do {
+                let destinations = try await api.forwardDestinations(serverId: server.id)
+                return ServerTargets(targets: destinations.targets(in: server), permissionsKnown: true)
+            } catch APIError.notFound {
+                routeMissingUntil.withLock { $0 = Date().addingTimeInterval(routeRecheck) }
+            } catch is CancellationError {
+                return nil
+            } catch APIError.unauthorized {
+                return nil
+            } catch {
+                // A blip on the new route (transport, 5xx, a rate limit) must not
+                // hide the server: the two older reads still answer, without threads.
+            }
+        }
+        return await legacyTargets(in: server, api: api)
+    }
+
+    private nonisolated static func legacyTargets(in server: Server, api: APIClient) async -> ServerTargets? {
         async let listed = try? await api.channels(serverId: server.id)
         async let allowed = try? await api.fetchMemberPermissions(serverId: server.id)
         guard let list = await listed else { return nil }
