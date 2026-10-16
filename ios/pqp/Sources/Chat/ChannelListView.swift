@@ -72,6 +72,10 @@ struct ChannelListView: View {
     /// The counts above came from a read, not from the empty starting value:
     /// only then do they say anything about the hub's tile for this server.
     @State private var unreadFetched = false
+    /// The sign-out epoch the counts were read in, and the newest request:
+    /// a read from an earlier account or an older request never lands.
+    @State private var unreadEpochFetched = -1
+    @State private var unreadRequestSeq = 0
     @State private var isLoading = true
     @State private var error: String?
     /// The Baú's instance flags. Nil until asked; off on any failure. The row
@@ -977,9 +981,11 @@ struct ChannelListView: View {
     }
 
     private func publishServerUnread() {
-        guard unreadFetched else { return }
+        // Counts read for another account (a sign-out while this list is still
+        // mounted) are not published into the next one's tiles.
+        guard unreadFetched, unreadEpochFetched == session.unreadEpoch else { return }
         let preferences = session.preferences
-        session.noteServerUnread(server.id, ServerUnread.totals(from: Array(unread.values)) {
+        session.noteServerUnreadFromList(server.id, ServerUnread.totals(from: Array(unread.values)) {
             ChannelMute.isMuted(channelId: $0, serverId: server.id, preferences: preferences)
         })
     }
@@ -1036,8 +1042,12 @@ struct ChannelListView: View {
         // An answer that outlives a sign-out is the previous account's: it is
         // neither shown nor published into the next one's tiles.
         let epoch = session.unreadEpoch
-        if let entries = try? await session.api.unread(serverId: server.id), epoch == session.unreadEpoch {
+        unreadRequestSeq += 1
+        let request = unreadRequestSeq
+        if let entries = try? await session.api.unread(serverId: server.id),
+           epoch == session.unreadEpoch, request == unreadRequestSeq {
             unread = Dictionary(uniqueKeysWithValues: entries.map { ($0.channelId, $0) })
+            unreadEpochFetched = epoch
             unreadFetched = true
         }
         await refreshBau()

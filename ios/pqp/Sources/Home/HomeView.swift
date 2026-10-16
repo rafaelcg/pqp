@@ -727,6 +727,9 @@ final class HomeModel {
         hasLoadedOnce = true
         // After the lists are up and off this call's path: the badges are a
         // nicety and must never hold the hub back.
+        // A pass cancelled half way must not leave its replacement waiting out
+        // the throttle with the other servers never read.
+        if unreadPassRunning { unreadPassAt = nil }
         unreadTask?.cancel()
         unreadTask = Task { await self.hydrateServerUnread() }
     }
@@ -815,6 +818,7 @@ final class HomeModel {
     @ObservationIgnored private var unreadTask: Task<Void, Never>?
     @ObservationIgnored private var unreadPassAt: Date?
     @ObservationIgnored private var unreadPass = 0
+    @ObservationIgnored private var unreadPassRunning = false
     /// When a live frame last touched each server, in the order frames came,
     /// so a read that began earlier cannot overwrite what a frame just said.
     @ObservationIgnored private var activitySeq = 0
@@ -829,6 +833,8 @@ final class HomeModel {
               ServerUnread.needsPass(last: unreadPassAt, now: Date(), force: force)
         else { return }
         unreadPassAt = Date()
+        unreadPassRunning = true
+        defer { unreadPassRunning = false }
         unreadPass += 1
         let pass = unreadPass
         let preferences = session.preferences
@@ -848,6 +854,7 @@ final class HomeModel {
         let api = session.api
         let startedAt = activitySeq
         let epoch = session.unreadEpoch
+        let listsStart = session.listPublishCount
         var failed: [String] = []
         await withTaskGroup(of: (String, [UnreadEntry]?).self) { group in
             var next = 0
@@ -861,7 +868,7 @@ final class HomeModel {
             for await (id, entries) in group {
                 if pass == unreadPass, !Task.isCancelled, epoch == session.unreadEpoch {
                     if let entries {
-                        applyUnread(entries, serverId: id, startedAt: startedAt)
+                        applyUnread(entries, serverId: id, startedAt: startedAt, listsStart: listsStart)
                     } else {
                         failed.append(id)
                     }
@@ -872,8 +879,11 @@ final class HomeModel {
         return failed
     }
 
-    private func applyUnread(_ entries: [UnreadEntry], serverId: String, startedAt: Int) {
+    private func applyUnread(_ entries: [UnreadEntry], serverId: String, startedAt: Int, listsStart: Int) {
         guard let session,
+              // The server's own list published after this read began: it is newer,
+              // whether or not the list is still open.
+              !session.listPublished(serverId, since: listsStart),
               // A frame that landed after the read began is newer than it, and
               // the open server's own list is the authority for itself.
               (activityAt[serverId] ?? 0) <= startedAt,

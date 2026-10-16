@@ -97,6 +97,19 @@ final class SessionStore {
     /// account checks it before writing (`HomeModel.readUnread`).
     @ObservationIgnored private(set) var unreadEpoch = 0
 
+    /// Which server lists have published their own totals, in order, so a hub
+    /// read that began BEFORE a list published is known to be older than it
+    /// (`HomeModel.applyUnread`), even after the list has closed.
+    @ObservationIgnored private var listSeq = 0
+    @ObservationIgnored private var listPublishedAt: [String: Int] = [:]
+    var listPublishCount: Int { listSeq }
+    func listPublished(_ serverId: String, since seq: Int) -> Bool { (listPublishedAt[serverId] ?? 0) > seq }
+    func noteServerUnreadFromList(_ serverId: String, _ totals: ServerUnreadTotals) {
+        listSeq += 1
+        listPublishedAt[serverId] = listSeq
+        noteServerUnread(serverId, totals)
+    }
+
     /// One server's totals, written whole. Absent at zero, and equal writes are
     /// dropped so the hub does not redraw for nothing.
     func noteServerUnread(_ serverId: String, _ totals: ServerUnreadTotals) {
@@ -703,6 +716,7 @@ final class SessionStore {
         serverUnread = [:]
         openedServerId = nil
         unreadEpoch += 1
+        listPublishedAt = [:]
         answeredAgeGateThisLaunch = false
         PendingInvite.clear()
         pendingInviteCode = nil

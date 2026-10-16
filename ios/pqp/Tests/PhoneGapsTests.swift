@@ -101,6 +101,16 @@ final class PhoneGapsTests: XCTestCase {
         XCTAssertNil(session.serverUnread["s1"], "a server with nothing unread is absent")
     }
 
+    @MainActor
+    func testAHubReadThatBeganBeforeAListPublishedIsOlderThanIt() {
+        let session = SessionStore()
+        let began = session.listPublishCount
+        session.noteServerUnreadFromList("s1", .none)
+        XCTAssertTrue(session.listPublished("s1", since: began), "the list was newer, even though it is closed now")
+        XCTAssertFalse(session.listPublished("s2", since: began))
+        XCTAssertFalse(session.listPublished("s1", since: session.listPublishCount), "a read that began after it is newer")
+    }
+
     // MARK: - A folded section that hides a mention
 
     private func channel(_ id: String) throws -> Channel {
