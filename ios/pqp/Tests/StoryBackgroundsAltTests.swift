@@ -141,6 +141,35 @@ final class StoryBackgroundsAltTests: XCTestCase {
         XCTAssertEqual(StoryAltText.clean(String(repeating: "x", count: 300))?.count, StoryLayerLimits.altMax)
     }
 
+    func testTheLimitCountsUTF16UnitsLikeTheContractAndNeverCutsACharacter() {
+        // 101 emoji are 101 characters and 202 units: over the contract's 200.
+        let capped = StoryAltText.capped(String(repeating: "\u{1F600}", count: 101))
+        XCTAssertEqual(capped.count, 100)
+        XCTAssertLessThanOrEqual(capped.utf16.count, StoryLayerLimits.altMax)
+        XCTAssertEqual(StoryAltText.capped("abc"), "abc")
+        XCTAssertEqual(StoryAltText.remaining("abc"), StoryLayerLimits.altMax - 3)
+    }
+
+    func testASpokenPhraseIsAWholePhraseNotLettersInsideOtherWords() {
+        XCTAssertTrue(StoryAltText.says("um gato", in: "a praia. um gato. bora"))
+        XCTAssertTrue(StoryAltText.says("art", in: "art"))
+        XCTAssertFalse(StoryAltText.says("art", in: "party"))
+        XCTAssertTrue(StoryAltText.says("art", in: "party. art. fim"))
+    }
+
+    func testUndoingSomethingElseKeepsADescriptionAddedAfterIt() throws {
+        let model = StoryEditorModel()
+        model.canvas = CGSize(width: 360, height: 640)
+        let photo = try XCTUnwrap(model.addImage(
+            StoryLayerFile(data: Data([1]), contentType: "image/jpeg", width: 10, height: 20), preview: UIImage()
+        ))
+        _ = try XCTUnwrap(model.addText(StoryTextData(text: "oi")))
+        model.setAlt(id: photo, alt: "um gato")
+        model.undo()
+        guard case .image(let picture)? = model.layer(photo)?.content else { return XCTFail("the photo is still there") }
+        XCTAssertEqual(picture.alt, "um gato")
+    }
+
     func testTheEditorKeepsADescriptionOnAPhotoNotOnAText() throws {
         let model = StoryEditorModel()
         model.canvas = CGSize(width: 360, height: 640)

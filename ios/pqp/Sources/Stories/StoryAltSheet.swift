@@ -29,10 +29,10 @@ struct StoryAltSheet: View {
         self.kind = kind
         self.initial = initial
         self.onSave = onSave
-        _text = State(initialValue: String(initial.prefix(StoryLayerLimits.altMax)))
+        _text = State(initialValue: StoryAltText.capped(initial))
     }
 
-    private var left: Int { StoryLayerLimits.altMax - text.count }
+    private var left: Int { StoryAltText.remaining(text) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -54,7 +54,7 @@ struct StoryAltSheet: View {
                     // A description is one sentence, not a paragraph, and never
                     // longer than the contract takes.
                     let flat = value.replacingOccurrences(of: "\n", with: " ")
-                    let capped = String(flat.prefix(StoryLayerLimits.altMax))
+                    let capped = StoryAltText.capped(flat)
                     if capped != value { text = capped }
                 }
                 .onSubmit(save)

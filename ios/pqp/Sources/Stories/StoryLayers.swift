@@ -575,8 +575,39 @@ enum StoryAltText {
         guard let raw else { return nil }
         let collapsed = raw.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !collapsed.isEmpty else { return nil }
-        return String(collapsed.prefix(StoryLayerLimits.altMax))
+        return capped(collapsed)
     }
+
+    /// At most `altMax` UTF-16 code units, the unit the contract's `.max(200)`
+    /// counts in (so 101 emoji do not slip past a count of characters), without
+    /// cutting a character in half.
+    static func capped(_ value: String) -> String {
+        var out = ""
+        var units = 0
+        for character in value {
+            units += character.utf16.count
+            if units > StoryLayerLimits.altMax { break }
+            out.append(character)
+        }
+        return out
+    }
+
+    /// Whether `spoken` already carries `alt` as a phrase of its own, not as
+    /// letters inside other words ("art" is not said by "party").
+    static func says(_ alt: String, in spoken: String) -> Bool {
+        var from = spoken.startIndex
+        while let found = spoken.range(of: alt, range: from..<spoken.endIndex) {
+            let before = found.lowerBound == spoken.startIndex ? nil : spoken[spoken.index(before: found.lowerBound)]
+            let after = found.upperBound == spoken.endIndex ? nil : spoken[found.upperBound]
+            let edge: (Character?) -> Bool = { $0.map { !($0.isLetter || $0.isNumber) } ?? true }
+            if edge(before), edge(after) { return true }
+            from = found.upperBound
+        }
+        return false
+    }
+
+    /// How many more units fit, for the counter under the field.
+    static func remaining(_ value: String) -> Int { StoryLayerLimits.altMax - value.utf16.count }
 
     /// A screen reader's version of the story, in the order the web composer
     /// writes it (`altTextFor`): what the author wrote to describe the base

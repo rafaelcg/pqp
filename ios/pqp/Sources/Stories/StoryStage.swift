@@ -165,7 +165,7 @@ extension StoryLayer {
     /// reader never hears the same description twice.
     func hasUnspokenAlt(in story: Story) -> Bool {
         guard case .image(let picture) = content, let alt = StoryAltText.clean(picture.alt) else { return false }
-        return !(story.altText ?? "").contains(alt)
+        return !StoryAltText.says(alt, in: story.altText ?? "")
     }
 
     /// Calls and mentions are doors; text, photos and drawings are only seen.
