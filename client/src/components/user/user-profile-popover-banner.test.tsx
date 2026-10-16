@@ -26,6 +26,7 @@ vi.stubEnv("VITE_API_URL", API_BASE);
 
 const ANA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const BRUNO = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const CARLA = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const BANNER = `/api/users/${BRUNO}/banner?v=abcd1234`;
 
 vi.mock("@/lib/api", async (importOriginal) => ({
@@ -89,24 +90,30 @@ afterEach(() => {
 function Opener() {
   const open = useProfilePopover();
   return (
-    <button
-      type="button"
-      data-opener=""
-      onClick={(event) =>
-        open(
-          {
-            id: BRUNO,
-            displayName: "Bruno",
-            tag: "bruno#0002",
-            avatarUrl: null,
-          },
-          event.currentTarget,
-        )
-      }
-    >
-      Bruno
-    </button>
+    <>
+      {[
+        { id: BRUNO, displayName: "Bruno", tag: "bruno#0002" },
+        { id: CARLA, displayName: "Carla", tag: "carla#0003" },
+      ].map((person) => (
+        <button
+          key={person.id}
+          type="button"
+          data-opener={person.displayName}
+          onClick={(event) =>
+            open({ ...person, avatarUrl: null }, event.currentTarget)
+          }
+        >
+          {person.displayName}
+        </button>
+      ))}
+    </>
   );
+}
+
+async function settle() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
 
 async function openCard(): Promise<HTMLElement> {
@@ -129,12 +136,10 @@ async function openCard(): Promise<HTMLElement> {
     );
   });
   await act(async () => {
-    host!.querySelector<HTMLButtonElement>("[data-opener]")!.click();
+    host!.querySelector<HTMLButtonElement>('[data-opener="Bruno"]')!.click();
   });
   // Let every read the card fires on open settle.
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
+  await settle();
   const card = document.body.querySelector<HTMLElement>("[data-profile-card]");
   expect(card).not.toBeNull();
   return card!;
@@ -197,6 +202,24 @@ describe("profile card banner", () => {
       image.dispatchEvent(new Event("error"));
     });
 
+    expect(band(card).dataset.profileBanner).toBe("generated");
+    expect(band(card).querySelector("img")).toBeNull();
+  });
+
+  it("never draws the last person's banner on the next one", async () => {
+    vi.mocked(fetchUserBannerUrl).mockResolvedValueOnce({ bannerUrl: BANNER });
+    expect(band(await openCard()).dataset.profileBanner).toBe("image");
+
+    // Carla's read fails: her card must not keep Bruno's picture.
+    vi.mocked(fetchUserBannerUrl).mockRejectedValueOnce(new Error("404"));
+    await act(async () => {
+      host!.querySelector<HTMLButtonElement>('[data-opener="Carla"]')!.click();
+    });
+    await settle();
+
+    expect(fetchUserBannerUrl).toHaveBeenLastCalledWith(CARLA);
+    const card = document.body.querySelector<HTMLElement>("[data-profile-card]")!;
+    expect(card.textContent).toContain("Carla");
     expect(band(card).dataset.profileBanner).toBe("generated");
     expect(band(card).querySelector("img")).toBeNull();
   });

@@ -487,8 +487,15 @@ function UserProfileCard({
     null,
   );
   const [aboutPick, setAboutPick] = useState<ProfileAboutTab | null>(null);
-  /** Their banner, once read. Null until then, and for most accounts after. */
-  const [bannerUrl, setBannerUrl] = useState<string | null>(null);
+  /**
+   * Their banner, once read, with whose it is. The card can be handed another
+   * person while open, and their read can fail: keyed, the last person's
+   * banner is never drawn on the next one.
+   */
+  const [banner, setBanner] = useState<{ userId: string; url: string | null } | null>(
+    null,
+  );
+  const bannerUrl = banner?.userId === subject.id ? banner.url : null;
   /** Open while the composer is up. */
   const [writing, setWriting] = useState(false);
   /** The same fact, readable from listeners registered before it changes. */
@@ -667,10 +674,11 @@ function UserProfileCard({
    */
   useEffect(() => {
     let alive = true;
-    fetchUserBannerUrl(subject.id)
+    const userId = subject.id;
+    fetchUserBannerUrl(userId)
       .then((result) => {
         if (alive) {
-          setBannerUrl(result.bannerUrl ?? null);
+          setBanner({ userId, url: result.bannerUrl ?? null });
         }
       })
       .catch(() => {});
