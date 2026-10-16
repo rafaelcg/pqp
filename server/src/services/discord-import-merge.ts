@@ -22,6 +22,9 @@ import {
   type ChannelRow,
 } from "./servers.js";
 
+/** Rules per INSERT: 1,000 x 4 parameters, far under PostgreSQL's 65,535. */
+const OVERWRITE_CHUNK = 1000;
+
 /** Runtime flag `discord_import_existing`, read for the server being merged into. */
 export function discordImportExistingEnabled(serverId: string): boolean {
   return isEnabled("discord_import_existing", { serverId });
@@ -335,19 +338,24 @@ export async function applyDiscordMerge(input: {
       });
     }
     if (rules.size > 0) {
-      const params: unknown[] = [];
-      const tuples = [...rules.values()].map((rule) => {
-        const base = params.length;
-        params.push(rule.channelId, rule.roleId, rule.allow, rule.deny);
-        return `($${base + 1}, 'role', $${base + 2}, $${base + 3}, $${base + 4})`;
-      });
-      await client.query(
-        `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
-         VALUES ${tuples.join(", ")}
-         ON CONFLICT (channel_id, target_type, target_id)
-         DO UPDATE SET allow = EXCLUDED.allow, deny = EXCLUDED.deny`,
-        params,
-      );
+      // Bounded chunks: a template of 200 channels with 100 cargos can name
+      // more rules than one statement has bind parameters (65,535 / 4).
+      const all = [...rules.values()];
+      for (let from = 0; from < all.length; from += OVERWRITE_CHUNK) {
+        const params: unknown[] = [];
+        const tuples = all.slice(from, from + OVERWRITE_CHUNK).map((rule) => {
+          const base = params.length;
+          params.push(rule.channelId, rule.roleId, rule.allow, rule.deny);
+          return `($${base + 1}, 'role', $${base + 2}, $${base + 3}, $${base + 4})`;
+        });
+        await client.query(
+          `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+           VALUES ${tuples.join(", ")}
+           ON CONFLICT (channel_id, target_type, target_id)
+           DO UPDATE SET allow = EXCLUDED.allow, deny = EXCLUDED.deny`,
+          params,
+        );
+      }
       touchedPermissions = true;
     }
     for (const row of channels) {

@@ -877,6 +877,44 @@ describeDb("discord layout import into an existing server", () => {
       ).toBe(1);
     });
 
+    it("writes more rules than one statement holds, in chunks", async () => {
+      await enable();
+      const roles = Array.from({ length: 8 }, (_, i) => ({
+        id: 100 + i,
+        name: `Role${i}`,
+        color: 0,
+        hoist: false,
+        mentionable: false,
+      }));
+      const channels = Array.from({ length: 150 }, (_, i) => ({
+        id: i + 1,
+        type: 0,
+        name: `c${i}`,
+        position: i,
+        permission_overwrites: roles.map((role) => ({
+          id: role.id,
+          type: 0,
+          allow: DISCORD_VIEW,
+          deny: "0",
+        })),
+      }));
+      fetchOk(guildTemplate(channels, roles));
+      const res = await apply(
+        owner,
+        roles.map((role) => role.id),
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.channels).toHaveLength(150);
+      const rules = await getPool().query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM channel_overwrites o
+           JOIN channels c ON c.id = o.channel_id
+           JOIN roles r ON r.id = o.target_id
+          WHERE c.server_id = $1 AND r.name LIKE 'Role%'`,
+        [serverId],
+      );
+      expect(rules.rows[0]!.n).toBe(1200);
+    });
+
     it("moves the permissions version only when a rule or cargo was written", async () => {
       await enable();
       const version = async () =>
