@@ -261,9 +261,12 @@ object LayerOps {
         return bringToFront(layers, ink.id)
     }
 
-    /** What a screen reader says for the story: its text layers, in order. */
-    fun spokenText(layers: List<EditorLayer>): String? =
-        StoryLayers.altText(layers.filterIsInstance<TextLayer>().map { it.text })
+    /**
+     * What a screen reader says for the story: the author's description of the picture first (when they
+     * wrote one), then its text layers, in order.
+     */
+    fun spokenText(layers: List<EditorLayer>, description: String = ""): String? =
+        StoryLayers.altText(listOf(description) + layers.filterIsInstance<TextLayer>().map { it.text })
 
     /** A text card must say something: at least one layer that is not empty ink. */
     fun hasContent(layers: List<EditorLayer>): Boolean = layers.any {

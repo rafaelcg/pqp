@@ -1013,6 +1013,11 @@
     <string name="stories_viewer_sound_off">Turn the sound off</string>
     <string name="stories_viewer_react">React %1$s</string>
     <string name="stories_compose_background">Background %1$d</string>
+    <string name="stories_compose_background_in_family">%1$s, background %2$d</string>
+    <string name="stories_compose_background_family">Background style</string>
+    <string name="stories_compose_background_glow">Glow</string>
+    <string name="stories_compose_background_solid">Solid</string>
+    <string name="stories_compose_background_gradient">Gradient</string>
     <string name="stories_viewers_title">Seen by %1$d</string>
     <plurals name="stories_viewers_meta">
         <item quantity="one">%1$d reaction · gone in %2$s</item>
@@ -1097,6 +1102,11 @@
     <string name="stories_editor_discard_body">What you added is lost.</string>
     <string name="stories_editor_discard">Throw away</string>
     <string name="stories_editor_keep">Keep editing</string>
+    <string name="stories_editor_description_add">Add a description</string>
+    <string name="stories_editor_description_edit">Edit description</string>
+    <string name="stories_editor_description_title">Describe this for people who cannot see it</string>
+    <string name="stories_editor_description_hint">One or two sentences about what the picture shows. A screen reader reads it first.</string>
+    <string name="stories_editor_description_save">Save</string>
     <string name="stories_editor_nothing">Add some text, a photo or a sticker first.</string>
     <string name="stories_editor_canvas">Story canvas. Items you add can be moved, resized and turned.</string>
     <string name="stories_editor_text_hint">Type something</string>

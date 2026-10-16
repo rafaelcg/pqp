@@ -1006,6 +1006,11 @@
     <string name="stories_viewer_sound_off">Tirar o som</string>
     <string name="stories_viewer_react">Reagir com %1$s</string>
     <string name="stories_compose_background">Fundo %1$d</string>
+    <string name="stories_compose_background_in_family">%1$s, fundo %2$d</string>
+    <string name="stories_compose_background_family">Estilo do fundo</string>
+    <string name="stories_compose_background_glow">Brilho</string>
+    <string name="stories_compose_background_solid">Sólido</string>
+    <string name="stories_compose_background_gradient">Degradê</string>
     <string name="stories_viewers_title">Visto por %1$d</string>
     <plurals name="stories_viewers_meta">
         <item quantity="one">%1$d reação · some em %2$s</item>
@@ -1090,6 +1095,11 @@
     <string name="stories_editor_discard_body">O que tu colocou some.</string>
     <string name="stories_editor_discard">Jogar fora</string>
     <string name="stories_editor_keep">Continuar editando</string>
+    <string name="stories_editor_description_add">Colocar uma descrição</string>
+    <string name="stories_editor_description_edit">Editar descrição</string>
+    <string name="stories_editor_description_title">Descreve pra quem não enxerga</string>
+    <string name="stories_editor_description_hint">Uma ou duas frases sobre o que aparece na imagem. O leitor de tela lê isso primeiro.</string>
+    <string name="stories_editor_description_save">Salvar</string>
     <string name="stories_editor_nothing">Coloca um texto, uma foto ou uma figurinha antes.</string>
     <string name="stories_editor_canvas">Tela do story. O que tu coloca dá pra mover, aumentar e girar.</string>
     <string name="stories_editor_text_hint">Escreve aí</string>

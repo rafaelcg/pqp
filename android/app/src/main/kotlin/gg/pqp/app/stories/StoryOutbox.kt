@@ -51,6 +51,8 @@ class StoryPostInput(
     /** The clip with its sound already taken out, when the composer made it. */
     val mutedUri: Uri?,
     val cardBackground: String,
+    /** The author's description of the picture or clip; empty when they wrote none. */
+    val description: String = "",
     val layers: List<EditorLayer>,
     val layerFiles: Map<String, LayerFile>,
     val layersEnabled: Boolean,
@@ -570,7 +572,7 @@ object StoryDraftBuilder {
             requestId = id,
             media = base?.let { StoryMediaInput(it.contentType, it.bytes.size.toLong(), it.width, it.height, it.durationMs) },
             layers = if (layersEnabled) EditorPost.layersJson(layers, layerFiles) else emptyList(),
-            altText = if (layersEnabled) LayerOps.spokenText(layers) else null,
+            altText = if (layersEnabled) LayerOps.spokenText(layers, if (base != null) input.description else "") else null,
         )
 
         val files = linkedMapOf<String, ByteArray>()

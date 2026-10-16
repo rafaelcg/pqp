@@ -366,6 +366,7 @@ fun StoryComposer(
                 muted = muted,
                 mutedUri = mutedUri,
                 cardBackground = cardBackground,
+                description = editor.description,
                 layers = editor.layers,
                 layerFiles = layerFiles.toMap(),
                 layersEnabled = layersEnabled,

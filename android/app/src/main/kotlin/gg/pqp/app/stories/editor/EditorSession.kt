@@ -56,6 +56,13 @@ class EditorSession {
     /** The stroke a finger is drawing right now: shown live, saved (one undo step) when the finger lifts. */
     var liveStroke by mutableStateOf<Stroke?>(null)
 
+    /**
+     * What the author says the picture or clip shows, for people who cannot see it. Sent first in the
+     * story's `altText`, ahead of the words the text layers carry. Not part of the undo history: it is
+     * a field, not a thing on the canvas.
+     */
+    var description by mutableStateOf("")
+
     var textStyle by mutableStateOf(TextStyleChoice())
     var pen by mutableStateOf(PenChoice())
 

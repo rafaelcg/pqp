@@ -168,6 +168,7 @@ fun StoryEditor(
     var guideV by remember { mutableStateOf(false) }
     var guideH by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
+    var describing by remember { mutableStateOf(false) }
     var canvasPx by remember { mutableStateOf(LayerMath.Canvas(1f, 1f)) }
 
     val limitLayers = stringResource(R.string.stories_editor_limit_layers)
@@ -456,6 +457,29 @@ fun StoryEditor(
             Column(Modifier.fillMaxWidth().toolsBottom(gap).padding(bottom = Spacing.sm)) {
                 if (env.cardBackground != null) {
                     BackgroundSwatches(selected = env.cardBackground, onPick = onCardBackground)
+                } else if (env.layersEnabled) {
+                    // A picture or a clip: the author may say what it shows, for people who cannot see it.
+                    val described = session.description.isNotBlank()
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .padding(bottom = Spacing.sm)
+                            .clip(RoundedCornerShape(50))
+                            .background(Color.Black.copy(alpha = 0.5f))
+                            .semantics { role = Role.Button }
+                            .clickable { describing = true }
+                            .padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+                            .testTag("stories.editor.describe"),
+                    ) {
+                        Icon(PqpIcons.Describe, contentDescription = null, tint = if (described) Palette.Signal else Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(Spacing.sm))
+                        Text(
+                            stringResource(if (described) R.string.stories_editor_description_edit else R.string.stories_editor_description_add),
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
                 }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -576,6 +600,17 @@ fun StoryEditor(
                 { sheet = Sheet.None },
             )
             Sheet.None -> Unit
+        }
+
+        if (describing) {
+            DescriptionDialog(
+                initial = session.description,
+                onDone = {
+                    session.description = it.trim()
+                    describing = false
+                },
+                onDismiss = { describing = false },
+            )
         }
 
         if (confirmDiscard) {
@@ -732,29 +767,95 @@ private fun LayerMenuPopup(
     }
 }
 
-/** The gradient swatches under a text card. */
+/** Where the author writes what the picture shows. Sent first in the story's `altText`. */
+@Composable
+private fun DescriptionDialog(initial: String, onDone: (String) -> Unit, onDismiss: () -> Unit) {
+    var value by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.stories_editor_description_title)) },
+        text = {
+            Column {
+                Text(stringResource(R.string.stories_editor_description_hint), style = MaterialTheme.typography.bodySmall)
+                androidx.compose.material3.OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it.take(StoryLayers.DESCRIPTION_MAX) },
+                    minLines = 2,
+                    maxLines = 5,
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm).testTag("stories.editor.describe.field"),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onDone(value) }, modifier = Modifier.testTag("stories.editor.describe.done")) {
+                Text(stringResource(R.string.stories_editor_description_save))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+@Composable
+private fun backgroundFamilyName(family: String): String = stringResource(
+    when (family) {
+        "solid" -> R.string.stories_compose_background_solid
+        "gradient" -> R.string.stories_compose_background_gradient
+        else -> R.string.stories_compose_background_glow
+    },
+)
+
+/**
+ * The swatches under a text card, one family at a time: a small switch (glow, solid, gradient) over a
+ * row of six. The switch only changes which row is shown; the chosen key stays until another is picked.
+ */
 @Composable
 internal fun BackgroundSwatches(selected: String, onPick: (String) -> Unit) {
-    androidx.compose.foundation.layout.Row(
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.sm, Alignment.CenterHorizontally),
-        modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm),
-    ) {
-        StoriesRules.BACKGROUNDS.forEachIndexed { position, key ->
-            val label = stringResource(R.string.stories_compose_background, position + 1)
-            Box(
-                Modifier
-                    .semantics {
-                        role = Role.RadioButton
-                        this.selected = key == selected
-                        contentDescription = label
-                    }
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(backgroundBrush(key))
-                    .border(if (key == selected) 3.dp else 1.dp, if (key == selected) Color.White else Color.White.copy(alpha = 0.4f), CircleShape)
-                    .clickable { onPick(key) }
-                    .testTag("stories.composer.bg.$key"),
-            )
+    var family by remember { mutableStateOf(StoriesRules.backgroundFamily(selected)) }
+    val names = StoriesRules.BACKGROUND_FAMILIES.associateWith { backgroundFamilyName(it) }
+    val familyName: (String) -> String = { names.getValue(it) }
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+        val switchLabel = stringResource(R.string.stories_compose_background_family)
+        Row(
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+            modifier = Modifier.padding(top = Spacing.sm).semantics { contentDescription = switchLabel },
+        ) {
+            StoriesRules.BACKGROUND_FAMILIES.forEach { key ->
+                val on = key == family
+                Text(
+                    familyName(key),
+                    color = if (on) Palette.Ink else Color.White.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .semantics { role = Role.Button; this.selected = on }
+                        .clip(RoundedCornerShape(50))
+                        .background(if (on) Color.White else Color.Black.copy(alpha = 0.45f))
+                        .clickable { family = key }
+                        .padding(horizontal = Spacing.md, vertical = 6.dp)
+                        .testTag("stories.composer.bgfamily.$key"),
+                )
+            }
+        }
+        Row(
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.sm, Alignment.CenterHorizontally),
+            modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm),
+        ) {
+            StoriesRules.backgroundsOf(family).forEachIndexed { position, key ->
+                val label = stringResource(R.string.stories_compose_background_in_family, familyName(family), position + 1)
+                Box(
+                    Modifier
+                        .semantics {
+                            role = Role.RadioButton
+                            this.selected = key == selected
+                            contentDescription = label
+                        }
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(backgroundBrush(key))
+                        .border(if (key == selected) 3.dp else 1.dp, if (key == selected) Color.White else Color.White.copy(alpha = 0.4f), CircleShape)
+                        .clickable { onPick(key) }
+                        .testTag("stories.composer.bg.$key"),
+                )
+            }
         }
     }
 }
