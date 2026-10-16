@@ -182,7 +182,12 @@ final class EmojiImages {
             let (bytes, response) = try await URLSession.shared.bytes(for: request)
             guard let http = response as? HTTPURLResponse else { return .transient }
             // A gone or forbidden emoji will not come back; a server error might.
-            guard http.statusCode == 200 else { return (400..<500).contains(http.statusCode) ? .rejected : .transient }
+            guard http.statusCode == 200 else {
+                // Gone or forbidden will not come back; a timeout (408), a rate
+                // limit (429) or any server error might.
+                let permanent = (400..<500).contains(http.statusCode) && ![408, 425, 429].contains(http.statusCode)
+                return permanent ? .rejected : .transient
+            }
             if http.expectedContentLength > Int64(maxBytes) { return .rejected }
             for try await byte in bytes {
                 data.append(byte)
