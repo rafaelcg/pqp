@@ -5,6 +5,7 @@ import ptBR from "../locales/pt-BR/translation.json";
 import LLMS from "../../public/llms.txt?raw";
 import LLMS_FULL from "../../public/llms-full.txt?raw";
 import INDEX_MD from "../../public/index.md?raw";
+import { factFor } from "../content/compare-facts";
 /**
  * What the site may say about Android. Every page words it its own way, so
  * this file is the one place the facts live, and every surface is checked
@@ -51,7 +52,6 @@ const STORE_SURFACES = [
   "tela.option.pqp.limit",
   "tela.faq.download.a",
   "tela.faq.mobile.a",
-  "vsDiscord.row.apps.pqp",
   "vem.proof.platforms",
   "vem.compare.apps.pqp",
   "vem.faq.install.a",
@@ -108,6 +108,14 @@ describe("Android: where the app lives", () => {
       for (const key of APK_ONLY) expect(get(locale, key)).toBeTruthy();
     });
   }
+
+  it("the comparison facts name Google Play for pqp's apps, in every language", () => {
+    const fact = factFor("pqp", "apps")!;
+    for (const locale of locales) {
+      expect(fact.value[locale], locale).toMatch(/Google Play/);
+      expect(fact.value[locale], locale).not.toMatch(NOT_IN_STORE_YET);
+    }
+  });
 
   it("pt-BR says na Google Play, everywhere", () => {
     for (const [key, value] of Object.entries(ptBR)) {

@@ -26,6 +26,14 @@
  */
 
 import {
+  FACTS_CHECKED,
+  factFor,
+  formatCheckedDate,
+  sourceLabel,
+  TELA_SOURCES,
+  VS_DISCORD_FEATURES,
+} from "../content/compare-facts";
+import {
   escapeHtml,
   STREAMERS_FAQ,
   type MarketingLocale,
@@ -334,18 +342,6 @@ export const DOWNLOAD_PRERENDER_TEAM = {
   approvers: [{ name: "Rafael Cammarano Guglielmi", handle: "rafaelcg" }],
 } as const;
 
-/** The verdicts of the `/vs-discord` table, in the live page's row order. */
-const VS_DISCORD_ROWS = [
-  ["price", "yes", "yes"],
-  ["openSource", "yes", "no"],
-  ["selfHost", "yes", "no"],
-  ["ageGate", "yes", "yes"],
-  ["apps", "partial", "yes"],
-  ["ecosystem", "partial", "yes"],
-  ["maturity", "partial", "yes"],
-  ["region", "yes", "yes"],
-] as const;
-
 /** The element the block is written into, exactly as `index.html` has it. */
 const ROOT_OPEN = '<div id="root">';
 
@@ -406,35 +402,45 @@ const CLOSE_PAGE = `</main>`;
 const BUTTON =
   "inline-flex rounded-[var(--radius-control)] bg-accent px-6 py-3 font-semibold text-on-accent";
 
+/** "Source: host, host" for a cell or a card, as plain links. */
+function sourcesHtml(label: string, urls: readonly string[]): string {
+  const e = escapeHtml;
+  return `<p class="mt-1 text-xs text-text-tertiary">${e(label)}: ${urls
+    .map((u) => `<a href="${e(u)}" rel="noopener noreferrer" class="underline">${e(sourceLabel(u))}</a>`)
+    .join(", ")}</p>`;
+}
+
 function telaBlock(locale: MarketingLocale): string {
   const c = TELA_PRERENDER_COPY[locale];
+  const v = VS_DISCORD_PRERENDER_COPY[locale];
   const e = escapeHtml;
   const cta = `<p class="mt-6"><a href="${CREATE_ROOM_PRERENDER_HREF}" class="${BUTTON}">${e(c["tela.cta.create"])}</a></p>`;
-  const options = (["pqp", "jitsi", "teamspeak", "meet"] as const)
+  const options = (["pqp", "jitsi", "stoat", "teamspeak"] as const)
     .map((id) => {
       const ours =
         id === "pqp"
           ? ` <span class="text-xs font-semibold uppercase tracking-[0.16em] text-accent">${e(c["tela.options.ours"])}</span>`
           : "";
-      return `<li class="mt-6"><h3 class="font-display text-xl font-bold">${e(c[`tela.option.${id}.name`])}${ours}</h3><p class="mt-1 text-text-secondary">${e(c[`tela.option.${id}.body`])}</p><dl class="mt-2"><dt class="text-xs font-semibold uppercase tracking-[0.16em]">${e(c["tela.options.goodFor"])}</dt><dd class="mt-1">${e(c[`tela.option.${id}.good`])}</dd><dt class="mt-2 text-xs font-semibold uppercase tracking-[0.16em]">${e(c["tela.options.limit"])}</dt><dd class="mt-1 text-text-secondary">${e(c[`tela.option.${id}.limit`])}</dd></dl></li>`;
+      return `<li class="mt-6"><h3 class="font-display text-xl font-bold">${e(c[`tela.option.${id}.name`])}${ours}</h3><p class="mt-1 text-text-secondary">${e(c[`tela.option.${id}.body`])}</p><dl class="mt-2"><dt class="text-xs font-semibold uppercase tracking-[0.16em]">${e(c["tela.options.goodFor"])}</dt><dd class="mt-1">${e(c[`tela.option.${id}.good`])}</dd><dt class="mt-2 text-xs font-semibold uppercase tracking-[0.16em]">${e(c["tela.options.limit"])}</dt><dd class="mt-1 text-text-secondary">${e(c[`tela.option.${id}.limit`])}</dd></dl>${sourcesHtml(v["vsDiscord.table.source"], TELA_SOURCES[id])}</li>`;
     })
     .join("");
   const steps = (["1", "2", "3"] as const)
     .map((n) => `<li class="mt-3">${n}. ${e(c[`tela.how.${n}`])}</li>`)
     .join("");
-  const faq = (["download", "vpn", "people", "free", "mobile", "data", "why"] as const)
+  const faq = (["sound", "download", "people", "free", "mobile", "data"] as const)
     .map(
       (id) =>
         `<div class="mt-4"><dt class="font-display font-bold">${e(c[`tela.faq.${id}.q`])}</dt><dd class="mt-1 text-text-secondary">${e(c[`tela.faq.${id}.a`])}${id === "data" ? ` <a href="/privacy" class="underline">${e(c["tela.faq.data.link"])}</a>` : ""}</dd></div>`,
     )
     .join("");
+  const asOf = c["tela.options.asOf"].replace("{date}", formatCheckedDate(FACTS_CHECKED, locale));
   return [
     OPEN_PAGE("max-w-3xl"),
     `<h1 class="font-display text-4xl font-bold tracking-tight">${e(c["tela.hero.title"])}</h1>`,
     `<p class="mt-5 text-lg text-text-secondary">${e(c["tela.hero.lede"])}</p>`,
     cta,
     `<p class="mt-4 text-sm text-text-tertiary">${e(c["tela.hero.note"])}</p>`,
-    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.options.title"])}</h2><p class="mt-2 text-sm text-text-secondary">${e(c["tela.hero.disclosure"])}</p><ul>${options}</ul><p class="mt-4 text-xs text-text-tertiary">${e(c["tela.options.asOf"])}</p></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.options.title"])}</h2><p class="mt-2 text-sm text-text-secondary">${e(c["tela.hero.disclosure"])}</p><ul>${options}</ul><p class="mt-4 text-xs text-text-tertiary">${e(asOf)}</p></section>`,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.how.title"])}</h2><ol>${steps}</ol></section>`,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.faq.title"])}</h2><dl>${faq}</dl></section>`,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.cta.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["tela.cta.body"])}</p>${cta}<p class="mt-4"><a href="/vs-discord" class="underline">${e(c["tela.cta.compare"])}</a></p></section>`,
@@ -447,36 +453,44 @@ function vsDiscordBlock(locale: MarketingLocale, chrome: MarketingChrome): strin
   const e = escapeHtml;
   const cta = `<a href="${CREATE_ROOM_PRERENDER_HREF}" class="${BUTTON}">${e(c["vsDiscord.cta.create"])}</a>`;
   // The live cell prefixes a visually hidden verdict word when the phrase does
-  // not already start with it (`VerdictCell` in `vs-discord-page.tsx`).
-  const cell = (verdict: "yes" | "no" | "partial", body: string) => {
-    const word = c[`vsDiscord.chip.${verdict}`];
+  // not already start with it (`VerdictCell` in `compare-cells.tsx`).
+  const cell = (
+    status: "yes" | "no" | "partial" | "unknown",
+    body: string,
+    sources?: readonly string[],
+  ) => {
+    const word = c[`vsDiscord.chip.${status}`];
     const prefix = body.toLowerCase().startsWith(word.toLowerCase())
       ? ""
       : `<span class="sr-only">${e(word)}: </span>`;
-    return `${prefix}${e(body)}`;
+    return `${prefix}${e(body)}${sources ? sourcesHtml(c["vsDiscord.table.source"], sources) : ""}`;
   };
-  const rows = VS_DISCORD_ROWS.map(
-    ([id, pqp, discord]) =>
-      `<tr><th scope="row" class="py-2 pr-4 align-top">${e(c[`vsDiscord.row.${id}.label`])}</th><td class="py-2 pr-4 align-top">${cell(pqp, c[`vsDiscord.row.${id}.pqp`])}</td><td class="py-2 align-top text-text-secondary">${cell(discord, c[`vsDiscord.row.${id}.discord`])}</td></tr>`,
-  ).join("");
-  const faq = (["why", "when", "how", "catch"] as const)
+  const rows = VS_DISCORD_FEATURES.map((feature) => {
+    const pqp = factFor("pqp", feature)!;
+    const discord = factFor("discord", feature)!;
+    return `<tr><th scope="row" class="py-2 pr-4 align-top">${e(c[`vsDiscord.row.${feature as "price"}.label`])}</th><td class="py-2 pr-4 align-top">${cell(pqp.status, pqp.value[locale])}</td><td class="py-2 align-top text-text-secondary">${cell(discord.status, discord.value[locale], discord.sources)}</td></tr>`;
+  }).join("");
+  const faq = (["import", "both", "sound", "catch"] as const)
     .map(
       (id) =>
         `<div class="mt-4"><dt class="font-display font-bold">${e(c[`vsDiscord.faq.${id}.q`])}</dt><dd class="mt-1 text-text-secondary">${e(c[`vsDiscord.faq.${id}.a`])}</dd></div>`,
     )
     .join("");
-  // Spanish readers are outside Brazil, and the live page drops the card about
-  // the Brazilian suspension for them.
-  const featured =
-    locale === "es"
-      ? `<p class="mt-8">${cta}</p>`
-      : `<section class="mt-12"><h2 class="text-xs font-semibold uppercase tracking-[0.22em]">${e(c["vsDiscord.row.screen.label"])}</h2><div class="mt-4"><p class="font-display text-lg font-bold">pqp: ${e(c["vsDiscord.chip.works"])}</p><p class="mt-1 text-text-secondary">${e(c["vsDiscord.featured.pqpDetail"])}</p><p class="mt-4">${cta}</p></div><div class="mt-6"><p class="font-display text-lg font-bold">Discord: ${e(c["vsDiscord.chip.suspended"])}</p><p class="mt-1 text-text-secondary">${e(c["vsDiscord.featured.discordDetail"])}</p></div><p class="mt-4 text-xs text-text-tertiary">${e(c["vsDiscord.hero.disclaimer"])}</p></section>`;
+  const does = (["screen", "watch", "import"] as const)
+    .map(
+      (id) =>
+        `<li class="mt-4"><h3 class="font-display text-lg font-bold">${e(c[`vsDiscord.pqp.${id}.title`])}</h3><p class="mt-1 text-text-secondary">${e(c[`vsDiscord.pqp.${id}.body`])}</p></li>`,
+    )
+    .join("");
+  const asOf = c["vsDiscord.hero.asOf"].replace("{date}", formatCheckedDate(FACTS_CHECKED, locale));
   return [
     OPEN_PAGE("max-w-3xl"),
     `<h1 class="font-display text-4xl font-extrabold tracking-tight">pqp vs Discord <span class="mt-3 block text-xl font-bold">${e(c["vsDiscord.hero.tagline"])}</span></h1>`,
     `<p class="mt-5 text-lg text-text-secondary">${e(c["vsDiscord.hero.body"])}</p>`,
-    featured,
-    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.table.title"])}</h2><table class="mt-4 w-full text-left text-sm"><caption class="sr-only">${e(c["vsDiscord.table.caption"])}</caption><thead><tr><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.feature"])}</th><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.pqp"])}</th><th scope="col" class="py-2">${e(c["vsDiscord.table.col.discord"])}</th></tr></thead><tbody>${rows}</tbody></table></section>`,
+    `<p class="mt-3 text-xs text-text-tertiary">${e(asOf)}</p>`,
+    `<p class="mt-6">${cta}</p>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.pqp.title"])}</h2><ul>${does}</ul></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.table.title"])}</h2><table class="mt-4 w-full text-left text-sm"><caption class="sr-only">${e(c["vsDiscord.table.caption"])}</caption><thead><tr><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.feature"])}</th><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.pqp"])}</th><th scope="col" class="py-2">${e(c["vsDiscord.table.col.discord"])}</th></tr></thead><tbody>${rows}</tbody></table><h3 class="mt-6 font-display text-base font-bold">${e(c["vsDiscord.ahead.title"])}</h3><p class="mt-1 text-text-secondary">${e(c["vsDiscord.ahead.body"])}</p></section>`,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.faq.title"])}</h2><dl>${faq}</dl></section>`,
     `<section id="ios-beta" class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.closing.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["vsDiscord.closing.body"])}</p><p class="mt-6">${cta} <a href="${e(chrome.iosBetaUrl || IOS_BETA_PRERENDER_HREF)}" rel="noopener noreferrer" class="ml-3 underline">${e(c["vsDiscord.cta.beta"])}</a></p><p class="mt-6 text-sm text-text-secondary">${e(c["vsDiscord.closing.tela.lead"])} <a href="/tela" class="underline">${e(c["vsDiscord.closing.tela.link"])}</a></p></section>`,
     CLOSE_PAGE,

@@ -51,6 +51,7 @@ import {
   CODE_SIGNING_COMMITTERS,
 } from "@/components/downloads/code-signing-policy";
 import type { MarketingPage } from "./marketing-meta";
+import { FACTS_CHECKED, formatCheckedDate } from "../content/compare-facts";
 
 /**
  * The no-JS body of `/streamers`, run against THE REAL `index.html`.
@@ -307,10 +308,10 @@ describe("the /tela, /vs-discord and /download no-JS bodies", () => {
       for (const key of ["tela.options.title", "tela.how.title", "tela.faq.title", "tela.cta.title"] as const) {
         expect(root).toMatch(new RegExp(`<h2[^>]*>${escapeRe(esc(c[key]))}</h2>`));
       }
-      for (const id of ["pqp", "jitsi", "teamspeak", "meet"] as const) {
+      for (const id of ["pqp", "jitsi", "stoat", "teamspeak"] as const) {
         expect(root).toContain(esc(c[`tela.option.${id}.name`]));
       }
-      for (const id of ["download", "vpn", "people", "free", "mobile", "data", "why"] as const) {
+      for (const id of ["sound", "download", "people", "free", "mobile", "data"] as const) {
         expect(root).toContain(esc(c[`tela.faq.${id}.q`]));
         expect(root).toContain(esc(c[`tela.faq.${id}.a`]));
       }
@@ -328,19 +329,17 @@ describe("the /tela, /vs-discord and /download no-JS bodies", () => {
       expect(root).toMatch(/<h1[^>]*>pqp vs Discord /);
       expect(root).toContain(esc(c["vsDiscord.hero.tagline"]));
       expect(root).toContain("<table");
-      expect(root.match(/<th scope="row"/g)).toHaveLength(8);
-      for (const id of ["why", "when", "how", "catch"] as const) {
+      expect(root.match(/<th scope="row"/g)).toHaveLength(9);
+      for (const id of ["import", "both", "sound", "catch"] as const) {
         expect(root).toContain(esc(c[`vsDiscord.faq.${id}.q`]));
       }
       expect(root).toContain('href="/tela"');
       expect(root).toContain(`href="${PUBLIC_TESTFLIGHT_URL}"`);
       expect(root).toContain('id="ios-beta"');
-      // The Brazilian suspension card is not on the Spanish page.
-      if (locale === "es") {
-        expect(root).not.toContain(esc(c["vsDiscord.featured.discordDetail"]));
-      } else {
-        expect(root).toContain(esc(c["vsDiscord.featured.discordDetail"]));
-      }
+      // Every Discord cell carries its source link, and the page its date.
+      expect(root).toContain("support-apps.discord.com");
+      expect(root).toContain("discord.com/nitro");
+      expect(root).toContain(esc(formatCheckedDate(FACTS_CHECKED, locale)));
     }
   });
 

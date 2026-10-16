@@ -217,9 +217,9 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
   });
 
   it("every FAQ pair matches its vsDiscord.faq.* twin, both locales", () => {
-    // Order matters: the page renders FAQ_ITEMS in why/when/how/catch order
-    // and the JSON-LD must be the same list.
-    const ids = ["why", "when", "how", "catch"] as const;
+    // Order matters: the page renders FAQ_ITEMS in import/both/sound/catch
+    // order and the JSON-LD must be the same list.
+    const ids = ["import", "both", "sound", "catch"] as const;
     expect(VS_DISCORD_FAQ.en).toHaveLength(ids.length);
     expect(VS_DISCORD_FAQ["pt-BR"]).toHaveLength(ids.length);
     ids.forEach((id, index) => {
@@ -254,7 +254,7 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
 
   it("every /tela FAQ pair matches its tela.faq.* twin, both locales", () => {
     // Same rule as above: page order, and the JSON-LD must be the same list.
-    const ids = ["download", "vpn", "people", "free", "mobile", "data", "why"] as const;
+    const ids = ["sound", "download", "people", "free", "mobile", "data"] as const;
     expect(TELA_FAQ.en).toHaveLength(ids.length);
     expect(TELA_FAQ["pt-BR"]).toHaveLength(ids.length);
     ids.forEach((id, index) => {
@@ -326,6 +326,47 @@ describe("the /vem campaign page", () => {
       for (const [key, value] of Object.entries(catalogue)) {
         if (!key.startsWith("vem.")) continue;
         expect(value.toLowerCase(), key).not.toMatch(/anpd|suspen/);
+      }
+    }
+  });
+});
+
+describe("the /vs-discord and /tela copy stays about features", () => {
+  // pqp-stay-away-from-discord-ban-topic: these two pages once carried a
+  // present-tense claim about another company's circumstances in their title,
+  // card and FAQ. They are feature-first now, and this keeps them that way in
+  // the catalogues and the edge heads.
+  const BANNED =
+    /anpd|suspen|\bvpn\b|banid|banned|\bban\b|17 de agosto|17 august|17 ago|funciona no br|works in brazil|sem data para voltar/i;
+  const ours = (key: string) => key.startsWith("vsDiscord.") || key.startsWith("tela.");
+
+  it("has no word about suspensions, bans, a regulator or a VPN, in any language", () => {
+    for (const [label, catalogue] of [["en", en], ["pt-BR", ptBR], ["es", es]] as const) {
+      for (const [key, value] of Object.entries(catalogue)) {
+        if (!ours(key)) continue;
+        expect(value, `${label} ${key}`).not.toMatch(BANNED);
+      }
+    }
+    for (const path of ["/vs-discord", "/tela"] as const) {
+      for (const locale of ["pt-BR", "en", "es"] as const) {
+        expect(renderMarketingHead(path, locale), `${path} ${locale}`).not.toMatch(BANNED);
+      }
+    }
+  });
+
+  it("never says você in the pt-BR copy of the two pages", () => {
+    for (const [key, value] of Object.entries(ptBR)) {
+      if (!ours(key)) continue;
+      // Singular only: "vocês" is the plural of "tu" in the south too.
+      expect(value, key).not.toMatch(/\bvoc[eê](?!s)/i);
+    }
+  });
+
+  it("has no em dash", () => {
+    for (const [label, catalogue] of [["en", en], ["pt-BR", ptBR], ["es", es]] as const) {
+      for (const [key, value] of Object.entries(catalogue)) {
+        if (!ours(key)) continue;
+        expect(value, `${label} ${key}`).not.toContain("\u2014");
       }
     }
   });
@@ -483,8 +524,8 @@ describe("Spanish", () => {
   it("every Spanish FAQ pair matches its catalogue twin", () => {
     const sets = [
       [LANDING_FAQ.es, "landing", ["safe", "free", "signin", "install", "capacity", "import", "data"]],
-      [VS_DISCORD_FAQ.es, "vsDiscord", ["why", "when", "how", "catch"]],
-      [TELA_FAQ.es, "tela", ["download", "vpn", "people", "free", "mobile", "data", "why"]],
+      [VS_DISCORD_FAQ.es, "vsDiscord", ["import", "both", "sound", "catch"]],
+      [TELA_FAQ.es, "tela", ["sound", "download", "people", "free", "mobile", "data"]],
       [
         VEM_FAQ.es,
         "vem",

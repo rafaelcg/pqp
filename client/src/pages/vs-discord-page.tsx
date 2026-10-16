@@ -1,97 +1,43 @@
 import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
 import { noteSignupCta } from "@/lib/signup-assist";
-import { Ban, Check, Minus, X, type LucideIcon } from "lucide-react";
+import { Import, MonitorUp, Tv, type LucideIcon } from "lucide-react";
 import { type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
+import { VerdictCell } from "@/components/marketing/compare-cells";
 import { Seo } from "@/components/marketing/seo";
 import { Button } from "@/components/ui/button";
+import {
+  FACTS_CHECKED,
+  factFor,
+  formatCheckedDate,
+  VS_DISCORD_FEATURES,
+  type CompareFeature,
+} from "@/content/compare-facts";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { testflightUrl } from "@/lib/testflight";
 import { cn } from "@/lib/utils";
 
-/** The featured card renders works/suspended itself, so the table needs three. */
-type Verdict = "yes" | "no" | "partial";
-
-interface ScoreRow {
-  id: string;
-  label: MessageKey;
-  pqp: { verdict: Verdict; body: MessageKey };
-  discord: { verdict: Verdict; body: MessageKey };
-}
-
 /**
- * The screen-share row is absent on purpose: it is the reason the page exists,
- * so it gets the featured card under the hero instead of a seat in the table.
- */
-const ROWS: ScoreRow[] = [
-  {
-    id: "price",
-    label: "vsDiscord.row.price.label",
-    pqp: { verdict: "yes", body: "vsDiscord.row.price.pqp" },
-    discord: { verdict: "yes", body: "vsDiscord.row.price.discord" },
-  },
-  {
-    id: "openSource",
-    label: "vsDiscord.row.openSource.label",
-    pqp: { verdict: "yes", body: "vsDiscord.row.openSource.pqp" },
-    discord: { verdict: "no", body: "vsDiscord.row.openSource.discord" },
-  },
-  {
-    id: "selfHost",
-    label: "vsDiscord.row.selfHost.label",
-    pqp: { verdict: "yes", body: "vsDiscord.row.selfHost.pqp" },
-    discord: { verdict: "no", body: "vsDiscord.row.selfHost.discord" },
-  },
-  {
-    id: "ageGate",
-    label: "vsDiscord.row.ageGate.label",
-    pqp: { verdict: "yes", body: "vsDiscord.row.ageGate.pqp" },
-    discord: { verdict: "yes", body: "vsDiscord.row.ageGate.discord" },
-  },
-  {
-    id: "apps",
-    label: "vsDiscord.row.apps.label",
-    pqp: { verdict: "partial", body: "vsDiscord.row.apps.pqp" },
-    discord: { verdict: "yes", body: "vsDiscord.row.apps.discord" },
-  },
-  {
-    id: "ecosystem",
-    label: "vsDiscord.row.ecosystem.label",
-    pqp: { verdict: "partial", body: "vsDiscord.row.ecosystem.pqp" },
-    discord: { verdict: "yes", body: "vsDiscord.row.ecosystem.discord" },
-  },
-  {
-    id: "maturity",
-    label: "vsDiscord.row.maturity.label",
-    pqp: { verdict: "partial", body: "vsDiscord.row.maturity.pqp" },
-    discord: { verdict: "yes", body: "vsDiscord.row.maturity.discord" },
-  },
-  {
-    id: "region",
-    label: "vsDiscord.row.region.label",
-    pqp: { verdict: "yes", body: "vsDiscord.row.region.pqp" },
-    discord: { verdict: "yes", body: "vsDiscord.row.region.discord" },
-  },
-];
-
-/**
- * The four questions people actually search after the suspension, in page
- * order. The edge middleware serves the same pairs as FAQPage JSON-LD
- * (`src/lib/marketing-meta.ts`), and the suite pins the two copies together —
- * so a question added here without its edge twin fails the tests, not silently
- * drifts.
+ * In page order. The edge middleware serves the same pairs as FAQPage JSON-LD
+ * (`src/lib/marketing-meta.ts`), and the suite pins the two copies together,
+ * so a question added here without its edge twin fails the tests, not
+ * silently drifts.
  */
 const FAQ_ITEMS: { id: string; question: MessageKey; answer: MessageKey }[] = [
-  { id: "why", question: "vsDiscord.faq.why.q", answer: "vsDiscord.faq.why.a" },
   {
-    id: "when",
-    question: "vsDiscord.faq.when.q",
-    answer: "vsDiscord.faq.when.a",
+    id: "import",
+    question: "vsDiscord.faq.import.q",
+    answer: "vsDiscord.faq.import.a",
   },
-  { id: "how", question: "vsDiscord.faq.how.q", answer: "vsDiscord.faq.how.a" },
+  { id: "both", question: "vsDiscord.faq.both.q", answer: "vsDiscord.faq.both.a" },
+  {
+    id: "sound",
+    question: "vsDiscord.faq.sound.q",
+    answer: "vsDiscord.faq.sound.a",
+  },
   {
     id: "catch",
     question: "vsDiscord.faq.catch.q",
@@ -99,73 +45,43 @@ const FAQ_ITEMS: { id: string; question: MessageKey; answer: MessageKey }[] = [
   },
 ];
 
-const VERDICT: Record<
-  Verdict,
-  { icon: LucideIcon; label: MessageKey; className: string }
-> = {
-  yes: {
-    icon: Check,
-    label: "vsDiscord.chip.yes",
-    className: "bg-success/15 text-success",
+/** What pqp does, before the table: the three things the page is about. */
+const DOES: { id: string; icon: LucideIcon; title: MessageKey; body: MessageKey }[] = [
+  {
+    id: "screen",
+    icon: MonitorUp,
+    title: "vsDiscord.pqp.screen.title",
+    body: "vsDiscord.pqp.screen.body",
   },
-  no: {
-    icon: X,
-    label: "vsDiscord.chip.no",
-    className: "bg-ink-3 text-paper-muted",
+  {
+    id: "watch",
+    icon: Tv,
+    title: "vsDiscord.pqp.watch.title",
+    body: "vsDiscord.pqp.watch.body",
   },
-  partial: {
-    icon: Minus,
-    label: "vsDiscord.chip.partial",
-    className: "bg-warning/15 text-warning",
+  {
+    id: "import",
+    icon: Import,
+    title: "vsDiscord.pqp.import.title",
+    body: "vsDiscord.pqp.import.body",
   },
+];
+
+const ROW_LABEL: Record<CompareFeature, MessageKey> = {
+  price: "vsDiscord.row.price.label",
+  openSource: "vsDiscord.row.openSource.label",
+  selfHost: "vsDiscord.row.selfHost.label",
+  screenShare: "vsDiscord.row.screenShare.label",
+  screenAudio: "vsDiscord.row.screenAudio.label",
+  watchParty: "vsDiscord.row.watchParty.label",
+  layoutImport: "vsDiscord.row.layoutImport.label",
+  apps: "vsDiscord.row.apps.label",
+  ecosystem: "vsDiscord.row.ecosystem.label",
+  maturity: "vsDiscord.row.maturity.label",
 };
 
 function stagger(i: number): CSSProperties {
   return { "--stagger": i } as CSSProperties;
-}
-
-/**
- * One verdict: a small colour-coded icon and the phrase. The icon is decorative
- * — the text answers the row on its own — except where the phrase does not
- * literally state the verdict word, where a visually-hidden prefix restores for
- * a screen reader what the colour coding tells everyone else.
- */
-function VerdictCell({
-  verdict,
-  body,
-  muted = false,
-}: {
-  verdict: Verdict;
-  body: string;
-  muted?: boolean;
-}) {
-  const { t } = useTranslation();
-  const { icon: Icon, label, className } = VERDICT[verdict];
-  const verdictWord = t(label);
-  return (
-    <div className="flex items-start gap-2.5">
-      <span
-        aria-hidden
-        className={cn(
-          "mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-full",
-          className,
-        )}
-      >
-        <Icon className="h-3 w-3" strokeWidth={3} />
-      </span>
-      <p
-        className={cn(
-          "text-sm leading-snug",
-          muted ? "text-paper-muted" : "text-paper",
-        )}
-      >
-        {!body.toLowerCase().startsWith(verdictWord.toLowerCase()) && (
-          <span className="sr-only">{verdictWord}: </span>
-        )}
-        {body}
-      </p>
-    </div>
-  );
 }
 
 function CreateRoomButton({ className }: { className?: string }) {
@@ -200,19 +116,23 @@ function CreateRoomButton({ className }: { className?: string }) {
 }
 
 /**
- * `/vs-discord` — honest scoreboard against Discord, built for the Brazil
- * screen-share gap. Claims are verified in the design spec; tone matches the
- * landing. Three beats: the matchup, the one verdict that matters (featured
- * card, where the CTA lives), then the full record — including the rows
- * Discord wins.
+ * `/vs-discord`: a feature-by-feature comparison with Discord. Every Discord
+ * line comes from `content/compare-facts.ts`, which gives it a source link and
+ * the day it was checked, and the page says what Discord does better. Nothing
+ * here is about Discord's conduct or circumstances, only what the product does.
+ * Three beats: what pqp does, the full table (including the rows Discord
+ * wins), and the honest summary where the CTA closes.
  */
 export function VsDiscordPage() {
   const { t, locale } = useTranslation();
-  // The featured card is about a Brazilian regulatory story, and the Spanish
-  // page is written for readers outside Brazil to whom it means nothing. They
-  // get the comparison and the CTA without it.
-  const showBrazilCard = locale !== "es";
   const betaUrl = testflightUrl();
+  const checked = formatCheckedDate(FACTS_CHECKED, locale);
+
+  const rows = VS_DISCORD_FEATURES.map((feature) => ({
+    feature,
+    pqp: factFor("pqp", feature)!,
+    discord: factFor("discord", feature)!,
+  }));
 
   return (
     <div className="flex min-h-full flex-col bg-ink text-paper">
@@ -230,9 +150,8 @@ export function VsDiscordPage() {
         />
 
         <div className="relative mx-auto max-w-5xl px-5 pb-24 pt-14 sm:px-8 sm:pt-20">
-          {/* The matchup. `pqp` bright, `Discord` dimmed — the hierarchy is
-              the argument — and the brand names never translate, so the fight
-              poster is the same in both languages. */}
+          {/* The matchup. `pqp` bright, `Discord` dimmed, and the brand names
+              never translate, so the poster is the same in every language. */}
           <h1 className="animate-rise text-center" style={stagger(0)}>
             <span className="flex flex-col items-center gap-2 sm:flex-row sm:items-baseline sm:justify-center sm:gap-5">
               <span className="font-brand text-6xl tracking-tight text-paper sm:text-7xl">
@@ -256,81 +175,55 @@ export function VsDiscordPage() {
           >
             {t("vsDiscord.hero.body")}
           </p>
+          <p
+            className="animate-rise mx-auto mt-4 max-w-2xl text-pretty text-center text-xs leading-relaxed text-paper-muted/80"
+            style={stagger(1)}
+          >
+            {t("vsDiscord.hero.asOf", { date: checked })}
+          </p>
+          <div
+            className="animate-rise mt-8 flex justify-center"
+            style={stagger(2)}
+          >
+            <CreateRoomButton />
+          </div>
 
-          {/* The reason this page exists, pulled out of the table. The CTA sits
-              here because this card is the conversion moment, not the footer. */}
-          {showBrazilCard ? (
-            <section
-              className="animate-rise mt-14"
-              style={stagger(2)}
-              aria-labelledby="vs-discord-featured"
+          {/* What pqp does. */}
+          <section
+            className="animate-rise mt-20"
+            style={stagger(3)}
+            aria-labelledby="vs-discord-does"
+          >
+            <h2
+              id="vs-discord-does"
+              className="text-balance text-center font-display text-2xl font-bold tracking-tight sm:text-3xl"
             >
-              <h2
-                id="vs-discord-featured"
-                className="text-center text-xs font-semibold uppercase tracking-[0.22em] text-paper-muted"
-              >
-                {t("vsDiscord.row.screen.label")}
-              </h2>
-              <div className="mt-5 grid overflow-hidden rounded-2xl border border-ink-4 md:grid-cols-2">
-                <div className="relative bg-signal/[0.07] p-6 sm:p-8">
-                  <div
-                    className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,var(--glow-accent),transparent_65%)]"
-                    aria-hidden
-                  />
-                  <div className="relative">
-                    <p className="font-brand text-lg tracking-tight text-signal">
-                      pqp
-                    </p>
-                    <p className="mt-3 flex items-center gap-3 font-display text-3xl font-bold tracking-tight sm:text-4xl">
-                      <span
-                        aria-hidden
-                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-signal/15 text-signal"
-                      >
-                        <Check className="h-5 w-5" strokeWidth={3} />
-                      </span>
-                      {t("vsDiscord.chip.works")}
-                    </p>
-                    <p className="mt-3 text-pretty text-sm leading-relaxed text-paper-muted">
-                      {t("vsDiscord.featured.pqpDetail")}
-                    </p>
-                    <CreateRoomButton className="mt-6" />
-                  </div>
-                </div>
-                <div className="border-t border-ink-4 bg-ink-2/60 p-6 sm:p-8 md:border-l md:border-t-0">
-                  <p className="pt-1 text-xs font-semibold uppercase tracking-[0.18em] text-paper-muted">
-                    Discord
+              {t("vsDiscord.pqp.title")}
+            </h2>
+            <ul className="mt-8 grid gap-4 md:grid-cols-3">
+              {DOES.map((item) => (
+                <li
+                  key={item.id}
+                  className="flex flex-col rounded-2xl border border-ink-4/60 bg-ink-2/60 p-6"
+                >
+                  <span className="grid h-10 w-10 place-items-center rounded-xl bg-signal/15 text-signal">
+                    <item.icon aria-hidden className="h-5 w-5" />
+                  </span>
+                  <h3 className="mt-4 font-display text-lg font-bold tracking-tight">
+                    {t(item.title)}
+                  </h3>
+                  <p className="mt-2 text-pretty text-sm leading-relaxed text-paper-muted">
+                    {t(item.body)}
                   </p>
-                  <p className="mt-3 flex items-center gap-3 font-display text-3xl font-bold tracking-tight text-danger sm:text-4xl">
-                    <span
-                      aria-hidden
-                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-danger/15 text-danger"
-                    >
-                      <Ban className="h-5 w-5" strokeWidth={3} />
-                    </span>
-                    {t("vsDiscord.chip.suspended")}
-                  </p>
-                  <p className="mt-3 text-pretty text-sm leading-relaxed text-paper-muted">
-                    {t("vsDiscord.featured.discordDetail")}
-                  </p>
-                </div>
-              </div>
-              <p className="mx-auto mt-4 max-w-2xl text-pretty text-center text-xs leading-relaxed text-paper-muted/80">
-                {t("vsDiscord.hero.disclaimer")}
-              </p>
-            </section>
-          ) : (
-            <div
-              className="animate-rise mt-10 flex justify-center"
-              style={stagger(2)}
-            >
-              <CreateRoomButton />
-            </div>
-          )}
+                </li>
+              ))}
+            </ul>
+          </section>
 
           {/* The full record, including the rows Discord wins. */}
           <section
             className="animate-rise mt-20"
-            style={stagger(3)}
+            style={stagger(4)}
             aria-labelledby="vs-discord-scoreboard"
           >
             <h2
@@ -340,10 +233,7 @@ export function VsDiscordPage() {
               {t("vsDiscord.table.title")}
             </h2>
 
-            {/* Desktop table. The spec floated sticky column headers; dropped
-                deliberately — eight rows fit in one screen, and the sticky the
-                old page carried was inert inside this overflow-hidden wrapper
-                anyway. */}
+            {/* Desktop table. */}
             <div className="mt-8 hidden overflow-hidden rounded-2xl border border-ink-4 bg-ink-2/60 md:block">
               <table className="w-full border-collapse text-left text-sm">
                 <caption className="sr-only">
@@ -353,46 +243,47 @@ export function VsDiscordPage() {
                   <tr className="border-b border-ink-4 bg-ink-3/80">
                     <th
                       scope="col"
-                      className="w-[34%] px-5 py-4 text-xs font-semibold uppercase tracking-[0.16em] text-paper-muted"
+                      className="w-[22%] px-5 py-4 text-xs font-semibold uppercase tracking-[0.16em] text-paper-muted"
                     >
                       {t("vsDiscord.table.col.feature")}
                     </th>
                     <th
                       scope="col"
-                      className="w-[33%] border-l border-signal/25 bg-signal/[0.07] px-5 py-4 font-brand text-lg tracking-tight text-signal"
+                      className="w-[39%] border-l border-signal/25 bg-signal/[0.07] px-5 py-4 font-brand text-lg tracking-tight text-signal"
                     >
                       {t("vsDiscord.table.col.pqp")}
                     </th>
                     <th
                       scope="col"
-                      className="w-[33%] border-l border-ink-4 px-5 py-4 text-xs font-semibold uppercase tracking-[0.16em] text-paper-muted"
+                      className="w-[39%] border-l border-ink-4 px-5 py-4 text-xs font-semibold uppercase tracking-[0.16em] text-paper-muted"
                     >
                       {t("vsDiscord.table.col.discord")}
                     </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {ROWS.map((row) => (
+                  {rows.map((row) => (
                     <tr
-                      key={row.id}
+                      key={row.feature}
                       className="border-b border-ink-4/60 transition-colors duration-150 last:border-b-0 hover:bg-ink-3/30"
                     >
                       <th
                         scope="row"
                         className="px-5 py-4 align-top text-sm font-semibold text-paper"
                       >
-                        {t(row.label)}
+                        {t(ROW_LABEL[row.feature])}
                       </th>
                       <td className="border-l border-signal/25 bg-signal/[0.05] px-5 py-4 align-top">
                         <VerdictCell
-                          verdict={row.pqp.verdict}
-                          body={t(row.pqp.body)}
+                          status={row.pqp.status}
+                          body={row.pqp.value[locale]}
                         />
                       </td>
                       <td className="border-l border-ink-4 px-5 py-4 align-top">
                         <VerdictCell
-                          verdict={row.discord.verdict}
-                          body={t(row.discord.body)}
+                          status={row.discord.status}
+                          body={row.discord.value[locale]}
+                          sources={row.discord.sources}
                           muted
                         />
                       </td>
@@ -407,21 +298,21 @@ export function VsDiscordPage() {
               className="mt-8 space-y-3 md:hidden"
               aria-label={t("vsDiscord.table.caption")}
             >
-              {ROWS.map((row) => (
+              {rows.map((row) => (
                 <li
-                  key={row.id}
+                  key={row.feature}
                   className="overflow-hidden rounded-xl border border-ink-4 bg-ink-2/60"
                 >
                   <p className="border-b border-ink-4/60 px-4 py-3 text-sm font-semibold text-paper">
-                    {t(row.label)}
+                    {t(ROW_LABEL[row.feature])}
                   </p>
                   <div className="flex gap-3 border-l-2 border-signal/40 bg-signal/[0.05] px-4 py-3">
                     <span className="w-16 shrink-0 pt-px font-brand text-sm tracking-tight text-signal">
                       {t("vsDiscord.table.col.pqp")}
                     </span>
                     <VerdictCell
-                      verdict={row.pqp.verdict}
-                      body={t(row.pqp.body)}
+                      status={row.pqp.status}
+                      body={row.pqp.value[locale]}
                     />
                   </div>
                   <div className="flex gap-3 border-t border-ink-4/60 px-4 py-3">
@@ -429,14 +320,24 @@ export function VsDiscordPage() {
                       {t("vsDiscord.table.col.discord")}
                     </span>
                     <VerdictCell
-                      verdict={row.discord.verdict}
-                      body={t(row.discord.body)}
+                      status={row.discord.status}
+                      body={row.discord.value[locale]}
+                      sources={row.discord.sources}
                       muted
                     />
                   </div>
                 </li>
               ))}
             </ul>
+
+            <div className="mx-auto mt-10 max-w-2xl rounded-xl border border-ink-4 bg-ink-2/60 p-5 sm:p-6">
+              <h3 className="font-display text-base font-bold tracking-tight">
+                {t("vsDiscord.ahead.title")}
+              </h3>
+              <p className="mt-2 text-pretty text-sm leading-relaxed text-paper-muted">
+                {t("vsDiscord.ahead.body")}
+              </p>
+            </div>
           </section>
 
           {/* The FAQ. Real page copy, not schema bait: the same four pairs go
@@ -444,7 +345,7 @@ export function VsDiscordPage() {
               pins the copies together. */}
           <section
             className="animate-rise mt-20"
-            style={stagger(4)}
+            style={stagger(5)}
             aria-labelledby="vs-discord-faq"
           >
             <h2
@@ -475,7 +376,7 @@ export function VsDiscordPage() {
           <section
             id="ios-beta"
             className="animate-rise mt-20 scroll-mt-8 text-center"
-            style={stagger(5)}
+            style={stagger(6)}
             aria-labelledby="vs-discord-closing"
           >
             <h2
@@ -506,14 +407,10 @@ export function VsDiscordPage() {
                 <span className="font-semibold text-paper">
                   {t("vsDiscord.cta.beta")}
                 </span>
-                {" — "}
+                {": "}
                 {t("vsDiscord.cta.beta.hint")}
               </p>
             )}
-            {/* /tela already links here; until now nothing linked back, so the
-                two pages built for the same moment had a one-way relationship.
-                This is also the better page for a reader who does not want a
-                scoreboard, only the thing that works today. */}
             <p className="mx-auto mt-8 max-w-2xl text-pretty text-sm text-paper-muted">
               {t("vsDiscord.closing.tela.lead")}{" "}
               <Link
