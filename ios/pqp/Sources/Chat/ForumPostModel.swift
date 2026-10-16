@@ -26,7 +26,9 @@ final class ForumPostModel {
     /// Deleted while open: the screen says so instead of closing on its own.
     private(set) var isRemoved = false
     private(set) var tags: [ForumTag] = []
-    private(set) var permissions: PermissionsSnapshot?
+    /// Only read for a deep link, which has no list underneath; otherwise the
+    /// list's snapshot answers (see `permissions`).
+    private var ownPermissions: PermissionsSnapshot?
     /// What went wrong with the last edit, said once above the composer.
     var notice: String?
     /// A deep link's first read failed for a reason other than "gone" (a
@@ -66,9 +68,12 @@ final class ForumPostModel {
         self.home = home
         if let home {
             tags = home.tags
-            permissions = home.permissions
         }
     }
+
+    /// The list's snapshot when there is a list, so a post opened a moment
+    /// after the forum does not need a second read and never disagrees with it.
+    var permissions: PermissionsSnapshot? { home?.permissions ?? ownPermissions }
 
     // MARK: - Who is looking
 
@@ -93,6 +98,10 @@ final class ForumPostModel {
 
     /// A closed post takes replies from staff only.
     var canReply: Bool { !isLocked || isStaff }
+
+    /// SEND_MESSAGES on the forum, which is what a reply is checked against.
+    /// Unknown (a snapshot still on its way) reads as yes; the server decides.
+    var maySend: Bool { SendGate.canSend(permissions, channelId: forumId) }
 
     var postTags: [ForumTag] {
         guard let post else { return [] }
@@ -134,7 +143,7 @@ final class ForumPostModel {
             await session.realtime.join(channelId: forumId)
         }
         let needsTags = tags.isEmpty
-        let needsPermissions = home == nil && permissions == nil
+        let needsPermissions = home == nil && ownPermissions == nil
         let api = session.api
         let forumId = forumId
         let serverId = serverId
@@ -143,7 +152,7 @@ final class ForumPostModel {
             ? try? api.fetchMemberPermissions(serverId: serverId) : nil
         await loadDetail()
         if let tags = await tagsAnswer { self.tags = tags }
-        if let permissions = await permissionsAnswer { self.permissions = permissions }
+        if let permissions = await permissionsAnswer { self.ownPermissions = permissions }
     }
 
     /// The post's detail. Only a 404 means gone; anything else is retried a

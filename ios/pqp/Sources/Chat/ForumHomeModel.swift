@@ -81,7 +81,23 @@ final class ForumHomeModel {
             || permissions.can(PermissionBit.manageChannels, channelId: forum.id)
     }
 
-    var canPost: Bool { config.enabled }
+    /// Why "Novo post" is not offered, or nil when it is. A member whose
+    /// SEND_MESSAGES is denied on the forum is read-only: the server answers a
+    /// create with 403, so the button, the composer and the empty-state action
+    /// all follow this instead of discovering it on Publicar. The permission
+    /// wins over the flag: "paused" is a thing staff can undo, "read only" is
+    /// what this account is.
+    enum PostBlock: Equatable {
+        case readOnly
+        case paused
+    }
+
+    var postBlock: PostBlock? {
+        if !SendGate.canSend(permissions, channelId: forum.id) { return .readOnly }
+        return config.enabled ? nil : .paused
+    }
+
+    var canPost: Bool { postBlock == nil }
 
     func tag(id: String) -> ForumTag? { tags.first { $0.id == id } }
 

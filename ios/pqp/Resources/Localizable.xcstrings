@@ -971,6 +971,16 @@
         }
       }
     },
+    "Posts will show up here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os posts vão aparecer aqui."
+          }
+        }
+      }
+    },
     "Private community" : {
       "localizations" : {
         "pt-BR" : {
@@ -10397,6 +10407,26 @@
         }
       }
     },
+    "You can read here, but you can't send messages." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu pode ler aqui, mas não pode mandar mensagens."
+          }
+        }
+      }
+    },
+    "You can read this forum, but you can't post in it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu pode ler este fórum, mas não pode postar nele."
+          }
+        }
+      }
+    },
     "You can turn on camera or share a screen now." : {
       "localizations" : {
         "pt-BR" : {
@@ -10457,12 +10487,12 @@
         }
       }
     },
-    "You don't have permission to send here" : {
+    "You don't have permission to post in this forum." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você não tem permissão pra mandar aqui"
+            "value" : "Tu não tem permissão pra postar neste fórum."
           }
         }
       }
@@ -10473,6 +10503,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você não pode compartilhar sua tela neste canal."
+          }
+        }
+      }
+    },
+    "You don't have permission to send here" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não tem permissão pra mandar aqui"
           }
         }
       }

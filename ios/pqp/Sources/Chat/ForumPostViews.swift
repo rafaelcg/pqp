@@ -240,6 +240,33 @@ struct ForumLockedBar: View {
     }
 }
 
+/// The composer's place for somebody whose SEND_MESSAGES is denied here: the
+/// same dashed strip as a closed post, with the reason. Used by forum posts
+/// and by text channels (the web's `ComposerReadOnlyNotice`).
+struct ComposerReadOnlyBar: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 12))
+            Text("You can read here, but you can't send messages.")
+                .font(Typography.callout)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(Palette.paperMuted)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: Metrics.cornerRadiusLarge, style: .continuous)
+                .strokeBorder(Palette.border, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+        )
+        .padding(.horizontal, Metrics.hPadding)
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("composer.readOnly")
+    }
+}
+
 /// Staff in a closed post still get a composer, with this above it.
 struct ForumLockedStaffNote: View {
     var body: some View {
