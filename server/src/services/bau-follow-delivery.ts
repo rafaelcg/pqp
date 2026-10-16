@@ -148,6 +148,7 @@ export async function bauFollowAuthorFor(
 /** Test seam: the cache outlives a truncated table. */
 export function resetBauFollowAuthorCacheForTests(): void {
   pseudoUserIds.clear();
+  lastPrune = 0;
 }
 
 // ------------------------------------------------------------------- the tick
@@ -222,6 +223,9 @@ async function runOnce(options: { serverId?: string }): Promise<BauFollowTickRes
     if (Date.now() - lastPrune > 60 * 60_000) {
       lastPrune = Date.now();
       await guarded("prune", pruneOld);
+      await guarded("legacy-pings", async () => {
+        await cleanLegacyPingCards();
+      });
     }
   } catch (error) {
     console.error("[bau-follow] tick failed:", error);
@@ -389,8 +393,7 @@ async function syncEditedPosts(serverId?: string): Promise<number> {
         WHERE d.status = 'delivered' AND d.message_id IS NOT NULL
           AND d.delivered_at > NOW() - INTERVAL '${RECONCILE_DAYS} days'
           AND p.status = 'published' AND p.visibility = 'free'
-          AND (d.post_updated_at IS NULL OR p.updated_at > d.post_updated_at
-               OR m.body LIKE '@%')
+          AND (d.post_updated_at IS NULL OR p.updated_at > d.post_updated_at)
           ${scope}
         ORDER BY d.post_id, d.follow_id
         LIMIT $1`,
@@ -418,6 +421,58 @@ async function syncEditedPosts(serverId?: string): Promise<number> {
     logEvent("bau.follow.updated", { count: updated });
   }
   return updated;
+}
+
+/**
+ * Cards delivered while a delivery could still ping carry the role's name alone
+ * on their first line (`@Role`, then the fallback) and a `message_mentions` row
+ * per member. Nothing pings now, so those lines and rows go.
+ *
+ * NOT PART OF THE EVERY-TICK SWEEP: reading message bodies there would charge
+ * every tick for a population that only shrinks. It runs on the first tick of a
+ * process and then hourly (beside the prune), over the same window as the sync,
+ * a batch at a time. Hourly, not once, because during a rolling deploy a replica
+ * still on the old code can deliver one more ping card after this one has swept.
+ * A card whose post is edited meanwhile is also fixed by `syncOne`.
+ */
+async function cleanLegacyPingCards(): Promise<number> {
+  const pool = getPool();
+  let cleaned = 0;
+  for (let batch = 0; batch < 10; batch += 1) {
+    const rows = await pool.query<{ id: string; channel_id: string }>(
+      `WITH legacy AS (
+         SELECT m.id FROM messages m
+           JOIN bau_follow_deliveries d ON d.message_id = m.id
+          WHERE d.status = 'delivered' AND m.forward IS NOT NULL
+            AND d.delivered_at > NOW() - INTERVAL '${RECONCILE_DAYS} days'
+            AND m.body LIKE '@%' AND position(chr(10) in m.body) > 0
+          LIMIT ${SWEEP_BATCH}
+       ), fixed AS (
+         UPDATE messages m
+            SET body = substr(m.body, position(chr(10) in m.body) + 1), edited_at = NOW()
+           FROM legacy WHERE m.id = legacy.id
+         RETURNING m.id, m.channel_id
+       ), unmentioned AS (
+         DELETE FROM message_mentions WHERE message_id IN (SELECT id FROM fixed)
+       )
+       SELECT id, channel_id FROM fixed`,
+    );
+    for (const row of rows.rows) {
+      invalidateLatestMessages(row.channel_id);
+      const message = await getHydratedMessage(row.id).catch(() => null);
+      if (message) {
+        broadcastToChannel(row.channel_id, { type: "message-update", message: mapMessage(message) });
+      }
+    }
+    cleaned += rows.rows.length;
+    if (rows.rows.length < SWEEP_BATCH) {
+      break;
+    }
+  }
+  if (cleaned > 0) {
+    logEvent("bau.follow.legacyPingsCleaned", { count: cleaned });
+  }
+  return cleaned;
 }
 
 async function syncOne(row: SyncRow): Promise<boolean> {

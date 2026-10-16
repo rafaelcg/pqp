@@ -577,27 +577,46 @@ describeDb("Seguir: following a Baú into a channel", () => {
     expect(isForwardFallbackBody(first.body, parsed)).toBe(true);
   });
 
-  it("a card delivered while pings existed loses its role line and its mention rows, with no edit of the post", async () => {
+  /** A card as the old code left it: a mention line above the fallback, and the role's member recorded as mentioned. */
+  async function makeLegacyPingCard(): Promise<string> {
     const role = await createRole(destId, { name: "novidades", permissions: Permission.VIEW_CHANNEL, mentionable: true });
     await assignRole(destId, bob.id, role.id);
     await follow(alice, destChannelId);
-    await publish();
+    const postId = await publish();
     await tick();
     const [card] = await cards(destChannelId);
-    // The card as the old code left it: a mention line above the fallback, and
-    // the role's member recorded as mentioned.
     await getPool().query(`UPDATE messages SET body = '@novidades' || chr(10) || body WHERE id = $1`, [card!.id]);
     await getPool().query(`INSERT INTO message_mentions (message_id, user_id) VALUES ($1, $2)`, [card!.id, bob.id]);
-    // Nothing about the post changed: the sweep still finds the card by its body.
+    return postId;
+  }
+
+  it("a card delivered while pings existed loses its role line and mention rows in the periodic cleanup, once", async () => {
+    await makeLegacyPingCard();
+    // The cleanup is hourly, not every tick: an ordinary tick leaves it alone...
+    await tick();
+    expect((await cards(destChannelId))[0]!.body.startsWith("@novidades")).toBe(true);
+    // ...and the first tick of a process (or the next hour) does it.
+    resetBauFollowAuthorCacheForTests();
     await tick();
     const row = (await cards(destChannelId))[0]!;
     expect(row.body.startsWith("Encaminhado: ")).toBe(true);
     expect(row.edited_at).not.toBeNull();
     expect((await getPool().query(`SELECT 1 FROM message_mentions`)).rowCount).toBe(0);
-    // And once fixed it is left alone.
+    // Clean cards are not touched again.
     const before = row.edited_at!.getTime();
+    resetBauFollowAuthorCacheForTests();
     await tick();
     expect((await cards(destChannelId))[0]!.edited_at!.getTime()).toBe(before);
+  });
+
+  it("an edit of the post that leaves the snapshot unchanged still removes a legacy ping line", async () => {
+    const postId = await makeLegacyPingCard();
+    // A pin bumps updated_at but changes nothing the card shows: the hash is the same.
+    expect((await call(qgOwner, "POST", `${home()}/posts/${postId}/pin`, { pinned: true })).status).toBe(200);
+    await tick();
+    const row = (await cards(destChannelId))[0]!;
+    expect(row.body.startsWith("Encaminhado: ")).toBe(true);
+    expect((await getPool().query(`SELECT 1 FROM message_mentions`)).rowCount).toBe(0);
   });
 
   // ----------------------------------------------- edits, deletes, retraction
