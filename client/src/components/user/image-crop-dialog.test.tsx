@@ -93,6 +93,23 @@ describe("the crop step", () => {
     expect(region.height).toBeCloseTo(1);
   });
 
+  it("lets go of the preview before the upload decodes the file again", async () => {
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    let previewAtConfirm: Element | null | undefined;
+    onConfirm.mockImplementation(() => {
+      previewAtConfirm = document.querySelector("[data-crop-image]");
+    });
+    await open("avatar");
+    await loadCropImage(800, 600);
+    await saved();
+    // A full-resolution decode is hundreds of megabytes for a phone photo:
+    // two at once is how a tab gets evicted on a phone.
+    expect(previewAtConfirm).toBeNull();
+    expect(revoke).toHaveBeenCalledWith("blob:crop-step");
+    expect(save().disabled).toBe(true);
+    revoke.mockRestore();
+  });
+
   it("draws the banner's frame at the banner's shape", async () => {
     await open("banner");
     expect(frame().style.aspectRatio).toMatch(/^3( \/ 1)?$/);
@@ -115,7 +132,12 @@ describe("the crop step", () => {
     // Moving the picture right shows more of its left side.
     expect(zoomed.x).toBeLessThan((1 - zoomed.width) / 2);
 
+    // Save hands back once per pick, so the reset gets a fresh one.
     onConfirm.mockClear();
+    await open("avatar");
+    await loadCropImage(1000, 1000);
+    press("+");
+    press("ArrowLeft");
     press("0");
     const reset = await saved();
     expect(reset).toEqual({ x: 0, y: 0, width: 1, height: 1 });

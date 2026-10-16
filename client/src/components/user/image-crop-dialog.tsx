@@ -91,6 +91,16 @@ export function ImageCropDialog({
   const frameWidthRef = useRef(0);
   /** Every pointer that is down on the frame, where it was last seen. */
   const pointers = useRef(new Map<number, { x: number; y: number }>());
+  /**
+   * What Save framed, held for one commit. The preview is a full-resolution
+   * decode of the file and the upload decodes it again, which for a 48 MP
+   * phone photo is a few hundred megabytes twice over. So Save first takes the
+   * preview out of the page and drops its URL, and only after that commit is
+   * the region handed back and the upload's own decode started.
+   */
+  const [confirmed, setConfirmed] = useState<CropRegion | null>(null);
+  const onConfirmRef = useRef(onConfirm);
+  onConfirmRef.current = onConfirm;
 
   // A fresh object URL per file, released when the file changes or the dialog
   // closes. The `<img>` honours EXIF orientation, which is the same picture
@@ -98,6 +108,7 @@ export function ImageCropDialog({
   useEffect(() => {
     setView(null);
     setUnreadable(false);
+    setConfirmed(null);
     if (!file) {
       setSrc(null);
       return;
@@ -106,6 +117,16 @@ export function ImageCropDialog({
     setSrc(url);
     return () => URL.revokeObjectURL(url);
   }, [file]);
+
+  useEffect(() => {
+    if (!confirmed) {
+      return;
+    }
+    if (src) {
+      URL.revokeObjectURL(src);
+    }
+    onConfirmRef.current(confirmed);
+  }, [confirmed, src]);
 
   useLayoutEffect(() => {
     if (!frame) {
@@ -280,12 +301,12 @@ export function ImageCropDialog({
           </Button>
           <Button
             type="button"
-            disabled={!view}
+            disabled={!view || confirmed !== null}
             data-crop-save=""
             className="h-auto min-h-9 w-full min-w-0 whitespace-normal px-2 text-center max-sm:min-h-11"
             onClick={() => {
-              if (view) {
-                onConfirm(cropRegion(view));
+              if (view && !confirmed) {
+                setConfirmed(cropRegion(view));
               }
             }}
           >
@@ -316,7 +337,7 @@ export function ImageCropDialog({
           onPointerCancel={onPointerEnd}
           onKeyDown={onKeyDown}
         >
-          {src && !unreadable ? (
+          {src && !unreadable && !confirmed ? (
             <img
               src={src}
               alt=""
