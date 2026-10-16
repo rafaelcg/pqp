@@ -6078,5 +6078,6 @@
   "importDiscordMerge.done.open": "Ir para os canais novos",
   "importDiscordMerge.error.forbidden": "Tu precisa da permissão Gerenciar servidor pra importar uma estrutura aqui.",
   "importDiscordMerge.error.gone": "Esta comunidade não pode importar uma estrutura agora.",
-  "serverSettings.audit.action.server.discord_import_merge": "adicionou uma estrutura do Discord ao servidor"
+  "serverSettings.audit.action.server.discord_import_merge": "adicionou uma estrutura do Discord ao servidor",
+  "importDiscordMerge.error.openFailed": "Adicionado, mas não deu pra abrir os canais novos. Escolhe um na lista."
 }

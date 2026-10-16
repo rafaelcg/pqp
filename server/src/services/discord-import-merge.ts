@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   grantablePermissions,
   planDiscordMerge,
@@ -12,11 +13,7 @@ import { logAudit } from "./audit.js";
 import { bumpChannelLayoutVersion } from "./channel-layout.js";
 import { insertForumTags } from "./discord-import.js";
 import type { Queryable } from "./invites.js";
-import {
-  applyPrivateChannelOverwrites,
-  bumpPermissionsVersion,
-  upsertMemberViewOverwrite,
-} from "./permissions.js";
+import { applyPrivateChannelOverwrites, upsertMemberViewOverwrite } from "./permissions.js";
 import {
   CHANNEL_COLUMNS,
   invalidateServerAudience,
@@ -88,10 +85,11 @@ export async function previewDiscordMerge(
  * Adds a Discord layout to a server that already exists, in ONE transaction.
  *
  * Strictly additive. Nothing here updates or deletes a channel, a category, a
- * cargo, an overwrite or a member. The only write to a row that was already
- * there is the server's `channel_layout_version` (which every channel create
- * bumps too, so open clients know the list moved) and the rank number of the
- * cargos, which slides up by the number of cargos added so the new ones sit
+ * cargo, an overwrite or a member. The only writes to a row that was already
+ * there are the server's `channel_layout_version` (which every channel create
+ * bumps too, so open clients know the list moved), its `permissions_version`
+ * when a rule or cargo is written (so cached permission answers drop), and the
+ * rank number of the cargos, which slides up by the number of cargos added so the new ones sit
  * under everything (the same thing making a cargo by hand does; their order
  * among themselves is unchanged).
  *
@@ -151,39 +149,49 @@ export async function applyDiscordMerge(input: {
         [serverId, toCreate.length],
       );
       const grantable = grantablePermissions(input.actorPermissions);
-      let rank = 1;
-      for (const role of toCreate) {
-        const permissions = BigInt(role.permissions) & grantable;
-        // `ON CONFLICT` on the case-insensitive name: a cargo made by hand a
-        // moment ago (the plan above read the table before it) is reused, not
-        // a unique violation that would take the whole import down with it.
-        const inserted = await client.query<{ id: string }>(
-          `INSERT INTO roles (server_id, name, color, hoist, mentionable, permissions, position)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           ON CONFLICT (server_id, LOWER(name)) DO NOTHING
-           RETURNING id`,
-          [
-            serverId,
-            role.name,
-            role.color,
-            role.hoist,
-            role.mentionable,
-            serializePermissions(permissions),
-            rank,
-          ],
+      // One statement for every cargo. `ON CONFLICT` on the case-insensitive
+      // name: a cargo made by hand a moment ago (the plan above read the table
+      // before it) is reused, not a unique violation that would take the whole
+      // import down with it.
+      const params: unknown[] = [serverId];
+      const tuples = toCreate.map((role, index) => {
+        const base = params.length;
+        params.push(
+          role.name,
+          role.color,
+          role.hoist,
+          role.mentionable,
+          serializePermissions(BigInt(role.permissions) & grantable),
+          index + 1,
         );
-        rank += 1;
-        if (inserted.rows[0]) {
-          roleIdByTemplate.set(role.templateId, inserted.rows[0].id);
-          rolesCreated.push(role.name);
+        return `($1, $${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`;
+      });
+      const inserted = await client.query<{ id: string; name: string }>(
+        `INSERT INTO roles (server_id, name, color, hoist, mentionable, permissions, position)
+         VALUES ${tuples.join(", ")}
+         ON CONFLICT (server_id, LOWER(name)) DO NOTHING
+         RETURNING id, name`,
+        params,
+      );
+      const idByName = new Map(inserted.rows.map((row) => [row.name.toLowerCase(), row.id]));
+      const raced = toCreate.filter((role) => !idByName.has(role.name.toLowerCase()));
+      if (raced.length > 0) {
+        const found = await client.query<{ id: string; name: string }>(
+          `SELECT id, name FROM roles WHERE server_id = $1 AND LOWER(name) = ANY($2::text[])`,
+          [serverId, raced.map((role) => role.name.toLowerCase())],
+        );
+        for (const row of found.rows) {
+          idByName.set(row.name.toLowerCase(), row.id);
+        }
+      }
+      for (const role of toCreate) {
+        const id = idByName.get(role.name.toLowerCase());
+        if (!id) {
           continue;
         }
-        const raced = await client.query<{ id: string }>(
-          `SELECT id FROM roles WHERE server_id = $1 AND LOWER(name) = LOWER($2)`,
-          [serverId, role.name],
-        );
-        if (raced.rows[0]) {
-          roleIdByTemplate.set(role.templateId, raced.rows[0].id);
+        roleIdByTemplate.set(role.templateId, id);
+        if (inserted.rows.some((row) => row.id === id)) {
+          rolesCreated.push(role.name);
         }
       }
       touchedPermissions = true;
@@ -202,64 +210,101 @@ export async function applyDiscordMerge(input: {
           [serverId],
         )
       ).rows[0]?.max ?? -1;
-    for (const category of merge.addedCategories) {
-      categoryPosition += 1;
-      const inserted = await client.query<{ id: string }>(
-        `INSERT INTO channels (server_id, name, type, position, is_private, topic, parent_id)
-         VALUES ($1, $2, 'category', $3, FALSE, NULL, NULL)
-         RETURNING id`,
-        [serverId, category.name, categoryPosition],
+
+    type NewRow = {
+      id: string;
+      name: string;
+      type: string;
+      position: number;
+      isPrivate: boolean;
+      topic: string | null;
+      parentId: string | null;
+    };
+    const insertRows = async (rows: NewRow[]): Promise<ChannelRow[]> => {
+      if (rows.length === 0) {
+        return [];
+      }
+      const params: unknown[] = [serverId];
+      const tuples = rows.map((row) => {
+        const base = params.length;
+        params.push(row.id, row.name, row.type, row.position, row.isPrivate, row.topic, row.parentId);
+        return `($${base + 1}, $1, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
+      });
+      const result = await client.query<ChannelRow>(
+        `INSERT INTO channels (id, server_id, name, type, position, is_private, topic, parent_id)
+         VALUES ${tuples.join(", ")}
+         RETURNING ${CHANNEL_COLUMNS}`,
+        params,
       );
-      categoryIdByTemplate.set(category.templateId, inserted.rows[0]!.id);
-    }
+      // Back in the order they were planned, whatever order Postgres returned.
+      const byId = new Map(result.rows.map((row) => [row.id, row]));
+      return rows.map((row) => byId.get(row.id)!);
+    };
+
+    await insertRows(
+      merge.addedCategories.map((category) => {
+        categoryPosition += 1;
+        const id = randomUUID();
+        categoryIdByTemplate.set(category.templateId, id);
+        return {
+          id,
+          name: category.name,
+          type: "category",
+          position: categoryPosition,
+          isPrivate: false,
+          topic: null,
+          parentId: null,
+        };
+      }),
+    );
 
     // Channels go after the last sibling of their group: the end of the
     // category they join, or of the loose channels. One mixed sequence per
-    // group, the same one `createChannel` appends to.
-    const nextPosition = new Map<string, number>();
-    const positionFor = async (parentId: string | null): Promise<number> => {
-      const key = parentId ?? "";
-      let next = nextPosition.get(key);
-      if (next === undefined) {
-        const max = await client.query<{ max: number | null }>(
-          `SELECT MAX(position) AS max FROM channels
-            WHERE server_id = $1 AND parent_id IS NOT DISTINCT FROM $2
-              AND type = ANY($3::text[])`,
-          [serverId, parentId, positionGroupTypes("text")],
-        );
-        next = (max.rows[0]?.max ?? -1) + 1;
-      }
-      nextPosition.set(key, next + 1);
-      return next;
-    };
+    // group, the same one `createChannel` appends to. A category this merge
+    // just made has no children yet, so only the groups that existed are read.
+    const parentOf = (channel: (typeof merge.addedChannels)[number]): string | null =>
+      channel.parentExistingId ??
+      (channel.parentTemplateId != null
+        ? (categoryIdByTemplate.get(channel.parentTemplateId) ?? null)
+        : null);
+    const existingParents = [
+      ...new Set(
+        merge.addedChannels
+          .map((channel) => channel.parentExistingId)
+          .filter((id): id is string => id != null),
+      ),
+    ];
+    const maxima = await client.query<{ parent_id: string | null; max: number }>(
+      `SELECT parent_id, MAX(position) AS max FROM channels
+        WHERE server_id = $1 AND type = ANY($2::text[])
+          AND (parent_id IS NULL OR parent_id = ANY($3::uuid[]))
+        GROUP BY parent_id`,
+      [serverId, positionGroupTypes("text"), existingParents],
+    );
+    const nextPosition = new Map<string, number>(
+      maxima.rows.map((row) => [row.parent_id ?? "", row.max + 1]),
+    );
 
     const channelIdByTemplate = new Map<number, string>();
-    const channels: ChannelRow[] = [];
-    for (const channel of merge.addedChannels) {
-      const parentId =
-        channel.parentExistingId ??
-        (channel.parentTemplateId != null
-          ? (categoryIdByTemplate.get(channel.parentTemplateId) ?? null)
-          : null);
-      const position = await positionFor(parentId);
-      const inserted = await client.query<ChannelRow>(
-        `INSERT INTO channels (server_id, name, type, position, is_private, topic, parent_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING ${CHANNEL_COLUMNS}`,
-        [
-          serverId,
-          channel.name,
-          channel.type,
+    const channels = await insertRows(
+      merge.addedChannels.map((channel) => {
+        const parentId = parentOf(channel);
+        const key = parentId ?? "";
+        const position = nextPosition.get(key) ?? 0;
+        nextPosition.set(key, position + 1);
+        const id = randomUUID();
+        channelIdByTemplate.set(channel.templateId, id);
+        return {
+          id,
+          name: channel.name,
+          type: channel.type,
           position,
-          channel.isPrivate,
-          channel.topic,
+          isPrivate: channel.isPrivate,
+          topic: channel.topic,
           parentId,
-        ],
-      );
-      const row = inserted.rows[0]!;
-      channels.push(row);
-      channelIdByTemplate.set(channel.templateId, row.id);
-    }
+        };
+      }),
+    );
 
     await insertForumTags(
       client,
@@ -275,18 +320,33 @@ export async function applyDiscordMerge(input: {
 
     // Rules on the channels this merge made, and only those. A rule whose
     // cargo is neither on the server nor ticked is not written.
+    const rules = new Map<string, { channelId: string; roleId: string; allow: string; deny: string }>();
     for (const overwrite of input.plan.overwrites) {
       const channelId = channelIdByTemplate.get(overwrite.channelTemplateId);
       const roleId = roleIdByTemplate.get(overwrite.roleTemplateId);
       if (!channelId || !roleId) {
         continue;
       }
+      rules.set(`${channelId}:${roleId}`, {
+        channelId,
+        roleId,
+        allow: overwrite.allow,
+        deny: overwrite.deny,
+      });
+    }
+    if (rules.size > 0) {
+      const params: unknown[] = [];
+      const tuples = [...rules.values()].map((rule) => {
+        const base = params.length;
+        params.push(rule.channelId, rule.roleId, rule.allow, rule.deny);
+        return `($${base + 1}, 'role', $${base + 2}, $${base + 3}, $${base + 4})`;
+      });
       await client.query(
         `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
-         VALUES ($1, 'role', $2, $3, $4)
+         VALUES ${tuples.join(", ")}
          ON CONFLICT (channel_id, target_type, target_id)
          DO UPDATE SET allow = EXCLUDED.allow, deny = EXCLUDED.deny`,
-        [channelId, roleId, overwrite.allow, overwrite.deny],
+        params,
       );
       touchedPermissions = true;
     }
@@ -304,6 +364,16 @@ export async function applyDiscordMerge(input: {
         await upsertMemberViewOverwrite(client, row.id, input.actorId);
         touchedPermissions = true;
       }
+    }
+
+    if (touchedPermissions) {
+      // Inside the transaction, so the version moves with the rows it
+      // describes: a bump after COMMIT that failed would leave every cached
+      // permission answer stale for rules that are already committed.
+      await client.query(
+        `UPDATE servers SET permissions_version = permissions_version + 1 WHERE id = $1`,
+        [serverId],
+      );
     }
 
     await logAudit(
@@ -335,18 +405,10 @@ export async function applyDiscordMerge(input: {
   }
 
   // Committed. Caches after, never before: a read in between would warm them
-  // with the old list. A failure here must not look like a failed import.
-  try {
-    if (touchedPermissions) {
-      await bumpPermissionsVersion(serverId);
-    }
-  } catch (error) {
-    console.error("[discord-import-merge] permissions version bump failed:", error);
-  } finally {
-    invalidateServerChannelList(serverId);
-    if (merged.rolesCreated.length > 0) {
-      invalidateServerAudience(serverId);
-    }
+  // with the old list.
+  invalidateServerChannelList(serverId);
+  if (merged.rolesCreated.length > 0) {
+    invalidateServerAudience(serverId);
   }
   return merged;
 }

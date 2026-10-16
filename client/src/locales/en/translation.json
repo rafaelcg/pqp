@@ -6078,5 +6078,6 @@
   "importDiscordMerge.done.open": "Go to the new channels",
   "importDiscordMerge.error.forbidden": "You need the Manage server permission to import a layout here.",
   "importDiscordMerge.error.gone": "This community can't import a layout right now.",
-  "serverSettings.audit.action.server.discord_import_merge": "added a Discord layout to the server"
+  "serverSettings.audit.action.server.discord_import_merge": "added a Discord layout to the server",
+  "importDiscordMerge.error.openFailed": "Added, but could not open the new channels. Pick one from the list."
 }

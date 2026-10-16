@@ -280,9 +280,40 @@ export function planDiscordMerge(
         .map((channel) => channelKey(channel.name, channel.type)),
     );
 
+  // A category refused for a cap stays refused for a later one that reads the
+  // same, or the duplicate could take the slot its twin was denied and be made
+  // empty.
+  const refused = new Map<string, MergeSkipReason>();
+  const skipWhole = (
+    category: MappedImportChannel,
+    children: MappedImportChannel[],
+    reason: MergeSkipReason,
+  ) => {
+    skipped.push({
+      kind: "category",
+      name: category.name,
+      categoryName: null,
+      reason,
+    });
+    for (const child of children) {
+      skipped.push({
+        kind: "channel",
+        name: child.name,
+        type: child.type,
+        categoryName: category.name,
+        reason,
+      });
+    }
+  };
+
   for (const category of templateCategories) {
     const norm = mergeName(category.name);
     const children = childrenOf(category.templateId);
+    const refusedBefore = refused.get(norm);
+    if (refusedBefore) {
+      skipWhole(category, children, refusedBefore);
+      continue;
+    }
     const earlier = targets.get(norm);
     if (earlier) {
       skipped.push({
@@ -322,39 +353,13 @@ export function planDiscordMerge(
       children.map((child) => channelKey(child.name, child.type)),
     ).size;
     if (categorySlots <= 0) {
-      skipped.push({
-        kind: "category",
-        name: category.name,
-        categoryName: null,
-        reason: "categoryLimit",
-      });
-      for (const child of children) {
-        skipped.push({
-          kind: "channel",
-          name: child.name,
-          type: child.type,
-          categoryName: category.name,
-          reason: "categoryLimit",
-        });
-      }
+      refused.set(norm, "categoryLimit");
+      skipWhole(category, children, "categoryLimit");
       continue;
     }
     if (budget < (distinct > 0 ? 2 : 1)) {
-      skipped.push({
-        kind: "category",
-        name: category.name,
-        categoryName: null,
-        reason: "channelLimit",
-      });
-      for (const child of children) {
-        skipped.push({
-          kind: "channel",
-          name: child.name,
-          type: child.type,
-          categoryName: category.name,
-          reason: "channelLimit",
-        });
-      }
+      refused.set(norm, "channelLimit");
+      skipWhole(category, children, "channelLimit");
       continue;
     }
     categorySlots -= 1;

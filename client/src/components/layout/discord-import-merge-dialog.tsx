@@ -128,6 +128,8 @@ export function DiscordImportMergeDialog({
   }
 
   const empty = preview ? discordMergeIsEmpty(preview) : false;
+  // Everything is already here, but a ticked cargo is still something to add.
+  const canConfirm = !empty || picked.size > 0;
   const firstChannel = done?.channels.find((channel) => channel.type !== "category") ?? null;
 
   const title =
@@ -137,7 +139,7 @@ export function DiscordImportMergeDialog({
         ? empty
           ? t("importDiscordMerge.preview.titleEmpty")
           : t("importDiscordMerge.preview.title")
-        : done && done.channels.length + done.categories > 0
+        : done && done.channels.length + done.categories + done.roles > 0
           ? t("importDiscordMerge.done.title")
           : t("importDiscordMerge.done.titleEmpty");
 
@@ -219,7 +221,7 @@ export function DiscordImportMergeDialog({
               <Button
                 type="button"
                 onClick={() => void handleApply()}
-                disabled={busy || empty}
+                disabled={busy || !canConfirm}
                 data-testid="discord-merge-confirm"
               >
                 {busy

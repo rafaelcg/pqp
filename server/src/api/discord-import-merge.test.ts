@@ -877,6 +877,24 @@ describeDb("discord layout import into an existing server", () => {
       ).toBe(1);
     });
 
+    it("moves the permissions version only when a rule or cargo was written", async () => {
+      await enable();
+      const version = async () =>
+        (
+          await getPool().query<{ v: number }>(
+            `SELECT permissions_version AS v FROM servers WHERE id = $1`,
+            [serverId],
+          )
+        ).rows[0]!.v;
+      const start = await version();
+      fetchOk(guildTemplate([{ id: 1, type: 0, name: "plain", position: 0 }]));
+      await apply(owner);
+      expect(await version()).toBe(start);
+      fetchOk(guildTemplate([STAFF_CHANNEL], ROLES));
+      await apply(owner, [7]);
+      expect(await version()).toBeGreaterThan(start);
+    });
+
     it("never hands a cargo a permission its creator cannot grant", async () => {
       await enable();
       // Manage Server + Manage Roles, but not Kick Members.

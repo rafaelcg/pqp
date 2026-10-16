@@ -253,6 +253,30 @@ describe("DiscordImportMergeDialog", () => {
     expect(button("Add to this community")?.disabled).toBe(true);
   });
 
+  it("keeps confirm off for an all-there template until a cargo is ticked, then allows it", async () => {
+    api.previewDiscordMerge.mockResolvedValue(
+      previewOf({ addedCategories: [], addedChannels: [] }),
+    );
+    api.applyDiscordMerge.mockResolvedValue({
+      plan: previewOf({ addedCategories: [], addedChannels: [] }),
+      channels: [],
+      rolesCreated: ["Helpers"],
+    });
+    mount(<DiscordImportMergeDialog serverId="srv-1" serverName="Casa" onClose={() => {}} />);
+    type(document.querySelector("textarea") as HTMLTextAreaElement, "abcd1234");
+    click(button("Preview"));
+    await flush();
+    expect(button("Add to this community")?.disabled).toBe(true);
+    click(document.querySelector('[role="checkbox"]'));
+    expect(button("Add to this community")?.disabled).toBe(false);
+    click(button("Add to this community"));
+    await flush();
+    expect(api.applyDiscordMerge).toHaveBeenCalledWith("srv-1", "abcd1234", [7]);
+    // A roles-only import is not reported as "nothing new".
+    expect(text()).toContain("Added to your community");
+    expect(text()).toContain("Added: 1 role.");
+  });
+
   it("says plainly when the server refuses (403) and when the door is closed (404)", async () => {
     const { ApiError } = await import("@/lib/api");
     api.previewDiscordMerge.mockRejectedValueOnce(new ApiError(403, "no"));

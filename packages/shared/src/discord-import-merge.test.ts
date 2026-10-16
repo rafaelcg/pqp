@@ -211,6 +211,28 @@ describe("planDiscordMerge", () => {
     ]);
   });
 
+  it("keeps a refused category refused for a later duplicate, instead of making it empty", () => {
+    const filler = Array.from({ length: MAX_IMPORT_CHANNELS - 1 }, (_, i) =>
+      row(`filler-${i}`, "text"),
+    );
+    const result = planDiscordMerge(
+      plan([
+        { id: 1, type: 4, name: "Chat", position: 0 },
+        { id: 2, type: 0, name: "a", position: 0, parent_id: 1 },
+        { id: 3, type: 0, name: "b", position: 1, parent_id: 1 },
+        { id: 4, type: 4, name: "chat", position: 1 },
+      ]),
+      existing(filler),
+    );
+    expect(result.addedCategories).toEqual([]);
+    expect(summary(result)).toEqual([
+      "category:Chat:channelLimit",
+      "channel:a:channelLimit",
+      "channel:b:channelLimit",
+      "category:chat:channelLimit",
+    ]);
+  });
+
   it("still reuses a category at the cap", () => {
     const cats = Array.from({ length: MAX_IMPORT_CATEGORIES }, (_, i) =>
       row(i === 0 ? "Text" : `cat-${i}`, "category", null, i),

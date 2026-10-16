@@ -13979,7 +13979,13 @@ function MainAppContent({
             } catch {
               // The channels-update frame refreshes the list anyway.
             }
-            await selectChannel(channelId, serverId);
+            try {
+              await selectChannel(channelId, serverId);
+            } catch {
+              // The import is committed and the list is on screen; only the
+              // jump failed, so say so and leave the channels to pick.
+              setAppError(t("importDiscordMerge.error.openFailed"));
+            }
           })();
         }}
       />
