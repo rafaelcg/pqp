@@ -26,11 +26,14 @@ const headersFor = (suffix: string) => ({
   Authorization: `Bearer dev-local-token:${suffix}`,
 });
 
-async function setFlag(enabled: boolean | null): Promise<void> {
+async function setFlag(
+  enabled: boolean | null,
+  key = "discord_import_notice",
+): Promise<void> {
   const res = await fetch(`${API}/api/admin/flags`, {
     method: "PUT",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${E2E_ADMIN_TOKEN}` },
-    body: JSON.stringify({ key: "discord_import_notice", enabled }),
+    body: JSON.stringify({ key, enabled }),
   });
   expect(res.status).toBe(200);
 }
@@ -232,6 +235,27 @@ test("the button opens the Discord import and ends the card", async ({ page }) =
   await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 30_000 });
   await page.waitForTimeout(1500);
   await expect(notice(page)).toHaveCount(0);
+});
+
+test("where discord_import_existing is on, the words and the button go INTO this server", async ({ page }) => {
+  const { owner, serverId } = await seed(`m${Date.now().toString(36)}`);
+  await setFlag(true, "discord_import_existing");
+  try {
+    await openAs(page, owner, serverId);
+    await expect(notice(page)).toBeVisible({ timeout: 20_000 });
+    await expect(notice(page)).toContainText("We add your categories and channels here");
+    await expect(notice(page)).toContainText("Nothing already here is deleted or changed");
+    await shot(page, "merge-notice-en");
+    await realClick(page, "[data-discord-import-notice-action]");
+    // The merge dialog, not the create dialog: it names this server.
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("are added to Mesa do Rafa", { timeout: 20_000 });
+    await expect(dialog).toContainText("Nothing in Mesa do Rafa is deleted or changed");
+    await shot(page, "merge-dialog-opened");
+    await expect(notice(page)).toHaveCount(0);
+  } finally {
+    await setFlag(null, "discord_import_existing");
+  }
 });
 
 test("a keyboard reaches the button and the close, each with a name and a visible focus ring", async ({ page }) => {

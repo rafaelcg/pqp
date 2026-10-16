@@ -512,6 +512,8 @@ import { BringCrewStrip } from "@/components/onboarding/bring-crew-strip";
 import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
 import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
 import { DiscordImportNotice } from "@/components/onboarding/discord-import-notice";
+import { openDiscordImport } from "@/lib/discord-import-launcher";
+import { useDiscordImportExisting } from "@/lib/use-discord-import-existing";
 import { NudgeButton, useNudgeTrigger } from "@/components/dm/nudge-button";
 import { useNudgeShake } from "@/hooks/use-nudge-shake";
 import {
@@ -3107,6 +3109,12 @@ function MainAppContent({
   const discordImportNoticeHistory = useDiscordImportNoticeRecord(
     user?.id ?? null,
     selectedServerId,
+  );
+  // Whether the import can go INTO this server (`discord_import_existing`, per
+  // server). The card waits for the answer so its words and its button agree.
+  const discordImportExisting = useDiscordImportExisting(
+    selectedServerId,
+    discordImportNoticeOn && perms.can(Permission.MANAGE_SERVER),
   );
   /**
    * Every `watch_party` channel on the open server this viewer may see the
@@ -10711,6 +10719,7 @@ function MainAppContent({
   function renderDiscordImportNotice(channelName: string | null) {
     if (
       !discordImportNoticeOn ||
+      discordImportExisting === null ||
       !selectedServer ||
       selection.kind !== "server" ||
       activeConversation ||
@@ -10744,14 +10753,15 @@ function MainAppContent({
     return (
       <DiscordImportNotice
         serverId={selectedServer.id}
-        // TODO(discord_import_existing): when `openDiscordImport({ serverId })`
-        // lands, call it here for a server it is on for, and pass `existing`.
-        // Until then the button opens the create-new import, and the copy
-        // promises nothing about merging.
-        existing={false}
+        // Where `discord_import_existing` is on for this server the import goes
+        // INTO it (additive; the merge dialog); everywhere else it is the
+        // create-new import every server has always had. The words follow.
+        existing={discordImportExisting}
         onImport={() => {
           discordImportNoticeHistory.click();
-          setPendingCreate({ mode: "import", source: null });
+          openDiscordImport(
+            discordImportExisting ? { serverId: selectedServer.id } : {},
+          );
         }}
         onDismiss={discordImportNoticeHistory.close}
       />

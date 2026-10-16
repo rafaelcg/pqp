@@ -677,12 +677,18 @@ How the client learns two things:
   the strip only on an explicit `false`: an unknown answer shows nothing. With
   both flags off that route still reads nothing.
 
-The button opens the create-new Discord import (the same dialog as the hub's
-"Trazer do Discord"). When `discord_import_existing` lands, `App.tsx`'s
-`renderDiscordImportNotice` calls `openDiscordImport({ serverId })` for servers
-that flag is on for; the copy was written to be true either way. Measure with
-Umami: `discord_import_notice_view`, `_click`, `_dismiss` (each with
-`existing`), against `server.discord_import` rows in `audit_log`.
+What the button opens depends on `discord_import_existing` for THAT server
+(`GET /api/servers/:id/discord-import/config`, read once per server per load by
+`lib/use-discord-import-existing.ts`; the card waits for the answer so it never
+swaps wording). On: `openDiscordImport({ serverId })`, the additive merge dialog,
+and the sentence says "We add your categories and channels here... Nothing
+already here is deleted or changed, and your Discord stays as it is". Off, or a
+failed read: `openDiscordImport()`, the create-new import (the hub's "Trazer do
+Discord"), and the sentence says "We copy your categories and channels...
+Nothing gets deleted, here or on your Discord". Neither sentence promises
+people or messages. Measure with Umami: `discord_import_notice_view`, `_click`,
+`_dismiss` (each with `existing`), against `server.discord_import` rows in
+`audit_log`.
 
 Turn it on from controles → interruptores or `PUT /api/admin/flags
 { key: "discord_import_notice", enabled: true }`. Open tabs follow on the next

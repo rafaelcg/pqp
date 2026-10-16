@@ -57,6 +57,16 @@ describe("DiscordImportNotice", () => {
     expect(html).not.toMatch(/members|messages/i);
   });
 
+  it("where the import goes INTO the server, says it only adds and changes nothing there", () => {
+    const html = renderToStaticMarkup(
+      <DiscordImportNotice serverId="s1" existing onImport={noop} onDismiss={noop} />,
+    );
+    expect(html).toContain("We add your categories and channels here in about a minute.");
+    expect(html).toContain("Nothing already here is deleted or changed");
+    expect(html).not.toContain("We copy your");
+    expect(html).not.toMatch(/members|messages/i);
+  });
+
   it("is a labelled region named by its title, with one action and a named close", () => {
     const html = renderToStaticMarkup(
       <DiscordImportNotice serverId="s1" existing={false} onImport={noop} onDismiss={noop} />,

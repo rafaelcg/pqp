@@ -32,7 +32,11 @@ export function DiscordImportNotice({
   onDismiss,
 }: {
   serverId: string;
-  /** The import will go into THIS server (not make a new one). Analytics only. */
+  /**
+   * The import goes INTO this server (`discord_import_existing`), additively,
+   * instead of making a new one. Changes the sentence, so it only promises
+   * what that dialog does, and tags the funnel.
+   */
   existing: boolean;
   onImport: () => void;
   onDismiss: () => void;
@@ -68,7 +72,9 @@ export function DiscordImportNotice({
           {t("discordImportNotice.title")}
         </p>
         <p className="mt-0.5 text-pretty text-sm text-on-accent-soft/80">
-          {t("discordImportNotice.body")}
+          {existing
+            ? t("discordImportNotice.bodyExisting")
+            : t("discordImportNotice.body")}
         </p>
       </div>
       {/* On a phone the button takes its own row under the text, lined up

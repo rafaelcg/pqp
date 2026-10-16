@@ -5343,6 +5343,7 @@
   "newcomerInvite.roomName": "{name}'s room",
   "discordImportNotice.title": "Coming from Discord? Bring your server over",
   "discordImportNotice.body": "We copy your categories and channels in about a minute. Nothing gets deleted, here or on your Discord.",
+  "discordImportNotice.bodyExisting": "We add your categories and channels here in about a minute. Nothing already here is deleted or changed, and your Discord stays as it is.",
   "discordImportNotice.action": "Import from Discord",
   "discordImportNotice.dismiss": "Dismiss",
   "conversations.title": "Conversations",
