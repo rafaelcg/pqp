@@ -217,11 +217,18 @@ describeDb("GET /api/servers/:id/members/status", () => {
     );
     expect(lean.body.roster).toBe(full.body.roster);
 
-    await getPool().query(`UPDATE users SET display_name = 'Renamed' WHERE id = $1`, [
-      online.id,
-    ]);
+    // A rename that moves the person to the other end of the (name ordered)
+    // list under any collation: the rows are reordered, the membership is not.
+    await getPool().query(
+      `UPDATE users SET display_name = 'zzz away', username = 'zzz_away' WHERE id = $1`,
+      [away.id],
+    );
     await invalidateServerMemberList(serverId);
     applyManualStatus(online.id, "dnd");
+    const reread = await call<FullRoster>(owner, "GET", `/api/servers/${serverId}/members`);
+    expect(reread.body.members.map((m) => m.id)).not.toEqual(
+      full.body.members.map((m) => m.id),
+    );
     const after = await call<StatusRoster>(
       owner,
       "GET",
@@ -229,6 +236,7 @@ describeDb("GET /api/servers/:id/members/status", () => {
     );
     expect(after.body.statuses[online.id]).toBe("dnd");
     expect(after.body.roster).toBe(full.body.roster);
+    expect(reread.body.roster).toBe(full.body.roster);
   });
 
   it("moves the roster token when somebody joins and when somebody leaves", async () => {

@@ -10815,15 +10815,19 @@ async function resolveMemberStatuses(
 }
 
 /**
- * Who is in a server's member list, as one token (a hash of the ids in list
- * order). It changes when somebody joins or leaves and does not change when a
- * name, avatar, role or status does, which is the point: it is what a poll
- * compares to know the membership it already holds is still the membership.
+ * Who is in a server's member list, as one token (a hash of the SORTED ids). It
+ * changes when somebody joins or leaves and does not change when a name, avatar,
+ * role or status does, which is the point: it is what a poll compares to know the
+ * membership it already holds is still the membership.
+ *
+ * Sorted because the list is ordered by name: a rename reorders the rows, and a
+ * token over list order would call that a membership change and send every tab
+ * back to the whole 2.4 MB list.
  */
 function rosterToken(members: ReadonlyArray<{ id: string }>): string {
   const hash = createHash("sha1");
-  for (const member of members) {
-    hash.update(member.id);
+  for (const id of members.map((member) => member.id).sort()) {
+    hash.update(id);
   }
   return hash.digest("base64url").slice(0, 16);
 }
