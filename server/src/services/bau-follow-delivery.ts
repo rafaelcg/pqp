@@ -344,12 +344,6 @@ interface SyncRow extends PostForSnapshot {
   source_id: string;
   source_name: string;
   source_icon_url: string | null;
-  /**
-   * A card delivered while pings existed: its body opens with the `@Role` line.
-   * Selected whether or not its post changed, and rewritten without the line
-   * (and without its mention rows), because a delivery never pings now.
-   */
-  legacy_ping: boolean;
 }
 
 /** Pages of stale cards one tick works through (SWEEP_BATCH rows each). */
@@ -383,8 +377,7 @@ async function syncEditedPosts(serverId?: string): Promise<number> {
               p.updated_at::text AS post_updated_at,
               p.id, p.server_id, p.title, p.body, p.teaser, p.media_kind,
               p.media_youtube_url, p.published_at, p.created_at,
-              s.id AS source_id, s.name AS source_name, s.icon_url AS source_icon_url,
-              (m.body LIKE '@%') AS legacy_ping
+              s.id AS source_id, s.name AS source_name, s.icon_url AS source_icon_url
          FROM bau_follow_deliveries d
          JOIN messages m ON m.id = d.message_id
          JOIN community_home_posts p ON p.id = d.post_id
@@ -458,18 +451,10 @@ async function cleanLegacyPingCards(): Promise<number> {
        SELECT id, channel_id FROM fixed`,
     );
     // The rows are already fixed in the database (one statement, mentions
-    // included); the announcement is a courtesy to people with the channel open,
-    // and a client that misses it reads the card as it is on open.
+    // included); see `announceCardUpdate` for the announcement.
     await mapWithConcurrency(rows.rows, CONCURRENCY, async (row) => {
       invalidateLatestMessages(row.channel_id);
-      try {
-        const message = await getHydratedMessage(row.id);
-        if (message) {
-          broadcastToChannel(row.channel_id, { type: "message-update", message: mapMessage(message) });
-        }
-      } catch (error) {
-        console.error("[bau-follow] legacy ping announce failed:", error);
-      }
+      await announceCardUpdate(row.id, row.channel_id);
     });
     cleaned += rows.rows.length;
     if (rows.rows.length < SWEEP_BATCH) {
@@ -490,7 +475,10 @@ async function syncOne(row: SyncRow): Promise<boolean> {
     { publicUrl: await getBauPublicUrl(row.server_id, row.id) },
   );
   const hash = snapshotHash(snapshot);
-  if (hash === row.snapshot_hash && !row.legacy_ping) {
+  // The sweep never reads a body: only a card whose post was edited (this row is
+  // in the stale set) but whose snapshot did not change asks whether it still
+  // carries a legacy `@Role` line, because that card would otherwise keep it.
+  if (hash === row.snapshot_hash && !(await isLegacyPingCard(row.message_id))) {
     await pool.query(
       `UPDATE bau_follow_deliveries SET post_updated_at = $3::timestamptz
         WHERE post_id = $1 AND follow_id = $2`,
@@ -499,12 +487,11 @@ async function syncOne(row: SyncRow): Promise<boolean> {
     return false;
   }
   const body = followBody(snapshot);
-  if (row.legacy_ping) {
-    // The ping this card once made no longer counts as a mention for anyone.
-    // BEFORE the body is rewritten: the body is what marks the card as legacy,
-    // so a failure here leaves the card marked and the next pass retries both.
-    await pool.query(`DELETE FROM message_mentions WHERE message_id = $1`, [row.message_id]);
-  }
+  // Nothing pings from a Seguir card, so it holds no mention rows: any that a
+  // legacy card still has go with its rewrite. BEFORE the body changes: the body
+  // is what marks a card as legacy, so a failure here leaves it marked and the
+  // next pass retries both. One primary-key delete per EDITED card.
+  await pool.query(`DELETE FROM message_mentions WHERE message_id = $1`, [row.message_id]);
   const changed = await pool.query(
     `UPDATE messages
         SET body = $2, forward = $3::jsonb, edited_at = NOW(),
@@ -533,14 +520,41 @@ async function syncOne(row: SyncRow): Promise<boolean> {
     return false;
   }
   invalidateLatestMessages(row.channel_id);
-  const message = await getHydratedMessage(row.message_id).catch(() => null);
-  if (message) {
-    broadcastToChannel(row.channel_id, {
-      type: "message-update",
-      message: mapMessage(message),
-    });
-  }
+  await announceCardUpdate(row.message_id, row.channel_id);
   return true;
+}
+
+/** Whether a delivered card still opens with the `@Role` line a pinging delivery wrote. */
+async function isLegacyPingCard(messageId: string): Promise<boolean> {
+  const found = await getPool().query(
+    `SELECT 1 FROM messages WHERE id = $1 AND body LIKE '@%'`,
+    [messageId],
+  );
+  return (found.rowCount ?? 0) > 0;
+}
+
+/**
+ * Tell the channel a card changed. The change is already committed, so this is
+ * a courtesy to people with the channel open (a client that misses it reads the
+ * card as it is on open), but a hydrating read can fail transiently, so it gets
+ * three tries a moment apart before it is logged and let go.
+ */
+async function announceCardUpdate(messageId: string, channelId: string): Promise<void> {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const message = await getHydratedMessage(messageId);
+      if (message) {
+        broadcastToChannel(channelId, { type: "message-update", message: mapMessage(message) });
+      }
+      return;
+    } catch (error) {
+      if (attempt === 3) {
+        console.error("[bau-follow] card update announce failed:", error);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+    }
+  }
 }
 
 // ---------------------------------------------------------------- 3. enqueue
