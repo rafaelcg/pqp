@@ -28,7 +28,9 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.BoxWithConstraints
+import gg.pqp.app.stories.editor.toolsBottom
+import gg.pqp.app.stories.editor.toolsTop
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
@@ -63,8 +65,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.LinearGradientShader
+import androidx.compose.ui.graphics.Shader
+import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -96,6 +103,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import gg.pqp.app.R
@@ -107,6 +115,9 @@ import gg.pqp.app.reports.ui.ReportSheet
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.stories.StoriesRules
 import gg.pqp.app.stories.StoriesStore
+import gg.pqp.app.stories.StoryPreloadRules
+import gg.pqp.app.stories.StoryPreloader
+import gg.pqp.app.stories.StoryVideoCache
 import gg.pqp.app.stories.Story
 import gg.pqp.app.stories.StoryAuthor
 import gg.pqp.app.stories.deleteStory
@@ -115,13 +126,24 @@ import gg.pqp.app.stories.reactToStory
 import gg.pqp.app.stories.removeStoryFromServer
 import gg.pqp.app.stories.replyToStory
 import gg.pqp.app.stories.stories
+import gg.pqp.app.ui.components.monogramColor
 import gg.pqp.app.ui.theme.Palette
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
 import kotlin.math.absoluteValue
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** How long a story may take to show before a spinner says it is on its way. */
+private const val SPINNER_AFTER_MS = 300L
+
+/** How long a story may take to show before the preloader steps aside for it. */
+private const val STILL_LOADING_MS = 250L
+
+/** How stale a story's details may be when a deck opens: the preloader read them moments ago for the same viewer. */
+private const val VIEWER_DETAILS_MAX_AGE_MS = 45_000L
 
 /** The story clock runs in real time whatever the animator duration scale says. */
 private object RealTimeClock : androidx.compose.ui.MotionDurationScale {
@@ -168,6 +190,9 @@ fun StoryViewer(
     val dragY = remember { Animatable(0f) }
     val density = LocalDensity.current
     val dismissPx = with(density) { 120.dp.toPx() }
+    val preloader = remember(session) { StoryPreloader.of(context, session) }
+    // The viewer's wishes end with the viewer: what it was still fetching is not worth the data.
+    DisposableEffect(preloader) { onDispose { preloader.onViewerClosed() } }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -215,6 +240,8 @@ fun StoryViewer(
                 DeckPage(
                     session = session,
                     store = store,
+                    preloader = preloader,
+                    onShown = { storyIndex -> preloader.onViewing(decks, page, storyIndex) },
                     deck = decks[page],
                     active = pager.currentPage == page && !pager.isScrollInProgress,
                     contextLabel = contextLabel,
@@ -256,6 +283,9 @@ fun StoryViewer(
 private fun DeckPage(
     session: SessionStore,
     store: StoriesStore,
+    preloader: StoryPreloader,
+    /** The story on screen changed (or this page became the one on screen): index in the deck. */
+    onShown: (Int) -> Unit,
     deck: StoryDeck,
     active: Boolean,
     contextLabel: String,
@@ -274,8 +304,11 @@ private fun DeckPage(
 
     var loaded by remember(deck) { mutableStateOf<List<Story>?>(null) }
     var failed by remember(deck) { mutableStateOf(false) }
-    LaunchedEffect(deck) {
-        runCatching { session.api.stories(deck.storyIds) }
+    // "Tentar de novo" on the failed screen asks again, for the same deck.
+    var attempt by remember(deck) { mutableIntStateOf(0) }
+    LaunchedEffect(deck, attempt) {
+        // Through the preloader: what it already read to plan the next stories is not asked for twice.
+        runCatching { preloader.stories(deck.storyIds, VIEWER_DETAILS_MAX_AGE_MS) }
             .onSuccess { list ->
                 val order = deck.storyIds.withIndex().associate { it.value to it.index }
                 loaded = list.sortedBy { order[it.id] ?: Int.MAX_VALUE }
@@ -307,13 +340,21 @@ private fun DeckPage(
     var reporting by remember { mutableStateOf<Story?>(null) }
     var confirmingDelete by remember { mutableStateOf<Story?>(null) }
     var muted by remember { mutableStateOf(true) }
+    // Whether the clip on screen has a sound track at all (a clip shot with no microphone has none).
+    var hasAudio by remember(deck) { mutableStateOf(true) }
     // Somebody a mention opened: the story waits while their card is up.
     var profile by remember { mutableStateOf<StoryAuthor?>(null) }
     val paused = holding || typing || sheetOpen || menuOpen || reporting != null || confirmingDelete != null || profile != null
 
     val story = stories?.getOrNull(index)
     val progress = remember(story?.id) { Animatable(0f) }
+    LaunchedEffect(story?.id) { hasAudio = true }
     var videoProgress by remember(story?.id) { mutableFloatStateOf(0f) }
+    // The story's first frame is on screen. Nothing runs against the person's time before that: not the bar, not the
+    // "seen" count, and the preloader waits too, so the link is the story on screen's alone.
+    var shownReady by remember(story?.id) { mutableStateOf(false) }
+    // A clip is still pulling bytes (its buffer is not full): the next story is not fetched against it.
+    var mediaLoading by remember(story?.id) { mutableStateOf(false) }
 
     val advance: () -> Unit = {
         val list = stories.orEmpty()
@@ -325,9 +366,10 @@ private fun DeckPage(
 
     // The clock for a photo, a text card or a call sticker. Linear, because it
     // is a clock; it stops where it is when paused and resumes from there.
-    LaunchedEffect(story?.id, active, paused) {
+    LaunchedEffect(story?.id, active, paused, shownReady) {
         val current = story ?: return@LaunchedEffect
-        if (current.kind == "video" || !active || paused) {
+        // Not until the picture is there: a 5 s photo that arrives 3 s late is still 5 s on screen.
+        if (current.kind == "video" || !active || paused || !shownReady) {
             progress.stop()
             return@LaunchedEffect
         }
@@ -342,12 +384,48 @@ private fun DeckPage(
     }
 
     // Seen after a second on screen, never for the author's own.
-    LaunchedEffect(story?.id, active) {
+    LaunchedEffect(story?.id, active, shownReady) {
         val current = story ?: return@LaunchedEffect
-        if (!active || current.own != null) return@LaunchedEffect
+        if (!active || !shownReady || current.own != null) return@LaunchedEffect
         delay(StoriesRules.SEEN_AFTER_MS)
         store.markSeen(current.id, meId)
+        preloader.markSeen(current.id)
     }
+
+    // Where the viewer is, so the preloader can have what comes next ready.
+    // The preloader waits for the story on screen to be on screen: what is being looked at comes first, on a slow link.
+    LaunchedEffect(story?.id, active) {
+        if (active && story != null) {
+            gg.pqp.app.stories.StoryPerf.becameCurrent(story.id)
+            // One that is already cached shows within a frame or two and keeps the preloads running; one
+            // that is really loading gets the link to itself.
+            val showed = kotlinx.coroutines.withTimeoutOrNull(STILL_LOADING_MS) {
+                androidx.compose.runtime.snapshotFlow { shownReady }.first { it }
+            }
+            if (showed == null) preloader.pause()
+        }
+    }
+    // A clip that is still buffering holds the preloader too: it is on the same link.
+    LaunchedEffect(story?.id, active, mediaLoading) {
+        if (active && story != null && mediaLoading) preloader.pause()
+    }
+    LaunchedEffect(story?.id, active, shownReady, mediaLoading) {
+        if (active && story != null && shownReady && !mediaLoading) onShown(index)
+    }
+
+    // While the story on screen has no first frame: its author's colour over black, and a small spinner if it takes
+    // more than a moment. The bar does not move meanwhile.
+    // Over a page beside the one on screen too, so what arrives piece by piece is never seen piece by piece.
+    val waiting = story != null && !shownReady
+    var spinnerOn by remember(story?.id) { mutableStateOf(false) }
+    LaunchedEffect(story?.id, waiting, active) {
+        spinnerOn = false
+        if (waiting && active) {
+            delay(SPINNER_AFTER_MS)
+            spinnerOn = true
+        }
+    }
+    val veil by animateFloatAsState(if (waiting) 1f else 0f, tween(150), label = "story-veil")
 
     val chromeAlpha by animateFloatAsState(if (holding) 0f else 1f, tween(200), label = "story-chrome")
     val nextLabel = stringResource(R.string.stories_viewer_next)
@@ -355,13 +433,34 @@ private fun DeckPage(
     val pauseLabel = stringResource(R.string.stories_viewer_pause)
     val resumeLabel = stringResource(R.string.stories_viewer_resume)
 
-    Box(modifier.fillMaxSize().background(Color.Black)) {
+    BoxWithConstraints(modifier.fillMaxSize().background(Color.Black)) {
+        // The bar above and below the 9:16 canvas on a taller screen: the bars and the header sit inside it.
+        val gap = gg.pqp.app.stories.editor.CanvasInsets.gap(maxWidth, maxHeight)
         when {
-            failed -> Text(
-                stringResource(R.string.error_network),
-                color = Color.White,
-                modifier = Modifier.align(Alignment.Center),
-            )
+            // A story that cannot be read must not be a dead end: the screen is black
+            // and has no header, so without these two buttons the only way out is the
+            // system back gesture.
+            failed -> Column(
+                Modifier.align(Alignment.Center).padding(horizontal = 32.dp).testTag("stories.viewer.failed"),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    stringResource(R.string.error_network),
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = { failed = false; attempt += 1 },
+                        modifier = Modifier.testTag("stories.viewer.retry"),
+                    ) { Text(stringResource(R.string.connection_retry), color = Color.White) }
+                    TextButton(
+                        onClick = onClose,
+                        modifier = Modifier.testTag("stories.viewer.failedClose"),
+                    ) { Text(stringResource(R.string.stories_viewer_close), color = Color.White) }
+                }
+            }
             story == null -> CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
             else -> {
                 // The story itself, with the gestures on it.
@@ -404,12 +503,33 @@ private fun DeckPage(
                         muted = muted,
                         onVideoProgress = { videoProgress = it },
                         onVideoEnded = advance,
+                        onHasAudio = { hasAudio = it },
+                        onReady = { shownReady = true },
+                        onLoading = { mediaLoading = it },
                         onJoinCall = { call ->
                             onJoinCall(call.serverId, call.channelId, call.channelName)
                             onClose()
                         },
                         onOpenMention = { profile = it },
                     )
+                }
+
+                if (veil > 0f) {
+                    val loading = stringResource(R.string.stories_viewer_loading)
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { alpha = veil }
+                            .background(Color.Black)
+                            .background(monogramColor(story.author.id).copy(alpha = 0.3f))
+                            .semantics { contentDescription = loading }
+                            .testTag("stories.viewer.waiting"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (spinnerOn) {
+                            CircularProgressIndicator(Modifier.size(28.dp), color = Color.White.copy(alpha = 0.85f), strokeWidth = 2.dp)
+                        }
+                    }
                 }
 
                 // Writing a reply: the story pauses and steps back.
@@ -420,7 +540,7 @@ private fun DeckPage(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .statusBarsPadding()
+                        .toolsTop(gap)
                         .graphicsLayer { alpha = chromeAlpha }
                         .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent)))
                         .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
@@ -435,6 +555,7 @@ private fun DeckPage(
                         story = story,
                         contextLabel = contextLabel,
                         muted = muted,
+                        hasSound = hasAudio,
                         onToggleMute = { muted = !muted },
                         menuOpen = menuOpen,
                         onMenu = { menuOpen = it },
@@ -457,6 +578,7 @@ private fun DeckPage(
                                         val ok = runCatching { session.api.removeStoryFromServer(serverId, story.id) }.isSuccess
                                         if (ok) {
                                             store.forget(story.id)
+                                            preloader.forget(story.id)
                                             store.refresh(store.serverKey(serverId))
                                         }
                                     }
@@ -472,11 +594,11 @@ private fun DeckPage(
                         .fillMaxWidth()
                         .graphicsLayer { alpha = chromeAlpha }
                         .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f))))
-                        .navigationBarsPadding()
-                        .imePadding()
+                        // With the keyboard up the reply sits on it; otherwise inside the canvas, not across its edge.
+                        .then(if (typing) Modifier.navigationBarsPadding().imePadding() else Modifier.toolsBottom(gap))
                         .padding(Spacing.md),
                 ) {
-                    story.caption?.takeIf { it.isNotBlank() && story.kind != "text" }?.let {
+                    StoriesRules.legacyCaption(story)?.let {
                         Text(
                             it,
                             color = Color.White,
@@ -491,6 +613,7 @@ private fun DeckPage(
                             session = session,
                             story = story,
                             onFocus = { typing = it },
+                            onReacted = { preloader.setReaction(story.id, it) },
                         )
                     }
                 }
@@ -533,7 +656,10 @@ private fun DeckPage(
                         confirmingDelete = null
                         scope.launch {
                             val ok = runCatching { session.api.deleteStory(target.id) }.isSuccess
-                            if (ok) store.forget(target.id)
+                            if (ok) {
+                                store.forget(target.id)
+                                preloader.forget(target.id)
+                            }
                         }
                     },
                     modifier = Modifier.testTag("stories.delete.confirm"),
@@ -582,6 +708,7 @@ private fun Header(
     story: Story,
     contextLabel: String,
     muted: Boolean,
+    hasSound: Boolean,
     onToggleMute: () -> Unit,
     menuOpen: Boolean,
     onMenu: (Boolean) -> Unit,
@@ -616,7 +743,7 @@ private fun Header(
                 maxLines = 1,
             )
         }
-        if (story.kind == "video") {
+        if (story.kind == "video" && hasSound) {
             IconButton(onClick = onToggleMute) {
                 Icon(
                     if (muted) PqpIcons.Deafened else PqpIcons.Listening,
@@ -694,6 +821,8 @@ private fun StoryMenu(
 @OptIn(UnstableApi::class)
 @Composable
 internal fun StoryVideo(
+    /** The story's id: the key its clip is cached and preloaded under. */
+    storyId: String,
     url: String,
     posterUrl: String?,
     active: Boolean,
@@ -703,21 +832,63 @@ internal fun StoryVideo(
     fill: Boolean,
     onProgress: (Float) -> Unit,
     onEnded: () -> Unit,
+    /** Whether the clip has a sound track at all: a clip shot with no microphone has none, and the sound button has nothing to do. */
+    onHasAudio: (Boolean) -> Unit = {},
+    /** The first frame is on screen. */
+    onReady: () -> Unit = {},
+    /** The player is still loading bytes (its buffer is not full). */
+    onLoading: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
-    var ready by remember(url) { mutableStateOf(false) }
-    val player = remember(url) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(url))
+    var ready by remember(storyId, url) { mutableStateOf(false) }
+    // The listener outlives a recomposition: it asks for the current answer, not the one it was made with.
+    val isActive by androidx.compose.runtime.rememberUpdatedState(active)
+    // A failed clip moves the deck once, whichever of the two paths below meets the failure first.
+    val failureHandled = remember(storyId, url) { booleanArrayOf(false) }
+    val player = remember(storyId, url) {
+        // Read through the clip cache: a clip the preloader already fetched starts from disk, with no wait.
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(StoryVideoCache.dataSourceFactory(context)))
+            // Never more than 10 s ahead: a clip does not keep pulling the whole file against whatever comes next.
+            .setLoadControl(
+                androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(5_000, 10_000, 2_500, 5_000)
+                    .build(),
+            )
+            .build().apply {
+            setMediaItem(StoryVideoCache.mediaItem(url, StoryPreloadRules.videoKey(storyId)))
             repeatMode = Player.REPEAT_MODE_OFF
             prepare()
         }
     }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
+            override fun onRenderedFirstFrame() {
+                gg.pqp.app.stories.StoryPerf.frameReady(storyId, "video")
+                onReady()
+            }
+
+            override fun onIsLoadingChanged(isLoading: Boolean) {
+                onLoading(isLoading)
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                // A clip that will not play has no first frame to wait for, and nothing to stay on: on to the next.
+                // Only the one on screen moves the deck; one beside it waits to be looked at (see below).
+                onReady()
+                if (isActive && !failureHandled[0]) {
+                    failureHandled[0] = true
+                    onEnded()
+                }
+            }
+
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_READY) ready = true
                 if (state == Player.STATE_ENDED) onEnded()
+            }
+
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                if (!tracks.isEmpty) onHasAudio(tracks.containsType(androidx.media3.common.C.TRACK_TYPE_AUDIO))
             }
         }
         player.addListener(listener)
@@ -727,6 +898,14 @@ internal fun StoryVideo(
         }
     }
     LaunchedEffect(active, paused) { player.playWhenReady = active && !paused }
+    // A clip that failed while it was beside the one on screen is already dead when its turn comes: on to the next.
+    LaunchedEffect(player, active) {
+        if (active && player.playerError != null && !failureHandled[0]) {
+            failureHandled[0] = true
+            onReady()
+            onEnded()
+        }
+    }
     LaunchedEffect(muted) { player.volume = if (muted) 0f else 1f }
     LaunchedEffect(player, active) {
         while (active) {
@@ -737,7 +916,14 @@ internal fun StoryVideo(
     }
     Box(Modifier.fillMaxSize()) {
         AndroidView(
-            factory = { PlayerView(it).apply { useController = false; this.player = player } },
+            // A stall in the middle of a clip shows the player's own spinner; the bar waits with the picture.
+            factory = {
+                PlayerView(it).apply {
+                    useController = false
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                    this.player = player
+                }
+            },
             update = {
                 it.resizeMode = if (fill) {
                     androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
@@ -749,7 +935,12 @@ internal fun StoryVideo(
         )
         // The poster until the first frame, so the open never flashes black.
         if (!ready && posterUrl != null) {
-            AsyncImage(model = posterUrl, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            AsyncImage(
+                model = rememberStoryImage(posterUrl, StoryPreloadRules.posterKey(storyId)),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }
@@ -776,18 +967,78 @@ fun TextCard(text: String, background: String?, modifier: Modifier = Modifier, f
     }
 }
 
-/** `STORY_BACKGROUNDS`: two stops each, so a card has depth without an image. */
+/**
+ * A card's fill. The glow family is two stops top to bottom, so a card has depth without an image; the
+ * solid family is one flat colour; the gradient family runs on the same 160 degree line the web draws
+ * (CSS `linear-gradient(160deg, ...)`), so a card reads the same on every platform.
+ */
 fun backgroundBrush(key: String?): Brush {
-    val (top, bottom) = when (key) {
+    val (top, bottom) = backgroundColors(key)
+    return if (StoriesRules.backgroundFamily(key) == "gradient") CssAngleBrush(160f, top, bottom) else Brush.verticalGradient(listOf(top, bottom))
+}
+
+/**
+ * A two-stop gradient along a CSS angle (0 is up, 90 right, 160 down and a little right), with the
+ * gradient line sized the way CSS sizes it so the first and last colours land exactly on the corners.
+ */
+private class CssAngleBrush(private val degrees: Float, private val from: Color, private val to: Color) : ShaderBrush() {
+    override fun createShader(size: Size): Shader {
+        val radians = Math.toRadians(degrees.toDouble())
+        val dx = Math.sin(radians).toFloat()
+        val dy = -Math.cos(radians).toFloat()
+        val half = (Math.abs(size.width * dx) + Math.abs(size.height * dy)) / 2f
+        val centre = Offset(size.width / 2f, size.height / 2f)
+        return LinearGradientShader(
+            from = Offset(centre.x - dx * half, centre.y - dy * half),
+            to = Offset(centre.x + dx * half, centre.y + dy * half),
+            colors = listOf(from, to),
+        )
+    }
+}
+
+/**
+ * The colours of the bars around a 9:16 card, top then bottom: the card's colour at the middle of its
+ * top edge and of its bottom edge, so there is no seam where the canvas meets them. For every family
+ * but the angled gradient that is just the two stops; on the 160 degree line the top edge's middle is
+ * a little way in from the first stop, and the bottom edge's a little short of the last.
+ */
+fun backgroundBarColors(key: String?): Pair<Color, Color> {
+    val (first, last) = backgroundColors(key)
+    if (StoriesRules.backgroundFamily(key) != "gradient") return first to last
+    val radians = Math.toRadians(160.0)
+    val dx = Math.abs(Math.sin(radians)).toFloat()
+    val dy = Math.abs(Math.cos(radians)).toFloat()
+    // A 9 by 16 canvas; the gradient line is as long as the canvas is deep along it.
+    val line = 9f * dx + 16f * dy
+    val inset = (8f * dy) / line
+    return androidx.compose.ui.graphics.lerp(first, last, 0.5f - inset) to androidx.compose.ui.graphics.lerp(first, last, 0.5f + inset)
+}
+
+/** A card's two stops, top then bottom. A solid colour is the same stop twice. */
+fun backgroundColors(key: String?): Pair<Color, Color> = when (key) {
         "lime" -> Palette.Signal to Palette.SignalDim
         "ember" -> Color(0xFF7A1F12) to Color(0xFFE0662E)
         "grape" -> Color(0xFF2B1446) to Color(0xFF7B3FB0)
         "sand" -> Color(0xFF8C6A3E) to Color(0xFFE2C48E)
         "ink" -> Color(0xFF0A0A0A) to Color(0xFF2A2F36)
+        // The solid family: `--story-bg-*` in client/src/index.css, converted from oklch.
+        "cobalt" -> solid(0xFF1957D2)
+        "crimson" -> solid(0xFFBB061E)
+        "pine" -> solid(0xFF00633F)
+        "plum" -> solid(0xFF892784)
+        "teal" -> solid(0xFF007475)
+        "onyx" -> solid(0xFF0C0D0F)
+        // The gradient family: the first and the last stop of the 160 degree line.
+        "sunset" -> Color(0xFFD34100) to Color(0xFF990062)
+        "ocean" -> Color(0xFF007E96) to Color(0xFF013E8B)
+        "aurora" -> Color(0xFF007950) to Color(0xFF4B2E96)
+        "dusk" -> Color(0xFF3334A0) to Color(0xFFC32E85)
+        "berry" -> Color(0xFFB80F79) to Color(0xFF52187E)
+        "lagoon" -> Color(0xFF00817B) to Color(0xFF006527)
         else -> Color(0xFF0B1020) to Color(0xFF1E2A4A)
     }
-    return Brush.verticalGradient(listOf(top, bottom))
-}
+
+private fun solid(argb: Long): Pair<Color, Color> = Color(argb).let { it to it }
 
 fun textOn(background: String?): Color = when (background) {
     "lime", "sand" -> Palette.Ink
@@ -817,7 +1068,7 @@ private fun OwnFooter(story: Story, onOpenViewers: () -> Unit) {
  * pauses the story and raises the full reaction row.
  */
 @Composable
-private fun ReplyFooter(session: SessionStore, story: Story, onFocus: (Boolean) -> Unit) {
+private fun ReplyFooter(session: SessionStore, story: Story, onFocus: (Boolean) -> Unit, onReacted: (String?) -> Unit) {
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val focus = LocalFocusManager.current
@@ -833,12 +1084,23 @@ private fun ReplyFooter(session: SessionStore, story: Story, onFocus: (Boolean) 
             flash = null
         }
     }
+    // The newest reaction the server took wins: an answer that arrives after a later one must not overwrite it, and a later
+    // one that failed must not stop an earlier one that succeeded from being remembered. [0] counts taps, [1] is the
+    // newest tap the cache has been told about.
+    val latest = remember(story.id) { intArrayOf(0, 0) }
     val react: (String) -> Unit = { value ->
         val next = if (reaction == value) null else value
+        val mine = ++latest[0]
         reaction = next
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         if (next != null) flash = StoriesRules.reactionGlyph(next)
-        scope.launch { runCatching { session.api.reactToStory(story.id, next) } }
+        scope.launch {
+            // The preload cache learns of it only when the server did.
+            if (runCatching { session.api.reactToStory(story.id, next) }.isSuccess && mine > latest[1]) {
+                latest[1] = mine
+                onReacted(next)
+            }
+        }
     }
     val sentLabel = stringResource(R.string.stories_viewer_sent)
 

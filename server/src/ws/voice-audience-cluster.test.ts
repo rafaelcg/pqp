@@ -396,6 +396,17 @@ describeDb("audience mode across two instances", () => {
   it("a moderator turning it off on B gives B's member the microphone back", async () => {
     const { channel, host, a, b, memberOnB } = await stage();
     await a.voice.setVoiceAudienceMode(channel, true, host);
+    // B hears the toggle over the bus and re-reads the row on its own time. A
+    // moderator who turns it off BEFORE B's member has been told "on" is a
+    // different, legitimate story: B's pass for "on" is overtaken, the member
+    // never loses the microphone, and there is no `voice-speak-changed` to
+    // wait for (this test timed out on CI whenever B's read lost the race
+    // against A finishing its own enforcement). So start from the state the
+    // test is named for: B's member locked, then turned off.
+    await waitFor(
+      () => last(memberOnB, "voice-speak-changed")?.canSpeak === false,
+      "audience on reaches B",
+    );
     const off = await b.voice.setVoiceAudienceMode(channel, false, host);
     expect(off.audience).toBeNull();
     expect(tryToSpeak(memberOnB, channel)).toBe(true);

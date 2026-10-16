@@ -25,8 +25,9 @@ function text(n: number, over: Partial<Extract<EditorLayer, { type: "text" }>> =
 function mention(n: number, userId = uuid(900 + n)): EditorLayer {
   return { id: uuid(n), type: "mention", x: 0.5, y: 0.5, scale: 1, rotation: 0, userId, name: `Ana${n}` };
 }
-function image(n: number): EditorLayer {
+function image(n: number, alt?: string): EditorLayer {
   return {
+    ...(alt === undefined ? {} : { alt }),
     id: uuid(n),
     type: "image",
     x: 0.5,
@@ -53,17 +54,56 @@ describe("editorReducer", () => {
     expect(state.selectedId).toBe(uuid(2));
   });
 
-  it("puts a drawing at the bottom of the stack (index 0, under everything placed) and keeps the selection", () => {
+  it("layer order is creation order: a new drawing goes on top, and keeps the selection", () => {
     const drawing: EditorLayer = { id: uuid(9), type: "drawing", x: 0.5, y: 0.5, scale: 1, rotation: 0, strokes: [] };
     const state = run({ type: "add", layer: text(1) }, { type: "add", layer: text(2) }, { type: "add", layer: drawing });
-    expect(state.layers.map((layer) => layer.id)).toEqual([uuid(9), uuid(1), uuid(2)]);
+    expect(state.layers.map((layer) => layer.id)).toEqual([uuid(1), uuid(2), uuid(9)]);
     expect(state.selectedId).toBe(uuid(2));
+    // Later layers go above it.
+    const later = editorReducer(state, { type: "add", layer: text(3) });
+    expect(later.layers.map((layer) => layer.id)).toEqual([uuid(1), uuid(2), uuid(9), uuid(3)]);
+    // Bring to front works on it.
+    expect(editorReducer(later, { type: "forward", id: uuid(9) }).layers.map((layer) => layer.id)).toEqual([uuid(1), uuid(2), uuid(3), uuid(9)]);
+  });
+
+  it("drawing again moves the single drawing back to the top, in one undo step", () => {
+    const drawing: EditorLayer = { id: uuid(9), type: "drawing", x: 0.5, y: 0.5, scale: 1, rotation: 0, strokes: [] };
+    const state = run({ type: "add", layer: drawing }, { type: "add", layer: text(1) }, { type: "add", layer: text(2) });
+    expect(state.layers.map((layer) => layer.id)).toEqual([uuid(9), uuid(1), uuid(2)]);
+    const redrawn = editorReducer(state, { type: "patch", id: uuid(9), patch: { strokes: [[]] } as Partial<EditorLayer>, toTop: true });
+    expect(redrawn.layers.map((layer) => layer.id)).toEqual([uuid(1), uuid(2), uuid(9)]);
+    // Already on top: nothing to move.
+    expect(editorReducer(redrawn, { type: "patch", id: uuid(9), patch: {}, toTop: true }).layers.map((layer) => layer.id)).toEqual([uuid(1), uuid(2), uuid(9)]);
+    const undone = editorReducer(redrawn, { type: "undo" });
+    expect(undone.layers.map((layer) => layer.id)).toEqual([uuid(9), uuid(1), uuid(2)]);
   });
 
   it("undo steps back one action at a time", () => {
     const state = run({ type: "add", layer: text(1) }, { type: "add", layer: text(2) }, { type: "undo" });
     expect(state.layers.map((layer) => layer.id)).toEqual([uuid(1)]);
     expect(run({ type: "undo" }).layers).toEqual([]);
+  });
+
+  it("redo brings back what undo stepped over, and any new edit clears it", () => {
+    const undone = run({ type: "add", layer: text(1) }, { type: "add", layer: text(2) }, { type: "undo" });
+    expect(undone.future).toHaveLength(1);
+    const redone = editorReducer(undone, { type: "redo" });
+    expect(redone.layers.map((layer) => layer.id)).toEqual([uuid(1), uuid(2)]);
+    expect(redone.future).toEqual([]);
+    // Undo twice, redo once: one step still waiting.
+    const twice = editorReducer(editorReducer(redone, { type: "undo" }), { type: "undo" });
+    const once = editorReducer(twice, { type: "redo" });
+    expect(once.layers.map((layer) => layer.id)).toEqual([uuid(1)]);
+    expect(once.future).toHaveLength(1);
+    // A new edit ends the redo line, whatever kind it is.
+    expect(editorReducer(once, { type: "add", layer: text(3) }).future).toEqual([]);
+    expect(editorReducer(once, { type: "patch", id: uuid(1), patch: { rotation: 1 } }).future).toEqual([]);
+    expect(editorReducer(once, { type: "remove", id: uuid(1) }).future).toEqual([]);
+    expect(editorReducer(once, { type: "checkpoint" }).future).toEqual([]);
+    // A gesture in flight (transient) does not.
+    expect(editorReducer(once, { type: "patch", id: uuid(1), patch: { x: 0.6 }, transient: true }).future).toHaveLength(1);
+    // Nothing to redo is a no-op.
+    expect(editorReducer(redone, { type: "redo" })).toBe(redone);
   });
 
   it("a gesture is one undo step: a checkpoint, then transient patches", () => {
@@ -203,6 +243,14 @@ describe("toLayerInput", () => {
     });
   });
 
+  it("sends a photo's description trimmed on one line, and none when it is blank", () => {
+    expect(toLayerInput(image(1, "  um gato\n  dormindo "))).toMatchObject({ alt: "um gato dormindo" });
+    expect(toLayerInput(image(1, "   "))).not.toHaveProperty("alt");
+    expect(toLayerInput(image(1))).not.toHaveProperty("alt");
+    const long = toLayerInput(image(1, "x".repeat(300))) as { alt: string };
+    expect(long.alt.length).toBe(200);
+  });
+
   it("sends the trimmed text", () => {
     expect(toLayerInput(text(1, { text: "  oi  " }))).toMatchObject({ text: "oi" });
   });
@@ -213,6 +261,16 @@ describe("altTextFor", () => {
     const layers = [text(1, { text: "segundo", y: 0.6 }), text(2, { text: "primeiro", y: 0.2 }), mention(3)];
     const alt = altTextFor(layers, "legenda", (name) => `com ${name}`);
     expect(alt).toBe("primeiro. segundo. com Ana3. legenda");
+  });
+
+  it("leads with what the author wrote for the picture and the placed photos", () => {
+    const layers = [
+      text(1, { text: "oi", y: 0.1 }),
+      { ...image(2, "  segunda   foto "), y: 0.7 },
+      { ...image(3, "primeira foto"), y: 0.3 },
+      image(4),
+    ];
+    expect(altTextFor(layers, "", (n) => n, " um cachorro\ncorrendo ")).toBe("um cachorro correndo. primeira foto. segunda foto. oi");
   });
 
   it("is empty with nothing to say and never longer than the wire allows", () => {

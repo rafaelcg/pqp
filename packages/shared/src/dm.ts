@@ -154,3 +154,10 @@ export const blockListResponseSchema = z.object({
 });
 
 export type BlockListResponse = z.infer<typeof blockListResponseSchema>;
+
+/**
+ * What the missed-call record says. Stored as an ordinary message body written
+ * by the caller (`ws/voice.ts`), so anything that needs to tell a call record
+ * from something typed, like the moderation context read, matches on this.
+ */
+export const MISSED_CALL_BODY = "\u{1F4DE} Missed call";

@@ -33,6 +33,7 @@ import {
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
 import { sweepQuarantinedCommunityHomeMedia } from "./services/community-home-scan.js";
 import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
+import { runBauFollowTick } from "./services/bau-follow-delivery.js";
 import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
 import { sweepCommunityHomeCaptions } from "./services/community-home-captions.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
@@ -171,6 +172,17 @@ export const PENDING_DELETION_SWEEP_INTERVAL_MS = 5 * 60_000;
 
 /** Same cadence the Community Home schedule sweep has always had. */
 export const COMMUNITY_HOME_MEDIA_SWEEP_INTERVAL_MS = 30_000;
+
+/**
+ * Seguir: delivers followed Baú posts as cards (and updates and retracts the
+ * ones already delivered). Every ten seconds: a post that goes live is also
+ * KICKED by the publish route, so this timer is the catch-up for a scheduled
+ * post arriving, a retry coming due, and a process that restarted. Runs where
+ * the cold jobs run (the worker when there is one), because a delivery needs a
+ * database and, for the fan-out, the cluster bus rather than a socket of its
+ * own. With nothing followed it is one indexed read.
+ */
+export const BAU_FOLLOW_INTERVAL_MS = 10_000;
 
 /**
  * Outgoing webhook outbox. First attempt is also kicked from enqueue, in
@@ -404,6 +416,7 @@ export function startColdJobs(): ColdJobs {
       "community-home",
       sweepCommunityHomeMedia,
     ),
+    every(BAU_FOLLOW_INTERVAL_MS, "bau-follow", () => runBauFollowTick()),
     // Never touches an illegal-content row at any age.
     every(ATTACHMENT_SWEEP_INTERVAL_MS, "server-emoji-quarantine", sweepQuarantinedServerEmoji),
     every(

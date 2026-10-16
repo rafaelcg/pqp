@@ -145,7 +145,12 @@ test("A posts a text story; B sees the ring, opens it, reacts and replies; A see
     await page.getByRole("menuitem", { name: "Post a story" }).click();
     const composer = page.getByRole("dialog", { name: "New story" });
     await expect(composer).toBeVisible();
-    await composer.getByRole("radio", { name: "Text" }).click();
+    // With no object storage the composer opens straight on the text card, its editor already up (and the
+    // tabs out of the way); with storage it opens on the camera and the Text tab is the way in.
+    const textTab = composer.getByRole("radio", { name: "Text" });
+    await expect(textTab.or(composer.locator("[data-story-text]"))).toBeVisible();
+    // (If the editor came up by itself in the meantime the tab is gone and there is nothing to click.)
+    await textTab.click({ timeout: 3000 }).catch(() => undefined);
     await composer.locator("[data-story-text]").fill("bora de cs hoje?");
     await composer.locator("[data-story-text-done]").click();
     await composer.locator("[data-story-bg='grape']").click();
@@ -173,6 +178,20 @@ test("A posts a text story; B sees the ring, opens it, reacts and replies; A see
     // Past the one second that counts as a view.
     await second.page.waitForTimeout(1_400);
 
+    // Escape in the "More options" menu closes the menu only; the viewer stays.
+    await viewer.getByRole("button", { name: "More options" }).click();
+    await expect(second.page.getByRole("menu")).toBeVisible();
+    await second.page.keyboard.press("Escape");
+    await expect(second.page.getByRole("menu")).toBeHidden();
+    await expect(viewer).toBeVisible();
+
+    // The page behind is inert: Tab never leaves the viewer for the chat (Safari walks fields first).
+    await expect(second.page.locator("body > [inert]")).not.toHaveCount(0);
+    for (let press = 0; press < 10; press += 1) {
+      await second.page.keyboard.press("Tab");
+      expect(await second.page.evaluate(() => Boolean(document.querySelector("[data-story-viewer]")?.contains(document.activeElement)))).toBe(true);
+    }
+
     // React: focusing the reply raises the reaction row.
     const reply = viewer.getByRole("textbox", { name: "Reply to Alice Story…" });
     await reply.click();
@@ -190,6 +209,21 @@ test("A posts a text story; B sees the ring, opens it, reacts and replies; A see
     await expect(
       second.page.getByRole("button", { name: "Alice Story's story, seen" }),
     ).toBeVisible({ timeout: 10_000 });
+
+    // The X in the corner takes a real mouse click (the deck, a positioned full-size box later in the
+    // tree, once painted over it, so only the keyboard could close the viewer).
+    await second.page.getByRole("button", { name: "Alice Story's story, seen" }).click();
+    await expect(viewer).toBeVisible();
+    const closeBox = (await viewer.getByRole("button", { name: "Close" }).boundingBox())!;
+    // What a click at its centre reaches must be the button itself (a one-story viewer also closes by
+    // itself when the story ends, so "it closed" alone would prove nothing).
+    const reaches = await second.page.evaluate(([x, y]) => {
+      const found = document.elementFromPoint(x, y);
+      return Boolean(found?.closest("button[aria-label='Close']"));
+    }, [closeBox.x + closeBox.width / 2, closeBox.y + closeBox.height / 2]);
+    expect(reaches, "the X is what a click on it reaches").toBe(true);
+    await second.page.mouse.click(closeBox.x + closeBox.width / 2, closeBox.y + closeBox.height / 2);
+    await expect(viewer).toBeHidden();
 
     // ---- A: the reply is a conversation message quoting the story.
     const conversations = await fetch(`${API}/api/dms`, { headers: headersFor(alice) });

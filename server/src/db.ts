@@ -1621,6 +1621,7 @@ export interface DbMessage {
   reply_author_id?: string | null;
   reply_author_name?: string | null;
   reply_body?: string | null;
+  reply_forward?: unknown;
   pinned_at?: Date | null;
   pinned_by?: string | null;
   /** Joined from `pinned_by`; absent or null when the pinner has since left. */
@@ -1640,6 +1641,8 @@ export interface DbMessage {
   system_kind?: string | null;
   /** The story a DM reply quotes (`messages.story_id`). */
   story_id?: string | null;
+  /** `messages.forward`: the snapshot of a forwarded message, or null. */
+  forward?: unknown;
 }
 
 export interface DbInvite {

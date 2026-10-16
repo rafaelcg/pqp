@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Image as ImageIcon, Shield, Tag, Webhook } from "lucide-react";
-import type { Channel, ForumSettings, ForumSort } from "@pqp/shared";
+import { BellRing, Image as ImageIcon, Shield, Tag, Webhook } from "lucide-react";
+import type { BauFollow, Channel, ForumSettings, ForumSort } from "@pqp/shared";
 import { FORUM_SETTINGS_DEFAULTS, isVoiceRoomChannelType } from "@pqp/shared";
 import { ForumTagsSection } from "@/components/layout/forum-tags-section";
 import {
@@ -24,6 +24,8 @@ import {
   readChannelRecipe,
 } from "@/components/layout/channel-permissions-section";
 import { WebhooksSection } from "@/components/layout/webhooks-section";
+import { ChannelBauFollowsSection } from "@/components/layout/channel-bau-follows-section";
+import { ApiError, fetchChannelBauFollows } from "@/lib/api";
 import { channelTakesWebhooks } from "@/lib/channel-webhooks";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
@@ -50,7 +52,8 @@ export type ChannelSettingsSectionId =
   | "overview"
   | "tags"
   | "permissions"
-  | "webhooks";
+  | "webhooks"
+  | "follows";
 
 const EMPTY_TAG_DRAFT: TagDraft = { rows: [], requireTag: false };
 
@@ -184,6 +187,44 @@ export function ChannelSettingsDialog({
   const [privateBusy, setPrivateBusy] = useState(false);
 
   const isForum = channel?.type === "forum";
+  // Seguir: the Baús this text channel follows. Read when the sheet opens, and
+  // the section is drawn only when there is something to show, so a deployment
+  // with the feature off (the read is a 404) never sees it.
+  const [bauFollows, setBauFollows] = useState<BauFollow[]>([]);
+  // A read that FAILED (not the 404 of a deployment with the feature off) shows
+  // the section anyway, with the error and a retry, so a hiccup does not hide
+  // the way to unfollow.
+  const [bauFollowsFailed, setBauFollowsFailed] = useState(false);
+  const [bauFollowsNonce, setBauFollowsNonce] = useState(0);
+  const canSeeFollows =
+    canManageChannels &&
+    channel?.type === "text" &&
+    (bauFollows.length > 0 || bauFollowsFailed);
+  const followChannelId =
+    open && canManageChannels && channel?.type === "text" ? channel.id : null;
+  useEffect(() => {
+    setBauFollows([]);
+    setBauFollowsFailed(false);
+    if (!followChannelId) {
+      return;
+    }
+    let cancelled = false;
+    fetchChannelBauFollows(followChannelId)
+      .then((res) => {
+        if (!cancelled) {
+          setBauFollows(res.follows);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setBauFollowsFailed(!(error instanceof ApiError && error.status === 404));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [followChannelId, bauFollowsNonce]);
+
   const canSeeOverview = canManageChannels;
   const canSeeTags = canManageChannels && isForum;
   const canSeePermissions = canManageRoles || canManageChannels;
@@ -204,8 +245,11 @@ export function ChannelSettingsDialog({
     if (canSeeWebhooks) {
       ids.push("webhooks");
     }
+    if (canSeeFollows) {
+      ids.push("follows");
+    }
     return ids;
-  }, [canSeeOverview, canSeeTags, canSeePermissions, canSeeWebhooks]);
+  }, [canSeeOverview, canSeeTags, canSeePermissions, canSeeWebhooks, canSeeFollows]);
 
   const firstSection = visible[0] ?? "overview";
   const openingSection: ChannelSettingsSectionId =
@@ -388,6 +432,13 @@ export function ChannelSettingsDialog({
       id: "webhooks",
       label: t("channelSettings.section.webhooks"),
       icon: Webhook,
+    });
+  }
+  if (canSeeFollows) {
+    sections.push({
+      id: "follows",
+      label: t("channelSettings.section.follows"),
+      icon: BellRing,
     });
   }
 
@@ -765,6 +816,14 @@ export function ChannelSettingsDialog({
             <WebhooksSection
               open={open && section === "webhooks"}
               channelId={channel.id}
+            />
+          )}
+          {active?.id === "follows" && (
+            <ChannelBauFollowsSection
+              follows={bauFollows}
+              onChange={setBauFollows}
+              failed={bauFollowsFailed}
+              onRetry={() => setBauFollowsNonce((n) => n + 1)}
             />
           )}
         </div>

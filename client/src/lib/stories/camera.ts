@@ -1,4 +1,4 @@
-import { STORY_IMAGE_MAX_EDGE } from "@pqp/shared";
+import { STORY_IMAGE_MAX_EDGE, storyBaseFit } from "@pqp/shared";
 
 /**
  * The browser camera, as far as the story composer needs it. Everything that
@@ -186,4 +186,49 @@ export async function captureStill(video: HTMLVideoElement): Promise<{
   context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
   return blob ? { blob, width, height } : null;
+}
+
+// ------------------------------------------------------------------ portrait clips
+
+/** A clip cut to the story's 9:16: 720 x 1280 is plenty for a phone screen and light to upload. */
+export const PORTRAIT_CLIP_WIDTH = 720;
+export const PORTRAIT_CLIP_HEIGHT = 1280;
+
+/**
+ * A laptop webcam sends 16:9 and the preview crops it to 9:16, so recording the raw
+ * stream would post a clip that is not what was on screen (and, now that a story shows
+ * a clip that is not 9:16 whole, a thin landscape strip). A source that is not near 9:16
+ * is recorded through a canvas that keeps the same centred crop the preview shows.
+ */
+export function needsPortraitCrop(width: number, height: number): boolean {
+  return storyBaseFit(width, height) === "contain";
+}
+
+/**
+ * A stream of `source` cut to the preview's crop, at 30 fps, until `stop`. Drawn by a
+ * timer rather than `requestAnimationFrame`, which a hidden tab stops.
+ */
+export function portraitCropStream(source: HTMLVideoElement): { stream: MediaStream; stop: () => void } | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = PORTRAIT_CLIP_WIDTH;
+  canvas.height = PORTRAIT_CLIP_HEIGHT;
+  const context = canvas.getContext("2d");
+  if (!context || typeof canvas.captureStream !== "function") {
+    return null;
+  }
+  const draw = () => {
+    if (!source.videoWidth || !source.videoHeight) {
+      return;
+    }
+    const { sx, sy, sw, sh } = coverCrop(source.videoWidth, source.videoHeight);
+    context.drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  };
+  draw();
+  const timer = window.setInterval(draw, 1000 / 30);
+  return {
+    stream: canvas.captureStream(30),
+    stop: () => {
+      window.clearInterval(timer);
+    },
+  };
 }

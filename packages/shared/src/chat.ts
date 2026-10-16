@@ -19,6 +19,7 @@ import {
 } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
 import { botActionCardSchema, botNoticeSchema } from "./bots.js";
+import { messageForwardFieldSchema } from "./forward.js";
 import { friendActivitySchema } from "./friends.js";
 import { permissionsUpdateSchema } from "./permissions.js";
 import { communityHomeUpdateSchema } from "./community-home.js";
@@ -26,6 +27,7 @@ import { storiesUpdateFrameSchema } from "./stories.js";
 import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { serverRemovedSchema } from "./moderation.js";
+import { serverOrderUpdateSchema } from "./server-order.js";
 import { streamStartedSchema } from "./stream-alerts.js";
 import {
   ownStatusSchema,
@@ -198,6 +200,8 @@ const broadcastMessageSchema = z.object({
   botCard: botActionCardSchema.nullable().optional().catch(null),
   /** See `messageSchema.storyId`: the story a reply quotes. */
   storyId: z.string().uuid().nullable().optional(),
+  /** See `messageSchema.forward`: the snapshot a forwarded message carries. */
+  forward: messageForwardFieldSchema,
 });
 
 export const pollVoteMessageSchema = z.object({
@@ -732,6 +736,8 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   watchPartyWaitlistApprovedSchema,
   // Per person too: see `moderation.ts`, and its absence from the list below.
   serverRemovedSchema,
+  // Per person too: the account's own sockets, see `server-order.ts`.
+  serverOrderUpdateSchema,
   // Per person too: see `voiceNoteListenedSchema`, and its absence from the
   // list below.
   voiceNoteListenedSchema,
@@ -856,6 +862,10 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  * lost the server, so no channel could reach them anyway. It names who was
  * kicked or banned by who receives it, and travels on `chat.membership` keyed
  * by user id.
+ *
+ * `server-order-update` is absent for the same reason: addressed to one
+ * account's own sockets (the rail reordered in another tab), no channel. It
+ * travels on `chat.server-order` keyed by user id.
  *
  * `nudge-refused` is absent for the same reason as `message-rejected`: it
  * tells one sender their nudge did not land. A nudge that DID land is an

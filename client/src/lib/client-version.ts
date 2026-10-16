@@ -145,3 +145,82 @@ export function isCriticalBuild(
   const critical = config.criticalMinBuiltAt ?? null;
   return critical !== null && running.builtAt < critical;
 }
+
+// -------------------------------------------------------------- the cadence
+
+/**
+ * WHEN a new build is ANNOUNCED to a page that is already open.
+ *
+ * Reported on 2026-10-13 by a desktop user: "de 10 em 10 segundos tem
+ * atualização". The web deploys on every merge (about nineteen that day), and
+ * every open window learned of every one of them, so a person in a call was
+ * told of a new version all evening. A page that is open does not need the
+ * newest build the minute it exists: the API stays backward compatible with the
+ * previous bundles, and a page opened fresh always gets the latest.
+ *
+ * So a build that is merely NEW is announced once a day, at a quiet hour
+ * (`ANNOUNCE_HOUR_UTC_DEFAULT`, 09:00 UTC, which is 06:00 in Brasilia), and
+ * only after it has been live for `ANNOUNCE_SOAK_MS`, so a build that is
+ * replaced by a hotfix within the hour is never announced at all. A page that
+ * has been open across several deploys is told about the newest one, once.
+ *
+ * Three things skip the wait, because an operator said so: the force switch
+ * (`client_force_update`, "announce now, with emphasis"), a critical update, and
+ * a bundle built before `CLIENT_MIN_BUILT_AT` (`isForcedBuild` and
+ * `isCriticalBuild` above). Pure, like the rest of this file.
+ */
+export const ANNOUNCE_HOUR_UTC_DEFAULT = 9;
+export const ANNOUNCE_SOAK_MS = 60 * 60_000;
+/** Spreads a day's announcements over this long, so every window does not reload in the same second. */
+export const ANNOUNCE_JITTER_MS = 10 * 60_000;
+
+/**
+ * `VITE_UPDATE_ANNOUNCE_HOUR_UTC`: the hour of day (0 to 23, UTC) a new build is
+ * announced. Unset or unusable is `ANNOUNCE_HOUR_UTC_DEFAULT`; `off` (or `-1`)
+ * announces the moment a build is seen, which is what a self-host that wants the
+ * old behaviour sets. A build-time value on purpose, like
+ * `VITE_UPDATE_MAX_STALE_HOURS`: the live lever is the operator's force switch.
+ */
+export function announceHourFromEnv(raw: string | undefined): number | null {
+  const value = raw?.trim().toLowerCase();
+  if (!value) {
+    return ANNOUNCE_HOUR_UTC_DEFAULT;
+  }
+  if (value === "off" || value === "now" || value === "-1") {
+    return null;
+  }
+  const hour = Number(value);
+  return Number.isInteger(hour) && hour >= 0 && hour <= 23
+    ? hour
+    : ANNOUNCE_HOUR_UTC_DEFAULT;
+}
+
+/**
+ * The first moment a build that went live at `liveSince` may be announced: the
+ * first `hourUtc`:00 UTC at or after `liveSince + ANNOUNCE_SOAK_MS`. With no
+ * hour (the gate is off) it is `liveSince`, which is always in the past.
+ */
+export function announceAtFor(
+  liveSince: number,
+  hourUtc: number | null,
+): number {
+  if (hourUtc === null) {
+    return liveSince;
+  }
+  const earliest = liveSince + ANNOUNCE_SOAK_MS;
+  const slot = new Date(earliest);
+  slot.setUTCHours(hourUtc, 0, 0, 0);
+  let at = slot.getTime();
+  if (at < earliest) {
+    at += 24 * 60 * 60_000;
+  }
+  return at;
+}
+
+/** Whether a build held back until `announceAt` (null: not held back) may be shown at `now`. */
+export function isAnnounced(
+  announceAt: number | null | undefined,
+  now: number,
+): boolean {
+  return announceAt === null || announceAt === undefined || now >= announceAt;
+}

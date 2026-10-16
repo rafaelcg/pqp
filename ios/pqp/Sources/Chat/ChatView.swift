@@ -24,6 +24,9 @@ struct ChatView: View {
     /// which stands in for the system nav bar's while that bar's fill (and
     /// its back button) is hidden under the film. See `watchTheater`.
     @Environment(\.dismiss) private var dismiss
+    /// The people an `@` may name here (`loadMentionCandidates`).
+    @State private var mentionCandidates: [MentionCandidate] = []
+    @State private var mentionsLoaded = false
     let channelId: String
     let title: String
     /// Set only for a conversation (a channel with no server). Calls are a DM
@@ -69,8 +72,25 @@ struct ChatView: View {
     /// landing on the question or the first unread reply instead of the tail.
     /// A post is a thread channel, so everything else is this same screen.
     var forumPost: ForumPostModel? = nil
+    /// A forwarded message's card brought us here: scroll to this message
+    /// once the history has it, outline it for a moment, then say so through
+    /// `onJumped` so coming back later does not jump again.
+    var jumpToMessageId: String? = nil
+    var onJumped: () -> Void = {}
 
     @State private var model = ChatModel()
+    /// Encaminhar: the flag (`GET /api/forwards/config`), the message whose
+    /// picker is up, and the message a jump landed on.
+    @State private var forwardsEnabled = false
+    @State private var forwardSource: ForwardSource?
+    @State private var forwardStart: Task<Void, Never>?
+    @State private var jumpTarget: String?
+    @State private var highlightedMessageId: String?
+    /// This screen was opened on a message. Latched on for the screen's life
+    /// (the prop is cleared once the jump is done, which would flip the
+    /// scroll view's modifier and rebuild it mid-landing).
+    @State private var jumpedHere = false
+    private var landsOnMessage: Bool { jumpToMessageId != nil || jumpedHere }
     /// Chamar a atenção: the flag (`GET /api/fun/config`) and whether the other
     /// person in this 1:1 is a friend. Both read when the conversation opens.
     @State private var funConfig = FunConfig.off
@@ -235,6 +255,7 @@ struct ChatView: View {
                 sanctionRow
                 errorRow
                 composerContext
+                mentionStrip
                 attachmentStrip
                 slowModeRow
                 voiceNoteNotices
@@ -508,6 +529,8 @@ struct ChatView: View {
         }
         .animation(Motion.standard, value: call.isCollapsed)
         .animation(Motion.standard, value: actionTarget?.id)
+        .forwardSheet($forwardSource)
+        .task { forwardsEnabled = await session.api.forwardConfig().enabled }
         .threadDestination($openedThread, serverId: server?.id)
         // Opening a DM from a profile pushes the conversation onto this stack.
         // Wrapped in its own type rather than pushing `DmSummary` directly:
@@ -573,6 +596,7 @@ struct ChatView: View {
                 joinsAsThread: forumPost != nil
             )
             transcriptOpening = false
+            await landOnJumpTarget()
             if let forumPost {
                 let target = await forumPost.land(chat: model)
                 let cursor = forumPost.previousReadAt
@@ -682,7 +706,10 @@ struct ChatView: View {
             next: { [model, notePlayer] finished in
                 model.nextUnheardVoiceNote(after: finished, heard: notePlayer.heardIds)
             },
-            refresh: { [model] in Task { await model.refreshMessages() } }
+            refresh: { [model] in Task { await model.refreshMessages() } },
+            requestTranscript: { [model] message, attachmentId in
+                await model.requestTranscript(message: message, attachmentId: attachmentId)
+            }
         )
     }
 
@@ -722,7 +749,16 @@ struct ChatView: View {
                     }
                     if model.hasMore {
                         Button("Load earlier messages") {
-                            Task { await model.loadEarlier() }
+                            // The message the reader was on, before the older
+                            // page is put above it: the scroll offset does not
+                            // move on its own, so without this the transcript
+                            // stays at the top of the NEW page and the reader
+                            // is fifty messages from where they were.
+                            let keep = model.messages.first?.id
+                            Task {
+                                await model.loadEarlier()
+                                if let keep { keepPlace(on: keep, proxy) }
+                            }
                         }
                         .font(Typography.callout)
                         .foregroundStyle(Palette.paperMuted)
@@ -786,6 +822,7 @@ struct ChatView: View {
                                     .accessibilityLabel(Text("Solution"))
                             }
                         }
+                        .overlay { jumpOutline(for: message) }
                         .id(message.id)
                         // A gesture rather than `.contextMenu`, because the
                         // quick-reaction row's layout is the whole point and a
@@ -857,7 +894,10 @@ struct ChatView: View {
                 .padding(.vertical, 12)
             }
             .scrollDismissesKeyboard(.interactively)
-            .modifier(TranscriptBottomAnchor(enabled: forumPost == nil))
+            // Not while a link is putting the transcript on one message: the
+            // bottom anchor would pull it back to the tail as rows are
+            // measured, the same fight a forum post's landing has.
+            .modifier(TranscriptBottomAnchor(enabled: forumPost == nil && !landsOnMessage))
             // Held invisible until it is on its latest message: see
             // `TranscriptOpening.isHidden`. Not `.hidden()`, which would also
             // skip the layout the scroll needs.
@@ -907,6 +947,18 @@ struct ChatView: View {
                     }
                 }
             }
+            .onChange(of: jumpTarget) { _, id in
+                guard let id else { return }
+                // Where a link opens is not a navigation the reader made, so
+                // it is not animated; the second pass is for the heights a
+                // lazy stack only learns once it has built the rows.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { proxy.scrollTo(id, anchor: .center) }
+                DispatchQueue.main.async {
+                    withTransaction(transaction) { proxy.scrollTo(id, anchor: .center) }
+                }
+            }
             .onChange(of: forumLanding) { _, target in
                 guard let target else { return }
                 // Where the app opens is not a navigation the reader made, so
@@ -936,6 +988,18 @@ struct ChatView: View {
                 }
             }
             .animation(Motion.standard, value: showsForumJumpPill)
+        }
+    }
+
+    /// After older history lands above the reader: put them back on the message
+    /// they were on, no animation. Twice, the second pass once the lazy stack
+    /// has measured the rows it just built.
+    private func keepPlace(on id: String, _ proxy: ScrollViewProxy) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { proxy.scrollTo(id, anchor: .top) }
+        DispatchQueue.main.async {
+            withTransaction(transaction) { proxy.scrollTo(id, anchor: .top) }
         }
     }
 
@@ -1018,6 +1082,8 @@ struct ChatView: View {
             ),
             canPin: Moderation.canPin(inServer: server != nil, serverRole: server?.role),
             canReport: !model.isMine(message) && !message.isWebhook,
+            canForward: canForward(message),
+            onForward: { startForward(message) },
             onReact: { emoji in
                 Task { await model.toggleReaction(emoji, on: message) }
             },
@@ -1061,6 +1127,66 @@ struct ChatView: View {
         )
     }
 
+    // MARK: - Encaminhar
+
+    /// "Forward" is offered on a message of a server channel, a thread or a
+    /// forum post, while the flag is on. A conversation is never a source (the
+    /// server answers 422), and neither is a nudge or a row it has not
+    /// confirmed yet.
+    private func canForward(_ message: Message) -> Bool {
+        forwardsEnabled && conversation == nil && !message.isNudge
+            && !message.isPending && !message.blocked
+    }
+
+    /// Opens the picker. Whether this message is stuck in its server is asked
+    /// of the channel list first (a cached read), so the picker never offers a
+    /// DM or another server for a private channel's message.
+    private func startForward(_ message: Message) {
+        let serverId = server?.id ?? flagsServerId
+        // Only the latest tap may open the picker: a slow read for an earlier
+        // message must not land after, and replace, a later one.
+        forwardStart?.cancel()
+        forwardStart = Task {
+            var channels: [Channel]?
+            if let serverId { channels = try? await session.api.channels(serverId: serverId) }
+            guard !Task.isCancelled else { return }
+            let stays = ForwardSource.messageStaysIn(message, serverId: serverId, channels: channels)
+            forwardSource = ForwardSource.message(message, stayInServerId: stays)
+        }
+    }
+
+    /// A forwarded message's card asked for one message: read back until the
+    /// history has it (a bounded number of pages), scroll there, outline it for
+    /// a moment. A message older than that, or gone, leaves the channel on its
+    /// latest message, which is where it would have opened anyway.
+    private func landOnJumpTarget() async {
+        guard let id = jumpToMessageId else { return }
+        jumpedHere = true
+        defer { onJumped() }
+        var pages = 0
+        while model.hasMore, pages < 12, !model.messages.contains(where: { $0.id == id }) {
+            await model.loadEarlier()
+            pages += 1
+        }
+        guard model.messages.contains(where: { $0.id == id }) else { return }
+        transcriptPositioned = true
+        jumpTarget = id
+        withAnimation(Motion.standard) { highlightedMessageId = id }
+        try? await Task.sleep(for: .seconds(2.5))
+        withAnimation(Motion.standard) { highlightedMessageId = nil }
+    }
+
+    @ViewBuilder
+    private func jumpOutline(for message: Message) -> some View {
+        if highlightedMessageId == message.id {
+            RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous)
+                .strokeBorder(Palette.signal, lineWidth: 2)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+                .accessibilityIdentifier("message.jumpOutline")
+        }
+    }
+
     /// The author and staff mark a reply as the answer. Never the question
     /// itself, and never a row the server has not confirmed yet.
     private func forumSolutionAction(for message: Message) -> ForumSolutionAction? {
@@ -1099,6 +1225,94 @@ struct ChatView: View {
             }
             .background(Palette.inkDeep)
             .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    // MARK: - @mention autocomplete
+
+    /// The members matching the `@token` at the end of the draft, best first
+    /// (`MentionAutocomplete`, the web's rules). Nothing while no token is being
+    /// typed, and nothing for a forum post's reply (its replies are not mentions
+    /// of the people in a channel).
+    private var mentionSuggestions: [MentionCandidate] {
+        guard forumPost == nil, let active = MentionAutocomplete.findAtEnd(of: model.draft) else { return [] }
+        let me = session.currentUser?.id
+        return MentionAutocomplete.filter(mentionCandidates.filter { $0.id != me }, query: active.query)
+    }
+
+    @ViewBuilder
+    private var mentionStrip: some View {
+        let suggestions = mentionSuggestions
+        // The members are read the first time a `@` is typed, not on every open.
+        Color.clear.frame(height: 0)
+            // Keyed on the draft's length while a token is open, so a members read
+            // that failed is tried again on the next keystroke (`mentionsLoaded`
+            // keeps a read that worked from repeating).
+            .task(id: forumPost == nil && MentionAutocomplete.findAtEnd(of: model.draft) != nil ? model.draft.count : -1) {
+                if forumPost == nil, MentionAutocomplete.findAtEnd(of: model.draft) != nil {
+                    await loadMentionCandidates()
+                }
+            }
+        if !suggestions.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(suggestions) { candidate in
+                        Button {
+                            insertMention(candidate)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Avatar(name: candidate.displayName, seed: candidate.id, size: 24, url: candidate.avatarUrl)
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Text(verbatim: candidate.displayName)
+                                        .font(Typography.callout.weight(.semibold))
+                                        .foregroundStyle(Palette.paper)
+                                        .lineLimit(1)
+                                    if let username = candidate.username {
+                                        Text(verbatim: "@\(username)")
+                                            .font(Typography.caption)
+                                            .foregroundStyle(Palette.paperMuted)
+                                            .lineLimit(1)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .frame(minHeight: 44)
+                            .background(Capsule().fill(Palette.surfaceRaised))
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(Text(verbatim: "@\(candidate.username ?? candidate.displayName)"))
+                        .accessibilityIdentifier("mention.suggestion.\(candidate.username ?? candidate.id)")
+                    }
+                }
+                .padding(.horizontal, Metrics.hPadding)
+                .padding(.vertical, 6)
+            }
+            .background(Palette.surface)
+            .transition(.opacity)
+            .accessibilityIdentifier("mention.strip")
+        }
+    }
+
+    private func insertMention(_ candidate: MentionCandidate) {
+        guard let username = candidate.username, let active = MentionAutocomplete.findAtEnd(of: model.draft) else { return }
+        model.draft = MentionAutocomplete.apply(to: model.draft, active: active, username: username).value
+        model.noteTyping()
+    }
+
+    /// The people a mention may name here, read the first time a `@` is typed: a
+    /// server's members, or the other people in a conversation.
+    private func loadMentionCandidates() async {
+        guard !mentionsLoaded else { return }
+        mentionsLoaded = true
+        if let conversation {
+            mentionCandidates = conversation.participants.map(\.mentionCandidate)
+        } else if let serverId = server?.id ?? flagsServerId,
+                  let members = try? await session.api.members(serverId: serverId) {
+            mentionCandidates = members.map(\.mentionCandidate)
+        } else {
+            // Try again on the next `@`.
+            mentionsLoaded = false
         }
     }
 
@@ -1475,7 +1689,10 @@ struct MessageRow: View {
     /// The same-instance Baú permalink this message gets a card for, if any.
     /// A blocked message gets none: it is hidden, not unfurled.
     private var bauSelection: BauShare.Selection? {
-        message.blocked ? nil : BauShare.selectCardLink(in: message.body)
+        // A forward's fallback body carries the permalink its own card opens:
+        // a second, Baú card for the same link would say it twice.
+        message.blocked || message.hasForwardFallbackBody
+            ? nil : BauShare.selectCardLink(in: message.body)
     }
 
     private var bauCardShown: Bool {
@@ -1487,8 +1704,11 @@ struct MessageRow: View {
     /// the sender wrote stay. When the viewer may not see the post the body is
     /// untouched, so the plain link is exactly what it was.
     private var displayBody: String {
-        guard let bauSelection, bauState != .unavailable else { return message.body }
-        return BauShare.strippingLink(bauSelection.link, from: message.body)
+        // The forwarder's own words; nothing when the body is only the
+        // fallback an old client reads.
+        let words = message.forwardComment
+        guard let bauSelection, bauState != .unavailable else { return words }
+        return BauShare.strippingLink(bauSelection.link, from: words)
     }
 
     var body: some View {
@@ -1583,6 +1803,10 @@ struct MessageRow: View {
                     MessageBodyText(body: displayBody)
                         .font(Typography.body)
                         .foregroundStyle(Palette.paper)
+                }
+
+                if let forward = message.forward, !message.blocked {
+                    ForwardCard(forward: forward)
                 }
 
                 if let bauSelection {
@@ -1697,7 +1921,56 @@ struct MessageBodyText: View {
         return parsed
     }
 
-    var body: some View { Text(attributed) }
+    /// What the body shows. With no custom emoji in it, exactly the text it was.
+    /// With some, the markdown is parsed with a stand-in character per `<:name:id>`
+    /// (so bold or a link around an emoji still works) and the text is then cut at
+    /// the stand-ins and put back together with the pictures between the pieces,
+    /// `:name:` while a picture loads or when it cannot.
+    var body: some View {
+        let prepared = CustomEmoji.prepare(raw)
+        if prepared.tokens.isEmpty {
+            Text(attributed)
+        } else {
+            Self.compose(prepared.text, tokens: prepared.tokens)
+                .accessibilityLabel(Text(verbatim: CustomEmoji.spoken(Self.attributed(prepared.text), tokens: prepared.tokens)))
+                .task(id: prepared.tokens.map(\.id)) {
+                    let ids = prepared.tokens.map(\.id)
+                    // A fetch that failed in a way worth another try is asked
+                    // again after its pause while the message stays on screen.
+                    for _ in 0..<4 {
+                        await EmojiImages.shared.load(ids)
+                        guard EmojiImages.shared.hasRetryPending(ids) else { break }
+                        try? await Task.sleep(for: .seconds(EmojiImages.retryDelay + 1))
+                        if Task.isCancelled { break }
+                    }
+                }
+        }
+    }
+
+    private static func compose(_ prepared: String, tokens: [CustomEmoji.Token]) -> Text {
+        let parsed = attributed(prepared)
+        let images = EmojiImages.shared
+        var result = Text(verbatim: "")
+        var pieceStart = parsed.startIndex
+        var next = 0
+        var index = parsed.startIndex
+        while index < parsed.endIndex {
+            let after = parsed.characters.index(after: index)
+            if parsed.characters[index] == CustomEmoji.placeholder, next < tokens.count {
+                result = result + Text(AttributedString(parsed[pieceStart..<index]))
+                let token = tokens[next]
+                if let image = images.image(for: token.id) {
+                    result = result + Text(Image(uiImage: image))
+                } else {
+                    result = result + Text(verbatim: ":\(token.name):")
+                }
+                next += 1
+                pieceStart = after
+            }
+            index = after
+        }
+        return result + Text(AttributedString(parsed[pieceStart..<parsed.endIndex]))
+    }
 }
 
 struct ReplyChip: View {
@@ -1709,7 +1982,7 @@ struct ReplyChip: View {
                 .font(.system(size: 9))
             Text(reply.deleted
                  ? String(localized: "Deleted message")
-                 : "\(reply.authorName ?? String(localized: "Someone")): \(reply.excerpt)")
+                 : "\(reply.authorName ?? String(localized: "Someone")): \(CustomEmoji.asText(reply.excerpt))")
                 .lineLimit(1)
         }
         .font(Typography.caption)

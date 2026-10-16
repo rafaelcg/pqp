@@ -232,6 +232,8 @@ fun VoiceNoteCard(
             }
             HeardLine(listeners)
         }
+
+        TranscriptLine(attachmentId = id, base = voice.transcript, isMine = note.isMine)
     }
 }
 

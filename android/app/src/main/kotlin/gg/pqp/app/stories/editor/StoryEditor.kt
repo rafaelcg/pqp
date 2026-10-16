@@ -36,7 +36,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -44,6 +43,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -106,10 +106,11 @@ data class EditorEnv(
     val cardBackground: String?,
     val audienceLabel: String,
     val canPost: Boolean,
-    val posting: Boolean,
-    /** "You're not in that room": shown while a call card is placed and its author is not in the room. */
-    val callWarning: String?,
     val occupancy: Map<String, List<VoiceParticipant>>,
+    /** False for a clip with no audio track (shot without the microphone): there is nothing to mute. */
+    val hasAudio: Boolean = true,
+    /** The list of who may see the story could not be read: the pill says so and offers a retry. */
+    val audienceError: Boolean = false,
 )
 
 private enum class Sheet { None, Tray, Photo, Call, Mention }
@@ -145,6 +146,7 @@ fun StoryEditor(
     onPickGalleryPhoto: () -> Unit,
     onTakePhoto: () -> Unit,
     onAudience: () -> Unit,
+    onRetryAudience: () -> Unit = {},
     onPost: () -> Unit,
     callSheet: @Composable (onPick: (CallLayer) -> Unit, onDismiss: () -> Unit) -> Unit,
     mentionSheet: @Composable (onPick: (MentionLayer) -> Unit, onDismiss: () -> Unit) -> Unit,
@@ -154,6 +156,9 @@ fun StoryEditor(
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
     var drawing by remember { mutableStateOf(false) }
+    // The composer sends a finished drawing ahead of the story, so it needs to know when the tool closes.
+    LaunchedEffect(drawing) { session.drawingOpen = drawing }
+    DisposableEffect(session) { onDispose { session.drawingOpen = false } }
     var sheet by remember { mutableStateOf(if (openCallSheetAtStart) Sheet.Call else Sheet.None) }
     var textTarget by remember { mutableStateOf<TextTarget?>(null) }
     var menu by remember { mutableStateOf<LayerMenu?>(null) }
@@ -163,6 +168,7 @@ fun StoryEditor(
     var guideV by remember { mutableStateOf(false) }
     var guideH by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
+    var describing by remember { mutableStateOf(false) }
     var canvasPx by remember { mutableStateOf(LayerMath.Canvas(1f, 1f)) }
 
     val limitLayers = stringResource(R.string.stories_editor_limit_layers)
@@ -197,12 +203,14 @@ fun StoryEditor(
         if (drawing) drawing = false else close()
     }
 
-    Box(
+    BoxWithConstraints(
         modifier
             .fillMaxSize()
             .background(Color.Black)
             .testTag("stories.editor"),
     ) {
+        // The bar above and below a 9:16 canvas on a taller screen: the tools sit inside the canvas, not across its edge.
+        val gap = CanvasInsets.gap(maxWidth, maxHeight)
         BoxWithConstraints(Modifier.fillMaxSize()) {
             // The canvas is 9:16, as wide as it can be; the bars above and below carry the tools.
             val width = minOf(maxWidth, maxHeight * 9f / 16f)
@@ -238,9 +246,12 @@ fun StoryEditor(
                                 session.selectedId = layer.id
                                 if (layer is TextLayer) textTarget = TextTarget(layer.id)
                             },
+                            // A tap on nothing writes, like every story app: the text tool opens (and
+                            // says so when the story is full).
                             onTapEmpty = {
                                 session.selectedId = null
                                 menu = null
+                                if (session.layers.size >= StoryLayers.MAX && env.layersEnabled) refuse(LayerOps.Refusal.TooMany) else textTarget = TextTarget(null)
                             },
                             onLongPress = { layer, at ->
                                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -260,23 +271,38 @@ fun StoryEditor(
                     base(canvas)
                 }
 
-                // Ink first (it is the lowest layer), then everything else in order.
+                // Everything in the order it was made, the drawing included. The stroke being
+                // drawn is on top, which is where the drawing goes the moment it has one.
                 val live = session.liveStroke
-                val ink = session.layers.firstOrNull { it is InkLayer } as? InkLayer
-                if (ink != null || live != null) InkLayerContent(ink?.strokes.orEmpty(), live = live)
+                val hasInk = session.layers.any { it is InkLayer }
                 session.layers.forEach { layer ->
-                    if (layer is InkLayer) return@forEach
                     key(layer.id) {
-                        LayerHost(
-                            layer = layer,
-                            canvas = canvas,
-                            session = session,
-                            env = env,
-                            shrink = trashArmed && session.activeId == layer.id,
-                            hidden = textTarget?.id == layer.id,
-                            onEdit = { textTarget = TextTarget(layer.id) },
-                        )
+                        if (layer is InkLayer) {
+                            InkLayerContent(layer.strokes, live = live)
+                        } else {
+                            LayerHost(
+                                layer = layer,
+                                canvas = canvas,
+                                session = session,
+                                env = env,
+                                shrink = trashArmed && session.activeId == layer.id,
+                                hidden = textTarget?.id == layer.id,
+                                onEdit = { textTarget = TextTarget(layer.id) },
+                            )
+                        }
                     }
+                }
+                if (live != null && !hasInk) InkLayerContent(emptyList(), live = live)
+
+                // A card nobody has written on yet: a hint where the words will go.
+                if (env.cardBackground != null && session.layers.isEmpty() && textTarget == null) {
+                    Text(
+                        stringResource(R.string.stories_editor_card_hint),
+                        color = Color.White.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.titleMedium,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.align(Alignment.Center).padding(horizontal = Spacing.xl).testTag("stories.editor.cardHint"),
+                    )
                 }
 
                 // Guide lines while a layer sits on the middle.
@@ -319,6 +345,7 @@ fun StoryEditor(
                             LayerMenuPopup(
                                 layer = layer,
                                 onDismiss = { menu = null },
+                                canFront = LayerOps.canBringForward(session.layers, layer.id),
                                 onFront = {
                                     session.bringToFront(layer.id)
                                     menu = null
@@ -350,7 +377,7 @@ fun StoryEditor(
             exit = fadeOut(tween(100)),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
-            Column(Modifier.fillMaxWidth().statusBarsPadding()) {
+            Column(Modifier.fillMaxWidth().toolsTop(gap)) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(Spacing.sm)) {
                     ToolButton(PqpIcons.Close, stringResource(R.string.stories_viewer_close), "stories.editor.close", onClick = close)
                     Box(Modifier.weight(1f))
@@ -361,7 +388,7 @@ fun StoryEditor(
                         }
                         Spacer(Modifier.width(Spacing.sm))
                     }
-                    if (env.isVideo) {
+                    if (env.isVideo && env.hasAudio) {
                         ToolButton(
                             if (env.muted) PqpIcons.ServerMuted else PqpIcons.Speakerphone,
                             stringResource(if (env.muted) R.string.stories_editor_unmute else R.string.stories_editor_mute),
@@ -370,30 +397,44 @@ fun StoryEditor(
                         )
                         Spacer(Modifier.width(Spacing.sm))
                     }
-                    ToolButton(PqpIcons.AddText, stringResource(R.string.stories_editor_tool_text), "stories.editor.tool.text") {
-                        textTarget = TextTarget(null)
+                    // At the limit a tool says so instead of opening and doing nothing: dimmed, and a tap
+                    // gets the reason.
+                    val full = session.layers.size >= StoryLayers.MAX
+                    val photosFull = session.layers.count { it is PhotoLayer } >= StoryLayers.MAX_IMAGES
+                    val hasInkNow = session.layers.any { it is InkLayer }
+                    ToolButton(PqpIcons.AddText, stringResource(R.string.stories_editor_tool_text), "stories.editor.tool.text", dimmed = full && env.layersEnabled) {
+                        if (full && env.layersEnabled) refuse(LayerOps.Refusal.TooMany) else textTarget = TextTarget(null)
                     }
                     if (env.layersEnabled) {
                         Spacer(Modifier.width(Spacing.sm))
-                        ToolButton(PqpIcons.AddPhoto, stringResource(R.string.stories_editor_tool_photo), "stories.editor.tool.photo") {
-                            sheet = Sheet.Photo
+                        ToolButton(PqpIcons.AddPhoto, stringResource(R.string.stories_editor_tool_photo), "stories.editor.tool.photo", dimmed = full || photosFull) {
+                            when {
+                                full -> refuse(LayerOps.Refusal.TooMany)
+                                photosFull -> refuse(LayerOps.Refusal.TooManyPhotos)
+                                else -> sheet = Sheet.Photo
+                            }
                         }
                         Spacer(Modifier.width(Spacing.sm))
-                        ToolButton(PqpIcons.Stickers, stringResource(R.string.stories_editor_tool_stickers), "stories.editor.tool.stickers") {
-                            sheet = Sheet.Tray
+                        ToolButton(PqpIcons.Stickers, stringResource(R.string.stories_editor_tool_stickers), "stories.editor.tool.stickers", dimmed = full) {
+                            if (full) refuse(LayerOps.Refusal.TooMany) else sheet = Sheet.Tray
                         }
                         Spacer(Modifier.width(Spacing.sm))
-                        ToolButton(PqpIcons.Draw, stringResource(R.string.stories_editor_tool_draw), "stories.editor.tool.draw") {
-                            drawing = true
+                        ToolButton(PqpIcons.Draw, stringResource(R.string.stories_editor_tool_draw), "stories.editor.tool.draw", dimmed = full && !hasInkNow) {
+                            if (full && !hasInkNow) {
+                                refuse(LayerOps.Refusal.TooMany)
+                            } else {
+                                session.beginDrawing()
+                                drawing = true
+                            }
                         }
                     }
                 }
-                // A notice: a limit hit, or "you are not in that call".
-                val notice = message ?: env.callWarning
+                // A notice: a limit hit.
+                val notice = message
                 if (notice != null) {
                     Text(
                         notice,
-                        color = if (message != null) Color.White else Palette.Warning,
+                        color = Color.White,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier
                             .align(Alignment.CenterHorizontally)
@@ -413,16 +454,58 @@ fun StoryEditor(
             exit = fadeOut(tween(100)),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = Spacing.sm)) {
+            Column(Modifier.fillMaxWidth().toolsBottom(gap).padding(bottom = Spacing.sm)) {
                 if (env.cardBackground != null) {
                     BackgroundSwatches(selected = env.cardBackground, onPick = onCardBackground)
+                } else if (env.layersEnabled) {
+                    // A picture or a clip: the author may say what it shows, for people who cannot see it.
+                    val described = session.description.isNotBlank()
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .padding(bottom = Spacing.sm)
+                            .clip(RoundedCornerShape(50))
+                            .background(Color.Black.copy(alpha = 0.5f))
+                            .semantics { role = Role.Button }
+                            .clickable { describing = true }
+                            .padding(horizontal = Spacing.lg, vertical = Spacing.sm)
+                            .testTag("stories.editor.describe"),
+                    ) {
+                        Icon(PqpIcons.Describe, contentDescription = null, tint = if (described) Palette.Signal else Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(Spacing.sm))
+                        Text(
+                            stringResource(if (described) R.string.stories_editor_description_edit else R.string.stories_editor_description_add),
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
                 }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = Spacing.xs),
                 ) {
                     Box(Modifier.weight(1f).padding(end = Spacing.md), contentAlignment = Alignment.CenterStart) {
-                        Text(
+                        if (env.audienceError) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .background(Color.Black.copy(alpha = 0.5f))
+                                    .padding(start = Spacing.lg)
+                                    .testTag("stories.editor.audienceError"),
+                            ) {
+                                Text(
+                                    env.audienceLabel,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                TextButton(onClick = onRetryAudience, modifier = Modifier.testTag("stories.editor.audienceRetry")) {
+                                    Text(stringResource(R.string.connection_retry), color = Palette.Signal)
+                                }
+                            }
+                        } else Text(
                             env.audienceLabel,
                             color = Color.White,
                             style = MaterialTheme.typography.labelLarge,
@@ -438,24 +521,18 @@ fun StoryEditor(
                     }
                     Button(
                         onClick = onPost,
-                        enabled = env.canPost && !env.posting,
+                        enabled = env.canPost,
                         shape = RoundedCornerShape(50),
                         colors = ButtonDefaults.buttonColors(containerColor = Palette.Signal, contentColor = Palette.Ink),
                         modifier = Modifier.testTag("stories.editor.post"),
                     ) {
-                        if (env.posting) {
-                            CircularProgressIndicator(Modifier.size(18.dp), color = Palette.Ink, strokeWidth = 2.dp)
-                            Spacer(Modifier.width(Spacing.sm))
-                            Text(stringResource(R.string.stories_upload_posting))
-                        } else {
-                            Text(stringResource(R.string.stories_editor_post))
-                        }
+                        Text(stringResource(R.string.stories_editor_post))
                     }
                 }
             }
         }
 
-        if (drawing) DrawControls(session, onDone = { drawing = false })
+        if (drawing) DrawControls(session, onDone = { drawing = false }, canvasGap = gap)
 
         // --- the text tool ---
         textTarget?.let { target ->
@@ -466,6 +543,7 @@ fun StoryEditor(
                     TextStyleChoice(it.font, it.color, it.background, it.align, it.size)
                 } ?: session.textStyle,
                 canvasWidthPx = canvasPx.width,
+                canvasGap = gap,
                 dim = if (env.cardBackground != null) 0.3f else 0.78f,
                 onCancel = { textTarget = null },
                 onDone = { text, style ->
@@ -522,6 +600,17 @@ fun StoryEditor(
                 { sheet = Sheet.None },
             )
             Sheet.None -> Unit
+        }
+
+        if (describing) {
+            DescriptionDialog(
+                initial = session.description,
+                onDone = {
+                    session.description = it.trim()
+                    describing = false
+                },
+                onDismiss = { describing = false },
+            )
         }
 
         if (confirmDiscard) {
@@ -593,7 +682,7 @@ private fun LayerHost(
         add(CustomAccessibilityAction(bigger) { session.update(latest.placed(scale = LayerMath.clampScale(latest.scale * 1.2f))); true })
         add(CustomAccessibilityAction(smaller) { session.update(latest.placed(scale = LayerMath.clampScale(latest.scale / 1.2f))); true })
         add(CustomAccessibilityAction(turn) { session.update(latest.placed(rotation = LayerMath.normalizeRotation(latest.rotation + (PI / 12).toFloat()))); true })
-        add(CustomAccessibilityAction(front) { session.bringToFront(latest.id); true })
+        if (LayerOps.canBringForward(session.layers, layer.id)) add(CustomAccessibilityAction(front) { session.bringToFront(latest.id); true })
         if (layer is TextLayer) add(CustomAccessibilityAction(edit) { onEdit(); true })
         add(CustomAccessibilityAction(delete) { session.remove(latest.id); true })
     }
@@ -636,6 +725,8 @@ private fun LayerHost(
 private fun LayerMenuPopup(
     layer: EditorLayer,
     onDismiss: () -> Unit,
+    /** Whether "bring forward" would change anything: not offered for the topmost layer. */
+    canFront: Boolean,
     onFront: () -> Unit,
     onShape: (String) -> Unit,
     onEdit: () -> Unit,
@@ -661,11 +752,13 @@ private fun LayerMenuPopup(
                 )
             }
         }
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.stories_editor_layer_front)) },
-            leadingIcon = { Icon(PqpIcons.BringToFront, contentDescription = null) },
-            onClick = onFront,
-        )
+        if (canFront) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.stories_editor_layer_front)) },
+                leadingIcon = { Icon(PqpIcons.BringToFront, contentDescription = null) },
+                onClick = onFront,
+            )
+        }
         DropdownMenuItem(
             text = { Text(stringResource(R.string.stories_editor_layer_delete), color = Palette.Danger) },
             leadingIcon = { Icon(PqpIcons.Delete, contentDescription = null, tint = Palette.Danger) },
@@ -674,29 +767,95 @@ private fun LayerMenuPopup(
     }
 }
 
-/** The gradient swatches under a text card. */
+/** Where the author writes what the picture shows. Sent first in the story's `altText`. */
+@Composable
+private fun DescriptionDialog(initial: String, onDone: (String) -> Unit, onDismiss: () -> Unit) {
+    var value by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.stories_editor_description_title)) },
+        text = {
+            Column {
+                Text(stringResource(R.string.stories_editor_description_hint), style = MaterialTheme.typography.bodySmall)
+                androidx.compose.material3.OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it.take(StoryLayers.DESCRIPTION_MAX) },
+                    minLines = 2,
+                    maxLines = 5,
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm).testTag("stories.editor.describe.field"),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onDone(value) }, modifier = Modifier.testTag("stories.editor.describe.done")) {
+                Text(stringResource(R.string.stories_editor_description_save))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+@Composable
+private fun backgroundFamilyName(family: String): String = stringResource(
+    when (family) {
+        "solid" -> R.string.stories_compose_background_solid
+        "gradient" -> R.string.stories_compose_background_gradient
+        else -> R.string.stories_compose_background_glow
+    },
+)
+
+/**
+ * The swatches under a text card, one family at a time: a small switch (glow, solid, gradient) over a
+ * row of six. The switch only changes which row is shown; the chosen key stays until another is picked.
+ */
 @Composable
 internal fun BackgroundSwatches(selected: String, onPick: (String) -> Unit) {
-    androidx.compose.foundation.layout.Row(
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.sm, Alignment.CenterHorizontally),
-        modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm),
-    ) {
-        StoriesRules.BACKGROUNDS.forEachIndexed { position, key ->
-            val label = stringResource(R.string.stories_compose_background, position + 1)
-            Box(
-                Modifier
-                    .semantics {
-                        role = Role.RadioButton
-                        this.selected = key == selected
-                        contentDescription = label
-                    }
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(backgroundBrush(key))
-                    .border(if (key == selected) 3.dp else 1.dp, if (key == selected) Color.White else Color.White.copy(alpha = 0.4f), CircleShape)
-                    .clickable { onPick(key) }
-                    .testTag("stories.composer.bg.$key"),
-            )
+    var family by remember { mutableStateOf(StoriesRules.backgroundFamily(selected)) }
+    val names = StoriesRules.BACKGROUND_FAMILIES.associateWith { backgroundFamilyName(it) }
+    val familyName: (String) -> String = { names.getValue(it) }
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+        val switchLabel = stringResource(R.string.stories_compose_background_family)
+        Row(
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+            modifier = Modifier.padding(top = Spacing.sm).semantics { contentDescription = switchLabel },
+        ) {
+            StoriesRules.BACKGROUND_FAMILIES.forEach { key ->
+                val on = key == family
+                Text(
+                    familyName(key),
+                    color = if (on) Palette.Ink else Color.White.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier
+                        .semantics { role = Role.Button; this.selected = on }
+                        .clip(RoundedCornerShape(50))
+                        .background(if (on) Color.White else Color.Black.copy(alpha = 0.45f))
+                        .clickable { family = key }
+                        .padding(horizontal = Spacing.md, vertical = 6.dp)
+                        .testTag("stories.composer.bgfamily.$key"),
+                )
+            }
+        }
+        Row(
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.sm, Alignment.CenterHorizontally),
+            modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm),
+        ) {
+            StoriesRules.backgroundsOf(family).forEachIndexed { position, key ->
+                val label = stringResource(R.string.stories_compose_background_in_family, familyName(family), position + 1)
+                Box(
+                    Modifier
+                        .semantics {
+                            role = Role.RadioButton
+                            this.selected = key == selected
+                            contentDescription = label
+                        }
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(backgroundBrush(key))
+                        .border(if (key == selected) 3.dp else 1.dp, if (key == selected) Color.White else Color.White.copy(alpha = 0.4f), CircleShape)
+                        .clickable { onPick(key) }
+                        .testTag("stories.composer.bg.$key"),
+                )
+            }
         }
     }
 }

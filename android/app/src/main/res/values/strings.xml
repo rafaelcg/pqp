@@ -34,6 +34,8 @@
     <string name="servers_create_name">Server name</string>
     <string name="servers_create_confirm">Create</string>
     <string name="server_actions">Community actions</string>
+    <string name="server_move_up">Move up</string>
+    <string name="server_move_down">Move down</string>
     <string name="server_leave">Leave community</string>
     <string name="server_leave_title">Leave %1$s?</string>
     <string name="server_leave_body">You stop seeing its channels and messages. You can come back later with a new invite.</string>
@@ -165,6 +167,9 @@
     <string name="bau_like">Like</string>
     <string name="bau_unlike">Remove like</string>
     <string name="bau_comments">Comments</string>
+    <string name="bau_share">Share</string>
+    <string name="bau_share_description">Share this post</string>
+    <string name="bau_share_failed">Could not open the share sheet.</string>
     <string name="bau_comments_view_one">See %1$d comment</string>
     <string name="bau_comments_view_all">See all %1$d comments</string>
     <string name="bau_comments_show_less">Show fewer</string>
@@ -190,6 +195,10 @@
     <string name="bau_media_file">File</string>
     <string name="bau_media_image">Image</string>
     <string name="bau_media_video">Play video</string>
+    <string name="bau_captions_on">Turn on subtitles</string>
+    <string name="bau_captions_off">Turn off subtitles</string>
+    <string name="bau_captions_auto">%1$s (automatic)</string>
+    <string name="bau_captions_unknown">Original audio</string>
     <string name="bau_media_youtube">Watch on YouTube</string>
     <string name="bau_media_youtube_open">Open on YouTube</string>
     <string name="bau_media_youtube_failed">This video does not play here.</string>
@@ -457,13 +466,23 @@
     <string name="friends_request_sent">Request sent</string>
     <string name="friends_now_friends">You are friends</string>
     <string name="friends_nudge_request">Someone sent you a friend request.</string>
-    <string name="friends_nudge_accepted">Your friend request was accepted.</string>
 
     <!-- Status -->
     <string name="status_online">Online</string>
     <string name="status_idle">Idle</string>
     <string name="status_dnd">Do not disturb</string>
     <string name="status_offline">Offline</string>
+    <string name="status_away">Away</string>
+    <string name="status_invisible">Invisible</string>
+    <string name="status_your">Your status</string>
+    <string name="status_change">Change your status</string>
+    <string name="status_away_hint">Stays until you change it. Nothing is silenced.</string>
+    <string name="status_dnd_hint">You stay visible. No notifications until you change it.</string>
+    <string name="status_invisible_hint">You show as offline to everyone. Voice channels you join still show you.</string>
+    <string name="status_save_failed">Could not change your status, try again</string>
+    <string name="server_removed_kicked">You were removed from %1$s. A new invite can bring you back.</string>
+    <string name="server_removed_banned">You were banned from %1$s.</string>
+    <string name="server_removed_deleted">The community %1$s was deleted. It is gone for everyone.</string>
 
     <!-- Your data. Both rights the privacy policy promises, and the second one
          is what Play requires of any app that lets you create an account. -->
@@ -750,6 +769,21 @@
     <string name="voice_note_unheard">Not heard yet</string>
     <string name="voice_note_heard">Heard</string>
     <string name="voice_note_heard_at">Heard at %1$s</string>
+    <string name="voice_note_transcript_pending">Transcribing…</string>
+    <string name="voice_note_transcript_no_speech">No speech in this message</string>
+    <string name="voice_note_transcript_failed">Could not transcribe this message</string>
+    <string name="voice_note_transcript_request">Transcribe</string>
+    <string name="voice_note_transcript_slow">Slow down, try again in a moment</string>
+    <string name="voice_note_transcript_request_failed">That did not work. Try again.</string>
+    <string name="voice_note_transcript_more">show more</string>
+    <string name="voice_note_transcript_less">show less</string>
+    <string name="voice_notes_settings_title">Voice messages</string>
+    <string name="voice_notes_settings_description">The text shows up under the audio, for people who would rather read.</string>
+    <string name="voice_notes_transcribe_mine">Transcribe my voice messages</string>
+    <string name="voice_notes_transcribe_mine_hint">Anyone who can hear them can read the text. The audio goes through a transcription service. It applies to the next messages you send; the ones already sent stay as they are.</string>
+    <string name="voice_notes_show_transcripts">Show transcripts</string>
+    <string name="voice_notes_show_transcripts_hint">Shows the text under the voice messages you receive. Off, you see no transcripts at all.</string>
+    <string name="voice_notes_settings_failed">Could not save that, try again</string>
 
     <!-- Channel list: live rows, voice occupants, Baú preview -->
     <string name="channels_section_text">Text</string>
@@ -1023,9 +1057,9 @@
     <string name="stories_yours">Your story</string>
     <string name="stories_open">%1$s\'s story</string>
     <string name="stories_unseen">new</string>
-    <string name="stories_call_badge">in a call</string>
+    <string name="stories_call_badge">someone is in the call</string>
     <string name="stories_empty_title">Nobody has posted yet</string>
-    <string name="stories_empty_body">Show what\'s up: a clip, your setup, when you\'re getting on. Gone in 24 h.</string>
+    <string name="stories_empty_body">Show what\'s up: a clip, your setup, when you\'re getting on. Gone in 24\u00A0h.</string>
     <string name="stories_empty_cta">Post</string>
     <string name="stories_viewer_reply_to">Reply to %1$s…</string>
     <string name="stories_viewer_replies_off">%1$s turned replies off</string>
@@ -1050,6 +1084,11 @@
     <string name="stories_viewer_sound_off">Turn the sound off</string>
     <string name="stories_viewer_react">React %1$s</string>
     <string name="stories_compose_background">Background %1$d</string>
+    <string name="stories_compose_background_in_family">%1$s, background %2$d</string>
+    <string name="stories_compose_background_family">Background style</string>
+    <string name="stories_compose_background_glow">Glow</string>
+    <string name="stories_compose_background_solid">Solid</string>
+    <string name="stories_compose_background_gradient">Gradient</string>
     <string name="stories_viewers_title">Seen by %1$d</string>
     <plurals name="stories_viewers_meta">
         <item quantity="one">%1$d reaction · gone in %2$s</item>
@@ -1064,7 +1103,8 @@
     <string name="stories_call_live">In the call now</string>
     <string name="stories_call_join">Join the call</string>
     <string name="stories_call_ended">The call ended</string>
-    <string name="stories_call_empty">Nobody in the call right now</string>
+    <string name="stories_call_empty">Nobody in the call</string>
+    <string name="stories_call_locked">You can\'t join this room</string>
     <string name="stories_call_full">The room is full</string>
     <string name="stories_compose_title">New story</string>
     <string name="stories_compose_mode_text">Text</string>
@@ -1133,6 +1173,11 @@
     <string name="stories_editor_discard_body">What you added is lost.</string>
     <string name="stories_editor_discard">Throw away</string>
     <string name="stories_editor_keep">Keep editing</string>
+    <string name="stories_editor_description_add">Add a description</string>
+    <string name="stories_editor_description_edit">Edit description</string>
+    <string name="stories_editor_description_title">Describe this for people who cannot see it</string>
+    <string name="stories_editor_description_hint">One or two sentences about what the picture shows. A screen reader reads it first.</string>
+    <string name="stories_editor_description_save">Save</string>
     <string name="stories_editor_nothing">Add some text, a photo or a sticker first.</string>
     <string name="stories_editor_canvas">Story canvas. Items you add can be moved, resized and turned.</string>
     <string name="stories_editor_text_hint">Type something</string>
@@ -1213,7 +1258,6 @@
     <string name="stories_sticker_call">Call people in</string>
     <string name="stories_call_picker_body">Whoever taps joins right away. The card shows who\'s in there live.</string>
     <string name="stories_call_picker_none">No voice rooms in the servers you picked.</string>
-    <string name="stories_call_not_in_room">You\'re not in %1$s. The card only lets people in while you\'re in the call.</string>
     <string name="stories_call_picker_empty">empty</string>
     <string name="stories_call_default_text">who\'s up for a call?</string>
     <string name="stories_audience_title">Who sees it</string>
@@ -1232,9 +1276,21 @@
     <string name="stories_audience_replies_hint">Replies land in your Chats</string>
     <string name="stories_audience_post">Post story</string>
     <string name="stories_audience_footer">Gone in 24 h. Each server\'s staff can remove it.</string>
-    <string name="stories_upload_failed">Didn\'t upload. Try again</string>
+    <string name="stories_viewer_loading">Loading story</string>
     <string name="stories_upload_posted">Posted</string>
     <string name="stories_upload_posting">Posting…</string>
+    <string name="stories_outbox_waiting_label">Waiting for connection</string>
+    <string name="stories_outbox_waiting_body">Your story will post on its own when the connection is back.</string>
+    <string name="stories_outbox_try_now">Try now</string>
+    <string name="stories_outbox_failed_label">Didn\'t post</string>
+    <string name="stories_outbox_failed_title">Your story didn\'t post</string>
+    <string name="stories_outbox_failed_body">Your story is still saved. Try again, or discard it.</string>
+    <string name="stories_outbox_posting_title">Posting your story</string>
+    <string name="stories_outbox_posting_body">It\'s on its way. If you discard it, it won\'t go up.</string>
+    <string name="stories_outbox_keep">Keep posting</string>
+    <string name="stories_outbox_retry">Try again</string>
+    <string name="stories_outbox_discard">Discard</string>
+    <string name="stories_outbox_progress_desc">Posting your story, %1$d percent</string>
     <string name="stories_menu_mute">Mute %1$s\'s stories</string>
     <string name="stories_menu_mute_hint">They leave your strip. %1$s won\'t know.</string>
     <string name="stories_menu_report">Report story</string>
@@ -1276,4 +1332,153 @@
     <string name="channels_moved_category">%1$s moved to position %2$d of %3$d.</string>
     <string name="channels_more">More</string>
     <string name="channels_drag_handle">Drag %1$s</string>
+
+    <!-- Stories composer, round two: QA fixes -->
+    <string name="stories_editor_card_hint">Tap to write</string>
+    <string name="stories_audience_load_failed">Couldn\'t load who can see it</string>
+    <string name="stories_audience_loading">Loading…</string>
+    <string name="stories_picker_one_only">One picture per story, so the first one is used.</string>
+    <string name="stories_picker_some_did_not_fit">Some photos did not fit.</string>
+    <string name="stories_empty_compact_cta">Post a story</string>
+    <string name="you_open">Your profile</string>
+    <!-- Overrides the Material bottom sheet scrim label, whose pt-BR default says "Fechar planilha" (spreadsheet). -->
+    <string name="close_sheet">Close</string>
+
+    <!-- Encaminhar (forward) -->
+    <string name="chat_jump_latest">Jump to latest</string>
+    <string name="forward_action">Forward</string>
+    <string name="forward_title">Forward</string>
+    <string name="forward_search_hint">Search servers, channels and people</string>
+    <string name="forward_comment_hint">Add a message (optional)</string>
+    <string name="forward_section_recent">Recent</string>
+    <string name="forward_section_people">Conversations</string>
+    <string name="forward_group">Group</string>
+    <string name="forward_new_dm">New direct message</string>
+    <string name="forward_private_channel">Private channel</string>
+    <string name="forward_restricted_note">This stays in %1$s. You can only forward it to a channel there.</string>
+    <string name="forward_send_none">Pick where to send it</string>
+    <string name="forward_send">Forward (%1$d)</string>
+    <string name="forward_server_failed">Couldn\'t load the channels of %1$s</string>
+    <string name="forward_not_member">You\'re not in that server</string>
+    <string name="forward_retry">Try again</string>
+    <string name="forward_sending">Forwarding</string>
+    <string name="forward_cap">Up to 5 at a time.</string>
+    <string name="forward_none_found">Nothing matches.</string>
+    <string name="forward_loading">Loading your channels</string>
+    <string name="forward_sent_badge">Sent</string>
+    <string name="forward_selected_count">%1$d selected</string>
+    <string name="forward_post_preview">Baú post: %1$s</string>
+    <string name="forward_message_preview">Message from %1$s: %2$s</string>
+    <string name="forward_message_preview_bare">Message from %1$s</string>
+    <string name="forward_sent_to">Forwarded to %1$s</string>
+    <plurals name="forward_sent_many">
+        <item quantity="one">Forwarded to %1$d place</item>
+        <item quantity="other">Forwarded to %1$d places</item>
+    </plurals>
+    <string name="forward_view">View</string>
+    <string name="forward_refusal_no_access">You can\'t see that channel.</string>
+    <string name="forward_refusal_cannot_send">You can\'t send messages there.</string>
+    <string name="forward_refusal_bad_target">Nothing can be sent there.</string>
+    <string name="forward_refusal_stays_in_server">This only goes inside its own server.</string>
+    <string name="forward_refusal_unreachable">You can\'t message this person.</string>
+    <string name="forward_refusal_slow_mode">Slow mode is on there. Try again in %1$ds.</string>
+    <string name="forward_refusal_slow_mode_nowait">Slow mode is on there. Try again in a moment.</string>
+    <string name="forward_refusal_rate_limited">Too many in a row. Try again in %1$ds.</string>
+    <string name="forward_refusal_rate_limited_nowait">Too many in a row. Try again in a moment.</string>
+    <string name="forward_refusal_automod">That server\'s AutoMod blocked it.</string>
+    <string name="forward_refusal_unavailable">That didn\'t work right now. Try again.</string>
+    <string name="forward_failure_gone">This isn\'t available to forward anymore.</string>
+    <string name="forward_failure_not_forwardable">This message can\'t be forwarded.</string>
+    <string name="forward_failure_empty">There is nothing here to forward.</string>
+    <string name="forward_failure_slow">Easy there. Try again in a few seconds.</string>
+    <string name="forward_failure_other">Couldn\'t forward. Try again.</string>
+    <string name="forward_card_from_bau">Forwarded from %1$s · Baú</string>
+    <string name="forward_card_from_channel">Forwarded from %1$s · #%2$s</string>
+    <string name="forward_card_from_server">Forwarded from %1$s</string>
+    <string name="forward_card_aria">%1$s. %2$s</string>
+    <string name="forward_card_aria_empty">%1$s</string>
+    <string name="forward_card_restricted">Only inside its server</string>
+    <string name="forward_card_empty">Open the original</string>
+    <string name="forward_post_menu">Post options</string>
+    <!-- Seguir: follow a Baú into a channel of another server -->
+    <string name="follow_button">Follow</string>
+    <string name="follow_button_active">Following</string>
+    <string name="follow_button_description">Follow this Baú into a channel of another server</string>
+    <string name="follow_title">Follow this Baú</string>
+    <string name="follow_hint">New free posts arrive as a card in the channel you pick, signed by this community. Members-only posts never go out.</string>
+    <string name="follow_yours">What you already follow here</string>
+    <string name="follow_server">Server</string>
+    <string name="follow_channel">Channel</string>
+    <string name="follow_role">Mention a role on each post</string>
+    <string name="follow_no_role">Mention nobody</string>
+    <string name="follow_submit">Follow</string>
+    <string name="follow_submitting">Following…</string>
+    <string name="follow_followed">Done. New posts will arrive in #%1$s of %2$s.</string>
+    <string name="follow_unfollow">Unfollow</string>
+    <string name="follow_resume">Resume</string>
+    <string name="follow_paused">Paused</string>
+    <string name="follow_paused_hint">Paused because whoever set it up lost permission to manage this channel. Resuming makes you the one it answers to.</string>
+    <string name="follow_paused_hint_banned">Paused because this server banned the Baú\'s account. Unban it to resume, or unfollow.</string>
+    <string name="follow_unavailable">This Baú no longer accepts follows.</string>
+    <string name="follow_pings">Mentions %1$s</string>
+    <string name="follow_no_destinations">To follow a Baú you need to manage webhooks or channels in a server of yours.</string>
+    <string name="follow_destination_full">%1$s already follows %2$d Baús, the most a server can.</string>
+    <string name="follow_all_followed">Every channel of this server already follows this Baú.</string>
+    <string name="follow_load_failed">Couldn\'t load your servers. Try again.</string>
+    <string name="follow_retry">Try again</string>
+    <string name="follow_close">Close</string>
+    <string name="follow_error_generic">Couldn\'t follow right now. Try again.</string>
+    <string name="follow_error_forbidden">You need to manage webhooks or channels in that channel.</string>
+    <string name="follow_error_exists">That channel already follows this Baú.</string>
+    <string name="follow_error_blocked">This community doesn\'t accept that server.</string>
+    <string name="follow_error_limit">That server follows as many Baús as it can.</string>
+    <string name="follow_error_invalid">That role can\'t be mentioned.</string>
+    <string name="follow_error_slow">Slow down a little and try again.</string>
+    <string name="follow_error_action">That didn\'t work. Try again.</string>
+    <string name="follow_menu_description">Baú options</string>
+    <string name="follow_followers_menu">Followers</string>
+    <string name="follow_followers_title">Followers of this Baú</string>
+    <string name="follow_followers_hint">Servers that receive your free posts as cards. You see server names, never people.</string>
+    <string name="follow_followers_empty">No server follows this Baú yet.</string>
+    <string name="follow_followers_more">Show more</string>
+    <plurals name="follow_followers_count">
+        <item quantity="one">%1$d follower</item>
+        <item quantity="other">%1$d followers</item>
+    </plurals>
+    <string name="follow_followers_remove">Remove</string>
+    <string name="follow_followers_block">Remove and block</string>
+    <string name="follow_followers_blocked">Blocked servers</string>
+    <string name="follow_followers_unblock">Unblock</string>
+    <string name="follow_followers_load_failed">Couldn\'t load the followers. Try again.</string>
+    <string name="follow_followers_confirm_block_title">Remove and block %1$s?</string>
+    <string name="follow_followers_confirm_block_body">Every follow from that server stops now, and it can\'t follow this Baú again until you unblock it. Cards already delivered stay.</string>
+    <string name="follow_allow_title">Allow other servers to follow this Baú</string>
+    <string name="follow_allow_helper">Free posts arrive as cards in the channels people choose. In a public community any member can set it up; otherwise only people who manage the server. Members-only posts never go out.</string>
+    <string name="follow_channel_action">What this channel follows</string>
+    <string name="follow_channel_title">Following</string>
+    <string name="follow_channel_description">The Baús this channel follows. New free posts arrive here as cards.</string>
+    <string name="follow_channel_from">Baú of %1$s</string>
+    <string name="follow_channel_load_failed">Couldn\'t load what this channel follows.</string>
+
+    <!-- Server list: channel unread -->
+    <string name="servers_unread">Unread messages</string>
+    <plurals name="servers_unread_mentions">
+        <item quantity="one">%1$d mention</item>
+        <item quantity="other">%1$d mentions</item>
+    </plurals>
+
+    <!-- Conversas: Fixadas, mute, swipe -->
+    <string name="conversas_section_pinned">Pinned</string>
+    <string name="conversas_section_recent">Recent</string>
+    <string name="conversas_pin">Pin</string>
+    <string name="conversas_unpin">Unpin</string>
+    <string name="conversas_mute">Mute</string>
+    <string name="conversas_unmute">Unmute</string>
+    <string name="conversas_close_action">Close conversation</string>
+    <string name="conversas_pinned_state">Pinned</string>
+    <string name="conversas_pin_limit">You can pin up to 15 conversations. Unpin one first.</string>
+
+    <!-- A friendship started -->
+    <string name="friend_accepted_title">You and %1$s are friends now</string>
+    <string name="friend_accepted_cta">Say hi</string>
 </resources>

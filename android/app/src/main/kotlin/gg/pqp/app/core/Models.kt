@@ -73,13 +73,38 @@ data class MePreferences(
     val notifications: MeNotificationPreferences? = null,
     /** Chamar a atenção, both ways. Absent reads as on (`nudgesAllowed`). */
     val allowNudges: Boolean? = null,
+    /** The manual status (`manualStatusSchema`); absent reads as online (see [OwnStatus]). */
+    val status: String? = null,
+    /** Voice note transcription, both halves on unless turned off (see [VoiceTranscriptionPrefs]). */
+    val voiceTranscription: VoiceTranscriptionPrefs? = null,
+    /**
+     * Fixadas: conversation (channel) ids pinned to the top of Conversas, newest
+     * pin first. The same key the web rail writes, replaced whole on a write.
+     */
+    val pinnedConversations: List<String>? = null,
 )
 
-/** `notificationPreferencesSchema`, the one key this client reads. */
+/**
+ * `userPreferencesSchema.voiceTranscription`: `mine` (my notes may be transcribed, copied onto each
+ * note when it is sent) and `show` (I read transcripts). Absent reads as true, and the preference is
+ * replaced as a whole on write, so every write sends both halves.
+ */
+@Serializable
+data class VoiceTranscriptionPrefs(
+    val mine: Boolean? = null,
+    val show: Boolean? = null,
+) {
+    val mineOn: Boolean get() = mine != false
+    val showOn: Boolean get() = show != false
+}
+
+/** `notificationPreferencesSchema`, the two level maps this client reads. */
 @Serializable
 data class MeNotificationPreferences(
-    /** Channel id to `"all" | "mentions" | "none"`. */
+    /** Channel id to `"all" | "mentions" | "none"`. A conversation is a channel here too. */
     val channels: Map<String, String> = emptyMap(),
+    /** Server id to the same levels: a server set to `none` badges nothing on the list. */
+    val servers: Map<String, String> = emptyMap(),
 )
 
 // --- servers and channels ---
@@ -113,6 +138,15 @@ data class ServersResponse(val servers: List<ServerSummary> = emptyList())
  */
 @Serializable
 data class CreateServerRequest(val name: String, val locale: String? = null)
+
+/**
+ * `PUT /api/servers/order`: the whole order this account sees, top to bottom.
+ * `origin` names the sender (up to 64 characters) and comes back on the
+ * `server-order-update` frame, so a phone can tell its own echo from another
+ * tab's or device's change.
+ */
+@Serializable
+data class ServerOrderRequest(val serverIds: List<String>, val origin: String? = null)
 
 /** The app's language as the server's `locale` enum spells it: `pt-BR`, `en` or `es`. */
 fun serverLocale(language: String = java.util.Locale.getDefault().language): String = when (language.lowercase()) {
@@ -280,6 +314,11 @@ data class VoiceNote(
     val waveform: String = "",
     val listenedByMe: Boolean = false,
     val listenedBy: List<JsonElement>? = null,
+    /**
+     * Absent when the `voice_note_transcription` flag is off where the note lives, or its sender did
+     * not allow one: no block, no transcript line. See [NoteTranscript].
+     */
+    val transcript: NoteTranscript? = null,
 ) {
     /** Who has heard it, as far as the server was willing to say. */
     val listeners: List<NoteListener>
@@ -298,6 +337,19 @@ data class VoiceNote(
             }
         }
 }
+
+/**
+ * A note's transcript as it travels (`voiceNoteTranscriptSchema`): on the `voice` block, on the
+ * `voice-note-transcript` frame and as the answer to `POST /api/attachments/:id/transcript`.
+ * `text` is set only when [status] is `done`. [status] is a string rather than an enum so a value a
+ * newer server adds decodes (and reads as "nothing to draw") instead of failing the whole message.
+ */
+@Serializable
+data class NoteTranscript(
+    val status: String = "none",
+    val text: String? = null,
+    val language: String? = null,
+)
 
 /** One person who played a note, and when if the server said. */
 data class NoteListener(val userId: String, val listenedAt: String?)
@@ -376,6 +428,15 @@ data class Message(
      * story expires.
      */
     val storyId: String? = null,
+    /**
+     * Encaminhar: the snapshot a forwarded message carries
+     * (`messageSchema.forward`, `packages/shared/src/forward.ts`). Absent on
+     * every ordinary message. Read leniently ([LenientForwardSerializer]): a
+     * version this build does not know, or a value that fails today's parse, is
+     * null and the message shows its `body`, never a failed page.
+     */
+    @Serializable(with = gg.pqp.app.forward.LenientForwardSerializer::class)
+    val forward: gg.pqp.app.forward.MessageForward? = null,
 )
 
 /** `webhookEmbedSchema` in `packages/shared/src/webhooks.ts`. Every field optional, as on Discord. */

@@ -3647,6 +3647,22 @@ html[data-immersive-stage] [data-immersive-hide] {
     linear-gradient(170deg, oklch(0.42 0.08 65) 0%, oklch(0.22 0.04 55) 100%);
   --story-bg-ink: radial-gradient(70% 50% at 50% 0%, oklch(0.4 0.02 250 / 0.5) 0%, oklch(0.4 0.02 250 / 0) 70%),
     linear-gradient(180deg, oklch(0.2 0.012 250) 0%, oklch(0.11 0.01 250) 100%);
+
+  /* The solid family: one flat color each. Every one, and the lighter stop of each gradient below,
+     holds 4.5:1 with white text (the rule the first family was chosen by). */
+  --story-bg-cobalt: oklch(0.5 0.2 262);
+  --story-bg-crimson: oklch(0.5 0.2 25);
+  --story-bg-pine: oklch(0.44 0.1 160);
+  --story-bg-plum: oklch(0.46 0.17 330);
+  --story-bg-teal: oklch(0.5 0.1 195);
+  --story-bg-onyx: oklch(0.16 0.005 260);
+  /* The gradient family: two stops on a diagonal, no glow. */
+  --story-bg-sunset: linear-gradient(160deg, oklch(0.58 0.2 45) 0%, oklch(0.44 0.2 350) 100%);
+  --story-bg-ocean: linear-gradient(160deg, oklch(0.54 0.11 215) 0%, oklch(0.38 0.14 258) 100%);
+  --story-bg-aurora: linear-gradient(160deg, oklch(0.5 0.13 165) 0%, oklch(0.4 0.16 290) 100%);
+  --story-bg-dusk: linear-gradient(160deg, oklch(0.4 0.17 275) 0%, oklch(0.56 0.2 350) 100%);
+  --story-bg-berry: linear-gradient(160deg, oklch(0.52 0.21 350) 0%, oklch(0.36 0.16 305) 100%);
+  --story-bg-lagoon: linear-gradient(160deg, oklch(0.54 0.1 190) 0%, oklch(0.44 0.13 150) 100%);
 }
 
 /* A ring: a gradient layer and a seen layer, crossfaded (never animate the
@@ -3736,6 +3752,10 @@ html[data-immersive-stage] [data-immersive-hide] {
   animation: story-upload-spin 1.4s linear infinite;
   transform-origin: center;
 }
+/* The arc follows the real upload progress; the small linear ease just joins the steps. */
+.story-upload-arc {
+  transition: stroke-dashoffset var(--duration-base) linear;
+}
 
 /* The viewer. */
 .story-text-card[data-bg="lime"] {
@@ -3755,6 +3775,45 @@ html[data-immersive-stage] [data-immersive-hide] {
 }
 .story-text-card[data-bg="ink"] {
   background: var(--story-bg-ink);
+}
+/* The solid and gradient families (`STORY_BACKGROUNDS_SOLID` / `_GRADIENT` in @pqp/shared). The
+   composer's swatches, the viewer, the deck, the DM quote card and every thumbnail read the same
+   rule, so a key looks the same in all of them. */
+.story-text-card[data-bg="cobalt"] {
+  background: var(--story-bg-cobalt);
+}
+.story-text-card[data-bg="crimson"] {
+  background: var(--story-bg-crimson);
+}
+.story-text-card[data-bg="pine"] {
+  background: var(--story-bg-pine);
+}
+.story-text-card[data-bg="plum"] {
+  background: var(--story-bg-plum);
+}
+.story-text-card[data-bg="teal"] {
+  background: var(--story-bg-teal);
+}
+.story-text-card[data-bg="onyx"] {
+  background: var(--story-bg-onyx);
+}
+.story-text-card[data-bg="sunset"] {
+  background: var(--story-bg-sunset);
+}
+.story-text-card[data-bg="ocean"] {
+  background: var(--story-bg-ocean);
+}
+.story-text-card[data-bg="aurora"] {
+  background: var(--story-bg-aurora);
+}
+.story-text-card[data-bg="dusk"] {
+  background: var(--story-bg-dusk);
+}
+.story-text-card[data-bg="berry"] {
+  background: var(--story-bg-berry);
+}
+.story-text-card[data-bg="lagoon"] {
+  background: var(--story-bg-lagoon);
 }
 
 /* Hold to pause: the chrome leaves after 250 ms in 200 ms, returns in 150. */
@@ -3852,10 +3911,45 @@ html[data-immersive-stage] [data-immersive-hide] {
 }
 .story-sheet {
   transform: translateY(100%);
-  transition: transform var(--duration-slow) var(--ease-emphasized);
+  /* Closed means gone: hidden once it has slid away, so no sliver of it can show under the owner bar. */
+  visibility: hidden;
+  transition:
+    transform var(--duration-slow) var(--ease-emphasized),
+    visibility 0s linear var(--duration-slow);
 }
 [data-story-sheet="open"] .story-sheet {
   transform: none;
+  visibility: visible;
+  transition:
+    transform var(--duration-slow) var(--ease-emphasized),
+    visibility 0s;
+}
+/* The owner bar ("Visto por N") gives way to the sheet that carries the same title. */
+[data-story-sheet="open"] [data-story-owner-bar] {
+  opacity: 0;
+  pointer-events: none;
+}
+[data-story-owner-bar] {
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* The blurred copy of the base behind the author's canvas. A base shown whole always has it; a
+   base that fills the canvas only needs it when the card is taller or wider than 9:16. */
+.story-backdrop {
+  display: none;
+}
+.story-backdrop[data-always] {
+  display: block;
+}
+@container (min-aspect-ratio: 0.568) {
+  .story-backdrop {
+    display: block;
+  }
+}
+@container (max-aspect-ratio: 0.557) {
+  .story-backdrop {
+    display: block;
+  }
 }
 
 /*
@@ -3872,7 +3966,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   .story-react-fly {
     animation: none;
   }
-  .story-ring > [data-ring-layer="gap"] {
+  .story-ring > [data-ring-layer="gap"],
+  .story-upload-arc {
     transition: none;
   }
   .story-tray-up,
@@ -3923,6 +4018,17 @@ html[data-immersive-stage] [data-immersive-hide] {
     --story-cmp-bottom: 168px;
   }
 }
+/* A soft keyboard rising over the text being edited lifts the whole stage, the layer's own
+   position untouched, and it settles back after. Instant under reduced motion. */
+.story-cmp-lift {
+  transform: translateY(calc(var(--story-lift, 0px) * -1));
+  transition: transform var(--duration-base) var(--ease-emphasized);
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-cmp-lift {
+    transition: none;
+  }
+}
 .story-cmp-head {
   display: flex;
   height: var(--story-cmp-top);
@@ -3930,6 +4036,11 @@ html[data-immersive-stage] [data-immersive-hide] {
   gap: 8px;
   flex: none;
   padding-inline: 8px;
+}
+/* Seven round buttons fit a narrow column (a short desktop window) by shrinking, never by spilling over the canvas. */
+.story-cmp-head .story-cbtn {
+  flex: 0 1 40px;
+  min-width: 30px;
 }
 .story-cmp-canvas {
   position: relative;
@@ -3991,6 +4102,11 @@ html[data-immersive-stage] [data-immersive-hide] {
 .story-cbtn[aria-pressed="true"] {
   background: var(--story-on-media);
   color: var(--story-card);
+}
+/* "Describe the photo" once the author has written one: the button says it is done. */
+.story-cbtn[data-active="true"]:not(:disabled) {
+  background: var(--story-accent);
+  color: var(--story-on-accent);
 }
 .story-cmp button:focus-visible,
 .story-cmp [role="radio"]:focus-visible,
@@ -4261,6 +4377,25 @@ html[data-immersive-stage] [data-immersive-hide] {
   position: absolute;
   background: var(--story-accent);
   opacity: 0.9;
+}
+/* The safe area guide: what a viewer's own bars can cover lies outside this rectangle. Faint while a
+   layer is near its edge, bright once the layer reaches past it. Opacity only. */
+.story-safe {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: 12px;
+  border: 1px dashed color-mix(in oklab, var(--story-on-media) 40%, transparent);
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+.story-safe[data-story-safe="outside"] {
+  border-color: var(--story-accent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--story-card) 30%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-safe {
+    transition: none;
+  }
 }
 .story-trash {
   pointer-events: none;

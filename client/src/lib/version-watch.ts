@@ -1,4 +1,7 @@
 import {
+  ANNOUNCE_JITTER_MS,
+  announceAtFor,
+  announceHourFromEnv,
   isCriticalBuild,
   isForcedBuild,
   isStaleBuild,
@@ -58,6 +61,14 @@ export interface VersionWatchDeps {
   updateWorker: () => Promise<void>;
   publish: (next: BuildStaleness) => void;
   now?: () => number;
+  /**
+   * The hour (UTC) a build that is merely new is announced, or null to announce
+   * at once (`announceHourFromEnv`). Absent is null: the watch holds nothing
+   * back unless it is told to, which keeps every older caller as it was.
+   */
+  announceHourUtc?: number | null;
+  /** Spreads announcements over `ANNOUNCE_JITTER_MS`; fixed per watch. Test seam. */
+  jitterMs?: number;
 }
 
 export interface VersionWatch {
@@ -74,6 +85,9 @@ export function createVersionWatch(deps: VersionWatchDeps): VersionWatch {
   let firstSeen: { build: string; at: number } | null = null;
   /** What this watch last published, so a failed lookup does not undo it. */
   let lastPublished: BuildStaleness | null = null;
+  // One draw per page, so this window announces at one steady moment instead of
+  // a different one on every poll.
+  const jitterMs = deps.jitterMs ?? Math.floor(Math.random() * ANNOUNCE_JITTER_MS);
 
   function publish(next: BuildStaleness): void {
     lastPublished = next;
@@ -108,14 +122,28 @@ export function createVersionWatch(deps: VersionWatchDeps): VersionWatch {
     const critical = config
       ? isCriticalBuild(deps.running, config)
       : Boolean(known?.critical);
+    // WHEN this page is told. The force switch and a critical update skip the
+    // daily wait (an operator asked for them); everything else waits for the
+    // quiet hour (`announceAtFor`).
+    const liveSince = latest.builtAt ?? firstSeen.at;
+    const hourUtc = deps.announceHourUtc ?? null;
+    const announceAt =
+      forced || critical || hourUtc === null
+        ? null
+        : announceAtFor(liveSince, hourUtc) + jitterMs;
     publish({
       stale: true,
       forced,
       critical,
       latestBuild: latest.build,
-      // The deployed build's age is how long this page has been behind, even
-      // if it only just learned of it (a laptop that slept for two days).
-      since: latest.builtAt ?? firstSeen.at,
+      // How long this page has been behind: the deployed build's age (even if
+      // it only just learned of it, a laptop that slept for two days), or, for
+      // a build that was held back, the moment it was let out. The long-stale
+      // reload counts from there, so a build held for a day is not "twelve
+      // hours stale" the instant it is announced.
+      since: Math.max(liveSince, announceAt ?? 0),
+      builtAt: latest.builtAt,
+      announceAt,
     });
   }
 
@@ -225,6 +253,9 @@ export function startVersionWatch(options: {
         ? Promise.resolve()
         : updateRegisteredWorker(),
     publish: options.publish,
+    announceHourUtc: announceHourFromEnv(
+      import.meta.env.VITE_UPDATE_ANNOUNCE_HOUR_UTC,
+    ),
   });
   activeWatch = watch;
 

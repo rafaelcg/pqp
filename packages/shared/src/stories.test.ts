@@ -4,6 +4,10 @@ import { messageSchema } from "./api.js";
 import { createReportSchema, REPORT_REASONS } from "./reports.js";
 import { Permission, PERMISSION_DEFAULT_EVERYONE, hasPermission } from "./permissions.js";
 import {
+  STORY_BACKGROUNDS,
+  STORY_BACKGROUND_FAMILIES,
+  STORY_CARD_BACKGROUNDS,
+  STORY_LAYER_ALT_MAX,
   STORY_LAYERS_MAX,
   STORY_LAYER_IMAGES_MAX,
   STORY_LAYER_MAX_BYTES,
@@ -16,6 +20,8 @@ import {
   createStoryResponseSchema,
   createStorySchema,
   storiesConfigSchema,
+  storyBackgroundFamily,
+  storyBackgroundsOf,
   storyLayerInputSchema,
   sniffStoryMediaType,
   storiesUpdateSchema,
@@ -39,6 +45,39 @@ const photo = {
   audiences: { serverIds: [SERVER] },
   media: { contentType: "image/jpeg", byteSize: 400_000, width: 1080, height: 1440 },
 };
+
+describe("text card backgrounds", () => {
+  const card = (background: string) => ({
+    kind: "text",
+    text: "oi",
+    background,
+    audiences: { serverIds: [SERVER] },
+  });
+
+  it("takes every key of every family, and nothing else", () => {
+    for (const key of STORY_CARD_BACKGROUNDS) {
+      expect(createStorySchema.safeParse(card(key)).success, key).toBe(true);
+    }
+    expect(createStorySchema.safeParse(card("hotpink")).success).toBe(false);
+  });
+
+  it("keeps the first family exactly as the phones know it, and the keys unique", () => {
+    // Android pins STORY_BACKGROUNDS to its own copy: a new key belongs in a new family.
+    expect([...STORY_BACKGROUNDS]).toEqual(["lime", "night", "ember", "grape", "sand", "ink"]);
+    expect(new Set(STORY_CARD_BACKGROUNDS).size).toBe(STORY_CARD_BACKGROUNDS.length);
+  });
+
+  it("tells each key's family, an unknown one reading as the first", () => {
+    for (const family of STORY_BACKGROUND_FAMILIES) {
+      for (const key of storyBackgroundsOf(family)) {
+        expect(storyBackgroundFamily(key)).toBe(family);
+      }
+    }
+    expect(storyBackgroundFamily("lime")).toBe("glow");
+    expect(storyBackgroundFamily(null)).toBe("glow");
+    expect(storyBackgroundFamily("from-a-newer-build")).toBe("glow");
+  });
+});
 
 describe("createStorySchema", () => {
   it("takes a photo to one server, replies on by default, no friends", () => {
@@ -321,7 +360,8 @@ describe("sniffing and pacing", () => {
     expect(sniffStoryMediaType(ftyp("heic"))).toBeNull();
     expect(sniffStoryMediaType(ftyp("mif1"))).toBeNull();
     expect(sniffStoryMediaType(ftyp("avif"))).toBeNull();
-    expect(sniffStoryMediaType(ftyp("qt  "))).toBeNull();
+    // A QuickTime movie (.mov) is a video; the video job still refuses anything but H.264.
+    expect(sniffStoryMediaType(ftyp("qt  "))).toBe("video/mp4");
     expect(sniffStoryMediaType(new TextEncoder().encode("GIF89a......"))).toBeNull();
   });
 
@@ -427,6 +467,17 @@ describe("story layers on create (strict)", () => {
     ).toBe(true);
   });
 
+  it("takes an optional description on a placed photo, trimmed and bounded", () => {
+    const photoLayer = { ...geometry(), type: "image", upload: { ...upload, contentType: "image/jpeg" } };
+    expect(storyLayerInputSchema.parse(photoLayer)).not.toHaveProperty("alt");
+    expect(storyLayerInputSchema.parse({ ...photoLayer, alt: "  um gato  " })).toMatchObject({ alt: "um gato" });
+    expect(storyLayerInputSchema.safeParse({ ...photoLayer, alt: "x".repeat(STORY_LAYER_ALT_MAX) }).success).toBe(true);
+    expect(storyLayerInputSchema.safeParse({ ...photoLayer, alt: "x".repeat(STORY_LAYER_ALT_MAX + 1) }).success).toBe(false);
+    expect(storyLayerInputSchema.safeParse({ ...photoLayer, alt: "   " }).success).toBe(false);
+    // A drawing and a text layer have no description: the field is not theirs.
+    expect(storyLayerInputSchema.parse({ ...geometry(), type: "text", text: "oi", alt: "x" })).not.toHaveProperty("alt");
+  });
+
   it("limits what an image or a drawing may be, and mentions each person once", () => {
     const jpeg = { ...upload, contentType: "image/jpeg" };
     expect(storyLayerInputSchema.safeParse({ ...geometry(), type: "image", upload: jpeg }).success).toBe(true);
@@ -482,6 +533,15 @@ describe("story layers on read (lenient)", () => {
     },
     own: null,
   };
+
+  it("reads a placed photo's description, null for a story from before it", () => {
+    const photoLayer = { ...geometry(), type: "image", url: "https://x/y.jpg", width: 10, height: 10 };
+    const parsed = storySchema.parse({
+      ...story,
+      layers: [photoLayer, { ...photoLayer, id: nextId(1), alt: "um gato" }],
+    });
+    expect(parsed.layers.map((layer) => (layer.type === "image" ? layer.alt : "x"))).toEqual([null, "um gato"]);
+  });
 
   it("keeps what it understands, in order, and drops the rest", () => {
     const parsed = storySchema.parse({

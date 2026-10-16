@@ -4,12 +4,14 @@ import gg.pqp.app.core.PqpJson
 import gg.pqp.app.protocol.RepoSources
 import gg.pqp.app.stories.editor.CallCardState
 import gg.pqp.app.stories.editor.CallFaces
+import gg.pqp.app.stories.editor.callCardCanJoin
 import gg.pqp.app.stories.editor.callCardState
 import gg.pqp.app.stories.ui.visibleLayers
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -17,7 +19,7 @@ import org.junit.Test
 
 /**
  * The viewer's side of layers: reading them leniently (one bad layer never
- * costs the story), the call card's four states, what a story with no layers
+ * costs the story), the call card's five states, what a story with no layers
  * still draws, and how long a story with words stays up.
  */
 class ViewerTest {
@@ -144,15 +146,67 @@ class ViewerTest {
     // --- the call card ---
 
     @Test
-    fun `the call card says one of four things`() {
-        assertEquals(CallCardState.Live, callCardState("live", 3))
+    fun `the call card says one of five things`() {
+        // Live with people.
+        assertEquals(CallCardState.Live, callCardState("live", 3, joinable = true))
+        // Live and empty is still a live, joinable room (#1210): an empty card, not an ended one.
+        assertEquals(CallCardState.Empty, callCardState("live", 0, joinable = true))
+        // A viewer without CONNECT gets `live` and joinable false, with or without people.
+        assertEquals(CallCardState.Locked, callCardState("live", 0, joinable = false))
+        assertEquals(CallCardState.Locked, callCardState("live", 2, joinable = false))
+        // A mesh room at its seat limit.
+        assertEquals(CallCardState.Full, callCardState("full", 8, joinable = false))
+        // Ended only for a deleted channel or an author who lost CONNECT, however many are listed.
+        assertEquals(CallCardState.Ended, callCardState("ended", 0, joinable = false))
+        assertEquals(CallCardState.Ended, callCardState("ended", 4, joinable = false))
+        // The editor's preview has no viewer to refuse, so it never asks.
+        assertEquals(CallCardState.Live, callCardState("live", 1))
         assertEquals(CallCardState.Empty, callCardState("live", 0))
-        assertEquals(CallCardState.Full, callCardState("full", 8))
-        assertEquals(CallCardState.Ended, callCardState("ended", 0))
-        // An ended call is ended however many are listed, and an unknown state reads as live or empty by head count.
-        assertEquals(CallCardState.Ended, callCardState("ended", 4))
+        // An unknown state reads as live or empty by head count.
         assertEquals(CallCardState.Live, callCardState("???", 2))
         assertEquals(CallCardState.Empty, callCardState("???", 0))
+    }
+
+    @Test
+    fun `only a live or empty card has an Entrar button`() {
+        assertTrue(callCardCanJoin(CallCardState.Live))
+        assertTrue(callCardCanJoin(CallCardState.Empty))
+        assertFalse(callCardCanJoin(CallCardState.Locked))
+        assertFalse(callCardCanJoin(CallCardState.Full))
+        assertFalse(callCardCanJoin(CallCardState.Ended))
+    }
+
+    @Test
+    fun `the server's call shapes decode into the card states`() {
+        fun state(call: String): CallCardState {
+            val live = story("[]", ""","call":$call""").call!!
+            return callCardState(live.state, live.count, live.joinable)
+        }
+        val ids = """"serverId":"$id","channelId":"$id""""
+        assertEquals(
+            CallCardState.Empty,
+            state("""{$ids,"channelName":"Lobby","participants":[],"count":0,"state":"live","joinable":true}"""),
+        )
+        assertEquals(
+            CallCardState.Live,
+            state(
+                """{$ids,"channelName":"Lobby","participants":[{"id":"a","displayName":"Bia"}],
+                   "count":1,"state":"live","joinable":true}""",
+            ),
+        )
+        assertEquals(
+            CallCardState.Locked,
+            state("""{$ids,"channelName":"Lobby","participants":[],"count":0,"state":"live","joinable":false}"""),
+        )
+        assertEquals(
+            CallCardState.Full,
+            state("""{$ids,"channelName":"Lobby","participants":[],"count":8,"state":"full","joinable":false}"""),
+        )
+        // A deleted channel: no name left, and still a card to draw quietly.
+        assertEquals(
+            CallCardState.Ended,
+            state("""{$ids,"channelName":"","participants":[],"count":0,"state":"ended","joinable":false}"""),
+        )
     }
 
     @Test
@@ -205,6 +259,22 @@ class ViewerTest {
         // With text layers, the layers are the words and the caption is not added twice.
         val both = story("[${textLayer("so isso")}]", ""","caption":"${"c".repeat(60)}"""")
         assertEquals("so isso", StoriesRules.wordsOf(both))
+    }
+
+    @Test
+    fun `the caption pill is only for a story from before layers`() {
+        val mention = """{${geometry("mention", y = 0.3)},"userId":"u2"}"""
+        // A photo from before layers keeps its pill.
+        assertEquals("legenda velha", StoriesRules.legacyCaption(story("[]", ""","caption":"legenda velha"""")))
+        // Text layers draw those words once: no pill.
+        assertNull(StoriesRules.legacyCaption(story("[${textLayer("oi")}]", ""","caption":"oi"""")))
+        assertNull(StoriesRules.legacyCaption(story("[$mention,${textLayer("oi")}]", ""","caption":"oi"""")))
+        // Layers with no text layer (a mention, a call card) leave the caption alone.
+        assertEquals("oi", StoriesRules.legacyCaption(story("[$mention]", ""","caption":"oi"""")))
+        // No caption, a blank one, and a text card never draw it.
+        assertNull(StoriesRules.legacyCaption(story("[]")))
+        assertNull(StoriesRules.legacyCaption(story("[]", ""","caption":"  """")))
+        assertNull(StoriesRules.legacyCaption(story("[]", ""","caption":"x"""", kind = "text")))
     }
 
     @Test

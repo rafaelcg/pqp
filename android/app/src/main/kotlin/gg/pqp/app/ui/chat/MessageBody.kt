@@ -30,8 +30,31 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.unit.em
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil3.compose.AsyncImage
+import gg.pqp.app.PqpApplication
 import gg.pqp.app.bau.BauShare
+import gg.pqp.app.core.Backend
+import gg.pqp.app.core.ServerEmoji
 import gg.pqp.app.ui.theme.Spacing
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+
+/**
+ * The server whose custom emoji the messages below may show (`CustomEmojiProvider` on the web). Null
+ * in a conversation, where every `<:name:id>` reads as `:name:`: an emoji belongs to its server.
+ */
+val LocalEmojiServerId = staticCompositionLocalOf<String?> { null }
 
 /**
  * A message body, drawn the way the web bubble draws it.
@@ -56,6 +79,7 @@ fun MessageBody(
 ) {
     val blocks = remember(body) { ChatMarkdown.parse(body) }
     val openBau = LocalOpenBauPost.current
+    val emoji = rememberServerEmoji(blocks)
 
     Column(modifier) {
         blocks.forEachIndexed { index, block ->
@@ -63,7 +87,8 @@ fun MessageBody(
             val last = index == blocks.lastIndex
             when (block) {
                 is ChatBlock.Paragraph -> Text(
-                    text = annotate(block.spans, selfUsername, if (last) editedMark else null, openBau),
+                    text = annotate(block.spans, selfUsername, if (last) editedMark else null, openBau, emoji),
+                    inlineContent = emojiContent(block.spans, emoji),
                     style = MaterialTheme.typography.bodyLarge,
                 )
 
@@ -76,7 +101,8 @@ fun MessageBody(
                     )
                     Spacer(Modifier.width(Spacing.sm))
                     Text(
-                        text = annotate(block.spans, selfUsername, if (last) editedMark else null, openBau),
+                        text = annotate(block.spans, selfUsername, if (last) editedMark else null, openBau, emoji),
+                        inlineContent = emojiContent(block.spans, emoji),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -113,12 +139,74 @@ fun MessageBody(
     }
 }
 
+/**
+ * The emoji of the server these messages are in, by id, or empty (a conversation, a server not read yet,
+ * a read that failed: every token then draws as `:name:`). Reads the server's list the first time one is
+ * shown, and asks again, at most every 30 s, when a message names an id the list does not hold (somebody
+ * added one since), which is what keeps other members current without a socket frame.
+ */
+@Composable
+private fun rememberServerEmoji(blocks: List<ChatBlock>): Map<String, ServerEmoji> {
+    val serverId = LocalEmojiServerId.current
+    val store = (LocalContext.current.applicationContext as? PqpApplication)?.serverEmoji
+    val wanted = remember(blocks) { emojiIdsIn(blocks) }
+    if (serverId == null || store == null || wanted.isEmpty()) return emptyMap()
+
+    LaunchedEffect(store, serverId) { store.load(serverId) }
+    val list by remember(store, serverId) {
+        store.lists.map { it[serverId] }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(null)
+    val byId = remember(list) { list?.associateBy { it.id }.orEmpty() }
+    LaunchedEffect(byId, wanted) {
+        if (list != null && wanted.any { it !in byId }) store.noteUnknown(serverId)
+    }
+    return byId
+}
+
+private fun emojiIdsIn(blocks: List<ChatBlock>): Set<String> {
+    val ids = HashSet<String>()
+    for (block in blocks) {
+        val spans = when (block) {
+            is ChatBlock.Paragraph -> block.spans
+            is ChatBlock.Quote -> block.spans
+            is ChatBlock.Code -> continue
+        }
+        spans.forEach { span -> span.emoji?.let { ids += it.id } }
+    }
+    return ids
+}
+
+private fun inlineKey(id: String) = "emoji:$id"
+
+/** One inline picture per distinct emoji in [spans] that the server has, sized to the line like the web's 1.375em. */
+@Composable
+private fun emojiContent(spans: List<ChatSpan>, emoji: Map<String, ServerEmoji>): Map<String, InlineTextContent> {
+    if (emoji.isEmpty()) return emptyMap()
+    return remember(spans, emoji) {
+        val out = LinkedHashMap<String, InlineTextContent>()
+        for (span in spans) {
+            val ref = span.emoji ?: continue
+            val known = emoji[ref.id] ?: continue
+            val key = inlineKey(ref.id)
+            if (key in out) continue
+            val url = Backend.absolute(known.url) ?: continue
+            out[key] = InlineTextContent(
+                Placeholder(width = 1.375.em, height = 1.375.em, placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter),
+            ) { alt ->
+                AsyncImage(model = url, contentDescription = alt, modifier = Modifier.fillMaxSize())
+            }
+        }
+        out
+    }
+}
+
 @Composable
 private fun annotate(
     spans: List<ChatSpan>,
     selfUsername: String?,
     editedMark: String?,
     openBau: (BauPostTarget) -> Unit,
+    emoji: Map<String, ServerEmoji>,
 ): AnnotatedString {
     val scheme = MaterialTheme.colorScheme
     val me = selfUsername?.lowercase()
@@ -139,6 +227,12 @@ private fun annotate(
 
     return buildAnnotatedString {
         spans.forEach { span ->
+            // A custom emoji the server has is a picture in the text; one it does not have is `:name:`, as typed.
+            val picture = span.emoji?.takeIf { it.id in emoji && Backend.absolute(emoji.getValue(it.id).url) != null }
+            if (picture != null) {
+                appendInlineContent(inlineKey(picture.id), span.text)
+                return@forEach
+            }
             val isMassMention = span.mention?.let {
                 it.equals("everyone", true) || it.equals("here", true)
             } == true

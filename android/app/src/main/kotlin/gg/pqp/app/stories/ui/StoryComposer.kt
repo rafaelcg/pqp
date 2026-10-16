@@ -1,6 +1,7 @@
 package gg.pqp.app.stories.ui
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,6 +34,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,31 +56,27 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
+import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.social.friends
-import gg.pqp.app.stories.CreateStoryRequest
 import gg.pqp.app.stories.PrepResult
 import gg.pqp.app.stories.PreparedMedia
+import gg.pqp.app.stories.EagerSession
 import gg.pqp.app.stories.StoriesRules
 import gg.pqp.app.stories.StoriesStore
+import gg.pqp.app.stories.StoryOutbox
+import gg.pqp.app.stories.StoryPostInput
 import gg.pqp.app.stories.StoryAudienceOptions
 import gg.pqp.app.stories.StoryAudienceTargets
-import gg.pqp.app.stories.StoryCallRoom
-import gg.pqp.app.stories.StoryMediaInput
-import gg.pqp.app.stories.StorySticker
 import gg.pqp.app.stories.StoryMediaPrep
 import gg.pqp.app.stories.VideoPrep
 import gg.pqp.app.stories.camera.StoryCameraScreen
-import gg.pqp.app.stories.createStory
 import gg.pqp.app.stories.editor.CallLayer
 import gg.pqp.app.stories.editor.CallRoomOption
 import gg.pqp.app.stories.editor.CallRoomSheet
 import gg.pqp.app.stories.editor.EditorEnv
-import gg.pqp.app.stories.editor.EditorPost
 import gg.pqp.app.stories.editor.EditorSession
-import gg.pqp.app.stories.editor.InkLayer
-import gg.pqp.app.stories.editor.InkRenderer
 import gg.pqp.app.stories.editor.LayerFile
 import gg.pqp.app.stories.editor.LayerOps
 import gg.pqp.app.stories.editor.MentionLayer
@@ -88,29 +86,20 @@ import gg.pqp.app.stories.editor.PhotoLayer
 import gg.pqp.app.stories.editor.StoryBaseImage
 import gg.pqp.app.stories.editor.StoryBaseVideo
 import gg.pqp.app.stories.editor.StoryEditor
-import gg.pqp.app.stories.editor.TextLayer
-import gg.pqp.app.stories.publishStory
 import gg.pqp.app.stories.storyAudiences
-import gg.pqp.app.stories.uploadStoryMedia
 import gg.pqp.app.ui.theme.Palette
 import gg.pqp.app.ui.theme.Spacing
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
 private enum class ComposeMode { Text, Camera, Call }
 
-/** Layer files and the base are PUT this many at once. */
-private const val UPLOADS_AT_ONCE = 3
-
-private sealed interface PostState {
-    data object Idle : PostState
-    data object Posting : PostState
-    data object Failed : PostState
-}
+/** The first wait before the audience list is read again after a failure; it doubles up to [StoriesRules.RETRY_MAX_MS]. */
+private const val AUDIENCE_RETRY_FIRST_MS = 1_000L
 
 /**
  * Making a story: the camera first (or TEXTO and CALL for a card with no
@@ -148,8 +137,8 @@ fun StoryComposer(
     var cardBackground by remember { mutableStateOf("night") }
     var muted by remember { mutableStateOf(false) }
     var openCallAtStart by remember { mutableStateOf(false) }
-    // Who sits in which voice room, for the call card: it is live only
-    // while its author is in the room.
+    // Who sits in which voice room, for the call card's preview and for the
+    // room the picker starts on. An empty room is fine to post.
     val phase by session.phase.collectAsStateWithLifecycle()
     val meId = (phase as? SessionPhase.Ready)?.me?.id
     val voice = (context.applicationContext as? gg.pqp.app.PqpApplication)?.voice
@@ -160,7 +149,6 @@ fun StoryComposer(
     var options by remember { mutableStateOf<StoryAudienceOptions?>(null) }
     var targets by remember { mutableStateOf(StoryAudienceTargets()) }
     var replies by remember { mutableStateOf(true) }
-    var post by remember { mutableStateOf<PostState>(PostState.Idle) }
 
     // The layers are rebuilt from nothing whenever the base changes: another
     // picture is another story (and the editor asked before throwing layers away).
@@ -176,15 +164,27 @@ fun StoryComposer(
     // that never wakes up.
     var audienceAttempt by remember { mutableStateOf(0) }
     var audienceFailed by remember { mutableStateOf(false) }
-    LaunchedEffect(audienceAttempt) {
-        if (audienceAttempt == 0) store.refreshConfig()
-        audienceFailed = false
-        runCatching { session.api.storyAudiences() }
-            .onSuccess {
-                options = it
-                targets = StoriesRules.defaultAudience(it, contextServerId, fromFriends = contextServerId == null)
+    // A composer opened with the API unreachable must not stay dead: the read is retried with
+    // backoff, straight away when the live connection comes back, and by hand ("Tentar de novo").
+    // The photo and the words the person already made are untouched meanwhile.
+    val realtimeState by session.realtime.state.collectAsStateWithLifecycle()
+    val connected = realtimeState == RealtimeState.Ready
+    LaunchedEffect(audienceAttempt, connected) {
+        if (options != null) return@LaunchedEffect
+        store.refreshConfig()
+        var wait = AUDIENCE_RETRY_FIRST_MS
+        while (true) {
+            val loaded = runCatching { session.api.storyAudiences() }.getOrNull()
+            if (loaded != null) {
+                audienceFailed = false
+                options = loaded
+                targets = StoriesRules.defaultAudience(loaded, contextServerId, fromFriends = contextServerId == null)
+                break
             }
-            .onFailure { audienceFailed = true }
+            audienceFailed = true
+            delay(wait)
+            wait = StoriesRules.nextRetryDelay(wait)
+        }
     }
 
     val tooLong = { seconds: Long -> context.getString(R.string.stories_compose_too_long, (seconds / 1000).toInt()) }
@@ -247,7 +247,13 @@ fun StoryComposer(
             }
         }
     }
-    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), accept)
+    // The picker is asked for one item, but a long press on a thumbnail selects several in recent versions
+    // of it, whatever the request said. A story has one picture, so the first is used, and the person is told.
+    val onePerStory = stringResource(R.string.stories_picker_one_only)
+    val pick = rememberLauncherForActivityResult(PickVisualMediaList()) { uris ->
+        accept(uris.firstOrNull())
+        if (uris.size > 1) Toast.makeText(context, onePerStory, Toast.LENGTH_SHORT).show()
+    }
     val openGallery: () -> Unit = {
         pick.launch(
             PickVisualMediaRequest(
@@ -262,35 +268,60 @@ fun StoryComposer(
 
     // A photo placed on the story: prepared (1440 px, EXIF gone) and kept for the PUT.
     val photoFailed = stringResource(R.string.stories_editor_photo_failed)
-    val addPhotoLayer: (Uri?) -> Unit = { uri ->
-        if (uri != null) {
+    val photosDidNotFit = stringResource(R.string.stories_picker_some_did_not_fit)
+    val limitPhotosText = stringResource(R.string.stories_editor_limit_photos)
+    val limitLayersText = stringResource(R.string.stories_editor_limit_layers)
+    // Each photo picked becomes a layer, one after the other, up to the limits; what does not fit is said, not dropped.
+    val addPhotoLayers: (List<Uri>) -> Unit = { uris ->
+        if (uris.isNotEmpty()) {
             scope.launch {
-                val result = try {
-                    StoryMediaPrep.prepare(context, uri, gg.pqp.app.stories.StoriesRules.MAX_BYTES)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    PrepResult.Unreadable
-                }
-                if (result is PrepResult.Ready && !result.media.isVideo) {
-                    val id = editor.newId()
-                    val at = gg.pqp.app.stories.editor.LayerMath.startPosition(editor.layers.size)
-                    val refused = editor.add(
-                        PhotoLayer(
-                            id = id, x = at.x, y = at.y, source = result.media.previewUri.toString(),
-                            width = result.media.width, height = result.media.height,
-                        ),
-                    )
-                    if (refused == null) {
-                        layerFiles[id] = LayerFile(id, result.media.contentType, result.media.bytes, result.media.width, result.media.height)
+                var failed = false
+                var refusedWith: LayerOps.Refusal? = null
+                uris.forEach { uri ->
+                    // Check before the work: a photo that cannot be placed is not prepared for nothing.
+                    val probe = PhotoLayer(id = "probe", source = "", width = 1, height = 1)
+                    val full = LayerOps.canAdd(editor.layers, probe)
+                    if (full != null) {
+                        refusedWith = full
+                        return@forEach
                     }
-                } else {
-                    refusal = photoFailed
+                    val result = try {
+                        StoryMediaPrep.prepare(context, uri, gg.pqp.app.stories.StoriesRules.MAX_BYTES)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        PrepResult.Unreadable
+                    }
+                    if (result is PrepResult.Ready && !result.media.isVideo) {
+                        val id = editor.newId()
+                        val at = gg.pqp.app.stories.editor.LayerMath.startPosition(editor.layers.size)
+                        val refused = editor.add(
+                            PhotoLayer(
+                                id = id, x = at.x, y = at.y, source = result.media.previewUri.toString(),
+                                width = result.media.width, height = result.media.height,
+                            ),
+                        )
+                        if (refused == null) {
+                            layerFiles[id] = LayerFile(id, result.media.contentType, result.media.bytes, result.media.width, result.media.height)
+                        } else {
+                            refusedWith = refused
+                        }
+                    } else {
+                        failed = true
+                    }
                 }
+                val message = when {
+                    failed -> photoFailed
+                    refusedWith == LayerOps.Refusal.TooMany -> if (uris.size > 1) photosDidNotFit else limitLayersText
+                    refusedWith != null -> if (uris.size > 1) photosDidNotFit else limitPhotosText
+                    else -> null
+                }
+                if (message != null) Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
             }
         }
     }
-    val pickPhotoLayer = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia(), addPhotoLayer)
+    val addPhotoLayer: (Uri?) -> Unit = { uri -> if (uri != null) addPhotoLayers(listOf(uri)) }
+    val pickPhotoLayer = rememberLauncherForActivityResult(PickVisualMediaList(), addPhotoLayers)
 
     // A call card has to go to the server its room is in (the contract refuses
     // anything else). That server is ticked the moment the room is placed,
@@ -306,62 +337,65 @@ fun StoryComposer(
     val hasWords = LayerOps.hasContent(editor.layers)
     val ready = if (media != null) true else hasWords
 
-    // One id per story the person means to post, the same on a retry after a
-    // failure (so a lost answer never posts it twice) and new as soon as
-    // anything about it changes (so an edited retry is not answered with the
-    // story it replaced).
-    val requestId = remember(media, mode, cardBackground, muted, editor.layers, targets, replies) {
-        java.util.UUID.randomUUID().toString()
-    }
+    // "Postar" hands the story to the outbox and closes the composer: the files, the request, the
+    // upload and the publish all happen there, with the own ring showing how far along it is.
+    val outbox = remember(session, context) { StoryOutbox.of(context, session, store) }
 
-    val doPost: () -> Unit = {
-        post = PostState.Posting
-        scope.launch {
-            // Already ticked and shown (see above); this only keeps what is
-            // sent identical to what the sheet showed.
-            val audience = StoriesRules.withSticker(targets, stickerServerId)
-            val ok = runCatching {
-                postStory(
-                    session = session,
-                    context = context,
-                    media = media,
-                    muted = muted,
-                    mutedUri = mutedUri,
-                    onMuted = { mutedUri = it },
-                    cardBackground = cardBackground,
-                    layers = editor.layers,
-                    layerFiles = layerFiles,
-                    layersEnabled = layersEnabled,
-                    replies = replies,
-                    audience = audience,
-                    requestId = requestId,
-                    maxBytes = config.maxBytes,
-                )
-            }.isSuccess
-            if (ok) {
-                contextServerId?.let { store.refresh(store.serverKey(it)) }
-                audience.serverIds.forEach { store.refresh(store.serverKey(it)) }
-                store.refresh(StoriesStore.FRIENDS)
-                post = PostState.Idle
-                onPosted()
-            } else {
-                post = PostState.Failed
-            }
-        }
+    // Files go ahead of the story: sent the moment their bytes are final, thrown away if the person changes their mind.
+    val eager = remember(outbox) { EagerSession(outbox.eager) }
+    // The composer closing without a post (X, back, discard) takes everything it started with it; after "Postar" there is nothing left to take.
+    DisposableEffect(eager) { onDispose { eager.discardAll() } }
+    LaunchedEffect(media, config.eagerUploads) { if (config.eagerUploads) eager.syncBase(media) }
+    LaunchedEffect(editor, editor.layers, editor.drawingOpen, config.eagerUploads) {
+        if (layersEnabled && config.eagerUploads) eager.syncLayers(editor.layers, layerFiles, editor.drawingOpen)
+    }
+    // A second tap before the composer has gone must not hand the same story over twice.
+    val handedOver = remember { booleanArrayOf(false) }
+    val doPost: () -> Unit = post@{
+        val userId = meId ?: return@post
+        if (handedOver[0]) return@post
+        handedOver[0] = true
+        // A muted clip is a different file from the one sent ahead: that one goes, the muted one is sent at "Postar".
+        val eagerFiles = eager.handOver(baseIsUsable = !(muted && media?.isVideo == true))
+        // Already ticked and shown (see above); this only keeps what is sent identical to what the sheet showed.
+        val audience = StoriesRules.withSticker(targets, stickerServerId)
+        outbox.enqueue(
+            StoryPostInput(
+                userId = userId,
+                media = media,
+                muted = muted,
+                mutedUri = mutedUri,
+                cardBackground = cardBackground,
+                description = editor.description,
+                layers = editor.layers,
+                layerFiles = layerFiles.toMap(),
+                layersEnabled = layersEnabled,
+                replies = replies,
+                audience = audience,
+                maxBytes = config.maxBytes,
+                eager = eagerFiles,
+                refreshKeys = buildList {
+                    contextServerId?.let { add(store.serverKey(it)) }
+                    audience.serverIds.forEach { add(store.serverKey(it)) }
+                    add(StoriesStore.FRIENDS)
+                },
+            ),
+        )
+        onPosted()
     }
 
     // The live camera owns the whole screen until there is something to edit.
     val showingCamera = !editing
     val suspendCamera = showingCamera && (trimming != null || working != null)
 
-    val audienceLabel = audienceLabel(options, targets)
+    val audienceLabel = when {
+        options != null -> audienceLabel(options, targets)
+        audienceFailed -> stringResource(R.string.stories_audience_load_failed)
+        else -> stringResource(R.string.stories_audience_loading)
+    }
 
     Dialog(
-        // Not while posting: closing mid-post would cancel the upload or the
-        // publish and leave a story that never goes live (the server sweeps
-        // those, but the person would think it was posted). A failed post
-        // unlocks it, and a retry reuses the same requestId.
-        onDismissRequest = { if (post != PostState.Posting) onDismiss() },
+        onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         Box(
@@ -405,10 +439,9 @@ fun StoryComposer(
                             muted = muted,
                             cardBackground = if (current == null) cardBackground else null,
                             audienceLabel = audienceLabel,
+                            audienceError = options == null && audienceFailed,
+                            hasAudio = current?.hasAudio != false,
                             canPost = ready && options != null,
-                            posting = post == PostState.Posting,
-                            callWarning = callLayer?.takeIf { !StoryCallRoom.authorIn(it.channelId, meId, occupancy) }
-                                ?.let { stringResource(R.string.stories_call_not_in_room, it.roomName) },
                             occupancy = occupancy,
                         ),
                         base = {
@@ -434,9 +467,15 @@ fun StoryComposer(
                             pickPhotoLayer.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         },
                         onTakePhoto = { layerCamera = true },
-                        onAudience = { choosingAudience = true },
+                        // Nothing to choose from until the list is there: tapping the pill reads it again.
+                        onAudience = { if (options == null) audienceAttempt += 1 else choosingAudience = true },
+                        onRetryAudience = { audienceAttempt += 1 },
                         onPost = {
-                            if (StoriesRules.canPost(targets)) doPost() else choosingAudience = true
+                            gg.pqp.app.stories.StoryPerf.mark("post")
+                            when {
+                                StoriesRules.canPost(targets) -> doPost()
+                                else -> choosingAudience = true
+                            }
                         },
                         callSheet = { onPick, onDismissSheet ->
                             val rooms = rememberCallRooms(session, options)
@@ -503,22 +542,6 @@ fun StoryComposer(
                     )
                 }
             }
-
-            if (post == PostState.Failed && !choosingAudience) {
-                Text(
-                    stringResource(R.string.stories_upload_failed),
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 96.dp)
-                        .clip(MaterialTheme.shapes.small)
-                        .background(Palette.Danger.copy(alpha = 0.9f))
-                        .clickable { post = PostState.Idle }
-                        .padding(horizontal = Spacing.lg, vertical = Spacing.sm)
-                        .testTag("stories.composer.failed"),
-                )
-            }
         }
 
         trimming?.let { work ->
@@ -541,9 +564,8 @@ fun StoryComposer(
                 lockedServerId = stickerServerId,
                 replies = replies,
                 onReplies = { replies = it },
-                post = post,
-                onPost = doPost,
-                onDismiss = { if (post != PostState.Posting) choosingAudience = false },
+                onPost = { doPost() },
+                onDismiss = { choosingAudience = false },
             )
         }
     }
@@ -626,94 +648,6 @@ private fun rememberMentionPeople(
 /** The people a mention can name, and whether the list is known to be incomplete. */
 private class MentionDirectory(val people: List<MentionPerson>?, val failed: Boolean, val retry: () -> Unit)
 
-/**
- * Create, PUT every file, publish. A server that predates layers gets the old
- * shape (the words folded into the card's text, or a photo's caption); any
- * other gets the base plus the layers.
- */
-private suspend fun postStory(
-    session: SessionStore,
-    context: android.content.Context,
-    media: PreparedMedia?,
-    muted: Boolean,
-    mutedUri: Uri?,
-    onMuted: (Uri) -> Unit,
-    cardBackground: String,
-    layers: List<gg.pqp.app.stories.editor.EditorLayer>,
-    layerFiles: Map<String, LayerFile>,
-    layersEnabled: Boolean,
-    replies: Boolean,
-    audience: StoryAudienceTargets,
-    requestId: String,
-    maxBytes: Long,
-) {
-    // The base: as picked, or without its sound when muted.
-    var base = media
-    if (base != null && base.isVideo && muted) {
-        val uri = mutedUri ?: VideoPrep.removeAudio(context, base.previewUri).also(onMuted)
-        val ready = StoryMediaPrep.prepare(context, uri, maxBytes)
-        base = (ready as? PrepResult.Ready)?.media ?: error("The muted clip could not be read")
-    }
-
-    val words = layers.filterIsInstance<TextLayer>().map { it.text.trim() }.filter { it.isNotEmpty() }
-    val files = buildMap<String, LayerFile> {
-        if (layersEnabled) {
-            layers.forEach { layer ->
-                when (layer) {
-                    is PhotoLayer -> layerFiles[layer.id]?.let { put(layer.id, it) }
-                    is InkLayer -> {
-                        val (w, h) = InkRenderer.exportSize()
-                        val png = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { InkRenderer.renderPng(layer.strokes, w, h) }
-                        put(layer.id, LayerFile(layer.id, "image/png", png, w, h))
-                    }
-                    else -> Unit
-                }
-            }
-        }
-    }
-    val request = CreateStoryRequest(
-        kind = EditorPost.kind(base?.isVideo, base != null),
-        // The old shape for a server with no layers: a card's words as its text, a photo's as its caption.
-        caption = if (!layersEnabled && base != null) words.joinToString(" ").take(StoriesRules.CAPTION_MAX).ifBlank { null } else null,
-        text = if (!layersEnabled && base == null) words.joinToString("\n").take(StoriesRules.TEXT_MAX) else null,
-        background = if (base == null) cardBackground else null,
-        // A server with no layers knows the call card only as the old sticker on a text card.
-        sticker = if (!layersEnabled && base == null) {
-            layers.filterIsInstance<CallLayer>().firstOrNull()?.let { StorySticker("call", it.serverId, it.channelId) }
-        } else {
-            null
-        },
-        repliesEnabled = replies,
-        audiences = audience,
-        requestId = requestId,
-        media = base?.let {
-            StoryMediaInput(it.contentType, it.bytes.size.toLong(), it.width, it.height, it.durationMs)
-        },
-        layers = if (layersEnabled) EditorPost.layersJson(layers, files) else emptyList(),
-        altText = if (layersEnabled) LayerOps.spokenText(layers) else null,
-    )
-    val created = session.api.createStory(request)
-    // A story with a picture and no slot to PUT it to is a broken answer, not a posted story: unless the
-    // server already has it live (a retry of a post whose answer was lost).
-    if (base != null && created.upload == null && created.story.own?.status != "live") {
-        error("The server made a story with media and no place to upload it")
-    }
-    val pairs = EditorPost.pair(created.layerUploads, files)
-        ?: error("The server and the phone disagree about which layer files to upload")
-    // The files are independent signed PUTs: a few at a time, and publish only when every one is up.
-    val gate = Semaphore(UPLOADS_AT_ONCE)
-    coroutineScope {
-        val uploads = buildList {
-            if (base != null) created.upload?.let { slot -> add(async { gate.withPermit { session.api.uploadStoryMedia(slot, base.contentType, base.bytes) } }) }
-            pairs.forEach { (slot, file) ->
-                add(async { gate.withPermit { session.api.uploadStoryMedia(slot.asUpload(), file.contentType, file.bytes) } })
-            }
-        }
-        uploads.awaitAll()
-    }
-    if (EditorPost.needsPublish(created.upload != null, created.layerUploads)) session.api.publishStory(created.story.id)
-}
-
 @Composable
 private fun ModeTabs(mode: ComposeMode, mediaEnabled: Boolean, onMode: (ComposeMode) -> Unit) {
     Row(
@@ -761,7 +695,6 @@ private fun AudienceSheet(
     lockedServerId: String?,
     replies: Boolean,
     onReplies: (Boolean) -> Unit,
-    post: PostState,
     onPost: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -824,29 +757,14 @@ private fun AudienceSheet(
             }
             Button(
                 onClick = onPost,
-                enabled = StoriesRules.canPost(targets) && post != PostState.Posting,
+                enabled = StoriesRules.canPost(targets),
                 shape = MaterialTheme.shapes.small,
                 colors = ButtonDefaults.buttonColors(containerColor = Palette.Signal, contentColor = Palette.Ink),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("stories.audience.post"),
             ) {
-                if (post == PostState.Posting) {
-                    CircularProgressIndicator(Modifier.size(18.dp), color = Palette.Ink, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(Spacing.sm))
-                    Text(stringResource(R.string.stories_upload_posting))
-                } else {
-                    Text(stringResource(R.string.stories_audience_post))
-                }
-            }
-            if (post == PostState.Failed) {
-                Text(
-                    stringResource(R.string.stories_upload_failed),
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier
-                        .padding(top = Spacing.sm)
-                        .testTag("stories.audience.failed"),
-                )
+                Text(stringResource(R.string.stories_audience_post))
             }
             Text(
                 stringResource(R.string.stories_audience_footer),

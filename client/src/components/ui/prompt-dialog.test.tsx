@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Channel } from "@pqp/shared";
 import {
   ChannelOverviewSection,
@@ -80,6 +80,33 @@ describe("PromptDialog", () => {
     expect(input.maxLength).toBe(CHANNEL_NAME_MAX_LENGTH);
     type(input, "a".repeat(300));
     expect(input.value).toHaveLength(CHANNEL_NAME_MAX_LENGTH);
+  });
+
+  it("puts focus in the name field even when something else took it first", async () => {
+    // Opened from a menu: the menu hands focus back to its trigger and the
+    // dialog's own fallback lands on Close. The field has to win after both.
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    vi.useFakeTimers();
+    try {
+      await mount(
+        <PromptDialog
+          open
+          title="Create forum"
+          onClose={() => {}}
+          onConfirm={() => {}}
+        />,
+      );
+      act(() => opener.focus());
+      expect(document.activeElement).toBe(opener);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(document.activeElement).toBe(nameInput());
+    } finally {
+      vi.useRealTimers();
+      opener.remove();
+    }
   });
 
   it("keeps Criar disabled for a name of only spaces", async () => {

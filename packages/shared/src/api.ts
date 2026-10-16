@@ -14,6 +14,7 @@ import { voiceRoomTransportSchema } from "./signaling.js";
 import { pollSchema } from "./polls.js";
 import { customEmojiTokensAsText } from "./server-emoji.js";
 import { messageSystemKindSchema } from "./nudge.js";
+import { messageForwardFieldSchema } from "./forward.js";
 
 /**
  * `watch_party` is a voice room with one stage: only holders of
@@ -1005,6 +1006,14 @@ export const messageSchema = z.object({
    * Absent on the wire for every other message: read it as `storyId ?? null`.
    */
   storyId: z.string().uuid().nullable().optional(),
+  /**
+   * Set when this message is a forward (`POST /api/forwards`): a snapshot of a
+   * Baú post or of another message, drawn as a card under `body` (the
+   * forwarder's own comment, or a plain fallback line when there is none).
+   * Absent on every ordinary message: read it as `forward ?? null`. See
+   * `forward.ts`.
+   */
+  forward: messageForwardFieldSchema,
 });
 
 export const MESSAGE_MAX_LENGTH = 4000;

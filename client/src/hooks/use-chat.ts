@@ -1772,6 +1772,12 @@ export function createChatController(
             return;
           }
 
+          // A message is the end of "is typing": the sender's line goes the
+          // moment it lands, not up to TYPING_TTL_MS later.
+          if (message.message.authorId && typing.delete(message.message.authorId)) {
+            emit();
+          }
+
           const incoming = toChatMessage(message.message);
           // A bot's "working" row ends with its message, not with a timer.
           if (typing.get(incoming.authorId)?.activity) {

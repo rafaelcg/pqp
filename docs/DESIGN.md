@@ -467,6 +467,10 @@ shrinks `vh` for an on-screen keyboard.
   one column, for a dialog whose content is its own layout.
 - **`dismissible={false}`** removes the close button, Escape and the backdrop
   together. An X that does nothing reads as a bug.
+- **The close button** is the control ladder's icon button (`--control-md`, 36px,
+  what `Button size="icon"` draws), with negative margins so it adds nothing to
+  the header's height and the glyph stays put. On a phone a pseudo-element reaches
+  4px past the box on every side, so the touch target is 44px.
 - **Accessibility.** `role="dialog"`, `aria-modal`, labelled by its title and
   described by its description. Escape is stopped from reaching a menu inside.
 

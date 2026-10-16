@@ -33,6 +33,8 @@
     <string name="servers_create_name">Nome do servidor</string>
     <string name="servers_create_confirm">Criar</string>
     <string name="server_actions">Ações da comunidade</string>
+    <string name="server_move_up">Mover pra cima</string>
+    <string name="server_move_down">Mover pra baixo</string>
     <string name="server_leave">Sair da comunidade</string>
     <string name="server_leave_title">Sair de %1$s?</string>
     <string name="server_leave_body">Você deixa de ver os canais e as mensagens de lá. Dá para voltar depois com um convite novo.</string>
@@ -157,6 +159,9 @@
     <string name="bau_like">Curtir</string>
     <string name="bau_unlike">Tirar curtida</string>
     <string name="bau_comments">Comentários</string>
+    <string name="bau_share">Compartilhar</string>
+    <string name="bau_share_description">Compartilhar esse post</string>
+    <string name="bau_share_failed">Não deu pra abrir o compartilhamento.</string>
     <string name="bau_comments_view_one">Ver %1$d comentário</string>
     <string name="bau_comments_view_all">Ver todos os %1$d comentários</string>
     <string name="bau_comments_show_less">Mostrar menos</string>
@@ -182,6 +187,10 @@
     <string name="bau_media_file">Arquivo</string>
     <string name="bau_media_image">Imagem</string>
     <string name="bau_media_video">Ver vídeo</string>
+    <string name="bau_captions_on">Ligar legendas</string>
+    <string name="bau_captions_off">Desligar legendas</string>
+    <string name="bau_captions_auto">%1$s (automática)</string>
+    <string name="bau_captions_unknown">Áudio original</string>
     <string name="bau_media_youtube">Ver no YouTube</string>
     <string name="bau_media_youtube_open">Abrir no YouTube</string>
     <string name="bau_media_youtube_failed">Esse vídeo não toca aqui.</string>
@@ -349,7 +358,7 @@
     <string name="push_prompt_dismiss">Agora não</string>
 
     <!-- Você -->
-    <string name="you_title">Você</string>
+    <string name="you_title">Tu</string>
     <string name="you_backend">Servidor</string>
     <string name="you_version">Versão</string>
     <string name="you_voice_title">Voz</string>
@@ -449,13 +458,23 @@
     <string name="friends_request_sent">Pedido enviado</string>
     <string name="friends_now_friends">Vocês são amigos</string>
     <string name="friends_nudge_request">Alguém te enviou um pedido de amizade.</string>
-    <string name="friends_nudge_accepted">Seu pedido de amizade foi aceito.</string>
 
     <!-- Status -->
     <string name="status_online">Online</string>
     <string name="status_idle">Ausente</string>
     <string name="status_dnd">Não perturbe</string>
     <string name="status_offline">Offline</string>
+    <string name="status_away">Ausente</string>
+    <string name="status_invisible">Invisível</string>
+    <string name="status_your">Teu status</string>
+    <string name="status_change">Mudar o teu status</string>
+    <string name="status_away_hint">Fica assim até tu mudar. Nada é silenciado.</string>
+    <string name="status_dnd_hint">Tu continua visível. Sem notificações até tu mudar.</string>
+    <string name="status_invisible_hint">Tu aparece como offline pra todo mundo. Nos canais de voz em que tu entrar, tu continua aparecendo.</string>
+    <string name="status_save_failed">Não deu pra mudar o teu status, tenta de novo</string>
+    <string name="server_removed_kicked">Tu foi removido de %1$s. Dá pra voltar com um convite novo.</string>
+    <string name="server_removed_banned">Tu foi banido de %1$s.</string>
+    <string name="server_removed_deleted">A comunidade %1$s foi apagada e não existe mais pra ninguém.</string>
 
     <!-- Seus dados. Os dois direitos que a política de privacidade promete, e o
          segundo é exigido pela Play de qualquer app que deixa criar conta. -->
@@ -743,6 +762,21 @@
     <string name="voice_note_unheard">Ainda não ouvido</string>
     <string name="voice_note_heard">Ouviu</string>
     <string name="voice_note_heard_at">Ouviu às %1$s</string>
+    <string name="voice_note_transcript_pending">Transcrevendo…</string>
+    <string name="voice_note_transcript_no_speech">Não tem fala nesse áudio</string>
+    <string name="voice_note_transcript_failed">Não deu pra transcrever esse áudio</string>
+    <string name="voice_note_transcript_request">Transcrever</string>
+    <string name="voice_note_transcript_slow">Calma, tenta de novo daqui a pouco</string>
+    <string name="voice_note_transcript_request_failed">Não deu certo. Tenta de novo.</string>
+    <string name="voice_note_transcript_more">ver mais</string>
+    <string name="voice_note_transcript_less">ver menos</string>
+    <string name="voice_notes_settings_title">Mensagens de voz</string>
+    <string name="voice_notes_settings_description">O texto aparece embaixo do áudio, pra quem prefere ler.</string>
+    <string name="voice_notes_transcribe_mine">Transcrever meus áudios</string>
+    <string name="voice_notes_transcribe_mine_hint">Quem pode ouvir também lê o texto. O áudio passa por um serviço de transcrição. Vale pros próximos áudios que tu mandar; os que já foram ficam como estão.</string>
+    <string name="voice_notes_show_transcripts">Mostrar transcrições</string>
+    <string name="voice_notes_show_transcripts_hint">Mostra o texto embaixo dos áudios que tu recebe. Desligado, tu não vê nenhuma transcrição.</string>
+    <string name="voice_notes_settings_failed">Não deu pra salvar, tenta de novo</string>
 
     <!-- Lista de canais: linhas vivas, quem tá na call, prévia do Baú -->
     <string name="channels_section_text">Texto</string>
@@ -1016,9 +1050,9 @@
     <string name="stories_yours">Teu story</string>
     <string name="stories_open">Story de %1$s</string>
     <string name="stories_unseen">novo</string>
-    <string name="stories_call_badge">em call</string>
+    <string name="stories_call_badge">tem gente na call</string>
     <string name="stories_empty_title">Ninguém postou ainda</string>
-    <string name="stories_empty_body">Mostra o que tá rolando: um clipe, teu setup, que horas tu entra. Some em 24 h.</string>
+    <string name="stories_empty_body">Mostra o que tá rolando: um clipe, teu setup, que horas tu entra. Some em 24\u00A0h.</string>
     <string name="stories_empty_cta">Postar</string>
     <string name="stories_viewer_reply_to">Responder pra %1$s…</string>
     <string name="stories_viewer_replies_off">%1$s desligou as respostas</string>
@@ -1043,6 +1077,11 @@
     <string name="stories_viewer_sound_off">Tirar o som</string>
     <string name="stories_viewer_react">Reagir com %1$s</string>
     <string name="stories_compose_background">Fundo %1$d</string>
+    <string name="stories_compose_background_in_family">%1$s, fundo %2$d</string>
+    <string name="stories_compose_background_family">Estilo do fundo</string>
+    <string name="stories_compose_background_glow">Brilho</string>
+    <string name="stories_compose_background_solid">Sólido</string>
+    <string name="stories_compose_background_gradient">Degradê</string>
     <string name="stories_viewers_title">Visto por %1$d</string>
     <plurals name="stories_viewers_meta">
         <item quantity="one">%1$d reação · some em %2$s</item>
@@ -1058,6 +1097,7 @@
     <string name="stories_call_join">Entrar na call</string>
     <string name="stories_call_ended">A call acabou</string>
     <string name="stories_call_empty">Ninguém na call agora</string>
+    <string name="stories_call_locked">Tu não pode entrar nessa sala</string>
     <string name="stories_call_full">A sala lotou</string>
     <string name="stories_compose_title">Novo story</string>
     <string name="stories_compose_mode_text">Texto</string>
@@ -1126,6 +1166,11 @@
     <string name="stories_editor_discard_body">O que tu colocou some.</string>
     <string name="stories_editor_discard">Jogar fora</string>
     <string name="stories_editor_keep">Continuar editando</string>
+    <string name="stories_editor_description_add">Colocar uma descrição</string>
+    <string name="stories_editor_description_edit">Editar descrição</string>
+    <string name="stories_editor_description_title">Descreve pra quem não enxerga</string>
+    <string name="stories_editor_description_hint">Uma ou duas frases sobre o que aparece na imagem. O leitor de tela lê isso primeiro.</string>
+    <string name="stories_editor_description_save">Salvar</string>
     <string name="stories_editor_nothing">Coloca um texto, uma foto ou uma figurinha antes.</string>
     <string name="stories_editor_canvas">Tela do story. O que tu coloca dá pra mover, aumentar e girar.</string>
     <string name="stories_editor_text_hint">Escreve aí</string>
@@ -1206,7 +1251,6 @@
     <string name="stories_sticker_call">Chama pra call</string>
     <string name="stories_call_picker_body">Quem tocar entra direto. O card mostra quem tá lá dentro na hora.</string>
     <string name="stories_call_picker_none">Nenhuma sala de voz nos servidores marcados.</string>
-    <string name="stories_call_not_in_room">Tu não tá no %1$s. O card só deixa entrar enquanto tu tá na call.</string>
     <string name="stories_call_picker_empty">vazia</string>
     <string name="stories_call_default_text">bora pra call?</string>
     <string name="stories_audience_title">Quem vê</string>
@@ -1225,9 +1269,21 @@
     <string name="stories_audience_replies_hint">Resposta chega nas tuas Conversas</string>
     <string name="stories_audience_post">Postar story</string>
     <string name="stories_audience_footer">Some em 24 h. A staff de cada servidor pode tirar.</string>
-    <string name="stories_upload_failed">Não subiu. Tentar de novo</string>
+    <string name="stories_viewer_loading">Carregando story</string>
     <string name="stories_upload_posted">Postado</string>
     <string name="stories_upload_posting">Postando…</string>
+    <string name="stories_outbox_waiting_label">Esperando conexão</string>
+    <string name="stories_outbox_waiting_body">Teu story vai postar sozinho quando a conexão voltar.</string>
+    <string name="stories_outbox_try_now">Tentar agora</string>
+    <string name="stories_outbox_failed_label">Não postou</string>
+    <string name="stories_outbox_failed_title">Teu story não subiu</string>
+    <string name="stories_outbox_failed_body">Teu story continua guardado. Tenta de novo ou descarta.</string>
+    <string name="stories_outbox_posting_title">Postando teu story</string>
+    <string name="stories_outbox_posting_body">Ele tá subindo. Se descartares, não vai ao ar.</string>
+    <string name="stories_outbox_keep">Continuar postando</string>
+    <string name="stories_outbox_retry">Tentar de novo</string>
+    <string name="stories_outbox_discard">Descartar</string>
+    <string name="stories_outbox_progress_desc">Postando teu story, %1$d por cento</string>
     <string name="stories_menu_mute">Silenciar stories de %1$s</string>
     <string name="stories_menu_mute_hint">Some da tua faixa. %1$s não fica sabendo.</string>
     <string name="stories_menu_report">Denunciar story</string>
@@ -1269,4 +1325,153 @@
     <string name="channels_moved_category">%1$s foi pra posição %2$d de %3$d.</string>
     <string name="channels_more">Mais</string>
     <string name="channels_drag_handle">Arrastar %1$s</string>
+
+    <!-- Stories composer, round two: QA fixes -->
+    <string name="stories_editor_card_hint">Toca pra escrever</string>
+    <string name="stories_audience_load_failed">Não deu pra carregar quem vê</string>
+    <string name="stories_audience_loading">Carregando…</string>
+    <string name="stories_picker_one_only">Só cabe uma foto por story, usei a primeira.</string>
+    <string name="stories_picker_some_did_not_fit">Algumas fotos não couberam.</string>
+    <string name="stories_empty_compact_cta">Postar um story</string>
+    <string name="you_open">Teu perfil</string>
+    <!-- Sobrescreve o rótulo do fundo escuro do bottom sheet do Material, que em pt-BR diz "Fechar planilha". -->
+    <string name="close_sheet">Fechar</string>
+
+    <!-- Encaminhar (forward) -->
+    <string name="chat_jump_latest">Ir pras mais recentes</string>
+    <string name="forward_action">Encaminhar</string>
+    <string name="forward_title">Encaminhar</string>
+    <string name="forward_search_hint">Procura servidor, canal ou pessoa</string>
+    <string name="forward_comment_hint">Escreve algo (opcional)</string>
+    <string name="forward_section_recent">Recentes</string>
+    <string name="forward_section_people">Conversas</string>
+    <string name="forward_group">Grupo</string>
+    <string name="forward_new_dm">Nova DM</string>
+    <string name="forward_private_channel">Canal privado</string>
+    <string name="forward_restricted_note">Isso fica só em %1$s. Só dá pra encaminhar pra um canal de lá.</string>
+    <string name="forward_send_none">Escolhe pra onde mandar</string>
+    <string name="forward_send">Encaminhar (%1$d)</string>
+    <string name="forward_server_failed">Não deu pra carregar os canais de %1$s</string>
+    <string name="forward_not_member">Tu não participa desse servidor</string>
+    <string name="forward_retry">Tentar de novo</string>
+    <string name="forward_sending">Encaminhando</string>
+    <string name="forward_cap">Até 5 por vez.</string>
+    <string name="forward_none_found">Nada encontrado.</string>
+    <string name="forward_loading">Carregando teus canais</string>
+    <string name="forward_sent_badge">Enviado</string>
+    <string name="forward_selected_count">%1$d selecionados</string>
+    <string name="forward_post_preview">Post do Baú: %1$s</string>
+    <string name="forward_message_preview">Mensagem de %1$s: %2$s</string>
+    <string name="forward_message_preview_bare">Mensagem de %1$s</string>
+    <string name="forward_sent_to">Encaminhado pra %1$s</string>
+    <plurals name="forward_sent_many">
+        <item quantity="one">Encaminhado pra %1$d lugar</item>
+        <item quantity="other">Encaminhado pra %1$d lugares</item>
+    </plurals>
+    <string name="forward_view">Ver</string>
+    <string name="forward_refusal_no_access">Tu não vê esse canal.</string>
+    <string name="forward_refusal_cannot_send">Tu não pode mandar mensagem aí.</string>
+    <string name="forward_refusal_bad_target">Aí não dá pra mandar mensagem.</string>
+    <string name="forward_refusal_stays_in_server">Isso só vai pra dentro do próprio servidor.</string>
+    <string name="forward_refusal_unreachable">Tu não pode mandar mensagem pra essa pessoa.</string>
+    <string name="forward_refusal_slow_mode">Modo lento ligado aí. Tenta de novo em %1$ds.</string>
+    <string name="forward_refusal_slow_mode_nowait">Modo lento ligado aí. Tenta de novo daqui a pouco.</string>
+    <string name="forward_refusal_rate_limited">Muita coisa seguida. Tenta de novo em %1$ds.</string>
+    <string name="forward_refusal_rate_limited_nowait">Muita coisa seguida. Tenta de novo daqui a pouco.</string>
+    <string name="forward_refusal_automod">O AutoMod desse servidor bloqueou.</string>
+    <string name="forward_refusal_unavailable">Não rolou agora. Tenta de novo.</string>
+    <string name="forward_failure_gone">Isso não está mais disponível pra encaminhar.</string>
+    <string name="forward_failure_not_forwardable">Essa mensagem não dá pra encaminhar.</string>
+    <string name="forward_failure_empty">Não tem nada aqui pra encaminhar.</string>
+    <string name="forward_failure_slow">Calma. Tenta de novo em alguns segundos.</string>
+    <string name="forward_failure_other">Não deu pra encaminhar. Tenta de novo.</string>
+    <string name="forward_card_from_bau">Encaminhado de %1$s · Baú</string>
+    <string name="forward_card_from_channel">Encaminhado de %1$s · #%2$s</string>
+    <string name="forward_card_from_server">Encaminhado de %1$s</string>
+    <string name="forward_card_aria">%1$s. %2$s</string>
+    <string name="forward_card_aria_empty">%1$s</string>
+    <string name="forward_card_restricted">Só dentro do servidor</string>
+    <string name="forward_card_empty">Abrir o original</string>
+    <string name="forward_post_menu">Opções do post</string>
+    <!-- Seguir: follow a Baú into a channel of another server -->
+    <string name="follow_button">Seguir</string>
+    <string name="follow_button_active">Seguindo</string>
+    <string name="follow_button_description">Seguir este Baú num canal de outro servidor</string>
+    <string name="follow_title">Seguir este Baú</string>
+    <string name="follow_hint">Os posts livres novos chegam como cartão no canal que tu escolher, assinados por esta comunidade. Posts só pra membros nunca saem.</string>
+    <string name="follow_yours">O que tu já segue deste Baú</string>
+    <string name="follow_server">Servidor</string>
+    <string name="follow_channel">Canal</string>
+    <string name="follow_role">Marcar um cargo a cada post</string>
+    <string name="follow_no_role">Sem marcar ninguém</string>
+    <string name="follow_submit">Seguir</string>
+    <string name="follow_submitting">Seguindo…</string>
+    <string name="follow_followed">Pronto. Os posts novos vão chegar em #%1$s de %2$s.</string>
+    <string name="follow_unfollow">Deixar de seguir</string>
+    <string name="follow_resume">Retomar</string>
+    <string name="follow_paused">Pausado</string>
+    <string name="follow_paused_hint">Pausado porque quem configurou perdeu a permissão de gerenciar este canal. Ao retomar, tu passa a ser quem responde por ele.</string>
+    <string name="follow_paused_hint_banned">Pausado porque este servidor baniu a conta do Baú. Desbane pra retomar, ou deixa de seguir.</string>
+    <string name="follow_unavailable">Este Baú não aceita mais seguidores.</string>
+    <string name="follow_pings">Marca %1$s</string>
+    <string name="follow_no_destinations">Pra seguir um Baú, tu precisa gerenciar webhooks ou canais num servidor teu.</string>
+    <string name="follow_destination_full">%1$s já segue %2$d Baús, o máximo que um servidor pode.</string>
+    <string name="follow_all_followed">Todos os canais deste servidor já seguem este Baú.</string>
+    <string name="follow_load_failed">Não deu pra carregar teus servidores. Tenta de novo.</string>
+    <string name="follow_retry">Tentar de novo</string>
+    <string name="follow_close">Fechar</string>
+    <string name="follow_error_generic">Não deu pra seguir agora. Tenta de novo.</string>
+    <string name="follow_error_forbidden">Tu precisa gerenciar webhooks ou canais nesse canal.</string>
+    <string name="follow_error_exists">Esse canal já segue este Baú.</string>
+    <string name="follow_error_blocked">Esta comunidade não aceita esse servidor.</string>
+    <string name="follow_error_limit">Esse servidor já segue o máximo de Baús que pode.</string>
+    <string name="follow_error_invalid">Esse cargo não pode ser marcado.</string>
+    <string name="follow_error_slow">Vai com calma e tenta de novo.</string>
+    <string name="follow_error_action">Isso não funcionou. Tenta de novo.</string>
+    <string name="follow_menu_description">Opções do Baú</string>
+    <string name="follow_followers_menu">Seguidores</string>
+    <string name="follow_followers_title">Seguidores deste Baú</string>
+    <string name="follow_followers_hint">Servidores que recebem teus posts livres como cartões. Tu vê o nome dos servidores, nunca de pessoas.</string>
+    <string name="follow_followers_empty">Nenhum servidor segue este Baú ainda.</string>
+    <string name="follow_followers_more">Mostrar mais</string>
+    <plurals name="follow_followers_count">
+        <item quantity="one">%1$d seguidor</item>
+        <item quantity="other">%1$d seguidores</item>
+    </plurals>
+    <string name="follow_followers_remove">Remover</string>
+    <string name="follow_followers_block">Remover e bloquear</string>
+    <string name="follow_followers_blocked">Servidores bloqueados</string>
+    <string name="follow_followers_unblock">Desbloquear</string>
+    <string name="follow_followers_load_failed">Não deu pra carregar os seguidores. Tenta de novo.</string>
+    <string name="follow_followers_confirm_block_title">Remover e bloquear %1$s?</string>
+    <string name="follow_followers_confirm_block_body">Todos os seguimentos desse servidor param agora, e ele não poderá seguir este Baú de novo até tu desbloquear. Os cartões já entregues ficam.</string>
+    <string name="follow_allow_title">Permitir que outros servidores sigam este Baú</string>
+    <string name="follow_allow_helper">Os posts livres chegam como cartões nos canais que as pessoas escolherem. Numa comunidade pública qualquer membro pode configurar; nas outras, só quem gerencia o servidor. Posts só pra membros nunca saem.</string>
+    <string name="follow_channel_action">O que este canal segue</string>
+    <string name="follow_channel_title">Seguindo</string>
+    <string name="follow_channel_description">Os Baús que este canal segue. Os posts livres novos chegam aqui como cartões.</string>
+    <string name="follow_channel_from">Baú de %1$s</string>
+    <string name="follow_channel_load_failed">Não deu pra carregar o que este canal segue.</string>
+
+    <!-- Server list: channel unread -->
+    <string name="servers_unread">Mensagens não lidas</string>
+    <plurals name="servers_unread_mentions">
+        <item quantity="one">%1$d menção</item>
+        <item quantity="other">%1$d menções</item>
+    </plurals>
+
+    <!-- Conversas: Fixadas, mute, swipe -->
+    <string name="conversas_section_pinned">Fixadas</string>
+    <string name="conversas_section_recent">Recentes</string>
+    <string name="conversas_pin">Fixar</string>
+    <string name="conversas_unpin">Desafixar</string>
+    <string name="conversas_mute">Silenciar</string>
+    <string name="conversas_unmute">Reativar o som</string>
+    <string name="conversas_close_action">Fechar conversa</string>
+    <string name="conversas_pinned_state">Fixada</string>
+    <string name="conversas_pin_limit">Dá pra fixar até 15 conversas. Desafixa uma antes.</string>
+
+    <!-- A friendship started -->
+    <string name="friend_accepted_title">Tu e %1$s agora são amigos</string>
+    <string name="friend_accepted_cta">Mandar um oi</string>
 </resources>

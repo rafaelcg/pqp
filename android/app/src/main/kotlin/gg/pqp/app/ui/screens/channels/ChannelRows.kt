@@ -349,8 +349,23 @@ fun CategoryHeader(
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.onSurfaceVariant,
                 )
+                // Somebody pinged this person inside: the lime count the rows
+                // themselves show, never the plain dot. Otherwise the dot says
+                // there is news and nothing louder.
                 AnimatedVisibility(
-                    visible = summary.hasUnread,
+                    visible = summary.mentions > 0,
+                    enter = scaleIn(spring(dampingRatio = 0.5f, stiffness = 800f)),
+                    exit = scaleOut(),
+                ) {
+                    CountBadge(
+                        count = summary.mentions,
+                        loud = true,
+                        label = "@" + if (summary.mentions > 99) "99+" else summary.mentions.toString(),
+                        modifier = Modifier.padding(start = Spacing.sm).testTag("channels.category.mentions"),
+                    )
+                }
+                AnimatedVisibility(
+                    visible = summary.hasUnread && summary.mentions == 0,
                     enter = scaleIn(spring(dampingRatio = 0.5f, stiffness = 800f)),
                     exit = scaleOut(),
                 ) {

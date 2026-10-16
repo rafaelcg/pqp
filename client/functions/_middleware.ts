@@ -7,6 +7,12 @@ import {
   type BlogTarget,
 } from "../src/lib/blog-meta";
 import {
+  bauPostFromMetaPath,
+  injectBauPostHead,
+  type BauPostMeta,
+  type BauPostTarget,
+} from "../src/lib/bau-post-meta";
+import {
   communitySlugFromMetaPath,
   injectCommunityHead,
   type CommunityMeta,
@@ -37,7 +43,8 @@ import {
 } from "../src/lib/profile-meta";
 
 /**
- * Cloudflare Pages middleware: real Open Graph tags for `/@handle` and `/c/…`.
+ * Cloudflare Pages middleware: real Open Graph tags for `/@handle`, `/c/…` and
+ * `/c/…/p/…` (a public Baú post).
  *
  * WHY THIS FILE EXISTS. The site is a static SPA — every route is the same
  * `index.html`, and the head is fixed up in the browser by `Seo`. Crawlers and
@@ -91,7 +98,12 @@ interface PagesContext {
     /** Pages' own static-asset binding. Absent in some runtimes; handled. */
     ASSETS?: { fetch: (input: Request | string | URL) => Promise<Response> };
   };
-  next: () => Promise<Response>;
+  /**
+   * Pages' own signature: with no argument it forwards the request it was
+   * given, with one it forwards that instead (how a HEAD is answered as a GET,
+   * see `answerHead`).
+   */
+  next: (input?: Request | string, init?: RequestInit) => Promise<Response>;
   /** Keeps background work alive after the response. Absent in tests. */
   waitUntil?: (promise: Promise<unknown>) => void;
 }
@@ -412,6 +424,107 @@ async function fetchCommunity(
 }
 
 /**
+ * A public Baú post, for its card. `"missing"` is the API's 404 (the post is
+ * not public, for any of the reasons it does not say); `null` is "could not
+ * tell" (API down, timeout, malformed body, no origin), which serves the page
+ * untouched. The two are told apart on purpose: a down API must never make a
+ * live post look dead to a crawler, while a dead one should not stay indexed.
+ *
+ * Shape-checked rather than trusted, like `fetchCommunity`: these strings go
+ * into a document, `injectBauPostHead` escapes them, and a missing field would
+ * print "undefined" on the card.
+ */
+async function fetchBauPost(
+  apiOrigin: string,
+  target: BauPostTarget,
+): Promise<BauPostMeta | "missing" | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    const response = await fetch(
+      `${apiOrigin}/api/public/communities/${encodeURIComponent(target.slug)}/posts/${encodeURIComponent(target.postId)}`,
+      { signal: controller.signal, headers: { accept: "application/json" } },
+    );
+    if (response.status === 404) {
+      return "missing";
+    }
+    if (!response.ok) {
+      return null;
+    }
+    const body = (await response.json()) as {
+      post?: {
+        id?: unknown;
+        title?: unknown;
+        teaser?: unknown;
+        coverUrl?: unknown;
+        coverType?: unknown;
+        coverWidth?: unknown;
+        coverHeight?: unknown;
+        coverBytes?: unknown;
+        publishedAt?: unknown;
+      };
+      community?: CommunityMeta;
+    };
+    const post = body.post;
+    const community = body.community;
+    if (
+      !post ||
+      typeof post.id !== "string" ||
+      !community ||
+      typeof community.slug !== "string" ||
+      typeof community.name !== "string"
+    ) {
+      return null;
+    }
+    const text = (value: unknown): string | null =>
+      typeof value === "string" && value.trim() ? value : null;
+    // A number the card will print into a tag: a positive whole number or
+    // nothing. An older API sends none of these, which is "unknown".
+    const count = (value: unknown): number | null =>
+      typeof value === "number" && Number.isInteger(value) && value > 0
+        ? value
+        : null;
+    // A size in bytes, where ZERO is a fact (an empty object is not a picture)
+    // and not an absence.
+    const bytes = (value: unknown): number | null =>
+      typeof value === "number" && Number.isInteger(value) && value >= 0
+        ? value
+        : null;
+    return {
+      slug: target.slug,
+      postId: target.postId,
+      // The whole answer, so the page does not have to ask the API again.
+      embed: body,
+      title: text(post.title),
+      teaser: text(post.teaser),
+      coverUrl: text(post.coverUrl),
+      coverType: text(post.coverType),
+      coverWidth: count(post.coverWidth),
+      coverHeight: count(post.coverHeight),
+      coverBytes: bytes(post.coverBytes),
+      publishedAt: text(post.publishedAt),
+      community: {
+        slug: community.slug,
+        name: community.name,
+        tagline: typeof community.tagline === "string" ? community.tagline : null,
+        category: typeof community.category === "string" ? community.category : "geral",
+        memberCount:
+          typeof community.memberCount === "number" &&
+          Number.isFinite(community.memberCount)
+            ? community.memberCount
+            : 0,
+        iconUrl: typeof community.iconUrl === "string" ? community.iconUrl : null,
+        bannerUrl: typeof community.bannerUrl === "string" ? community.bannerUrl : null,
+      },
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * The rewritten response, with the caching a per-URL, per-language document
  * needs. Shared by both surfaces because the answer is the same for both:
  * anything in front of this must not reuse one page's bytes for another's URL.
@@ -547,19 +660,23 @@ async function handleRequest(context: PagesContext): Promise<Response> {
 
   const handle = handleFromMetaPath(url.pathname);
   const slug = handle ? null : communitySlugFromMetaPath(url.pathname);
+  const bauPost: BauPostTarget | null =
+    handle || slug ? null : bauPostFromMetaPath(url.pathname);
   const marketing =
-    handle || slug ? null : marketingPageFromMetaPath(url.pathname);
+    handle || slug || bauPost ? null : marketingPageFromMetaPath(url.pathname);
   const blog: BlogTarget | null =
-    handle || slug || marketing ? null : blogTargetFromMetaPath(url.pathname);
+    handle || slug || bauPost || marketing
+      ? null
+      : blogTargetFromMetaPath(url.pathname);
   const inviteCode =
-    handle || slug || marketing || blog
+    handle || slug || bauPost || marketing || blog
       ? null
       : inviteCodeFromMetaPath(url.pathname);
   // The overwhelmingly common case, and it must cost nothing: this middleware
   // is in front of every request the site serves, including every hashed
-  // asset. All five parsers are pure string checks — nothing is awaited
+  // asset. All six parsers are pure string checks — nothing is awaited
   // before this return.
-  if (!handle && !slug && !marketing && !blog && !inviteCode) {
+  if (!handle && !slug && !bauPost && !marketing && !blog && !inviteCode) {
     // Still a pure string check. Only a GET for a path the SPA has no route
     // for pays for the content-type look, and only to turn the shell's
     // 200 into a real 404. See `spa-routes.ts`.
@@ -664,6 +781,39 @@ async function handleRequest(context: PagesContext): Promise<Response> {
     );
   }
 
+  if (bauPost) {
+    const post = await fetchBauPost(apiOrigin, bauPost);
+    if (post === null) {
+      // Could not tell. The page is served as it was: a card that unfurls
+      // generically is a bad day, a live post that looks dead is worse.
+      return response;
+    }
+    if (post === "missing") {
+      // Not public, for a reason the API does not give. The SPA draws its own
+      // friendly 404 with the community's way in; what changes is what a
+      // crawler is told, so a taken-down post leaves the index. The status
+      // stays 200 on purpose: the person opening it deserves the page.
+      const headers = new Headers(response.headers);
+      headers.set("x-robots-tag", "noindex, nofollow");
+      headers.set("cache-control", "no-store");
+      headers.delete("content-length");
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    }
+    const html = await response.text();
+    return rewritten(
+      response,
+      injectBauPostHead(html, post, {
+        siteOrigin: url.origin,
+        apiOrigin,
+        locale: cardLocale,
+      }),
+    );
+  }
+
   const profile = await fetchProfile(apiOrigin, handle!);
   if (!profile) {
     // An unclaimed handle. The SPA draws its own "this @ is free — claim it"
@@ -684,6 +834,54 @@ async function handleRequest(context: PagesContext): Promise<Response> {
   );
 }
 
+/** Every path this middleware writes a card for. Pure string checks. */
+function isCardPath(pathname: string): boolean {
+  return Boolean(
+    handleFromMetaPath(pathname) ||
+      communitySlugFromMetaPath(pathname) ||
+      bauPostFromMetaPath(pathname) ||
+      marketingPageFromMetaPath(pathname) ||
+      blogTargetFromMetaPath(pathname) ||
+      inviteCodeFromMetaPath(pathname),
+  );
+}
+
+/**
+ * A HEAD for a page that has a card, answered as its GET would be, minus the
+ * body.
+ *
+ * Link crawlers and some CDNs probe an address with HEAD before they fetch it,
+ * and a probe that comes back with different headers (or with none of the
+ * ones the GET carries) is read as a page that is not what it says it is. The
+ * asset layer answers a HEAD for `index.html` on its own and never reaches the
+ * rewrite, so the headers a HEAD saw were the shell's, not the card's.
+ *
+ * The request is turned into a GET, run through the whole of `onRequest` (the
+ * API lookup, the locale, the caching headers, the hero strip), and the body
+ * dropped. `Content-Length` is left off because the rewrite removes it from
+ * the GET too: the length of a body that was never built is not a fact.
+ */
+async function answerHead(context: PagesContext): Promise<Response> {
+  const asGet = new Request(context.request.url, {
+    method: "GET",
+    headers: context.request.headers,
+  });
+  const response = await onRequest({
+    ...context,
+    request: asGet,
+    next: () => context.next(asGet),
+  });
+  // A body nobody will read would hold the connection to the asset layer open.
+  await response.body?.cancel().catch(() => undefined);
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 /**
  * `index.html` carries the landing page's first screen for the home route
  * (`src/lib/prerender-hero.ts`). The file is the same for every path, so every
@@ -694,6 +892,9 @@ async function handleRequest(context: PagesContext): Promise<Response> {
  * fall-throughs, because it wraps all of them.
  */
 export async function onRequest(context: PagesContext): Promise<Response> {
+  if (context.request.method === "HEAD" && isCardPath(new URL(context.request.url).pathname)) {
+    return answerHead(context);
+  }
   const response = await handleRequest(context);
   if (context.request.method !== "GET") {
     return response;

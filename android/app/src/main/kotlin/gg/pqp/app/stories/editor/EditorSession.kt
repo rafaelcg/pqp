@@ -41,6 +41,9 @@ class EditorSession {
     var canUndo by mutableStateOf(false)
         private set
 
+    /** The draw tool is open: a drawing is still being made, and is not worth sending ahead of the story yet. */
+    var drawingOpen by mutableStateOf(false)
+
     /** The layer a finger is on right now. */
     var activeId by mutableStateOf<String?>(null)
 
@@ -52,6 +55,13 @@ class EditorSession {
 
     /** The stroke a finger is drawing right now: shown live, saved (one undo step) when the finger lifts. */
     var liveStroke by mutableStateOf<Stroke?>(null)
+
+    /**
+     * What the author says the picture or clip shows, for people who cannot see it. Sent first in the
+     * story's `altText`, ahead of the words the text layers carry. Not part of the undo history: it is
+     * a field, not a thing on the canvas.
+     */
+    var description by mutableStateOf("")
 
     var textStyle by mutableStateOf(TextStyleChoice())
     var pen by mutableStateOf(PenChoice())
@@ -106,6 +116,12 @@ class EditorSession {
     fun bringToFront(id: String) = commit(LayerOps.bringToFront(layers, id))
 
     fun layer(id: String): EditorLayer? = layers.firstOrNull { it.id == id }
+
+    /** The draw tool opened: a drawing already made goes to the top (one undo step) so the next stroke is seen. */
+    fun beginDrawing() {
+        val next = LayerOps.inkToFront(layers)
+        if (next != layers) commit(next)
+    }
 
     fun addStroke(stroke: Stroke) = commit(LayerOps.withStroke(layers, ::newId, stroke))
 

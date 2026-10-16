@@ -13,6 +13,7 @@ import {
   permissionsUpdateSchema,
   profileUpdateSchema,
   serverRemovedSchema,
+  serverOrderUpdateSchema,
   voiceNoteListenedSchema,
   type ChanceRequest,
   type ChannelFanoutFrame,
@@ -23,12 +24,14 @@ import {
   type FriendActivity,
   type MessagePreview,
   type MessageRejectReason,
+  type MessageForward,
   type MessageSystemKind,
   NUDGE_BODY,
   type NudgeFrame,
   type NudgeRefusalReason,
   type PollRequest,
   type ProfileUpdate,
+  type ServerOrderUpdate,
   type ServerRemoved,
   type VoiceNoteListened,
   type BotActionCard,
@@ -225,6 +228,7 @@ const CHANNELS_TOPIC = "chat.channels";
 const MEMBERSHIP_TOPIC = "chat.membership";
 const VOICE_LISTENED_TOPIC = "chat.voice-listened";
 const BOT_NOTICE_TOPIC = "chat.bot-notice";
+const SERVER_ORDER_TOPIC = "chat.server-order";
 
 interface PresenceUser {
   id: string;
@@ -766,6 +770,49 @@ export function broadcastToChannel(
 }
 
 /**
+ * A message written by the SERVER, not typed by a person (a followed Baú's card
+ * delivered into a channel, `services/bau-follow-delivery.ts`): the same
+ * fan-out a send gets after it commits, minus everything that belongs to a
+ * sender. The message reaches the channel's viewers; everybody else who can
+ * see the channel gets the activity frame (unread dot, and a mention flag for
+ * `mentionedUserIds`, the people a role ping was recorded for).
+ *
+ * Runs in the API or in the worker. In the worker there are no sockets, so
+ * `broadcastToChannel` only reaches the siblings over the cluster bus, and
+ * the activity frame is published for them to fan out (their copy is the one
+ * that sends web push, as it is for every message that crosses the bus). With
+ * the bus off the worker has nobody to tell, which is what a deployment with a
+ * worker and no bus already means for every other frame.
+ */
+export async function announceServiceMessage(
+  message: ReturnType<typeof mapMessage>,
+  mentionedUserIds: readonly string[] = [],
+): Promise<void> {
+  broadcastToChannel(message.channelId, {
+    type: "message-broadcast",
+    message,
+  });
+  if (isBusEnabled()) {
+    publishToCluster(ACTIVITY_TOPIC, {
+      channelId: message.channelId,
+      authorId: message.authorId,
+      mentions: [],
+      repliedToUserId: null,
+      ...(mentionedUserIds.length > 0 ? { mentionedUserIds } : {}),
+      preview: null,
+    });
+  }
+  // The message is already out: a failure in the activity leg (unread dots,
+  // push) is logged, never thrown, so the caller cannot mistake a completed
+  // broadcast for a failed one and replay it.
+  await notifyChannelActivity(message.channelId, message.authorId, [], null, {
+    mentionedUserIds,
+  }).catch((error: unknown) => {
+    console.error("[chat] service message activity failed:", error);
+  });
+}
+
+/**
  * The local half of `broadcastToChannel`, and the *only* thing a frame arriving
  * from the bus is allowed to call. Separating them is the loop guard's second
  * line of defence: even a frame that somehow escaped the origin check in
@@ -1150,6 +1197,42 @@ export function deliverServerRemoved(
   const payload = encode(frame);
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && addressed.has(user.id)) {
+      socket.send(payload);
+    }
+  });
+}
+
+/**
+ * The rail was reordered: tell every socket this account holds, so its other
+ * tabs and its phone follow. `origin` is the saving tab's own id, echoed so it
+ * can skip the frame (it already shows this order, and re-applying it could
+ * undo a second drag made while the save was in the air).
+ *
+ * Fire-and-forget and NOT retried when the bus is down, unlike
+ * `server-removed`: the order is the account's own state, each tab re-reads
+ * the list when it reconnects, and the next save sends a newer frame.
+ */
+export function notifyServerOrder(
+  userId: string,
+  serverIds: readonly string[],
+  origin?: string,
+): void {
+  const frame: ServerOrderUpdate = {
+    type: "server-order-update",
+    serverIds: [...serverIds],
+    ...(origin ? { origin } : {}),
+  };
+  deliverServerOrder(frame, userId);
+  if (isBusEnabled()) {
+    publishToCluster(SERVER_ORDER_TOPIC, { frame, userId });
+  }
+}
+
+/** The local half, and the only thing a bus frame may call. */
+function deliverServerOrder(frame: ServerOrderUpdate, userId: string): void {
+  const payload = encode(frame);
+  forEachSocketOfUser(userId, (socket) => {
+    if (socket.readyState === 1) {
       socket.send(payload);
     }
   });
@@ -2309,6 +2392,14 @@ export type PostChannelMessageInput = {
   storyId?: string;
   /** A server bot's action card. Only the bot runner sets it. */
   botCard?: BotActionCard;
+  /**
+   * A forward (`POST /api/forwards`): the snapshot stored on the message and
+   * the forwarder's own comment. `body` is then the comment, or the fallback
+   * line when there is none. Nothing the snapshot says can mention anybody:
+   * names are read from the comment only, `@everyone` and `@here` never fire,
+   * and AutoMod reads the snapshot too, because that text lands in the channel.
+   */
+  forward?: { snapshot: MessageForward; comment: string };
 };
 
 export type PostChannelMessageResult =
@@ -2491,7 +2582,15 @@ async function postChannelMessageAttempt(
         channel.type === "thread" ? (channel.parent_id ?? null) : null,
       authorId: input.author.id,
       memberPerms,
-      body: input.body,
+      body: input.forward
+        ? [
+            input.forward.comment,
+            input.forward.snapshot.title ?? "",
+            input.forward.snapshot.excerpt,
+          ]
+            .filter((part) => part.length > 0)
+            .join("\n")
+        : input.body,
     };
     const verdict = await checkAutomod(automodInput);
     if (verdict) {
@@ -2512,14 +2611,23 @@ async function postChannelMessageAttempt(
 
   await input.beforeCreate?.();
 
-  const parsedMentions = extractMentions(input.body);
+  // What mentions are read from. A forward's body may be the server's
+  // fallback line (a title the forwarder never wrote), and the snapshot is
+  // never re-resolved, so only the forwarder's own comment can mention, and
+  // `@everyone` / `@here` never fire from a forward at all.
+  const mentionSource = input.forward ? input.forward.comment : input.body;
+  const parsedMentions = extractMentions(mentionSource);
   let hereUserIds: string[] = [];
   const mentionEveryone =
     channel?.kind === "server" &&
+    !input.forward &&
     parsedMentions.everyone &&
     canMentionEveryone;
   const mentionHere =
-    channel?.kind === "server" && parsedMentions.here && canMentionEveryone;
+    channel?.kind === "server" &&
+    !input.forward &&
+    parsedMentions.here &&
+    canMentionEveryone;
   if (mentionHere) {
     const hereAudience = await getChannelAudience(input.channelId);
     hereUserIds = (hereAudience?.userIds ?? []).filter(
@@ -2563,10 +2671,17 @@ async function postChannelMessageAttempt(
       mentionEveryone,
       mentionHere,
       extraUserIds: hereUserIds,
-      canMentionEveryone,
+      canMentionEveryone: canMentionEveryone && !input.forward,
+      ...(input.forward ? { mentionText: input.forward.comment } : {}),
     },
-    input.chance || input.poll || input.systemKind || input.botCard
-      ? { chance: input.chance, poll: input.poll, systemKind: input.systemKind, botCard: input.botCard }
+    input.chance || input.poll || input.systemKind || input.botCard || input.forward
+      ? {
+          chance: input.chance,
+          poll: input.poll,
+          systemKind: input.systemKind,
+          botCard: input.botCard,
+          ...(input.forward ? { forward: input.forward.snapshot } : {}),
+        }
       : undefined,
     input.nonce,
     channel?.kind !== "server" ? (input.storyId ?? null) : null,
@@ -2644,7 +2759,9 @@ async function postChannelMessageAttempt(
   }
 
   const message = mapMessage(dbMessage);
-  const url = extractFirstUrl(input.body);
+  // A forward is its own preview: the fallback line's URL is the card's
+  // `url`, and unfurling it would draw the same thing twice under the card.
+  const url = input.forward ? null : extractFirstUrl(input.body);
   let cacheFresh = true;
   if (url) {
     const state = await getEmbedCacheState(url);
@@ -2664,7 +2781,7 @@ async function postChannelMessageAttempt(
     input.senderSocket,
   );
 
-  const mentions = extractMentionUsernames(input.body);
+  const mentions = extractMentionUsernames(mentionSource);
   const mentionedUserIds = mentionIdsFromDb
     ? (dbMessage.mentionedUserIds ?? [])
     : [];
@@ -3455,6 +3572,21 @@ subscribeToCluster(MEMBERSHIP_TOPIC, (data) => {
     return;
   }
   deliverServerRemoved(parsed.data, userIds);
+});
+
+/**
+ * A rail reorder saved on another instance. The frame is parsed with the schema
+ * the clients parse it with and the account must survive as a string: without
+ * it there is nobody to tell.
+ */
+subscribeToCluster(SERVER_ORDER_TOPIC, (data) => {
+  const record = asRecord(data);
+  const parsed = serverOrderUpdateSchema.safeParse(record?.frame);
+  const userId = typeof record?.userId === "string" ? record.userId : undefined;
+  if (!parsed.success || !userId) {
+    return;
+  }
+  deliverServerOrder(parsed.data, userId);
 });
 
 subscribeToCluster(PERMISSIONS_TOPIC, (data) => {

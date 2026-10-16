@@ -333,6 +333,37 @@ export const FEATURE_FLAGS = {
     // The fan-out starts from a post, and a post has a server.
     perServer: true,
   },
+  bau_follow: {
+    description:
+      "Seguir um Baú: quem gerencia um canal de outro servidor passa a receber ali os posts livres novos deste Baú, como um cartão de encaminhado. Ligado para o servidor DE ORIGEM (o Baú seguido).",
+    env: "BAU_FOLLOW",
+    parseEnv: exactTrue,
+    // Off: the Seguir button is absent, creating a follow is a 404 and nothing
+    // is delivered. Turned on for ONE source first (the QG, its override), then
+    // any community that asks, with no deploy. It reads the SOURCE: a follow is
+    // set up from the source's Baú and delivered when the source publishes.
+    codeDefault: false,
+    // Every reader knows the source server: the follow routes sit under
+    // `/servers/:id/home`, and the delivery job works from a post, which has one.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/home/follow (enabled)",
+  },
+  bau_public_posts: {
+    description:
+      "Página pública de post do Baú (pqp.gg/c/<comunidade>/p/<post>) e o botão Compartilhar: só posts grátis e publicados de comunidade com endereço público.",
+    env: "BAU_PUBLIC_POSTS",
+    parseEnv: exactTrue,
+    // Off: a post that was members' business becomes a page anybody holding the
+    // link can read, and an Open Graph card on every network it is pasted into.
+    // Turned on one community first (its override), then everybody. Needs
+    // `COMMUNITIES_ENABLED` and the Baú on; with either off the page answers
+    // 404 like an unknown address.
+    codeDefault: false,
+    // Every reader starts from a post, and a post has a server: the public
+    // read, the cover redirect and the `publicUrl` on a feed post.
+    perServer: true,
+    clientVia: "publicUrl on GET /api/servers/:id/home/posts",
+  },
   community_home_video_captions: {
     description:
       "Legendas automáticas nos vídeos enviados pro Baú (o áudio vai pro Cloudflare Workers AI; a tradução das legendas também precisa da tradução do Baú ligada).",
@@ -618,7 +649,7 @@ export const FEATURE_FLAGS = {
   },
   client_force_update: {
     description:
-      "Forçar atualização: todo cliente web ou desktop fora do último build vê a tela \"atualização necessária\" (não aparece durante uma chamada). Ligue só enquanto o build bom estiver no ar.",
+      "Empurrar atualização: todo cliente web ou desktop fora do último build recebe o aviso na hora, sem esperar o horário diário (09:00 UTC), e o ícone de atualização fica em destaque. Não bloqueia a tela de ninguém e não recarrega ninguém numa call. Desligue quando o build bom já estiver na mão de todo mundo.",
     env: "CLIENT_FORCE_UPDATE",
     parseEnv: exactTrue,
     codeDefault: false,
@@ -627,7 +658,7 @@ export const FEATURE_FLAGS = {
   },
   client_force_update_in_call: {
     description:
-      "Atualização crítica: com a atualização forçada ligada (ou CLIENT_MIN_BUILT_AT), o cliente recarrega mesmo no meio de uma call. Derruba quem está em call; só para um conserto crítico, e desligue assim que o build bom estiver no ar.",
+      "Atualização crítica: com \"Empurrar atualização\" ligada (ou CLIENT_MIN_BUILT_AT), o cliente recarrega sozinho mesmo no meio de uma call e mostra a tela \"atualização necessária\". É a única coisa que bloqueia a tela, e derruba quem está em call: só para um conserto crítico, e desligue assim que o build bom estiver no ar.",
     env: "CLIENT_FORCE_UPDATE_IN_CALL",
     parseEnv: exactTrue,
     codeDefault: false,
@@ -764,6 +795,21 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/stories/config + GET /api/stories/friends",
   },
+  stories_eager_uploads: {
+    description:
+      "Stories: o arquivo começa a subir assim que a pessoa o tem, antes do Postar, e o Postar só cria e publica. Ligado por padrão; é o interruptor de emergência: desligado, a rota de upload adiantado responde 404 e o app cai no fluxo de sempre (criar, subir, publicar).",
+    env: "STORIES_EAGER_UPLOADS",
+    parseEnv: onUnlessOff,
+    // On: a kill switch, not a rollout. The plain flow is the whole fallback.
+    codeDefault: true,
+    // About the deployment's storage and traffic, not a server.
+    perServer: false,
+    // Web and the phones read `eagerUploads` from the stories config; a client
+    // that never asks still gets a 404 from the route and falls back by itself.
+    // No `(field)`: the contract test would ask for a client reader, and the
+    // clients that read it land after the server.
+    clientVia: "GET /api/stories/config + POST /api/stories/uploads",
+  },
   mixed_channel_list: {
     description:
       "Lista de canais só com categorias: tipos misturados em cada categoria, a ordem que o gerente escolher, e um servidor novo nasce com a categoria Canais.",
@@ -778,6 +824,35 @@ export const FEATURE_FLAGS = {
     perServer: true,
     // No `(field)`: the clients that read `mixed` land after the server.
     clientVia: "GET /api/servers/:id/channel-layout",
+  },
+  forward_messages: {
+    description:
+      "Encaminhar: mandar um post do Baú ou uma mensagem pra outro canal ou DM como um card que diz de onde veio. Desligado, o servidor recusa (404) e os apps escondem a ação; os cards que já foram enviados continuam aparecendo.",
+    env: "FORWARD_MESSAGES",
+    parseEnv: exactTrue,
+    // Off until the web and the phones draw the card: before that, an old
+    // client shows the plain fallback line, which is readable but not the
+    // feature.
+    codeDefault: false,
+    // A forward fans out to many servers and to conversations (no server), so
+    // a per-server override would never be read. Checked on every request, so
+    // off is a real kill switch whatever a stale client thinks.
+    perServer: false,
+    clientVia: "GET /api/forwards/config",
+  },
+  discord_bring_crew: {
+    description:
+      "Traz tua galera (depois de copiar um Discord): o último passo vira um anúncio pronto pra colar no Discord antigo, e o dono vê quantas pessoas já chegaram, com um lembrete no dia seguinte se veio pouca gente.",
+    env: "DISCORD_BRING_CREW",
+    parseEnv: exactTrue,
+    // Off until the step has been seen on a real import: on, it changes the
+    // last screen of every import and puts a strip over the owner's channels.
+    codeDefault: false,
+    // Every reader has the server: the import's apply (the server it just
+    // made) and the arrivals route.
+    perServer: true,
+    clientVia:
+      "POST /api/import/discord/apply (bringCrew) and GET /api/servers/:id/import-arrivals (enabled)",
   },
 } as const satisfies Record<string, FlagDefinition>;
 

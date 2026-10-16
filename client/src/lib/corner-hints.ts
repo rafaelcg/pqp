@@ -1,7 +1,7 @@
 /**
  * One card at a time.
  *
- * The update card, QG, the Android/iOS beta invite, Novidades, and cargos
+ * QG, the Android/iOS beta invite, Novidades, and cargos
  * all pin to `right-4 bottom-4`. Showing two is a stack, not a queue: the
  * one underneath still records its impression, so the person never sees it.
  * First match in this list is the only one allowed to mount. Not every id
@@ -11,10 +11,10 @@
  * layout one.
  *
  * Order is product, not recency:
- *  1. update — a waiting build beats every campaign (it is also mounted
- *     outside App; see `lib/update-prompt-state.ts` for how it reports in)
+ *  (A waiting build used to be 1 here, a card that beat every campaign. It is
+ *  the quiet update indicator now and takes no corner at all.)
  *  2. communityHomePost — a live Baú publish in the open server; not a
- *     campaign, so it beats the first-run cards and yields only to update
+ *     campaign, so it beats the first-run cards
  *  3. notifyOffer — a DM or mention reached a hidden tab and banners are off;
  *     a moment rather than a campaign (`lib/notifications.ts`, `NotifyOfferHint`)
  *  4. qg — the house, first-run
@@ -31,7 +31,6 @@
  *     hint is up (see `lib/feature-hints.ts`)
  */
 export const CORNER_HINT_ORDER = [
-  "update",
   "communityHomePost",
   "notifyOffer",
   "qg",

@@ -18,6 +18,12 @@ object StoriesRules {
     const val TEXT_MAX = 280
     const val REPLY_MAX = 2000
 
+    /** The longest wait between two reads of the audience list while the API is unreachable. */
+    const val RETRY_MAX_MS = 15_000L
+
+    /** The wait after [previous] in an exponential backoff that never exceeds [RETRY_MAX_MS]. */
+    fun nextRetryDelay(previous: Long): Long = (previous * 2).coerceIn(1L, RETRY_MAX_MS)
+
     /** How long after a story is on screen it counts as seen. */
     const val SEEN_AFTER_MS = 1_000L
 
@@ -26,6 +32,29 @@ object StoriesRules {
 
     /** `STORY_BACKGROUNDS`, in the order the picker draws them. */
     val BACKGROUNDS = listOf("lime", "night", "ember", "grape", "sand", "ink")
+
+    /** `STORY_BACKGROUNDS_SOLID`: flat colours. */
+    val BACKGROUNDS_SOLID = listOf("cobalt", "crimson", "pine", "plum", "teal", "onyx")
+
+    /** `STORY_BACKGROUNDS_GRADIENT`: two stops on a 160 degree line. */
+    val BACKGROUNDS_GRADIENT = listOf("sunset", "ocean", "aurora", "dusk", "berry", "lagoon")
+
+    /** `STORY_BACKGROUND_FAMILIES`, in the order the switch draws them. */
+    val BACKGROUND_FAMILIES = listOf("glow", "solid", "gradient")
+
+    /** The keys of one family, in picker order (`storyBackgroundsOf`). */
+    fun backgroundsOf(family: String): List<String> = when (family) {
+        "solid" -> BACKGROUNDS_SOLID
+        "gradient" -> BACKGROUNDS_GRADIENT
+        else -> BACKGROUNDS
+    }
+
+    /** Which family a key belongs to; an unknown key reads as the first (`storyBackgroundFamily`). */
+    fun backgroundFamily(key: String?): String = when (key) {
+        in BACKGROUNDS_SOLID -> "solid"
+        in BACKGROUNDS_GRADIENT -> "gradient"
+        else -> "glow"
+    }
 
     /** What a reaction looks like. GG is the house one and is a word, not an emoji. */
     fun reactionGlyph(reaction: String): String = when (reaction) {
@@ -51,6 +80,20 @@ object StoriesRules {
     fun wordsOf(story: Story): String {
         val layers = story.layers.filterIsInstance<TextStoryLayer>().joinToString("\n") { it.text }
         return layers.ifBlank { if (story.kind == "text") story.text.orEmpty() else story.caption.orEmpty() }
+    }
+
+    /**
+     * The caption pill of a story from before layers, or null when it is not
+     * drawn. A story with text layers has those words twice (the author's build
+     * copies them into `caption` for older builds): the layers draw them where
+     * the author put them, so the pill is not drawn. A text card never has one.
+     * Same rule as the web viewer (`showLegacyText`) and iOS (`legacyCaption`).
+     */
+    fun legacyCaption(story: Story): String? {
+        if (story.kind == "text") return null
+        val caption = story.caption?.takeIf { it.isNotBlank() } ?: return null
+        if (story.layers.any { it is TextStoryLayer }) return null
+        return caption
     }
 
     /**

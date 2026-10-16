@@ -958,6 +958,10 @@ final class ChatModel {
             applyListen(messageId: messageId, attachmentId: attachmentId,
                         userId: userId, listenedAt: listenedAt)
 
+        case .voiceNoteTranscript(let noteChannelId, let messageId, let attachmentId, let transcript):
+            guard noteChannelId == channelId else { return }
+            applyTranscript(messageId: messageId, attachmentId: attachmentId, transcript: transcript)
+
         case .voiceNoteUpdated(let noteChannelId, let messageId, _, let playbackReady):
             guard noteChannelId == channelId, playbackReady,
                   messages.contains(where: { $0.id == messageId }) else { return }
@@ -1018,6 +1022,30 @@ final class ChatModel {
             voice.listenedBy = listeners
         }
         messages[index].attachments[attachment].voice = voice
+    }
+
+    /// A transcript landed (a frame, or the answer to asking for one): into the
+    /// note it belongs to. A note this model does not hold is none of its business.
+    func applyTranscript(messageId: String, attachmentId: String, transcript: VoiceNoteTranscript) {
+        guard let index = messages.firstIndex(where: { $0.id == messageId }),
+              let attachment = messages[index].attachments.firstIndex(where: { $0.id == attachmentId }),
+              var voice = messages[index].attachments[attachment].voice
+        else { return }
+        voice.transcript = VoiceNoteTranscript.merged(current: voice.transcript, incoming: transcript)
+        messages[index].attachments[attachment].voice = voice
+    }
+
+    /// "Transcrever": ask for a transcript of someone else's note. The answer is
+    /// merged at once (usually `pending`; the text follows on the frame).
+    func requestTranscript(message: Message, attachmentId: String) async -> VoiceTranscriptRequest {
+        guard let session else { return .failed }
+        do {
+            let transcript = try await session.api.requestTranscript(attachmentId: attachmentId)
+            applyTranscript(messageId: message.id, attachmentId: attachmentId, transcript: transcript)
+            return .idle
+        } catch {
+            return VoiceTranscriptRequest.from(error)
+        }
     }
 
     /// Read the visible page again. A pending Opus note becomes playable on the

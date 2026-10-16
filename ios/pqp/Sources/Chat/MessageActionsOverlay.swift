@@ -32,6 +32,10 @@ struct MessageActionsOverlay: View {
     /// Reporting your own message makes no sense, and neither does reporting a
     /// webhook — there is nobody to sanction.
     let canReport: Bool
+    /// Encaminhar: offered while the flag is on, on a message that can be a
+    /// source. Defaulted off so every other caller keeps its menu.
+    var canForward: Bool = false
+    var onForward: () -> Void = {}
 
     var onReact: (String) -> Void
     var onMoreReactions: () -> Void
@@ -149,6 +153,15 @@ struct MessageActionsOverlay: View {
             row("Reply", icon: "arrowshape.turn.up.left") {
                 onReply()
                 onDismiss()
+            }
+
+            if canForward {
+                divider
+                row("Forward", icon: "arrowshape.turn.up.right") {
+                    onForward()
+                    onDismiss()
+                }
+                .accessibilityIdentifier("messageActions.forward")
             }
 
             if let solution {

@@ -57,7 +57,9 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import androidx.compose.ui.unit.dp
 import gg.pqp.app.R
+import gg.pqp.app.bau.BauCaptionsSource
 import gg.pqp.app.core.Backend
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
@@ -342,8 +344,11 @@ internal fun BauActiveVideo(
     key: String,
     open: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The post's automatic subtitles, or null (none, flag off, not a transcribed video). */
+    captions: BauCaptionsSource? = null,
 ) {
     val player = BauPlayback.player
+    val captionsState = rememberBauCaptions(player, captions)
     var fullscreen by remember(key) { mutableStateOf(false) }
     val fullscreenNow by rememberUpdatedState(fullscreen)
     val failed = BauPlayback.failedKey == key
@@ -399,6 +404,11 @@ internal fun BauActiveVideo(
                 onRelease = { view -> view.player = null },
                 modifier = Modifier.fillMaxSize(),
             )
+            if (captionsState != null) {
+                // Above the controller's bar, which sits along the bottom.
+                BauCaptionsCue(captionsState, bottomPadding = 56.dp, modifier = Modifier.align(Alignment.BottomCenter))
+                BauCaptionsButton(captionsState, Modifier.align(Alignment.TopEnd))
+            }
         }
 
         if (failed) {
@@ -419,13 +429,13 @@ internal fun BauActiveVideo(
     }
 
     if (fullscreen && player != null) {
-        BauFullscreen(player = player, onExit = { fullscreen = false })
+        BauFullscreen(player = player, onExit = { fullscreen = false }, captions = captionsState)
     }
 }
 
 @OptIn(UnstableApi::class)
 @Composable
-private fun BauFullscreen(player: ExoPlayer, onExit: () -> Unit) {
+private fun BauFullscreen(player: ExoPlayer, onExit: () -> Unit, captions: BauCaptionsState?) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     var playing by remember { mutableStateOf(player.isPlaying) }
@@ -533,6 +543,11 @@ private fun BauFullscreen(player: ExoPlayer, onExit: () -> Unit) {
                 onRelease = { view -> view.player = null },
                 modifier = Modifier.fillMaxSize(),
             )
+
+            if (captions != null && !inPip) {
+                BauCaptionsCue(captions, bottomPadding = 72.dp, modifier = Modifier.align(Alignment.BottomCenter))
+                BauCaptionsButton(captions, Modifier.align(Alignment.TopStart).safeDrawingPadding())
+            }
 
             if (!inPip) {
                 IconButton(

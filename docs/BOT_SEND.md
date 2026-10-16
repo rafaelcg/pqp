@@ -204,6 +204,32 @@ only, and a staff-only tag has to be listed by id; `defaultTagIds` apply when
 nothing the payload names resolves; `dedupeWindowHours: 0` turns dedupe off.
 The full design is `docs/plans/FORUM_CHANNELS.md` section 7.
 
+### Pointing a feed tool at it (measured)
+
+From a 48 h run of n8n's RSS Feed Trigger and a MonitoRSS-shaped sender on a dozen
+real feeds, two API instances behind one proxy (`docs/plans/FORUM_CHANNELS.md`
+section 7 is the design, this is what the tools actually did):
+
+- **The budget is the thing to plan for.** 10 posts burst then 1 a minute per
+  webhook is 60 an hour. A busy feed is fine; a feed's first sync, or a tool
+  catching up, is a burst. Give each tool its own webhook.
+- **n8n cannot honour `retry_after`.** The HTTP Request node's Retry On Fail
+  waits at most 5 s and replays the whole batch, so items past the burst get
+  `429` three times and are dropped for good (the RSS trigger does not emit them
+  again). The replayed items that did land are answered by dedupe and cost
+  nothing. Pace the node instead: Options, Batching, 1 item per batch, interval
+  `61000` ms. Fourteen items arriving at once all landed paced; unpaced, ten did
+  and four were lost.
+- **Set `Idempotency-Key` to the item's GUID, or never set it for that feed.** The
+  key is the header when present, else a hash of the title and link, so a tool
+  that sometimes sends the header does not dedupe against itself.
+- **Re-sends are normal and free.** Feeds that re-date items (The Verge, Steam
+  news) made n8n send the same item hundreds of times over two days; every one was
+  answered with `X-Pqp-Deduplicated: 1`, and no duplicate post was ever written.
+- **Downtime.** A sender that keeps its own "seen" list and honours `retry_after`
+  (MonitoRSS-style) catches up after the API was away. n8n gives up after its
+  three tries, so items that appeared while the API was down are not posted.
+
 ## Follow-ups
 
 No in-app key manager. Minting stays a database script. An operator UI would

@@ -12,6 +12,7 @@ import type {
   PutForumTagsRequest,
   UpdateForumSettingsRequest,
   VoiceAudienceResponse,
+  DiscordImportArrivals,
   ChannelType,
   ChannelLayoutConfig,
   ChannelLayoutInput,
@@ -42,6 +43,12 @@ import type {
   UpdateServerCommunityHomeConfig,
   CommunityHomeLikeResponse,
   CommunityHomePostCard,
+  BauFollow,
+  BauFollowDestinations,
+  BauFollowState,
+  BauFollowers,
+  CreateBauFollowRequest,
+  UpdateBauFollowRequest,
   CommunityHomePostResponse,
   ShareCommunityHomePostRequest,
   CommunityHomePostsResponse,
@@ -85,11 +92,13 @@ import type {
   CreateFeedbackRequest,
   CreateReportRequest,
   FeedbackItem,
+  PublicBauPostResponse,
   PublicCommunity,
   PublicProfile,
   PublicUser,
   AllReportPage,
   Report,
+  ReportContext,
   ReportPage,
   ReportStatus,
   ReportSummaryPage,
@@ -120,6 +129,9 @@ import type {
   CreateAutomodRuleInput,
   UpdateAutomodRuleInput,
   PublicInvitePreview,
+  CreateForwardRequest,
+  CreateForwardResponse,
+  ForwardDestinations,
 } from "@pqp/shared";
 import {
   LIVE_PREVIEW_ENDED_ERROR,
@@ -130,6 +142,7 @@ import {
   type LivePreviewStartResponse,
 } from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
+import { takePublicPostEmbed } from "./community-home/public-post-embed";
 import { parseRetryAfterMs } from "./reconnect-jitter";
 
 const API_TIMEOUT_MS = 12_000;
@@ -429,6 +442,81 @@ export async function fetchPublicCommunity(
       return null;
     }
     throw error;
+  }
+}
+
+/**
+ * A Baú post's public page, by community slug and post id: the third read in
+ * this file that works with no session. `GET /api/public/communities/:slug/posts/:postId`.
+ *
+ * `null` is the 404, and the server answers one 404 for every reason there is
+ * (draft, members-only, deleted, no address, a flag off), so the page draws one
+ * "not here" for all of them. Every other failure throws, for the reason
+ * `fetchPublicCommunity` does: a network drop is not "this post is gone".
+ */
+export async function fetchPublicBauPost(
+  slug: string,
+  postId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<PublicBauPostResponse | null> {
+  // The edge already asked for this post to write its card and put the answer
+  // in the HTML: one API hit per page view instead of two. Only the first read
+  // of a document; anything unusable falls through to the network.
+  const embedded =
+    typeof document === "undefined"
+      ? null
+      : takePublicPostEmbed(document, slug, postId);
+  if (embedded) {
+    return embedded;
+  }
+  try {
+    return await apiFetch<PublicBauPostResponse>(
+      `/api/public/communities/${encodeURIComponent(slug)}/posts/${encodeURIComponent(postId)}`,
+      { signal: options.signal },
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Whether the signed-in person is already in a community, and its id, from a
+ * PUBLIC page (`/c/<slug>/p/<id>`).
+ *
+ * Its own request with the token passed in, not `apiFetch`: the app's token
+ * provider is installed by `App` (`setAuthTokenProvider`), which has not mounted
+ * on a public page, so `apiFetch` would send no credential and read a 401 as
+ * "not a member". Null on every failure (not signed in, banned, offline, the
+ * route off): the caller's join button is the honest fallback for all of them.
+ */
+export async function lookupCommunityMembership(
+  slug: string,
+  getToken: () => Promise<string | null>,
+): Promise<{ serverId: string; joined: boolean } | null> {
+  try {
+    const token = await getToken();
+    if (!token) {
+      return null;
+    }
+    const response = await fetch(
+      `${getApiBaseUrl()}/api/communities/by-slug/${encodeURIComponent(slug)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) {
+      return null;
+    }
+    const { community } = (await response.json()) as {
+      community?: { id?: unknown; joined?: unknown };
+    };
+    if (typeof community?.id !== "string") {
+      return null;
+    }
+    return { serverId: community.id, joined: community.joined === true };
+  } catch {
+    return null;
   }
 }
 
@@ -1325,6 +1413,15 @@ export const fetchAttachmentUrl = (attachmentId: string) =>
 export const fetchServers = () =>
   apiFetch<{ servers: Server[] }>("/api/servers");
 
+/**
+ * Save the order of THIS account's server rail. `origin` is the tab's own random
+ * id; the server echoes it on the `server-order-update` frame it sends to the
+ * account's other sockets so this tab can tell its own echo apart. Answers
+ * with the order as stored (ids this account no longer holds are dropped).
+ */
+export const saveServerOrder = (serverIds: string[], origin: string) =>
+  put<{ serverIds: string[] }>("/api/servers/order", { serverIds, origin });
+
 export const createServer = (
   name: string,
   idempotencyKey?: string,
@@ -1349,6 +1446,8 @@ export const applyDiscordImport = (source: string, idempotencyKey?: string) =>
     channels: Channel[];
     roles: ServerRole[];
     invite: Invite;
+    /** Flag `discord_bring_crew` for the new server; absent on an older API. */
+    bringCrew?: boolean;
   }>(
     "/api/import/discord/apply",
     { source },
@@ -2242,6 +2341,26 @@ export const lookupUserByTag = (tag: string, signal?: AbortSignal) =>
     signal ? { signal } : {},
   );
 
+/**
+ * Encaminhar. `forward_messages` is a runtime flag: off, the route is a 404 and
+ * the config says `enabled: false` (an older API has no config route at all,
+ * which reads as off too). See `lib/forward.ts`.
+ */
+export const fetchForwardConfig = () =>
+  apiFetch<{ enabled?: boolean }>("/api/forwards/config");
+
+/** Always a 200 once the request was valid; each target answers for itself. */
+export const createForward = (body: CreateForwardRequest) =>
+  post<CreateForwardResponse>("/api/forwards", body);
+
+/**
+ * The channels of one server a forward may go to, already filtered by what the
+ * caller can see and speak in: one request where the picker used to make two
+ * (channels + permission snapshot). A 404 is an API that predates it.
+ */
+export const fetchForwardDestinations = (serverId: string) =>
+  apiFetch<ForwardDestinations>(`/api/servers/${serverId}/forward-destinations`);
+
 export const fetchConversations = () =>
   apiFetch<DmListResponse>("/api/dms");
 
@@ -2281,6 +2400,10 @@ export const createInvite = (
 
 export const listInvites = (serverId: string) =>
   apiFetch<{ invites: Invite[] }>(`/api/servers/${serverId}/invites`);
+
+/** "Traz tua galera": who came over since a Discord import (managers only). */
+export const getImportArrivals = (serverId: string) =>
+  apiFetch<DiscordImportArrivals>(`/api/servers/${serverId}/import-arrivals`);
 
 export const deleteInvite = (serverId: string, inviteId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}/invites/${inviteId}`);
@@ -2416,6 +2539,71 @@ export const updateCommunityHomePost = (
 
 export const deleteCommunityHomePost = (serverId: string, postId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}/home/posts/${postId}`);
+
+// ---------------------------------------------------------------- Seguir
+//
+// Following a Baú into a channel of another server. `enabled: false` (the
+// per-source flag `bau_follow`) means no button; everything else is a 404 then.
+
+export const fetchBauFollowState = (serverId: string) =>
+  apiFetch<BauFollowState>(`/api/servers/${serverId}/home/follow`);
+
+export const fetchBauFollowDestinations = (serverId: string) =>
+  apiFetch<BauFollowDestinations>(
+    `/api/servers/${serverId}/home/follow/destinations`,
+  );
+
+export const createBauFollow = (
+  serverId: string,
+  body: CreateBauFollowRequest,
+) => post<{ follow: BauFollow }>(`/api/servers/${serverId}/home/follow`, body);
+
+export const fetchChannelBauFollows = (channelId: string) =>
+  apiFetch<{ follows: BauFollow[] }>(`/api/channels/${channelId}/bau-follows`);
+
+export const updateBauFollow = (
+  followId: string,
+  body: UpdateBauFollowRequest,
+) => patch<{ follow: BauFollow }>(`/api/bau-follows/${followId}`, body);
+
+export const deleteBauFollow = (followId: string) =>
+  del<{ ok: boolean }>(`/api/bau-follows/${followId}`);
+
+/** Source staff: who follows this Baú (server names, never people). */
+export const fetchBauFollowers = (
+  serverId: string,
+  page: { limit?: number; cursor?: string | null } = {},
+) => {
+  const query = new URLSearchParams();
+  if (page.limit) {
+    query.set("limit", String(page.limit));
+  }
+  if (page.cursor) {
+    query.set("cursor", page.cursor);
+  }
+  const qs = query.toString();
+  return apiFetch<BauFollowers>(
+    `/api/servers/${serverId}/home/followers${qs ? `?${qs}` : ""}`,
+  );
+};
+
+/** Owner: the "Permitir seguir" switch. Answers the followers read. */
+export const updateBauFollowConfig = (serverId: string, allowed: boolean) =>
+  patch<BauFollowers>(`/api/servers/${serverId}/home/follow-config`, { allowed });
+
+export const removeBauFollower = (
+  serverId: string,
+  followId: string,
+  block: boolean,
+) =>
+  del<{ ok: boolean; removed: number }>(
+    `/api/servers/${serverId}/home/followers/${followId}${block ? "?block=1" : ""}`,
+  );
+
+export const unblockBauFollower = (serverId: string, blockedServerId: string) =>
+  del<{ ok: boolean }>(
+    `/api/servers/${serverId}/home/follow-blocks/${blockedServerId}`,
+  );
 
 /** The sidebar badge: posts this person has not seen. Cheap, no posts. */
 export const fetchCommunityHomeUnread = (serverId: string) =>
@@ -2591,6 +2779,23 @@ export const resolveReport = (
 export const fetchAllReports = (
   options: { before?: string; status?: ReportStatus } = {},
 ) => apiFetch<AllReportPage>(`/api/reports/all${reportQuery(options)}`);
+
+/**
+ * What a moderator needs to judge one report (the card's "Contexto" panel).
+ * 404 for anybody who may not read the queue the report lives in, the same
+ * answer as a report that does not exist.
+ */
+export const fetchReportContext = (reportId: string) =>
+  apiFetch<ReportContext>(`/api/reports/${reportId}/context`);
+
+/**
+ * Terminate somebody else's account (instance moderators only). This is the
+ * ONLY instance-level sanction there is: the same deletion as
+ * `DELETE /api/me`, aimed at another person. 409 `owned_servers` when the
+ * account owns a server other people are in; `details.servers` names them.
+ */
+export const terminateAccount = (userId: string) =>
+  del<{ ok: true }>(`/api/admin/users/${userId}`);
 
 /** Deletes the reported message. 400 when there is nothing live to remove. */
 export const removeReportedMessage = (reportId: string) =>
