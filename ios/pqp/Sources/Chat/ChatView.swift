@@ -1896,7 +1896,46 @@ struct MessageBodyText: View {
         return parsed
     }
 
-    var body: some View { Text(attributed) }
+    /// What the body shows. With no custom emoji in it, exactly the text it was.
+    /// With some, the markdown is parsed with a stand-in character per `<:name:id>`
+    /// (so bold or a link around an emoji still works) and the text is then cut at
+    /// the stand-ins and put back together with the pictures between the pieces,
+    /// `:name:` while a picture loads or when it cannot.
+    var body: some View {
+        let prepared = CustomEmoji.prepare(raw)
+        if prepared.tokens.isEmpty {
+            Text(attributed)
+        } else {
+            Self.compose(prepared.text, tokens: prepared.tokens)
+                .accessibilityLabel(Text(verbatim: CustomEmoji.asText(raw)))
+                .task(id: prepared.tokens.map(\.id)) { await EmojiImages.shared.load(prepared.tokens.map(\.id)) }
+        }
+    }
+
+    private static func compose(_ prepared: String, tokens: [CustomEmoji.Token]) -> Text {
+        let parsed = attributed(prepared)
+        let images = EmojiImages.shared
+        var result = Text(verbatim: "")
+        var pieceStart = parsed.startIndex
+        var next = 0
+        var index = parsed.startIndex
+        while index < parsed.endIndex {
+            let after = parsed.characters.index(after: index)
+            if parsed.characters[index] == CustomEmoji.placeholder, next < tokens.count {
+                result = result + Text(AttributedString(parsed[pieceStart..<index]))
+                let token = tokens[next]
+                if let image = images.image(for: token.id) {
+                    result = result + Text(Image(uiImage: image))
+                } else {
+                    result = result + Text(verbatim: ":\(token.name):")
+                }
+                next += 1
+                pieceStart = after
+            }
+            index = after
+        }
+        return result + Text(AttributedString(parsed[pieceStart..<parsed.endIndex]))
+    }
 }
 
 struct ReplyChip: View {
@@ -1908,7 +1947,7 @@ struct ReplyChip: View {
                 .font(.system(size: 9))
             Text(reply.deleted
                  ? String(localized: "Deleted message")
-                 : "\(reply.authorName ?? String(localized: "Someone")): \(reply.excerpt)")
+                 : "\(reply.authorName ?? String(localized: "Someone")): \(CustomEmoji.asText(reply.excerpt))")
                 .lineLimit(1)
         }
         .font(Typography.caption)
