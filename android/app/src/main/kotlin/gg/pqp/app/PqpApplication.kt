@@ -44,6 +44,10 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
     lateinit var voice: gg.pqp.app.voice.VoiceController
         private set
 
+    /** See `AttentionReporter`: the lifecycle half of the push attention gate. */
+    lateinit var attention: gg.pqp.app.core.AttentionReporter
+        private set
+
     /**
      * Application-scoped because a push can arrive, be drawn and be tapped with
      * no Activity in the process at all.
@@ -102,6 +106,20 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
     lateinit var voiceNotes: gg.pqp.app.voicenotes.VoiceNotes
         private set
 
+    /**
+     * Application-scoped so a server's emoji are read once, not once per screen that draws a message
+     * from it. See `ServerEmojiStore`.
+     */
+    lateinit var serverEmoji: gg.pqp.app.core.ServerEmojiStore
+        private set
+
+    /**
+     * Application-scoped for the same reason [voiceNotes] is: a `voice-note-transcript` frame for a
+     * note whose screen is gone still has to land, and a request outlives the card that made it.
+     */
+    lateinit var transcripts: gg.pqp.app.voicenotes.NoteTranscripts
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -115,6 +133,11 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
 
         http = gg.pqp.app.core.ApiClient.defaultHttpClient()
         session = SessionStore(appScope, http)
+        // The socket reconnects the moment a network is back, not when its backoff next wakes up.
+        gg.pqp.app.core.NetworkReconnect.register(this, session)
+        // Tells the server whether the app is in front of the person, so a backgrounded phone is
+        // pushed (`push_attention_gate`). Application-scoped: the socket outlives every Activity.
+        attention = gg.pqp.app.core.AttentionReporter(this, session.realtime, appScope)
         voice = gg.pqp.app.voice.VoiceController(this, session, appScope)
         push = gg.pqp.app.push.PushController(this, session, appScope)
         calls = gg.pqp.app.voice.CallController(this, session, voice, appScope)
@@ -136,6 +159,7 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
             .map { it.isActive }
             .distinctUntilChanged()
             .stateIn(appScope, SharingStarted.Eagerly, false)
+        serverEmoji = gg.pqp.app.core.ServerEmojiStore(appScope, fetch = { id -> session.api.serverEmoji(id) })
         voiceNotes = gg.pqp.app.voicenotes.VoiceNotes(
             context = this,
             scope = appScope,
@@ -144,6 +168,11 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
             frames = session.realtime.frames,
             myId = { (session.phase.value as? gg.pqp.app.core.SessionPhase.Ready)?.me?.id },
             callActive = callActive,
+        )
+        transcripts = gg.pqp.app.voicenotes.NoteTranscripts(
+            scope = appScope,
+            frames = session.realtime.frames,
+            requestFn = { id -> gg.pqp.app.attachments.AttachmentApi(session.api).requestTranscript(id) },
         )
         registerActivityLifecycleCallbacks(BackgroundPause { voiceNotes.onAppBackgrounded() })
     }

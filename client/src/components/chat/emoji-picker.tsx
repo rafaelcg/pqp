@@ -1,6 +1,7 @@
 import type { ServerEmoji } from "@pqp/shared";
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { ContainedChunkBoundary } from "@/components/error-boundary";
 import {
   EMOJI_PICKER_SIZE,
   placeAnchoredPanel,
@@ -114,9 +115,13 @@ export function EmojiPickerPanel({
         className,
       )}
     >
-      <Suspense fallback={<div className="h-full w-full animate-pulse bg-ink-2" />}>
-        <LazyPanel onSelect={onSelect} customEmoji={customEmoji} />
-      </Suspense>
+      {/* A stale chunk costs this panel and nothing else: the root boundary
+          would take the whole app, a call's screens included. */}
+      <ContainedChunkBoundary>
+        <Suspense fallback={<div className="h-full w-full animate-pulse bg-ink-2" />}>
+          <LazyPanel onSelect={onSelect} customEmoji={customEmoji} />
+        </Suspense>
+      </ContainedChunkBoundary>
     </div>
   );
 

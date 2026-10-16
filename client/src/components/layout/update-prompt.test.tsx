@@ -2,35 +2,14 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
-import { setInCall } from "@/lib/in-call-state";
-import {
-  isUpdateWaiting,
-  requestUpdatePrompt,
-  resetUpdateState,
-  setBuildStaleness,
-} from "@/lib/update-prompt-state";
+import { isUpdateWaiting, resetUpdateState } from "@/lib/update-prompt-state";
 import type { ServiceWorkerControls } from "@/lib/register-sw";
-import { CornerCard } from "./corner-card";
 import { UpdatePrompt } from "./update-prompt";
 
 /**
- * THE BUG THIS FILE EXISTS FOR, reported from production on 9 Sep 2026:
- * *"other onboarding popups are making the update one disappear so im stuck on
- * an old version of the app cause i can't click on it anymore."*
- *
- * Reproduced on a real build served by a real service worker: with a new
- * bundle waiting and the QG invite up, ONE Escape keypress removed the update
- * card and left the onboarding card standing. Every corner card attaches its
- * own capture-phase Escape listener to `document`; the update card is mounted
- * first (it lives in `main.tsx`, outside `App`), so it registers first, runs
- * first, calls `preventDefault`, and the card the person was actually trying
- * to dismiss survives while the one they cannot get back does not. Twenty
- * minutes of snooze later it is due again, unless they are in a call, and a
- * watch party is hours of call.
- *
- * A DOM is the only place any of that is observable, so this file, its
- * `corner-card-escape` sibling and `qg-hint-gating` are the only ones in the
- * client suite that ask for jsdom. Everything else stays on `node`.
+ * `UpdatePrompt` used to be the corner card. It is the service worker's half of
+ * the quiet update indicator now: it renders nothing, and records that a worker
+ * is waiting. What a person sees is `update-indicator.test.tsx`.
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -39,25 +18,23 @@ import { UpdatePrompt } from "./update-prompt";
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
-/** Stands in for the service worker: `arrive()` is a new build landing. */
 function fakeWorker() {
   let notify: (() => void) | null = null;
-  let updated = 0;
+  let disposed = 0;
   const register = (onNeedRefresh: () => void): ServiceWorkerControls => {
     notify = onNeedRefresh;
     return {
-      async update() {
-        updated += 1;
-      },
+      async update() {},
       dispose() {
         notify = null;
+        disposed += 1;
       },
     };
   };
   return {
     register,
     arrive: () => act(() => notify?.()),
-    updates: () => updated,
+    disposed: () => disposed,
   };
 }
 
@@ -75,215 +52,37 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
-  setInCall(false);
   resetUpdateState();
+  document.body.innerHTML = "";
 });
 
-function updateCard(): Element | null {
-  return document.querySelector('[data-corner-card="update"]');
-}
-
-function pressEscape() {
-  act(() => {
-    document.body.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-  });
-}
-
-function clickText(text: string) {
-  const button = [...document.querySelectorAll("button")].find(
-    (el) => el.textContent?.trim() === text,
-  );
-  if (!button) {
-    throw new Error(`no button labelled ${text}`);
-  }
-  act(() => button.click());
-}
-
-/** The exit animation unmounts a corner card 180ms after `open` goes false. */
-async function settle() {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 260));
-  });
-}
-
-describe("the update notice", () => {
-  it("appears when a build lands, and Escape does not take it away", async () => {
+describe("UpdatePrompt", () => {
+  it("draws nothing, even when a new build lands", async () => {
     const worker = fakeWorker();
     await mount(<UpdatePrompt register={worker.register} />);
-    expect(updateCard()).toBeNull();
+    expect(host?.innerHTML).toBe("");
 
-    await worker.arrive();
-    expect(updateCard()).not.toBeNull();
-
-    pressEscape();
-    await settle();
-
-    expect(updateCard()).not.toBeNull();
+    worker.arrive();
+    // No card, no dialog, no corner element of any kind: an interruption is
+    // what this replaced.
+    expect(document.body.querySelector('[data-corner-card="update"]')).toBeNull();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    expect(host?.innerHTML).toBe("");
   });
 
-  it("does not swallow Escape from the onboarding card beside it", async () => {
-    // The other half of the reported bug: the keypress was aimed at the QG
-    // card, and that card has to actually close.
-    const worker = fakeWorker();
-    let hintClosed = 0;
-    await mount(
-      <>
-        <UpdatePrompt register={worker.register} />
-        <CornerCard
-          open
-          onClose={() => (hintClosed += 1)}
-          label="qg"
-          dismissLabel="dismiss"
-          dataAttribute="qg"
-          title="Come into the QG"
-        />
-      </>,
-    );
-    await worker.arrive();
-
-    pressEscape();
-    await settle();
-
-    expect(hintClosed).toBe(1);
-    expect(updateCard()).not.toBeNull();
-  });
-
-  it("keeps the build waiting after Later, so the rail keeps its way back", async () => {
+  it("records that a worker is waiting, for the indicator to read", async () => {
     const worker = fakeWorker();
     await mount(<UpdatePrompt register={worker.register} />);
-    await worker.arrive();
-    expect(isUpdateWaiting()).toBe(true);
-
-    clickText("Later");
-    await settle();
-
-    expect(updateCard()).toBeNull();
-    // The card is snoozed. The FACT is not: this is what draws the rail icon.
+    expect(isUpdateWaiting()).toBe(false);
+    worker.arrive();
     expect(isUpdateWaiting()).toBe(true);
   });
 
-  it("comes back when the rail asks for it, snoozed or not", async () => {
+  it("lets go of the worker when it unmounts", async () => {
     const worker = fakeWorker();
     await mount(<UpdatePrompt register={worker.register} />);
-    await worker.arrive();
-
-    clickText("Later");
-    await settle();
-    expect(updateCard()).toBeNull();
-
-    act(() => requestUpdatePrompt());
-    expect(updateCard()).not.toBeNull();
-  });
-
-  it("hushes during a call but comes back when the rail asks", async () => {
-    // The hush is deliberate: a reload kills a screen share and cannot restore
-    // it. What must not happen is the person having no way to take the update
-    // for the length of a watch party.
-    const worker = fakeWorker();
-    await mount(<UpdatePrompt register={worker.register} />);
-    await worker.arrive();
-
-    act(() => setInCall(true));
-    await settle();
-    expect(updateCard()).toBeNull();
-    expect(isUpdateWaiting()).toBe(true);
-
-    act(() => requestUpdatePrompt());
-    expect(updateCard()).not.toBeNull();
-  });
-
-  it("takes the update when Update now is pressed", async () => {
-    const worker = fakeWorker();
-    let applied = 0;
-    await mount(
-      <UpdatePrompt
-        register={worker.register}
-        apply={async () => {
-          applied += 1;
-        }}
-      />,
-    );
-    await worker.arrive();
-
-    clickText("Update now");
-
-    expect(applied).toBe(1);
-  });
-
-  it("gives the button back with the reason when taking the update fails", async () => {
-    const worker = fakeWorker();
-    await mount(
-      <UpdatePrompt
-        register={worker.register}
-        apply={async () => ({ ok: false, reason: "offline" })}
-      />,
-    );
-    await worker.arrive();
-
-    clickText("Update now");
-    await act(async () => {});
-
-    expect(updateCard()?.textContent).toContain("offline");
-    // Retry is offered, and the card is still up.
-    clickText("Try again");
-  });
-
-  describe("when the page finds out by itself (no worker involved)", () => {
-    // The window that never navigates: the service worker says nothing, the
-    // version poll does (`lib/version-watch.ts`).
-    const STALE = {
-      stale: true,
-      forced: false,
-      latestBuild: "def456",
-      since: 1,
-    };
-
-    it("shows the card, in the same place and with the same Later", async () => {
-      const worker = fakeWorker();
-      await mount(<UpdatePrompt register={worker.register} />);
-      expect(updateCard()).toBeNull();
-
-      act(() => setBuildStaleness(STALE));
-      expect(updateCard()).not.toBeNull();
-      expect(isUpdateWaiting()).toBe(true);
-
-      clickText("Later");
-      await settle();
-      expect(updateCard()).toBeNull();
-      expect(isUpdateWaiting()).toBe(true);
-    });
-
-    it("hushes during a call, like any other waiting build", async () => {
-      const worker = fakeWorker();
-      await mount(<UpdatePrompt register={worker.register} />);
-      act(() => setInCall(true));
-      act(() => setBuildStaleness(STALE));
-      await settle();
-      expect(updateCard()).toBeNull();
-      expect(isUpdateWaiting()).toBe(true);
-    });
-
-    it("goes away when the page is current again", async () => {
-      const worker = fakeWorker();
-      await mount(<UpdatePrompt register={worker.register} />);
-      act(() => setBuildStaleness(STALE));
-      expect(updateCard()).not.toBeNull();
-      act(() =>
-        setBuildStaleness({
-          stale: false,
-          forced: false,
-          latestBuild: null,
-          since: null,
-        }),
-      );
-      await settle();
-      expect(updateCard()).toBeNull();
-    });
+    act(() => root?.unmount());
+    root = null;
+    expect(worker.disposed()).toBe(1);
   });
 });

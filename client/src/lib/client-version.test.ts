@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  ANNOUNCE_HOUR_UTC_DEFAULT,
+  ANNOUNCE_SOAK_MS,
   NO_FORCE,
+  announceAtFor,
+  announceHourFromEnv,
+  isAnnounced,
   isCriticalBuild,
   isForcedBuild,
   isStaleBuild,
@@ -137,5 +142,73 @@ describe("isCriticalBuild", () => {
     expect(
       isCriticalBuild({ build: "dev", builtAt: 0 }, { ...NO_FORCE, criticalMinBuiltAt: 2_000 }),
     ).toBe(false);
+  });
+});
+
+describe("the daily announcement", () => {
+  const HOUR = 3_600_000;
+  const at = (day: number, hour: number, minute = 0) =>
+    Date.UTC(2026, 9, day, hour, minute);
+
+  it("holds a build until 09:00 UTC after it went live, by default", () => {
+    expect(ANNOUNCE_HOUR_UTC_DEFAULT).toBe(9);
+    // Built at 15:30 on the 13th: announced at 09:00 on the 14th.
+    expect(announceAtFor(at(13, 15, 30), 9)).toBe(at(14, 9));
+    // Built at 02:00: announced the same morning, 09:00.
+    expect(announceAtFor(at(13, 2), 9)).toBe(at(13, 9));
+  });
+
+  it("makes a build soak for an hour first, so a hotfix right behind it is the only one announced", () => {
+    // Ten minutes before the slot is too soon: it waits for the next morning.
+    expect(announceAtFor(at(13, 8, 50), 9)).toBe(at(14, 9));
+    // An hour and a bit before the slot is enough.
+    expect(announceAtFor(at(13, 7, 50), 9)).toBe(at(13, 9));
+    expect(ANNOUNCE_SOAK_MS).toBe(HOUR);
+  });
+
+  it("never waits more than a day and an hour", () => {
+    for (let h = 0; h < 24; h++) {
+      for (const m of [0, 1, 30, 59]) {
+        const live = at(13, h, m);
+        const wait = announceAtFor(live, 9) - live;
+        expect(wait).toBeGreaterThanOrEqual(ANNOUNCE_SOAK_MS);
+        expect(wait).toBeLessThanOrEqual(25 * HOUR);
+      }
+    }
+  });
+
+  it("announces a build whose slot has long passed at once", () => {
+    const live = at(10, 12);
+    expect(isAnnounced(announceAtFor(live, 9), at(13, 20))).toBe(true);
+  });
+
+  it("announces once a day however many builds ship: it is the newest one that is read", () => {
+    // Three builds across the day all resolve to the same morning.
+    const slots = [at(13, 10), at(13, 15), at(13, 23, 50)].map((live) =>
+      announceAtFor(live, 9),
+    );
+    expect(new Set(slots).size).toBe(1);
+  });
+
+  it("is off with no hour: the moment it went live", () => {
+    expect(announceAtFor(at(13, 15), null)).toBe(at(13, 15));
+  });
+
+  it("reads the build-time hour, with `off` and bad values handled", () => {
+    expect(announceHourFromEnv(undefined)).toBe(9);
+    expect(announceHourFromEnv("")).toBe(9);
+    expect(announceHourFromEnv("6")).toBe(6);
+    expect(announceHourFromEnv("0")).toBe(0);
+    expect(announceHourFromEnv("off")).toBeNull();
+    expect(announceHourFromEnv("-1")).toBeNull();
+    expect(announceHourFromEnv("25")).toBe(9);
+    expect(announceHourFromEnv("noon")).toBe(9);
+  });
+
+  it("isAnnounced: no hold, or the hold has run out", () => {
+    expect(isAnnounced(null, 5)).toBe(true);
+    expect(isAnnounced(undefined, 5)).toBe(true);
+    expect(isAnnounced(10, 9)).toBe(false);
+    expect(isAnnounced(10, 10)).toBe(true);
   });
 });

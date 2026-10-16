@@ -223,11 +223,6 @@ export function CallPickerSheet({
           })}
         </div>
       )}
-      {room && !authorInRoom(room, meId) && (
-        <p data-story-call-hint="" className="px-2 pt-3 text-xs leading-snug" style={{ color: "var(--story-accent-soft)" }}>
-          {t("stories.callPicker.notInRoom", { room: room.name })}
-        </p>
-      )}
       <div className="flex justify-end px-1 pt-3">
         <button
           type="button"

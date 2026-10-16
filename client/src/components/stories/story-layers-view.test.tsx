@@ -52,7 +52,7 @@ describe("callCardState", () => {
 
 describe("StoryCallCard", () => {
   const server = { name: "QG do pqp", iconUrl: null };
-  const render = (call: StoryCallLive | null, preview = null as { channelName: string; names: string[]; authorAway?: boolean } | null) =>
+  const render = (call: StoryCallLive | null, preview = null as { channelName: string; names: string[] } | null) =>
     renderToStaticMarkup(<StoryCallCard call={call} preview={preview} server={server} onJoin={() => {}} />);
 
   it("a live room: the room and server, the faces, the count, a pulsing dot and Entrar", () => {
@@ -102,11 +102,12 @@ describe("StoryCallCard", () => {
     expect(html).toContain(en["stories.call.enter"]);
   });
 
-  it("shows the author's preview as viewers will see it: over, when the author is not in the room", () => {
-    const html = render(null, { channelName: "Sala", names: ["Bia"], authorAway: true });
-    expect(html).toContain('data-story-call-state="ended"');
-    expect(html).toContain(en["stories.call.ended"]);
-    expect(html).not.toContain("story-live-dot");
+  it("an empty room in the preview is not an ended call: nobody in it, and the way in is still shown", () => {
+    const html = render(null, { channelName: "Sala", names: [] });
+    expect(html).toContain('data-story-call-state="empty"');
+    expect(html).toContain(en["stories.call.empty"]);
+    expect(html).toContain(en["stories.call.enter"]);
+    expect(html).not.toContain(en["stories.call.ended"]);
   });
 
   it("sizes everything in canvas units, so it is the same card at any size", () => {
@@ -145,11 +146,12 @@ describe("StoryContent layers", () => {
     expect(html).toContain("bora de cs?");
   });
 
-  it("puts the layers on a 9:16 canvas that covers the card, so a tall phone crops them with the picture", () => {
+  it("fits the 9:16 canvas INSIDE the card, so a tall phone never crops what the author placed", () => {
     const html = render({ layers: [text] });
     expect(html).toContain("data-story-layer-canvas");
     expect(html).toContain("aspect-ratio:9 / 16");
-    expect(html).toContain("max(100cqw, calc(100cqh * 9 / 16))");
+    expect(html).toContain("min(100cqw, calc(100cqh * 9 / 16))");
+    expect(html).not.toContain("max(100cqw");
   });
 
   it("sets text in the layer's own font, color, background, alignment and size", () => {
@@ -210,6 +212,13 @@ describe("StoryContent layers", () => {
     expect(render({ layers: [text] }, { withLayers: false })).not.toContain("bora de cs?");
   });
 
+  it("names a placed photo by what the author wrote, and leaves a photo without one decorative", () => {
+    const photo: DisplayLayer = { ...geometry, id: "i2", type: "image", src: "https://example.test/x.png", width: 100, height: 100, shape: "rect" };
+    expect(render({ layers: [{ ...photo, alt: "um gato dormindo" }] })).toContain('alt="um gato dormindo"');
+    expect(render({ layers: [{ ...photo, alt: null }] })).toContain('alt=""');
+    expect(render({ layers: [photo] })).toContain('alt=""');
+  });
+
   it("does not let a photo or drawing layer catch the pointer, so taps still go to the story", () => {
     const image: DisplayLayer = { ...geometry, id: "i1", type: "image", src: "https://example.test/x.png", width: 100, height: 100, shape: "circle" };
     const html = render({ layers: [image] });
@@ -225,27 +234,47 @@ describe("StoryContent base fit", () => {
   it("fills the canvas with a picture that is 9:16, or within 12% of it", () => {
     for (const [w, h] of [[1080, 1920], [1080, 2160], [1000, 1700]] as const) {
       const html = render({ mediaWidth: w, mediaHeight: h });
-      expect(html).not.toContain("data-story-base-blur");
+      // The picture fills the canvas; its blurred copy only shows on a card that is not 9:16
+      // (a container query), so it is not marked as always on.
+      expect(html).not.toContain("data-always");
       expect(html).toContain("object-cover");
       expect(html).not.toContain("object-contain");
     }
   });
 
-  it("shows a landscape photo whole over a blurred copy of itself, inside the layers' own canvas", () => {
+  it("shows a landscape photo whole, inside the canvas, over a blurred copy of itself", () => {
     const html = render({ mediaWidth: 1920, mediaHeight: 1080 });
     expect(html).toContain("data-story-base-blur");
+    expect(html).toContain("data-always");
     expect(html).toContain("blur-[28px]");
     expect(html).toContain("object-contain");
-    expect(html).toContain("max(100cqw, calc(100cqh * 9 / 16))");
+    expect(html).toContain("min(100cqw, calc(100cqh * 9 / 16))");
+  });
+
+  it("fills a card that is not 9:16 with the blurred picture even when the picture fills the canvas", () => {
+    const html = render({ mediaWidth: 1080, mediaHeight: 1920 });
+    expect(html).toContain("data-story-base-blur");
+    expect(html).toContain("story-backdrop");
+  });
+
+  it("fills around a text card's canvas with its own background, not the camera of anything", () => {
+    const html = render({ kind: "text", mediaUrl: null, background: "grape", text: "salve" });
+    expect(html).toContain('class="story-text-card absolute inset-0" data-bg="grape"');
+    expect(html).not.toContain("data-story-base-blur");
   });
 
   it("an unknown size fills, as every story from before this did", () => {
-    expect(render({})).not.toContain("data-story-base-blur");
+    expect(render({})).not.toContain("data-always");
   });
 
-  it("shows a landscape poster whole, with no blur behind a video", () => {
+  it("shows a landscape poster whole, over the poster blurred (a video's blurred copy is its poster)", () => {
     const html = render({ kind: "video", posterUrl: "https://example.test/p.jpg", mediaWidth: 1920, mediaHeight: 1080 });
     expect(html).toContain("object-contain");
+    expect(html).toContain("data-always");
+  });
+
+  it("a video with no poster has nothing to blur: the card's own dark shows around it", () => {
+    const html = render({ kind: "video", posterUrl: null, mediaUrl: null, mediaWidth: 1920, mediaHeight: 1080 });
     expect(html).not.toContain("data-story-base-blur");
   });
 });
@@ -268,7 +297,8 @@ describe("displayLayerFrom", () => {
       url: "https://example.test/i.png",
       width: 10,
       height: 20,
+      alt: "um gato",
     };
-    expect(displayLayerFrom(image)).toMatchObject({ type: "image", src: "https://example.test/i.png", shape: "rounded" });
+    expect(displayLayerFrom(image)).toMatchObject({ type: "image", src: "https://example.test/i.png", shape: "rounded", alt: "um gato" });
   });
 });

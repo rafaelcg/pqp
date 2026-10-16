@@ -11,6 +11,7 @@ import {
   type StoryUpload,
 } from "@pqp/shared";
 
+import { sniffVideoCodec } from "./video-codec";
 /**
  * Getting a photo or a clip ready to post, in the browser.
  *
@@ -29,6 +30,8 @@ export type StoryFileProblem =
   | { kind: "wrong-type" }
   | { kind: "too-big" }
   | { kind: "too-long"; seconds: number }
+  /** A video the server would refuse: not H.264 (an iPhone's default HEVC, ProRes). */
+  | { kind: "wrong-codec" }
   | { kind: "unreadable" };
 
 export interface PreparedStoryMedia {
@@ -203,6 +206,11 @@ export async function prepareStoryFile(
     } catch {
       return { ok: false, problem: { kind: "unreadable" } };
     }
+  }
+  // The server only takes H.264. A browser can still play an HEVC clip, so say so before the upload,
+  // not after it as a story that never appears.
+  if ((await sniffVideoCodec(file)) === "unsupported") {
+    return { ok: false, problem: { kind: "wrong-codec" } };
   }
   const previewUrl = URL.createObjectURL(file);
   try {

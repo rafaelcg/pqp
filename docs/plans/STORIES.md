@@ -127,7 +127,7 @@ Smaller ones adopted:
 | 23 | Compose entry points: "Teu story" bubble, the server name menu, the chat "+" menu, the Conversas header | Always one tap away without a permanent slot |
 | 24 | Ring: `conic-gradient(accent, warning, accent)`. Seen: `border-strong`, thinner | Both are real tokens. Solid lime already means "speaking" and "in call" |
 | 25 | A call story shows a headphones badge on the ring | You can tell it is joinable before opening it |
-| 26 | The call sticker is live: it reads the room roster and turns into "A call acabou" when the room empties or the author leaves it | A stale "join" button is worse than none |
+| 26 | The call sticker is live: it reads the room roster. An empty room reads "Ninguém na call agora" and still offers "Entrar"; it turns into "A call acabou" only when the channel is gone or the author can no longer connect to it (revised 2026-10-13, see §17.6) | A stale "join" button is worse than none, but an empty room is not an ended call: joining an empty room is fine |
 | 27 | Moderation reuses chat. Reports go to the server queue; "minor in sexual content" goes to the instance queue. Staff with `MANAGE_MESSAGES` can remove a story **from their server only** | A story can also be in friends and other servers. One server's staff only owns their slice |
 | 28 | A reported story does not expire until resolved; its bytes are held | Evidence must not evaporate under the moderator (the Fleets critique) |
 | 29 | The author is told once, in-app, with the reason, when staff remove their story | No silent disappearance, and no push |
@@ -977,8 +977,9 @@ Setup:
       from MinIO and confirm no GPS tags.
 - [ ] Call sticker in `broderagi` while A is in it.
   - [ ] B taps "Entrar na call" and is in the room.
-  - [ ] When the room empties, the sticker reads "A call acabou" and the button
-        is gone.
+  - [ ] When the room empties, the sticker reads "Ninguém na call agora" and the
+        button stays (joining an empty room is fine). "A call acabou" only when
+        the channel is deleted or A loses access to it.
 - [ ] C without `POST_STORIES` (remove the bit from @everyone, give it to a
       role A has): C's composer shows Sandbox greyed with the reason; the API
       refuses a forged request with 403.
@@ -1073,6 +1074,32 @@ Setup:
 - [ ] `GET /api/admin/metrics` → `stories` shows the posts, views, reactions,
       replies and sweep lag the test just produced.
 
+**Android pass, 2026-10-15 (emulator, `adb input tap`/`swipe` and screenshots)**
+
+Pixel 10 Pro image (API 37.1) on a local API with MinIO, `stories` on for one
+server and `stories_friends` on. Real taps through the user's path:
+
+- Verified: camera permission, a photo from the live camera, a held shutter
+  recording a clip (mic prompt included), the photo picker and the 30 s
+  trimmer on a 45 s clip (window dragged to 0:15 to 0:45, re-encode with
+  progress), text card with background swatches, the layer editor (text,
+  mention, drawing, call sticker, drag, long press menu), "Who sees it" with
+  zero audiences disabling Post, a post to a server and to Amigos at once, the
+  ring and the viewer (layers drawn as made, mention sheet with Add friend,
+  tap to step, swipe across to the next person, swipe down to close,
+  "Seen by", delete menu, reply sent as a DM, live ring for another account's
+  story), the outbox on a dead API ("Didn't post", the retry sheet, "Try again"
+  posting once, no duplicate), and the viewer's own load failure.
+- Fixed in this pass: a story the viewer could not read (API unreachable) left
+  a black screen with one line of text and no way out but the system back
+  gesture; it now has Retry and Close. The outbox's failed sheet said "Your
+  photo or video is still saved" for a text card; it now says "story".
+- Not verifiable without a device: camera quality, front-lens mirroring and
+  torch, two-finger pinch and rotate (`adb input` has no multi-touch), TalkBack
+  reading, 60 fps on a mid phone, sound (the emulator microphone is silent),
+  uploads that outlive the app in the background, Data Saver, and the
+  Moto G class memory behaviour of the 720p re-encode.
+
 ---
 
 ## 16. Open questions for Rafael (each has a default, so nothing blocks)
@@ -1105,6 +1132,13 @@ gains `layers: StoryLayer[]`, at most `STORY_LAYERS_MAX` (20), ordered back to
 front. Nothing is burned into the base: a viewer draws the base, then each
 layer in order, scaled to its own 9:16 canvas, clipped at the edge.
 
+**Layer order is creation order for every type, the drawing included** (decision
+2026-10-13; the earlier rule "the drawing is index 0, lowest" hid a drawing under
+a photo layer): a new drawing goes on top of the stack, later layers go above it,
+and "bring to front" works on it. A second drawing session does not add a second
+drawing (there is one): it moves the drawing back to the top, in the same undo
+step as the stroke, so new strokes are never hidden.
+
 Every layer has `id` (a client uuid, unique in the story), `x` and `y` (the
 CENTER, 0..1 of the canvas), `scale` (0.2 to 5) and `rotation` (radians, clockwise,
 within `STORY_LAYER_ROTATION_MAX`, 3.1416, a hair above pi because a 32-bit float pi is
@@ -1120,6 +1154,43 @@ bigger than `Math.PI`).
 
 `caption`, `text`, `background` and `sticker` keep working. `altText` (at most
 500) is the spoken version: clients write the text layers into it.
+
+**Text card background families (web, 2026-10-15).** `background` is still one
+palette key, now from three families: glow (`STORY_BACKGROUNDS`, the original six,
+what the phones ship), solid (`STORY_BACKGROUNDS_SOLID`: cobalt, crimson, pine,
+plum, teal, onyx) and gradient (`STORY_BACKGROUNDS_GRADIENT`: sunset, ocean,
+aurora, dusk, berry, lagoon). The new keys are additive: `storyBackgroundSchema`
+accepts all three, the column has no CHECK, and `STORY_BACKGROUNDS` itself did not
+change (Android pins it). A build that does not know a key draws its default dark
+card, so nothing fails to parse. Every key keeps 4.5:1 with white text (the lighter
+stop, for a gradient). The CSS source of truth is the `--story-bg-*` tokens and
+`.story-text-card[data-bg]` rules in `client/src/index.css`; a phone that wants the
+new keys adds them to its own table (solid is one flat colour, gradient is a
+160 degree two-stop linear gradient, stops in the CSS) and offers them in its picker.
+
+**Manual descriptions (web, 2026-10-15).** The author may describe the base
+photo or video and each placed photo. A placed photo carries `alt` (at most
+`STORY_LAYER_ALT_MAX`, 200; optional on write, `null` on read when none was
+written). The base's description has no field of its own: the composer writes it
+FIRST in `altText`, then the placed photos' descriptions, then the text layers,
+the people and the caption, so a build that only reads `altText` already speaks
+it. AutoMod reads every `alt` like a caption. The viewer names a placed photo
+with its `alt`, and the base picture and the canvas group with `altText`. A phone
+that wants to author one writes the same two things; reading `alt` on an image
+layer is all it needs to speak it (an unknown key is ignored until then).
+
+**iOS (2026-10-16).** Both of the above are on the iPhone. The card picker is one
+menu in three sections (Brilho, Sólido, Degradê); the stops of the twelve new
+keys are the web's OKLCH tokens converted to sRGB (`StoryRules.backgroundColors`),
+a gradient runs at 160 degrees (`StoryRules.backgroundGradient`), and
+`StoryBackgroundsAltTests` reads `packages/shared/src/stories.ts` so a key added
+there without a colour here fails the test. A photo or video draft has a
+**Descrever** pill on the foot row and a placed photo has a button in its
+long-press menu; the base description goes first in `altText`
+(`StoryAltText.make`, the web's order), a placed photo's goes in `alt`
+(`StoryLayerPicture.alt`, 200 characters, sent only when written). The viewer
+names a placed photo by its `alt` only when the story's own `altText` does not
+already say it, so a screen reader never hears it twice.
 
 ### 17.2 One schema, read leniently and written strictly
 
@@ -1207,10 +1278,21 @@ is there now; nothing is preselected on phones when the author is in no room,
 and the web matches; a clear warning when the author is not in the room. Result:
 a card with the room's name, the server icon, up to 3 live faces and "+n", the
 count, an "Entrar" button, a pulsing live dot while people are in, "Ninguem na
-call agora" (via i18n) when empty, and a quiet ended state after the room
-empties. Tapping joins through the existing join path. The same look on web,
-iOS and Android. The live data is the story's existing `call` object
-(participants, count, `state`, `joinable`), unchanged.
+call agora" (via i18n) when empty (with "Entrar" still offered), and a quiet
+ended state only when the channel is gone or the author lost access to it.
+Tapping joins through the existing join path. The same look on web, iOS and
+Android. The live data is the story's existing `call` object (participants,
+count, `state`, `joinable`).
+
+**State rule (2026-10-13).** `state` is `live` for any room its author can still
+use, with `count` 0 when empty (an empty room is NOT an ended call, and it does
+not matter whether the author is in it); `full` for a mesh room at its limit;
+`ended` only when the channel is gone (`channelName` ""), or the author can no
+longer connect to it. A viewer without CONNECT gets `live`, count 0, no faces and
+`joinable: false`; one who cannot see the channel gets no `call`. The strip
+item's `hasCall` (the ring's "em call" badge) is true only while somebody is IN
+the room, as that viewer may see it. The editor therefore no longer warns that
+the author is not in the room.
 
 ### 17.7 Composer and viewer UX (spec)
 
@@ -1226,15 +1308,38 @@ as today.
   background and align, size slider), photo tool (gallery, files or camera as
   layers), draw tool (pen, marker, highlighter, eraser, colors, size, undo),
   stickers tray (call, mention, room for more). Every layer drags anywhere;
-  pinch to scale and rotate on touch; on desktop drag plus a corner handle for
-  scale and rotate and the scroll wheel to scale; snap to the center lines with
+  pinch to scale and rotate on touch; on desktop drag plus a corner handle and the
+  scroll wheel to scale (the handle scales, and turns the layer only once swung past about
+  10 degrees; with Shift it only turns); a layer never scales past the canvas it is on (the
+  shared bounds, and its own natural size turned as it is); a faint dashed safe-area guide
+  (`STORY_SAFE_AREA`: what the viewer's bars can cover) shows while a layer is dragged near
+  its edge and turns bright when the layer reaches past it; snap to the center lines with
   a light haptic on phones; a trash zone at the bottom while dragging; tap a text
   layer to edit; long press or right click to bring forward or delete; arrows,
   plus and minus, and Delete on web for keyboard users. Undo the last few
   actions. Video: trim to 30 s, mute toggle. Reduced motion respected. Copy in
   en and pt-BR (and es on web), pt-BR uses tu, no em dashes, icons from the
   platform set and never emoji as UI.
-- Viewer: base, then layers in order, scaled to the viewer's canvas and clipped.
+- While a text layer is being edited, only the text controls are on screen (cancel,
+  font, background, align, Done, the size slider and the palette), as on Instagram.
+  The toolbar (close, back, text, photo, draw, stickers, undo, redo), the selection
+  chip bar, the camera / text tabs and the audience and Post row are hidden (and
+  inert) until Done. The camera step and the text editor never share the stage:
+  the text tab releases the camera, and leaving a text card for the camera closes
+  the editor. Layers belong to their base, so going Back to the camera or
+  switching tab with layers placed asks "Descartar story?" first, and so does X
+  (or Escape) with any picture or layer. Undo has a redo beside it (Shift+Cmd/Ctrl+Z,
+  Ctrl+Y); any new edit clears the redo line.
+- Viewer: base, then layers in order, scaled to the viewer's canvas. **The viewer never
+  crops the author's canvas** (decision, 2026-10-13): on a screen taller or wider than 9:16
+  the whole 9:16 canvas (base and layers) is fitted INSIDE it (contain, centered) and the
+  remaining space is filled with the blurred base (the photo, or a video's poster) or the
+  text card's background colour. The chrome (bars, header, reply row, the owner's "Visto
+  por" bar) is drawn over the screen, so a layer placed at the edge of the canvas is at
+  the edge everywhere, and a text layer is never cut off. `storyBaseFit` (fill or whole) is
+  about the base INSIDE the canvas and is unchanged. Web, iOS and Android all follow this.
+  The call card is the wide compact row (0.82 of the canvas width, about 12% of its height):
+  the server's tile, the status and room, up to three faces, and "Entrar".
   Mentions and the call are tappable; text and photos are not. The desktop
   viewer uses the height of the window (about 92dvh, 9:16), not a small card.
 
@@ -1253,6 +1358,23 @@ worker's attack surface and, because iOS and older Safari cannot play it, a
 server-side transcode (CPU the worker does not have today) or a viewer that
 cannot play half the stories. Chrome, Edge and Safari cover nearly all web
 users, and the one hole is Firefox.
+
+**QuickTime (`.mov`) is accepted as it is** (2026-10-13; what an iPhone's camera roll
+and AirDrop hand over). The question was whether the server's probe can take a
+QuickTime movie with H.264/AAC, or whether the browser must remux it. It can, with
+no remux and no new demuxer: ffmpeg's `mov` demuxer, which every upload is already
+read with, IS the QuickTime one (QuickTime and MP4 are the same boxes), the video
+job's H.264 check refuses what QuickTime usually carries that we cannot play
+(an iPhone's default HEVC, ProRes) and a file with no video stream, and the sniffer
+only had to stop refusing the `ftyp` brand `qt  ` (HEIC and AVIF stay refused). It
+is stored and served under the wire type `video/mp4`, like every recording; the
+picker sends `.mov` / `video/quicktime`. The one hole is an HEVC `.mov`, which a
+browser can still preview: the web composer therefore reads the codec from the file's
+boxes BEFORE the upload (`video-codec.ts`: `moov` is at the end of an iPhone movie, the
+first video sample entry of `stsd` names it) and refuses HEVC, ProRes and the like with
+the reason and the fix (export as H.264; on an iPhone, Most Compatible). The server's
+codec refusal stays as the backstop; a transcode would need CPU the worker does not
+have (the same reason as WebM). Phones are unchanged.
 
 What the web composer does: pick a recorder type in this order,
 `video/mp4;codecs=avc1.42E01E,mp4a.40.2`, `video/mp4;codecs=avc1`, `video/mp4`,
@@ -1276,6 +1398,101 @@ duration. Pinned by `story-media.test.ts`.
 2. Web composer and viewer. 3. iOS. 4. Android. Each platform in separate PRs
    (capture and sources, then editor and layers, then viewer and call sticker),
    each with tests and a hands-on QA section.
+
+## 18. Fast stories: eager uploads (2026-10-14)
+
+Posting felt slow because nothing started until Post. The file now goes up the
+moment the author has it, and Post only creates and publishes.
+
+- `POST /api/stories/uploads` `{ kind: "base" | "layer", contentType, byteLength }`
+  answers 201 `{ uploadId, url, method, headers, expiresAt }`. Same types and
+  limits as the old path (a layer is a photo or the drawing, 8 MB; a base is a
+  photo or an H.264 MP4, 25 MB), refused the same way (video off, stories off, house
+  cast). 20 mints in a burst and 30 a minute per process, and at most
+  `STORY_UPLOADS_OUTSTANDING_MAX` (24) unclaimed uploads per account.
+- `DELETE /api/stories/uploads/:uploadId` answers 204: the upload is marked
+  discarded (nothing can claim it any more) and the object goes now, best effort.
+  The row stays discarded for two hours and the sweep deletes the object once
+  more before it drops the row, because an aborted browser PUT can still land
+  after the DELETE and a row-less object would never be named again. Another
+  account's id and an unknown one are the same 404; a repeat and a claimed
+  upload are a harmless 204.
+- `POST /api/stories` takes `media.uploadId` and, per photo or drawing layer,
+  `upload.uploadId`. The declared type and size must be the upload's. Before the
+  transaction (CLAUDE.md: nothing between BEGIN and COMMIT touches the network)
+  the server HEADs each object (size and type exactly) and copies it, server
+  side, to a key under the new story's prefix, which no URL was ever signed for.
+  Inside the transaction the claim is one row-locked `UPDATE`, so an upload backs
+  one story: a second claim is a 409 and rolls the story back. A refused create
+  deletes the copies it made and leaves the upload usable. Publish is unchanged
+  and judges the copy (real type from the bytes, scan, video job).
+- Every copy is recorded on the upload row (`copy_keys`) BEFORE it is made. A copy
+  made ahead of the story's transaction has no story row to be swept by, so a
+  crash mid-copy or a failed cleanup would leak it; the row names it, and the
+  sweep deletes it (never the key the story kept). A claimed row is also kept
+  while its story is still pending, so a replayed create always knows which of
+  its files were eager and never hands out a PUT URL for one.
+- The response has no `upload` for an eager base and no `layerUploads` entry for
+  an eager layer, so a client can mix: eager where it had time, the old URLs for
+  the rest. A client that sends no `uploadId` gets exactly the old behaviour.
+- `publish: true` on the create, allowed only when every file is eager (else 400),
+  creates and publishes in one call and answers the published story: one round
+  trip instead of two. A failure after the story exists answers as publish would,
+  and a retry with the same `requestId` finds the pending story and publishes it.
+- Sweep: unclaimed uploads older than `STORY_UPLOAD_UNCLAIMED_HOURS` (6), and
+  those of a deleted account, lose object and row; a claimed row is a one hour
+  tombstone that retries the source delete.
+- Counters on `GET /api/admin/metrics` `stories.process`: `uploadsMinted`,
+  `uploadsClaimed`, `uploadsDiscarded`, `uploadsSwept`.
+- RUNTIME KILL SWITCH: the flag `stories_eager_uploads` (global, on by default,
+  flipped from the dashboard). Off, `POST /api/stories/uploads` answers the 404 a
+  server that predates it gives, and `GET /api/stories/config` says
+  `eagerUploads: false` (absent on an older server, which reads as off). Every
+  client then uses the plain flow, which is the whole fallback.
+
+### 18.1 The web client
+
+- `lib/stories/eager-upload.ts`: one `EagerUpload` per file (mint, PUT with
+  progress, state `uploading | done | failed | cancelled`). The composer starts
+  one when the base is captured or imported, one per placed photo as soon as it is
+  on the canvas, and one for the drawing once the pen is up (re-sent if the
+  strokes change). Taking a photo off the canvas, a retake, a replaced base or a
+  discard cancels it: the PUT aborts and `DELETE /api/stories/uploads/:id` is
+  fired and forgotten. There is no trim step on the web, so a re-trim is a new
+  base.
+- Post (`lib/stories/post.ts`) closes the composer at once and waits for the
+  handles. With every file stored it is ONE request, create with `publish: true`.
+  A file with no stored copy (failed, or a server without the route) goes the
+  plain way beside the stored ones. A draft kept for more than five hours
+  uploads again before it is used, because the server sweeps at six.
+- The own ring carries bytes over bytes across every file (a stored file counts
+  whole), the label reads "Postando...", and a failed post keeps the whole draft:
+  tapping the ring opens "Tentar de novo" / "Descartar" (a refusal that cannot be
+  retried only offers to put it away). Discard cancels every upload.
+- Preload (`lib/stories/preload.ts`): at most two downloads, viewer before strips,
+  a lower priority one is preempted. The viewer warms the next two stories of
+  the queue across authors and the first story of the next author (pictures
+  decoded, the poster and layer photos, the author's face, a clip buffered on a
+  hidden element that the viewer then takes over whole); each strip warms the
+  first unseen story of its first three rings. Leaving the window cancels the
+  download. Video preload is skipped under `navigator.connection.saveData`.
+  The stories the strip read are remembered for three minutes so the viewer uses
+  the very objects (and presigned URLs) that were warmed.
+- A story appears whole (`StoryContent` with `gate`, used by the viewer): the card
+  shows its own background and keeps everything else at opacity 0 until the base,
+  every photo layer, the drawing, the faces on call and mention cards (all
+  `img`s in the card, `decode()`d) and the fonts are in, then reveals in one
+  frame with a 140 ms fade (none under reduced motion); a spinner shows only
+  after 300 ms, and a story that never completes shows after 10 s as it is. The
+  preloader warms every one of those assets and the fonts, so a preloaded story
+  reveals on its first frame. Scaled text, mentions and call cards use CSS `zoom`
+  on an inner box instead of `transform: scale` (the viewer only; the editor
+  keeps the transform its gestures measure), so small text stays sharp at any scale.
+  The mute button was already in the top chrome for video stories; every header
+  icon now has the same 44 px hit box on desktop too.
+- The viewer's clock now starts at the first frame (`onReady`, pause reason
+  `load`, given up on after 12 s), so a story on a slow link gets its full time
+  instead of being skipped while it downloads.
 
 ## Research sources
 

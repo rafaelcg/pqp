@@ -753,6 +753,147 @@ that the web got in PR #84. Neither has been seen on a phone yet: the picture a
 quality choice produces exists only on a live connection, which is what
 `VideoSendReport` and the Video section of Settings are for.
 
+## Stories: the camera and the sources
+
+The composer opens on the camera (`StoryCameraView`), the way Instagram's does.
+It replaced `UIImagePickerController`, which could not show a progress ring,
+flip on a double tap or hold a flash across a recording.
+
+- **Tap the shutter for a photo, hold it for a video** up to 30 s with a ring
+  that fills as it records. The tap/hold decision is `StoryShutterPress`, pure
+  and tested; the recording starts under the finger at 0.35 s, not after it
+  lifts. Past 30 s the recording ends on its own and the release that follows
+  does not take a photo. Dragging up while holding zooms.
+- **Front and back**, by the button or a double tap on the preview. Pinch to
+  zoom (a phone with an ultra-wide lens shows 0.5x below 1x), tap to focus,
+  flash off/on/auto (a torch while a video records; a white screen for a
+  selfie, since the front camera has no flash).
+- **The front camera is mirrored in the photo and the video**, to match the
+  preview, as every selfie camera of a social app does it. It is one line,
+  `connection.isVideoMirrored` in `StoryCaptureCore.applyOrientationAndMirroring`.
+- **Gallery** is `PhotosPicker` (photos and videos, no library permission),
+  **Files** is `fileImporter`. A video past 30 s opens `StoryTrimView`: a
+  filmstrip of the clip and a window of exactly 30 s that slides along it, the
+  chosen part looping above. Up to a second over is cut to the limit without
+  asking, because a recording stops a frame or two late (the server accepts up
+  to `STORY_MAX_PROBED_VIDEO_MS`, 31 s).
+- **Permission states** are `StoryCameraAccess`: needs prompt, denied (offers
+  Settings), restricted, no device, and "the camera is on in your call" (a
+  device has one owner). Every one of them still offers the gallery and Files.
+- **The microphone is asked for the first time somebody holds for a video**
+  (`prepareForVideo`), never when the camera opens and never for a photo: a tap
+  on the shutter needs only the camera, so it works with the microphone refused
+  or never asked. If the sheet takes the finger with it, that hold records
+  nothing and the next one does. A video with no microphone is silent and the
+  badge says so.
+- **In a call, videos are silent.** A capture session with a microphone input
+  takes the audio session from WebRTC, so while `voice.holdsSeat` or a DM call
+  is up the camera records without a mic input, and the recording badge says so.
+
+The AVFoundation half (`StoryCaptureCore`) runs only on a phone. A simulator has
+no capture device, so a debug build with `PQP_STORY_CAMERA=mock` swaps in
+`MockStoryCameraEngine` (a moving gradient, a rendered photo, a real H.264 file
+of the held length). It is compiled out of the choice on a release build.
+`PQP_STORY_CAMERA_ACCESS=denied|restricted|undetermined` forces a permission
+screen and `PQP_STORY_FIXTURE_VIDEO=<seconds>` feeds the composer a synthetic
+clip, both debug only. `StoryCameraTests` covers the decisions, the scripted
+camera and the trim export; `StoryCameraUITests` drives the whole flow on the
+mock. **Owed: a pass on a real phone** (front/back flip, torch, pinch, hold to
+record, the mic prompt, an interruption by a call).
+
+## Stories: the editor and its layers
+
+A shot or a picked file (and the Text and Call tabs, on a card background)
+opens `StoryEditorView`: a 9:16 canvas with layers on it, over a dark page with
+the tools in the corner, the way Instagram's is. A layer is DATA
+(`StoryLayer`: id, x, y as 0..1 of the canvas, scale, rotation in radians, and
+one of text / image / drawing / call / mention), never burned into the picture.
+
+- **One gesture surface** (`StoryGestureSurface`, UIKit) owns every touch on the
+  canvas. The first finger picks the topmost layer under it (hit-tested through
+  the layer's own rotation and scale, `StoryCanvas.hit`), and that layer keeps
+  the drag, the pinch and the twist, which run at the same time, until the last
+  finger lifts. A pan is only recognised after the finger has moved, so the
+  layer is looked for where the finger went DOWN, not where it is when the
+  recogniser fires; a fast drag recognised late on the wrong spot was the first
+  bug the UI test found. A pinch with the fingers beside a small line of text
+  still scales the picked layer.
+- **Snap and bin** (`StorySnap`, pure): the center lines pull within 7 pt with
+  a light haptic once per entry, rotation sticks to 0 / 90 / 180 degrees within
+  about 4, a bin appears while dragging and a drop on it deletes with a second
+  haptic. Undo keeps the last 20 actions (a move is one action).
+- **Text** (`StoryTextEditView`): five fonts, the twelve palette colors, none /
+  solid / soft backgrounds, alignment, a size slider; a `UITextView` sized to
+  its text so the box behind it hugs the words while typing. Tapping a text
+  layer edits it. **Photos** come from `PhotosPicker` (re-encoded to 1440 px,
+  no EXIF, at most 6), **drawing** is PencilKit (pen, marker, highlighter,
+  eraser) exported as ONE transparent 810x1440 PNG. Layer order is creation
+  order for every type, the drawing included: a new drawing goes on top, an
+  existing one redrawn keeps its place. **Stickers**: the call (one per story, picked from the voice rooms of the
+  servers you can post to, with who is in them now) and mentions (friends and the
+  members of the server the composer opened from, up to 5, each once).
+- **Posting**: `POST /api/stories` with `layers` (picture layers declare an
+  upload, never a key) and `altText`, then each file is PUT to its
+  `layerUploads` URL, then publish. The caption of a media story carries the text
+  layers for builds that predate layers.
+- **Shared layout.** Every size is a fraction of the canvas WIDTH, so a story
+  looks the same on every platform. The numbers are the web's
+  (`STORY_LAYOUT` / `STORY_TEXT_COLOR_HEX` in `packages/shared/src/stories.ts`)
+  and `StoryLayersTests.testTheLayoutConstantsMatchTheSharedReference` pins
+  them: text 0.08 x width x size, wrapping at 0.84 of the width, line height
+  1.14; a photo 0.40 of the width; the call card 0.82; the mention pill's font
+  0.05. A picture within 12% of 9:16 fills the canvas, anything else is shown
+  whole over a blurred copy of itself (a video over black).
+- VoiceOver: every layer is an element with its text as the label and actions
+  for edit, move (four ways), bigger, smaller, bring to front and delete; a
+  muted-sound toggle, a size slider and the trimmer are adjustable.
+
+Tests: `StoryLayersTests` (decoding, lenient reads, encoding, geometry, snapping,
+the editor's state), `StoryEditorUITests` (text card, drag and bin and undo,
+tap to edit, photo with text and a call sticker, a mention, drawing, mute,
+discard). **Owed: a pass on a real phone** for two-finger pinch and twist
+together, the haptics, and PencilKit with a finger; the simulator drives single
+finger gestures only.
+
+## Stories: the viewer with layers, and the call sticker
+
+`StoryViewer` draws the base and then every layer over it (`StoryStage.swift`),
+on the same 9:16 canvas the editor used.
+
+- **The author's canvas is never cropped**: it is the biggest 9:16 box that
+  FITS the card (contain), centered, and what the card has left over (a tall phone
+  has a little above and below) is filled by the base itself, blurred for a photo
+  or a video and the background color for a card. The chrome sits over the canvas
+  as it always has. Everything a layer is, is a fraction of the canvas, so it sits
+  where the author put it, and the viewer and the editor share the same canvas
+  rule (`StoryViewerLayersTests`).
+- **Base**: a picture within 12% of 9:16 fills the canvas; any other photo is
+  shown whole over a blurred copy of itself and a video over black. A text card
+  is its background plus its text layers; a card from before layers keeps its
+  one line in the middle.
+- **Touches**: the layers sit above the tap zones, but only the call's door and a
+  mention take touches; a tap on a title still goes to the next story. A mention
+  opens that person's profile over the story, which pauses it.
+- **VoiceOver** reads the story once, from `altText` (else the caption, else the
+  card's text); the text and photo layers are hidden from it, the call sticker
+  reads as one sentence (room, server, who is in, or that nobody is / it ended)
+  and the mention is a button.
+- **The call sticker** (`StoryCallStickerCard`): the room's name, the server's
+  icon, up to three faces and a "+n", the count, a pulsing live dot (still under
+  Reduce Motion) and "Entrar", which joins through the existing path. A call is
+  `live` whenever the room exists and its author can still use it, so an empty
+  room says "Ninguém na call agora" and keeps its door (there is no warning in
+  the editor about the author being outside the room); a viewer without CONNECT
+  sees it live with no door; a full room says so; `ended` ("A call acabou", no
+  door) is only a deleted channel (it arrives with no name, and the card says
+  "Call") or an author who lost CONNECT. No `call` from the server means the
+  viewer cannot see the channel, and nothing is drawn. The same view is the editor's preview, so what
+  you place is what is seen. Its live data is the story's own `call` (the server
+  answers it at read time); the server's icon is read once from `GET
+  /api/servers` when a story on screen has a call layer.
+- A server that predates layers has no call layer; the old card keeps its place
+  at the bottom of the viewer.
+
 ## Copy and pt-BR
 
 All UI copy lives inline in Swift and is collected into

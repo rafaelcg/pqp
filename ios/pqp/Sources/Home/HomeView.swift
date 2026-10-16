@@ -51,6 +51,9 @@ struct HomeView: View {
         /// Set when the link was a forum or one of its posts: the channel
         /// list pushes the forum, and the forum the post.
         var forum: ForumFocus? = nil
+        /// Set when the link was a message (a forwarded card): the channel
+        /// opens scrolled to it.
+        var jumpToMessageId: String? = nil
     }
 
     /// Conversas on a phone: which tab is up. Seeded by the landing rule once
@@ -194,7 +197,8 @@ struct HomeView: View {
             initialChannel: restored.channel,
             opensBau: restored.opensBau,
             initialBau: restored.bau,
-            initialForum: restored.forum
+            initialForum: restored.forum,
+            initialMessageId: restored.jumpToMessageId
         )
     }
 
@@ -220,7 +224,29 @@ struct HomeView: View {
     /// first and then asks for the `.server` it turned into, so by this point
     /// every case is a place that either exists or does not.
     private func follow(_ request: DeepLinkTarget) async {
-        defer { session.navigationHandled() }
+        // A request that was superseded while this one waited is not
+        // "handled" by this call: the newer one is on its own task.
+        var superseded = false
+        defer { if !superseded { session.navigationHandled() } }
+
+        // A place asked for while a place this stack opened is still up (a
+        // forwarded card tapped inside a channel a link brought us to). A
+        // `navigationDestination(item:)` only pushes on nil to a value, so
+        // swapping one value for another changes nothing on screen: go back to
+        // the hub first, then push. Nothing here is a place for an invite or a
+        // conversation.
+        switch request {
+        case .invite, .conversation: break
+        default:
+            if restoredChannel != nil {
+                restoredChannel = nil
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled, session.navigationRequest == request else {
+                    superseded = true
+                    return
+                }
+            }
+        }
 
         switch request {
         case .invite:
@@ -241,32 +267,11 @@ struct HomeView: View {
             openedConversation = conversation
 
         case .channel(let serverId, let channelId):
-            guard let server = await resolveServer(serverId),
-                  let channels = try? await session.api.channels(serverId: serverId)
-            else { return }
-            tab = .servidores
-            if let channel = channels.first(where: { $0.id == channelId }) {
-                if channel.isText {
-                    restoredChannel = RestoredChannel(server: server, channel: channel)
-                } else if channel.isForum {
-                    restoredChannel = RestoredChannel(
-                        server: server, channel: nil, forum: ForumFocus(forumId: channel.id)
-                    )
-                }
-                return
-            }
-            // Not in the list: a forum post (a push for a reply in one names
-            // the post's own channel). The post knows its forum; anything
-            // else, or a post this account cannot see, lands on the server.
-            if let detail = await forumPostOnce(channelId),
-               channels.contains(where: { $0.id == detail.post.forumId && $0.isForum }) {
-                restoredChannel = RestoredChannel(
-                    server: server, channel: nil,
-                    forum: ForumFocus(forumId: detail.post.forumId, postId: channelId)
-                )
-            } else {
-                restoredChannel = RestoredChannel(server: server, channel: nil)
-            }
+            await openChannel(serverId: serverId, channelId: channelId, messageId: nil)
+
+        case .message(let serverId, let channelId, let messageId):
+            // A forwarded message's card: the channel, scrolled to the message.
+            await openChannel(serverId: serverId, channelId: channelId, messageId: messageId)
 
         case .forumPost(let serverId, let forumId, let postId):
             guard let server = await resolveServer(serverId) else { return }
@@ -294,6 +299,38 @@ struct HomeView: View {
             guard let server = await resolveServer(serverId) else { return }
             tab = .servidores
             restoredChannel = RestoredChannel(server: server, channel: nil, bau: BauFocus(postId: postId))
+        }
+    }
+
+    /// A channel by id, optionally on one message. Not in the list: a forum
+    /// post (a push for a reply in one names the post's own channel). The post
+    /// knows its forum; anything else, or a post this account cannot see,
+    /// lands on the server.
+    private func openChannel(serverId: String, channelId: String, messageId: String?) async {
+        guard let server = await resolveServer(serverId),
+              let channels = try? await session.api.channels(serverId: serverId)
+        else { return }
+        tab = .servidores
+        if let channel = channels.first(where: { $0.id == channelId }) {
+            if channel.isText {
+                restoredChannel = RestoredChannel(
+                    server: server, channel: channel, jumpToMessageId: messageId
+                )
+            } else if channel.isForum {
+                restoredChannel = RestoredChannel(
+                    server: server, channel: nil, forum: ForumFocus(forumId: channel.id)
+                )
+            }
+            return
+        }
+        if let detail = await forumPostOnce(channelId),
+           channels.contains(where: { $0.id == detail.post.forumId && $0.isForum }) {
+            restoredChannel = RestoredChannel(
+                server: server, channel: nil,
+                forum: ForumFocus(forumId: detail.post.forumId, postId: channelId)
+            )
+        } else {
+            restoredChannel = RestoredChannel(server: server, channel: nil)
         }
     }
 
@@ -718,6 +755,52 @@ final class HomeModel {
         }
     }
 
+    /// Move one server a place up or down in this person's own list, and save
+    /// it. Optimistic, like the profile switch below: the list moves on the
+    /// tap.
+    ///
+    /// SAVES RUN ONE AT A TIME. Two requests in the air can be processed in
+    /// either order, which would leave the stored order older than the one on
+    /// screen. So the first move starts a loop that sends the CURRENT order,
+    /// and a move made while a save is in the air only changes `servers`: the
+    /// loop sends it next (several quick moves are one request), and stops when
+    /// the stored order is the one shown. A refused save puts the order back to
+    /// the last one the server confirmed (never an intermediate one that was
+    /// not saved), touching nothing else on the rows, and shows the server's
+    /// sentence.
+    func moveServer(serverId: String, by delta: Int) async {
+        guard let session,
+              let moved = ServerOrder.moved(servers, id: serverId, by: delta)
+        else { return }
+        if confirmedServerOrder == nil {
+            confirmedServerOrder = servers.map(\.id)
+        }
+        servers = moved
+        guard !serverOrderSaving else { return }
+        serverOrderSaving = true
+        defer {
+            serverOrderSaving = false
+            confirmedServerOrder = nil
+        }
+        while true {
+            let ids = servers.map(\.id)
+            if ids == confirmedServerOrder { return }
+            do {
+                try await session.api.saveServerOrder(ids)
+                confirmedServerOrder = ids
+            } catch {
+                if let confirmed = confirmedServerOrder {
+                    servers = ServerOrder.applying(confirmed, to: servers)
+                }
+                if let shown = error.userFacingMessage { self.error = shown }
+                return
+            }
+        }
+    }
+
+    private var serverOrderSaving = false
+    private var confirmedServerOrder: [String]?
+
     /// One membership's badge opt-out, flipped from the rail's own menu.
     ///
     /// Optimistic, because the switch is a preference about a chip on a card
@@ -735,7 +818,11 @@ final class HomeModel {
                 serverId: serverId, showOnProfile: showOnProfile
             )
         } catch {
-            servers[index].showOnProfile = previous
+            // By id, not by the index read before the await: the list can have
+            // been reordered while the request was in the air.
+            if let now = servers.firstIndex(where: { $0.id == serverId }) {
+                servers[now].showOnProfile = previous
+            }
             if let shown = error.userFacingMessage { self.error = shown }
         }
     }
@@ -1228,6 +1315,7 @@ struct HubView: View {
                             // that private servers are shown by default, which is
                             // the exact misreading this must not create.
                             .contextMenu {
+                                serverMoveButtons(server)
                                 if server.isCommunity {
                                     Button {
                                         Task {
@@ -1367,6 +1455,30 @@ struct HubView: View {
         }
     }
 
+    /// Move up / Move down for a server, in the menu of its tile or row. Hidden
+    /// at the ends, so there is no item that does nothing. A drag is not
+    /// reachable by VoiceOver, and the phone channel list reorders through a
+    /// menu for the same reason.
+    @ViewBuilder
+    private func serverMoveButtons(_ server: Server) -> some View {
+        if model.servers.first?.id != server.id {
+            Button {
+                Task { await model.moveServer(serverId: server.id, by: -1) }
+            } label: {
+                Label("Move up", systemImage: "arrow.up")
+            }
+            .accessibilityIdentifier("server.moveUp.\(server.id)")
+        }
+        if model.servers.last?.id != server.id {
+            Button {
+                Task { await model.moveServer(serverId: server.id, by: 1) }
+            } label: {
+                Label("Move down", systemImage: "arrow.down")
+            }
+            .accessibilityIdentifier("server.moveDown.\(server.id)")
+        }
+    }
+
     // MARK: - Servidores (the tab)
 
     /// Servers as rows, the way the Servidores tab draws them: the mark, the
@@ -1388,6 +1500,7 @@ struct HubView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("servers.server.\(server.id)")
+                .contextMenu { serverMoveButtons(server) }
             }
 
             Menu {

@@ -40,6 +40,7 @@ import gg.pqp.app.R
 import gg.pqp.app.core.ServerSummary
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.ui.screens.channels.mutedChannelIds
 import gg.pqp.app.social.ConversasHome
 import gg.pqp.app.social.ConversationList
 import gg.pqp.app.social.DmSummary
@@ -198,7 +199,11 @@ private fun ClassicHome(
     // Rows with something unread, not messages: "4" next to Messages means four
     // conversations want you, which is the number a person can act on. A sum of
     // message counts would say 200 for one chatty group.
-    val unreadConversations = ConversationList.waiting(conversations)
+    val classicPhase by session.phase.collectAsStateWithLifecycle()
+    val unreadConversations = ConversationList.waiting(
+        conversations,
+        mutedChannelIds((classicPhase as? SessionPhase.Ready)?.me?.preferences?.notifications?.channels),
+    )
     val pendingRequests = friends.pendingCount
 
     BackHandler(enabled = tab != HomeTab.Servers) { tab = HomeTab.Servers }
@@ -352,7 +357,10 @@ private fun PhoneTabsHome(
     val conversations by social.conversations.collectAsStateWithLifecycle()
     val phase by session.phase.collectAsStateWithLifecycle()
     val me = (phase as? SessionPhase.Ready)?.me
-    val waiting = ConversationList.waiting(conversations)
+    val waiting = ConversationList.waiting(
+        conversations,
+        mutedChannelIds(me?.preferences?.notifications?.channels),
+    )
 
     BackHandler(enabled = tab != landing) { select(landing) }
 

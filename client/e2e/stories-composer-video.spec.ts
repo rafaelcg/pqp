@@ -175,6 +175,54 @@ for (const size of [
       await useEveryTool(page, composer);
     });
 
+    test("text mode: only the text controls show, the camera is released, and it never comes back under the editor", async ({ page }) => {
+      const composer = await openComposer(page, await setup(), size);
+      await composer.locator("[data-story-mode=text]").click();
+      // The editor opens on the card's own background: no camera, no camera controls, no tools, no Post row.
+      await expect(composer.locator("[data-story-text-editor]")).toBeVisible();
+      await expect(composer.locator("[data-story-camera]")).toHaveCount(0);
+      await expect(composer.locator("[data-story-shutter]")).toHaveCount(0);
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            [...document.querySelectorAll("video")].every((video) => {
+              const stream = video.srcObject as MediaStream | null;
+              return !stream || stream.getTracks().every((track) => track.readyState === "ended");
+            }),
+          ),
+        )
+        .toBe(true);
+      for (const hidden of ["close", "undo", "redo", "tool-text", "audience", "post"]) {
+        await expect(composer.locator(`.story-cmp-head [data-story-${hidden}], .story-cmp-foot [data-story-${hidden}]`)).toBeHidden();
+      }
+      await composer.locator("[data-story-text]").fill("oi");
+      await composer.locator("[data-story-text-done]").click();
+      // The tools and the Post row are back.
+      await expect(composer.locator("[data-story-post]")).toBeVisible();
+      await expectReachable(page, composer.locator("[data-story-tool-text]"), "tool-text");
+      // Back to the camera: a layer exists, so leaving asks first, and the camera is live without any editor.
+      await composer.locator("[data-story-mode=camera]").click();
+      await expect(composer.locator("[data-story-discard]")).toBeVisible();
+      await composer.locator("[data-story-discard-confirm]").click();
+      await expect(composer.locator("[data-story-shutter]")).toBeVisible();
+      await expect(composer.locator("[data-story-text-editor]")).toHaveCount(0);
+      await expect(composer.locator("[data-story-layer]")).toHaveCount(0);
+    });
+
+    test("X asks before throwing a story away, and Escape does the same", async ({ page }) => {
+      const composer = await openComposer(page, await setup(), size);
+      await composer.locator("[data-story-shutter]").click();
+      await expect(composer.locator("[data-story-audience]")).toBeVisible();
+      await composer.locator("[data-story-close]").click();
+      await expect(composer.locator("[data-story-discard]")).toBeVisible();
+      await composer.locator("[data-story-discard-keep]").click();
+      await expect(composer.locator("[data-story-discard]")).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await expect(composer.locator("[data-story-discard]")).toBeVisible();
+      await composer.locator("[data-story-discard-confirm]").click();
+      await expect(composer).toHaveCount(0);
+    });
+
     test("a photo: every tool works, and Back returns to a clean camera", async ({ page }) => {
       const composer = await openComposer(page, await setup(), size);
       await composer.locator("[data-story-shutter]").click();

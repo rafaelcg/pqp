@@ -8,6 +8,7 @@ import { loadLocale, setActiveCatalogue } from "@/lib/i18n";
 const api = vi.hoisted(() => ({
   fetchChannelMembers: vi.fn(),
   fetchChannelOverwrites: vi.fn(),
+  fetchChannelBauFollows: vi.fn(),
   fetchMembers: vi.fn(),
   fetchForumTags: vi.fn(),
   fetchForumSettings: vi.fn(),
@@ -55,6 +56,7 @@ beforeEach(() => {
   }
   api.fetchChannelMembers.mockResolvedValue({ members: [] });
   api.fetchChannelOverwrites.mockResolvedValue({ overwrites: [] });
+  api.fetchChannelBauFollows.mockResolvedValue({ follows: [] });
   api.fetchMembers.mockResolvedValue({ members: [] });
   api.fetchForumTags.mockResolvedValue({ tags });
   api.fetchForumSettings.mockResolvedValue({

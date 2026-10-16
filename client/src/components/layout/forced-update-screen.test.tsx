@@ -34,8 +34,17 @@ afterEach(() => {
   resetUpdateState();
 });
 
-const FORCED = { stale: true, forced: true, latestBuild: "def456", since: 1 };
+// Only a CRITICAL update blocks. The force switch (`forced`) announces at once
+// and draws the indicator louder, and blocks nobody.
+const FORCED = {
+  stale: true,
+  forced: true,
+  critical: true,
+  latestBuild: "def456",
+  since: 1,
+};
 const SOFT = { stale: true, forced: false, latestBuild: "def456", since: 1 };
+const URGENT = { stale: true, forced: true, latestBuild: "def456", since: 1 };
 
 function screen() {
   return document.querySelector('[role="dialog"]');
@@ -50,15 +59,19 @@ function pressEscape() {
 }
 
 describe("the forced update screen", () => {
-  it("is absent until the operator forces an update", async () => {
+  it("is absent for an ordinary update, and for one the operator only pushed", async () => {
     await mount(<ForcedUpdateScreen apply={async () => {}} />);
     expect(screen()).toBeNull();
 
     act(() => setBuildStaleness(SOFT));
     expect(screen()).toBeNull();
+
+    // `client_force_update` alone: announced at once, never a blocking screen.
+    act(() => setBuildStaleness(URGENT));
+    expect(screen()).toBeNull();
   });
 
-  it("blocks with one button once an update is forced", async () => {
+  it("blocks with one button once an update is critical", async () => {
     await mount(<ForcedUpdateScreen apply={async () => {}} />);
     act(() => setBuildStaleness(FORCED));
 
@@ -103,13 +116,10 @@ describe("the forced update screen", () => {
     expect(screen()?.querySelector("button")?.textContent).toBe("Updating…");
   });
 
-  it("waits out a call and appears when it ends", async () => {
+  it("is up in a call too: a critical update is the one that does not wait", async () => {
     await mount(<ForcedUpdateScreen apply={async () => {}} />);
     act(() => setInCall(true));
     act(() => setBuildStaleness(FORCED));
-    expect(screen()).toBeNull();
-
-    act(() => setInCall(false));
     expect(screen()).not.toBeNull();
   });
 

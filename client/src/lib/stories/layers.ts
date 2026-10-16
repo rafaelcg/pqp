@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import {
   STORY_LAYOUT,
+  STORY_LAYER_ALT_MAX,
   STORY_LAYER_IMAGE_SHAPES,
   STORY_LAYER_SCALE_MAX,
   STORY_LAYER_SCALE_MIN,
@@ -32,7 +33,8 @@ import type { Stroke } from "./drawing";
  *   84% of the width; a photo is 40% of the width (height by aspect; a circle
  *   is cropped to a square); a mention chip is 5% type; a call card is 82%.
  *   The values are `STORY_LAYOUT` in `@pqp/shared`; do not copy them here.
- * - A drawing sits at the BOTTOM of the stack, just above the base.
+ * - Layer order is creation order for every type: a new drawing goes on TOP, and a second
+ *   drawing session moves the single drawing back to the top (one undo step).
  * - Layers outside the canvas are clipped by it.
  */
 
@@ -83,6 +85,8 @@ export type EditorLayer =
       previewUrl: string;
       width: number;
       height: number;
+      /** What the author wrote to describe the photo, for screen readers. Empty or absent: none. */
+      alt?: string;
     })
   | (LayerGeometry & { type: "drawing"; strokes: Stroke[] })
   | (LayerGeometry & { type: "call"; serverId: string; channelId: string; channelName: string })
@@ -130,10 +134,21 @@ export function clampGeometry<T extends LayerGeometry>(layer: T): T {
   };
 }
 
-/** Where and how a layer sits on the canvas. Shared by the editor and the viewer. */
+/**
+ * Where and how a layer sits on the canvas. Shared by the editor and the viewer.
+ *
+ * `width: max-content` is load-bearing. The box is absolute at `left: x%`, and an absolute box
+ * with an auto width shrinks to fit the room left BEFORE the container's right edge. Anything
+ * inside that resolves a width against its parent (a photo's `max-width: 100%` from the reset, a
+ * chip's `max-width`) then follows that leftover room: a photo at x = 0.8 drew at half size, and
+ * one at x = 0.95 at a tenth. A layer's width is its own content's (a photo is 40cqw, a call
+ * card 82cqw, text wraps at 84cqw), never a function of where it was put, so the box takes it
+ * from the content and the position cannot squeeze it.
+ */
 export function layerStyle(geometry: LayerGeometry): CSSProperties {
   return {
     position: "absolute",
+    width: "max-content",
     left: `${geometry.x * 100}%`,
     top: `${geometry.y * 100}%`,
     transform: `translate(-50%, -50%) rotate(${geometry.rotation}rad) scale(${geometry.scale})`,
@@ -185,16 +200,18 @@ export interface EditorState {
   layers: EditorLayer[];
   selectedId: string | null;
   past: EditorLayer[][];
+  /** What undo stepped back over, newest first to redo. Any new edit clears it. */
+  future: EditorLayer[][];
 }
 
 export const HISTORY_LIMIT = 40;
 
-export const initialEditorState: EditorState = { layers: [], selectedId: null, past: [] };
+export const initialEditorState: EditorState = { layers: [], selectedId: null, past: [], future: [] };
 
 export type EditorAction =
   | { type: "add"; layer: EditorLayer }
   /** Replace a layer's fields. `transient` skips the history entry (a gesture in flight). */
-  | { type: "patch"; id: string; patch: Partial<EditorLayer>; transient?: boolean }
+  | { type: "patch"; id: string; patch: Partial<EditorLayer>; transient?: boolean; toTop?: boolean }
   /** Push the pre-gesture layers as one undo step. Dispatched once at the start of a gesture. */
   | { type: "checkpoint" }
   | { type: "remove"; id: string }
@@ -202,6 +219,7 @@ export type EditorAction =
   | { type: "backward"; id: string }
   | { type: "select"; id: string | null }
   | { type: "undo" }
+  | { type: "redo" }
   | { type: "reset" };
 
 /**
@@ -246,14 +264,16 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       }
       const added = clampGeometry(action.layer);
       return {
-        // A drawing goes under everything placed (index 0, just above the base); the rest on top.
-        layers: action.layer.type === "drawing" ? [added, ...state.layers] : [...state.layers, added],
+        // Creation order, the drawing included: it goes on top (a drawing is not selected: it has
+        // no frame to move).
+        layers: [...state.layers, added],
         selectedId: action.layer.type === "drawing" ? state.selectedId : action.layer.id,
         past: push(state.past, state.layers),
+        future: [],
       };
     }
     case "checkpoint":
-      return { ...state, past: push(state.past, state.layers) };
+      return { ...state, past: push(state.past, state.layers), future: [] };
     case "patch": {
       const index = state.layers.findIndex((layer) => layer.id === action.id);
       if (index < 0) {
@@ -261,10 +281,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       }
       const layers = state.layers.slice();
       layers[index] = clampGeometry({ ...layers[index]!, ...action.patch } as EditorLayer);
+      if (action.toTop && index !== layers.length - 1) {
+        // One history step for the change and the move: a drawing drawn on again surfaces.
+        layers.push(...layers.splice(index, 1));
+      }
       return {
         ...state,
         layers,
         past: action.transient ? state.past : push(state.past, state.layers),
+        future: action.transient ? state.future : [],
       };
     }
     case "remove": {
@@ -275,6 +300,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         layers: state.layers.filter((layer) => layer.id !== action.id),
         selectedId: state.selectedId === action.id ? null : state.selectedId,
         past: push(state.past, state.layers),
+        future: [],
       };
     }
     case "forward":
@@ -287,7 +313,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const layers = state.layers.slice();
       const [moved] = layers.splice(index, 1);
       layers.splice(target, 0, moved!);
-      return { ...state, layers, past: push(state.past, state.layers) };
+      return { ...state, layers, past: push(state.past, state.layers), future: [] };
     }
     case "select":
       return state.selectedId === action.id ? state : { ...state, selectedId: action.id };
@@ -297,7 +323,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         return state;
       }
       const selectedId = previous.some((layer) => layer.id === state.selectedId) ? state.selectedId : null;
-      return { layers: previous, selectedId, past: state.past.slice(0, -1) };
+      return { layers: previous, selectedId, past: state.past.slice(0, -1), future: push(state.future, state.layers) };
+    }
+    case "redo": {
+      const following = state.future[state.future.length - 1];
+      if (!following) {
+        return state;
+      }
+      const selectedId = following.some((layer) => layer.id === state.selectedId) ? state.selectedId : null;
+      return { layers: following, selectedId, past: push(state.past, state.layers), future: state.future.slice(0, -1) };
     }
     case "reset":
       return initialEditorState;
@@ -326,6 +360,7 @@ export function toLayerInput(layer: EditorLayer, drawing?: { blob: Blob; width: 
         ...geometry,
         type: "image",
         shape: layer.shape,
+        ...(layer.alt?.trim() ? { alt: layer.alt.trim().replace(/\s+/g, " ").slice(0, STORY_LAYER_ALT_MAX) } : {}),
         upload: {
           contentType: layer.contentType,
           byteSize: layer.blob.size,
@@ -348,10 +383,26 @@ export function toLayerInput(layer: EditorLayer, drawing?: { blob: Blob; width: 
   }
 }
 
-/** The words a screen reader gets for a story: the text layers in reading order, then the caption. */
-export function altTextFor(layers: readonly EditorLayer[], caption: string, mentionLabel: (name: string) => string): string {
+/**
+ * The words a screen reader gets for a story: what the author wrote to describe the picture (the
+ * base's, then each placed photo's), the text layers in reading order, the people, then the caption.
+ */
+export function altTextFor(
+  layers: readonly EditorLayer[],
+  caption: string,
+  mentionLabel: (name: string) => string,
+  baseAlt = "",
+): string {
   const parts: string[] = [];
   const reading = (a: EditorLayer, b: EditorLayer) => a.y - b.y || a.x - b.x;
+  if (baseAlt.trim()) {
+    parts.push(baseAlt.trim().replace(/\s+/g, " "));
+  }
+  for (const layer of layers.filter((entry) => entry.type === "image").sort(reading)) {
+    if (layer.type === "image" && layer.alt?.trim()) {
+      parts.push(layer.alt.trim().replace(/\s+/g, " "));
+    }
+  }
   // What is written, top to bottom, then who is in it.
   for (const layer of layers.filter((entry) => entry.type === "text").sort(reading)) {
     if (layer.type === "text" && layer.text.trim()) {

@@ -65,6 +65,8 @@ import { MessageBody } from "@/components/chat/message-body";
 import { ChanceCard } from "@/components/chat/chance-card";
 import { PollCard } from "@/components/chat/poll-card";
 import { BauPostCard } from "@/components/chat/bau-post-card";
+import { ForwardCard } from "@/components/chat/forward-card";
+import { forwardCommentOf } from "@/lib/forward";
 import {
   selectBauCardLink,
   stripBauLink,
@@ -2928,11 +2930,15 @@ const MessageRow = memo(function MessageRow({
   // reader may see it; until it answers (and if it refuses) the link stays.
   const bauSelection = useMemo(
     () =>
-      selectBauCardLink(
-        message.body,
-        typeof window === "undefined" ? null : window.location.origin,
-      ),
-    [message.body],
+      // A forward's fallback body carries the source's own URL: the forward
+      // card is the one card, never a second Baú card beside it.
+      message.forward
+        ? null
+        : selectBauCardLink(
+            message.body,
+            typeof window === "undefined" ? null : window.location.origin,
+          ),
+    [message.body, message.forward],
   );
   const bauState = useBauCard(bauSelection?.link ?? null, locale, currentUserId);
   // While the card is (about to be) there, the pasted URL is not repeated
@@ -2940,8 +2946,9 @@ const MessageRow = memo(function MessageRow({
   const bauCardShown =
     bauSelection !== null &&
     (bauState.status === "ok" || bauState.status === "loading");
-  const shownBody =
-    bauSelection && bauCardShown
+  const shownBody = message.forward
+    ? forwardCommentOf(message)
+    : bauSelection && bauCardShown
       ? stripBauLink(message.body, bauSelection.link)
       : message.body;
   const hideBodyForBauCard = shownBody === "";
@@ -3622,7 +3629,7 @@ const MessageRow = memo(function MessageRow({
 
               {isEditing ? (
                 <EditComposer
-                  initialValue={message.body}
+                  initialValue={message.forward ? forwardCommentOf(message) : message.body}
                   allowEmpty={attachments.length > 0}
                   onCancel={onCancelEdit}
                   onSubmit={onSubmitEdit}
@@ -3663,7 +3670,7 @@ const MessageRow = memo(function MessageRow({
                         body={shownBody}
                         currentUsername={currentUsername}
                       />
-                      {attachments.length === 0 && (
+                      {attachments.length === 0 && !message.forward && (
                         <EditedMarker editedAt={message.editedAt} />
                       )}
                     </div>
@@ -3699,6 +3706,7 @@ const MessageRow = memo(function MessageRow({
                         {t("chat.attachmentUnavailable")}
                       </p>
                     )}
+                  {message.forward && <ForwardCard forward={message.forward} />}
                   {bauSelection && (
                     <BauPostCard link={bauSelection.link} state={bauState} />
                   )}

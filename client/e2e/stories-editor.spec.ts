@@ -60,22 +60,42 @@ async function setup() {
   return { owner, serverId: server.id, channelId: channels.channels.find((c) => c.type === "text")!.id };
 }
 
+/** On a phone the channel list (server menu, story strip) is a drawer behind "Open navigation". */
+async function openChannelList(page: Page) {
+  const drawer = page.getByRole("button", { name: "Open navigation" });
+  // The button exists only on a narrow screen, and only once the shell has laid out.
+  const narrow = (page.viewportSize()?.width ?? 1440) < 768;
+  if (narrow) {
+    await drawer.click();
+  }
+}
+
 async function openTextComposer(page: Page, ctx: Awaited<ReturnType<typeof setup>>) {
   await page.addInitScript((value) => localStorage.setItem("pqp:dev-user-suffix", value), ctx.owner);
   await page.goto(`/app/server/${ctx.serverId}/channel/${ctx.channelId}?lang=en`);
   await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+  await openChannelList(page);
   await page.locator("[data-server-menu-trigger]").first().click();
   await page.getByRole("menuitem", { name: "Post a story" }).click();
   const composer = page.getByRole("dialog", { name: "New story" });
-  await composer.getByRole("radio", { name: "Text" }).click();
+  // With no object storage the composer opens straight on the text card, its editor already up (and the
+  // tabs out of the way); with storage it opens on the camera and the Text tab is the way in.
+  const textTab = composer.getByRole("radio", { name: "Text" });
+  await expect(textTab.or(composer.locator("[data-story-text]"))).toBeVisible();
+  // (If the editor came up by itself in the meantime the tab is gone and there is nothing to click.)
+  await textTab.click({ timeout: 3000 }).catch(() => undefined);
   return composer;
 }
 
 async function addText(composer: Locator, text: string) {
-  // The first text opens on its own; later ones from the text tool.
-  if (!(await composer.locator("[data-story-text]").isVisible())) {
+  // The first text of an empty text card opens its editor on its own; later ones come from the
+  // text tool. (While the editor is open the tools are out of the way, so never reach for one
+  // then: the card with no layers is the one that opens by itself, however slowly.)
+  const opensItself = (await composer.locator("[data-layer-type]").count()) === 0;
+  if (!opensItself) {
     await composer.locator("[data-story-tool-text]").click();
   }
+  await composer.locator("[data-story-text]").waitFor({ state: "visible", timeout: 15_000 });
   await composer.locator("[data-story-text]").fill(text);
   await composer.locator("[data-story-text-done]").click();
   await expect(composer.locator("[data-story-text]")).toHaveCount(0);
@@ -174,6 +194,51 @@ test("text layers: place, drag, keyboard, pinch, trash, undo", async ({ page }) 
   await layers.nth(0).focus();
   await page.keyboard.press("Delete");
   await expect(layers).toHaveCount(1);
+});
+
+test("Ctrl+Z and Escape still reach the composer when the text editor has left focus on the page", async ({ page }) => {
+  const ctx = await setup();
+  const composer = await openTextComposer(page, ctx);
+  await addText(composer, "primeira");
+  await addText(composer, "segunda");
+  // Done removed the editor's field: nothing inside the composer has focus now.
+  expect(await page.evaluate(() => document.activeElement === document.body || !document.querySelector("[data-story-composer]")?.contains(document.activeElement))).toBe(true);
+  await expect(composer.locator('[data-layer-type="text"]')).toHaveCount(2);
+  await page.keyboard.press("Control+z");
+  await expect(composer.locator('[data-layer-type="text"]')).toHaveCount(1);
+  // Escape asks before anything is thrown away (undo took the selected layer, so there is no selection to clear first).
+  await page.keyboard.press("Escape");
+  await expect(composer.locator("[data-story-discard]")).toBeVisible();
+});
+
+test("280 characters of long unbroken words are sized to fit the canvas, clear of the viewer's chrome", async ({ page }) => {
+  const ctx = await setup();
+  const composer = await openTextComposer(page, ctx);
+  const long = ("A".repeat(80) + " https://example.com/very/long/path/that/never/ends/and/keeps/going?query=" + "x".repeat(40) + " " + "palavra".repeat(12)).slice(0, 280);
+  await addText(composer, long);
+  const canvas = (await composer.locator("[data-story-surface]").boundingBox())!;
+  const words = (await composer.locator('[data-layer-type="text"]').first().boundingBox())!;
+  // Inside the safe area: 10% off the top (progress bars, header), 13% off the bottom (reply row).
+  expect(words.y).toBeGreaterThanOrEqual(canvas.y + canvas.height * 0.1 - 1);
+  expect(words.y + words.height).toBeLessThanOrEqual(canvas.y + canvas.height * 0.87 + 1);
+  expect(words.x).toBeGreaterThanOrEqual(canvas.x);
+  expect(words.x + words.width).toBeLessThanOrEqual(canvas.x + canvas.width + 1);
+});
+
+test("the editor refits long text when the window is resized while it is open", async ({ page }) => {
+  const ctx = await setup();
+  const composer = await openTextComposer(page, ctx);
+  const long = ("palavra".repeat(12) + " ").repeat(3).slice(0, 280);
+  await composer.locator("[data-story-text]").waitFor({ state: "visible", timeout: 15_000 });
+  await composer.locator("[data-story-text]").fill(long);
+  const inside = async () => {
+    const canvas = (await composer.locator("[data-story-text-editor]").boundingBox())!;
+    const words = (await composer.locator("[data-story-text-box]").boundingBox())!;
+    return words.y >= canvas.y + canvas.height * 0.1 - 2 && words.y + words.height <= canvas.y + canvas.height * 0.87 + 2;
+  };
+  await expect.poll(inside).toBe(true);
+  await page.setViewportSize({ width: 390, height: 600 });
+  await expect.poll(inside).toBe(true);
 });
 
 test("posts a text card with layers and a mention; the server keeps them", async ({ page }) => {
@@ -293,6 +358,22 @@ for (const size of [
         { timeout: 10_000 },
       )
       .toEqual({ x: 0.527, y: 0.777 });
+    // The viewer never crops the author's canvas: it is the whole 9:16, fitted INSIDE the card (a
+    // phone is taller than 9:16, so there are bars above and below), never wider or taller than it.
+    const fit = await page.evaluate(() => {
+      const card = document.querySelector("[data-story-card]")!.getBoundingClientRect();
+      const canvas = document.querySelector("[data-story-viewer] [data-story-layer-canvas]")!.getBoundingClientRect();
+      return {
+        ratio: canvas.width / canvas.height,
+        inside:
+          canvas.left >= card.left - 1 &&
+          canvas.right <= card.right + 1 &&
+          canvas.top >= card.top - 1 &&
+          canvas.bottom <= card.bottom + 1,
+      };
+    });
+    expect(fit.inside).toBe(true);
+    expect(fit.ratio).toBeCloseTo(9 / 16, 2);
     // Its type is the same fraction of the canvas width at any size: 8% x size x scale of the width.
     // (Both in layout pixels: the viewer scales in while it opens, which scales a bounding box.)
     const fraction = await layer.locator(".story-tl").evaluate((element) => {
@@ -373,3 +454,255 @@ test("editing a text layer happens in place: it does not move, resize or untilt,
   await expect(layer).not.toContainText("editado");
   expect((await geometry(layer)).scale).toBeCloseTo(before.scale, 5);
 });
+
+test("a layer never scales past the canvas, and the corner handle turns only past its dead zone or with Shift", async ({ page }) => {
+  const ctx = await setup();
+  const composer = await openTextComposer(page, ctx);
+  await addText(composer, "limite");
+  const layer = composer.locator('[data-layer-type="text"]').first();
+  const surface = (await composer.locator("[data-story-surface]").boundingBox())!;
+  const width = async () => (await layer.boundingBox())!.width;
+
+  // The wheel and the keyboard stop where the layer fills the canvas.
+  const at = (await layer.boundingBox())!;
+  await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+  for (let i = 0; i < 10; i += 1) {
+    await page.mouse.wheel(0, -400);
+    await page.waitForTimeout(30);
+  }
+  await expect.poll(width).toBeLessThanOrEqual(surface.width + 1.5);
+  // The wheel commits its scale a moment after the last notch.
+  await page.waitForTimeout(450);
+  await layer.focus();
+  for (let i = 0; i < 10; i += 1) {
+    await page.keyboard.press("+");
+  }
+  expect(await width()).toBeLessThanOrEqual(surface.width + 1.5);
+  expect(await width()).toBeGreaterThan(surface.width * 0.9);
+
+  // The handle: a pull with a small wobble is a pure scale; a swing turns it; Shift only turns.
+  for (let i = 0; i < 6; i += 1) {
+    await page.keyboard.press("-");
+  }
+  const before = await geometry(layer);
+  const handle = (await composer.locator("[data-story-handle]").boundingBox())!;
+  const hx = handle.x + handle.width / 2;
+  const hy = handle.y + handle.height / 2;
+  const box = (await layer.boundingBox())!;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  const radius = Math.hypot(hx - cx, hy - cy);
+  const angle = Math.atan2(hy - cy, hx - cx);
+  const wobble = (4 * Math.PI) / 180;
+  await page.mouse.move(hx, hy);
+  await page.mouse.down();
+  await page.mouse.move(cx + radius * 1.2 * Math.cos(angle + wobble), cy + radius * 1.2 * Math.sin(angle + wobble), { steps: 8 });
+  await page.mouse.up();
+  const pulled = await geometry(layer);
+  expect(pulled.rotation).toBeCloseTo(before.rotation, 6);
+  expect(pulled.scale).toBeGreaterThan(before.scale);
+
+  const handle2 = (await composer.locator("[data-story-handle]").boundingBox())!;
+  const h2x = handle2.x + handle2.width / 2;
+  const h2y = handle2.y + handle2.height / 2;
+  const box2 = (await layer.boundingBox())!;
+  const c2x = box2.x + box2.width / 2;
+  const c2y = box2.y + box2.height / 2;
+  const r2 = Math.hypot(h2x - c2x, h2y - c2y);
+  const a2 = Math.atan2(h2y - c2y, h2x - c2x);
+  await page.keyboard.down("Shift");
+  await page.mouse.move(h2x, h2y);
+  await page.mouse.down();
+  await page.mouse.move(c2x + r2 * 1.5 * Math.cos(a2 + wobble), c2y + r2 * 1.5 * Math.sin(a2 + wobble), { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  const shifted = await geometry(layer);
+  expect(shifted.scale).toBeCloseTo(pulled.scale, 6);
+  expect(Math.abs(shifted.rotation - pulled.rotation)).toBeGreaterThan(0.03);
+});
+
+test("layer order is creation order: a drawing is created on top, and drawing again brings it back to the top", async ({ page }) => {
+  const ctx = await setup();
+  const composer = await openTextComposer(page, ctx);
+  await addText(composer, "primeiro");
+  const canDraw = (await composer.locator("[data-story-tool-draw]").count()) > 0;
+  test.skip(!canDraw, "object storage is off: there is no draw tool");
+  const order = () =>
+    composer.locator("[data-story-surface] [data-layer-type]").evaluateAll((elements) => elements.map((element) => (element as HTMLElement).dataset.layerType));
+  const stroke = async () => {
+    await composer.locator("[data-story-tool-draw]").click();
+    const box = (await composer.locator("[data-story-draw-surface]").boundingBox())!;
+    await page.mouse.move(box.x + 60, box.y + 80);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 160, box.y + 150, { steps: 6 });
+    await page.mouse.up();
+    await composer.locator("[data-story-draw-done]").click();
+  };
+  await stroke();
+  expect(await order()).toEqual(["text", "drawing"]);
+  await addText(composer, "segundo");
+  expect(await order()).toEqual(["text", "drawing", "text"]);
+  await stroke();
+  expect(await order()).toEqual(["text", "text", "drawing"]);
+  // The stroke and the move are one undo step.
+  await composer.locator("[data-story-undo]").click();
+  expect(await order()).toEqual(["text", "drawing", "text"]);
+});
+
+/**
+ * A layer has ONE natural width, wherever it sits. Every layer is an absolutely positioned box at
+ * `left: x%`, and a box with an auto width shrinks to the room left before the container's right
+ * edge: a photo at x = 0.8 came out at half size (0.20 of the canvas instead of 0.40) and a long
+ * text near the right edge wrapped far narrower than the 0.84 every client agrees on. Measured
+ * with real geometry, at a phone and at a desktop size, in the viewer and in the editor.
+ */
+const LAYER_XS = [0.1, 0.5, 0.8, 0.95];
+const SHOT_DIR = process.env.STORIES_SHOTS_DIR;
+const LONG_TEXT = "bora de cs hoje a noite com a galera toda junta no servidor";
+const PHOTO_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="810" viewBox="0 0 1080 810">' +
+  '<rect width="1080" height="810" fill="#d6262c"/><rect x="540" width="540" height="810" fill="#2457d6"/>' +
+  '<circle cx="540" cy="405" r="220" fill="#ffffff" fill-opacity="0.85"/></svg>';
+
+function layersAt(x: number) {
+  const geometry = { x, scale: 1, rotation: 0 };
+  return [
+    { ...geometry, id: "w-text", y: 0.17, type: "text", text: LONG_TEXT, font: "bold", color: "white", background: "none", align: "center", size: 1 },
+    {
+      ...geometry,
+      id: "w-photo",
+      y: 0.4,
+      type: "image",
+      shape: "rect",
+      url: "https://e2e-photo.test/photo.svg",
+      width: 1080,
+      height: 810,
+    },
+    {
+      ...geometry,
+      id: "w-mention",
+      y: 0.58,
+      type: "mention",
+      userId: "33333333-3333-4333-8333-333333333333",
+      user: { id: "33333333-3333-4333-8333-333333333333", displayName: "Bia Guest", avatarUrl: null, handle: null },
+    },
+    { ...geometry, id: "w-call", y: 0.74, type: "call", serverId: "44444444-4444-4444-8444-444444444444", channelId: "55555555-5555-4555-8555-555555555555" },
+  ];
+}
+
+for (const size of [
+  { width: 390, height: 844 },
+  { width: 1440, height: 900 },
+]) {
+  test(`every layer type keeps its canonical width at any x, in the viewer at ${size.width}x${size.height}`, async ({ page }) => {
+    const ctx = await setup();
+    await page.setViewportSize(size);
+    // One text story exists so the ring does; the layers the viewer draws are swapped in per open.
+    const created = await fetch(`${API}/api/stories`, {
+      method: "POST",
+      headers: headersFor(ctx.owner),
+      body: JSON.stringify({
+        kind: "text",
+        background: "night",
+        text: "layer widths",
+        layers: [],
+        audiences: { serverIds: [ctx.serverId], friends: false },
+      }),
+    });
+    expect(created.ok, `create story: ${created.status}`).toBe(true);
+
+    let x = 0.5;
+    await page.route("https://e2e-photo.test/**", (route) => route.fulfill({ status: 200, contentType: "image/svg+xml", body: PHOTO_SVG }));
+    await page.route("**/api/stories?ids=*", async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as { stories: { layers: unknown[] }[] };
+      for (const story of body.stories) {
+        story.layers = layersAt(x);
+      }
+      await route.fulfill({ response, json: body });
+    });
+    await page.addInitScript((value) => localStorage.setItem("pqp:dev-user-suffix", value), ctx.owner);
+
+    const measured: Record<string, number[]> = {};
+    for (const at of LAYER_XS) {
+      x = at;
+      await page.goto(`/app/server/${ctx.serverId}/channel/${ctx.channelId}?lang=en`);
+      await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+      await openChannelList(page);
+      await page.getByRole("button", { name: "Your story, view" }).click();
+      const viewer = page.locator("[data-story-viewer]");
+      await expect(viewer).toBeVisible();
+      const photo = viewer.locator('[data-story-layer="w-photo"] img');
+      await expect(photo).toBeVisible();
+      await expect.poll(async () => (await photo.boundingBox())?.width ?? 0).toBeGreaterThan(10);
+      // Every width as a fraction of the canvas, read in one go; the viewer eases in, so wait until
+      // two reads a frame apart agree (the fraction is what must not depend on x).
+      const read = () =>
+        viewer.evaluate((root) => {
+          const canvas = root.querySelector("[data-story-layer-canvas]")!.getBoundingClientRect();
+          const out: Record<string, number> = {};
+          for (const id of ["w-text", "w-photo", "w-mention", "w-call"]) {
+            out[id] = root.querySelector(`[data-story-layer="${id}"]`)!.getBoundingClientRect().width / canvas.width;
+          }
+          return out;
+        });
+      let last = JSON.stringify(await read());
+      await expect
+        .poll(async () => {
+          const now = JSON.stringify(await read());
+          const settled = now === last;
+          last = now;
+          return settled;
+        })
+        .toBe(true);
+      const fractions = JSON.parse(last) as Record<string, number>;
+      for (const id of Object.keys(fractions)) {
+        (measured[id] ??= []).push(fractions[id]);
+      }
+      if (SHOT_DIR && (at === 0.8 || at === 0.95)) {
+        // Past the viewer's ease-in, so the picture is the finished one.
+        await page.waitForTimeout(700);
+        await viewer.screenshot({ path: `${SHOT_DIR}/viewer-${size.width}x${size.height}-x${at}.png` });
+      }
+      await page.keyboard.press("Escape");
+      await expect(viewer).toBeHidden();
+    }
+
+    // Canonical fractions of the canvas width (STORY_LAYOUT): a photo 0.40, a call card 0.82, text
+    // wrapped at 0.84. A mention is as wide as its words, which is the same at every x.
+    const near = (value: number, digits: number) => expect.closeTo(value, digits);
+    expect(measured["w-photo"], "photo widths").toEqual(measured["w-photo"].map(() => near(0.4, 2)));
+    expect(measured["w-call"], "call card widths").toEqual(measured["w-call"].map(() => near(0.82, 2)));
+    expect(measured["w-text"], "text widths").toEqual(measured["w-text"].map(() => near(0.84, 2)));
+    expect(measured["w-mention"], "mention widths").toEqual(measured["w-mention"].map(() => near(measured["w-mention"][0], 3)));
+  });
+}
+
+for (const size of [
+  { width: 390, height: 844 },
+  { width: 1440, height: 900 },
+]) {
+test(`a text layer dragged to the right edge keeps its width in the editor at ${size.width}x${size.height}`, async ({ page }) => {
+  const ctx = await setup();
+  await page.setViewportSize(size);
+  const composer = await openTextComposer(page, ctx);
+  await addText(composer, LONG_TEXT);
+  const layer = composer.locator('[data-layer-type="text"]').first();
+  const surface = (await composer.locator("[data-story-surface]").boundingBox())!;
+  const centred = (await layer.boundingBox())!;
+  expect(centred.width / surface.width).toBeCloseTo(0.84, 2);
+
+  // Drag the middle of the words to 92 percent of the canvas width.
+  await page.mouse.move(centred.x + centred.width / 2, centred.y + centred.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(surface.x + surface.width * 0.92, centred.y + centred.height / 2, { steps: 8 });
+  await page.mouse.up();
+  expect((await geometry(layer)).left).toBeGreaterThan(85);
+  const moved = (await layer.boundingBox())!;
+  expect(moved.width / surface.width).toBeCloseTo(0.84, 2);
+  expect(moved.height).toBeCloseTo(centred.height, 0);
+  if (SHOT_DIR) {
+    await composer.screenshot({ path: `${SHOT_DIR}/editor-${size.width}x${size.height}.png` });
+  }
+});
+}

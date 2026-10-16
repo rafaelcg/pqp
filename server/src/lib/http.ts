@@ -125,13 +125,18 @@ export function sendJson(
   data: unknown,
   req?: IncomingMessage,
 ) {
+  const body = JSON.stringify(data);
   res.writeHead(status, {
     "Content-Type": "application/json",
+    // Stated, not left to Node: for a GET Node adds it itself, and for a HEAD
+    // (which the public community reads now answer) it adds nothing, so
+    // without this a HEAD would lack the header its GET carries.
+    "Content-Length": String(Buffer.byteLength(body)),
     "Cache-Control": "no-store",
     ...SECURITY_HEADERS,
     ...(req ? corsHeaders(req) : { "Access-Control-Allow-Origin": "*" }),
   });
-  res.end(JSON.stringify(data));
+  res.end(body);
 }
 
 export function sendError(

@@ -160,16 +160,21 @@ fun FriendsScreen(
     // Resolved here rather than inside the effect: a `stringResource` call is a
     // composable one and a `LaunchedEffect` body is not.
     val nudgeRequest = stringResource(R.string.friends_nudge_request)
-    val nudgeAccepted = stringResource(R.string.friends_nudge_accepted)
     LaunchedEffect(nudge) {
         val message = when (nudge) {
             "request" -> nudgeRequest
-            "accepted" -> nudgeAccepted
+            // "accepted" says who and offers to say hi (FriendAcceptedEffect), which
+            // the frame cannot: it names nobody. The friends list that follows does.
             // `depoimento` also rides this frame and has no surface here yet.
             else -> null
         }
         if (message != null) snackbars.showSnackbar(message)
         if (nudge != null) social.clearFriendNudge()
+    }
+
+    // Tu e Bia agora são amigos · Mandar um oi: after I accept, and when they do.
+    FriendAcceptedEffect(social, snackbars) { person ->
+        scope.launch { social.openConversation(listOf(person.id)).getOrNull()?.let(onOpenConversation) }
     }
 
     Scaffold(

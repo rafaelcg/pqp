@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,10 +27,14 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -52,6 +57,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -60,13 +68,23 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import gg.pqp.app.R
 import gg.pqp.app.attachments.formatAttachmentSize
+import gg.pqp.app.bau.BauCaptionsSource
 import gg.pqp.app.bau.BauComment
 import gg.pqp.app.bau.BauMedia
 import gg.pqp.app.bau.BauPost
+import gg.pqp.app.bau.BauPublicShare
 import gg.pqp.app.bau.BauViewModel
 import gg.pqp.app.bau.YoutubeLinks
 import gg.pqp.app.core.Channel
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.follow.BauFollowViewModel
+import gg.pqp.app.follow.ui.BauFollowSheet
+import gg.pqp.app.follow.ui.BauFollowersSheet
+import gg.pqp.app.follow.ui.FollowButton
+import gg.pqp.app.forward.ForwardInputs
+import gg.pqp.app.forward.ui.LocalStartForward
+import gg.pqp.app.forward.ui.rememberForwardEnabled
+import gg.pqp.app.ui.screens.SheetAction
 import gg.pqp.app.ui.chat.DayLabel
 import gg.pqp.app.ui.chat.DayLabels
 import gg.pqp.app.ui.components.Avatar
@@ -125,6 +143,22 @@ private fun BauScreenContent(
     val state by model.state.collectAsStateWithLifecycle()
     val canPost = rememberCanPostToBau(session, serverId, state.config)
     var composing by rememberSaveable { mutableStateOf(false) }
+    // Seguir: the button is drawn only while the flag is on for THIS Baú. The
+    // staff's side (the follower list, "Permitir seguir") is read once the
+    // permissions say this person manages the server, which is `canPost`.
+    val follow: BauFollowViewModel = viewModel(
+        key = "bau-follow-$serverId",
+        factory = BauFollowViewModel.factory(session, serverId),
+    )
+    val followState by follow.state.collectAsStateWithLifecycle()
+    val staffMenu by follow.staffMenu.collectAsStateWithLifecycle()
+    LaunchedEffect(canPost) { follow.setCanManage(canPost) }
+    var followersOpen by rememberSaveable { mutableStateOf(false) }
+    var staffMenuOpen by remember { mutableStateOf(false) }
+    // Encaminhar, from a post's own menu, while the runtime flag is on.
+    val forwardEnabled = rememberForwardEnabled(session.api)
+    val startForward = LocalStartForward.current
+    var menuPost by remember { mutableStateOf<BauPost?>(null) }
 
     // Arrived from a post card in chat: bring that post to the top, once. A
     // post that is not in the feed (gone, or not published) leaves the feed
@@ -150,6 +184,32 @@ private fun BauScreenContent(
             onPosted = {
                 composing = false
                 model.refresh()
+            },
+        )
+    }
+
+    menuPost?.let { post ->
+        val title = post.title?.trim()?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.bau_card_untitled)
+        val preview = stringResource(R.string.forward_post_preview, title)
+        BauPostMenu(
+            onForward = {
+                menuPost = null
+                startForward(ForwardInputs.forBauPost(serverId, post.id, preview, post.isMembersOnly))
+            },
+            onDismiss = { menuPost = null },
+        )
+    }
+
+    BauFollowSheet(model = follow, serverName = serverName)
+    if (followersOpen && canPost) {
+        BauFollowersSheet(
+            session = session,
+            serverId = serverId,
+            onChanged = follow::refreshAll,
+            onDismiss = {
+                followersOpen = false
+                // The owner may have moved the switch: the button follows it.
+                follow.refreshAll()
             },
         )
     }
@@ -185,6 +245,31 @@ private fun BauScreenContent(
                         }
                     },
                     actions = {
+                        FollowButton(followState, onOpen = follow::openPicker)
+                        if (canPost && staffMenu) {
+                            Box {
+                                IconButton(
+                                    onClick = { staffMenuOpen = true },
+                                    modifier = Modifier.testTag("bau.follow.menu"),
+                                ) {
+                                    Icon(
+                                        imageVector = PqpIcons.More,
+                                        contentDescription = stringResource(R.string.follow_menu_description),
+                                        modifier = Modifier.size(Sizes.iconAction),
+                                    )
+                                }
+                                DropdownMenu(expanded = staffMenuOpen, onDismissRequest = { staffMenuOpen = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.follow_followers_menu)) },
+                                        onClick = {
+                                            staffMenuOpen = false
+                                            followersOpen = true
+                                        },
+                                        modifier = Modifier.testTag("bau.follow.followers"),
+                                    )
+                                }
+                            }
+                        }
                         if (canPost) {
                             IconButton(
                                 onClick = { composing = true },
@@ -242,6 +327,7 @@ private fun BauScreenContent(
                             submitting = post.id in state.submitting,
                             commentFailed = post.id in state.commentFailed,
                             onToggleLike = { model.toggleLike(post.id) },
+                            onMore = if (forwardEnabled) ({ menuPost = post }) else null,
                             onLoadAll = { model.loadAllComments(post.id) },
                             onCollapse = { model.collapseComments(post.id) },
                             onComment = { body -> model.addComment(post.id, body) },
@@ -264,6 +350,8 @@ private fun PostCard(
     submitting: Boolean,
     commentFailed: Boolean,
     onToggleLike: () -> Unit,
+    /** The post's menu (Encaminhar). Null hides the button. */
+    onMore: (() -> Unit)?,
     onLoadAll: () -> Unit,
     onCollapse: () -> Unit,
     onComment: (String) -> Unit,
@@ -332,12 +420,24 @@ private fun PostCard(
             }
             post.media?.let { media ->
                 Spacer(Modifier.height(Spacing.md))
-                MediaView(media)
+                MediaView(
+                    media,
+                    captions = post.captions?.let {
+                        BauCaptionsSource(
+                            serverId = post.serverId,
+                            postId = post.id,
+                            sourceLang = it.sourceLang,
+                            durationMs = it.durationMs,
+                            // The vertical cut is what plays when the post has one: its length must agree.
+                            mustMatchDuration = media.videoUrl != null && media.videoUrl == media.mobile?.url,
+                        )
+                    },
+                )
             }
         }
 
         Spacer(Modifier.height(Spacing.md))
-        ActionRow(post, onToggleLike)
+        ActionRow(post, onToggleLike, onMore)
 
         CommentsBlock(
             post = post,
@@ -474,7 +574,7 @@ private fun LockedBox() {
  * in their apps. Nothing plays on scroll, which is the web's `preload="none"`.
  */
 @Composable
-private fun MediaView(media: BauMedia) {
+private fun MediaView(media: BauMedia, captions: BauCaptionsSource? = null) {
     val context = LocalContext.current
     val callActive = LocalBauCallActive.current
     val target = media.openUrl
@@ -570,7 +670,7 @@ private fun MediaView(media: BauMedia) {
         }
 
         media.canPlayInApp && target != null && BauPlayback.activeKey == target ->
-            BauActiveVideo(key = target, open = open)
+            BauActiveVideo(key = target, open = open, captions = captions)
 
         media.canPlayInApp -> Box(
             modifier = Modifier
@@ -676,8 +776,8 @@ private fun FileCard(media: BauMedia, open: () -> Unit) {
 }
 
 @Composable
-private fun ActionRow(post: BauPost, onToggleLike: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun ActionRow(post: BauPost, onToggleLike: () -> Unit, onMore: (() -> Unit)?) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         val likeLabel = stringResource(if (post.likedByMe) R.string.bau_unlike else R.string.bau_like)
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -722,8 +822,98 @@ private fun ActionRow(post: BauPost, onToggleLike: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // The right edge: Compartilhar (a post with a public page) and the post menu
+        // (Encaminhar), side by side.
+        val publicUrl = BauPublicShare.shareableUrl(post)
+        if (publicUrl != null || onMore != null) Spacer(Modifier.weight(1f))
+        if (publicUrl != null) ShareControl(publicUrl = publicUrl, title = shareTitle(post))
+        if (onMore != null) {
+            IconButton(onClick = onMore, modifier = Modifier.testTag("bau.post.menu")) {
+                Icon(
+                    imageVector = PqpIcons.More,
+                    contentDescription = stringResource(R.string.forward_post_menu),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(Sizes.iconAction),
+                )
+            }
+        }
     }
 }
+
+/** What a Baú post's menu offers: Encaminhar, which is the only entry so far. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BauPostMenu(onForward: () -> Unit, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.testTag("bau.post.menu.sheet"),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = Spacing.lg),
+        ) {
+            SheetAction(
+                icon = PqpIcons.ForwardMessage,
+                label = stringResource(R.string.forward_action),
+                testTag = "bau.post.forward",
+                onClick = onForward,
+            )
+        }
+    }
+}
+
+/**
+ * Compartilhar, right-aligned in the footer like the web's card: the system
+ * share sheet with the post's public link. Only drawn when the API sent a
+ * `publicUrl` ([BauPublicShare.shareableUrl]), so a members-only, locked or
+ * unpublished post, or a server without a public address, never shows it.
+ */
+@Composable
+private fun ShareControl(publicUrl: String, title: String?) {
+    val context = LocalContext.current
+    val label = stringResource(R.string.bau_share)
+    val description = stringResource(R.string.bau_share_description)
+    val failed = stringResource(R.string.bau_share_failed)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(MaterialTheme.shapes.small)
+            // One node for TalkBack: "Compartilhar esse post, button", not
+            // the description and then the visible word again.
+            .semantics { contentDescription = description }
+            .clickable(role = Role.Button) {
+                if (!BauPublicShare.share(context, publicUrl, title, label)) {
+                    android.widget.Toast.makeText(context, failed, android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+            .testTag("bau.share"),
+    ) {
+        Icon(
+            imageVector = PqpIcons.Share,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(Sizes.iconAction),
+        )
+        Spacer(Modifier.width(Spacing.xs))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.clearAndSetSemantics {},
+        )
+    }
+}
+
+/** What the share sheet shows as the subject: the title, else the body's first line. */
+private fun shareTitle(post: BauPost): String? =
+    post.title?.trim()?.takeIf { it.isNotEmpty() }
+        ?: post.body?.trim()?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()?.take(120)
 
 /**
  * The two newest comments, "see all" for the rest, and a one-line composer.

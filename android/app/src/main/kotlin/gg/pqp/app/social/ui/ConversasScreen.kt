@@ -18,10 +18,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -37,16 +39,21 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -59,6 +66,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -80,9 +89,14 @@ import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.social.ConversationFilter
 import gg.pqp.app.social.ConversationList
+import gg.pqp.app.social.ConversationPins
+import gg.pqp.app.social.ConversationPrefs
+import gg.pqp.app.social.PrefOutcome
 import gg.pqp.app.social.DmSummary
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.ui.components.ChromeDivider
+import gg.pqp.app.ui.screens.SheetAction
+import gg.pqp.app.ui.screens.channels.mutedChannelIds
 import gg.pqp.app.ui.components.pqpLargeTopBarColors
 import gg.pqp.app.ui.theme.Motion
 import gg.pqp.app.ui.theme.PqpIcons
@@ -130,6 +144,8 @@ fun ConversasScreen(
     val snackbars = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var closing by remember { mutableStateOf<DmSummary?>(null) }
+    // The row's actions (Fixar, Silenciar, Fechar), from a long press.
+    var acting by remember { mutableStateOf<DmSummary?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(ConversationFilter.All) }
 
@@ -150,11 +166,37 @@ fun ConversasScreen(
         social.clearError()
     }
 
+    // A friend accepted while Conversas was in front: say who, and offer to say hi.
+    FriendAcceptedEffect(social, snackbars) { person ->
+        scope.launch { social.openConversation(listOf(person.id)).getOrNull()?.let(onOpen) }
+    }
+
     val statusById = remember(friends) { friends.friends.associate { it.id to it.status } }
+    // Fixadas and the mute of a conversation, both from the account's stored
+    // preferences (the web writes the same keys), so they follow the person.
+    val prefs = remember(session) { ConversationPrefs.of(session) }
+    val pinnedIds = (phase as? SessionPhase.Ready)?.me?.preferences?.pinnedConversations.orEmpty()
+    val mutedIds = mutedChannelIds((phase as? SessionPhase.Ready)?.me?.preferences?.notifications?.channels)
     val shown = remember(conversations, query, filter) {
         ConversationList.filter(conversations, query, filter)
     }
-    val waiting = ConversationList.waiting(conversations)
+    val (pinnedRows, recentRows) = remember(shown, pinnedIds) { ConversationPins.split(shown, pinnedIds) }
+    val waiting = ConversationList.waiting(conversations, mutedIds)
+    val haptics = LocalHapticFeedback.current
+    val pinLimitText = stringResource(R.string.conversas_pin_limit)
+    val togglePin: (DmSummary) -> Unit = { conversation ->
+        haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+        val outcome = prefs.togglePin(conversation.channelId) { message ->
+            scope.launch { snackbars.showSnackbar(message) }
+        }
+        if (outcome == PrefOutcome.PinLimit) scope.launch { snackbars.showSnackbar(pinLimitText) }
+    }
+    val toggleMute: (DmSummary) -> Unit = { conversation ->
+        haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+        prefs.toggleMute(conversation.channelId, muted = conversation.channelId !in mutedIds) { message ->
+            scope.launch { snackbars.showSnackbar(message) }
+        }
+    }
 
     // Plain resources rather than `stringResource`: the preview lambdas run
     // while a row is built, outside any composable scope of their own.
@@ -317,35 +359,62 @@ fun ConversasScreen(
                             )
                         }
                     }
-                    items(shown, key = { it.channelId }) { conversation ->
+                    if (pinnedRows.isNotEmpty()) {
+                        item(key = "section-pinned") { SectionLabel(stringResource(R.string.conversas_section_pinned), pinned = true) }
+                    }
+                    val rowFor: @Composable LazyItemScope.(DmSummary, Boolean) -> Unit = { conversation, pinned ->
                         val other = conversation.participants.singleOrNull()
                         val typists = typing[conversation.channelId].orEmpty()
-                        ConversaRow(
-                            conversation = conversation,
-                            status = if (!conversation.isGroup && other != null) statusById[other.id] else null,
-                            preview = conversation.lastMessage?.let {
-                                ConversationList.previewLine(it, selfId, conversation.isGroup, words)
-                            },
-                            typing = when {
-                                typists.isEmpty() -> null
-                                conversation.isGroup ->
-                                    stringResource(R.string.conversas_typing_named, typists.first())
-                                else -> stringResource(R.string.conversas_typing)
-                            },
-                            time = ConversationList.listTime(conversation.lastMessageAt, now, locale, yesterday),
-                            onClick = { onOpen(conversation) },
-                            onLongClick = { closing = conversation },
-                            // A row that jumps to the top on a new message
-                            // glides there; Compose scales the spring by the
-                            // animator duration scale, so "remove animations"
-                            // makes it a jump.
+                        SwipeableConversa(
+                            pinned = pinned,
+                            onPin = { togglePin(conversation) },
+                            onClose = { closing = conversation },
                             modifier = Modifier.animateItem(),
-                        )
+                        ) {
+                            ConversaRow(
+                                conversation = conversation,
+                                status = if (!conversation.isGroup && other != null) statusById[other.id] else null,
+                                preview = conversation.lastMessage?.let {
+                                    ConversationList.previewLine(it, selfId, conversation.isGroup, words)
+                                },
+                                typing = when {
+                                    typists.isEmpty() -> null
+                                    conversation.isGroup ->
+                                        stringResource(R.string.conversas_typing_named, typists.first())
+                                    else -> stringResource(R.string.conversas_typing)
+                                },
+                                time = ConversationList.listTime(conversation.lastMessageAt, now, locale, yesterday),
+                                pinned = pinned,
+                                muted = conversation.channelId in mutedIds,
+                                onClick = { onOpen(conversation) },
+                                onLongClick = { acting = conversation },
+                            )
+                        }
                     }
+                    // A row that jumps to the top on a new message glides there;
+                    // Compose scales the spring by the animator duration scale, so
+                    // "remove animations" makes it a jump.
+                    items(pinnedRows, key = { it.channelId }) { rowFor(it, true) }
+                    if (pinnedRows.isNotEmpty() && recentRows.isNotEmpty()) {
+                        item(key = "section-recent") { SectionLabel(stringResource(R.string.conversas_section_recent), pinned = false) }
+                    }
+                    items(recentRows, key = { it.channelId }) { rowFor(it, false) }
                 }
             }
         }
         }
+    }
+
+    acting?.let { conversation ->
+        ConversationActionsSheet(
+            conversation = conversation,
+            pinned = conversation.channelId in pinnedIds,
+            muted = conversation.channelId in mutedIds,
+            onPin = { acting = null; togglePin(conversation) },
+            onMute = { acting = null; toggleMute(conversation) },
+            onClose = { acting = null; closing = conversation },
+            onDismiss = { acting = null },
+        )
     }
 
     closing?.let { conversation ->
@@ -482,8 +551,11 @@ private fun ConversaRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
+    pinned: Boolean = false,
+    muted: Boolean = false,
 ) {
-    val unread = conversation.unread.count
+    // A muted conversation badges nothing and is not bold: it is quiet on purpose.
+    val unread = if (muted) 0 else conversation.unread.count
     val interactions = remember { MutableInteractionSource() }
     val pressed by interactions.collectIsPressedAsState()
     val rowColor by animateColorAsState(
@@ -502,6 +574,7 @@ private fun ConversaRow(
                 onClick = onClick,
                 onLongClick = onLongClick,
             )
+            .background(MaterialTheme.colorScheme.surface)
             .background(rowColor)
             .padding(horizontal = Spacing.gutter, vertical = Spacing.sm)
             .testTag("conversas.row"),
@@ -531,6 +604,15 @@ private fun ConversaRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                if (pinned) {
+                    val words = stringResource(R.string.conversas_pinned_state)
+                    Icon(
+                        PqpIcons.Pin,
+                        contentDescription = words,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = Spacing.sm).size(14.dp).testTag("conversas.row.pinned"),
+                    )
+                }
                 if (time != null) {
                     Text(
                         text = time,
@@ -575,6 +657,15 @@ private fun ConversaRow(
                         .weight(1f)
                         .testTag(if (typing != null) "conversas.row.typing" else "conversas.row.preview"),
                 )
+                if (muted) {
+                    val words = stringResource(R.string.channels_muted)
+                    Icon(
+                        PqpIcons.ChannelMuted,
+                        contentDescription = words,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = Spacing.sm).size(16.dp).testTag("conversas.row.muted"),
+                    )
+                }
                 if (unread > 0) {
                     val label = ConversationList.countLabel(unread)
                     CountBadge(
@@ -661,6 +752,150 @@ private fun EmptyConversas(onAddFriend: () -> Unit, onInvite: () -> Unit) {
             Icon(PqpIcons.Link, contentDescription = null, modifier = Modifier.size(Sizes.iconInline))
             Spacer(Modifier.width(Spacing.sm))
             Text(stringResource(R.string.conversas_empty_invite))
+        }
+    }
+}
+
+/** "Fixadas" / "Recentes" over the rows, the web list's two sections. */
+@Composable
+private fun SectionLabel(text: String, pinned: Boolean) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.gutter)
+            .padding(top = Spacing.md, bottom = Spacing.xs),
+    ) {
+        if (pinned) {
+            Icon(
+                PqpIcons.Pin,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(12.dp),
+            )
+            Spacer(Modifier.width(Spacing.xs + 2.dp))
+        }
+        Text(
+            text = text.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag(if (pinned) "conversas.section.pinned" else "conversas.section.recent"),
+        )
+    }
+}
+
+/**
+ * A row you can swipe: to the right pins (or unpins), to the left closes, both
+ * the way iOS does it. A swipe only ASKS: the row springs back, because pinning
+ * moves the row to Fixadas by itself and closing asks first, so a half swipe
+ * never leaves a row stranded off to one side.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeableConversa(
+    pinned: Boolean,
+    onPin: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val state = rememberSwipeToDismissBoxState(
+        confirmValueChange = { target ->
+            when (target) {
+                SwipeToDismissBoxValue.StartToEnd -> onPin()
+                SwipeToDismissBoxValue.EndToStart -> onClose()
+                SwipeToDismissBoxValue.Settled -> Unit
+            }
+            // Never stays dismissed: the row comes back where it was.
+            false
+        },
+    )
+    SwipeToDismissBox(
+        state = state,
+        modifier = modifier.testTag("conversas.swipe"),
+        backgroundContent = {
+            val toward = state.dismissDirection
+            val pinning = toward == SwipeToDismissBoxValue.StartToEnd
+            val closing = toward == SwipeToDismissBoxValue.EndToStart
+            val colors = MaterialTheme.colorScheme
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        when {
+                            pinning -> colors.primary.copy(alpha = 0.18f)
+                            closing -> colors.error.copy(alpha = 0.18f)
+                            else -> Color.Transparent
+                        },
+                    )
+                    .padding(horizontal = Spacing.xl),
+                contentAlignment = if (closing) Alignment.CenterEnd else Alignment.CenterStart,
+            ) {
+                if (pinning) {
+                    Icon(
+                        if (pinned) PqpIcons.Unpin else PqpIcons.Pin,
+                        contentDescription = null,
+                        tint = colors.primary,
+                        modifier = Modifier.size(Sizes.iconAction),
+                    )
+                } else if (closing) {
+                    Icon(
+                        PqpIcons.Close,
+                        contentDescription = null,
+                        tint = colors.error,
+                        modifier = Modifier.size(Sizes.iconAction),
+                    )
+                }
+            }
+        },
+    ) { content() }
+}
+
+/** The long-press menu of a conversation: Fixar, Silenciar, Fechar a conversa. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConversationActionsSheet(
+    conversation: DmSummary,
+    pinned: Boolean,
+    muted: Boolean,
+    onPin: () -> Unit,
+    onMute: () -> Unit,
+    onClose: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        modifier = Modifier.testTag("conversas.actions"),
+    ) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = Spacing.lg)) {
+            Text(
+                text = conversationTitle(conversation),
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = Spacing.gutter).padding(bottom = Spacing.sm),
+            )
+            SheetAction(
+                icon = if (pinned) PqpIcons.Unpin else PqpIcons.Pin,
+                label = stringResource(if (pinned) R.string.conversas_unpin else R.string.conversas_pin),
+                testTag = "conversas.action.pin",
+                onClick = onPin,
+            )
+            SheetAction(
+                icon = if (muted) PqpIcons.Notifications else PqpIcons.ChannelMuted,
+                label = stringResource(if (muted) R.string.conversas_unmute else R.string.conversas_mute),
+                testTag = "conversas.action.mute",
+                onClick = onMute,
+            )
+            SheetAction(
+                icon = PqpIcons.Close,
+                label = stringResource(R.string.conversas_close_action),
+                testTag = "conversas.action.close",
+                destructive = true,
+                onClick = onClose,
+            )
         }
     }
 }

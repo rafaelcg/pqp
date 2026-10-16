@@ -2800,6 +2800,16 @@ ALTER TABLE server_members ADD COLUMN IF NOT EXISTS show_on_profile BOOLEAN NOT 
 CREATE INDEX IF NOT EXISTS idx_server_members_profile
   ON server_members (user_id, server_id)
   WHERE show_on_profile;
+
+-- Where THIS member's server rail puts this server (0 is the top). A fact
+-- about one account's view, never shared: the member dragged their own rail
+-- (`PUT /api/servers/order`). NULL is "never placed": every membership before
+-- the feature, and every server joined or created since the last save. The
+-- list sorts placed ones first by position, then the NULLs by the server's
+-- creation date, which is the order the rail always had, so nobody's rail moves
+-- until they drag it, and a new join lands at the bottom beside the "+".
+-- Nullable with no default: a catalog-only change, no table rewrite.
+ALTER TABLE server_members ADD COLUMN IF NOT EXISTS rail_position INTEGER;
 -- Public handles: the `pqp.gg/@rafa` half of an account
 -- ---------------------------------------------------------------------------
 --
@@ -3318,6 +3328,14 @@ CREATE INDEX IF NOT EXISTS idx_server_members_join_source_joined_at
 -- so it gets a partial index rather than a scan of the whole log.
 CREATE INDEX IF NOT EXISTS idx_audit_log_discord_import
   ON audit_log (created_at) WHERE action = 'server.discord_import';
+-- The same rows by server, for the owner's "did people come over" strip
+-- (`getDiscordImportArrivals`). It runs for every manager of every server
+-- once `discord_bring_crew` is on, and almost none were imported: without
+-- this the only way in is `idx_audit_log_server_id`, which walks every audit
+-- row of the server (up to the retention window) to find nothing. Imports are
+-- a handful a day, so this stays tiny.
+CREATE INDEX IF NOT EXISTS idx_audit_log_discord_import_server
+  ON audit_log (server_id, id) WHERE action = 'server.discord_import';
 
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS mention_everyone BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS mention_here BOOLEAN NOT NULL DEFAULT FALSE;
@@ -6405,3 +6423,182 @@ CREATE TABLE IF NOT EXISTS server_emoji_quarantine (
 
 CREATE INDEX IF NOT EXISTS idx_server_emoji_quarantine_at
   ON server_emoji_quarantine (quarantined_at);
+
+-- ============================================================ story uploads
+--
+-- Eager story uploads (`POST /api/stories/uploads`): a photo, a video or a
+-- layer image is put in storage the moment the author has it, before any story
+-- row exists, so Post only has to create and publish. A row is one object
+-- under `stories/<user>/uploads/<id>.<ext>`, never client chosen.
+--
+-- CLAIM: `POST /api/stories` with the id copies the object (server side) to
+-- the new story's own prefix and stamps `claimed_story_id` in the same
+-- transaction as the story insert, so an upload backs one story, once. The
+-- story owns the copy from then on; the source is deleted at once and again
+-- by the sweep (a claimed row is a one hour tombstone).
+--
+-- SWEEP (`sweepStories`): an UNCLAIMED upload older than
+-- `STORY_UPLOAD_UNCLAIMED_HOURS` (6) loses its object and its row, as does one
+-- whose account is gone (`user_id` is nulled, never cascaded, because the row
+-- is the only thing that names the object).
+CREATE TABLE IF NOT EXISTS story_uploads (
+  id                UUID PRIMARY KEY,
+  user_id           UUID REFERENCES users(id) ON DELETE SET NULL,
+  kind              TEXT NOT NULL CHECK (kind IN ('base', 'layer')),
+  storage_key       TEXT NOT NULL,
+  content_type      TEXT NOT NULL,
+  byte_size         INTEGER NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  claimed_story_id  UUID,
+  claimed_at        TIMESTAMPTZ,
+  -- The story-side key the claim copied this object to.
+  claimed_key       TEXT,
+  -- Lease for the sweep's delete, same idea as `stories.media_delete_claimed_at`.
+  delete_claimed_at TIMESTAMPTZ,
+  -- The author threw it away (`DELETE /api/stories/uploads/:id`). Nothing may
+  -- claim it from here on. The row outlives the object by two hours so the
+  -- sweep can delete the object once more, after the presigned PUT URL has
+  -- expired: an aborted browser PUT can still land after the first delete.
+  discarded_at      TIMESTAMPTZ,
+  -- Every story-prefix key a create attempt MEANT to copy this object to,
+  -- written BEFORE the copy: a copy made ahead of the story's transaction has
+  -- no story row yet, so this row is what lets the sweep find it if the
+  -- process dies or the cleanup fails. The key the claim kept is `claimed_key`
+  -- and belongs to the story; the others are leftovers of refused attempts.
+  copy_keys         TEXT[] NOT NULL DEFAULT '{}'
+);
+ALTER TABLE story_uploads ADD COLUMN IF NOT EXISTS discarded_at TIMESTAMPTZ;
+ALTER TABLE story_uploads ADD COLUMN IF NOT EXISTS copy_keys TEXT[] NOT NULL DEFAULT '{}';
+
+CREATE INDEX IF NOT EXISTS idx_story_uploads_user_open
+  ON story_uploads (user_id) WHERE claimed_story_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_story_uploads_created
+  ON story_uploads (created_at);
+
+-- ------------------------------------------------------------------ forwards
+-- Encaminhar: a message that carries a SNAPSHOT of a Baú post or of another
+-- message, drawn as a card under the body (the forwarder's own comment, or a
+-- plain fallback line). The shape is `messageForwardSchema` in
+-- packages/shared/src/forward.ts. Nullable, no default, so adding it is a
+-- metadata-only change on a table this size and every ordinary message stays
+-- NULL. The column is only ever written by `createMessage` for a message the
+-- forward route built, and read back through `mapMessage`, which validates it:
+-- a value this build cannot parse leaves as an ordinary message.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS forward JSONB;
+
+-- ============================================================ Seguir (Baú follows)
+--
+-- The owner's own switch for being followed: off by default, so a server that
+-- opens Seguir through the flag is still not followable until its Manage Server
+-- staff turn this on in the Baú settings. Read with the flag and the Baú switch.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS bau_follow_allowed BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- A follow points ONE source server's Baú at ONE text channel of another
+-- server. When the source publishes a free post, `bau-follow-delivery.ts`
+-- posts a forward card into every followed channel as the source (a
+-- webhook-style pseudo identity, never a person). Behind the per-server
+-- runtime flag `bau_follow`, read for the SOURCE.
+--
+-- `created_by` is the authority the delivery re-checks: the person who set the
+-- follow up must still be able to manage webhooks or channels in the
+-- destination. Nulled (not cascaded) when their account goes, which the
+-- delivery reads as lost authority and pauses on.
+--
+-- `since_at` is the line no post may be older than: a follow only ever carries
+-- what is published AFTER it was made (or after it was last resumed), never
+-- the backlog.
+CREATE TABLE IF NOT EXISTS bau_follows (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_server_id  UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  target_server_id  UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  target_channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  created_by        UUID REFERENCES users(id) ON DELETE SET NULL,
+  role_ping_id      UUID REFERENCES roles(id) ON DELETE SET NULL,
+  since_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  paused_at         TIMESTAMPTZ,
+  paused_reason     TEXT CHECK (paused_reason IS NULL OR paused_reason IN ('permissions', 'banned')),
+  permission_failures INT NOT NULL DEFAULT 0,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (source_server_id, target_channel_id)
+);
+
+-- A database that has the older two-word check (permissions only) gets the wider one.
+DO $$
+BEGIN
+  -- Only a table that still has the narrow check is touched, so a replay of this
+  -- file on a current database does no work and takes no lock.
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'bau_follows_paused_reason_check'
+       AND conrelid = 'bau_follows'::regclass
+       AND pg_get_constraintdef(oid) NOT LIKE '%banned%'
+  ) THEN
+    ALTER TABLE bau_follows DROP CONSTRAINT bau_follows_paused_reason_check;
+    ALTER TABLE bau_follows
+      ADD CONSTRAINT bau_follows_paused_reason_check
+      CHECK (paused_reason IS NULL OR paused_reason IN ('permissions', 'banned'));
+  END IF;
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_bau_follows_target_server
+  ON bau_follows (target_server_id);
+CREATE INDEX IF NOT EXISTS idx_bau_follows_target_channel
+  ON bau_follows (target_channel_id);
+
+-- A source may refuse a destination server: its follows are removed and a new
+-- one is refused. Keyed on the destination SERVER, not the channel.
+CREATE TABLE IF NOT EXISTS bau_follow_blocks (
+  source_server_id  UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  blocked_server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  created_by        UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (source_server_id, blocked_server_id)
+);
+
+-- One row per (post, follow): the dedupe. `post_id` deliberately has NO
+-- foreign key: a deleted post must still find the messages it delivered, so
+-- the delivery rows outlive the post and the sweep deletes the messages, then
+-- the row. `message_id` is SET NULL when somebody deletes the delivered
+-- message by hand, which leaves a `delivered` row with no message: done, never
+-- redelivered.
+--
+-- status: pending (due at `next_attempt_at`), delivering (claimed under
+-- `claim_id` until `claimed_until`), delivered, retracted (the post stopped
+-- being a free published post, the message is gone; goes back to pending when
+-- it qualifies again), dead (retries used up).
+CREATE TABLE IF NOT EXISTS bau_follow_deliveries (
+  post_id          UUID NOT NULL,
+  follow_id        UUID NOT NULL REFERENCES bau_follows(id) ON DELETE CASCADE,
+  source_server_id UUID NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'delivering', 'delivered', 'retracted', 'dead')),
+  message_id       UUID REFERENCES messages(id) ON DELETE SET NULL,
+  attempts         INT NOT NULL DEFAULT 0,
+  next_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  claim_id         UUID,
+  claimed_until    TIMESTAMPTZ,
+  last_error       TEXT,
+  snapshot_hash    TEXT,
+  post_updated_at  TIMESTAMPTZ,
+  delivered_at     TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (post_id, follow_id)
+);
+
+-- Serves the claim: the posts with something due (a skip scan on `post_id`) and,
+-- per post, its due rows in order.
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_due_by_post
+  ON bau_follow_deliveries (post_id, next_attempt_at, follow_id)
+  WHERE status IN ('pending', 'delivering');
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_follow
+  ON bau_follow_deliveries (follow_id);
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_message
+  ON bau_follow_deliveries (message_id) WHERE message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_delivered
+  ON bau_follow_deliveries (post_id) WHERE status = 'delivered';
+-- The quota (what went out in the last minute) and the retract / edit passes
+-- (delivered in the last 90 days) read the ledger by time, not by post.
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_delivered_at
+  ON bau_follow_deliveries (delivered_at) WHERE delivered_at IS NOT NULL;

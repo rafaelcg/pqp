@@ -18,6 +18,7 @@ import { useAttachmentsEnabled } from "@/hooks/use-attachments-enabled";
 import { useFileDropZone } from "@/hooks/use-file-drop-zone";
 import { chatDropVerdict } from "@/lib/chat-file-drop";
 import type { DroppedItems } from "@/lib/file-drop";
+import { ComposerReadOnlyNotice } from "@/components/chat/composer-read-only-notice";
 import {
   MessageComposer,
   type ComposerSlashContext,
@@ -477,7 +478,16 @@ export function ThreadPanel({
         </div>
       )}
 
+      {/* Positively lacking SEND_MESSAGES: say so instead of offering a box
+          whose messages the server would refuse. A closed post has its own
+          strip above and no box for a non-staff reader either way. */}
+      {canSend === false && (!forum?.locked || forum.canReplyLocked) && (
+        <ComposerReadOnlyNotice />
+      )}
+      {/* Hidden, never unmounted, while the permission is gone: the draft and
+          attachments are the composer's own state, and they come back with it. */}
       {(!forum?.locked || forum.canReplyLocked) && (
+      <div hidden={canSend === false}>
       <MessageComposer
         // Remount per thread, same reason the main composer keys by channel.
         key={thread.channelId}
@@ -505,7 +515,7 @@ export function ThreadPanel({
           setEditMessageId(last.id);
           return true;
         }}
-        disabled={isLoading}
+        disabled={isLoading || canSend === false}
         slowModeUntil={controller.getSlowModeHeldUntil() || null}
         placeholder={forum?.placeholder ?? t("thread.placeholder")}
         slashContext={
@@ -524,6 +534,7 @@ export function ThreadPanel({
             : undefined
         }
       />
+      </div>
       )}
     </aside>
   );
