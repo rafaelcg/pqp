@@ -5,7 +5,7 @@
  * owner. When the app plays its own cue for the event, the banner is created
  * silent so the two do not double. When the app plays nothing for it, the
  * banner must NOT be silent or the event arrives with no sound at all, which
- * is what bug #123 was: `silent` followed the master switch alone, an ordinary
+ * is what user bug report 123 was: `silent` followed the master switch alone, an ordinary
  * channel message has no app cue by design, and so every "all messages" banner
  * on the desktop app was mute.
  *
