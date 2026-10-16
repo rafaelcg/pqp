@@ -32,10 +32,45 @@ const TWITCH_AUTHORIZE = "https://id.twitch.tv/oauth2/authorize";
 const TWITCH_TOKEN = "https://id.twitch.tv/oauth2/token";
 const TWITCH_USERS = "https://api.twitch.tv/helix/users";
 
+/** Which leg of the exchange failed. Logged, never shown to a person. */
+export type OAuthFailureStep = "config" | "token_exchange" | "userinfo";
+
+export interface OAuthFailureDetail {
+  step?: OAuthFailureStep;
+  /** The provider's HTTP status, when it answered at all. */
+  upstreamStatus?: number;
+  /**
+   * What the provider said, clipped and scrubbed (see `describeUpstream`).
+   * E.g. Twitch's `invalid client secret`. Never the code, token, secret or
+   * verifier, even if the provider echoes one.
+   */
+  upstreamError?: string;
+  /**
+   * The provider refused OUR credentials (client id/secret), as opposed to a
+   * bad or reused code from the person. That is the operator's problem: it
+   * answers 502 and pages through the log line, instead of a 400 the person
+   * is told to retry (a retry can never work).
+   */
+  credentialsRejected?: boolean;
+  /** The provider could not be reached or answered 5xx: ours to fix, not the person's. */
+  providerDown?: boolean;
+}
+
 export class OAuthProviderError extends Error {
-  constructor(message: string) {
+  readonly step: OAuthFailureStep;
+  readonly upstreamStatus?: number;
+  readonly upstreamError?: string;
+  readonly credentialsRejected: boolean;
+  readonly providerDown: boolean;
+
+  constructor(message: string, detail: OAuthFailureDetail = {}) {
     super(message);
     this.name = "OAuthProviderError";
+    this.step = detail.step ?? "token_exchange";
+    this.upstreamStatus = detail.upstreamStatus;
+    this.upstreamError = detail.upstreamError;
+    this.credentialsRejected = detail.credentialsRejected === true;
+    this.providerDown = detail.providerDown === true;
   }
 }
 
@@ -120,21 +155,24 @@ export async function exchangeBattlenetCode(
 ): Promise<LinkedIdentity> {
   const creds = battlenetCredentials();
   if (!creds) {
-    throw new OAuthProviderError("Battle.net is not configured");
+    throw new OAuthProviderError("Battle.net is not configured", { step: "config" });
   }
-  const token = await postForm(BATTLENET_TOKEN, {
-    grant_type: "authorization_code",
-    code,
-    redirect_uri: redirectUri,
-  }, basicAuth(creds.id, creds.secret));
+  const token = await postForm(
+    BATTLENET_TOKEN,
+    {
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+    },
+    basicAuth(creds.id, creds.secret),
+    [code, creds.secret],
+  );
   const accessToken = readAccessToken(token);
 
   let lastStatus = 0;
   for (const endpoint of BATTLENET_USERINFO) {
-    const response = await fetch(endpoint, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-      redirect: "error",
+    const response = await fetchUserinfo(endpoint, {
+      Authorization: `Bearer ${accessToken}`,
     });
     lastStatus = response.status;
     if (!response.ok) {
@@ -147,7 +185,7 @@ export async function exchangeBattlenetCode(
     };
     const id = payload.id ?? payload.sub;
     if (id === undefined || id === null || String(id).length === 0) {
-      throw new OAuthProviderError("Battle.net userinfo had no id");
+      throw new OAuthProviderError("Battle.net userinfo had no id", { step: "userinfo" });
     }
     const tag = clipName(payload.battletag) ?? `Battle.net ${String(id).slice(-4)}`;
     return {
@@ -157,7 +195,11 @@ export async function exchangeBattlenetCode(
       profileUrl: null,
     };
   }
-  throw new OAuthProviderError(`Battle.net userinfo returned ${lastStatus}`);
+  throw new OAuthProviderError(`Battle.net userinfo returned ${lastStatus}`, {
+    step: "userinfo",
+    upstreamStatus: lastStatus,
+    providerDown: lastStatus >= 500,
+  });
 }
 
 export async function exchangeTwitchCode(
@@ -167,7 +209,7 @@ export async function exchangeTwitchCode(
 ): Promise<LinkedIdentity> {
   const creds = twitchCredentials();
   if (!creds) {
-    throw new OAuthProviderError("Twitch is not configured");
+    throw new OAuthProviderError("Twitch is not configured", { step: "config" });
   }
   const token = await postForm(TWITCH_TOKEN, {
     client_id: creds.id,
@@ -176,19 +218,20 @@ export async function exchangeTwitchCode(
     code,
     redirect_uri: redirectUri,
     code_verifier: pkceVerifier,
-  });
+  }, {}, [code, creds.secret, pkceVerifier]);
   const accessToken = readAccessToken(token);
 
-  const response = await fetch(TWITCH_USERS, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Client-Id": creds.id,
-    },
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-    redirect: "error",
+  const response = await fetchUserinfo(TWITCH_USERS, {
+    Authorization: `Bearer ${accessToken}`,
+    "Client-Id": creds.id,
   });
   if (!response.ok) {
-    throw new OAuthProviderError(`Twitch users returned ${response.status}`);
+    throw new OAuthProviderError(`Twitch users returned ${response.status}`, {
+      step: "userinfo",
+      upstreamStatus: response.status,
+      upstreamError: await describeUpstream(response, [accessToken, creds.secret]),
+      providerDown: response.status >= 500,
+    });
   }
   const payload = (await response.json()) as {
     data?: Array<{
@@ -200,7 +243,7 @@ export async function exchangeTwitchCode(
   };
   const user = payload.data?.[0];
   if (!user?.id) {
-    throw new OAuthProviderError("Twitch users returned no user");
+    throw new OAuthProviderError("Twitch users returned no user", { step: "userinfo" });
   }
   const login = user.login?.trim() ?? "";
   return {
@@ -219,10 +262,81 @@ function basicAuth(id: string, secret: string): Record<string, string> {
   return { Authorization: `Basic ${token}` };
 }
 
+/**
+ * The userinfo GET. A network failure here is the provider's, and says so,
+ * rather than escaping as a bare TypeError the caller cannot tell from a bug
+ * of ours.
+ */
+async function fetchUserinfo(
+  url: string,
+  headers: Record<string, string>,
+): Promise<Response> {
+  try {
+    return await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      redirect: "error",
+    });
+  } catch (error) {
+    throw new OAuthProviderError(
+      error instanceof Error ? error.message : "Userinfo request failed",
+      { step: "userinfo", providerDown: true },
+    );
+  }
+}
+
+/**
+ * Both providers answer a failed token request with a small JSON body:
+ * Twitch `{"status":403,"message":"invalid client secret"}`, Battle.net
+ * `{"error":"invalid_client","error_description":"..."}`. That sentence is
+ * the whole diagnosis, so it is read, clipped, and scrubbed of anything
+ * secret the provider might echo back (`secrets`), then logged by the caller.
+ */
+export async function describeUpstream(
+  response: Response,
+  secrets: string[],
+): Promise<string | undefined> {
+  let text: string;
+  try {
+    text = (await response.text()).slice(0, 2_000);
+  } catch {
+    return undefined;
+  }
+  let said = "";
+  try {
+    const body = JSON.parse(text) as Record<string, unknown>;
+    const parts = [body.error, body.message, body.error_description].filter(
+      (value): value is string => typeof value === "string" && value.length > 0,
+    );
+    said = parts.join(": ");
+  } catch {
+    said = text.replace(/\s+/g, " ").trim();
+  }
+  for (const secret of secrets) {
+    if (secret.length >= 4) {
+      said = said.split(secret).join("[redacted]");
+    }
+  }
+  said = said.slice(0, 200);
+  return said.length > 0 ? said : undefined;
+}
+
+/** The token endpoint refused our client id/secret, not the person's code. */
+function looksLikeRejectedCredentials(
+  status: number,
+  said: string | undefined,
+): boolean {
+  if (status === 401 || status === 403) {
+    return true;
+  }
+  return said !== undefined && /invalid[_ ]client|client authentication/i.test(said);
+}
+
 async function postForm(
   url: string,
   fields: Record<string, string>,
   extraHeaders: Record<string, string> = {},
+  secrets: string[] = [],
 ): Promise<unknown> {
   const body = new URLSearchParams(fields);
   let response: Response;
@@ -240,10 +354,18 @@ async function postForm(
   } catch (error) {
     throw new OAuthProviderError(
       error instanceof Error ? error.message : "Token request failed",
+      { step: "token_exchange", providerDown: true },
     );
   }
   if (!response.ok) {
-    throw new OAuthProviderError(`Token endpoint returned ${response.status}`);
+    const said = await describeUpstream(response, secrets);
+    throw new OAuthProviderError(`Token endpoint returned ${response.status}`, {
+      step: "token_exchange",
+      upstreamStatus: response.status,
+      upstreamError: said,
+      credentialsRejected: looksLikeRejectedCredentials(response.status, said),
+      providerDown: response.status >= 500,
+    });
   }
   return response.json() as Promise<unknown>;
 }
@@ -258,7 +380,9 @@ function readAccessToken(payload: unknown): string {
   ) {
     return payload.access_token;
   }
-  throw new OAuthProviderError("Token endpoint returned no access_token");
+  throw new OAuthProviderError("Token endpoint returned no access_token", {
+    step: "token_exchange",
+  });
 }
 
 function clipName(value: string | undefined | null): string | null {

@@ -1134,6 +1134,37 @@ identity; without that, running the suite would destroy the servers,
 conversations and handle every other test reads. Debug-only, like
 `PQP_API_OVERRIDE`.
 
+## The server list: unread, order, "Mandar um oi"
+
+Four things the hub shares with the web rail (`ServerUnread.swift`, `HomeView.swift`):
+
+- **Unread channel messages on each server.** A white pill on the tile's leading
+  edge for any unread, and the lime `@N` (`MentionPill`, the channel rows' own)
+  at its foot when somebody named you; on the Servidores tab a bold name and the
+  same dot or pill. Muted servers and muted channels show nothing. The numbers
+  come from `GET /api/servers/:id/unread`, hydrated by the hub (two at a time, muted
+  servers skipped, fifteen at most, not repeated within a minute: the hub re-reads
+  on every return from a channel), from the open server's own channel list (the
+  authority while it is up, written to `SessionStore.serverUnread`), and from
+  `channel-activity` frames for servers that are not open. **Leaving a chat now sends
+  `leave-channel`** (`RealtimeClient.leave(channelId:)`, only if that channel is
+  still the one held): the server does not send `channel-activity` for the channel a
+  socket is joined to, and this client never left one, so after reading a channel
+  every later message in it was swallowed (no badge in the list, none on the tile)
+  until some other channel was opened.
+- **A folded section that hides a mention** shows the lime `@N` instead of the white
+  dot (the web draws a dot for both).
+- **The list follows another device's order** (`server-order-update`). The phone's
+  own saves carry a random `origin` so it skips their echo; a frame that arrives
+  while a save is in the air only schedules a re-read when the saves drain
+  (`ServerOrder.remoteAction`, the web's `server-order-saver.ts` rule).
+- **"Mandar um oi"**: when somebody accepts a request this account sent
+  (`FriendsDigest.newlyAccepted`, the web's `newlyAcceptedFriends`), a card offers
+  to open the conversation, for twelve seconds.
+
+Tests: `PhoneGapsTests`; UI journeys in `ServerUnreadUITests` and
+`PhoneGapsUITests` (a local API and a second dev account, not run in CI).
+
 ## Parity with the web client
 
 Both clients talk to the same API — there is no mobile backend and no BFF — so

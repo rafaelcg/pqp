@@ -87,6 +87,19 @@ enum FriendsDigest {
         response.incoming.count
     }
 
+    /// Friends that are new since `before` because THEY said yes to a request
+    /// this account sent: the moment somebody is most likely to write
+    /// ("Mandar um oi"). Somebody this account accepted itself was in
+    /// `incoming` before, so it is not news; the first snapshot (`before` nil)
+    /// is a baseline, never news. Ported from `newlyAcceptedFriends` in
+    /// `client/src/components/conversations/friend-accepted-toast.tsx`.
+    static func newlyAccepted(before: FriendsResponse?, after: FriendsResponse) -> [Friend] {
+        guard let before else { return [] }
+        let known = Set(before.friends.map(\.id))
+        let iAccepted = Set(before.incoming.map(\.id))
+        return after.friends.filter { !known.contains($0.id) && !iAccepted.contains($0.id) }
+    }
+
     /// Ids that must not be offered as "add a friend" results: yourself,
     /// existing friends, and anyone already mid-request in either direction.
     /// Offering the button to an existing friend adds nothing and reads as a bug.

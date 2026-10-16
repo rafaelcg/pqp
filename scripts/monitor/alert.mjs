@@ -29,9 +29,10 @@
  *   fail/warn, already open  -> comment at most once per `reminderHours`
  *   ok,        already open  -> comment "recovered" and close
  *   skip                     -> touch nothing
+ *   retired key, open        -> comment "retired" and close
  *
- * The last two lines are the whole design. An alert that reopens every ten
- * minutes gets muted within a day, and a muted alert is worse than no alert
+ * The `ok` and `skip` lines are the whole design. An alert that reopens every
+ * ten minutes gets muted within a day, and a muted alert is worse than no alert
  * because it looks like coverage. `skip` leaving state alone matters just as
  * much: a check that could not run (missing credential, provider API down)
  * must never be read as "recovered".
@@ -140,6 +141,23 @@ function body(result, runUrl) {
   return lines.join("\n");
 }
 
+/**
+ * The open issues belonging to checks that no longer exist.
+ *
+ * Removing a check from a group leaves its last alert open forever: nothing
+ * reports `ok` for that key, so nothing closes it. That is not hypothetical:
+ * #607 (`fly-machines`) sat red for a month after the Fly cutover. A group
+ * therefore names the keys it retired, and this picks out the ones still open.
+ * A key that a result in this run still reports is never retired, so a check
+ * that comes back (a rollback flips it on) is judged normally.
+ */
+export function retiredIssues(existing, results, retiredKeys = []) {
+  const live = new Set(results.map((r) => r.key));
+  return retiredKeys
+    .filter((key) => !live.has(key) && existing.has(key))
+    .map((key) => ({ key, issue: existing.get(key) }));
+}
+
 function hoursSince(iso) {
   return (Date.now() - new Date(iso).getTime()) / 3_600_000;
 }
@@ -151,8 +169,16 @@ function hoursSince(iso) {
  * @param {number} options.reminderHours minimum gap between nag comments
  * @param {string} [options.runUrl]     link back to the workflow run
  * @param {boolean} [options.dryRun]    print the actions, change nothing
+ * @param {string[]} [options.retiredKeys] checks removed from this group; their open issues are closed
  */
-export async function reconcile({ repo, results, reminderHours, runUrl, dryRun = false }) {
+export async function reconcile({
+  repo,
+  results,
+  reminderHours,
+  runUrl,
+  dryRun = false,
+  retiredKeys = [],
+}) {
   const actions = [];
   const existing = dryRun ? await openAlerts(repo).catch(() => new Map()) : await openAlerts(repo);
   if (!dryRun) {
@@ -232,6 +258,25 @@ export async function reconcile({ repo, results, reminderHours, runUrl, dryRun =
         `Still failing as of ${new Date().toISOString()}.\n\n${result.summary}\n\n${
           result.detail ? `\`\`\`\n${String(result.detail).trim()}\n\`\`\`\n\n` : ""
         }${runUrl ? `[Run log](${runUrl})` : ""}`,
+      ]);
+    }
+  }
+
+  for (const { key, issue } of retiredIssues(existing, results, retiredKeys)) {
+    actions.push({ key, action: `close #${issue.number} (check retired)` });
+    if (!dryRun) {
+      await gh([
+        "issue",
+        "close",
+        String(issue.number),
+        "--repo",
+        repo,
+        "--reason",
+        "not planned",
+        "--comment",
+        `This check was retired at ${new Date().toISOString()}: it measured Fly, and production has run on the Vultr box since 2026-09-17, so it could not turn green or red for any reason that is true today. Closed automatically; see docs/MONITORING.md for what watches production now.${
+          runUrl ? `\n\n[Run log](${runUrl})` : ""
+        }`,
       ]);
     }
   }

@@ -245,6 +245,8 @@ struct ChatView: View {
     var body: some View {
         ZStack {
             Palette.ink.ignoresSafeArea()
+            // Removed from this channel's server: this screen closes itself.
+            Color.clear.frame(width: 0, height: 0).dismissWhenServerRemoved(server?.id ?? flagsServerId)
 
             VStack(spacing: 0) {
                 messageList
@@ -663,6 +665,7 @@ struct ChatView: View {
             model.close()
             recorder.abandon()
         }
+
         .task {
             recorder.onNote = { note in Task { await model.sendVoiceNote(note) } }
         }

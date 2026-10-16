@@ -82,6 +82,73 @@ final class SessionStore {
     /// success, drawn at the app root so it outlives the sheet that made it.
     var forwardToast: ForwardToast?
 
+    /// Unread channel messages per server, for the hub's tiles and rows
+    /// (`ServerUnread`). Written by the hub (a hydration pass, live frames for
+    /// servers that are not open) and by the open server's own channel list,
+    /// which is the authority while it is on screen. A server with nothing
+    /// unread is absent.
+    var serverUnread: [String: ServerUnreadTotals] = [:]
+
+    /// Servers this account was removed from (or that were deleted) since launch,
+    /// with why. A screen of such a server watches `removedRevision` and
+    /// closes itself; the hub drops the tile.
+    private(set) var removedServers: [String: ServerRemovedReason] = [:]
+    private(set) var removedRevision = 0
+    /// The revision each removal happened at, so a server list read that began
+    /// before it is known to be stale (`reconcileFetched`).
+    @ObservationIgnored private var removedAt: [String: Int] = [:]
+
+    /// A server list as the API just answered it, reconciled with the removals
+    /// this session has seen. `startedAt` is `removedRevision` when the read
+    /// BEGAN: a server removed after that is still in the answer, which is older
+    /// than the frame, so it is dropped. A server removed before it that the
+    /// answer still lists was joined again, and its marker is forgotten (a stale
+    /// one would close the screens of a server the person is back in).
+    func reconcileFetched<S: Identifiable>(_ fetched: [S], startedAt revision: Int) -> [S]
+    where S.ID == String {
+        fetched.filter { server in
+            guard let at = removedAt[server.id] else { return true }
+            if at > revision { return false }
+            removedServers.removeValue(forKey: server.id)
+            removedAt.removeValue(forKey: server.id)
+            return true
+        }
+    }
+
+    /// The status another device of this account just chose, raw. The Tu screen
+    /// adopts it (`ProfileView`) on every frame, even a repeat of the same value
+    /// (`remoteOwnStatusRevision`); nil until a frame arrives.
+    private(set) var remoteOwnStatus: String?
+    private(set) var remoteOwnStatusRevision = 0
+
+    /// The server whose channel list is on screen, so the hub does not count a
+    /// frame the list is already counting.
+    var openedServerId: String?
+
+    /// Bumped on sign-out: a hydration read still in flight for the previous
+    /// account checks it before writing (`HomeModel.readUnread`).
+    @ObservationIgnored private(set) var unreadEpoch = 0
+
+    /// Which server lists have published their own totals, in order, so a hub
+    /// read that began BEFORE a list published is known to be older than it
+    /// (`HomeModel.applyUnread`), even after the list has closed.
+    @ObservationIgnored private var listSeq = 0
+    @ObservationIgnored private var listPublishedAt: [String: Int] = [:]
+    var listPublishCount: Int { listSeq }
+    func listPublished(_ serverId: String, since seq: Int) -> Bool { (listPublishedAt[serverId] ?? 0) > seq }
+    func noteServerUnreadFromList(_ serverId: String, _ totals: ServerUnreadTotals) {
+        listSeq += 1
+        listPublishedAt[serverId] = listSeq
+        noteServerUnread(serverId, totals)
+    }
+
+    /// One server's totals, written whole. Absent at zero, and equal writes are
+    /// dropped so the hub does not redraw for nothing.
+    func noteServerUnread(_ serverId: String, _ totals: ServerUnreadTotals) {
+        let next: ServerUnreadTotals? = totals.isUnread ? totals : nil
+        if serverUnread[serverId] != next { serverUnread[serverId] = next }
+    }
+
     /// Whether this launch walked the account through the age gate, which is
     /// what marks a brand-new account (see `Onboarding.shouldRun`).
     private var answeredAgeGateThisLaunch = false
@@ -677,6 +744,14 @@ final class SessionStore {
         linkError = nil
         firstRun = nil
         arrivalCelebration = nil
+        // The next account's tiles are not lit by this one's unread.
+        serverUnread = [:]
+        openedServerId = nil
+        unreadEpoch += 1
+        listPublishedAt = [:]
+        removedServers = [:]
+        removedAt = [:]
+        remoteOwnStatus = nil
         answeredAgeGateThisLaunch = false
         PendingInvite.clear()
         pendingInviteCode = nil
@@ -747,6 +822,23 @@ final class SessionStore {
     /// opens the server, so the rosters sent at `auth` have to land somewhere.
     private static let occupancyHandlerKey = "voice-occupancy"
 
+    /// The two frames about the account itself, handled here (not in a screen)
+    /// because the screen they concern may not be the one on top, or on screen.
+    func applyAccountFrame(_ event: RealtimeEvent) {
+        switch event {
+        case .serverRemoved(let serverId, let reason):
+            removedServers[serverId] = reason
+            removedRevision += 1
+            removedAt[serverId] = removedRevision
+            serverUnread.removeValue(forKey: serverId)
+        case .ownStatus(let status):
+            remoteOwnStatus = status
+            remoteOwnStatusRevision += 1
+        default:
+            break
+        }
+    }
+
     private func startRealtime() async {
         guard eventTask == nil else { return }
         eventHandlers[Self.cacheHandlerKey] = { event in
@@ -766,6 +858,7 @@ final class SessionStore {
                     // The new socket does not know what the old one was told.
                     Task { await self.realtime.sendIdle(true) }
                 }
+                self.applyAccountFrame(event)
                 for handler in self.eventHandlers.values {
                     handler(event)
                 }

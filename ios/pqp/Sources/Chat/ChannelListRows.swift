@@ -310,7 +310,13 @@ struct ChannelSectionHeader: View {
                     Text("\(summary.channelCount) channels")
                         .font(.system(size: 11, weight: .medium))
                         .transition(.opacity)
-                    if summary.hasUnread {
+                    if summary.mentions > 0 {
+                        // Somebody named you in there: the channel rows' own
+                        // lime pill, not the dot every chatty section gets.
+                        MentionPill(count: summary.mentions)
+                            .transition(.scale.combined(with: .opacity))
+                            .accessibilityIdentifier("channels.section.mentions")
+                    } else if summary.hasUnread {
                         Circle()
                             .fill(Palette.paper)
                             .frame(width: 6, height: 6)

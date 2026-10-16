@@ -44,6 +44,9 @@ interface ForumBackend {
     /** The forum takes the socket's primary slot: its two frames are fanned out to its viewers. */
     fun join(forumId: String)
 
+    /** Give the primary slot back, if it is still the forum's (a chat opened since keeps its own). */
+    fun leave(forumId: String)
+
     /** Move the forum's read cursor: the sidebar dot goes, and "Novo" is measured from here next visit. */
     fun markRead(channelId: String)
 }
@@ -62,6 +65,9 @@ class SessionForumBackend(private val session: SessionStore) : ForumBackend {
     override suspend fun permissions(serverId: String) = session.api.serverPermissions(serverId)
     override fun join(forumId: String) {
         session.realtime.joinChannel(forumId)
+    }
+    override fun leave(forumId: String) {
+        session.realtime.leaveChannel(forumId)
     }
     override fun markRead(channelId: String) {
         SocialRepository.of(session).markRead(channelId)
@@ -474,10 +480,19 @@ class ForumViewModel(
 
     private var refreshJob: Job? = null
 
-    override fun onCleared() {
-        // Everything the list showed is read now; a list that never loaded
-        // showed nothing, and leaves the cursor where it was.
+    override fun onCleared() = release()
+
+    /**
+     * The forum screen is gone. Everything the list showed is read now (a list
+     * that never loaded showed nothing, and leaves the cursor where it was),
+     * and the socket's primary slot goes back: the server sends no
+     * `channel-activity` for a channel the socket is subscribed to, so a forum
+     * left joined never lit its row in the channel list again, however many
+     * posts landed while that list was on screen (QA F2).
+     */
+    internal fun release() {
         if (markedRead) backend.markRead(forumId)
+        backend.leave(forumId)
     }
 
     companion object {

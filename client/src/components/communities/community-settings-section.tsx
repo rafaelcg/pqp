@@ -15,9 +15,11 @@ import {
   type CommunitySettings,
   type Server,
 } from "@pqp/shared";
-import { Globe } from "lucide-react";
+import { Globe, Lock } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
 import {
@@ -26,6 +28,12 @@ import {
   fetchServerImageConfig,
   updateCommunitySettings,
 } from "@/lib/api";
+import {
+  communityVisibility,
+  doorsOpening,
+  type CommunityVisibility,
+  type DoorOpening,
+} from "@/lib/community-access";
 import { uploadServerImage } from "@/lib/server-image-upload";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -81,13 +89,23 @@ import { cn } from "@/lib/utils";
  * `bare` drops the section's own heading and rule, for when it is a whole pane
  * of Server settings (the Comunidade section) whose header already says it.
  */
+const STATE_BADGE: Record<CommunityVisibility, BadgeVariant> = {
+  private: "neutral",
+  public: "accent",
+  listed: "accent",
+  suspended: "warning",
+};
+
 export function CommunitySettingsSection({
   serverId,
+  serverName = "",
   canListPublicly,
   onIdentitySaved,
   bare = false,
 }: {
   serverId: string;
+  /** Named in the confirmation, so it says WHICH server is about to open. */
+  serverName?: string;
   /** True only for the server's owner. */
   canListPublicly: boolean;
   onIdentitySaved?: (patch: Partial<Server>) => void;
@@ -127,6 +145,8 @@ export function CommunitySettingsSection({
    * featured 400s stay on the form error, not this box.
    */
   const [slugError, setSlugError] = useState<string | null>(null);
+  /** Which door the pending save would open, while the confirmation is up. */
+  const [confirmOpening, setConfirmOpening] = useState<DoorOpening | null>(null);
   const addressToggleId = useId();
   const toggleId = useId();
   const taglineId = useId();
@@ -201,6 +221,29 @@ export function CommunitySettingsSection({
       cancelled = true;
     };
   }, [serverId, t]);
+
+  /**
+   * Save, asking first when it would let strangers in.
+   *
+   * Turning the address or the directory ON is the direction that opens the
+   * room, and it used to be a tick plus Save with nothing said. The question
+   * comes at Save because that is the moment the room actually changes; a tick
+   * alone changes nothing. Turning either OFF, or saving anything else, never
+   * asks (`doorsOpening`).
+   */
+  function requestSave() {
+    if (settings) {
+      const opening = doorsOpening(
+        { isCommunity: settings.isCommunity, isListed: settings.isListed },
+        { isCommunity: addressed, isListed: canListPublicly ? listed : settings.isListed },
+      );
+      if (opening) {
+        setConfirmOpening(opening);
+        return;
+      }
+    }
+    void save();
+  }
 
   async function save() {
     setSaving(true);
@@ -338,6 +381,7 @@ export function CommunitySettingsSection({
     }
   }
 
+  const visibility = settings ? communityVisibility(settings) : "private";
   const remaining = COMMUNITY_TAGLINE_MAX_LENGTH - tagline.trim().length;
   const aboutRemaining = COMMUNITY_ABOUT_MAX_LENGTH - about.trim().length;
   /**
@@ -379,6 +423,27 @@ export function CommunitySettingsSection({
           <Globe aria-hidden="true" className="h-4 w-4" />
           {t("communities.settings.title")}
         </h3>
+      )}
+
+      {/* WHERE THE ROOM STANDS RIGHT NOW, from what is saved (not from the
+          ticks under it): the first thing an owner should be able to read here
+          is who can walk in today. Text and an icon, never a colour alone. */}
+      {settings && (
+        <div
+          data-community-state={visibility}
+          className="flex items-start gap-3 rounded-md border border-ink-4 bg-ink-2 p-3"
+        >
+          <Badge
+            variant={STATE_BADGE[visibility]}
+            icon={visibility === "private" ? Lock : Globe}
+            className="mt-0.5"
+          >
+            {t(`communities.settings.state.${visibility}`)}
+          </Badge>
+          <p className="text-sm text-paper-muted">
+            {t(`communities.settings.state.${visibility}Body`)}
+          </p>
+        </div>
       )}
 
       {/* Both paragraphs render whether or not either switch is on. Reading
@@ -768,7 +833,7 @@ export function CommunitySettingsSection({
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Button disabled={formBusy || !dirty} onClick={() => void save()}>
+            <Button disabled={formBusy || !dirty} onClick={requestSave}>
               {saving
                 ? t("communities.settings.saving")
                 : t("communities.settings.save")}
@@ -797,6 +862,27 @@ export function CommunitySettingsSection({
           {error}
         </p>
       )}
+
+      {/* The question before a door opens. Not destructive (nothing is lost),
+          but hard to take back from the outside, so Cancel holds the focus and
+          a stray Enter cannot commit it. Escape and Cancel leave the form as it
+          is, ticks included, so nothing has been saved. */}
+      <ConfirmDialog
+        open={confirmOpening !== null}
+        title={t(`communities.settings.confirm.${confirmOpening ?? "address"}.title`, {
+          name: serverName,
+        })}
+        description={t(
+          `communities.settings.confirm.${confirmOpening ?? "address"}.body`,
+        )}
+        confirmLabel={t(
+          `communities.settings.confirm.${confirmOpening ?? "address"}.action`,
+        )}
+        destructive={false}
+        initialFocus="cancel"
+        onConfirm={() => void save()}
+        onClose={() => setConfirmOpening(null)}
+      />
     </section>
   );
 }

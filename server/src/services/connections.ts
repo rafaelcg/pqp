@@ -13,6 +13,7 @@ import {
 import type { DbUser } from "../db.js";
 import { getPool } from "../db.js";
 import { HttpError } from "../lib/http.js";
+import { logEvent } from "../lib/log.js";
 import { noBlockBetweenSql } from "./blocks.js";
 import { areFriendsSql } from "./friends.js";
 import {
@@ -25,6 +26,11 @@ import {
   twitchAuthorizeUrl,
   createPkcePair,
 } from "./connections-oauth.js";
+import {
+  reportConnectionFailure,
+  reportProviderCredentialsRejected,
+  type ConnectionFailureStep,
+} from "./connections-failures.js";
 import {
   fetchSteamProfile,
   isSteamConfigured,
@@ -235,6 +241,14 @@ export async function startConnection(
   }
   const origin = resolveRedirectOrigin(requestOrigin);
   if (!origin) {
+    // The origin is a public value the browser sent, not a secret, and it is
+    // the one thing that tells an operator which site needs registering.
+    logEvent("connections.startRefused", {
+      provider,
+      userId: user.id,
+      reason: "origin_not_allowed",
+      origin: requestOrigin,
+    });
     throw new HttpError(400, "This origin cannot start a connection");
   }
 
@@ -263,8 +277,17 @@ export async function startConnection(
     [nonce, user.id, provider, origin, pkceVerifier],
   );
 
+  // Never the URL: for Twitch and Battle.net it carries the state nonce.
+  logEvent("connections.start", { provider, userId: user.id });
   return { url };
 }
+
+/**
+ * What a person sees when the provider's side is what broke. 502, not 400: a
+ * 400 here told people to try again and a retry can never fix a rotated
+ * client secret. The client keys its own friendlier sentence on the status.
+ */
+export const CONNECTION_SERVICE_ERROR = "The connection service had a problem on our side";
 
 export async function completeConnection(
   user: DbUser,
@@ -272,11 +295,71 @@ export async function completeConnection(
   params: Record<string, string>,
 ): Promise<OwnConnection> {
   requirePerson(user);
+
+  // One place that records a failure on this path and hands back what to
+  // throw. Every `throw` below goes through it, so none of them is silent.
+  const fail = (
+    step: ConnectionFailureStep,
+    error: unknown,
+  ): Error => {
+    if (error instanceof OAuthProviderError) {
+      const providerSide = error.credentialsRejected || error.providerDown;
+      const status = providerSide ? 502 : 400;
+      reportConnectionFailure({
+        provider,
+        userId: user.id,
+        step: error.step === "userinfo" ? "userinfo" : step,
+        status,
+        upstreamStatus: error.upstreamStatus,
+        upstreamError: error.upstreamError,
+        reason: error.message,
+      });
+      if (error.credentialsRejected) {
+        reportProviderCredentialsRejected(provider, {
+          upstreamStatus: error.upstreamStatus,
+          upstreamError: error.upstreamError,
+        });
+      }
+      return new HttpError(status, providerSide ? CONNECTION_SERVICE_ERROR : error.message);
+    }
+    if (error instanceof SteamAuthError) {
+      reportConnectionFailure({
+        provider,
+        userId: user.id,
+        step,
+        status: 400,
+        reason: error.message,
+      });
+      return new HttpError(400, error.message);
+    }
+    const status = error instanceof HttpError ? error.status : 500;
+    reportConnectionFailure({
+      provider,
+      userId: user.id,
+      step,
+      status,
+      // An HttpError's text is ours; anything else is an unexpected throw
+      // (the database, a bug), named by class only so a driver message that
+      // quotes a parameter cannot carry a nonce or verifier into the log.
+      reason: error instanceof HttpError ? error.message : errorClass(error),
+    });
+    return error instanceof Error ? error : new Error(String(error));
+  };
+
   if (!isProviderEnabled(provider)) {
-    throw new HttpError(503, "That connection is not configured on this server");
+    throw fail("not_configured", new HttpError(503, "That connection is not configured on this server"));
   }
 
   if (params.error) {
+    // The provider's own `error` value is a short OAuth code (access_denied,
+    // server_error), not a secret, and says whether the person cancelled.
+    reportConnectionFailure({
+      provider,
+      userId: user.id,
+      step: "provider_error",
+      status: 400,
+      reason: params.error.slice(0, 60),
+    });
     if (params.error === "access_denied") {
       throw new HttpError(400, "Connection was cancelled");
     }
@@ -285,10 +368,15 @@ export async function completeConnection(
 
   const nonce = params.state;
   if (!nonce) {
-    throw new HttpError(400, "Missing connection state");
+    throw fail("state_missing", new HttpError(400, "Missing connection state"));
   }
 
-  const pending = await consumeState(nonce, user.id, provider);
+  let pending: { redirect_origin: string; pkce_verifier: string | null };
+  try {
+    pending = await consumeState(nonce, user.id, provider);
+  } catch (error) {
+    throw fail("state_consume", error);
+  }
   const callback = `${pending.redirect_origin}${connectionCallbackPath(provider)}`;
 
   let identity: {
@@ -298,10 +386,13 @@ export async function completeConnection(
     profileUrl: string | null;
   };
 
+  let step: ConnectionFailureStep = "token_exchange";
   try {
     if (provider === "steam") {
       const returnTo = `${callback}?state=${encodeURIComponent(nonce)}`;
+      step = "steam_verify";
       const steamId = await verifySteamAssertion(params, returnTo);
+      step = "steam_profile";
       const profile = await fetchSteamProfile(steamId);
       identity = {
         providerUserId: profile.steamId,
@@ -312,30 +403,35 @@ export async function completeConnection(
     } else if (provider === "battlenet") {
       const code = params.code;
       if (!code) {
+        step = "code_missing";
         throw new HttpError(400, "Missing authorization code");
       }
       identity = await exchangeBattlenetCode(code, callback);
     } else {
       const code = params.code;
       if (!code) {
+        step = "code_missing";
         throw new HttpError(400, "Missing authorization code");
       }
       if (!pending.pkce_verifier) {
+        step = "code_missing";
         throw new HttpError(400, "Missing PKCE verifier for this connection");
       }
       identity = await exchangeTwitchCode(code, callback, pending.pkce_verifier);
     }
   } catch (error) {
-    if (error instanceof HttpError) {
-      throw error;
-    }
-    if (error instanceof SteamAuthError || error instanceof OAuthProviderError) {
-      throw new HttpError(400, error.message);
-    }
-    throw error;
+    throw fail(step, error);
   }
 
-  return upsertConnection(user.id, provider, identity);
+  try {
+    return await upsertConnection(user.id, provider, identity);
+  } catch (error) {
+    throw fail("upsert", error);
+  }
+}
+
+function errorClass(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
 }
 
 export async function updateConnectionVisibility(

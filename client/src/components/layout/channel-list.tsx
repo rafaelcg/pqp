@@ -105,6 +105,8 @@ import {
   ContextMenu,
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
+import { PublicBadge } from "@/components/communities/public-badge";
+import { isServerPublic } from "@/lib/community-access";
 import { Menu } from "@/components/ui/menu";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
@@ -487,6 +489,13 @@ interface ChannelListProps {
    * not `COMMUNITIES_ENABLED`.
    */
   communityHomeEnabled?: boolean;
+  /**
+   * The instance has the public communities feature on (the answer the rail
+   * and the settings already follow). A server with a public address wears the
+   * "Public" mark in its header only while this is true: with it off the
+   * address answers 404 and the mark would be a lie.
+   */
+  communitiesEnabled?: boolean;
   /** "NEW" chip until the row is opened once on this server. */
   communityHomeShowNew?: boolean;
   /** Unread published posts. Outranks the "New" chip: a number says more. */
@@ -616,6 +625,7 @@ export const ChannelList = memo(function ChannelList({
   mobileOpen = false,
   onMobileClose,
   communityHomeEnabled = false,
+  communitiesEnabled = false,
   communityHomeShowNew = false,
   communityHomeUnread = 0,
   communityHomeUnreadFresh = false,
@@ -2307,7 +2317,10 @@ export const ChannelList = memo(function ChannelList({
                 ) : undefined
               }
             >
-              <ServerHeaderMenuTrigger server={server} />
+              <ServerHeaderMenuTrigger
+                server={server}
+                isPublic={isServerPublic(server, communitiesEnabled)}
+              />
             </Menu>
           ) : (
             <p className="min-w-0 flex-1 truncate text-sm text-text-tertiary">
@@ -2848,12 +2861,16 @@ export const ChannelList = memo(function ChannelList({
  */
 const ServerHeaderMenuTrigger = forwardRef<
   HTMLButtonElement,
-  { server: Server } & ComponentPropsWithoutRef<"button">
->(function ServerHeaderMenuTrigger({ server, ...triggerProps }, ref) {
+  { server: Server; isPublic?: boolean } & ComponentPropsWithoutRef<"button">
+>(function ServerHeaderMenuTrigger(
+  { server, isPublic = false, ...triggerProps },
+  ref,
+) {
   const { t } = useTranslation();
   const nameRef = useRef<HTMLParagraphElement | null>(null);
   const truncated = useIsTruncated(nameRef, server.name);
   const nameId = useId();
+  const publicId = useId();
 
   const nameNode = (
     <p
@@ -2866,13 +2883,21 @@ const ServerHeaderMenuTrigger = forwardRef<
     </p>
   );
 
+  const nameBlock = truncated ? (
+    <Tooltip label={server.name} side="bottom">
+      {nameNode}
+    </Tooltip>
+  ) : (
+    nameNode
+  );
+
   return (
     <button
       ref={ref}
       type="button"
       data-server-menu-trigger=""
       aria-label={t("chrome.serverMenu")}
-      aria-describedby={nameId}
+      aria-describedby={isPublic ? `${nameId} ${publicId}` : nameId}
       // `px-1`, no `py-*`: the row's own `py-2` (§6.2) plus the 32px icon
       // already total 48px (`min-h-12`) exactly. A vertical pad here on top
       // of that pushed a live-browser render to 56px — jsdom-only static
@@ -2886,12 +2911,18 @@ const ServerHeaderMenuTrigger = forwardRef<
       <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-surface-2 font-display text-[11px] font-bold text-text">
         <ServerIcon name={server.name} iconUrl={server.iconUrl} />
       </span>
-      {truncated ? (
-        <Tooltip label={server.name} side="bottom">
-          {nameNode}
-        </Tooltip>
+      {isPublic ? (
+        // The name keeps its full width and the mark goes UNDER it: beside it,
+        // a 256px column left a name like "Sandbox" two letters. A public room
+        // is never invisible from the inside, and a mark that eats the name is
+        // one people learn to resent. 16px tall so the row stays under its
+        // 48px floor (name line plus mark come to about 34px).
+        <span className="flex min-w-0 flex-1 flex-col items-start">
+          {nameBlock}
+          <PublicBadge id={publicId} className="h-4" />
+        </span>
       ) : (
-        nameNode
+        nameBlock
       )}
       <ChevronDown
         aria-hidden="true"

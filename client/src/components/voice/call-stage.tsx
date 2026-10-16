@@ -169,6 +169,7 @@ import {
 } from "@/components/voice/video-quality-control";
 import { VideoQualityMenu } from "@/components/voice/video-quality-menu";
 import { bindRemoteVideo } from "@/lib/remote-video-binding";
+import { reportStageExpanded } from "@/lib/viewer-fullscreen";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
 import {
   CallControlDivider,
@@ -700,6 +701,16 @@ function useStageFullscreen(
     },
     [apply],
   );
+
+  // Tell the SFU subscription the stage fills the screen, so a share asks for
+  // the layer the screen can show and not the one its CSS pixels can. Element
+  // fullscreen is read off the document by the session itself; this is the
+  // half only the stage knows (`expand`, the in-page fill). Cleared on unmount
+  // so a stage that goes away fullscreen cannot leave the answer stuck.
+  useEffect(() => {
+    reportStageExpanded(state.active);
+    return () => reportStageExpanded(false);
+  }, [state.active]);
 
   // Nothing to gate on any more: expanding needs no platform support, and
   // there is always a stage to expand even when the call is audio-only.

@@ -488,6 +488,11 @@ private object Lucide {
         "M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z",
         "M7 7.5a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0",
     )
+    val globe by lucide(
+        "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0",
+        "M2 12h20",
+        "M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z",
+    )
     val image by lucide(
         "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
         "M7 9a2 2 0 1 0 4 0a2 2 0 1 0 -4 0",
@@ -707,6 +712,7 @@ object PqpIcons {
     val Reopen get() = Lucide.rotateCcw
     val Tag get() = Lucide.tag
     val Image get() = Lucide.image
+    val Public get() = Lucide.globe
 
     // The story camera.
     val Camera get() = Lucide.camera

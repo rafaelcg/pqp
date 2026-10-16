@@ -13,6 +13,9 @@ struct ServerHeader: View {
     let name: String
     let bannerURL: URL?
     let activity: ServerActivity
+    /// The room has a public address: anyone holding the link can join. Shown
+    /// to every member, so a public room is never invisible from the inside.
+    var isPublic = false
     /// Status bar plus navigation bar: the header runs under both.
     let topInset: CGFloat
 
@@ -94,6 +97,9 @@ struct ServerHeader: View {
                 .foregroundStyle(Palette.paper)
                 .lineLimit(2)
                 .shadow(color: .black.opacity(bannerURL == nil ? 0 : 0.45), radius: 6, y: 1)
+            if isPublic {
+                PublicCommunityBadge()
+            }
             if !activity.isEmpty {
                 ServerActivityLine(activity: activity)
             }
@@ -134,13 +140,19 @@ struct ServerActivityLine: View {
 struct ServerCompactTitle: View {
     let name: String
     let activity: ServerActivity
+    var isPublic = false
 
     var body: some View {
         VStack(spacing: 1) {
-            Text(verbatim: name)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Palette.paper)
-                .lineLimit(1)
+            HStack(spacing: 5) {
+                Text(verbatim: name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Palette.paper)
+                    .lineLimit(1)
+                if isPublic {
+                    PublicCommunityBadge(compact: true)
+                }
+            }
             if !activity.isEmpty {
                 ServerActivityLine(activity: activity, size: 11)
             }
