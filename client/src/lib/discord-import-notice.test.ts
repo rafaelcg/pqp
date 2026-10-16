@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/config-refresh", () => ({ onConfigRefresh: () => () => {} }));
 vi.mock("@/lib/api", () => ({ apiFetch: vi.fn() }));
@@ -15,12 +17,15 @@ const {
   isDiscordImportNoticeOn,
   isSmallAndNew,
   loadDiscordImportNoticeConfig,
+  mergeNoticeRecords,
   noticeAllowedByHistory,
   noticeFromConfig,
   noticeKey,
   parseNoticeRecord,
   readNoticeRecord,
+  resetNoticeSessionForTests,
   setDiscordImportNoticeForTests,
+  useDiscordImportNoticeRecord,
   writeNoticeRecord,
 } = await import("./discord-import-notice");
 type Facts = Parameters<typeof discordImportNoticeVisible>[0];
@@ -228,5 +233,79 @@ describe("the config answer", () => {
     expect(isDiscordImportNoticeOn()).toBe(true);
     await loadDiscordImportNoticeConfig(async () => ({ discordImportNotice: false }));
     expect(isDiscordImportNoticeOn()).toBe(false);
+  });
+});
+
+describe("useDiscordImportNoticeRecord", () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  type Api = ReturnType<typeof useDiscordImportNoticeRecord>;
+  let root: Root | null = null;
+  let host: HTMLElement | null = null;
+  let api: Api;
+
+  function Probe({ user, server }: { user: string; server: string }) {
+    api = useDiscordImportNoticeRecord(user, server);
+    return null;
+  }
+
+  async function show(user: string, server: string) {
+    if (!host) {
+      host = document.createElement("div");
+      document.body.append(host);
+      root = createRoot(host);
+    }
+    await act(async () => {
+      root!.render(createElement(Probe, { user, server }));
+    });
+  }
+
+  beforeEach(() => {
+    resetNoticeSessionForTests();
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    host?.remove();
+    root = null;
+    host = null;
+    window.localStorage.clear();
+  });
+
+  it("a close on a host that keeps nothing still holds when the person switches servers and back", async () => {
+    // jsdom is localhost: the hints store persists nothing here.
+    await show("u", "a");
+    await act(async () => api.close());
+    expect(api.record.closes).toBe(1);
+    await show("u", "b");
+    expect(api.record.closes).toBe(0);
+    await show("u", "a");
+    expect(api.record.closes).toBe(1);
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it("a stale tab closing cannot undo a click another tab recorded", async () => {
+    window.localStorage.setItem("pqp:hints-persist", "1");
+    await show("u", "a");
+    expect(api.record.clicked).toBe(false);
+    // Another tab presses the button while this one still holds the old copy.
+    window.localStorage.setItem(
+      noticeKey("u", "a"),
+      JSON.stringify({ closes: 0, lastClosedAt: NOW, clicked: true }),
+    );
+    await act(async () => api.close());
+    expect(api.record.clicked).toBe(true);
+    expect(readNoticeRecord("u", "a").record).toMatchObject({ clicked: true, closes: 1 });
+  });
+});
+
+describe("mergeNoticeRecords", () => {
+  it("keeps the furthest of every field", () => {
+    expect(
+      mergeNoticeRecords(
+        { closes: 1, lastClosedAt: 10, clicked: false },
+        { closes: 0, lastClosedAt: 20, clicked: true },
+      ),
+    ).toEqual({ closes: 1, lastClosedAt: 20, clicked: true });
   });
 });

@@ -292,6 +292,32 @@ export function writeNoticeRecord(
   rememberHintValue(noticeKey(userId, serverId), JSON.stringify(record), storage);
 }
 
+/**
+ * Two views of one history (this tab's, storage's, this page's memory): the
+ * furthest each field has gone. A close can only add, a click is final, so
+ * the union is always the truth. It is what stops a stale tab from undoing a
+ * click another tab recorded.
+ */
+export function mergeNoticeRecords(a: NoticeRecord, b: NoticeRecord): NoticeRecord {
+  return {
+    closes: Math.max(a.closes, b.closes),
+    lastClosedAt: Math.max(a.lastClosedAt, b.lastClosedAt),
+    clicked: a.clicked || b.clicked,
+  };
+}
+
+/**
+ * What this page has done with the card, per user and server, for hosts whose
+ * storage does not keep it (localhost, a write that throws): switching away
+ * from a server and back must not bring a closed card back.
+ */
+const sessionRecords = new Map<string, NoticeRecord>();
+
+/** Test seam. */
+export function resetNoticeSessionForTests(): void {
+  sessionRecords.clear();
+}
+
 export function closedRecord(before: NoticeRecord, now: number = Date.now()): NoticeRecord {
   return { ...before, closes: before.closes + 1, lastClosedAt: now };
 }
@@ -327,7 +353,12 @@ export function useDiscordImportNoticeRecord(
       return;
     }
     const read = readNoticeRecord(userId, serverId);
-    setState({ key: noticeKey(userId, serverId), record: read.record, readable: read.readable });
+    const at = noticeKey(userId, serverId);
+    setState({
+      key: at,
+      record: mergeNoticeRecords(read.record, sessionRecords.get(at) ?? EMPTY_RECORD),
+      readable: read.readable,
+    });
   }, [userId, serverId]);
 
   // The latest state, so the write below runs once per press, not inside a
@@ -340,8 +371,16 @@ export function useDiscordImportNoticeRecord(
         return;
       }
       const at = noticeKey(userId, serverId);
-      const before = latest.current.key === at ? latest.current.record : EMPTY_RECORD;
+      // Against what storage holds NOW as well as this tab's copy: another tab
+      // may have clicked since this one loaded, and writing the stale copy
+      // back would undo it.
+      const before = [
+        latest.current.key === at ? latest.current.record : EMPTY_RECORD,
+        readNoticeRecord(userId, serverId).record,
+        sessionRecords.get(at) ?? EMPTY_RECORD,
+      ].reduce(mergeNoticeRecords);
       const record = next(before);
+      sessionRecords.set(at, record);
       writeNoticeRecord(userId, serverId, record);
       setState({ key: at, record, readable: true });
     },
