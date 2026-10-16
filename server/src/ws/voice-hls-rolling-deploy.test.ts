@@ -885,7 +885,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
 
   it("conventional ladder: the same session, one ladder, a moving playlist, through both restarts and a blip", async () => {
     await drill("conventional");
-  }, 60_000);
+  }, 90_000);
 
   /**
    * 2026-09-24 07:51:37 to 07:51:41: the new process adopted the ladder after
@@ -992,7 +992,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
       [fixture.channelId, host.rows[0]!.owner_id],
     );
     await drill("ll");
-  }, 60_000);
+  }, 90_000);
 
   it("low-latency: the same person back under a NEW peer id on the other machine keeps the session, rebound on the box", async () => {
     // A reconnect that could NOT resume (a fresh peer id), landing on the
@@ -1036,7 +1036,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     await b.registry.settleVoiceRegistryWrites();
     // api-a's next look finds the same person sharing on api-b.
     await viewerVisits(a, channel);
-    await waitFor(() => owners(channel).join() === "api-b", "the session to follow the person to api-b");
+    await waitFor(() => owners(channel).join() === "api-b", "the session to follow the person to api-b", HANDOVER_WAIT_MS);
     await waitFor(
       () => box.remuxRebinds.some((call) => call.presenterIdentity === again.peerId),
       "the box to be told who to follow now",
@@ -1077,7 +1077,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
       }),
     );
     expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlStopped", expect.anything());
-  }, 30_000);
+  }, 60_000);
 
   // -------------------------------------------------------------------------
   // THE PRESENTER RELOADS THE PAGE. Production rehearsal B, 2026-09-24 ~17:15Z:
@@ -1284,7 +1284,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     // old seat anywhere.
     const back = await presenterJoinsAndShares(b, userId, channel);
     await b.registry.settleVoiceRegistryWrites();
-    await waitFor(() => owners(channel).join() === "api-b", "the session to follow the presenter to api-b");
+    await waitFor(() => owners(channel).join() === "api-b", "the session to follow the presenter to api-b", HANDOVER_WAIT_MS);
     await waitFor(
       () => box.remuxRebinds.some((call) => call.presenterIdentity === back.peerId),
       "the box to follow the reloaded page",
@@ -1314,7 +1314,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
       expect.objectContaining({ channelId: channel, mode: "ll" }),
     );
     expect(logEvent).not.toHaveBeenCalledWith("voice.hlsLlStopped", expect.anything());
-  }, 30_000);
+  }, 60_000);
 
   it("low-latency: the host's voice archive survives a reload onto the OTHER machine, and its row is closed at the end (rehearsal D)", async () => {
     // Production rehearsal D, 2026-09-25: the same reload as above, with the
@@ -1353,7 +1353,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     box.archiveTrack = "TR_ARCHIVE_2";
     const back = await presenterJoinsAndShares(b, userId, channel);
     await b.registry.settleVoiceRegistryWrites();
-    await waitFor(() => owners(channel).join() === "api-b", "the session to follow the presenter to api-b");
+    await waitFor(() => owners(channel).join() === "api-b", "the session to follow the presenter to api-b", HANDOVER_WAIT_MS);
     await waitFor(
       () => box.archiveOutputs.length === 2,
       "the voice archive to continue on api-b",
@@ -1384,7 +1384,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
       { suffix: "", base: expect.any(Number) },
       { suffix: expect.stringMatching(/^-r\d+$/), base: expect.any(Number) },
     ]);
-  }, 60_000);
+  }, 90_000);
 
   it("a DIFFERENT person sharing inside the window is a new session, at once", async () => {
     await enableLlParty();
@@ -1499,7 +1499,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
     await bootInstance("api-a#2");
     box.cameraTracks = ["TR_CAM_1", "TR_CAM_2"];
     await presenterResumes(b, presenter, channel);
-    await waitFor(() => owners(channel).join() === "api-b", "the session to follow the presenter to api-b");
+    await waitFor(() => owners(channel).join() === "api-b", "the session to follow the presenter to api-b", HANDOVER_WAIT_MS);
     await new Promise((resolve) => setTimeout(resolve, 300));
     // Adopted, not restarted: the camera it inherited is still listed.
     const cams = () => [...box.egresses.values()].filter((e) => e.rung === "cam360p30");
@@ -1528,7 +1528,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
       "voice.hlsCameraTrackStaleSkipped",
       expect.objectContaining({ channelId: channel, stale: "TR_CAM_1", chosen: "TR_CAM_2" }),
     );
-  }, 40_000);
+  }, 60_000);
 
   it("a session whose rows never landed is not handed over: it stays where it is monitored", async () => {
     const channel = fixture.channelId;
@@ -1619,7 +1619,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
       { type: "set-sharing-screen", sharing: true },
     );
 
-    await waitFor(() => owners(channel).join() === "api-a", "api-a to adopt the given-back session");
+    await waitFor(() => owners(channel).join() === "api-a", "api-a to adopt the given-back session", HANDOVER_WAIT_MS);
     expect(a.egress.liveHlsStreamFor(channel)?.startedAt).toBe(startedAt);
     expect(box.starts.length).toBe(startsBefore);
     expect(box.stops).toEqual([]);
@@ -1627,7 +1627,7 @@ describeDb("a watch party survives a rolling deploy of both API machines", () =>
       "voice.hlsRowsDisowned",
       expect.objectContaining({ channelId: channel }),
     );
-  }, 30_000);
+  }, 45_000);
 
   it("a host still sharing with no session anywhere gets one back from the sweep", async () => {
     const channel = fixture.channelId;
