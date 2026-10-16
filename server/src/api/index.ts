@@ -13327,8 +13327,12 @@ async function serveEmbedImage(
   }
 }
 
-/** How long a redirect, or a served picture, may be cached (the signature behind it lives an hour). */
-const STORED_IMAGE_CACHE = "public, max-age=300";
+/**
+ * How long a redirect, or a served picture, may be cached. The signature behind
+ * a redirect is good for at least `STABLE_IMAGE_WINDOW_SECONDS` (six hours) from
+ * the moment it is handed out, so an hour is well inside it.
+ */
+const STORED_IMAGE_CACHE = "public, max-age=3600";
 
 /**
  * The answer for a profile picture, a banner or a server picture that has been
@@ -13339,7 +13343,7 @@ const STORED_IMAGE_CACHE = "public, max-age=300";
  * this process is the egress bill the presigned design exists to avoid. The
  * redirect is cacheable because the URL carries `?v=<hash of the key>`: a new
  * picture is a new address, so nothing here can serve a stale one, and the
- * window stays under the presigned target's own hour.
+ * window stays under the presigned target's own life.
  *
  * A HEAD, OR A GET THAT ASKS FOR A RANGE, IS SERVED FROM HERE, exactly as the
  * public Baú cover is (`serveCover`: 200 with a type and a length, an ETag,
@@ -13531,11 +13535,12 @@ async function serveServerEmojiObject(
     sendError(res, 404, "Not found", req);
     return;
   }
-  // An emoji's key never changes, and the window stays under the presigned
-  // target's own hour so a cached redirect cannot outlive the URL.
+  // An emoji's key never changes, and the cached redirect stays under the
+  // signed address's own life (`STABLE_IMAGE_WINDOW_SECONDS`), so it cannot
+  // outlive the URL.
   res.writeHead(302, {
     location: url,
-    "cache-control": "public, max-age=300",
+    "cache-control": STORED_IMAGE_CACHE,
   });
   res.end();
 }
