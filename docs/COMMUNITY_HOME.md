@@ -393,7 +393,9 @@ user and never in a member list.
   denies it does not appear). `POST /api/servers/:id/home/follow`; the channel is
   checked for the same authority, so a per-channel grant counts there. The
   destination channel's settings list what it follows with **Deixar de seguir**
-  (`GET /api/channels/:id/bau-follows`, `DELETE /api/bau-follows/:id`).
+  (`GET /api/channels/:id/bau-follows`, `DELETE /api/bau-follows/:id`). Android
+  has the same set (button, picker, followers with **Permitir seguir**, the
+  channel's list); see `docs/ANDROID.md` §Seguir. iOS does not yet.
 - **What goes out.** Free, published posts that went live AFTER the follow was
   made (or last resumed), never the backlog. Scheduled posts go out when they
   flip to published. Members-only (VIP) posts and drafts never do. A post older

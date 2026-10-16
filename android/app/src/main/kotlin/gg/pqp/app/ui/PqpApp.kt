@@ -925,6 +925,17 @@ private fun SignedInNav(
                             }
                         },
                         actions = {
+                            // Seguir: what this text channel follows. Absent for a
+                            // voice room, a conversation, and anybody who may not
+                            // manage the channel or whose channel follows nothing.
+                            val followServerId = route.serverId
+                            if (followServerId != null && !route.isVoiceChannel) {
+                                gg.pqp.app.follow.ui.ChannelFollowsAction(
+                                    session = session,
+                                    serverId = followServerId,
+                                    channelId = route.channelId,
+                                )
+                            }
                             // A watch party's join lives on the stage now (see
                             // above); the app bar icon stays only for an
                             // ordinary voice room, which has no stage to put
