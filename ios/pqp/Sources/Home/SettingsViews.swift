@@ -614,10 +614,11 @@ struct ServerSettingsView: View {
     /// until they have loaded; the role covers the owner meanwhile.
     var permissions: PermissionsSnapshot?
     let onChanged: (Server) -> Void
+    /// The room's public address went on or off (the header's flag follows).
+    var onCommunityChanged: (Bool) -> Void = { _ in }
     let onDeleted: () -> Void
 
     @State private var community: CommunitySettingsModel?
-    @State private var communityIsPublic: Bool?
     @State private var name = ""
     @State private var retention: Int?
     @State private var ssoDomain = ""
@@ -760,12 +761,6 @@ struct ServerSettingsView: View {
             )) { item in
                 ShareSheet(url: item.url)
             }
-            .onChange(of: communityIsPublic) { _, isPublic in
-                guard let isPublic, isPublic != server.isCommunity else { return }
-                var next = server
-                next.isCommunity = isPublic
-                onChanged(next)
-            }
             .alert(
                 communityConfirmTitle,
                 isPresented: Binding(
@@ -796,10 +791,9 @@ struct ServerSettingsView: View {
             }
             .task {
                 let model = CommunitySettingsModel(serverId: server.id, api: session.api)
-                // Handed on through state rather than built here, so the copy
-                // of the server that is changed is the current one (a rename
-                // made a moment earlier must not be undone by a toggle).
-                model.onSaved = { saved in communityIsPublic = saved.isCommunity }
+                // The parent applies the flag to its own, current copy of the
+                // server, so a rename made a moment earlier is not undone.
+                model.onSaved = { saved in onCommunityChanged(saved.isCommunity) }
                 community = model
                 await model.load(rules: communityRules)
             }

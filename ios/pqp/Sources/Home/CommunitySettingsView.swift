@@ -124,12 +124,13 @@ final class CommunitySettingsModel {
             let classified = CommunitySaveFailure.classify(error)
             failure = classified
             if classified.concernsAddress { addressFieldForced = true }
-            // A refused write leaves the server where it was; read it back so
-            // a lost race shows the truth instead of the switch's own guess.
-            if classified.staleView {
-                if let fresh = try? await api.communitySettings(serverId: serverId) {
-                    settings = fresh
-                }
+            // Read it back after ANY failure, not only a refusal: a timeout
+            // can land after the server committed, and a lost race leaves it
+            // somewhere the switch did not guess. The header follows too.
+            if let fresh = try? await api.communitySettings(serverId: serverId) {
+                settings = fresh
+                if !classified.concernsAddress { addressDraft = fresh.slug ?? "" }
+                onSaved(fresh)
             }
         }
     }

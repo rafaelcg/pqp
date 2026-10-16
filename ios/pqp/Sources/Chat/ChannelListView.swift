@@ -751,6 +751,7 @@ struct ChannelListView: View {
                 server: current,
                 permissions: watchPartyPermissions,
                 onChanged: { current = $0 },
+                onCommunityChanged: { current.isCommunity = $0 },
                 onDeleted: { dismiss() }
             )
         }

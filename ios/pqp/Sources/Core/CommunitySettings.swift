@@ -200,16 +200,6 @@ enum CommunitySaveFailure: Equatable, Sendable {
         }
     }
 
-    /// Whether the refusal means the screen's picture of the room is out of
-    /// date (the owner changed it from another device, a cargo was taken away)
-    /// and should be read again.
-    var staleView: Bool {
-        switch self {
-        case .needsAddress, .forbidden: true
-        default: false
-        }
-    }
-
     /// Whether the address field is what has to change.
     var concernsAddress: Bool {
         self == .slugTaken || self == .slugUnusable

@@ -151,18 +151,15 @@ final class CommunitySettingsTests: XCTestCase {
         )
         XCTAssertEqual(failure, .needsAddress)
         XCTAssertFalse(failure.concernsAddress)
-        XCTAssertTrue(failure.staleView)
     }
 
     func testAForbiddenSaveKeepsTheServersOwnSentence() {
         let sentence = "Only the owner can list this community in the directory"
         XCTAssertEqual(refusal(403, sentence), .forbidden(sentence))
-        XCTAssertTrue(CommunitySaveFailure.forbidden(sentence).staleView)
     }
 
     func testAnythingElseIsShownAsTheServerSaidIt() {
         XCTAssertEqual(refusal(500, "boom"), .other("boom"))
-        XCTAssertFalse(CommunitySaveFailure.other("boom").staleView)
         XCTAssertEqual(
             CommunitySaveFailure.classify(APIError.transport("offline")), .other("offline")
         )
