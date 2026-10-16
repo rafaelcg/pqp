@@ -118,6 +118,18 @@
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
 /index.md
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+# The markdown twins of the blog pages, written by the build
+# (`src/lib/static-pages.ts`): `/blog.md`, `/blog.en.md`, `/blog/<slug>.md`,
+# `.en.md`, `.es.md`. By extension, never `/blog/*`, which is a page.
+/blog.md
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  Content-Type: text/markdown; charset=utf-8
+/blog.*.md
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  Content-Type: text/markdown; charset=utf-8
+/blog/*.md
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  Content-Type: text/markdown; charset=utf-8
 
 # Standalone diagnostic pages (`share-*.html`, served at the extensionless URL
 # too). Pages, not assets: revalidated, like every other page.
