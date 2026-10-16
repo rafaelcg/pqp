@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 // BAÚ VIDEO SUBTITLES on the phone.
 //
@@ -172,6 +173,8 @@ final class BauCaptions {
     /// The reader's choice, nil until they press CC.
     private(set) var stored: Bool?
     @ObservationIgnored private var loading: Set<String> = []
+    @ObservationIgnored private var order: [String] = []
+    private static let cap = 24
     @ObservationIgnored private let defaults: UserDefaults
     private static let key = "pqp.communityHome.captions"
 
@@ -232,6 +235,15 @@ final class BauCaptions {
     }
 
     func seed(postID: String, cues: [BauCaptionCue], sourceLang: String, transcribedMs: Int?) {
+        if entries[postID] == nil {
+            order.append(postID)
+            // Bounded: a long scroll through captioned posts keeps the latest
+            // few, and an evicted one is simply read again when its card returns.
+            while order.count > Self.cap, let oldest = order.first {
+                order.removeFirst()
+                entries.removeValue(forKey: oldest)
+            }
+        }
         entries[postID] = Entry(cues: cues, sourceLang: sourceLang, transcribedMs: transcribedMs)
     }
 }
