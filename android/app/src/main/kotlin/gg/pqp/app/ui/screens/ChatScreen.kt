@@ -1402,7 +1402,7 @@ private fun MessageRow(
                     )
                     Spacer(Modifier.width(Spacing.sm))
                     Text(
-                        text = "${reply.authorName.orEmpty()} ${reply.excerpt}".trim(),
+                        text = "${reply.authorName.orEmpty()} ${gg.pqp.app.core.CustomEmoji.asText(reply.excerpt)}".trim(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

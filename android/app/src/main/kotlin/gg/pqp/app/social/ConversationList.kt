@@ -121,7 +121,8 @@ object ConversationList {
             // A frame for an attachment-only message carries an empty preview
             // and no flags at all. Empty is never a message anybody typed.
             message.preview.isBlank() -> words.attachment
-            else -> message.preview
+            // A custom emoji token reads as the `:name:` it was typed as on a line of plain text.
+            else -> gg.pqp.app.core.CustomEmoji.asText(message.preview)
         }
         if (viewerId != null && message.authorId == viewerId) return words.you(body)
         if (isGroup && message.authorName.isNotBlank()) {

@@ -20,7 +20,7 @@ object ForwardInputs {
     fun messageExcerpt(message: Message): String {
         val text = message.forward?.let { it.title?.takeIf { t -> t.isNotBlank() } ?: it.excerpt }
             ?: message.body
-        return cut(text)
+        return cut(gg.pqp.app.core.CustomEmoji.asText(text))
     }
 
     /**

@@ -37,7 +37,15 @@ data class ChatSpan(
     val code: Boolean = false,
     val link: String? = null,
     val mention: String? = null,
+    /**
+     * A `<:name:id>` token. [text] is `:name:`, which is what is drawn when the renderer has no
+     * picture for the id (another server's emoji, a deleted one, a conversation).
+     */
+    val emoji: CustomEmojiRef? = null,
 )
+
+/** The `name` and `id` of one custom emoji token (`CUSTOM_EMOJI_TOKEN_PATTERN`). */
+data class CustomEmojiRef(val name: String, val id: String)
 
 object ChatMarkdown {
 
@@ -268,6 +276,25 @@ object ChatMarkdown {
                 }
             }
 
+            if (c == '<' && text.startsWith("<:", i)) {
+                // A custom emoji. Outside code only: the backtick branch above has already taken a code run,
+                // and a fenced block never reaches here, so a token typed in code stays the characters typed.
+                val token = gg.pqp.app.core.CustomEmoji.TOKEN_AT.find(text.substring(i))
+                if (token != null) {
+                    flush()
+                    val name = token.groupValues[1]
+                    out += ChatSpan(
+                        ":$name:",
+                        style.bold,
+                        style.italic,
+                        style.strike,
+                        emoji = CustomEmojiRef(name, token.groupValues[2]),
+                    )
+                    i += token.value.length
+                    continue
+                }
+            }
+
             if (c == '@') {
                 val mention = MENTION_AT.find(text.substring(i))
                 if (mention != null) {
@@ -387,7 +414,7 @@ object ChatMarkdown {
         for (span in spans) {
             if (span.text.isEmpty()) continue
             val last = out.lastOrNull()
-            if (last != null && last.copy(text = "") == span.copy(text = "") && !span.code) {
+            if (last != null && last.copy(text = "") == span.copy(text = "") && !span.code && span.emoji == null) {
                 out[out.lastIndex] = last.copy(text = last.text + span.text)
             } else {
                 out += span

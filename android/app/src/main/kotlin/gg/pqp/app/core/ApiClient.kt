@@ -59,6 +59,10 @@ class ApiClient(
     suspend fun servers(): List<ServerSummary> =
         get<ServersResponse>("/api/servers").servers
 
+    /** `GET /api/servers/:id/emoji`: the server's custom emoji, for a message that names one. */
+    suspend fun serverEmoji(serverId: String): ServerEmojiList =
+        get("/api/servers/$serverId/emoji")
+
     /**
      * `idempotencyKey`, when given, rides the `Idempotency-Key` header: a
      * repeat with the same key inside its 24h window answers with the same
