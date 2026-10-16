@@ -24,6 +24,9 @@ struct ChatView: View {
     /// which stands in for the system nav bar's while that bar's fill (and
     /// its back button) is hidden under the film. See `watchTheater`.
     @Environment(\.dismiss) private var dismiss
+    /// The people an `@` may name here (`loadMentionCandidates`).
+    @State private var mentionCandidates: [MentionCandidate] = []
+    @State private var mentionsLoaded = false
     let channelId: String
     let title: String
     /// Set only for a conversation (a channel with no server). Calls are a DM
@@ -250,6 +253,7 @@ struct ChatView: View {
                 sanctionRow
                 errorRow
                 composerContext
+                mentionStrip
                 attachmentStrip
                 slowModeRow
                 voiceNoteNotices
@@ -1195,6 +1199,94 @@ struct ChatView: View {
             }
             .background(Palette.inkDeep)
             .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    // MARK: - @mention autocomplete
+
+    /// The members matching the `@token` at the end of the draft, best first
+    /// (`MentionAutocomplete`, the web's rules). Nothing while no token is being
+    /// typed, and nothing for a forum post's reply (its replies are not mentions
+    /// of the people in a channel).
+    private var mentionSuggestions: [MentionCandidate] {
+        guard forumPost == nil, let active = MentionAutocomplete.findAtEnd(of: model.draft) else { return [] }
+        let me = session.currentUser?.id
+        return MentionAutocomplete.filter(mentionCandidates.filter { $0.id != me }, query: active.query)
+    }
+
+    @ViewBuilder
+    private var mentionStrip: some View {
+        let suggestions = mentionSuggestions
+        // The members are read the first time a `@` is typed, not on every open.
+        Color.clear.frame(height: 0)
+            // Keyed on the draft's length while a token is open, so a members read
+            // that failed is tried again on the next keystroke (`mentionsLoaded`
+            // keeps a read that worked from repeating).
+            .task(id: forumPost == nil && MentionAutocomplete.findAtEnd(of: model.draft) != nil ? model.draft.count : -1) {
+                if forumPost == nil, MentionAutocomplete.findAtEnd(of: model.draft) != nil {
+                    await loadMentionCandidates()
+                }
+            }
+        if !suggestions.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(suggestions) { candidate in
+                        Button {
+                            insertMention(candidate)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Avatar(name: candidate.displayName, seed: candidate.id, size: 24, url: candidate.avatarUrl)
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Text(verbatim: candidate.displayName)
+                                        .font(Typography.callout.weight(.semibold))
+                                        .foregroundStyle(Palette.paper)
+                                        .lineLimit(1)
+                                    if let username = candidate.username {
+                                        Text(verbatim: "@\(username)")
+                                            .font(Typography.caption)
+                                            .foregroundStyle(Palette.paperMuted)
+                                            .lineLimit(1)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .frame(minHeight: 44)
+                            .background(Capsule().fill(Palette.surfaceRaised))
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(Text(verbatim: "@\(candidate.username ?? candidate.displayName)"))
+                        .accessibilityIdentifier("mention.suggestion.\(candidate.username ?? candidate.id)")
+                    }
+                }
+                .padding(.horizontal, Metrics.hPadding)
+                .padding(.vertical, 6)
+            }
+            .background(Palette.surface)
+            .transition(.opacity)
+            .accessibilityIdentifier("mention.strip")
+        }
+    }
+
+    private func insertMention(_ candidate: MentionCandidate) {
+        guard let username = candidate.username, let active = MentionAutocomplete.findAtEnd(of: model.draft) else { return }
+        model.draft = MentionAutocomplete.apply(to: model.draft, active: active, username: username).value
+        model.noteTyping()
+    }
+
+    /// The people a mention may name here, read the first time a `@` is typed: a
+    /// server's members, or the other people in a conversation.
+    private func loadMentionCandidates() async {
+        guard !mentionsLoaded else { return }
+        mentionsLoaded = true
+        if let conversation {
+            mentionCandidates = conversation.participants.map(\.mentionCandidate)
+        } else if let serverId = server?.id ?? flagsServerId,
+                  let members = try? await session.api.members(serverId: serverId) {
+            mentionCandidates = members.map(\.mentionCandidate)
+        } else {
+            // Try again on the next `@`.
+            mentionsLoaded = false
         }
     }
 
