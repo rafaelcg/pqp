@@ -967,7 +967,8 @@ export function ForumPostView({
   );
 
   // The author's "did a reply solve it?" nudge: only on their own open post
-  // once somebody answered, and gone for good once dismissed.
+  // once somebody else answered (`people` counts the author, so 2 or more),
+  // and gone for good once dismissed.
   const [nudgeDismissed, setNudgeDismissed] = useState(() =>
     readSolutionNudgeDismissed(postId),
   );
@@ -976,6 +977,8 @@ export function ForumPostView({
     !post.resolvedAt &&
     !post.lockedAt &&
     post.replyCount > 0 &&
+    people !== null &&
+    people > 1 &&
     !nudgeDismissed;
 
   const statusLabel = post.resolvedAt ? t("forum.status.resolved") : t("forum.status.open");
