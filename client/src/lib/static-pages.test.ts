@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { onRequest } from "../../functions/_middleware";
 import { ARTICLES, articleFaq } from "./blog/articles";
 import { POSTS } from "./blog/posts";
@@ -319,6 +319,31 @@ describe("the middleware", () => {
     for (const page of blogPages()) {
       if (page.kind !== "blog-index") {
         expect(body, page.path).toContain(`href="${page.path}"`);
+      }
+    }
+  });
+
+  it("never lets the optional nav lookup slow or fail a blog page", async () => {
+    // The communities lookup behind the nav's optional links goes to the API.
+    // One that never answers must cost the page at most the short bound, and
+    // one that throws must cost it nothing: the body is written either way.
+    const never = vi.fn(() => new Promise<Response>(() => undefined));
+    const boom = vi.fn(() => Promise.reject(new Error("network")));
+    for (const stub of [never, boom]) {
+      vi.stubGlobal("fetch", stub);
+      try {
+        const c = ctx("/blog/pqp-vs-discord-2026?lang=en");
+        const started = Date.now();
+        const res = await onRequest({
+          ...c,
+          env: { ...c.env, PQP_API_URL: "https://api.example.test" },
+        });
+        const body = await res.text();
+        expect(res.status).toBe(200);
+        expect(body).toContain('<div id="pre-page" lang="en"');
+        expect(Date.now() - started).toBeLessThan(2500);
+      } finally {
+        vi.unstubAllGlobals();
       }
     }
   });

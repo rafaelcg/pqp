@@ -325,6 +325,37 @@ async function marketingChrome(context: PagesContext): Promise<MarketingChrome> 
   };
 }
 
+/** How long a blog page waits for the optional nav and footer links. */
+const BLOG_CHROME_WAIT_MS = 300;
+
+/**
+ * The chrome a blog page's static body is written with, or undefined (the
+ * default: no optional links) when the lookup failed or is still running after
+ * `BLOG_CHROME_WAIT_MS`. Never rejects. A lookup already settled and memoized
+ * costs nothing here; only a cold one is ever cut short, and it keeps running to
+ * fill the cache for the next reader.
+ */
+async function boundedChrome(
+  chrome: Promise<MarketingChrome | undefined> | null,
+): Promise<MarketingChrome | undefined> {
+  if (!chrome) {
+    return undefined;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      chrome,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), BLOG_CHROME_WAIT_MS);
+      }),
+    ]);
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * The build's rendering of a blog page (`prerender/blog/<slug>.<lang>.json`),
  * read through the asset binding, in the language this reader gets: their own
@@ -745,9 +776,13 @@ async function handleRequest(context: PagesContext): Promise<Response> {
 
   // Started beside the page fetch, so it costs nothing once memoized.
   const chrome =
-    (marketing && PRERENDERED_MARKETING_PAGES.includes(marketing)) || blog
+    marketing && PRERENDERED_MARKETING_PAGES.includes(marketing)
       ? marketingChrome(context)
       : null;
+  // The blog's nav and footer links are a nicety for a reader without a script,
+  // never a reason to slow or fail the page: a lookup that rejects is the
+  // default chrome, and `boundedChrome` stops waiting on one that is slow.
+  const blogChrome = blog ? marketingChrome(context).catch(() => undefined) : null;
   const response = await context.next();
   const contentType = response.headers.get("content-type") ?? "";
   if (!response.ok || !contentType.includes("text/html")) {
@@ -799,7 +834,7 @@ async function handleRequest(context: PagesContext): Promise<Response> {
             withHead,
             body.chromeLocale,
             body.html,
-            chrome ? await chrome : undefined,
+            await boundedChrome(blogChrome),
             body.lang,
           )
         : withHead,
