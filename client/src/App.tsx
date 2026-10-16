@@ -681,7 +681,7 @@ import { useStableCallback } from "@/hooks/use-stable-callback";
 import { useChannelLayoutConfig } from "@/hooks/use-channel-layout-config";
 import type { ApplyLayoutResult } from "@/components/layout/channel-list";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
-import { mergeMemberStatuses } from "@/lib/member-roster";
+import { applyMemberStatuses, mergeMemberStatuses } from "@/lib/member-roster";
 import {
   useChannelNotifications,
   useNotifyOfferReady,
@@ -3984,8 +3984,15 @@ function MainAppContent({
       fetchMembers(selectedServerId),
       fetchRoles(selectedServerId).catch(() => ({ roles: [] as ServerRole[] })),
     ])
-      .then(([{ members }, { roles }]) => {
+      .then(([{ members, roster }, { roles }]) => {
         if (!cancelled) {
+          // The poll below asks for statuses only while this token still names
+          // the people in the list.
+          rosterHeldRef.current = {
+            serverId: selectedServerId,
+            token: roster ?? null,
+            count: members.length,
+          };
           setServerMembers(members);
           setRosterServerId(selectedServerId);
           setServerRoles(roles);
@@ -4013,11 +4020,23 @@ function MainAppContent({
   const applyRosterPayload = useCallback((incoming: ServerMember[]) => {
     setServerMembers((prev) => mergeMemberStatuses(prev, incoming));
   }, []);
+  const rosterHeldRef = useRef<{
+    serverId: string;
+    token: string | null;
+    count: number;
+  } | null>(null);
+  const applyRosterStatuses = useCallback(
+    (statuses: Parameters<typeof applyMemberStatuses>[1]) => {
+      setServerMembers((prev) => applyMemberStatuses(prev, statuses));
+    },
+    [],
+  );
   const refreshMemberRoster = useMemberRosterRefresh(
     conversationParticipants ? null : selectedServerId,
     memberRosterNudge,
     applyRosterPayload,
     serverMembers.length,
+    { held: rosterHeldRef, onStatuses: applyRosterStatuses },
   );
 
   /**

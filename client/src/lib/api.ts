@@ -2001,7 +2001,28 @@ export function memberMatchesQuery(
 }
 
 export const fetchMembers = (serverId: string) =>
-  apiFetch<{ members: ServerMember[] }>(`/api/servers/${serverId}/members`);
+  apiFetch<{
+    members: ServerMember[];
+    /**
+     * Who is in the list, as one short token (`fetchMemberStatuses` answers with
+     * the same one). Absent from an API that predates it: no token, no shortcut.
+     */
+    roster?: string;
+  }>(`/api/servers/${serverId}/members`);
+
+/**
+ * The live half of the member list on its own: only the people who are NOT
+ * offline (everybody absent is offline), how many members there are, and the
+ * `roster` token to compare with the one `fetchMembers` returned. A few KB where
+ * the full list of a 6000-member community is 2.4 MB. Throws on an API that does
+ * not have it (404), which callers treat as "read the whole list".
+ */
+export const fetchMemberStatuses = (serverId: string) =>
+  apiFetch<{
+    roster: string;
+    count: number;
+    statuses: Record<string, UserStatus>;
+  }>(`/api/servers/${serverId}/members/status`);
 
 export const updateMemberRole = (
   serverId: string,
