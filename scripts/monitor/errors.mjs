@@ -1,5 +1,20 @@
 /**
- * "Is it throwing?" — the checks that read the actual production logs.
+ * "Is it throwing?", the checks that read production logs from Fly.
+ *
+ * STATE SINCE 2026-09-17 (read this first). The API moved from Fly to the
+ * Vultr box behind Cloudflare, and the Fly apps `pqp-api` and `pqp-worker` now
+ * run ZERO machines. Their `fly logs` buffer is stale, so `api-error-rate` kept
+ * measuring a month-old buffer (issue #695 still shows 2026-09-17 lines) and
+ * could never go green or red for any reason that is true today. That check is
+ * therefore OFF unless `MONITOR_FLY_ROLLBACK=true` (a rollback to Fly, which
+ * brings `fly logs` back to life). Log errors on the box are owned by Grafana
+ * Loki alerts, which see every line and keep 14 days (docs/MONITORING.md,
+ * "Logs in Grafana Cloud"); a GitHub runner has no SSH and no secret that
+ * reaches them.
+ *
+ * What stays on by default is `support-bot-alive`: `pqp-support`, the QG help
+ * bot, still runs as a Fly app, so its machine state and `bot.heartbeat` trail
+ * are still real. It needs `FLY_ORG_TOKEN` and skips without it.
  *
  * WHY THIS GROUP EXISTS
  * ---------------------
@@ -44,6 +59,7 @@
  */
 
 import { judgeHeartbeat } from "./bot-heartbeat.mjs";
+import { flyRollback } from "./net.mjs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -748,12 +764,22 @@ async function checkSupportBot() {
   return last;
 }
 
+/**
+ * Issue keys this group no longer reports (see the header). `run.mjs` closes
+ * any that are still open, so #695 does not sit red against a log buffer
+ * nobody has written to since the cutover.
+ */
+export function retiredErrorKeys() {
+  return flyRollback() ? [] : ["api-error-rate"];
+}
+
 export async function runErrorChecks() {
   // Sequential, like the availability group: two flyctl invocations against
   // the same API, and the monitor's own load should not be part of what it
   // measures.
   const checks = [
-    ["api-error-rate", checkApiErrorRate],
+    // Rollback to Fly only; on Vultr the API's logs are Loki's to watch.
+    ...(flyRollback() ? [["api-error-rate", checkApiErrorRate]] : []),
     ["support-bot-alive", checkSupportBot],
   ];
   const results = [];
@@ -776,10 +802,10 @@ export async function runErrorChecks() {
  */
 export const ERRORS_NOT_AUTOMATED = [
   {
-    what: "Anything older than ~100 log lines",
-    limit: "`fly logs --no-tail` buffer",
-    why: "Fly's free log retention is the buffer and nothing else. An error burst that ended before this ran is gone, so a spike between two runs can be missed entirely. A real fix is log shipping to somewhere with retention, which is a paid product and a separate decision.",
-    cadence: "accept it, or pay for retention",
+    what: "Error rate in the API and worker logs (Vultr box)",
+    limit: "Grafana Loki alerts, not this workflow",
+    why: "The box has no SSH key or token a GitHub runner can use, and /ready and /status.json carry no error counters. The pqp-api-logs rules (error lines, Connection terminated, no ws.connect) read every line in Loki. GET /api/admin/metrics would carry counters, but its token is not a repo secret (it lives on the pqp-admin Worker). Add ADMIN_METRICS_TOKEN as a repo secret to bring a counter check here.",
+    cadence: "Grafana owns it; confirm the rules are routed after any Alloy or Loki change",
   },
   {
     what: "pqp-ambient error rate and liveness",
@@ -790,7 +816,7 @@ export const ERRORS_NOT_AUTOMATED = [
   {
     what: "Errors the server never logs",
     limit: "n/a",
-    why: "This reads stdout. A route that returns 500 without a `console.error`, or a client-side failure, is invisible to it. It measures what the server says about itself, which is not the same as what users experience.",
+    why: "Support-bot liveness reads the bot's own stdout. A route that returns 500 without a `console.error`, or a client-side failure, is invisible to log-based checks anywhere, Loki included. Faro (frontend) covers the browser half.",
     cadence: "n/a",
   },
 ];

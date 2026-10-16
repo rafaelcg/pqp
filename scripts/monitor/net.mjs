@@ -212,6 +212,19 @@ export function tlsCertificate(servername, { port = 443, timeoutMs = 10_000 } = 
   });
 }
 
+/**
+ * `MONITOR_FLY_ROLLBACK=true` brings back the three checks that only mean
+ * something while the API runs on Fly: `fly-machines`, `worker-image-drift`
+ * and `api-error-rate` (the `fly logs` reader). Production moved to the Vultr
+ * box on 2026-09-17 and the Fly apps sit at zero machines as a rollback, so
+ * the default is off: those checks read dead apps and reported green. Set it
+ * as a repository variable only for the duration of a rollback to Fly
+ * (docs/MONITORING.md, "Rolling back to Fly").
+ */
+export function flyRollback() {
+  return process.env.MONITOR_FLY_ROLLBACK === "true";
+}
+
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 function encodeMaskedTextFrame(text) {
@@ -400,9 +413,10 @@ export function whois(query, { host, port = 43, timeoutMs = 15_000 } = {}) {
  *
  * THIS IS THE ANTI-FALSE-ALARM MECHANISM, and it is the reason these checks
  * can be trusted enough not to be muted. A single failed request is not an
- * outage: `fly.toml` uses a rolling deploy with `max_unavailable = 1` on a
- * single machine, so every legitimate release produces a few seconds where
- * this exact probe fails. Spreading three attempts across ~40s means a deploy,
+ * outage: every legitimate release rolls the API replicas one at a time
+ * (`pqp-deploy` on the Vultr box), and the Cloudflare edge answers a 502/520
+ * for the moments a replica is restarting, so this exact probe fails for a few
+ * seconds on a release. Spreading three attempts across ~40s means a deploy,
  * a GC pause or one dropped packet cannot open an issue, while a genuine
  * outage still fails all three.
  *
