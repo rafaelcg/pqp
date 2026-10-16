@@ -420,6 +420,15 @@ export function VsDiscordPage() {
                 {t("vsDiscord.closing.tela.link")}
               </Link>
             </p>
+            <p className="mx-auto mt-3 max-w-2xl text-pretty text-sm text-paper-muted">
+              {t("vsDiscord.closing.compare.lead")}{" "}
+              <Link
+                to="/compare"
+                className="underline decoration-paper-muted/40 underline-offset-4 transition-colors duration-150 hover:text-paper hover:decoration-paper/60"
+              >
+                {t("vsDiscord.closing.compare.link")}
+              </Link>
+            </p>
           </section>
         </div>
       </main>

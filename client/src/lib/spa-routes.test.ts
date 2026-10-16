@@ -48,6 +48,10 @@ describe("isUnknownSpaPath", () => {
     for (const path of [
       "/",
       "/vem",
+      "/compare",
+      "/compare/stoat",
+      "/compare/teamspeak",
+      "/compare/slack",
       "/watch-party",
       "/streamers",
       "/criadores",

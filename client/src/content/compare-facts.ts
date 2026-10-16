@@ -100,7 +100,8 @@ const TS_BETA_POST =
   "https://community.teamspeak.com/t/teamspeak-6-0-0-beta1-screen-camera-sharing-communities-design-overhaul/54925";
 const TS_ALTERNATIVETO =
   "https://alternativeto.net/news/2026/8/teamspeak-6-will-finally-introduce-direct-calls-4k-screen-sharing-and-picture-in-picture/";
-const DISCORD_NITRO = "https://discord.com/nitro";
+const SLACK_HUDDLES = "https://slack.com/help/articles/216771908";
+const DISCORD_NITRO ="https://discord.com/nitro";
 const DISCORD_TERMS = "https://discord.com/terms";
 const DISCORD_WIKI = "https://en.wikipedia.org/wiki/Discord";
 
@@ -575,6 +576,116 @@ export const FACTS: readonly Fact[] = [
       es: "No verificado.",
     },
     sources: [TS_SITE],
+    checked: C,
+  },
+
+  // -------------------------------------------------------- Slack huddles
+  {
+    product: "slack",
+    feature: "price",
+    status: "partial",
+    value: {
+      "pt-BR": "No plano grátis, um huddle tem no máximo duas pessoas; nos planos pagos, até 50.",
+      en: "On the free plan a huddle holds at most two people; paid plans allow up to 50.",
+      es: "En el plan gratis un huddle admite como máximo dos personas; los planes de pago, hasta 50.",
+    },
+    sources: [SLACK_HUDDLES],
+    checked: C,
+  },
+  {
+    product: "slack",
+    feature: "openSource",
+    status: "unknown",
+    value: {
+      "pt-BR": "Não verificado: as páginas que lemos não falam de licença do software.",
+      en: "Not verified: the pages we read do not mention a software licence.",
+      es: "No verificado: las páginas que leímos no mencionan una licencia del software.",
+    },
+    sources: ["https://slack.com/terms-of-service/user"],
+    checked: C,
+  },
+  {
+    product: "slack",
+    feature: "selfHost",
+    status: "unknown",
+    value: {
+      "pt-BR": "Não verificado: as páginas que lemos não falam de auto-hospedagem.",
+      en: "Not verified: the pages we read do not mention self-hosting.",
+      es: "No verificado: las páginas que leímos no mencionan el autoalojamiento.",
+    },
+    sources: ["https://slack.com/terms-of-service/user"],
+    checked: C,
+  },
+  {
+    product: "slack",
+    feature: "screenShare",
+    status: "yes",
+    value: {
+      "pt-BR": "Sim: até duas pessoas compartilham a tela ao mesmo tempo num huddle.",
+      en: "Yes: up to two people can share their screen at a time in a huddle.",
+      es: "Sí: hasta dos personas pueden compartir pantalla a la vez en un huddle.",
+    },
+    sources: [SLACK_HUDDLES],
+    checked: C,
+  },
+  {
+    product: "slack",
+    feature: "screenAudio",
+    status: "partial",
+    value: {
+      "pt-BR": "No desktop, ao começar a compartilhar dá pra escolher levar o áudio do sistema.",
+      en: "On desktop, when you start sharing you can choose to share system audio.",
+      es: "En el escritorio, al empezar a compartir puedes elegir llevar el audio del sistema.",
+    },
+    sources: [SLACK_HUDDLES],
+    checked: C,
+  },
+  {
+    product: "slack",
+    feature: "watchParty",
+    status: "unknown",
+    value: {
+      "pt-BR": "Não encontramos um watch party nos huddles; não verificado.",
+      en: "We found no watch party in huddles; not verified.",
+      es: "No encontramos una watch party en los huddles; no verificado.",
+    },
+    sources: [SLACK_HUDDLES],
+    checked: C,
+  },
+  {
+    product: "slack",
+    feature: "layoutImport",
+    status: "unknown",
+    value: {
+      "pt-BR": "Não verificado.",
+      en: "Not verified.",
+      es: "No verificado.",
+    },
+    sources: [SLACK_HUDDLES],
+    checked: C,
+  },
+  {
+    product: "slack",
+    feature: "apps",
+    status: "unknown",
+    value: {
+      "pt-BR": "Não verificado: a página dos huddles fala de desktop para Mac e Windows, e não lista as outras plataformas.",
+      en: "Not verified: the huddles page mentions the Mac and Windows desktop apps and does not list the other platforms.",
+      es: "No verificado: la página de los huddles menciona las apps de escritorio para Mac y Windows y no lista las otras plataformas.",
+    },
+    sources: [SLACK_HUDDLES],
+    checked: C,
+  },
+  {
+    product: "slack",
+    feature: "ecosystem",
+    status: "unknown",
+    value: {
+      "pt-BR": "Não verificado.",
+      en: "Not verified.",
+      es: "No verificado.",
+    },
+    sources: [SLACK_HUDDLES],
     checked: C,
   },
 ];
