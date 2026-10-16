@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import ImageIO
 import UIKit
 
 // CUSTOM SERVER EMOJI in a message body.
@@ -78,9 +79,31 @@ enum CustomEmoji {
     static let points: CGFloat = 22
 }
 
+/// How many emoji downloads run at once, across every message on screen. A
+/// burst of distinct ids (a long scroll, a message made of emoji) waits its
+/// turn instead of opening a connection each.
+private actor EmojiFetchGate {
+    private var available = 4
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if available > 0 {
+            available -= 1
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty { available += 1 } else { waiters.removeFirst().resume() }
+    }
+}
+
 /// The pictures fetched so far. One per id for the life of the process (an
-/// emoji's bytes never change under an id), capped, and a failure is remembered
-/// so a deleted emoji is not asked for again on every redraw.
+/// emoji's bytes never change under an id), capped. Only a CONFIRMED bad one
+/// (gone, not a picture, absurdly large) is remembered for good, so a deleted
+/// emoji is not asked for again on every redraw; a cancelled or failed request
+/// is retried, after a pause, the next time the message is drawn.
 @MainActor
 @Observable
 final class EmojiImages {
@@ -89,51 +112,101 @@ final class EmojiImages {
     private(set) var images: [String: UIImage] = [:]
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var failed: Set<String> = []
+    @ObservationIgnored private var retryAt: [String: Date] = [:]
     @ObservationIgnored private var order: [String] = []
     private static let cap = 256
+    private static let retryDelay: TimeInterval = 20
+    /// An emoji is a small picture; anything past this is not one.
+    private nonisolated static let maxBytes = 512 * 1024
+    private static let gate = EmojiFetchGate()
+
+    enum Outcome: Sendable {
+        case image(UIImage)
+        /// The server said no, or it is not a usable picture: never again.
+        case rejected
+        /// The network, a timeout, or a cancelled view: ask again later.
+        case transient
+    }
 
     func image(for id: String) -> UIImage? { images[id] }
 
     /// Starts the fetch for each id that is not here, in flight or known bad.
     func load(_ ids: [String]) async {
-        let wanted = Set(ids).filter { images[$0] == nil && !inFlight.contains($0) && !failed.contains($0) }
+        let now = Date()
+        let wanted = Set(ids).filter {
+            images[$0] == nil && !inFlight.contains($0) && !failed.contains($0)
+                && (retryAt[$0].map { $0 <= now } ?? true)
+        }
         guard !wanted.isEmpty else { return }
         inFlight.formUnion(wanted)
-        await withTaskGroup(of: (String, UIImage?).self) { group in
+        await withTaskGroup(of: (String, Outcome).self) { group in
             for id in wanted {
-                group.addTask { (id, await Self.fetch(id)) }
+                group.addTask {
+                    await Self.gate.acquire()
+                    let outcome = await Self.fetch(id)
+                    await Self.gate.release()
+                    return (id, outcome)
+                }
             }
-            for await (id, image) in group {
+            for await (id, outcome) in group {
                 inFlight.remove(id)
-                if let image {
+                switch outcome {
+                case .image(let image):
+                    retryAt.removeValue(forKey: id)
                     images[id] = image
                     order.append(id)
                     if order.count > Self.cap, let oldest = order.first {
                         order.removeFirst()
                         images.removeValue(forKey: oldest)
                     }
-                } else {
+                case .rejected:
                     failed.insert(id)
+                case .transient:
+                    retryAt[id] = Date().addingTimeInterval(Self.retryDelay)
                 }
             }
         }
     }
 
-    private nonisolated static func fetch(_ id: String) async -> UIImage? {
-        guard let url = CustomEmoji.imageURL(id: id) else { return nil }
+    private nonisolated static func fetch(_ id: String) async -> Outcome {
+        guard let url = CustomEmoji.imageURL(id: id) else { return .rejected }
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let source = UIImage(data: data)
-        else { return nil }
+        var data = Data()
+        do {
+            let (bytes, response) = try await URLSession.shared.bytes(for: request)
+            guard let http = response as? HTTPURLResponse else { return .transient }
+            // A gone or forbidden emoji will not come back; a server error might.
+            guard http.statusCode == 200 else { return (400..<500).contains(http.statusCode) ? .rejected : .transient }
+            if http.expectedContentLength > Int64(maxBytes) { return .rejected }
+            for try await byte in bytes {
+                data.append(byte)
+                if data.count > maxBytes { return .rejected }
+            }
+        } catch {
+            return .transient
+        }
+        if Task.isCancelled { return .transient }
+        // Decoded straight to the size it is drawn at, so a picture with absurd
+        // dimensions never becomes a full-size bitmap.
+        let side = CustomEmoji.points
+        let scale = await MainActor.run { UIScreen.main.scale }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(side * scale * 2),
+        ]
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        else { return .rejected }
         // Drawn once at the size it is shown, at the screen's scale: a 128 px
         // picture inside a line of text would otherwise be laid out at its own
         // pixel size.
-        let side = CustomEmoji.points
         let format = UIGraphicsImageRendererFormat.default()
-        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
-            source.draw(in: CGRect(x: 0, y: 0, width: side, height: side))
+        let drawn = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
+            UIImage(cgImage: thumbnail).draw(in: CGRect(x: 0, y: 0, width: side, height: side))
         }.withRenderingMode(.alwaysOriginal)
+        return .image(drawn)
     }
 }
