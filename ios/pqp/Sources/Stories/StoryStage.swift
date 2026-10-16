@@ -62,6 +62,8 @@ enum StoryStage {
     /// taller than the 13% the safe area keeps, so `footerTop` (its measured
     /// top edge) pulls the bottom up and the words shrink into what is left
     /// instead of printing over the header, the pill and the field.
+    static let minHeight: CGFloat = 24
+
     static func legacyTextBox(canvas: CGRect, headerBottom: CGFloat? = nil, footerTop: CGFloat?, gap: CGFloat = 12) -> CGRect {
         let left = canvas.minX + canvas.width * safeAreaX
         let right = canvas.maxX - canvas.width * safeAreaX
@@ -69,8 +71,10 @@ enum StoryStage {
         if let headerBottom, headerBottom + gap > top { top = headerBottom + gap }
         var bottom = canvas.maxY - canvas.height * safeAreaBottom
         if let footerTop, footerTop - gap < bottom { bottom = footerTop - gap }
-        // Never collapse: a keyboard on a short phone still leaves a line.
-        bottom = max(bottom, top + 60)
+        // Never collapse to nothing, and never reach past the footer: on a
+        // short phone with the keyboard up the box keeps a line's height and
+        // grows UP into the header's band rather than down over the field.
+        if bottom - top < minHeight { top = bottom - minHeight }
         return CGRect(x: left, y: top, width: right - left, height: bottom - top)
     }
 }

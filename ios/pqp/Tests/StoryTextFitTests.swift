@@ -37,7 +37,9 @@ final class StoryTextFitTests: XCTestCase {
 
     func testAFooterHigherThanTheTopStillLeavesALine() {
         let box = StoryStage.legacyTextBox(canvas: canvas, footerTop: 100)
-        XCTAssertEqual(box.height, 60, accuracy: 0.01)
+        XCTAssertEqual(box.height, StoryStage.minHeight, accuracy: 0.01)
+        // Never reaches past the footer: it grows up, not down.
+        XCTAssertLessThanOrEqual(box.maxY, 100 - 12 + 0.01)
     }
 
     func testAShortLineKeepsTheOldSize() {
