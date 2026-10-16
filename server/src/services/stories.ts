@@ -460,6 +460,8 @@ type StoredObjectLayer = {
   rotation: number;
   /** Image layers only. */
   shape?: "rect" | "rounded" | "circle";
+  /** Image layers only: the author's description of the photo. Absent on a story posted without one. */
+  alt?: string;
   mediaKey: string;
   contentType: StoryContentType;
   byteSize: number;
@@ -1042,6 +1044,7 @@ async function resolveLayers(
             scale: layer.scale,
             rotation: layer.rotation,
             shape: layer.shape ?? "rect",
+            alt: layer.alt ?? null,
             url: presignGet(layer.mediaKey, { ttlSeconds }),
             width: layer.width,
             height: layer.height,
@@ -1500,6 +1503,11 @@ function layerWords(
   return (Number.isFinite(limit) ? [...all].slice(0, limit).join("") : all).trim();
 }
 
+/** What the author wrote to describe their placed photos, one per line: a viewer hears it, so AutoMod reads it. */
+function layerAlts(layers: ReadonlyArray<{ type: string; alt?: string }>): string {
+  return layers.flatMap((layer) => (layer.type === "image" && layer.alt ? [layer.alt] : [])).join("\n");
+}
+
 /**
  * Everybody a mention layer names must be able to see this story: a member of
  * one of the servers it goes to, or an accepted friend of the author when it
@@ -1550,7 +1558,7 @@ async function assertSticker(userId: string, sticker: StorySticker | undefined):
  * server. A staff member exempt from AutoMod in chat is exempt here too.
  */
 async function assertAutomod(userId: string, input: CreateStoryParsed): Promise<void> {
-  const body = [input.text, input.caption, layerWords(input.layers, Infinity), input.altText]
+  const body = [input.text, input.caption, layerWords(input.layers, Infinity), layerAlts(input.layers), input.altText]
     .filter(Boolean)
     .join("\n");
   if (!body) {

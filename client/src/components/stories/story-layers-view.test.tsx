@@ -212,6 +212,13 @@ describe("StoryContent layers", () => {
     expect(render({ layers: [text] }, { withLayers: false })).not.toContain("bora de cs?");
   });
 
+  it("names a placed photo by what the author wrote, and leaves a photo without one decorative", () => {
+    const photo: DisplayLayer = { ...geometry, id: "i2", type: "image", src: "https://example.test/x.png", width: 100, height: 100, shape: "rect" };
+    expect(render({ layers: [{ ...photo, alt: "um gato dormindo" }] })).toContain('alt="um gato dormindo"');
+    expect(render({ layers: [{ ...photo, alt: null }] })).toContain('alt=""');
+    expect(render({ layers: [photo] })).toContain('alt=""');
+  });
+
   it("does not let a photo or drawing layer catch the pointer, so taps still go to the story", () => {
     const image: DisplayLayer = { ...geometry, id: "i1", type: "image", src: "https://example.test/x.png", width: 100, height: 100, shape: "circle" };
     const html = render({ layers: [image] });
@@ -290,7 +297,8 @@ describe("displayLayerFrom", () => {
       url: "https://example.test/i.png",
       width: 10,
       height: 20,
+      alt: "um gato",
     };
-    expect(displayLayerFrom(image)).toMatchObject({ type: "image", src: "https://example.test/i.png", shape: "rounded" });
+    expect(displayLayerFrom(image)).toMatchObject({ type: "image", src: "https://example.test/i.png", shape: "rounded", alt: "um gato" });
   });
 });

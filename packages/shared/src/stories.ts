@@ -85,6 +85,8 @@ export const STORY_REPLY_MAX = 2000;
 export const STORY_REMOVE_REASON_MAX = 200;
 /** The spoken version of a story, for screen readers. Clients fill it from the text layers. */
 export const STORY_ALT_TEXT_MAX = 500;
+/** What the author wrote to describe one placed photo (`alt` on an image layer), or the base picture. */
+export const STORY_LAYER_ALT_MAX = 200;
 
 // ------------------------------------------------------------------ layers
 
@@ -491,6 +493,7 @@ const layerGeometry = {
 };
 
 const layerText = z.string().trim().min(1).max(STORY_TEXT_MAX).pipe(safeTextSchema);
+const layerAlt = z.string().trim().min(1).max(STORY_LAYER_ALT_MAX).pipe(safeTextSchema);
 
 const textLayerFields = {
   ...layerGeometry,
@@ -554,6 +557,8 @@ const imageLayerInputFields = {
   ...layerGeometry,
   type: z.literal("image"),
   shape: z.enum(STORY_LAYER_IMAGE_SHAPES).default("rect"),
+  /** The author's own description of the photo, for screen readers. Optional; absent means none was written. */
+  alt: layerAlt.optional(),
   upload: storyLayerUploadInputSchema,
 };
 
@@ -599,6 +604,8 @@ export const storyLayerSchema = z.discriminatedUnion("type", [
     ...layerGeometry,
     type: z.literal("image"),
     shape: z.enum(STORY_LAYER_IMAGE_SHAPES).default("rect"),
+    /** The author's description of the photo. Null when none was written, and for stories from before it. */
+    alt: z.string().nullable().default(null),
     url: z.string(),
     ...imageDims,
   }),

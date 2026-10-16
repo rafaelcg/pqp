@@ -7,6 +7,7 @@ import {
   STORY_BACKGROUNDS,
   STORY_BACKGROUND_FAMILIES,
   STORY_CARD_BACKGROUNDS,
+  STORY_LAYER_ALT_MAX,
   STORY_LAYERS_MAX,
   STORY_LAYER_IMAGES_MAX,
   STORY_LAYER_MAX_BYTES,
@@ -466,6 +467,17 @@ describe("story layers on create (strict)", () => {
     ).toBe(true);
   });
 
+  it("takes an optional description on a placed photo, trimmed and bounded", () => {
+    const photoLayer = { ...geometry(), type: "image", upload: { ...upload, contentType: "image/jpeg" } };
+    expect(storyLayerInputSchema.parse(photoLayer)).not.toHaveProperty("alt");
+    expect(storyLayerInputSchema.parse({ ...photoLayer, alt: "  um gato  " })).toMatchObject({ alt: "um gato" });
+    expect(storyLayerInputSchema.safeParse({ ...photoLayer, alt: "x".repeat(STORY_LAYER_ALT_MAX) }).success).toBe(true);
+    expect(storyLayerInputSchema.safeParse({ ...photoLayer, alt: "x".repeat(STORY_LAYER_ALT_MAX + 1) }).success).toBe(false);
+    expect(storyLayerInputSchema.safeParse({ ...photoLayer, alt: "   " }).success).toBe(false);
+    // A drawing and a text layer have no description: the field is not theirs.
+    expect(storyLayerInputSchema.parse({ ...geometry(), type: "text", text: "oi", alt: "x" })).not.toHaveProperty("alt");
+  });
+
   it("limits what an image or a drawing may be, and mentions each person once", () => {
     const jpeg = { ...upload, contentType: "image/jpeg" };
     expect(storyLayerInputSchema.safeParse({ ...geometry(), type: "image", upload: jpeg }).success).toBe(true);
@@ -521,6 +533,15 @@ describe("story layers on read (lenient)", () => {
     },
     own: null,
   };
+
+  it("reads a placed photo's description, null for a story from before it", () => {
+    const photoLayer = { ...geometry(), type: "image", url: "https://x/y.jpg", width: 10, height: 10 };
+    const parsed = storySchema.parse({
+      ...story,
+      layers: [photoLayer, { ...photoLayer, id: nextId(1), alt: "um gato" }],
+    });
+    expect(parsed.layers.map((layer) => (layer.type === "image" ? layer.alt : "x"))).toEqual([null, "um gato"]);
+  });
 
   it("keeps what it understands, in order, and drops the rest", () => {
     const parsed = storySchema.parse({

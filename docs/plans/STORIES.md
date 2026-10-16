@@ -1142,6 +1142,17 @@ stop, for a gradient). The CSS source of truth is the `--story-bg-*` tokens and
 new keys adds them to its own table (solid is one flat colour, gradient is a
 160 degree two-stop linear gradient, stops in the CSS) and offers them in its picker.
 
+**Manual descriptions (web, 2026-10-15).** The author may describe the base
+photo or video and each placed photo. A placed photo carries `alt` (at most
+`STORY_LAYER_ALT_MAX`, 200; optional on write, `null` on read when none was
+written). The base's description has no field of its own: the composer writes it
+FIRST in `altText`, then the placed photos' descriptions, then the text layers,
+the people and the caption, so a build that only reads `altText` already speaks
+it. AutoMod reads every `alt` like a caption. The viewer names a placed photo
+with its `alt`, and the base picture and the canvas group with `altText`. A phone
+that wants to author one writes the same two things; reading `alt` on an image
+layer is all it needs to speak it (an unknown key is ignored until then).
+
 ### 17.2 One schema, read leniently and written strictly
 
 `createStorySchema` is strict. A bad layer (unknown `type`, a number out of

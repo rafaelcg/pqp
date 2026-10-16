@@ -67,7 +67,7 @@ interface Live extends Transform {
 function toDisplay(layer: EditorLayer): DisplayLayer {
   switch (layer.type) {
     case "image":
-      return { id: layer.id, type: "image", x: layer.x, y: layer.y, scale: layer.scale, rotation: layer.rotation, src: layer.previewUrl, width: layer.width, height: layer.height, shape: layer.shape };
+      return { id: layer.id, type: "image", x: layer.x, y: layer.y, scale: layer.scale, rotation: layer.rotation, src: layer.previewUrl, width: layer.width, height: layer.height, shape: layer.shape, alt: layer.alt };
     case "drawing":
       return { id: layer.id, type: "drawing", x: layer.x, y: layer.y, scale: layer.scale, rotation: layer.rotation, strokes: layer.strokes };
     default:
