@@ -795,6 +795,29 @@ private fun DescriptionDialog(initial: String, onDone: (String) -> Unit, onDismi
     )
 }
 
+/** The colour's own name, for TalkBack: "Glow, Lime", not "Glow, background 1". Null for a key this build does not know. */
+internal fun backgroundColorNameRes(key: String): Int? = when (key) {
+    "lime" -> R.string.stories_bg_lime
+    "night" -> R.string.stories_bg_night
+    "ember" -> R.string.stories_bg_ember
+    "grape" -> R.string.stories_bg_grape
+    "sand" -> R.string.stories_bg_sand
+    "ink" -> R.string.stories_bg_ink
+    "cobalt" -> R.string.stories_bg_cobalt
+    "crimson" -> R.string.stories_bg_crimson
+    "pine" -> R.string.stories_bg_pine
+    "plum" -> R.string.stories_bg_plum
+    "teal" -> R.string.stories_bg_teal
+    "onyx" -> R.string.stories_bg_onyx
+    "sunset" -> R.string.stories_bg_sunset
+    "ocean" -> R.string.stories_bg_ocean
+    "aurora" -> R.string.stories_bg_aurora
+    "dusk" -> R.string.stories_bg_dusk
+    "berry" -> R.string.stories_bg_berry
+    "lagoon" -> R.string.stories_bg_lagoon
+    else -> null
+}
+
 @Composable
 private fun backgroundFamilyName(family: String): String = stringResource(
     when (family) {
@@ -840,7 +863,8 @@ internal fun BackgroundSwatches(selected: String, onPick: (String) -> Unit) {
             modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.sm),
         ) {
             StoriesRules.backgroundsOf(family).forEachIndexed { position, key ->
-                val label = stringResource(R.string.stories_compose_background_in_family, familyName(family), position + 1)
+                val colourName = backgroundColorNameRes(key)?.let { stringResource(it) } ?: (position + 1).toString()
+                val label = stringResource(R.string.stories_compose_background_in_family, familyName(family), colourName)
                 Box(
                     Modifier
                         .semantics {
