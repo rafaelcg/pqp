@@ -178,6 +178,9 @@ fun YouScreen(
                 modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
             )
 
+            // The two transcription switches, only where transcription exists.
+            gg.pqp.app.voicenotes.ui.VoiceNotesSettings(session)
+
             // Voice. One row for now: the check that tells "fica conectando"
             // apart from a refused session, a blocked socket and a network
             // with no path to the relay. It lives here because voice is what

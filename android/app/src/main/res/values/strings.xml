@@ -728,6 +728,21 @@
     <string name="voice_note_unheard">Not heard yet</string>
     <string name="voice_note_heard">Heard</string>
     <string name="voice_note_heard_at">Heard at %1$s</string>
+    <string name="voice_note_transcript_pending">Transcribing…</string>
+    <string name="voice_note_transcript_no_speech">No speech in this message</string>
+    <string name="voice_note_transcript_failed">Could not transcribe this message</string>
+    <string name="voice_note_transcript_request">Transcribe</string>
+    <string name="voice_note_transcript_slow">Slow down, try again in a moment</string>
+    <string name="voice_note_transcript_request_failed">That did not work. Try again.</string>
+    <string name="voice_note_transcript_more">show more</string>
+    <string name="voice_note_transcript_less">show less</string>
+    <string name="voice_notes_settings_title">Voice messages</string>
+    <string name="voice_notes_settings_description">The text shows up under the audio, for people who would rather read.</string>
+    <string name="voice_notes_transcribe_mine">Transcribe my voice messages</string>
+    <string name="voice_notes_transcribe_mine_hint">Anyone who can hear them can read the text. The audio goes through a transcription service. It applies to the next messages you send; the ones already sent stay as they are.</string>
+    <string name="voice_notes_show_transcripts">Show transcripts</string>
+    <string name="voice_notes_show_transcripts_hint">Shows the text under the voice messages you receive. Off, you see no transcripts at all.</string>
+    <string name="voice_notes_settings_failed">Could not save that, try again</string>
 
     <!-- Channel list: live rows, voice occupants, Baú preview -->
     <string name="channels_section_text">Text</string>

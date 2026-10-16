@@ -721,6 +721,21 @@
     <string name="voice_note_unheard">Ainda não ouvido</string>
     <string name="voice_note_heard">Ouviu</string>
     <string name="voice_note_heard_at">Ouviu às %1$s</string>
+    <string name="voice_note_transcript_pending">Transcrevendo…</string>
+    <string name="voice_note_transcript_no_speech">Não tem fala nesse áudio</string>
+    <string name="voice_note_transcript_failed">Não deu pra transcrever esse áudio</string>
+    <string name="voice_note_transcript_request">Transcrever</string>
+    <string name="voice_note_transcript_slow">Calma, tenta de novo daqui a pouco</string>
+    <string name="voice_note_transcript_request_failed">Não deu certo. Tenta de novo.</string>
+    <string name="voice_note_transcript_more">ver mais</string>
+    <string name="voice_note_transcript_less">ver menos</string>
+    <string name="voice_notes_settings_title">Mensagens de voz</string>
+    <string name="voice_notes_settings_description">O texto aparece embaixo do áudio, pra quem prefere ler.</string>
+    <string name="voice_notes_transcribe_mine">Transcrever meus áudios</string>
+    <string name="voice_notes_transcribe_mine_hint">Quem pode ouvir também lê o texto. O áudio passa por um serviço de transcrição. Vale pros próximos áudios que tu mandar; os que já foram ficam como estão.</string>
+    <string name="voice_notes_show_transcripts">Mostrar transcrições</string>
+    <string name="voice_notes_show_transcripts_hint">Mostra o texto embaixo dos áudios que tu recebe. Desligado, tu não vê nenhuma transcrição.</string>
+    <string name="voice_notes_settings_failed">Não deu pra salvar, tenta de novo</string>
 
     <!-- Lista de canais: linhas vivas, quem tá na call, prévia do Baú -->
     <string name="channels_section_text">Texto</string>

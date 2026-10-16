@@ -316,6 +316,17 @@ class SessionStore(
     }
 
     /**
+     * Voice note transcription's two switches, reflected into the session the moment they are chosen,
+     * so every screen reads one value. The write itself is `VoiceTranscriptionPreference`'s.
+     */
+    fun applyVoiceTranscription(prefs: VoiceTranscriptionPrefs) {
+        val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
+        _phase.value = SessionPhase.Ready(
+            current.copy(preferences = (current.preferences ?: MePreferences()).copy(voiceTranscription = prefs)),
+        )
+    }
+
+    /**
      * Close the wizard for good, on every device, and open [landing] behind it.
      *
      * The phase moves first and the write is not awaited: a failed write costs

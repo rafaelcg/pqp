@@ -75,7 +75,23 @@ data class MePreferences(
     val allowNudges: Boolean? = null,
     /** The manual status (`manualStatusSchema`); absent reads as online (see [OwnStatus]). */
     val status: String? = null,
+    /** Voice note transcription, both halves on unless turned off (see [VoiceTranscriptionPrefs]). */
+    val voiceTranscription: VoiceTranscriptionPrefs? = null,
 )
+
+/**
+ * `userPreferencesSchema.voiceTranscription`: `mine` (my notes may be transcribed, copied onto each
+ * note when it is sent) and `show` (I read transcripts). Absent reads as true, and the preference is
+ * replaced as a whole on write, so every write sends both halves.
+ */
+@Serializable
+data class VoiceTranscriptionPrefs(
+    val mine: Boolean? = null,
+    val show: Boolean? = null,
+) {
+    val mineOn: Boolean get() = mine != false
+    val showOn: Boolean get() = show != false
+}
 
 /** `notificationPreferencesSchema`, the one key this client reads. */
 @Serializable
@@ -286,6 +302,11 @@ data class VoiceNote(
     val waveform: String = "",
     val listenedByMe: Boolean = false,
     val listenedBy: List<JsonElement>? = null,
+    /**
+     * Absent when the `voice_note_transcription` flag is off where the note lives, or its sender did
+     * not allow one: no block, no transcript line. See [NoteTranscript].
+     */
+    val transcript: NoteTranscript? = null,
 ) {
     /** Who has heard it, as far as the server was willing to say. */
     val listeners: List<NoteListener>
@@ -304,6 +325,19 @@ data class VoiceNote(
             }
         }
 }
+
+/**
+ * A note's transcript as it travels (`voiceNoteTranscriptSchema`): on the `voice` block, on the
+ * `voice-note-transcript` frame and as the answer to `POST /api/attachments/:id/transcript`.
+ * `text` is set only when [status] is `done`. [status] is a string rather than an enum so a value a
+ * newer server adds decodes (and reads as "nothing to draw") instead of failing the whole message.
+ */
+@Serializable
+data class NoteTranscript(
+    val status: String = "none",
+    val text: String? = null,
+    val language: String? = null,
+)
 
 /** One person who played a note, and when if the server said. */
 data class NoteListener(val userId: String, val listenedAt: String?)

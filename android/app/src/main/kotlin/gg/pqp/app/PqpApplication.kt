@@ -113,6 +113,13 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
     lateinit var serverEmoji: gg.pqp.app.core.ServerEmojiStore
         private set
 
+    /**
+     * Application-scoped for the same reason [voiceNotes] is: a `voice-note-transcript` frame for a
+     * note whose screen is gone still has to land, and a request outlives the card that made it.
+     */
+    lateinit var transcripts: gg.pqp.app.voicenotes.NoteTranscripts
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -161,6 +168,11 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
             frames = session.realtime.frames,
             myId = { (session.phase.value as? gg.pqp.app.core.SessionPhase.Ready)?.me?.id },
             callActive = callActive,
+        )
+        transcripts = gg.pqp.app.voicenotes.NoteTranscripts(
+            scope = appScope,
+            frames = session.realtime.frames,
+            requestFn = { id -> gg.pqp.app.attachments.AttachmentApi(session.api).requestTranscript(id) },
         )
         registerActivityLifecycleCallbacks(BackgroundPause { voiceNotes.onAppBackgrounded() })
     }
