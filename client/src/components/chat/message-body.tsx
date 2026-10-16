@@ -52,11 +52,20 @@ function MarkdownSpan({
   children?: ReactNode;
   className?: string;
 }) {
-  const { byId } = useCustomEmojiScope();
+  const { serverId, byId } = useCustomEmojiScope();
   const id = node?.properties?.dataEmojiId;
   const emoji = typeof id === "string" ? byId.get(id) : undefined;
   if (emoji) {
-    return <CustomEmojiImage emoji={emoji} />;
+    return (
+      <CustomEmojiImage
+        emoji={emoji}
+        onBroken={() => {
+          if (serverId) {
+            noteUnknownServerEmoji(serverId);
+          }
+        }}
+      />
+    );
   }
   return <span className={props.className}>{children}</span>;
 }
