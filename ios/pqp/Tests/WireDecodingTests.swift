@@ -482,6 +482,41 @@ final class WireDecodingTests: XCTestCase {
         XCTAssertNil(version)
     }
 
+    /// `server-removed`: kicked, banned, or the server was deleted. Without it a
+    /// removed server stayed on the list until the app was relaunched.
+    func testServerRemovedDecodes() async throws {
+        for reason in ["kicked", "banned", "deleted"] {
+            let json = """
+            {"type":"server-removed","serverId":"33333333-3333-3333-3333-333333333333","reason":"\(reason)"}
+            """
+            let event = await firstEvent(from: json)
+            guard case .serverRemoved(let serverId, let decoded) = event else {
+                return XCTFail("Expected serverRemoved, got \(String(describing: event))")
+            }
+            XCTAssertEqual(serverId, "33333333-3333-3333-3333-333333333333")
+            XCTAssertEqual(decoded.rawValue, reason)
+        }
+    }
+
+    /// A reason this build does not know is dropped, not guessed at.
+    func testServerRemovedWithAnUnknownReasonIsNotAnEvent() async throws {
+        let json = """
+        {"type":"server-removed","serverId":"33333333-3333-3333-3333-333333333333","reason":"vaporised"}
+        """
+        let event = await firstEvent(from: json)
+        if case .serverRemoved = event { XCTFail("An unknown reason must not decode") }
+    }
+
+    /// `own-status`: the status another device of this account picked.
+    func testOwnStatusDecodes() async throws {
+        let json = #"{"type":"own-status","status":"dnd"}"#
+        let event = await firstEvent(from: json)
+        guard case .ownStatus(let status) = event else {
+            return XCTFail("Expected ownStatus, got \(String(describing: event))")
+        }
+        XCTAssertEqual(status, "dnd")
+    }
+
     /// `server-order-update`: this account's other device moved its server list.
     /// The `origin` is what lets the device that saved skip its own echo.
     func testServerOrderUpdateDecodes() async throws {

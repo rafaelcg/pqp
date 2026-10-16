@@ -543,6 +543,11 @@ final class HomeModel {
                 Task { await self.refreshFriendBadge() }
                 return
             }
+            // Removed from a server (or it was deleted): drop its tile, say why.
+            if case .serverRemoved(let serverId, let reason) = event {
+                self.dropRemovedServer(serverId, reason: reason)
+                return
+            }
             // The account's other device or tab moved its servers: follow it.
             if case .serverOrderUpdate(let ids, let origin) = event {
                 self.followRemoteServerOrder(ids, origin: origin)
@@ -693,7 +698,7 @@ final class HomeModel {
         // spinners below are already conditioned on the list being empty, so
         // filling them from disk is the whole of the fix here.
         if servers.isEmpty, let cached = await session.api.cachedServers() {
-            servers = cached
+            servers = cached.filter { session.removedServers[$0.id] == nil }
         }
         if conversations.isEmpty, let cached = await session.api.cachedConversations() {
             conversations = cached
@@ -703,9 +708,10 @@ final class HomeModel {
         do {
             // Both lists are the hub, side by side — fetching them together
             // means it never assembles in two visible stages.
+            let removalsBefore = session.removedRevision
             async let servers = session.api.servers()
             async let conversations = session.api.conversations()
-            self.servers = try await servers
+            self.servers = session.reconcileFetched(try await servers, startedAt: removalsBefore)
             self.conversations = try await conversations
             // Separate, non-fatal reads: the badge and the first-run checklist
             // are niceties and must not be able to blank the two lists that are
@@ -986,6 +992,31 @@ final class HomeModel {
         }
     }
 
+    /// A `server-removed` frame: the server leaves the list, and one sentence
+    /// says why (the web puts it in the error slot too). A server this phone does
+    /// not hold has nothing to update and nothing to say. The owner's own delete
+    /// is quiet: telling them what they just did is noise.
+    func dropRemovedServer(_ serverId: String, reason: ServerRemovedReason) {
+        guard let gone = servers.first(where: { $0.id == serverId }) else { return }
+        servers.removeAll { $0.id == serverId }
+        session?.noteServerUnread(serverId, .none)
+        if reason == .deleted && gone.role == "owner" { return }
+        // Its own slot, not `error`: the hub re-reads on every appear (it is
+        // about to, as the closing screen hands the stack back) and a re-read
+        // clears `error`, which would wipe the sentence before anyone saw it.
+        removalNotice = ServerRemovedCopy.sentence(reason, server: gone.name)
+        removalNoticeTask?.cancel()
+        removalNoticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(12))
+            guard !Task.isCancelled else { return }
+            self?.removalNotice = nil
+        }
+    }
+
+    /// Said once after a removal, for a few seconds (`dropRemovedServer`).
+    var removalNotice: String?
+    @ObservationIgnored private var removalNoticeTask: Task<Void, Never>?
+
     /// The server list as the server has it now: only the ORDER is taken, every
     /// other field on the rows stays as it is.
     private func reloadServerOrder() async {
@@ -1112,6 +1143,13 @@ struct HubView: View {
                     VStack(alignment: .leading, spacing: 22) {
                         if let error = model.error {
                             errorNote(error)
+                        }
+                        if let notice = model.removalNotice {
+                            Text(notice)
+                                .font(Typography.callout)
+                                .foregroundStyle(Palette.warning)
+                                .padding(.horizontal, Metrics.hPadding)
+                                .accessibilityIdentifier("hub.removalNotice")
                         }
                         // First, because on a fresh account it is the reason the
                         // screen is not empty — and because two of its three
@@ -1993,7 +2031,9 @@ struct UnreadBadge: View {
 struct ProfileView: View {
     @Environment(SessionStore.self) private var session
     @State private var showingSettings = false
-    @State private var manualStatus = "online"
+    /// What the menu shows and what the server last confirmed (`OwnStatusMenu`).
+    @State private var statusMenuState = OwnStatusMenu()
+    private var manualStatus: String { statusMenuState.shown }
 
     /// Only the two assertable states plus the default. `idle` is absent on
     /// purpose — it is a fact the device reports, not an opinion to pick.
@@ -2047,7 +2087,36 @@ struct ProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingSettings) { AccountSettingsView() }
         .task {
-            manualStatus = (try? await session.api.preferences())?.status ?? "online"
+            statusMenuState.loaded((try? await session.api.preferences())?.status ?? "online")
+        }
+        // Another device of this account picked a status: follow it, unless this
+        // screen has a write of its own in the air (that answer is the truth and
+        // an older frame must not flick the menu back mid-choice).
+        .onChange(of: session.remoteOwnStatusRevision) { _, _ in
+            guard let next = session.remoteOwnStatus else { return }
+            statusMenuState.remote(next)
+        }
+    }
+
+    /// Sends a status and whatever was chosen meanwhile, one write at a time
+    /// (`OwnStatusMenu`), then reads the server when a frame from another device
+    /// arrived during them.
+    private func driveStatusWrites(_ first: String) async {
+        var next = OwnStatusMenu.Next.send(first)
+        while true {
+            switch next {
+            case .send(let value):
+                var ok = true
+                do { _ = try await session.api.setStatus(value) } catch { ok = false }
+                next = statusMenuState.completed(sent: value, ok: ok)
+            case .reread:
+                if let status = (try? await session.api.preferences())?.status {
+                    statusMenuState.serverStatus(status)
+                }
+                return
+            case .nothing:
+                return
+            }
         }
     }
 
@@ -2055,16 +2124,8 @@ struct ProfileView: View {
         Menu {
             ForEach(statusChoices, id: \.value) { choice in
                 Button {
-                    let previous = manualStatus
-                    manualStatus = choice.value
-                    Task {
-                        do {
-                            _ = try await session.api.setStatus(choice.value)
-                        } catch {
-                            // The server is the record; a failed set must not
-                            // leave the menu claiming a status nobody else sees.
-                            manualStatus = previous
-                        }
+                    if let first = statusMenuState.choose(choice.value) {
+                        Task { await driveStatusWrites(first) }
                     }
                 } label: {
                     Label(choice.label, systemImage: manualStatus == choice.value ? "checkmark" : "circle")

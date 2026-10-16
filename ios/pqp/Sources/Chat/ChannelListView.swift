@@ -983,6 +983,9 @@ struct ChannelListView: View {
         .onChange(of: unread, initial: true) { _, _ in publishServerUnread() }
         .onChange(of: unreadFetched) { _, _ in publishServerUnread() }
         .onChange(of: session.preferences) { _, _ in publishServerUnread() }
+        // Removed from this server, or it was deleted: nothing here is real any
+        // more. Closes the list (the screens above it close themselves).
+        .dismissWhenServerRemoved(server.id)
     }
 
     private func publishServerUnread() {

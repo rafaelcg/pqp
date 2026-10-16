@@ -111,6 +111,90 @@ final class PhoneGapsTests: XCTestCase {
         XCTAssertFalse(session.listPublished("s1", since: session.listPublishCount), "a read that began after it is newer")
     }
 
+    // MARK: - Removals against a server list read
+
+    private struct Row: Identifiable { let id: String }
+
+    @MainActor
+    func testAListReadThatBeganBeforeARemovalDoesNotBringTheServerBack() {
+        let session = SessionStore()
+        let began = session.removedRevision
+        session.applyAccountFrame(.serverRemoved(serverId: "gone", reason: .kicked))
+        let kept = session.reconcileFetched([Row(id: "gone"), Row(id: "stay")], startedAt: began)
+        XCTAssertEqual(kept.map(\.id), ["stay"])
+        XCTAssertNotNil(session.removedServers["gone"], "the marker stays: screens of it still close")
+    }
+
+    @MainActor
+    func testAListReadAfterARemovalThatStillHasTheServerMeansRejoined() {
+        let session = SessionStore()
+        session.applyAccountFrame(.serverRemoved(serverId: "back", reason: .kicked))
+        let began = session.removedRevision
+        let kept = session.reconcileFetched([Row(id: "back")], startedAt: began)
+        XCTAssertEqual(kept.map(\.id), ["back"])
+        XCTAssertNil(session.removedServers["back"], "a stale marker would close the screens of a server they are back in")
+    }
+
+    @MainActor
+    func testARepeatedStatusFrameStillBumpsTheRevision() {
+        let session = SessionStore()
+        session.applyAccountFrame(.ownStatus("dnd"))
+        let first = session.remoteOwnStatusRevision
+        session.applyAccountFrame(.ownStatus("dnd"))
+        XCTAssertEqual(session.remoteOwnStatus, "dnd")
+        XCTAssertEqual(session.remoteOwnStatusRevision, first + 1)
+    }
+
+    // MARK: - The status menu
+
+    func testAChoiceMadeWhileAWriteIsInTheAirWaitsItsTurn() {
+        var menu = OwnStatusMenu("online")
+        XCTAssertEqual(menu.choose("dnd"), "dnd")
+        XCTAssertNil(menu.choose("invisible"), "queued, not sent beside the first")
+        XCTAssertNil(menu.choose("online"), "only the latest queued choice is kept")
+        XCTAssertEqual(menu.shown, "online")
+        XCTAssertEqual(menu.completed(sent: "dnd", ok: true), .send("online"))
+    }
+
+    func testTheQueuedChoiceIsSentAfterTheFirstWriteAnswers() {
+        var menu = OwnStatusMenu("online")
+        _ = menu.choose("dnd")
+        _ = menu.choose("invisible")
+        XCTAssertEqual(menu.completed(sent: "dnd", ok: true), .send("invisible"))
+        XCTAssertEqual(menu.completed(sent: "invisible", ok: true), .nothing)
+        XCTAssertEqual(menu.confirmed, "invisible")
+        XCTAssertEqual(menu.shown, "invisible")
+        XCTAssertFalse(menu.writing)
+    }
+
+    func testAFailedWriteFallsBackToTheLastConfirmedStatus() {
+        var menu = OwnStatusMenu("online")
+        _ = menu.choose("dnd")
+        XCTAssertEqual(menu.completed(sent: "dnd", ok: false), .nothing)
+        XCTAssertEqual(menu.shown, "online")
+        XCTAssertEqual(menu.confirmed, "online")
+    }
+
+    func testAFrameDuringAWriteIsReadBackFromTheServerAfterwards() {
+        var menu = OwnStatusMenu("online")
+        _ = menu.choose("dnd")
+        menu.remote("invisible")
+        XCTAssertEqual(menu.shown, "dnd", "a frame does not flick the menu mid-choice")
+        XCTAssertEqual(menu.completed(sent: "dnd", ok: true), .reread)
+        XCTAssertEqual(menu.shown, "invisible", "the newer announcement stays on show while the read is out, or if it fails")
+        menu.serverStatus("invisible")
+        XCTAssertEqual(menu.shown, "invisible")
+        XCTAssertEqual(menu.confirmed, "invisible")
+    }
+
+    func testARemoteStatusShowsAtOnceWhenNothingIsInTheAir() {
+        var menu = OwnStatusMenu("online")
+        menu.remote("dnd")
+        XCTAssertEqual(menu.shown, "dnd")
+        menu.remote("dnd")
+        XCTAssertEqual(menu.shown, "dnd")
+    }
+
     // MARK: - A folded section that hides a mention
 
     private func channel(_ id: String) throws -> Channel {
@@ -180,5 +264,35 @@ final class PhoneGapsTests: XCTestCase {
     func testAnUnchangedListIsNotNews() {
         let same = FriendsResponse(friends: [friend("a")], incoming: [], outgoing: [])
         XCTAssertTrue(FriendsDigest.newlyAccepted(before: same, after: same).isEmpty)
+    }
+
+    // MARK: - Removed from a server
+
+    @MainActor
+    func testARemovedServerLeavesTheListWithItsSentence() throws {
+        let model = HomeModel()
+        let kept = try server("00000000-0000-4000-8000-000000000001")
+        let gone = try server("00000000-0000-4000-8000-000000000002")
+        model.servers = [kept, gone]
+        model.dropRemovedServer(gone.id, reason: .banned)
+        XCTAssertEqual(model.servers.map(\.id), [kept.id])
+        XCTAssertEqual(model.removalNotice, ServerRemovedCopy.sentence(.banned, server: gone.name))
+        XCTAssertTrue(model.removalNotice?.contains(gone.name) == true)
+        XCTAssertNil(model.error, "its own slot: a re-read of the hub clears `error`")
+    }
+
+    @MainActor
+    func testAServerThePhoneDoesNotHoldHasNothingToSay() throws {
+        let model = HomeModel()
+        model.servers = [try server("00000000-0000-4000-8000-000000000001")]
+        model.dropRemovedServer("00000000-0000-4000-8000-0000000000ff", reason: .kicked)
+        XCTAssertEqual(model.servers.count, 1)
+        XCTAssertNil(model.removalNotice)
+    }
+
+    func testEveryRemovalHasASentenceThatNamesTheServer() {
+        for reason: ServerRemovedReason in [.kicked, .banned, .deleted] {
+            XCTAssertTrue(ServerRemovedCopy.sentence(reason, server: "QG").contains("QG"), "\(reason)")
+        }
     }
 }
