@@ -345,6 +345,32 @@ final class ForumHomeModel {
         state = ForumList.remove(state, postId: postId)
     }
 
-    /// Where the pinned count stands, for "2 de 3" in a post's menu.
-    var pinnedCount: Int { state.pinned.count }
+    /// Pinned posts in the whole forum, read for a post's menu while a filter
+    /// is on: the list's own pinned row follows the filters (a Bug filter hides
+    /// the rules post), so counting it said "0 de 3" with one pinned.
+    private(set) var unfilteredPinned: Int?
+
+    /// Where the pinned count stands, for "2 de 3" in a post's menu. Under a
+    /// filter it is the unfiltered count once that has been read.
+    var pinnedCount: Int {
+        ForumPinnedCount.resolve(narrowing: filters.isNarrowing, shown: state.pinned.count, unfiltered: unfilteredPinned)
+    }
+
+    /// Reads the forum's pinned count without the filters. Only asked while a
+    /// filter is on; without one the list already holds the answer.
+    func refreshPinnedTotal() async {
+        guard filters.isNarrowing, let session else { return }
+        let plain = ForumFilters(sort: filters.sort)
+        if let page = try? await session.api.forumPosts(forumId: forum.id, filters: plain, limit: 1) {
+            unfilteredPinned = page.pinned.count
+        }
+    }
+}
+
+/// Which pinned count a post's menu shows: the list's own when nothing narrows
+/// it, the forum-wide one (once read) when a filter hides pinned posts.
+enum ForumPinnedCount {
+    static func resolve(narrowing: Bool, shown: Int, unfiltered: Int?) -> Int {
+        narrowing ? (unfiltered ?? shown) : shown
+    }
 }

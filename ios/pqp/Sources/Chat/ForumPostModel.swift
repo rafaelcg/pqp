@@ -129,6 +129,8 @@ final class ForumPostModel {
     /// transcript's through `ChatModel`'s thread slot.
     func start(session: SessionStore) async {
         self.session = session
+        // "Pin post (N of 3)" counts the whole forum, not what a filter shows.
+        if let home { Task { await home.refreshPinnedTotal() } }
         let key = handlerKey
         session.eventHandlers[key] = { [weak self, weak session] event in
             guard let self else {
@@ -365,6 +367,7 @@ final class ForumPostModel {
             return
         }
         await save(optimistic: { $0.pinnedAt = pinned ? Date() : nil }, patch: .init(pinned: pinned))
+        await home?.refreshPinnedTotal()
     }
 
     func setLocked(_ locked: Bool) async {

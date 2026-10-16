@@ -22,7 +22,9 @@ struct StoryViewersSheet: View {
                 Text("Seen by \(viewCount)")
                     .font(Typography.title(19))
                     .foregroundStyle(Palette.paper)
-                Text("\(reactionCount) reactions · gone in \(StoryRules.left(until: story.expiresAt))")
+                Text(reactionCount == 1
+                     ? String(localized: "1 reaction · gone in \(StoryRules.left(until: story.expiresAt))")
+                     : String(localized: "\(reactionCount) reactions · gone in \(StoryRules.left(until: story.expiresAt))"))
                     .font(Typography.caption)
                     .foregroundStyle(Palette.paperMuted)
             }

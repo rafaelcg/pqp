@@ -191,6 +191,26 @@
         }
       }
     },
+    "1 new reply" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 resposta nova"
+          }
+        }
+      }
+    },
+    "1 reaction · gone in %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 reação · some em %@"
+          }
+        }
+      }
+    },
     "Add a comment" : {
       "localizations" : {
         "pt-BR" : {
@@ -277,6 +297,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Canais"
+          }
+        }
+      }
+    },
+    "Characters left: %lld" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restam %lld"
           }
         }
       }

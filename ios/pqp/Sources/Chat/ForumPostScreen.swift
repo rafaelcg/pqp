@@ -204,6 +204,10 @@ enum ForumCopy {
         }
     }
 
+    static func newReplies(_ count: Int) -> String {
+        count == 1 ? String(localized: "1 new reply") : String(localized: "\(count) new replies")
+    }
+
     static func posts(_ count: Int) -> String {
         switch count {
         case 0: String(localized: "No posts yet")
