@@ -6742,8 +6742,9 @@ router.get("/api/communities/config", async () => ({
 
 /**
  * First-run switches the client reads once per page and again on every config
- * refresh (`client/src/lib/newcomer-invite.ts`). One field today:
- * `inviteMoment`, the runtime flag `newcomer_invite_moment` (global, off by
+ * refresh (`client/src/lib/newcomer-invite.ts`). Two fields:
+ * `inviteMoment`, the runtime flag `newcomer_invite_moment`, and
+ * `discordImportNotice`, `discord_import_notice` (both global, off by
  * default; docs/FEATURE_FLAGS.md). Client presentation only, read per request,
  * so a flip reaches open tabs on their next refresh. Not behind
  * `COMMUNITIES_ENABLED`: an instance with no communities still has newcomers,
@@ -6751,6 +6752,7 @@ router.get("/api/communities/config", async () => ({
  */
 router.get("/api/onboarding/config", async () => ({
   inviteMoment: isEnabled("newcomer_invite_moment"),
+  discordImportNotice: isEnabled("discord_import_notice"),
 }));
 
 /**

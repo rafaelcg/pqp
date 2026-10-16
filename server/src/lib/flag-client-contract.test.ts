@@ -347,6 +347,40 @@ describe("newcomer_invite_moment against the onboarding config the client reads"
 });
 
 /**
+ * `discord_import_notice`, the "veio do Discord?" card in a small, new
+ * server's main channel. A global client flag on the same config route as
+ * the newcomer strip, plus one field on the arrivals route.
+ */
+describe("discord_import_notice against the onboarding config the client reads", () => {
+  it("is global, off by default, and named under the fields the routes serve", () => {
+    const def = FEATURE_FLAGS.discord_import_notice;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toContain("GET /api/onboarding/config (discordImportNotice)");
+    expect(def.clientVia).toContain("GET /api/servers/:id/import-arrivals (imported)");
+  });
+
+  it("the config route answers from the flag", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const route = /router\.get\("\/api\/onboarding\/config"[\s\S]*?\);/.exec(api)?.[0];
+    expect(route, "GET /api/onboarding/config is not mounted").toBeTruthy();
+    expect(route).toContain('discordImportNotice: isEnabled("discord_import_notice")');
+  });
+
+  it("the client reads discordImportNotice and imported off those answers", () => {
+    const lib = readFileSync(path.join(clientSrc, "lib/discord-import-notice.ts"), "utf8");
+    expect(lib).toContain("/api/onboarding/config");
+    expect(lib).toMatch(/\.discordImportNotice === true/);
+    const app = readFileSync(path.join(clientSrc, "App.tsx"), "utf8");
+    expect(app).toMatch(/startDiscordImportNoticeConfig\(\)/);
+    // The app hands the arrivals answer's field over, and the rule demands an
+    // explicit `false` (an older API's missing field must show nothing).
+    expect(app).toMatch(/imported: bringCrew\.arrivals\?\.imported/);
+    expect(lib).toMatch(/facts\.imported === false/);
+  });
+});
+
+/**
  * `conversations_home` and `conversations_home_phone_tabs`, Conversas. Two
  * global client flags served on one route that web, iOS and Android all read.
  */
