@@ -112,6 +112,24 @@
     <priority>0.7</priority>
   </url>
   <url>
+    <loc>https://pqp.gg/blog/mensagens-de-voz-encaminhar-e-emoji</loc>
+    <lastmod>2026-10-16</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://pqp.gg/blog/conversas-e-bau-no-chat</loc>
+    <lastmod>2026-10-12</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://pqp.gg/blog/arrastar-arquivo-em-qualquer-lugar</loc>
+    <lastmod>2026-10-08</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
     <loc>https://pqp.gg/blog/login-com-twitch-e-android-na-play</loc>
     <lastmod>2026-09-29</lastmod>
     <changefreq>monthly</changefreq>

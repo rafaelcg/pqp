@@ -24,6 +24,36 @@ const BODIES: Record<
   string,
   Record<BlogLocale, BodyLoader> & { es?: BodyLoader }
 > = {
+  "mensagens-de-voz-encaminhar-e-emoji": {
+    "pt-BR": () =>
+      import("@/content/blog/mensagens-de-voz-encaminhar-e-emoji.pt-BR.md?raw").then(
+        (m) => m.default,
+      ),
+    en: () =>
+      import("@/content/blog/mensagens-de-voz-encaminhar-e-emoji.en.md?raw").then(
+        (m) => m.default,
+      ),
+  },
+  "conversas-e-bau-no-chat": {
+    "pt-BR": () =>
+      import("@/content/blog/conversas-e-bau-no-chat.pt-BR.md?raw").then(
+        (m) => m.default,
+      ),
+    en: () =>
+      import("@/content/blog/conversas-e-bau-no-chat.en.md?raw").then(
+        (m) => m.default,
+      ),
+  },
+  "arrastar-arquivo-em-qualquer-lugar": {
+    "pt-BR": () =>
+      import("@/content/blog/arrastar-arquivo-em-qualquer-lugar.pt-BR.md?raw").then(
+        (m) => m.default,
+      ),
+    en: () =>
+      import("@/content/blog/arrastar-arquivo-em-qualquer-lugar.en.md?raw").then(
+        (m) => m.default,
+      ),
+  },
   "login-com-twitch-e-android-na-play": {
     "pt-BR": () =>
       import("@/content/blog/login-com-twitch-e-android-na-play.pt-BR.md?raw").then(
