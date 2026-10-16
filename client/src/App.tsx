@@ -754,8 +754,8 @@ import {
 } from "@/lib/share-guard-flag";
 import { ensureLinuxShellShareAudio } from "@/lib/linux-shell-share-audio";
 import {
-  hlsCaptureMaxFrameRate,
   screenCaptureMaxFrameRate,
+  shareLadderMaxFrameRate,
   type ScreenFrameRate,
 } from "@/lib/hls-capture-rate";
 import {
@@ -2958,14 +2958,22 @@ function MainAppContent({
   const screenFrameRateRef = useRef(localSettings.screenFrameRate);
   screenFrameRateRef.current = localSettings.screenFrameRate;
 
-  function shareMaxFrameRate(): 30 | 60 {
+  /**
+   * Is the call a share goes into a watch party: the only room whose share an
+   * HLS egress transcodes, and so the only one the ladder's frame rate has any
+   * say over. Assigned further down, next to the call's channel.
+   */
+  const shareFeedsHlsRef = useRef(false);
+
+  function shareMaxFrameRate(opts?: { watchParty?: boolean }): 30 | 60 {
     const config = liveHlsConfigRef.current;
     return screenCaptureMaxFrameRate({
       preference: screenFrameRateRef.current,
-      hlsLadderMax:
-        config?.enabled === true
-          ? hlsCaptureMaxFrameRate(config.ladder, true)
-          : 60,
+      hlsLadderMax: shareLadderMaxFrameRate({
+        feedsHls: opts?.watchParty ?? shareFeedsHlsRef.current,
+        hlsEnabled: config?.enabled,
+        ladder: config?.ladder,
+      }),
     });
   }
 
@@ -11006,6 +11014,11 @@ function MainAppContent({
     voiceState.voiceChannelId
       ? channels.find((c) => c.id === voiceState.voiceChannelId) ?? null
       : null;
+  // The call's channel when in one, the open channel otherwise (a host picking
+  // the film before joining): which of the two a share is for.
+  shareFeedsHlsRef.current = voiceState.voiceChannelId
+    ? voiceChannel?.type === "watch_party"
+    : selectedChannel?.type === "watch_party";
   // Hoisted above `sidebarIconsOnly`'s original spot (near the channel-list
   // toggle further down) so the Voz limpa eligibility below can read it: the
   // nudge is rendered only in the wide sidebar footer (`!compact` in
@@ -11864,7 +11877,7 @@ function MainAppContent({
             outputLevelDb={voice.outputLevelDb}
             onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
-            hlsMaxFrameRate={shareMaxFrameRate()}
+            hlsMaxFrameRate={shareMaxFrameRate({ watchParty: true })}
             liveStream={
               voiceState.channelLive[selectedChannel.id]?.stream ?? null
             }
@@ -12212,7 +12225,7 @@ function MainAppContent({
             outputLevelDb={voice.outputLevelDb}
             onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
-            hlsMaxFrameRate={shareMaxFrameRate()}
+            hlsMaxFrameRate={shareMaxFrameRate({ watchParty: true })}
             liveStream={
               voiceState.channelLive[selectedChannel.id]?.stream ?? null
             }

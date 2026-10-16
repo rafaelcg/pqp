@@ -1703,7 +1703,7 @@
   "call.quality.receive.largeRoomCap": "Sala grande: as telas chegam em até 720p, a menos que quem apresenta escolha 1080p.",
   "call.quality.send.largeRoomCap": "Sala grande: sua tela sai em 720p para ficar fluida para todo mundo. Escolha 1080p para enviar assim mesmo.",
   "call.quality.send.frameRate": "fps da tela",
-  "call.quality.send.frameRateHint": "Automático segue a ladder da Watch party (60 fps quando ela está em 1080p60).",
+  "call.quality.send.frameRateHint": "Automático compartilha a 60 fps. Numa watch party segue a ladder (60 fps só quando ela está em 1080p60).",
   "call.quality.send.priority": "Quando a conexão aperta",
   "call.quality.send.priority.motion": "Priorizar fluidez",
   "call.quality.send.priority.detail": "Priorizar nitidez",
