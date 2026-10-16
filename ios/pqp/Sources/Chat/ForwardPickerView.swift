@@ -138,6 +138,21 @@ final class ForwardPickerModel {
     /// list could not be read. Both reads depend only on the server, so they
     /// run together.
     private nonisolated static func targets(in server: Server, api: APIClient) async -> ServerTargets? {
+        // One request that also carries the threads. An API that predates the
+        // route answers 404 and falls through to the two older reads (no
+        // threads there).
+        do {
+            let destinations = try await api.forwardDestinations(serverId: server.id)
+            return ServerTargets(targets: destinations.targets(in: server), permissionsKnown: true)
+        } catch APIError.notFound {
+            // the older reads below
+        } catch {
+            return nil
+        }
+        return await legacyTargets(in: server, api: api)
+    }
+
+    private nonisolated static func legacyTargets(in server: Server, api: APIClient) async -> ServerTargets? {
         async let listed = try? await api.channels(serverId: server.id)
         async let allowed = try? await api.fetchMemberPermissions(serverId: server.id)
         guard let list = await listed else { return nil }

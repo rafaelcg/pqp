@@ -290,8 +290,23 @@ struct ForwardCardContent: Equatable, Sendable {
 
     /// https only; plain http is a debug build talking to the local stack
     /// (ATS refuses it on a release build anyway).
-    static func loadable(_ raw: String?) -> URL? {
-        guard let raw, !raw.isEmpty, let url = URL(string: raw) else { return nil }
+    ///
+    /// A ROOT-RELATIVE PATH IS COMPLETED AGAINST THE API BASE first, the way
+    /// `Avatar.resolve` does for an icon: a Baú card's picture is served from
+    /// our own origin (`/api/.../cover`, #1260) and arrives as a path, which
+    /// has no scheme and used to be refused, so the card never had a thumbnail.
+    /// A protocol-relative `//host/x` is not a path of ours and stays refused.
+    static func loadable(_ raw: String?, backend: Backend = .current) -> URL? {
+        guard let raw, !raw.isEmpty else { return nil }
+        if raw.hasPrefix("/") && !raw.hasPrefix("//") {
+            guard let url = URL(string: raw, relativeTo: backend.apiBaseURL)?.absoluteURL else { return nil }
+            return secure(url)
+        }
+        guard let url = URL(string: raw) else { return nil }
+        return secure(url)
+    }
+
+    private static func secure(_ url: URL) -> URL? {
         switch url.scheme?.lowercased() {
         case "https": return url
         #if DEBUG
@@ -422,11 +437,22 @@ struct ForwardTarget: Identifiable, Hashable, Codable, Sendable {
     /// Seed for the monogram (a server or conversation id).
     let seed: String
     let isConversation: Bool
+    /// A thread: the text channel it hangs off, for the line under its name.
+    /// Nil for a channel and a conversation. A thread goes to the server as a
+    /// plain `{ channelId }` like any other place.
+    var threadOf: String? = nil
 
     var id: String { channelId }
 
-    /// "# geral" under the server's name; a DM has no second line.
-    var subtitle: String? { isConversation ? nil : serverName }
+    /// The server's name under a channel; a thread says its channel first
+    /// ("#geral · Servidor"), like the web picker; a DM has no second line.
+    var subtitle: String? {
+        guard !isConversation else { return nil }
+        if let threadOf {
+            return serverName.map { "#\(threadOf) · \($0)" } ?? "#\(threadOf)"
+        }
+        return serverName
+    }
 }
 
 /// Ranking and searching for the picker. Pure.
@@ -451,6 +477,7 @@ enum ForwardTargets {
         let needle = fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
         if needle.isEmpty { return true }
         return fold(target.title).contains(needle)
+            || (target.threadOf.map { fold($0).contains(needle) } ?? false)
             || (target.serverName.map { fold($0).contains(needle) } ?? false)
     }
 
@@ -729,8 +756,71 @@ extension APIClient {
         return config
     }
 
+    /// `GET /api/servers/:id/forward-destinations`: the channels of one server
+    /// this account may forward into AND the active threads it is in, in one
+    /// request (the picker used to read the channel list and the permission
+    /// snapshot per server). A 404 is an API that predates the route; the
+    /// caller falls back to the two older reads.
+    func forwardDestinations(serverId: String) async throws -> ForwardDestinations {
+        try await get("/api/servers/\(serverId)/forward-destinations")
+    }
+
     func createForward(_ request: ForwardRequest) async throws -> [ForwardOutcome] {
         let response: ForwardResponse = try await post("/api/forwards", body: request)
         return response.outcomes
+    }
+}
+
+/// `forwardDestinationsSchema` in `packages/shared/src/forward.ts`.
+struct ForwardDestinations: Decodable, Sendable, Equatable {
+    struct Channel: Decodable, Sendable, Equatable {
+        let id: String
+        let name: String
+        /// `text`, `voice` or `watch_party`.
+        let type: String
+    }
+
+    struct Thread: Decodable, Sendable, Equatable {
+        let id: String
+        let name: String
+        let parentId: String
+        let parentName: String
+    }
+
+    let channels: [Channel]
+    /// Absent on an API that predates threads, which reads as none.
+    let threads: [Thread]
+
+    init(channels: [Channel], threads: [Thread] = []) {
+        self.channels = channels
+        self.threads = threads
+    }
+
+    private enum CodingKeys: String, CodingKey { case channels, threads }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        channels = try container.decode([Channel].self, forKey: .channels)
+        threads = try container.decodeIfPresent([Thread].self, forKey: .threads) ?? []
+    }
+
+    /// The places the picker lists for one server: its channels in the
+    /// server's order, then the threads, most recently active first (the
+    /// server's own order). Voice rooms and watch parties are here because
+    /// their chat takes a forward.
+    func targets(in server: Server) -> [ForwardTarget] {
+        channels.map { channel in
+            ForwardTarget(
+                channelId: channel.id, title: "#\(channel.name)", serverId: server.id,
+                serverName: server.name, iconUrl: server.iconUrl, seed: server.id,
+                isConversation: false
+            )
+        } + threads.map { thread in
+            ForwardTarget(
+                channelId: thread.id, title: thread.name, serverId: server.id,
+                serverName: server.name, iconUrl: server.iconUrl, seed: server.id,
+                isConversation: false, threadOf: thread.parentName
+            )
+        }
     }
 }

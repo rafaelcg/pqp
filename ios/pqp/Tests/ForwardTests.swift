@@ -739,4 +739,71 @@ final class ForwardTests: XCTestCase {
         XCTAssertEqual(recents.load(defaults: defaults).count, 12)
         XCTAssertEqual(recents.load(defaults: defaults).first, "x0")
     }
+
+    // MARK: - Threads as destinations, and the cover path
+
+    private func serverForTargets() throws -> Server {
+        let json = """
+        {"id":"\(serverId)","name":"QG","ownerId":"o","createdAt":"2026-10-15T12:00:00.000Z",
+         "messageRetentionDays":null,"ssoEmailDomain":null,"iconUrl":null,"bannerUrl":null,
+         "isCommunity":false,"showOnProfile":true,"communityHomeEnabled":false}
+        """
+        return try Coding.decoder.decode(Server.self, from: Data(json.utf8))
+    }
+
+    func testDestinationsDecodeWithThreadsAndWithoutThem() throws {
+        let with = """
+        {"channels":[{"id":"\(channelId)","name":"geral","type":"text"},
+                     {"id":"\(sourceId)","name":"Lobby","type":"voice"}],
+         "threads":[{"id":"\(otherServerId)","name":"duvida do patch","parentId":"\(channelId)","parentName":"geral"}]}
+        """
+        let decoded = try Coding.decoder.decode(ForwardDestinations.self, from: Data(with.utf8))
+        XCTAssertEqual(decoded.channels.count, 2)
+        XCTAssertEqual(decoded.threads.first?.parentName, "geral")
+
+        // An API that predates threads omits the key: none.
+        let old = #"{"channels":[{"id":"\#(channelId)","name":"geral","type":"text"}]}"#
+        let legacy = try Coding.decoder.decode(ForwardDestinations.self, from: Data(old.utf8))
+        XCTAssertTrue(legacy.threads.isEmpty)
+    }
+
+    func testThreadsComeAfterTheChannelsAndSayWhichChannelTheyHangOff() throws {
+        let destinations = ForwardDestinations(
+            channels: [.init(id: channelId, name: "geral", type: "text")],
+            threads: [.init(id: otherServerId, name: "duvida do patch", parentId: channelId, parentName: "geral")]
+        )
+        let targets = destinations.targets(in: try serverForTargets())
+        XCTAssertEqual(targets.map(\.title), ["#geral", "duvida do patch"])
+        XCTAssertNil(targets[0].threadOf)
+        XCTAssertEqual(targets[1].threadOf, "geral")
+        XCTAssertEqual(targets[1].subtitle, "#geral · QG")
+        XCTAssertEqual(targets[0].subtitle, "QG")
+        // A thread is sent as an ordinary channel id.
+        XCTAssertEqual(targets[1].channelId, otherServerId)
+    }
+
+    func testSearchFindsAThreadByItsParentChannel() throws {
+        let thread = ForwardTarget(
+            channelId: otherServerId, title: "duvida do patch", serverId: serverId, serverName: "QG",
+            iconUrl: nil, seed: serverId, isConversation: false, threadOf: "Geral"
+        )
+        XCTAssertTrue(ForwardTargets.matches(thread, query: "geral"))
+        XCTAssertTrue(ForwardTargets.matches(thread, query: "patch"))
+        XCTAssertFalse(ForwardTargets.matches(thread, query: "voz"))
+    }
+
+    func testARootRelativeCoverPathIsResolvedAgainstTheAPIAndOtherShapesStayStrict() {
+        let hosted = Backend.hosted
+        XCTAssertEqual(
+            ForwardCardContent.loadable("/api/public/communities/qg/posts/abc/cover", backend: hosted)?.absoluteString,
+            "https://api.pqp.gg/api/public/communities/qg/posts/abc/cover"
+        )
+        XCTAssertEqual(
+            ForwardCardContent.loadable("https://i.ytimg.com/vi/x/hq.jpg", backend: hosted)?.host, "i.ytimg.com"
+        )
+        XCTAssertNil(ForwardCardContent.loadable("//evil.example/x.jpg", backend: hosted), "protocol-relative is not our path")
+        XCTAssertNil(ForwardCardContent.loadable("ftp://x/y", backend: hosted))
+        XCTAssertNil(ForwardCardContent.loadable("", backend: hosted))
+        XCTAssertNil(ForwardCardContent.loadable(nil, backend: hosted))
+    }
 }
