@@ -5,6 +5,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
@@ -76,7 +77,10 @@ class ServerEmojiStore(
             val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
                 try {
                     val list = fetch(serverId)
-                    _lists.value = _lists.value + (serverId to list.emoji.sortedBy { it.name })
+                    // Merged into the latest map, atomically: two servers answering at once must not
+                    // overwrite each other's entry.
+                    val sorted = list.emoji.sortedBy { it.name }
+                    _lists.update { it + (serverId to sorted) }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (_: Exception) {
