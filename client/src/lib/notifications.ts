@@ -26,7 +26,13 @@ import {
 import { translateMessage } from "@/lib/i18n";
 import { isNotifyOpenChannelEnabled } from "@/lib/notify-config";
 import { queuePreferenceSync } from "@/lib/preferences";
-import { getSoundState, playActivitySound, playCue } from "@/lib/sounds";
+import { bannerSilent, cueForBurstActivity } from "@/lib/notification-sound";
+import {
+  getSoundState,
+  playActivitySound,
+  playCue,
+  type SoundCue,
+} from "@/lib/sounds";
 
 export type { NotificationLevel };
 
@@ -893,16 +899,19 @@ export function openNotificationTarget(path: string): void {
 }
 
 /**
- * What the desktop shell is told about the banner's own sound.
- *
- * `true` while the app's sounds are on: the app plays its cue (or deliberately
- * none), and an OS sound on top would double it. `false` when the person turned
- * app sounds off, so the OS banner makes its own noise instead of arriving
- * silent; the OS keeps its Do Not Disturb and its volume. A shell that predates
- * the field ignores it and stays silent, as before.
+ * What the desktop shell is told about the banner's own sound: `true` only
+ * when the window is in front or the app really plays `cue` itself (master
+ * switch and the cue's own switch on). Anything else leaves the OS sound on,
+ * so a channel message, which has no app cue, is no longer a mute banner. A
+ * shell that predates the field ignores it and stays silent, as before. See
+ * `lib/notification-sound.ts`.
  */
-export function appPlaysSounds(): boolean {
-  return getSoundState().enabled;
+export function bannerIsSilent(cue: SoundCue | null): boolean {
+  return bannerSilent({
+    windowFocused: typeof document !== "undefined" ? document.hasFocus() : false,
+    sounds: getSoundState(),
+    cue,
+  });
 }
 
 function describe(burst: Burst): { title: string; body: string } {
@@ -934,6 +943,11 @@ function describe(burst: Burst): { title: string; body: string } {
 }
 
 function deliver(burst: Burst): void {
+  const cue = cueForBurstActivity({
+    mentions: burst.mentions,
+    systemKind: burst.activity.systemKind,
+    kind: burst.activity.kind,
+  });
   const { title, body } = describe(burst);
   const { channelId, serverId } = burst.activity;
   const path = activityRoutePath(channelId, serverId);
@@ -942,7 +956,7 @@ function deliver(burst: Burst): void {
   if (desktop?.notify) {
     // The main process can raise the window on click, which a renderer-side
     // `window.focus()` cannot do from behind another app.
-    desktop.notify({ title, body, tag: channelId, path, silent: appPlaysSounds() });
+    desktop.notify({ title, body, tag: channelId, path, silent: bannerIsSilent(cue) });
     return;
   }
 
@@ -1037,7 +1051,13 @@ export function notifyIncomingCall(
 
   const desktop = getDesktop();
   if (desktop?.notify) {
-    desktop.notify({ title, body, tag, path, silent: appPlaysSounds() });
+    desktop.notify({
+      title,
+      body,
+      tag,
+      path,
+      silent: bannerIsSilent("incomingCall"),
+    });
     return;
   }
 
@@ -1137,7 +1157,7 @@ export function notifyStreamStarted(
         body,
         tag,
         path,
-        silent: appPlaysSounds(),
+        silent: bannerIsSilent(null),
       });
       if (sent && typeof (sent as Promise<unknown>).catch === "function") {
         (sent as Promise<unknown>).catch(() => {

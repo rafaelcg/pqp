@@ -252,9 +252,17 @@ the tray checkbox is off, close behaves as it always did. The preference
 
 `showNotification` in `main.js` builds the OS banner from
 `lib/notify-options.js`. The optional `silent` field of `pqpDesktop.notify`
-decides the sound: `true` (the app plays its own cue) or absent (older
-renderer) keeps the banner silent, `false` (app sounds off) lets the OS play
-its own. On Windows `app.setAppUserModelId` is called at startup with
+decides the sound: `true` (the app plays its own cue for this event) or absent
+(older renderer) keeps the banner silent, `false` lets the OS play its own.
+The renderer decides per event in `client/src/lib/notification-sound.ts`: a
+banner is silent only while the window is in front or the app really plays a
+cue for it (master switch and that cue's switch on). A channel message has no
+app cue by design, so before bug #123 (a Windows user's report) its
+banner was silent AND the app played nothing. Still unverified on Windows: that
+Electron's `silent: false` plays the default toast sound on a real machine with
+Focus Assist off (Focus Assist and the per-app "Play a sound" toggle in
+Settings > System > Notifications still win, and are the OS's to own), and that
+the in-app cue is audible while the window is minimised or in the tray. On Windows `app.setAppUserModelId` is called at startup with
 `build.appId` from `package.json` (`gg.pqp.app`), which is what makes a toast
 carry the "pqp" name and icon.
 
