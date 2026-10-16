@@ -1179,6 +1179,19 @@ with its `alt`, and the base picture and the canvas group with `altText`. A phon
 that wants to author one writes the same two things; reading `alt` on an image
 layer is all it needs to speak it (an unknown key is ignored until then).
 
+**iOS (2026-10-16).** Both of the above are on the iPhone. The card picker is one
+menu in three sections (Brilho, Sólido, Degradê); the stops of the twelve new
+keys are the web's OKLCH tokens converted to sRGB (`StoryRules.backgroundColors`),
+a gradient runs at 160 degrees (`StoryRules.backgroundGradient`), and
+`StoryBackgroundsAltTests` reads `packages/shared/src/stories.ts` so a key added
+there without a colour here fails the test. A photo or video draft has a
+**Descrever** pill on the foot row and a placed photo has a button in its
+long-press menu; the base description goes first in `altText`
+(`StoryAltText.make`, the web's order), a placed photo's goes in `alt`
+(`StoryLayerPicture.alt`, 200 characters, sent only when written). The viewer
+names a placed photo by its `alt` only when the story's own `altText` does not
+already say it, so a screen reader never hears it twice.
+
 ### 17.2 One schema, read leniently and written strictly
 
 `createStorySchema` is strict. A bad layer (unknown `type`, a number out of

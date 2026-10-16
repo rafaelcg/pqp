@@ -72,7 +72,7 @@ struct StoryStageBase: View {
     @ViewBuilder
     private var backdrop: some View {
         if story.isText {
-            LinearGradient(colors: StoryRules.backgroundColors(story.background), startPoint: .top, endPoint: .bottom)
+            StoryRules.backgroundGradient(story.background)
         } else if let media = story.media {
             let source = media.isVideo ? media.posterUrl : media.url
             ZStack {
@@ -142,7 +142,10 @@ struct StoryLayersOverlay: View {
         )
         ZStack {
             ForEach(story.layers) { layer in
-                StoryPlacedLayer(layer: layer, context: context, interactive: true, spoken: layer.isInteractiveInViewer)
+                StoryPlacedLayer(
+                    layer: layer, context: context, interactive: true,
+                    spoken: layer.isInteractiveInViewer || layer.hasUnspokenAlt(in: story)
+                )
                     .allowsHitTesting(layer.isInteractiveInViewer)
             }
         }
@@ -156,6 +159,15 @@ struct StoryLayersOverlay: View {
 }
 
 extension StoryLayer {
+    /// A placed photo the author described, when the story's own `altText` does
+    /// not already say it (a build that wrote the layer's `alt` and nothing in
+    /// `altText`): the viewer names the photo then, and only then, so a screen
+    /// reader never hears the same description twice.
+    func hasUnspokenAlt(in story: Story) -> Bool {
+        guard case .image(let picture) = content, let alt = StoryAltText.clean(picture.alt) else { return false }
+        return !StoryAltText.says(alt, in: story.altText ?? "")
+    }
+
     /// Calls and mentions are doors; text, photos and drawings are only seen.
     var isInteractiveInViewer: Bool {
         switch content {

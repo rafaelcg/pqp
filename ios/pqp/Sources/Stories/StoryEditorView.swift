@@ -45,7 +45,21 @@ struct StoryEditorView: View {
         }
     }
 
+    /// What the "Describe" sheet is writing: the base picture's description or
+    /// one placed photo's.
+    private enum AltTarget: Identifiable, Equatable {
+        case base
+        case photo(String)
+        var id: String {
+            switch self {
+            case .base: "base"
+            case .photo(let id): id
+            }
+        }
+    }
+
     @State private var textTarget: TextTarget?
+    @State private var altTarget: AltTarget?
     @State private var showingTray = false
     @State private var showingCall = false
     @State private var showingMention = false
@@ -152,6 +166,18 @@ struct StoryEditorView: View {
             .presentationDetents([.height(230)])
             .presentationBackground(Palette.ink)
         }
+        .sheet(item: $altTarget) { target in
+            switch target {
+            case .base:
+                StoryAltSheet(kind: .base, initial: model.baseAlt) { model.baseAlt = StoryAltText.clean($0) ?? "" }
+                    .presentationDetents([.height(330)])
+                    .presentationBackground(Palette.ink)
+            case .photo(let id):
+                StoryAltSheet(kind: .photo, initial: photoAlt(id)) { model.setAlt(id: id, alt: $0) }
+                    .presentationDetents([.height(330)])
+                    .presentationBackground(Palette.ink)
+            }
+        }
         .sheet(isPresented: $showingCall) {
             StoryCallSheet { choice in
                 showingCall = false
@@ -239,7 +265,7 @@ struct StoryEditorView: View {
     private func baseView(_ canvas: CGSize) -> some View {
         switch base {
         case .card(let key):
-            LinearGradient(colors: StoryRules.backgroundColors(key), startPoint: .top, endPoint: .bottom)
+            StoryRules.backgroundGradient(key)
                 .frame(width: canvas.width, height: canvas.height)
         case .media(let draft):
             StoryMediaBase(draft: draft, canvas: canvas, muted: muted)
@@ -316,6 +342,10 @@ struct StoryEditorView: View {
                     menuButton("circle.square", String(localized: "Change shape"), id: "menu.shape") {
                         model.cycleShape(id: id)
                     }
+                    menuButton("text.bubble", String(localized: "Describe the photo"), id: "menu.describe") {
+                        altTarget = .photo(id)
+                        menuFor = nil
+                    }
                 }
                 menuButton("trash", String(localized: "Delete"), id: "menu.delete") {
                     model.delete(id: id)
@@ -373,6 +403,9 @@ struct StoryEditorView: View {
                     .accessibilityIdentifier("editor.notice")
             }
             HStack {
+                if case .media = base {
+                    describeButton
+                }
                 Spacer()
                 Button(action: onNext) {
                     HStack(spacing: 8) {
@@ -396,6 +429,31 @@ struct StoryEditorView: View {
         .opacity(model.isDragging || textTarget != nil || drawing ? 0 : 1)
         .animation(.easeOut(duration: 0.12), value: model.isDragging)
         .allowsHitTesting(textTarget == nil && !drawing)
+    }
+
+    /// "Describe": what a screen reader says for the picture the story sits on.
+    /// Filled in when the author has written something.
+    private var describeButton: some View {
+        let written = StoryAltText.clean(model.baseAlt) != nil
+        return Button { altTarget = .base } label: {
+            HStack(spacing: 6) {
+                Image(systemName: written ? "text.bubble.fill" : "text.bubble").decorative()
+                Text("Describe")
+            }
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .background(Capsule().fill(.black.opacity(0.55)).overlay(Capsule().strokeBorder(.white.opacity(written ? 0.5 : 0.12), lineWidth: 1)))
+        }
+        .accessibilityValue(written ? Text("Described") : Text(verbatim: ""))
+        .accessibilityIdentifier("editor.describe")
+    }
+
+    /// A placed photo's written description, for the sheet to start from.
+    private func photoAlt(_ id: String) -> String {
+        if case .image(let picture)? = model.layer(id)?.content { return picture.alt ?? "" }
+        return ""
     }
 
     /// The tools: the column Instagram has on the right.
@@ -445,20 +503,31 @@ struct StoryEditorView: View {
 
     private var backgroundMenu: some View {
         Menu {
-            ForEach(StoryRules.backgrounds, id: \.self) { key in
-                Button { background = key } label: {
-                    Label(StoryEditorView.backgroundName(key), systemImage: background == key ? "checkmark.circle.fill" : "circle.fill")
-                }
-            }
+            // Three families, a section each (the web has a switch over a row of
+            // swatches): glow, solid, gradient.
+            backgroundSection(String(localized: "Glow"), StoryRules.backgrounds)
+            backgroundSection(String(localized: "Solid"), StoryRules.solidBackgrounds)
+            backgroundSection(String(localized: "Gradient"), StoryRules.gradientBackgrounds)
         } label: {
             Circle()
-                .fill(LinearGradient(colors: StoryRules.backgroundColors(background), startPoint: .top, endPoint: .bottom))
+                .fill(StoryRules.backgroundGradient(background))
                 .frame(width: 28, height: 28)
                 .overlay(Circle().strokeBorder(.white, lineWidth: 2))
                 .frame(width: 40, height: 40)
         }
         .accessibilityLabel(Text("Background"))
         .accessibilityIdentifier("composer.background")
+    }
+
+    private func backgroundSection(_ title: String, _ keys: [String]) -> some View {
+        Section(title) {
+            ForEach(keys, id: \.self) { key in
+                Button { background = key } label: {
+                    Label(StoryEditorView.backgroundName(key), systemImage: background == key ? "checkmark.circle.fill" : "circle.fill")
+                }
+                .accessibilityIdentifier("composer.background.\(key)")
+            }
+        }
     }
 
     static func backgroundName(_ key: String) -> String {
@@ -468,6 +537,18 @@ struct StoryEditorView: View {
         case "ember": String(localized: "Ember")
         case "grape": String(localized: "Grape")
         case "sand": String(localized: "Sand")
+        case "cobalt": String(localized: "Cobalt")
+        case "crimson": String(localized: "Crimson")
+        case "pine": String(localized: "Pine")
+        case "plum": String(localized: "Plum")
+        case "teal": String(localized: "Teal")
+        case "onyx": String(localized: "Onyx")
+        case "sunset": String(localized: "Sunset")
+        case "ocean": String(localized: "Ocean")
+        case "aurora": String(localized: "Aurora")
+        case "dusk": String(localized: "Dusk")
+        case "berry": String(localized: "Berry")
+        case "lagoon": String(localized: "Lagoon")
         default: String(localized: "Ink")
         }
     }

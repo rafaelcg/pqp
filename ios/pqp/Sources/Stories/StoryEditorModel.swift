@@ -36,7 +36,7 @@ final class StoryEditorModel {
     /// call its card; undoing the delete without them would bring back a layer
     /// that cannot be drawn or uploaded.
     private struct Snapshot {
-        let layers: [StoryLayer]
+        var layers: [StoryLayer]
         let drawing: PKDrawing?
         let files: [String: StoryLayerFile]
         let previews: [String: UIImage]
@@ -65,6 +65,12 @@ final class StoryEditorModel {
     /// The strokes behind the drawing layer, so a second visit to the pen
     /// keeps drawing on top of the first.
     private(set) var drawing = PKDrawing()
+
+    /// What the author wrote to describe the base photo or video, for screen
+    /// readers. It has no field of its own: it is written FIRST into the
+    /// story's `altText` (`StoryAltText.make`). Not part of undo. Cleared with
+    /// the rest.
+    var baseAlt = ""
 
     private(set) var guides = Guides()
     private(set) var isDragging = false
@@ -203,6 +209,23 @@ final class StoryEditorModel {
         selectedId = layer.id
         record(before)
         return layer.id
+    }
+
+    /// Describe a placed photo. Not an undo step (text in a sheet the author
+    /// just closed is not a gesture to take back); an empty string clears it.
+    func setAlt(id: String, alt: String) {
+        guard let index = layers.firstIndex(where: { $0.id == id }),
+              case .image(var picture) = layers[index].content else { return }
+        picture.alt = StoryAltText.clean(alt)
+        layers[index].content = .image(picture)
+        // Not an undo step, so undoing something ELSE must not take it back:
+        // the same description goes into every snapshot that holds the photo.
+        for stored in undoStack.indices {
+            guard let at = undoStack[stored].layers.firstIndex(where: { $0.id == id }),
+                  case .image(var older) = undoStack[stored].layers[at].content else { continue }
+            older.alt = picture.alt
+            undoStack[stored].layers[at].content = .image(older)
+        }
     }
 
     func cycleShape(id: String) {
@@ -361,6 +384,7 @@ final class StoryEditorModel {
         canUndo = false
         selectedId = nil
         callInfo = nil
+        baseAlt = ""
     }
 
     private func pruneFiles() {
