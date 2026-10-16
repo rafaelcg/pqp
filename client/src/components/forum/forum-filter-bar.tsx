@@ -10,7 +10,7 @@ import {
 import type { ReactNode } from "react";
 import { ForumTagIcon } from "@/components/forum/forum-tag-icon";
 import { Menu } from "@/components/ui/menu";
-import { RadioGroup } from "@/components/ui/radio-group";
+import { RadioGroup, useRovingRadio } from "@/components/ui/radio-group";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { ForumFilters } from "@/lib/forum-list";
 import type { ForumLayout } from "@/lib/forum-prefs";
@@ -45,7 +45,11 @@ interface ForumFilterBarProps {
    * it from its width. 0 is the list beside an open post: one "Tags" menu.
    */
   inlineTags: number;
-  /** A phone: one scrolling strip, with `leading` (the order) first. */
+  /**
+   * A phone: one scrolling strip. `leading` (the order) comes first in the
+   * strip and in the wide row, where the pane passes it only beside an open
+   * post, since the search row has no room for the sort menu there.
+   */
   strip?: boolean;
   leading?: ReactNode;
 }
@@ -152,10 +156,17 @@ export function ForumLayoutSwitch({
     { value: "compact", label: t("forum.layout.compact"), icon: Rows3 },
     { value: "gallery", label: t("forum.layout.gallery"), icon: LayoutGrid },
   ];
+  // One tab stop for the group, arrows to move and pick, like every radio group.
+  const { onKeyDown, tabIndexFor } = useRovingRadio(
+    options.map((option) => option.value),
+    layout,
+    onChange,
+  );
   return (
     <div
       role="radiogroup"
       aria-label={t("forum.layout.label")}
+      onKeyDown={onKeyDown}
       className="inline-flex h-10 shrink-0 items-center gap-0.5 rounded-[var(--radius-card)] bg-surface-1 p-1"
       data-forum-layout-switch=""
     >
@@ -166,6 +177,7 @@ export function ForumLayoutSwitch({
             role="radio"
             aria-checked={layout === value}
             aria-label={label}
+            tabIndex={tabIndexFor(value)}
             onClick={() => onChange(value)}
             className={cn(
               "grid h-8 w-8 place-items-center rounded-[var(--radius-control)] transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
@@ -275,6 +287,7 @@ export function ForumFilterBar({
       role="toolbar"
       aria-label={t("forum.filter.label")}
     >
+      {leading}
       <div className="shrink-0">
         <RadioGroup
           variant="segmented"
