@@ -255,6 +255,22 @@ class NoteTranscriptsTest {
     }
 
     @Test
+    fun `rechecks that fail are counted too, so a dead network does not ask for ever`() {
+        var calls = 0
+        val rig = Rig(answer = {
+            calls += 1
+            if (calls == 1) NoteTranscript("pending") else throw java.io.IOException("offline")
+        })
+        rig.store.request("a")
+        rig.scope.runCurrent()
+        repeat(NoteTranscripts.RECHECK_LIMIT + 3) { rig.advance(NoteTranscripts.RECHECK_AFTER_MS) }
+        assertEquals(1 + NoteTranscripts.RECHECK_LIMIT, rig.asked.size)
+        assertNull(rig.store.stored.value["a"])
+        rig.advance(NoteTranscripts.RECHECK_AFTER_MS * 5)
+        assertEquals(1 + NoteTranscripts.RECHECK_LIMIT, rig.asked.size)
+    }
+
+    @Test
     fun `a recheck stops the moment a frame settles the note`() {
         val rig = Rig(answer = { NoteTranscript("pending") })
         rig.store.request("a")

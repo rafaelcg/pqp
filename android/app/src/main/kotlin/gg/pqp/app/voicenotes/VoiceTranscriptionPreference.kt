@@ -55,8 +55,8 @@ suspend fun ApiClient.setVoiceTranscription(mine: Boolean, show: Boolean) {
 object VoiceTranscriptionPreference {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val writes = Mutex()
-    private var owner: String? = null
-    private var confirmed: VoiceTranscriptionPrefs? = null
+    /** What the server last confirmed, per account: a write that settles late belongs to ITS account, never the current one. */
+    private val confirmed = HashMap<String, VoiceTranscriptionPrefs>()
 
     private val _failed = MutableStateFlow(false)
 
@@ -72,35 +72,41 @@ object VoiceTranscriptionPreference {
         val userId = (session.phase.value as? SessionPhase.Ready)?.me?.id ?: return
         val before = current(session)
         synchronized(this) {
-            if (owner != userId) {
-                // First tap for this account: what the session holds came from `/api/me`.
-                owner = userId
-                confirmed = before
-            }
+            // First tap for this account: what the session holds came from `/api/me`.
+            if (userId !in confirmed) confirmed[userId] = before
         }
         _failed.value = false
         val next = VoiceTranscriptionPrefs(mine = mine ?: before.mineOn, show = show ?: before.showOn)
         session.applyVoiceTranscription(next)
         scope.launch {
             writes.withLock {
+                // Another account may be signed in by now: this account's queued write is dropped, and what the
+                // session holds (and the API would send under) is not this account's.
+                if (userIdOf(session) != userId) return@withLock
                 // The choice as it stands NOW: an earlier queued tap that this one superseded sends once.
                 val wanted = current(session)
-                val settled = synchronized(this@VoiceTranscriptionPreference) { confirmed }
-                if (settled != null && wanted.mineOn == settled.mineOn && wanted.showOn == settled.showOn) return@withLock
+                val settled = synchronized(this@VoiceTranscriptionPreference) { confirmed[userId] }
+                if (settled != null && sameChoice(wanted, settled)) return@withLock
                 try {
                     session.api.setVoiceTranscription(mine = wanted.mineOn, show = wanted.showOn)
-                    synchronized(this@VoiceTranscriptionPreference) { confirmed = wanted }
+                    synchronized(this@VoiceTranscriptionPreference) { confirmed[userId] = wanted }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
-                    val back = synchronized(this@VoiceTranscriptionPreference) { confirmed }
-                    // Another account may be signed in by now: only this one's session is put back.
-                    if ((session.phase.value as? SessionPhase.Ready)?.me?.id == userId && back != null) {
+                    val back = synchronized(this@VoiceTranscriptionPreference) { confirmed[userId] }
+                    // Put back only while the session still shows the choice that failed: a newer tap made while this
+                    // one was in the air owns the switch, and its queued write (it waits on this lock) must send.
+                    if (userIdOf(session) == userId && back != null && sameChoice(current(session), wanted)) {
                         session.applyVoiceTranscription(back)
+                        _failed.value = true
                     }
-                    _failed.value = true
                 }
             }
         }
     }
+
+    private fun userIdOf(session: SessionStore): String? = (session.phase.value as? SessionPhase.Ready)?.me?.id
+
+    private fun sameChoice(a: VoiceTranscriptionPrefs, b: VoiceTranscriptionPrefs): Boolean =
+        a.mineOn == b.mineOn && a.showOn == b.showOn
 }

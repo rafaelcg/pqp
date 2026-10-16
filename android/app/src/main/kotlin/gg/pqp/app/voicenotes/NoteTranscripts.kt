@@ -183,7 +183,8 @@ class NoteTranscripts(
                             setRequest(attachmentId, TranscriptRequest.Refused)
                         }
                         // A recheck that did not get through (offline, a 5xx, the limiter) tries again
-                        // on its own clock, and gives up the way the rest do.
+                        // on its own clock, and gives up the way the rest do. The count is advanced by
+                        // the timer (it asks as `count + 1`), so a run of failures reaches the limit.
                         recheck > 0 -> scheduleRecheck(attachmentId, recheck)
                         else -> {
                             takeBackOptimism(attachmentId)

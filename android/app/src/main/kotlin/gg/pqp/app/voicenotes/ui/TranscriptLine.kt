@@ -111,7 +111,7 @@ fun TranscriptLine(
                     modifier = Modifier
                         .heightIn(min = 32.dp)
                         .semantics { role = Role.Button }
-                        .clickable { transcripts.request(attachmentId) }
+                        .clickable(enabled = request != TranscriptRequest.Slow) { transcripts.request(attachmentId) }
                         .padding(vertical = 6.dp, horizontal = 2.dp)
                         .testTag("voice-note-transcribe"),
                 )
