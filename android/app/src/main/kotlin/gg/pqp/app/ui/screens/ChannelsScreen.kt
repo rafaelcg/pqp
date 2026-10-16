@@ -79,6 +79,9 @@ import gg.pqp.app.bau.BauLatest
 import gg.pqp.app.bau.BauPreviewState
 import gg.pqp.app.bau.CommunityHomeConfig
 import gg.pqp.app.bau.CommunityHomeConfigs
+import gg.pqp.app.communities.CommunitiesConfigs
+import gg.pqp.app.communities.CommunityAccess
+import gg.pqp.app.communities.ui.CommunitySheet
 import gg.pqp.app.bau.bauLatest
 import gg.pqp.app.bau.bauPreviewState
 import gg.pqp.app.bau.bauUnread
@@ -247,6 +250,11 @@ fun ChannelsScreen(
     val server = servers.firstOrNull { it.id == serverId }
     var communityHome by remember { mutableStateOf(CommunityHomeConfig()) }
     LaunchedEffect(session) { communityHome = CommunityHomeConfigs.resolve(session.api) }
+    // Public access (the address and the directory): the same instance flag
+    // gates the sheet and the "Público" mark on the banner.
+    var communitiesOn by remember { mutableStateOf(false) }
+    LaunchedEffect(session) { communitiesOn = CommunitiesConfigs.resolve(session.api).enabled }
+    var publicAccessOpen by remember(serverId) { mutableStateOf(false) }
     val showBau = communityHome.enabled && server?.communityHomeEnabled == true
 
     val scope = rememberCoroutineScope()
@@ -360,6 +368,9 @@ fun ChannelsScreen(
     // server-wide, the same permission the PUT checks.
     val canManageChannels = permissionsConfirmed &&
         hasPermission(parsePermissionBits(permissions.server), Permission.MANAGE_CHANNELS)
+    // Manage Server, which the owner holds: what the public-access sheet needs.
+    val canManagePublicAccess = communitiesOn && server != null && permissionsConfirmed &&
+        CommunityAccess.mayOpen(parsePermissionBits(permissions.server))
     var organizing by remember(serverId) { mutableStateOf(false) }
     var layoutNotice by remember(serverId) { mutableStateOf<String?>(null) }
     var newChannelIn by remember(serverId) { mutableStateOf<Pair<Channel, String>?>(null) }
@@ -715,6 +726,7 @@ fun ChannelsScreen(
                     serverName = serverName,
                     bannerUrl = server?.bannerUrl,
                     activity = activity,
+                    isPublic = communitiesOn && server?.isCommunity == true,
                     scrolledPx = {
                         if (listState.firstVisibleItemIndex == 0) {
                             listState.firstVisibleItemScrollOffset.toFloat()
@@ -786,18 +798,29 @@ fun ChannelsScreen(
             collapsed = collapsed,
             onBack = onBack,
             modifier = Modifier.align(Alignment.TopCenter),
+            isPublic = communitiesOn && server?.isCommunity == true,
             actions = { shown ->
-                if (mixed && canManageChannels) {
+                val organize = mixed && canManageChannels
+                if (organize || canManagePublicAccess) {
                     ServerMenu(
                         shown = shown,
-                        onOrganize = { organizing = true },
-                        onCreateCategory = { creatingCategory = true },
+                        onOrganize = if (organize) ({ organizing = true }) else null,
+                        onCreateCategory = if (organize) ({ creatingCategory = true }) else null,
+                        onPublicAccess = if (canManagePublicAccess) ({ publicAccessOpen = true }) else null,
                     )
                 }
             },
         )
     }
 
+    if (publicAccessOpen && server != null) {
+        CommunitySheet(
+            api = session.api,
+            server = server,
+            onChanged = { session.refreshServers() },
+            onDismiss = { publicAccessOpen = false },
+        )
+    }
     if (organizing && list != null) {
         ChannelOrganizerDialog(
             layout = mixedLayoutOf(list),
@@ -896,7 +919,12 @@ private fun AddChannelButton(category: Channel, onAdd: (Channel, String) -> Unit
 
 /** ⋯ at the end of the bar, for whoever may manage channels on the mixed list. */
 @Composable
-private fun ServerMenu(shown: Float, onOrganize: () -> Unit, onCreateCategory: () -> Unit) {
+private fun ServerMenu(
+    shown: Float,
+    onOrganize: (() -> Unit)?,
+    onCreateCategory: (() -> Unit)?,
+    onPublicAccess: (() -> Unit)?,
+) {
     var open by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
     Box {
@@ -917,21 +945,35 @@ private fun ServerMenu(shown: Float, onOrganize: () -> Unit, onCreateCategory: (
             }
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.channels_organize)) },
-                modifier = Modifier.testTag("channels.organize"),
-                onClick = {
-                    open = false
-                    onOrganize()
-                },
-            )
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.channels_create_category)) },
-                onClick = {
-                    open = false
-                    onCreateCategory()
-                },
-            )
+            onOrganize?.let { organize ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.channels_organize)) },
+                    modifier = Modifier.testTag("channels.organize"),
+                    onClick = {
+                        open = false
+                        organize()
+                    },
+                )
+            }
+            onCreateCategory?.let { create ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.channels_create_category)) },
+                    onClick = {
+                        open = false
+                        create()
+                    },
+                )
+            }
+            onPublicAccess?.let { publicAccess ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.community_menu)) },
+                    modifier = Modifier.testTag("channels.publicAccess"),
+                    onClick = {
+                        open = false
+                        publicAccess()
+                    },
+                )
+            }
         }
     }
 }

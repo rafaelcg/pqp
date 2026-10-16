@@ -73,6 +73,10 @@ import gg.pqp.app.bau.BauBadge
 import gg.pqp.app.bau.CommunityHomeConfig
 import gg.pqp.app.bau.CommunityHomeConfigs
 import gg.pqp.app.bau.bauUnreadAll
+import gg.pqp.app.communities.CommunitiesConfigs
+import gg.pqp.app.communities.CommunityAccess
+import gg.pqp.app.communities.ui.CommunitySheet
+import gg.pqp.app.communities.ui.PublicBadge
 import gg.pqp.app.core.IdempotencyAttempt
 import gg.pqp.app.core.ServerSummary
 import gg.pqp.app.core.SessionStore
@@ -116,6 +120,14 @@ fun ServersScreen(
     var deleting by remember { mutableStateOf<ServerSummary?>(null) }
     var reporting by remember { mutableStateOf<ServerSummary?>(null) }
     var inviting by remember { mutableStateOf<ServerSummary?>(null) }
+    var publicAccess by remember { mutableStateOf<ServerSummary?>(null) }
+
+    // Public access (the address and the directory) exists only while the
+    // instance has communities on, asked once per session, off on any failure.
+    // It gates both the menu item and the "Público" mark: with communities off
+    // the address answers 404 and the mark would be a lie.
+    var communitiesOn by remember { mutableStateOf(false) }
+    LaunchedEffect(session) { communitiesOn = CommunitiesConfigs.resolve(session.api).enabled }
 
     // A refusal is the server's sentence, verbatim. Only it knows whether a
     // delete was refused because the caller is no longer the owner, or a leave
@@ -279,6 +291,8 @@ fun ServersScreen(
                             onDelete = { deleting = server },
                             onReport = { reporting = server },
                             onInvite = { inviting = server },
+                            communitiesOn = communitiesOn,
+                            onPublicAccess = { publicAccess = server },
                             // Null at the ends: an item that does nothing is
                             // worse than no item.
                             onMoveUp = if (servers.firstOrNull()?.id == server.id) {
@@ -303,6 +317,16 @@ fun ServersScreen(
             api = session.api,
             server = server,
             onDismiss = { inviting = null },
+        )
+    }
+
+    publicAccess?.let { server ->
+        CommunitySheet(
+            api = session.api,
+            // The live row, so the role the sheet decides on is never stale.
+            server = servers.firstOrNull { it.id == server.id } ?: server,
+            onChanged = { session.refreshServers() },
+            onDismiss = { publicAccess = null },
         )
     }
 
@@ -454,6 +478,8 @@ private fun ServerRow(
     onDelete: () -> Unit,
     onReport: () -> Unit,
     onInvite: () -> Unit,
+    communitiesOn: Boolean,
+    onPublicAccess: () -> Unit,
     onMoveUp: (() -> Unit)?,
     onMoveDown: (() -> Unit)?,
 ) {
@@ -529,16 +555,24 @@ private fun ServerRow(
         }
         Spacer(Modifier.width(Spacing.md))
         Column(Modifier.weight(1f)) {
-            Text(
-                text = server.name,
-                style = MaterialTheme.typography.titleMedium,
-                // Something unread in a channel: the name is bold, the way a channel
-                // row with news is, and the badge on the icon says how much.
-                fontWeight = if (unread.hasUnread) FontWeight.Bold else null,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = server.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    // Something unread in a channel: the name is bold, the way a channel
+                    // row with news is, and the badge on the icon says how much.
+                    fontWeight = if (unread.hasUnread) FontWeight.Bold else null,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                // Strangers can walk in: said where the server is named.
+                if (communitiesOn && server.isCommunity) {
+                    Spacer(Modifier.width(Spacing.sm))
+                    PublicBadge()
+                }
+            }
             server.role?.let { role ->
                 val label = when (role) {
                     "owner" -> stringResource(R.string.role_owner)
@@ -577,6 +611,19 @@ private fun ServerRow(
                         onInvite()
                     },
                 )
+                // The address and the directory. Owner and admin always hold
+                // Manage Server; a member with a cargo that grants it finds the
+                // same sheet in the server's own menu.
+                if (communitiesOn && CommunityAccess.mayOpenFromRole(server.role)) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.community_menu)) },
+                        modifier = Modifier.testTag("servers.publicAccess"),
+                        onClick = {
+                            menuOpen = false
+                            onPublicAccess()
+                        },
+                    )
+                }
                 // Reorder this account's own list (a drag is not reachable by
                 // TalkBack, and a menu is what the phone channel list uses).
                 onMoveUp?.let { move ->
