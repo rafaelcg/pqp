@@ -134,6 +134,7 @@ import {
 } from "@/lib/utils";
 import { MessageListSkeleton } from "@/components/ui/skeleton";
 import { NudgeLine, NudgeNotice } from "@/components/chat/nudge-line";
+import type { AuthorGoneCheck } from "@/hooks/use-confirmed-gone-authors";
 
 /** Consecutive messages from one author within this window render as one block. */
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
@@ -343,6 +344,12 @@ interface MessageListProps {
    * False while it loads, in a conversation, or anywhere the map is partial.
    */
   authorsComplete?: boolean;
+  /**
+   * What makes "saiu" safe to show. A roster up to 15s old lacks somebody who
+   * just joined and posted first, so the tag waits for a fresh read that still
+   * lacks the author (`useConfirmedGoneAuthors`). Without it no tag is drawn.
+   */
+  authorGoneCheck?: AuthorGoneCheck;
   /** Painted roles, for the highest-position colour on a name. */
   roles?: readonly MessageRoleColor[];
   /** True while Mark unread is holding this channel's read cursor. */
@@ -629,6 +636,7 @@ export const MessageList = memo(function MessageList({
   activeThreadId = null,
   authors = EMPTY_AUTHORS,
   authorsComplete = false,
+  authorGoneCheck,
   roles = EMPTY_ROLES,
   unreadHeld = false,
   onForward,
@@ -643,6 +651,29 @@ export const MessageList = memo(function MessageList({
   forumPost = null,
 }: MessageListProps) {
   const { t } = useTranslation();
+  const reportMissingAuthors = authorGoneCheck?.report;
+  // Authors the loaded roster does not hold, for a re-read before any of them
+  // reads "saiu" (a person who just joined is missing until the roster
+  // catches up). Webhooks and AutoMod were never members.
+  // TODO(#1188): a custom bot author is not a server member either; exclude
+  // it here and in the row's `authorGone` when that lands.
+  const missingAuthorKey = useMemo(() => {
+    if (!authorsComplete || !reportMissingAuthors) {
+      return "";
+    }
+    const ids = new Set<string>();
+    for (const m of messages) {
+      if (!authors.has(m.authorId) && !m.isWebhook && !m.isAutomod) {
+        ids.add(m.authorId);
+      }
+    }
+    return [...ids].sort().join(",");
+  }, [authorsComplete, reportMissingAuthors, messages, authors]);
+  useEffect(() => {
+    if (missingAuthorKey && reportMissingAuthors) {
+      reportMissingAuthors(missingAuthorKey.split(","));
+    }
+  }, [missingAuthorKey, reportMissingAuthors]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -2233,7 +2264,10 @@ export const MessageList = memo(function MessageList({
                 },
               )}
               authors={authors}
-              authorsComplete={authorsComplete}
+              authorsComplete={
+                authorsComplete &&
+                !!authorGoneCheck?.confirmed.has(row.message.authorId)
+              }
               roles={roles}
               unreadHeld={unreadHeld}
               onForward={
@@ -2988,8 +3022,10 @@ const MessageRow = memo(function MessageRow({
       : message.body;
   const hideBodyForBauCard = shownBody === "";
   const authorInfo = authors.get(message.authorId);
-  // Not in a loaded roster: the author left, was removed or banned. Webhooks
-  // and AutoMod were never members, so they are never "gone".
+  // Not in a loaded roster and still not in a fresh read of it (the caller
+  // folds that into `authorsComplete`): the author left, was removed or was
+  // banned. Webhooks and AutoMod were never members, so they are never "gone".
+  // TODO(#1188): custom bots are not members either; exclude them here too.
   const authorGone =
     authorsComplete && !authorInfo && !message.isWebhook && !message.isAutomod;
   const mentionsYou = messageMentionsYou(
@@ -3615,7 +3651,13 @@ const MessageRow = memo(function MessageRow({
                       className="self-center rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-text-tertiary"
                       title={t("chat.authorGoneHint", { name: message.authorName })}
                     >
-                      {t("chat.authorGone")}
+                      {/* `title` reaches neither keyboard nor touch nor a
+                          screen reader: the full sentence is read instead of
+                          the one-word tag. */}
+                      <span aria-hidden="true">{t("chat.authorGone")}</span>
+                      <span className="sr-only">
+                        {t("chat.authorGoneHint", { name: message.authorName })}
+                      </span>
                     </span>
                   )}
                   {message.isAutomod ? (

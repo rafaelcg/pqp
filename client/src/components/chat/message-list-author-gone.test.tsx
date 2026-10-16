@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { messageSchema } from "@pqp/shared";
 import type { ChatMessage } from "@/hooks/use-chat";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { AuthorGoneCheck } from "@/hooks/use-confirmed-gone-authors";
 import { MessageList, type MessageAuthorInfo } from "./message-list";
 
 /**
@@ -52,7 +53,10 @@ afterEach(() => {
   host = null;
 });
 
-function mount(authorsComplete: boolean) {
+function mount(
+  authorsComplete: boolean,
+  check: AuthorGoneCheck | null = { confirmed: new Set([GONE]), report: () => {} },
+) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -66,6 +70,7 @@ function mount(authorsComplete: boolean) {
           onToggleReaction={() => {}}
           authors={ROSTER}
           authorsComplete={authorsComplete}
+          authorGoneCheck={check ?? undefined}
         />
       </TooltipProvider>,
     );
@@ -74,19 +79,41 @@ function mount(authorsComplete: boolean) {
 }
 
 function goneTags(container: HTMLElement): string[] {
-  return [...container.querySelectorAll("span[title]")]
-    .filter((el) => /não está mais no servidor|no longer in this server/.test(el.getAttribute("title") ?? ""))
-    .map((el) => el.getAttribute("title") ?? "");
+  return [...container.querySelectorAll("span.sr-only")]
+    .map((el) => el.textContent ?? "")
+    .filter((text) => /não está mais no servidor|no longer in this server/.test(text));
 }
 
 describe("an author who left", () => {
-  it("is tagged once the roster is whole, and nobody else is", () => {
+  it("is tagged once a fresh read still lacks them, and nobody else is", () => {
     const tags = goneTags(mount(true));
     expect(tags).toHaveLength(1);
     expect(tags[0]).toContain("Bia");
   });
 
+  it("says why in text a keyboard or screen reader reaches, not only in title", () => {
+    const tag = [...mount(true).querySelectorAll("span.sr-only")].find((el) =>
+      /Bia/.test(el.textContent ?? ""),
+    );
+    expect(tag).toBeTruthy();
+    expect(tag?.previousElementSibling?.getAttribute("aria-hidden")).toBe("true");
+  });
+
   it("is not tagged while the roster is unknown", () => {
     expect(goneTags(mount(false))).toEqual([]);
+  });
+
+  it("is not tagged before the confirming read, and is reported for one", () => {
+    const reported: string[][] = [];
+    const check: AuthorGoneCheck = {
+      confirmed: new Set(),
+      report: (ids) => reported.push([...ids]),
+    };
+    expect(goneTags(mount(true, check))).toEqual([]);
+    expect(reported).toEqual([[GONE]]);
+  });
+
+  it("is never tagged without a check to confirm it", () => {
+    expect(goneTags(mount(true, null))).toEqual([]);
   });
 });

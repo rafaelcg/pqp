@@ -43,30 +43,53 @@ export function useMemberRosterRefresh(
   refreshNudge: number,
   onMembers: (members: ServerMember[]) => void,
   rosterSize = 0,
-): void {
+): () => Promise<boolean> {
   const rosterSizeRef = useRef(rosterSize);
   rosterSizeRef.current = rosterSize;
   const onMembersRef = useRef(onMembers);
   onMembersRef.current = onMembers;
   const lastLoadAt = useRef(0);
 
+  /** True when a fresh roster was read and handed on. */
   const load = useCallback(
-    async (signal: { cancelled: boolean }) => {
+    async (signal: { cancelled: boolean }): Promise<boolean> => {
       if (!serverId) {
-        return;
+        return false;
       }
       lastLoadAt.current = Date.now();
       try {
         const res = await fetchMembers(serverId);
-        if (!signal.cancelled) {
-          onMembersRef.current(res.members);
+        if (signal.cancelled) {
+          return false;
         }
+        onMembersRef.current(res.members);
+        return true;
       } catch {
         // A failed refresh leaves the last known roster: stale, not wrong.
+        return false;
       }
     },
     [serverId],
   );
+
+  // A read for a server the shell has since left must not land on the new one.
+  const serverIdRef = useRef(serverId);
+  serverIdRef.current = serverId;
+  /**
+   * One read now, outside the poll and the nudge floor. For a caller that needs
+   * to know the roster is no older than this call (somebody posted who is not
+   * in it: either they just joined or they are gone). Resolves false when the
+   * read failed or the server changed meanwhile.
+   */
+  const refreshNow = useCallback(async (): Promise<boolean> => {
+    const asked = serverId;
+    const signal = {
+      get cancelled() {
+        return serverIdRef.current !== asked;
+      },
+    };
+    return load(signal);
+  }, [serverId, load]);
 
   useEffect(() => {
     if (!serverId) {
@@ -149,4 +172,6 @@ export function useMemberRosterRefresh(
       clearTimeout(timer);
     };
   }, [refreshNudge, serverId, load]);
+
+  return refreshNow;
 }
