@@ -28,12 +28,14 @@ private struct BauFollowEntry: ViewModifier {
 
     @State private var state: BauFollowState?
     @State private var permissions: PermissionsSnapshot?
+    /// The server `permissions` was read for.
+    @State private var permissionsFor: String?
     @State private var followers: BauFollowers?
     @State private var showingFollow = false
     @State private var showingFollowers = false
 
     private var canManageServer: Bool {
-        permissions?.can(PermissionBit.manageServer) ?? false
+        permissionsFor == server.id && (permissions?.can(PermissionBit.manageServer) ?? false)
     }
 
     func body(content: Content) -> some View {
@@ -75,15 +77,31 @@ private struct BauFollowEntry: ViewModifier {
     }
 
     private func refresh() async {
-        async let read: BauFollowState? = try? await session.api.bauFollowState(serverId: server.id)
-        async let allowed: PermissionsSnapshot? = permissions == nil
-            ? try? await session.api.fetchMemberPermissions(serverId: server.id) : permissions
-        state = await read
-        permissions = await allowed
-        if canManageServer {
-            followers = try? await session.api.bauFollowers(serverId: server.id)
-        } else {
-            followers = nil
+        // The staff menu depends on two reads that can fail on a bad moment:
+        // a few more tries, a few seconds apart, rather than a header that
+        // loses it until the screen is reopened.
+        for attempt in 0..<3 {
+            let serverId = server.id
+            // A snapshot belongs to the server it was read for.
+            let reuse = permissionsFor == serverId ? permissions : nil
+            async let read: BauFollowState? = try? await session.api.bauFollowState(serverId: serverId)
+            async let allowed: PermissionsSnapshot? = reuse == nil
+                ? try? await session.api.fetchMemberPermissions(serverId: serverId) : reuse
+            let fresh = await read
+            let snapshot = await allowed
+            guard !Task.isCancelled, serverId == server.id else { return }
+            state = fresh
+            permissions = snapshot
+            permissionsFor = snapshot == nil ? nil : serverId
+            if canManageServer {
+                followers = try? await session.api.bauFollowers(serverId: serverId)
+            } else {
+                followers = nil
+            }
+            let complete = snapshot != nil && (!canManageServer || followers != nil)
+            if complete || attempt == 2 { return }
+            try? await Task.sleep(for: .seconds(4))
+            if Task.isCancelled { return }
         }
     }
 }
@@ -103,6 +121,9 @@ final class BauFollowSheetModel {
     private(set) var busyRowId: String?
     private(set) var notice: String?
     private(set) var error: String?
+    /// A mutation failed and the list could not be read again since: what is on
+    /// show may omit a follow that did commit, so it is not trusted for a submit.
+    private var mineUnknown = false
     /// The header re-reads its own state after every change, including a
     /// failed one: a lost response can hide a change that did commit.
     private let onChanged: @MainActor () -> Void
@@ -126,7 +147,10 @@ final class BauFollowSheetModel {
         error = nil
         async let state: BauFollowState? = try? await session.api.bauFollowState(serverId: serverId)
         await reload(session: session)
-        if let fresh = await state { mine = fresh.mine }
+        if let fresh = await state {
+            mine = fresh.mine
+            mineUnknown = false
+        }
     }
 
     /// The servers the viewer may follow into. A 404 is "this Baú no longer
@@ -168,6 +192,15 @@ final class BauFollowSheetModel {
 
     func submit(session: SessionStore) async {
         guard let picker, picker.canSubmit, !isSubmitting, busyRowId == nil else { return }
+        if mineUnknown {
+            // A retry on a list that may be missing a committed follow would be
+            // refused as a duplicate: read it first, and say so if that fails.
+            await refresh(session: session)
+            if mineUnknown {
+                error = String(localized: "That did not work. Try again.")
+                return
+            }
+        }
         isSubmitting = true
         notice = nil
         error = nil
@@ -181,6 +214,7 @@ final class BauFollowSheetModel {
             notice = String(localized: "Done. New posts will arrive in #\(follow.targetChannelName) of \(follow.targetServerName).")
         } catch {
             self.error = BauFollowFailure.from(error).message
+            mineUnknown = true
         }
         // Either way: a lost response can hide a change that did commit.
         onChanged()
@@ -198,6 +232,7 @@ final class BauFollowSheetModel {
             mine.removeAll { $0.id == follow.id }
         } catch {
             self.error = String(localized: "That did not work. Try again.")
+            mineUnknown = true
         }
         onChanged()
         await refresh(session: session)
@@ -214,6 +249,7 @@ final class BauFollowSheetModel {
             if let index = mine.firstIndex(where: { $0.id == follow.id }) { mine[index] = updated }
         } catch {
             self.error = String(localized: "That did not work. Try again.")
+            mineUnknown = true
         }
         onChanged()
         await refresh(session: session)
@@ -222,7 +258,10 @@ final class BauFollowSheetModel {
     private func refresh(session: SessionStore) async {
         async let state: BauFollowState? = try? await session.api.bauFollowState(serverId: serverId)
         await reload(session: session)
-        if let fresh = await state { mine = fresh.mine }
+        if let fresh = await state {
+            mine = fresh.mine
+            mineUnknown = false
+        }
     }
 }
 
