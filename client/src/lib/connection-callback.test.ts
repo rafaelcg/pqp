@@ -114,6 +114,7 @@ describe("messageFromCompleteFailure", () => {
     alreadyLinked: "LINKED",
     expired: "EXPIRED",
     cancelled: "CANCELLED",
+    serviceDown: "SERVICE_DOWN",
     fallback: "FALLBACK",
   };
 
@@ -141,6 +142,23 @@ describe("messageFromCompleteFailure", () => {
         messages,
       ),
     ).toBe("FALLBACK");
+  });
+
+  it("tells a provider-side failure (502) apart from the 400s a person caused", () => {
+    expect(
+      messageFromCompleteFailure(
+        new ApiError(502, "The connection service had a problem on our side"),
+        messages,
+      ),
+    ).toBe("SERVICE_DOWN");
+    // A bad or reused code is a 400 and keeps the generic line, not "later".
+    expect(
+      messageFromCompleteFailure(new ApiError(400, "Token endpoint returned 400"), messages),
+    ).toBe("FALLBACK");
+    // And a 502 is never mistaken for the person's own cancel or expiry.
+    expect(
+      messageFromCompleteFailure(new ApiError(502, "Connection was cancelled"), messages),
+    ).toBe("SERVICE_DOWN");
   });
 
   it("falls back for anything else", () => {

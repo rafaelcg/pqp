@@ -2067,6 +2067,8 @@
   "settings.connections.loadFailed": "Could not load connections.",
   "settings.connections.connectFailed": "Could not start that connection.",
   "settings.connections.completeFailed": "Could not finish that connection.",
+  "settings.connections.serviceDown": "The connection service is having a problem on our side. Try again later.",
+  "settings.connections.callbackEmpty": "The page came back without the provider's answer. Try connecting again.",
   "settings.connections.alreadyLinked": "That account is already connected to someone else on pqp.",
   "settings.connections.expired": "That connection request expired. Try connecting again.",
   "settings.connections.saveFailed": "Could not save that setting.",
