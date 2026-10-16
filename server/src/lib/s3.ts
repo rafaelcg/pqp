@@ -35,6 +35,12 @@ const INTERNAL_URL_TTL_SECONDS = 60;
 /** A hung bucket must not hold a request — or the sweeper — open forever. */
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/** The request deadline, joined with a caller's own cancellation when it has one. */
+function withTimeout(signal?: AbortSignal): AbortSignal {
+  const deadline = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  return signal ? AbortSignal.any([deadline, signal]) : deadline;
+}
+
 /** Storage reachable but unusable, or not configured at all. */
 export class StorageError extends Error {
   constructor(message: string) {
@@ -493,6 +499,12 @@ export interface PresignGetOptions {
   downloadFilename?: string;
 }
 
+/** An object in the bucket and a signed address for it: what a route that may redirect OR serve needs. */
+export interface StoredImage {
+  key: string;
+  signedUrl: string;
+}
+
 export function presignGet(key: string, options: PresignGetOptions): string {
   return signRequest({
     method: "GET",
@@ -522,7 +534,11 @@ export interface ObjectHead {
  * object is not there; throws for anything else, so a caller can tell "never
  * uploaded" apart from "storage is down" and refuse the upload either way.
  */
-export async function headObject(key: string): Promise<ObjectHead | null> {
+export async function headObject(
+  key: string,
+  /** Lets a caller that stopped waiting stop the request too. */
+  signal?: AbortSignal,
+): Promise<ObjectHead | null> {
   const url = signRequest({
     method: "HEAD",
     key,
@@ -533,7 +549,7 @@ export async function headObject(key: string): Promise<ObjectHead | null> {
   try {
     response = await fetch(url, {
       method: "HEAD",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: withTimeout(signal),
     });
   } catch (error) {
     throw new StorageError(
@@ -576,6 +592,8 @@ export async function headObject(key: string): Promise<ObjectHead | null> {
 export async function getObjectPrefix(
   key: string,
   length: number,
+  /** Lets a caller that stopped waiting stop the request too. */
+  signal?: AbortSignal,
 ): Promise<Uint8Array | null> {
   const url = signRequest({
     method: "GET",
@@ -588,7 +606,7 @@ export async function getObjectPrefix(
     response = await fetch(url, {
       method: "GET",
       headers: { Range: `bytes=0-${length - 1}` },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: withTimeout(signal),
     });
   } catch (error) {
     throw new StorageError(
@@ -626,6 +644,62 @@ export async function getObjectPrefix(
     await reader.cancel().catch(() => undefined);
   }
   return Buffer.concat(chunks).subarray(0, length);
+}
+
+/**
+ * An object's bytes as a stream, for a route that serves them itself (the
+ * public Baú cover, which a link crawler reads and a redirect to a signed URL
+ * on another domain does not satisfy). `range` is an inclusive byte span, passed
+ * to the store as `Range: bytes=a-b`; a store that honours it answers 206, and
+ * the caller must check `status` rather than assume it did.
+ *
+ * Returns the fetch `Response` untouched on 200 / 206 so the caller can pipe
+ * `body` and forward the length headers, and null when the object is not
+ * there. Anything else throws a `StorageError`, with the body cancelled first
+ * (undici keeps the connection checked out until a body is consumed or
+ * cancelled). THE CALLER OWNS THE BODY: it must pipe it or `cancel()` it.
+ */
+export async function openObject(
+  key: string,
+  range?: { start: number; end: number },
+): Promise<Response | null> {
+  const url = signRequest({
+    method: "GET",
+    key,
+    ttlSeconds: INTERNAL_URL_TTL_SECONDS,
+  }).url;
+
+  // The deadline covers getting a RESPONSE, not delivering it. A body that is
+  // piped to a viewer on a slow link is paced by that viewer (backpressure), and
+  // a fixed clock over the whole stream would cut a valid 5 MB image off
+  // mid-picture for anyone slower than ~4 Mbit/s. A bucket that stalls after its
+  // headers is still bounded by the fetch client's own body timeout, and a
+  // viewer that leaves cancels the read.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      ...(range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {}),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    throw new StorageError(
+      error instanceof Error ? error.message : "Storage unreachable",
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+  if (response.status === 404) {
+    await response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (!response.ok || !response.body) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new StorageError(`Storage returned HTTP ${response.status} for GET`);
+  }
+  return response;
 }
 
 /**

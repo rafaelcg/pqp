@@ -43,6 +43,17 @@ struct StoriesConfig: Codable, Hashable, Sendable {
     var videoEnabled: Bool
     var maxVideoMs: Int
     var maxBytes: Int
+    /// How many layers a story may carry. Absent or 0 on a server that
+    /// predates layers: the editor is hidden, because that server would
+    /// silently drop what was placed.
+    var layersMax: Int? = nil
+    /// Whether `POST /api/stories/uploads` is on. Absent on a server that
+    /// predates eager uploads, which reads as off: a file then goes up the
+    /// old way, after Post.
+    var eagerUploads: Bool? = nil
+
+    var layersEnabled: Bool { (layersMax ?? 0) > 0 }
+    var eagerUploadsEnabled: Bool { eagerUploads == true }
 
     static let off = StoriesConfig(
         enabled: false, friendsEnabled: false, mediaEnabled: false,
@@ -186,16 +197,23 @@ struct Story: Codable, Hashable, Identifiable, Sendable {
     let background: String?
     let media: StoryMedia?
     let sticker: StoryCallSticker?
-    let call: StoryCallLive?
+    /// The live roster of the story's room, as the server read it. A var: an
+    /// open viewer swaps in a fresher one while the card is on screen.
+    var call: StoryCallLive?
     let publishedAt: Date?
     let expiresAt: Date?
     let audiences: [StoryAudience]
     var viewer: StoryViewerState
     var own: StoryOwnState?
+    /// What the author placed on the canvas, back to front. Empty on a story
+    /// from before layers, and for a layer this build cannot draw.
+    let layers: [StoryLayer]
+    /// What a screen reader says for the story.
+    let altText: String?
 
     private enum CodingKeys: String, CodingKey {
         case id, author, kind, caption, text, background, media, sticker, call
-        case publishedAt, expiresAt, audiences, viewer, own
+        case publishedAt, expiresAt, audiences, viewer, own, layers, altText
     }
 
     init(from decoder: Decoder) throws {
@@ -216,6 +234,8 @@ struct Story: Codable, Hashable, Identifiable, Sendable {
         audiences = (try? c.decodeIfPresent([StoryAudience].self, forKey: .audiences)) ?? []
         viewer = try c.decode(StoryViewerState.self, forKey: .viewer)
         own = (try? c.decodeIfPresent(StoryOwnState.self, forKey: .own)) ?? nil
+        layers = ((try? c.decodeIfPresent(StoryLayerList.self, forKey: .layers)) ?? nil)?.layers ?? []
+        altText = (try? c.decodeIfPresent(String.self, forKey: .altText)) ?? nil
     }
 
     var isText: Bool { kind == "text" }
@@ -303,6 +323,9 @@ struct StoryMediaInput: Codable, Hashable, Sendable {
     let width: Int
     let height: Int
     var durationMs: Int? = nil
+    /// An eager upload (`POST /api/stories/uploads`) that already holds these
+    /// bytes: the create then hands back no URL for the file.
+    var uploadId: String? = nil
 }
 
 struct StoryAudienceTargets: Codable, Hashable, Sendable {
@@ -312,7 +335,7 @@ struct StoryAudienceTargets: Codable, Hashable, Sendable {
 
 /// `POST /api/stories`. Optional keys are left out of the JSON, which is what
 /// the server's `superRefine` expects (a text story must not carry `media`).
-struct CreateStoryRequest: Encodable, Sendable {
+struct CreateStoryRequest: Codable, Sendable {
     /// Made once per story the person means to post and sent again on a
     /// retry: a second create with it answers the first story (with a fresh
     /// upload URL) instead of posting a second one.
@@ -325,6 +348,24 @@ struct CreateStoryRequest: Encodable, Sendable {
     var repliesEnabled: Bool = true
     let audiences: StoryAudienceTargets
     var media: StoryMediaInput? = nil
+    /// Each layer as the wire JSON (`StoryLayerInput` encoded): a request is
+    /// kept on disk while a post waits for a connection, and a layer's
+    /// declaration has to be patched once its upload is known.
+    var layers: [JSONValue]? = nil
+    var altText: String? = nil
+    /// Create AND publish in one call. Only when every file is an eager upload.
+    var publish: Bool? = nil
+}
+
+/// `POST /api/stories/uploads`: a URL for a file before its story exists.
+struct StoryUploadTicket: Codable, Sendable {
+    let uploadId: String
+    let url: String
+    let method: String
+    let headers: [String: String]
+    let expiresAt: String?
+
+    var upload: StoryUpload { StoryUpload(url: url, method: method, headers: headers) }
 }
 
 struct StoryUpload: Codable, Hashable, Sendable {
@@ -336,6 +377,19 @@ struct StoryUpload: Codable, Hashable, Sendable {
 struct CreateStoryResponse: Codable, Sendable {
     let story: Story
     let upload: StoryUpload?
+    /// One per picture layer (placed photo or drawing), empty for none.
+    let layerUploads: [StoryLayerUploadTarget]
+
+    private enum CodingKeys: String, CodingKey { case story, upload, layerUploads }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        story = try c.decode(Story.self, forKey: .story)
+        upload = try c.decodeIfPresent(StoryUpload.self, forKey: .upload)
+        // Absent is "no pictures"; present and unreadable is an error, so a
+        // story is never published without the files it declared.
+        layerUploads = try c.decodeIfPresent([StoryLayerUploadTarget].self, forKey: .layerUploads) ?? []
+    }
 }
 
 struct PublishStoryResponse: Codable, Sendable { let story: Story }
@@ -411,12 +465,39 @@ enum StoryRules {
         reactions.first { $0.key == reaction }?.glyph ?? reaction
     }
 
-    /// The text card palette. Each key is chosen for at least 4.5:1 with
-    /// white text (`STORY_BACKGROUNDS`).
+    /// The text card palette, family one ("glow"): `STORY_BACKGROUNDS`, which
+    /// stays the original six (Android pins it). Each key is chosen for at least
+    /// 4.5:1 with white text.
     static let backgrounds = ["lime", "night", "ember", "grape", "sand", "ink"]
+    /// Family two: one flat colour each (`STORY_BACKGROUNDS_SOLID`).
+    static let solidBackgrounds = ["cobalt", "crimson", "pine", "plum", "teal", "onyx"]
+    /// Family three: a 160 degree two-stop linear gradient each
+    /// (`STORY_BACKGROUNDS_GRADIENT`).
+    static let gradientBackgrounds = ["sunset", "ocean", "aurora", "dusk", "berry", "lagoon"]
+    /// Every key a text card may carry, in the order a picker draws them
+    /// (`STORY_CARD_BACKGROUNDS`).
+    static let cardBackgrounds = backgrounds + solidBackgrounds + gradientBackgrounds
 
+    /// The two ends a card is drawn between. The stops of the new families are
+    /// the web's `--story-bg-*` tokens (`client/src/index.css`, OKLCH) converted
+    /// to sRGB; a solid is the same colour twice. The glow six are this app's
+    /// own flattened versions of the web's radial-over-linear cards. A key this
+    /// build does not know draws the default dark card, so a story from a newer
+    /// build never fails to show.
     static func backgroundColors(_ key: String?) -> [Color] {
         switch key {
+        case "cobalt": [Color(red: 0.097, green: 0.343, blue: 0.825), Color(red: 0.097, green: 0.343, blue: 0.825)]
+        case "crimson": [Color(red: 0.732, green: 0.025, blue: 0.119), Color(red: 0.732, green: 0.025, blue: 0.119)]
+        case "pine": [Color(red: 0.000, green: 0.387, blue: 0.246), Color(red: 0.000, green: 0.387, blue: 0.246)]
+        case "plum": [Color(red: 0.535, green: 0.153, blue: 0.517), Color(red: 0.535, green: 0.153, blue: 0.517)]
+        case "teal": [Color(red: 0.000, green: 0.456, blue: 0.458), Color(red: 0.000, green: 0.456, blue: 0.458)]
+        case "onyx": [Color(red: 0.047, green: 0.052, blue: 0.061), Color(red: 0.047, green: 0.052, blue: 0.061)]
+        case "sunset": [Color(red: 0.828, green: 0.257, blue: 0.000), Color(red: 0.600, green: 0.000, blue: 0.383)]
+        case "ocean": [Color(red: 0.000, green: 0.493, blue: 0.589), Color(red: 0.002, green: 0.242, blue: 0.544)]
+        case "aurora": [Color(red: 0.000, green: 0.475, blue: 0.314), Color(red: 0.293, green: 0.180, blue: 0.586)]
+        case "dusk": [Color(red: 0.200, green: 0.205, blue: 0.629), Color(red: 0.764, green: 0.179, blue: 0.520)]
+        case "berry": [Color(red: 0.721, green: 0.060, blue: 0.476), Color(red: 0.320, green: 0.092, blue: 0.494)]
+        case "lagoon": [Color(red: 0.000, green: 0.504, blue: 0.484), Color(red: 0.000, green: 0.397, blue: 0.153)]
         case "lime": [Color(red: 0.22, green: 0.42, blue: 0.08), Color(red: 0.12, green: 0.27, blue: 0.05)]
         case "night": [Color(red: 0.10, green: 0.16, blue: 0.42), Color(red: 0.05, green: 0.07, blue: 0.22)]
         case "ember": [Color(red: 0.66, green: 0.20, blue: 0.10), Color(red: 0.38, green: 0.08, blue: 0.06)]
@@ -424,6 +505,21 @@ enum StoryRules {
         case "sand": [Color(red: 0.52, green: 0.38, blue: 0.16), Color(red: 0.32, green: 0.22, blue: 0.08)]
         default: [Color(red: 0.12, green: 0.14, blue: 0.17), Color(red: 0.03, green: 0.04, blue: 0.06)]
         }
+    }
+
+    /// The card as a view fill. The gradient family runs at 160 degrees (CSS:
+    /// clockwise from the top), which on the 9:16 canvas is from just right of
+    /// the top-left corner to just left of the bottom-right; the other families
+    /// keep the top-to-bottom they always had.
+    static func backgroundGradient(_ key: String?) -> LinearGradient {
+        let colors = backgroundColors(key)
+        if gradientBackgrounds.contains(key ?? "") {
+            return LinearGradient(
+                colors: colors,
+                startPoint: UnitPoint(x: 0.155, y: -0.033), endPoint: UnitPoint(x: 0.845, y: 1.033)
+            )
+        }
+        return LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
     }
 
     /// A ring is gone once its newest story expires. Expiry sends no frame,

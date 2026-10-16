@@ -164,12 +164,39 @@ function exitControl(): HTMLButtonElement | null {
   return document.querySelector<HTMLButtonElement>("[data-live-preview] header button[aria-label]");
 }
 
-/** jsdom runs a history traversal on a timer, then fires popstate. */
-async function goBack() {
+/**
+ * Runs `start` and resolves once the history traversal it began has landed.
+ * jsdom performs a traversal on a timer and then fires `popstate`, so the
+ * event is the signal: a fixed sleep here (it was 30 ms) is shorter than the
+ * timer on a loaded CI runner, and the next assertion then reads the entry
+ * from before the traversal.
+ */
+async function untilPopstate(start: () => void) {
   await act(async () => {
-    window.history.back();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onPop: (() => void) | undefined;
+    const landed = new Promise<void>((resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("the history traversal never fired popstate")),
+        5_000,
+      );
+      onPop = () => resolve();
+      window.addEventListener("popstate", onPop, { once: true });
+    });
+    try {
+      start();
+      await landed;
+    } finally {
+      clearTimeout(timer);
+      window.removeEventListener("popstate", onPop!);
+      // `landed` may still reject later if `start` threw; it is not awaited then.
+      landed.catch(() => {});
+    }
   });
+}
+
+async function goBack() {
+  await untilPopstate(() => window.history.back());
 }
 
 async function answerStart(index: number, result: LivePreviewStartResult) {
@@ -281,10 +308,7 @@ describe("LivePreviewPanel", () => {
     await watchNow();
     await answerStart(1, okResult());
     expect(window.history.state?.pqpLivePreview).not.toEqual(resting?.pqpLivePreview);
-    await act(async () => {
-      exitControl()!.click();
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    });
+    await untilPopstate(() => exitControl()!.click());
     expect(page()).toBeNull();
     // Back on the entry the visitor started from, not on the one the page pushed.
     expect(window.history.state).toEqual(resting);

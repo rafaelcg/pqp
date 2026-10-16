@@ -908,6 +908,14 @@ export const communityHomePostSchema = z.object({
    * anything that is not an uploaded video, and from an older API.
    */
   captions: communityHomePostCaptionsSchema.nullable().default(null),
+  /**
+   * The post's public page (`https://pqp.gg/c/<slug>/p/<id>`), present ONLY
+   * while it qualifies: published, free, in a community with a public address
+   * that is not suspended, with `COMMUNITIES_ENABLED` and the `bau_public_posts`
+   * flag on for the server. A client offers Compartilhar when this is a
+   * string and never builds the URL itself. Absent from an older API.
+   */
+  publicUrl: z.string().nullable().optional(),
 });
 
 export type CommunityHomePost = z.infer<typeof communityHomePostSchema>;

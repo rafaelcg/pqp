@@ -358,6 +358,260 @@ path, send permission), `packages/shared/src/community-home-share.test.ts`
 (permalink parsing), `client/src/lib/community-home/share-card.test.ts` (which
 links get a card), `client/src/components/chat/bau-post-card.test.tsx`.
 
+## Seguir (follow a Baú into a channel)
+
+Behind the per-server runtime flag `bau_follow` (default off), read for the
+SOURCE server: the QG first, any other community later with an override and no
+deploy. A follow is a row `source Baú -> text channel of another server`
+(`bau_follows`, unique per source and channel). When the source publishes a
+**free** post, a job posts a forward card (`messages.forward`, the contract in
+`docs/FORWARD.md`, `kind: "bau_post"`) into every followed channel. The author is
+a webhook-style pseudo identity per source (`users.is_webhook`, clerk id
+`bau-follow:<serverId>`), shown with the source's name and icon, never a real
+user and never in a member list.
+
+- **Who may be followed, and by whom.** Three things, all required, plus a fourth
+  that depends on the viewer: the `bau_follow` flag for the source, the source's
+  own Baú switch, and the OWNER'S switch **Permitir seguir** (`servers.bau_follow_allowed`,
+  default off, Baú settings in Server settings, Manage Server, audited), and then
+  EITHER the source is a public community with an address (a Baú that is public
+  by intent: any member of it may follow) OR the viewer holds Manage Server on it
+  (an ordinary server's staff may pipe their own Baú elsewhere; a plain member of
+  one never can). A refusal is a 404 for every reason. Delivery asks again: a
+  private source's follow whose creator lost Manage Server there counts as a
+  permission failure like any other. "Free" means free for the server's members,
+  which is why a private server needs its staff and its owner's say.
+- **The destination's say.** A destination that bans the source identity gets no
+  more cards (each skipped card counts toward the auto-pause), slow mode spaces
+  the cards out (one per interval, the rest wait), and the identity cannot be
+  sent a friend request.
+- **Setting it up.** A **Seguir** button on the Baú header of a followable
+  server opens a picker of the viewer's own servers, each with the text channels
+  where they hold MANAGE_WEBHOOKS or MANAGE_CHANNELS (tested per channel, cargo
+  bits plus that channel's overwrites, the same test as creating and delivering,
+  so a grant that exists only as a channel overwrite counts and a channel that
+  denies it does not appear). `POST /api/servers/:id/home/follow`; the channel is
+  checked for the same authority, so a per-channel grant counts there. The
+  destination channel's settings list what it follows with **Deixar de seguir**
+  (`GET /api/channels/:id/bau-follows`, `DELETE /api/bau-follows/:id`). Android
+  has the same set (button, picker, followers with **Permitir seguir**, the
+  channel's list); see `docs/ANDROID.md` §Seguir. iOS has it too (next item).
+- **On iOS** (`ios/pqp/Sources/Core/BauFollow.swift`, `Home/BauFollowViews.swift`).
+  The same three places as the web, in phone shapes. The Baú's toolbar draws a
+  bell while the state read says `enabled` (a filled bell once the viewer
+  follows it somewhere), which opens a sheet: the viewer's own follows of this
+  Baú (Deixar de seguir, Retomar when paused), then server, channel and optional
+  role pickers. Whoever holds Manage Server also gets an overflow menu whenever
+  the flag is on for the source (`flagOn` on the followers read), **even while the
+  owner's switch is off**, because that menu is where the switch lives on a phone
+  (there is no Baú settings screen): the Seguidores sheet holds the "Permitir
+  seguir" toggle, the follower list (Remover, Remover e bloquear after a
+  confirmation, 50 rows at a time) and the blocked servers with Desbloquear. A
+  text channel's context menu has **Seguindo** for whoever holds Manage Webhooks
+  or Manage Channels there, while the instance Baú flag is on: it lists what the
+  channel follows. Unlike the web, which hides that section when the list is
+  empty, the phone shows the entry and says "this channel follows nothing yet",
+  because a context menu cannot be filled after an async read. Refusals map the
+  way the web's `bauFollowErrorKey` does (`BauFollowFailure`). The rules are
+  pinned by `BauFollowTests`; `BauFollowUITests` drives the journey against a
+  local API (not run in CI).
+- **What goes out.** Free, published posts that went live AFTER the follow was
+  made (or last resumed), never the backlog. Scheduled posts go out when they
+  flip to published. Members-only (VIP) posts and drafts never do. A post older
+  than six hours when it would go out is dropped, so a flag that was off for a
+  day does not announce the day.
+- **Exactly once.** The seam is the post's state, not a hook (like the push
+  claim): `runBauFollowTick` (`bau-follow-delivery.ts`) enqueues a row in
+  `bau_follow_deliveries` per qualifying (post, follow), claims due rows with a
+  lease, and writes the card and the row's move to `delivered` in one
+  transaction guarded on the claim; a unique nonce on the message
+  (`bau-follow:<postId>`) is the second wall. Two processes (API and worker) may
+  tick at once. Retries after 5 s, 30 s, 2 min, 10 min and 1 h, then `dead`.
+  At most 60 deliveries of one post per minute. Runs in `jobs.ts` (the worker
+  when there is one) every 10 s and is kicked by the publish, edit, unpublish
+  and delete routes.
+- **Edits and deletes follow.** An edit that changes what the card shows updates
+  the delivered message (the snapshot, the fallback body, `editedAt`, and a
+  `message-update` frame). Deleting the post, moving it back to a draft or
+  locking it for members deletes the delivered messages; a post that comes back
+  free is delivered again. A card a destination moderator deleted by hand is not
+  posted again. Unfollowing stops future cards and leaves the delivered ones.
+- **Nothing pings.** A delivery carries no mention at all: no role, no user, no
+  `@everyone` or `@here`, and no `message_mentions` rows. (Seguir first shipped a
+  per-follow role ping; a source with several staff could amplify it into every
+  destination, so it was removed. `role_ping_id` stays in the table, inert, and
+  `rolePingId` / `rolePingName` stay in the API contract, always null, so older
+  clients still parse it; a create or patch that sends one is accepted and
+  ignored, and the destinations list offers no roles.) The snapshot is made
+  inert like a forward's (`defangSnapshot`: markup to plain words, a zero-width
+  space after every `@name`), so the card and its fallback body hold nothing a
+  client could scan into a mention. A card delivered while pings existed loses
+  its `@Role` line and its mention rows in a cleanup that runs on a process's
+  first tick and then hourly (`cleanLegacyPingCards`, a bounded batch over the
+  last 90 days; not in the every-tick sweep), or at once when its post is edited,
+  even if the edit changes nothing on the card. A card whose text held an `@word`
+  or mention markup is made inert the next time its post is edited.
+- **Auto-pause.** Delivery re-checks the authority the follow was made under
+  (`created_by` must still manage webhooks or channels in the channel). Three
+  consecutive failures pause the follow (`paused_reason: permissions`), write an
+  audit entry in the destination server and post one plain notice in the channel
+  from the source identity. The channel's staff resume it from the channel's
+  Seguir section; the resumer becomes the authority, `since_at` resets and what
+  was queued is dropped.
+- **Source side.** Staff with MANAGE_SERVER see the follower count and the list
+  (server and channel names, never people; `GET .../home/followers`, newest first,
+  paged with `?limit=` up to 500 and the opaque `?cursor=` from the previous
+  `nextCursor`, `count` always the total; no parameters answers the first 500 as
+  it always did), can remove
+  a follower, or remove and **block** its whole server
+  (`DELETE .../home/followers/:id?block=1`, which also removes that server's
+  other follows and refuses new ones); `DELETE .../home/follow-blocks/:serverId`
+  unblocks. A destination server holds at most 20 follows.
+- **The card's link.** The post's public page when it has one (`getBauPublicUrl`,
+  `bau_public_posts` on, a public community with an address), so a follower who
+  is not a member of the source opens a real page; otherwise the in-app Baú post
+  address, which only a member of the source can open. The body of a delivery is the fallback line alone. Cards delivered
+  while pings existed carry an `@Role` line above it, which `forwardBodyComment`
+  (`@pqp/shared`) still handles.
+
+Tests: `server/src/services/bau-follow.test.ts` (flag per source, permissions,
+delivery, scheduled, edit, delete, pause, source staff, limits) and
+`bau-follow-two-process.test.ts` (two processes, one card each).
+## A public page per post (`bau_public_posts`)
+
+Runtime flag, **per server, default off** (`docs/FEATURE_FLAGS.md`). A free,
+published post of a community with a public address has a page anybody can open
+with no account: `pqp.gg/c/<slug>/p/<postId>` (`bauPublicPostPath`,
+`parseBauPublicPostPath` in `packages/shared/src/community-home-public.ts`).
+It is the thing a member shares to X, Reddit, WhatsApp or Telegram, and the
+page's job is the same as `/c/<slug>`'s: show the post, then one button that
+carries the visitor through sign-up into the community (`?join=<slug>`).
+
+- **One predicate.** `bauPublicUrlFor` (`server/src/services/community-home.ts`)
+  says whether a post has a page: published, `visibility = free`, the server is
+  a community with an address and is not suspended, `COMMUNITIES_ENABLED`,
+  `COMMUNITY_HOME_ENABLED`, the server's own Baú switch, and the flag for that
+  server. The unauthenticated read, its cover redirect and the `publicUrl`
+  below all call it. Listing in the directory is not required, only the address.
+- **Read.** `GET /api/public/communities/:slug/posts/:postId` answers
+  `{ post, community }` (`publicBauPostResponseSchema`): title, body, the media
+  the feed draws (signed GETs, **ten minutes**: `BAU_PUBLIC_MEDIA_TTL_SECONDS`,
+  against the feed's twelve hours, so a post that stops being public stops being
+  served soon; a tab left open longer cannot seek in a video until reloaded),
+  the post's own `publicUrl` and the community poster, in ONE statement. **No
+  author, no comments, no likers, no translation, no subtitles**; the counts
+  only.
+- **Channel mentions.** A `<#channelId>` in a body keeps its id, and travels
+  with its name in `post.channels`, only when `@everyone` can view that channel
+  (the arithmetic of `channel_viewable` without a person: `@everyone`'s
+  permissions with the channel's `@everyone` overwrite, so a private channel's
+  deny fails with no special case). Any other mention is swapped for
+  `<#00000000-0000-0000-0000-000000000000>`, so a staff-only channel's name is
+  never published. The page draws both as neutral pills (`#anuncios`, `#canal`;
+  never "unavailable"); the teaser and the Open Graph text read `#anuncios` or
+  "um canal" (the markdown stripper would otherwise eat the `#` and leave the id
+  behind as `<id`).
+- **Caching.** 200: `public, max-age=0, s-maxage=60, stale-while-revalidate=60`.
+  Every refusal (and the cover redirect): `public, max-age=0, s-maxage=60`, the
+  same on every kind of refusal. 429 and 503 stay `no-store`. `Access-Control-Allow-Origin: *`
+  and no `Vary: Origin`, because Cloudflare does not honour `Vary` and the first
+  origin to ask would otherwise be the only one a cached copy answers. The
+  window a post flipped to private stays readable at the edge is at most
+  `s-maxage` + `stale-while-revalidate` (two minutes), then the signed URLs
+  inside run out (ten); the mirror cost is that a post published just after a
+  miss is invisible for up to a minute. **Cloudflare only caches this if a Cache
+  Rule says so** (a path with no file extension is not cached by default): an
+  "Eligible for cache, respect origin headers" rule for `/api/public/communities/*`.
+  Without the rule nothing breaks, the headers are simply not used.
+- **One API hit per page view.** The Pages middleware already fetches the post
+  to write the card, so it embeds the answer in the HTML as an inert
+  `<script type="application/json" id="pqp-bau-post">` (`<`, `>`, `&` escaped so
+  author text cannot close it). The page reads it first
+  (`takePublicPostEmbed`: parsed with the shared schema, must name the same
+  post and community, removed once read) and asks the API only when it is
+  absent or wrong. The limiter bucket is 240 burst / 8 per second per address (the
+  poster's is 60 / 2) because, until the Caddy change in `tools/api-host`
+  makes the API key on the viewer, every visitor behind one Cloudflare edge
+  shares it.
+- **Every refusal is the same 404**, byte for byte: draft, scheduled,
+  unpublished, deleted, members-only (with the VIP flag on or off), unknown or
+  malformed id, a post of another community under this slug, no address,
+  suspended, the Baú off for the server, and any of the three flags off
+  (including a per-server override that says no). Pinned by
+  `server/src/api/public-bau-post.test.ts`, which compares status, body and
+  headers against the unknown post's.
+- **Cover.** `GET …/posts/:postId/cover` is the post's own picture, an uploaded
+  image or a video's chosen cover, served from the API's own origin: 200 with
+  `Content-Type`, `Content-Length`, an `ETag`, `Accept-Ranges: bytes`,
+  `Cache-Control: public, max-age=3600, s-maxage=3600`, byte ranges (206 / 416)
+  and conditional GETs (304). It is the stable image address an unfurl card can
+  keep for weeks. It used to be a 302 to a presigned URL on the bucket's domain,
+  and X took that for "no image" (a small card with a placeholder): link
+  crawlers commonly validate an `og:image` with a HEAD or a ranged GET and want a
+  plain 200. Streamed from the bucket, never buffered; over 5 MB, or of a format
+  that is not an inert image (svg, html, anything unknown), it still answers the
+  old 302 to a fresh signed GET. The `ETag` is a hash of the object's key, which
+  is immutable (a replaced picture is a new key), so a 304 costs no storage call
+  and is only ever sent after the post has been proved public again. A YouTube
+  post's cover is its public poster (not ours, nothing is claimed about it). No
+  picture, or a post that does not qualify: the same 404. The code is
+  `server/src/api/public-bau-cover.ts`.
+- **HEAD.** Every public community read (`/api/public/communities/config`,
+  `/:slug`, `/:slug/posts/:postId` and `/cover`) answers HEAD exactly as GET minus
+  the body, refusals included, and `OPTIONS` is the usual 204. Before, a HEAD fell
+  into the authenticated router and answered 401.
+- **What the card is told about the picture.** The post's answer carries
+  `coverType`, `coverWidth`, `coverHeight` and `coverBytes`, read from the
+  picture's own first 64 KB (`server/src/lib/image-info.ts`, jpeg / png / webp /
+  gif, no dependency) and remembered per storage key
+  (`server/src/services/community-home-cover-info.ts`). Null when unknown: a
+  YouTube poster, a format we do not read, or a bucket that took more than 0.5 s
+  on a cold cover, because the page never waits longer than that on storage for
+  a hint. The lookup is one HEAD and one ranged read sent together; when the page
+  gives up and nobody else is waiting on it (the cover route may be), or one of
+  the two fails, both are cancelled at the bucket, each has a 5 s deadline of its
+  own, and the page does
+  not start more than 16 at once. The file's `Content-Type` is what the header
+  says the bytes are (the card advertises the same), falling back to the type the
+  object was stored under. The edge turns them into
+  `og:image:type`, `width`, `height` and picks the card by X's rules (jpg / png /
+  webp / gif, at most 5 MB; at least 300x157 for `summary_large_image`, 144x144 for
+  `summary`; X crops a large card to about 2:1, so any aspect ratio stays large).
+  A picture below those lines moves to the small card or is passed over for the
+  banner; we cannot enlarge one at the edge.
+- **`publicUrl`.** Every Baú post a member reads (feed, single read, chat card)
+  carries `publicUrl`, the page's absolute URL (origin from `PUBLIC_APP_URL`'s
+  first entry, else `https://pqp.gg`), **only** while the page would answer. A
+  client shows Compartilhar when, and only when, it is a string, and never
+  builds the URL itself.
+- **Linking the page from the server** (a followed Baú's delivery, a forward
+  card): `getBauPublicUrl(serverId, postId)` in
+  `server/src/services/community-home-public.ts` asks the same predicate about
+  the post as it is now and answers the address or null (never throws). A caller
+  that already holds the post row calls `bauPublicUrlFor(row)` and skips the
+  query. Link the public page only when it returns a string; otherwise link the
+  in-app permalink.
+- **Web.** `client/src/pages/public-bau-post-page.tsx` (route `/c/:slug/p/:postId`):
+  the post drawn like the Baú (`UnlockedMedia`), then the CTA block (the community
+  poster, the member count, "Entrar na comunidade" through the same join intent
+  as `/c/<slug>`); signed-in members get "Abrir no app". A post that does not
+  qualify is a friendly 404 that still offers the community when it is public.
+  Compartilhar (`client/src/components/community-home/community-home-share-public.tsx`):
+  `navigator.share` on a touch device, a menu on desktop (copy link, X, Reddit,
+  WhatsApp, Telegram). Every shared URL carries
+  `?utm_source=<network>&utm_medium=share&utm_campaign=bau` (`bauShareUrl`), which
+  the existing acquisition capture reads. The link is always the API's `publicUrl`
+  (canonical origin), on the page and in the app; the in-app button has a 44px
+  tap target (a pseudo-element past a compact visual).
+- **Edge.** `client/functions/_middleware.ts` rewrites the head for the route
+  through `client/src/lib/bau-post-meta.ts`: the post's title and teaser, the
+  post's picture (else the community banner) as `og:image`, `summary_large_image`
+  when there is one. It fetches the same read the page does, so a post that
+  would 404 unfurls as the product's generic card and says nothing.
+- **iOS and Android** show Compartilhar on a post that has `publicUrl` and hand
+  it to the system share sheet (`ShareLink` / `ACTION_SEND` chooser) with the
+  `utm_source=native` link.
+
 ## Limits
 
 What a member can do, and how much of it. The global per-user write budget
@@ -762,9 +1016,18 @@ step: `communityHome.captions.enqueued`, `.skipped` (`flag-off`,
 `no-provider`, `over-budget`), `.noSpeech`, `.done`, `.failed`, and
 `communityHome.captions.translation.done | skipped | failed`.
 
-**Native apps** do not show subtitles yet. AVPlayer only takes external
-WebVTT through an HLS wrapper or an `AVMutableComposition`, and ExoPlayer
-through a `SubtitleConfiguration`; the endpoint above is what they will read.
+**iOS** shows them (`ios/pqp/Sources/Core/BauCaptions.swift`). AVPlayer only
+takes external WebVTT through an HLS wrapper or an `AVMutableComposition`, so
+the app parses the WebVTT itself and draws the current cue in the
+`AVPlayerViewController`'s content overlay (inline and in the system's full
+screen), driven by a 0.25 s clock on the player. The rules are the web's:
+reader-language track, else the source; on by default only when the video's
+language differs from the reader's; the CC button in the card's action row
+flips it and is remembered on the device (`pqp.communityHome.captions`); no
+subtitles when the played file is more than 1.5 s from `durationMs`. Picture in
+Picture shows none (the overlay is the controller's, not the PiP window's).
+**Android** does not show subtitles yet: ExoPlayer takes them through a
+`SubtitleConfiguration`, and the endpoint above is what it will read.
 **The phone cut** (`bau_mobile_rendition`, the vertical second file of a
 post) is transcribed once, through the main video: the tracks are keyed to the
 post and the main video's storage key. The web player shows them on the cut

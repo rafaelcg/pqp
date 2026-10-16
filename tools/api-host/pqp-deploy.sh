@@ -27,6 +27,14 @@
 # access could.
 #
 # Usage: sudo /usr/local/bin/pqp-deploy <image-tag>
+#
+# pqp-deploy-capability: caddy-dir-v1
+# ^ A marker, not prose. deploy-api-vultr.yml greps the INSTALLED copy of
+# this script for that exact string and refuses to deploy over one without
+# it: compose.yaml bind-mounts the DIRECTORY /opt/pqp/caddy now (see
+# "THE CADDYFILE LIVES IN A DIRECTORY" below), and an older script would
+# `up -d caddy` against a directory it never created. Bump the suffix, and
+# the workflow's grep with it, if a later change needs the same gate.
 set -euo pipefail
 
 TAG="${1:?usage: pqp-deploy <image-tag>}"
@@ -51,6 +59,52 @@ env_tmp=""
 trap 'rm -f "$STAGING"/compose.yaml "$STAGING"/Caddyfile "$STAGING"/pqp-deploy.sh "$STAGING"/manifest.sha256 "$STAGING"/manifest.sig; rm -rf "${VERIFIED:-}"; rm -f "${tmp_bin:-}" "${env_tmp:-}"' EXIT
 
 cd "$DEST"
+
+# THE CADDYFILE LIVES IN A DIRECTORY, NOT AS A SINGLE BOUND FILE.
+# compose.yaml mounts /opt/pqp/caddy at /etc/caddy. It used to bind-mount
+# the one file /opt/pqp/Caddyfile, and a single-file bind mount pins an
+# INODE: `install` (below) writes a new file and renames it over the old
+# one, so the host path moved to a new inode while the container kept
+# reading the old one, silently, for four weeks (2026-09-16 to 2026-10-15,
+# 4660 bytes in the container against 8323 on the host). Every Caddyfile
+# change in between, including the Cloudflare viewer-address keying and
+# `stream_close_delay`, never ran, and `caddy reload --force` said "config
+# is unchanged" because, to the container, it was. A directory mount
+# resolves the name on every lookup, so a rename is seen. Everything Caddy
+# reads from the host lives under this one directory: Caddyfile, and
+# certs/ for the Origin CA mode of the Caddyfile.
+CADDY_DIR="$DEST/caddy"
+
+# Idempotent, safe on every run, and the reason a box whose operator never
+# ran any migration by hand still comes up: creates the directory and
+# SEEDS it from the old layout (/opt/pqp/Caddyfile, /opt/pqp/certs) only
+# where the new copy does not exist yet. It never overwrites anything that
+# is already in CADDY_DIR, and never deletes the old certs (key material;
+# an operator removes those by hand once the new layout has served traffic).
+# The staged Caddyfile, when there is one, is installed over the seed
+# below, so the seed only matters for a run that stages nothing.
+ensure_caddy_layout() {
+  install -d -m 0755 -o pqp -g pqp "$CADDY_DIR"
+  if [[ ! -e "$CADDY_DIR/Caddyfile" && -f "$DEST/Caddyfile" ]]; then
+    echo "caddy-layout: seeding $CADDY_DIR/Caddyfile from the old $DEST/Caddyfile"
+    install -m 0644 -o pqp -g pqp "$DEST/Caddyfile" "$CADDY_DIR/Caddyfile"
+  fi
+  if [[ ! -e "$CADDY_DIR/certs" ]]; then
+    if [[ -d "$DEST/certs" ]]; then
+      echo "caddy-layout: copying $DEST/certs to $CADDY_DIR/certs (the old directory is left in place)"
+      # Copy aside, then rename into place: a copy that dies halfway must not
+      # leave a half-filled certs/ that the `-e` test above would take for a
+      # finished migration on the next run. A leftover temp from a dead run
+      # is simply redone.
+      rm -rf -- "$CADDY_DIR/.certs.migrating"
+      cp -a -- "$DEST/certs" "$CADDY_DIR/.certs.migrating"
+      mv -- "$CADDY_DIR/.certs.migrating" "$CADDY_DIR/certs"
+    else
+      install -d -m 0755 -o pqp -g pqp "$CADDY_DIR/certs"
+    fi
+  fi
+}
+ensure_caddy_layout
 
 # The deploy workflow scp's a fresh compose.yaml/Caddyfile/pqp-deploy.sh as
 # pqp-deploy (unprivileged, cannot write into /opt/pqp or
@@ -155,7 +209,7 @@ print(hmac.new(key, data, hashlib.sha256).hexdigest())
     exit 1
   fi
   install -m 0644 -o pqp -g pqp "$VERIFIED/compose.yaml" "$DEST/compose.yaml"
-  install -m 0644 -o pqp -g pqp "$VERIFIED/Caddyfile" "$DEST/Caddyfile"
+  install -m 0644 -o pqp -g pqp "$VERIFIED/Caddyfile" "$CADDY_DIR/Caddyfile"
   # Same permissions/ownership provision.sh uses for the initial install.
   # Explicit temp-file-then-rename rather than trusting `install`'s own
   # internals to do the equivalent: GNU coreutils' `install` DOES already
@@ -403,8 +457,103 @@ fi
 # whether api-a/api-b are usable at request time; this reload only ever
 # needs to happen once the replica(s) we just brought up are confirmed
 # healthy above, which they are by this point.
+#
+# The reload is the NORMAL path and stays graceful: the Caddyfile's
+# `stream_close_delay` is what lets `/ws` sockets drain across it instead
+# of being cut, and nothing below touches that.
+#
+# SAFETY NET, not the plan (the directory mount in compose.yaml is the
+# plan): what Caddy is actually running from must be the file this run just
+# installed. A bind mount can go stale in ways a reload cannot see (the
+# 2026-10 incident: `caddy reload` answered "config is unchanged" for four
+# weeks), so compare the two files' bytes instead of trusting the reload's
+# own report. On a mismatch, recreate ONLY the caddy container (a new
+# container resolves its mounts afresh and starts from the host's file),
+# check again, and fail the deploy loudly if it still differs. Recreating
+# is the blunt tool, it cuts every open socket, which is exactly why it is
+# the fallback and the reload stays first.
+#
+# >>> caddy-integrity (test-pqp-deploy.sh extracts this block, keep the markers)
+# Both print a 64-hex-digit sha256 or NOTHING. Anything else on stdout (an
+# error text, a banner) is not a checksum and must never be compared as one:
+# an empty result means "could not read", which verify_caddyfile_in_sync
+# retries and then fails on, and only two real, different hashes count as a
+# mismatch.
+caddy_host_sum() {
+  { sha256sum "$CADDY_DIR/Caddyfile" 2>/dev/null || true; } | { grep -Eo '^[0-9a-f]{64}' || true; }
+}
+caddy_container_sum() {
+  { docker compose exec -T caddy sha256sum /etc/caddy/Caddyfile 2>/dev/null || true; } | { grep -Eo '^[0-9a-f]{64}' || true; }
+}
+caddy_in_sync() {
+  local host cont
+  host="$(caddy_host_sum)"
+  cont="$(caddy_container_sum)"
+  [[ -n "$host" && "$host" == "$cont" ]]
+}
+verify_caddyfile_in_sync() {
+  local tries=0 host cont=""
+  host="$(caddy_host_sum)"
+  if [[ -z "$host" ]]; then
+    echo "cannot read $CADDY_DIR/Caddyfile to compare it with what caddy runs; recreating caddy would not fix that" >&2
+    return 1
+  fi
+  # A failed `exec` reads as an empty sum, and a single transient Docker or
+  # exec error must not be taken for a stale file: recreating caddy cuts
+  # every open socket. So an EMPTY read is retried, and ONLY a read that
+  # actually returned a different hash leads to the recreate below. A read
+  # that stays empty is not evidence of a stale file (the reload just before
+  # this succeeded, so the container answers; what is broken is the
+  # checksum read itself, and a recreate would not fix that), so it fails
+  # the deploy without touching caddy.
+  while (( tries < ${CADDY_PROBE_TRIES:-5} )); do
+    cont="$(caddy_container_sum)"
+    [[ -n "$cont" ]] && break
+    tries=$((tries + 1))
+    sleep "${CADDY_SYNC_SLEEP:-2}"
+  done
+  if [[ -z "$cont" ]]; then
+    echo "could not read the Caddyfile checksum inside the caddy container after ${CADDY_PROBE_TRIES:-5} tries, so whether it matches $CADDY_DIR/Caddyfile is unknown; not recreating caddy on that basis" >&2
+    return 1
+  fi
+  if [[ "$cont" == "$host" ]]; then
+    echo "caddyfile-sync=ok (host and container sha256 agree)"
+    return 0
+  fi
+  tries=0
+  echo "warning: the Caddyfile caddy is running from differs from $CADDY_DIR/Caddyfile (host $host, container '$cont'); recreating the caddy container only" >&2
+  docker compose up -d --no-deps --force-recreate caddy
+  # The container needs a moment before `exec` answers; an unanswered exec
+  # reads as an empty sum, which is "not in sync", so this just polls.
+  while (( tries < ${CADDY_SYNC_TRIES:-15} )); do
+    if caddy_in_sync; then
+      echo "caddyfile-sync=recreated (host and container sha256 agree after recreating caddy)"
+      return 0
+    fi
+    tries=$((tries + 1))
+    sleep "${CADDY_SYNC_SLEEP:-2}"
+  done
+  echo "caddy still runs a Caddyfile that differs from $CADDY_DIR/Caddyfile after a recreate (host $(caddy_host_sum), container '$(caddy_container_sum)'); the config on disk is NOT what is live" >&2
+  return 1
+}
+# <<< caddy-integrity
+
 docker compose up -d caddy
 docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --force
+if ! verify_caddyfile_in_sync; then
+  exit 1
+fi
+
+# The old single-file layout is retired once the new one is proven live.
+# Left in place it would be a second, stale Caddyfile that nothing reads,
+# which is the shape of the original confusion (two files, two answers).
+if [[ -f "$DEST/Caddyfile" ]]; then
+  rm -f -- "$DEST/Caddyfile"
+  echo "caddy-layout: removed the retired $DEST/Caddyfile (live copy: $CADDY_DIR/Caddyfile)"
+fi
+if [[ -d "$DEST/certs" ]]; then
+  echo "caddy-layout: $DEST/certs is no longer read (certs live in $CADDY_DIR/certs); remove it by hand when convenient"
+fi
 
 # Only now, with every service healthy and every api replica confirmed on
 # this tag, is this the box's new known-good release.

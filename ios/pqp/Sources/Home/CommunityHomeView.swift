@@ -32,6 +32,9 @@ struct CommunityHomeView: View {
     /// API stores only an id; a channel that is not in this list gets no name.
     @State private var channels: [Channel] = []
     @State private var openedChannel: Channel?
+    /// Encaminhar: the flag, and the post whose picker is up.
+    @State private var forwardsEnabled = false
+    @State private var forwardSource: ForwardSource?
 
     var body: some View {
         ZStack {
@@ -70,7 +73,9 @@ struct CommunityHomeView: View {
                                 onToggleLike: { Task { await toggleLike(post) } },
                                 onLoadAll: { Task { await loadAllComments(post) } },
                                 onCollapse: { expanded.removeValue(forKey: post.id) },
-                                onComment: { body in await addComment(post, body: body) }
+                                onComment: { body in await addComment(post, body: body) },
+                                onForward: forwardsEnabled
+                                    ? { forwardSource = ForwardSource.bauPost(post) } : nil
                             )
                             .overlay {
                                 if highlightedPostId == post.id {
@@ -130,6 +135,9 @@ struct CommunityHomeView: View {
             BauPlayback.shared.stopAllUnlessFullScreen()
         }
         .communityHomeComposer(server: server, config: config, channels: channels) { Task { await load() } }
+        .bauFollowEntry(server: server)
+        .forwardSheet($forwardSource)
+        .task { forwardsEnabled = await session.api.forwardConfig().enabled }
         .navigationDestination(item: $openedChannel) { channel in
             chatDestination?(channel) ?? AnyView(EmptyView())
         }
@@ -233,6 +241,9 @@ private struct PostCard: View {
     let onLoadAll: () -> Void
     let onCollapse: () -> Void
     let onComment: (String) async -> Bool
+    /// Encaminhar: nil while the flag is off, which is what hides the menu.
+    var onForward: (() -> Void)? = nil
+    @Environment(SessionStore.self) private var session
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -289,6 +300,8 @@ private struct PostCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .pqpSurface()
         .accessibilityIdentifier("bau.post")
+        // The subtitles are read once, only for a video that says it has them.
+        .task(id: post.id) { await BauCaptions.shared.prepare(post, api: session.api) }
     }
 
     private var header: some View {
@@ -311,7 +324,28 @@ private struct PostCard: View {
                     .foregroundStyle(Palette.paperMuted)
             }
             Spacer(minLength: 0)
+            if let onForward {
+                postMenu(onForward)
+            }
         }
+    }
+
+    /// The post's menu: Encaminhar today, the one place more actions would go.
+    private func postMenu(_ onForward: @escaping () -> Void) -> some View {
+        Menu {
+            Button(action: onForward) {
+                Label("Forward", systemImage: "arrowshape.turn.up.right")
+            }
+            .accessibilityIdentifier("bau.post.forward")
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Palette.paperMuted)
+                .frame(width: 44, height: 36)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(Text("More"))
+        .accessibilityIdentifier("bau.post.menu")
     }
 
     private var actions: some View {
@@ -345,8 +379,67 @@ private struct PostCard: View {
             .accessibilityValue(Text(String(post.commentCount)))
 
             Spacer(minLength: 0)
+
+            // Subtitles: only a video that has them, and the choice is the
+            // person's, remembered for every video after.
+            if BauCaptions.shared.hasCaptions(for: post.id) {
+                CaptionsButton(postID: post.id)
+            }
+
+            // Only a post with a public page offers it, and only the server
+            // knows which those are (`publicUrl`); a locked post never does.
+            if let shareURL = BauPublicShare.shareURL(for: post) {
+                ShareButton(url: shareURL, title: BauPublicShare.shareTitle(for: post))
+            }
         }
         .padding(.top, 2)
+    }
+}
+
+/// CC: turn the subtitles on this video, and on every one after it, on or off.
+private struct CaptionsButton: View {
+    let postID: String
+
+    var body: some View {
+        let on = BauCaptions.shared.isOn(postID)
+        Button { BauCaptions.shared.toggle(postID) } label: {
+            Image(systemName: on ? "captions.bubble.fill" : "captions.bubble")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(on ? Palette.signal : Palette.paperMuted)
+                .frame(minWidth: 32, minHeight: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(on ? Text("Turn subtitles off") : Text("Turn subtitles on"))
+        .accessibilityIdentifier("bau.captions")
+    }
+}
+
+/// Compartilhar: the system share sheet with the post's public page, campaign
+/// attached. The sheet is the system's own, so there is no motion of ours to
+/// make reduced-motion safe.
+private struct ShareButton: View {
+    let url: URL
+    let title: String
+
+    var body: some View {
+        ShareLink(
+            item: url,
+            subject: title.isEmpty ? nil : Text(verbatim: title),
+            preview: SharePreview(title.isEmpty ? url.absoluteString : title)
+        ) {
+            HStack(spacing: 5) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 15, weight: .semibold))
+                Text("Share")
+                    .font(Typography.caption)
+            }
+            .foregroundStyle(Palette.paperMuted)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Share this post"))
+        .accessibilityIdentifier("bau.share")
     }
 }
 

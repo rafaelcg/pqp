@@ -102,6 +102,17 @@ vi.mock("./services/story-media.js", () => ({
   })),
   processStoryVideos: vi.fn(async () => ({ storyId: null, outcome: "idle" as const })),
 }));
+// Seguir: `bau-follow.test.ts` pins what the delivery tick does.
+vi.mock("./services/bau-follow-delivery.js", () => ({
+  runBauFollowTick: vi.fn(async () => ({
+    retracted: 0,
+    updated: 0,
+    enqueued: 0,
+    delivered: 0,
+    failed: 0,
+    paused: 0,
+  })),
+}));
 vi.mock("./services/stories.js", () => ({
   storyAudienceTargets: vi.fn(async () => ({ serverIds: [], friends: false })),
 }));
@@ -143,6 +154,7 @@ import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 import { sweepWatchPartyHosts } from "./services/watch-parties.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { processStoryVideos, sweepStories } from "./services/story-media.js";
+import { runBauFollowTick } from "./services/bau-follow-delivery.js";
 import { runChannelLayoutMigrations } from "./services/channel-layout.js";
 import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
 import {
@@ -237,11 +249,12 @@ describe("cold jobs", () => {
     // 26 with the soundboard upload sweep (a minute, asserted below);
     // 27 with the custom emoji quarantine sweep (hourly, asserted below); 29
     // with the Retrospectiva's seat sampler (a minute) and watched-party copy
-    // (15 minutes), both asserted below.
+    // (15 minutes), both asserted below; 30 with the Seguir delivery tick (10 s,
+    // asserted below).
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(29);
+    expect(jobs.count).toBe(30);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -275,6 +288,9 @@ describe("cold jobs", () => {
     expect(runChannelLayoutMigrations).toHaveBeenCalledTimes(4);
     // The stories video job: every 5 s, idle here, so once per tick.
     expect(processStoryVideos).toHaveBeenCalledTimes(48);
+    // The Seguir delivery tick: every 10 s, none at boot (the publish routes
+    // kick it, and the first tick is ten seconds away).
+    expect(runBauFollowTick).toHaveBeenCalledTimes(24);
     // The soundboard upload sweep: a minute, so four, and none at boot.
     expect(sweepSoundboardUploads).toHaveBeenCalledTimes(4);
 

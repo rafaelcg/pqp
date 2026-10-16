@@ -1,26 +1,27 @@
 import { isEnabled } from "./flags.js";
 
 /**
- * The operator's way to make every stale web or desktop client update, served
- * by `GET /api/client-update/config`, read per request. See
+ * The operator's way to push an update to every stale web or desktop client,
+ * served by `GET /api/client-update/config`, read per request. See
  * `docs/PWA.md` §"Nobody stays on an old bundle".
  *
  * WHY THE SERVER HAS A SAY AT ALL. The client already notices it is out of date
- * by itself (it polls `/version.json`, which the build writes), and updates at
- * a safe moment without being asked. That is the ordinary path and it needs
- * nothing from here. This is the lever for the day a bundle is BAD: a fixed
- * build is up, and waiting for people to go idle or hang up is too slow. The
- * operator flips `client_force_update` on the dashboard (no deploy, no restart)
- * and every client that is not on the latest build puts up a screen with one
- * button, except while it is in a call, where it waits for the hangup.
+ * by itself (it polls `/version.json`, which the build writes), tells the person
+ * ONCE A DAY with a small indicator (`lib/client-version.ts`, 09:00 UTC), and
+ * updates at a safe moment without being asked. That is the ordinary path and it
+ * needs nothing from here. This is the lever for the day a build matters NOW: a
+ * fixed build is up, and waiting for the morning is too slow.
  *
  * Two levers, both OFF until somebody sets them, so nothing changes for anyone
  * (including a self-host) until an operator does:
  *
  *  - `forceUpdate`: the runtime flag `client_force_update`
- *    (`CLIENT_FORCE_UPDATE=true` as its environment default). Blunt on purpose:
- *    "everyone not on the latest build". Turn it off again once the rollout is
- *    done, or the next ordinary deploy will put the blocking screen up too.
+ *    (`CLIENT_FORCE_UPDATE=true` as its environment default). "Announce now":
+ *    every client that is not on the latest build skips the daily wait and draws
+ *    its indicator with emphasis. It does NOT block anybody's screen (it used to,
+ *    and on 2026-10-13 that was a blocking screen for every one of nineteen
+ *    deploys, "de 10 em 10 segundos"), and it never reloads anyone in a call.
+ *    Turn it off again once the rollout is done.
  *  - `minBuiltAt`: `CLIENT_MIN_BUILT_AT`, an ISO date or epoch milliseconds.
  *    Every client whose bundle was BUILT before that moment is forced. Precise
  *    and self-limiting (a later deploy is built after it, so it is never
@@ -28,11 +29,13 @@ import { isEnabled } from "./flags.js";
  *    Build ids are commit hashes and cannot be ordered, which is why this is a
  *    time and not "a minimum build".
  *
- * And two that also reach a page IN A CALL, which the two above never do (they
- * wait for the hangup). For a critical fix only: they end the call.
+ * And two that make an update CRITICAL, the only thing that still blocks a screen
+ * (a small "atualização necessária" dialog) and the only thing that reloads a
+ * page IN A CALL. For a critical fix only: they end the call.
  *
  *  - `interruptCalls`: the runtime flag `client_force_update_in_call`. With
- *    either lever above forcing a bundle, that bundle reloads mid-call too.
+ *    either lever above forcing a bundle, that bundle reloads mid-call too, and
+ *    the dialog is up.
  *  - `criticalMinBuiltAt`: `CLIENT_CRITICAL_MIN_BUILT_AT`, same format as
  *    `CLIENT_MIN_BUILT_AT`. Bundles built before it reload, call or not.
  *

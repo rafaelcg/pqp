@@ -362,6 +362,11 @@ private object Lucide {
         "M9 17 4 12 9 7",
         "M20 18v-2a4 4 0 0 0-4-4H4",
     )
+    // Encaminhar. Lucide's `forward`: the curved arrow, which is not the chevron.
+    val forward by lucide(
+        "m15 17 5-5-5-5",
+        "M4 18v-2a4 4 0 0 1 4-4h12",
+    )
     val screenShareOff by lucide(
         "M13 3H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-3",
         "M8 21h8",
@@ -488,6 +493,78 @@ private object Lucide {
         "M7 9a2 2 0 1 0 4 0a2 2 0 1 0 -4 0",
         "m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21",
     )
+
+    // The story camera.
+    val camera by lucide(
+        "M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z",
+        "M9 13a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+    )
+    val switchCamera by lucide(
+        "M11 19H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5",
+        "M13 5h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5",
+        "M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+        "m18 22-3-3 3-3",
+        "m6 2 3 3-3 3",
+    )
+    val zapOff by lucide(
+        "M10.513 4.856 13.12 2.17a.5.5 0 0 1 .86.46l-1.377 4.317",
+        "M15.656 10H20a1 1 0 0 1 .78 1.63l-1.72 1.773",
+        "M16.273 16.273 10.88 21.83a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14H4a1 1 0 0 1-.78-1.63l4.507-4.643",
+        "m2 2 20 20",
+    )
+    // The story editor.
+    val messageSquareText by lucide(
+        "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+        "M7 11h10",
+        "M7 7h6",
+    )
+    val captions by lucide(
+        "M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z",
+        "M7 15h4",
+        "M15 15h2",
+        "M7 11h2",
+        "M13 11h4",
+    )
+    val type by lucide(
+        "M12 4v16",
+        "M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2",
+        "M9 20h6",
+    )
+    val imagePlus by lucide(
+        "M16 5h6",
+        "M19 2v6",
+        "M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5",
+        "m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21",
+        "M6 9a2 2 0 1 0 4 0a2 2 0 1 0 -4 0",
+    )
+    val sticker by lucide(
+        "M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z",
+        "M15 3v4a2 2 0 0 0 2 2h4",
+        "M8 13h.01",
+        "M16 13h.01",
+        "M10 16s.8 1 2 1c1.3 0 2-1 2-1",
+    )
+    val brush by lucide(
+        "m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08",
+        "M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z",
+    )
+    val eraser by lucide(
+        "m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21",
+        "M22 21H7",
+        "m5 11 9 9",
+    )
+    val undo2 by lucide(
+        "M9 14 4 9l5-5",
+        "M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11",
+    )
+    val alignLeft by lucide("M15 12H3", "M17 18H3", "M21 6H3")
+    val alignCenter by lucide("M17 12H7", "M19 18H5", "M21 6H3")
+    val alignRight by lucide("M21 12H9", "M21 18H7", "M21 6H3")
+    val arrowUpToLine by lucide("M5 3h14", "m18 13-6-6-6 6", "M12 7v14")
+    val video by lucide(
+        "m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5",
+        "M4 6h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z",
+    )
 }
 
 /**
@@ -527,6 +604,9 @@ object PqpIcons {
     val Close get() = Lucide.x
     val More get() = Lucide.ellipsisVertical
     val Forward get() = Lucide.chevronRight
+
+    /** Encaminhar: put this post or message into another channel or a DM. */
+    val ForwardMessage get() = Lucide.forward
     val Expand get() = Lucide.chevronDown
     val Confirm get() = Lucide.check
     val Add get() = Lucide.plus
@@ -627,4 +707,25 @@ object PqpIcons {
     val Reopen get() = Lucide.rotateCcw
     val Tag get() = Lucide.tag
     val Image get() = Lucide.image
+
+    // The story camera.
+    val Camera get() = Lucide.camera
+    val FlipCamera get() = Lucide.switchCamera
+    val Flash get() = Lucide.zap
+    val FlashOff get() = Lucide.zapOff
+    val Video get() = Lucide.video
+
+    // The story editor.
+    val AddText get() = Lucide.type
+    val Describe get() = Lucide.messageSquareText
+    val Captions get() = Lucide.captions
+    val AddPhoto get() = Lucide.imagePlus
+    val Stickers get() = Lucide.sticker
+    val Draw get() = Lucide.brush
+    val Eraser get() = Lucide.eraser
+    val Undo get() = Lucide.undo2
+    val AlignLeft get() = Lucide.alignLeft
+    val AlignCenter get() = Lucide.alignCenter
+    val AlignRight get() = Lucide.alignRight
+    val BringToFront get() = Lucide.arrowUpToLine
 }

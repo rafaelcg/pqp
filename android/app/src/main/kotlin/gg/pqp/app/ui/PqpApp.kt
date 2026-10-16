@@ -33,6 +33,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -41,6 +43,13 @@ import gg.pqp.app.R
 import gg.pqp.app.bau.CommunityHomeConfigs
 import gg.pqp.app.bau.ui.BauScreen
 import gg.pqp.app.ui.chat.BauPostTarget
+import gg.pqp.app.bau.BauPostRef
+import gg.pqp.app.forward.ForwardOpen
+import gg.pqp.app.forward.ForwardSent
+import gg.pqp.app.forward.ui.ForwardHost
+import gg.pqp.app.forward.ui.LocalOpenForward
+import gg.pqp.app.forward.ui.rememberOpenForward
+import gg.pqp.app.ui.chat.LocalEmojiServerId
 import gg.pqp.app.ui.chat.LocalOpenBauPost
 import gg.pqp.app.core.Permission
 import gg.pqp.app.core.PermissionsSnapshot
@@ -101,6 +110,9 @@ import kotlinx.serialization.Serializable
 
 @Serializable object ServersRoute
 
+/** How long a forward card's jump waits for the channel record before opening anyway. */
+private const val CHANNEL_LOOKUP_MS = 1_200L
+
 @Serializable data class ChannelsRoute(val serverId: String, val serverName: String)
 
 /**
@@ -147,6 +159,12 @@ import kotlinx.serialization.Serializable
      * room gets (which draws nothing at all while no party is running).
      */
     val isWatchParty: Boolean = false,
+    /**
+     * A message to land on (a forward card's jump link): the chat loads the
+     * page around it, scrolls to it and marks it for a moment. Null opens the
+     * newest message like any other chat.
+     */
+    val focusMessageId: String? = null,
 )
 
 @Serializable object YouRoute
@@ -302,6 +320,75 @@ private fun SignedInNav(
     val voiceState by voice.state.collectAsStateWithLifecycle()
     val callState by calls.state.collectAsStateWithLifecycle()
 
+    // Encaminhar. A tap on a forward card opens a Baú post or a message on this
+    // instance inside the app (anything else goes to a Custom Tab, see
+    // `rememberOpenForward`), and the "Ver" on the "Encaminhado" line opens the
+    // first place that took it.
+    val forwardScope = androidx.compose.runtime.rememberCoroutineScope()
+    var forwardNotice by remember { mutableStateOf<String?>(null) }
+    val notMember = stringResource(R.string.forward_not_member)
+    val servers by session.servers.collectAsStateWithLifecycle()
+    val serversLoaded by session.serversLoaded.collectAsStateWithLifecycle()
+    // Not in the server a card came from: there is nothing here to open (a channel
+    // list that 404s is a dead screen), and the card carries no public page yet, so
+    // say so. Judged only once the server list has been answered, and then strictly:
+    // an account in no server at all cannot open any card. Before that, try it.
+    val canOpen = { serverId: String ->
+        !serversLoaded || servers.any { it.id.equals(serverId, ignoreCase = true) }
+    }
+    val openForward = rememberOpenForward { target ->
+        when (target) {
+            is ForwardOpen.BauPost ->
+                if (canOpen(target.serverId)) {
+                    openBauPost(BauPostTarget(BauPostRef(target.serverId, target.postId)))
+                } else {
+                    forwardNotice = notMember
+                }
+
+            is ForwardOpen.Message ->
+                if (canOpen(target.serverId)) {
+                    forwardScope.launch {
+                        // Cancellation-preserving: a sign-out while this is in the air
+                        // must not go on to navigate on a host that is gone.
+                        // The channel record only fills in the title and the voice flags, so
+                        // it gets a short wait: a slow connection opens the chat with a
+                        // placeholder title rather than holding the tap.
+                        val channel = kotlinx.coroutines.withTimeoutOrNull(CHANNEL_LOOKUP_MS) {
+                            gg.pqp.app.core.runSuspendCatching { session.api.channels(target.serverId) }.getOrNull()
+                        }?.firstOrNull { it.id == target.channelId }
+                        nav.navigate(
+                            ChatRoute(
+                                target.channelId,
+                                channel?.name.orEmpty(),
+                                channel?.slowmodeSeconds ?: 0,
+                                serverId = target.serverId,
+                                isVoiceChannel = channel?.isVoice == true,
+                                isWatchParty = channel?.type == "watch_party",
+                                focusMessageId = target.messageId,
+                            ),
+                        )
+                    }
+                } else {
+                    forwardNotice = notMember
+                }
+
+            is ForwardOpen.External -> Unit
+        }
+    }
+    val viewForwarded: (ForwardSent) -> Unit = { sent ->
+        if (sent.isConversation) {
+            nav.navigate(ConversationRoute(sent.channelId, sent.label))
+        } else {
+            nav.navigate(
+                ChatRoute(
+                    sent.channelId,
+                    sent.label.removePrefix("#"),
+                    serverId = sent.serverId,
+                ),
+            )
+        }
+    }
+
     // Asked for on the tap that starts a call, never before. The gate lives
     // here rather than in the conversation screen so that answering a ring and
     // placing a call go through one piece of code.
@@ -388,6 +475,33 @@ private fun SignedInNav(
         push.pendingTarget.filterNotNull().collect { target ->
             push.consumeTarget()
             navigateToPush(nav, session, target)
+        }
+    }
+
+    // A server this account lost while the app was open (a kick, a ban, a delete). The list has
+    // already dropped it; every screen inside it leaves too, because the API refuses every read and
+    // send there and what is left would be a dead screen. Then the reason, once, as the web does.
+    LaunchedEffect(Unit) {
+        // A state, not an event: what arrived while nothing was collecting is still here, and is
+        // acknowledged only once it has been dealt with.
+        session.serverGone.collect { pending ->
+            if (pending.isEmpty()) return@collect
+            for (gone in pending) {
+                while (nav.currentBackStackEntry?.serverIdOrNull().equals(gone.serverId, ignoreCase = true)) {
+                    if (!nav.popBackStack()) break
+                }
+                if (!gone.quiet) {
+                    forwardNotice = context.getString(
+                        when (gone.reason) {
+                            gg.pqp.app.core.ServerRemovedReason.Kicked -> R.string.server_removed_kicked
+                            gg.pqp.app.core.ServerRemovedReason.Banned -> R.string.server_removed_banned
+                            gg.pqp.app.core.ServerRemovedReason.Deleted -> R.string.server_removed_deleted
+                        },
+                        gone.serverName,
+                    )
+                }
+            }
+            session.acknowledgeGone(pending)
         }
     }
 
@@ -480,7 +594,16 @@ private fun SignedInNav(
             // Compose's are the platform's, they cooperate with the predictive
             // back gesture the manifest opts into, and a bespoke slide would
             // break that cooperation.
-            CompositionLocalProvider(LocalOpenBauPost provides openBauPost) {
+            CompositionLocalProvider(
+                LocalOpenBauPost provides openBauPost,
+                LocalOpenForward provides openForward,
+            ) {
+            ForwardHost(
+                session = session,
+                onView = viewForwarded,
+                notice = forwardNotice,
+                onNoticeShown = { forwardNotice = null },
+            ) {
             NavHost(navController = nav, startDestination = ServersRoute) {
                 composable<ServersRoute> {
                     // The start destination is the three-tab home (servers,
@@ -541,6 +664,7 @@ private fun SignedInNav(
                 }
                 composable<ForumRoute> { entry ->
                     val route = entry.toRoute<ForumRoute>()
+                    CompositionLocalProvider(LocalEmojiServerId provides route.serverId) {
                     gg.pqp.app.forum.ui.ForumScreen(
                         session = session,
                         serverId = route.serverId,
@@ -558,17 +682,20 @@ private fun SignedInNav(
                             nav.navigate(ForumComposerRoute(route.serverId, route.forumId, title, route.forumName))
                         },
                     )
+                    }
                 }
                 composable<ForumPostRoute> { entry ->
                     val route = entry.toRoute<ForumPostRoute>()
-                    gg.pqp.app.forum.ui.ForumPostScreen(
-                        session = session,
-                        serverId = route.serverId,
-                        forumId = route.forumId,
-                        forumName = route.forumName,
-                        postId = route.postId,
-                        onBack = nav::popBackStack,
-                    )
+                    CompositionLocalProvider(LocalEmojiServerId provides route.serverId) {
+                        gg.pqp.app.forum.ui.ForumPostScreen(
+                            session = session,
+                            serverId = route.serverId,
+                            forumId = route.forumId,
+                            forumName = route.forumName,
+                            postId = route.postId,
+                            onBack = nav::popBackStack,
+                        )
+                    }
                 }
                 composable<ForumComposerRoute> { entry ->
                     val route = entry.toRoute<ForumComposerRoute>()
@@ -607,7 +734,11 @@ private fun SignedInNav(
                         val social = gg.pqp.app.social.SocialRepository.of(session)
                         androidx.compose.runtime.DisposableEffect(route.channelId) {
                             social.markRead(route.channelId)
-                            onDispose { social.markRead(route.channelId) }
+                            onDispose {
+                                social.markRead(route.channelId)
+                                // The server list reads this server's unread again when it comes back.
+                                route.serverId?.let { gg.pqp.app.unread.ServerUnreadStore.of(session).markStale(it) }
+                            }
                         }
                     }
 
@@ -703,6 +834,8 @@ private fun SignedInNav(
                     // `hostState` itself is collected once, above, at
                     // `SignedInNav` level -- see the toast effect there.
 
+                    // The server's custom emoji draw in its messages; a conversation (no server) shows `:name:`.
+                    CompositionLocalProvider(LocalEmojiServerId provides route.serverId) {
                     ChatScreen(
                         session = session,
                         channelId = route.channelId,
@@ -710,6 +843,7 @@ private fun SignedInNav(
                         slowmodeSeconds = route.slowmodeSeconds,
                         onBack = nav::popBackStack,
                         serverId = route.serverId,
+                        focusMessageId = route.focusMessageId,
                         onMessageAuthor = if (conversasConfig.home && route.serverId != null) {
                             { authorId ->
                                 messageScope.launch {
@@ -824,6 +958,17 @@ private fun SignedInNav(
                             }
                         },
                         actions = {
+                            // Seguir: what this text channel follows. Absent for a
+                            // voice room, a conversation, and anybody who may not
+                            // manage the channel or whose channel follows nothing.
+                            val followServerId = route.serverId
+                            if (followServerId != null && !route.isVoiceChannel) {
+                                gg.pqp.app.follow.ui.ChannelFollowsAction(
+                                    session = session,
+                                    serverId = followServerId,
+                                    channelId = route.channelId,
+                                )
+                            }
                             // A watch party's join lives on the stage now (see
                             // above); the app bar icon stays only for an
                             // ordinary voice room, which has no stage to put
@@ -842,6 +987,7 @@ private fun SignedInNav(
                             }
                         },
                     )
+                    }
                 }
                 composable<YouRoute> {
                     YouScreen(session = session, onBack = { nav.popBackStack() })
@@ -858,6 +1004,7 @@ private fun SignedInNav(
                         onBack = { nav.popBackStack() },
                     )
                 }
+            }
             }
             }
 
@@ -877,6 +1024,20 @@ private fun SignedInNav(
 }
 
 /** The two yeses the Baú row needs (see `ChannelsScreen`), asked for a push tap. */
+/**
+ * The server a destination belongs to, or null for one that is not inside any (the home tabs, the
+ * account screen, a conversation, a chat that was opened from a notification with no server).
+ */
+private fun NavBackStackEntry.serverIdOrNull(): String? = when {
+    destination.hasRoute<ChannelsRoute>() -> toRoute<ChannelsRoute>().serverId
+    destination.hasRoute<BauRoute>() -> toRoute<BauRoute>().serverId
+    destination.hasRoute<ForumRoute>() -> toRoute<ForumRoute>().serverId
+    destination.hasRoute<ForumPostRoute>() -> toRoute<ForumPostRoute>().serverId
+    destination.hasRoute<ForumComposerRoute>() -> toRoute<ForumComposerRoute>().serverId
+    destination.hasRoute<ChatRoute>() -> toRoute<ChatRoute>().serverId
+    else -> null
+}
+
 internal suspend fun bauIsOn(session: SessionStore, serverId: String): Boolean {
     if (!CommunityHomeConfigs.resolve(session.api).enabled) {
         return false

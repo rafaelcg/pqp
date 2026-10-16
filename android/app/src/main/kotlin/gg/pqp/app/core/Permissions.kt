@@ -74,6 +74,13 @@ object Permission {
     const val MANAGE_MESSAGES: Long = 1L shl 8
 
     /**
+     * Outgoing channel webhooks. With [MANAGE_CHANNELS] it is what lets
+     * somebody point a followed Baú at a channel (Seguir), which is what the
+     * server checks (`FOLLOW_MANAGE_BITS`).
+     */
+    const val MANAGE_WEBHOOKS: Long = 1L shl 20
+
+    /**
      * Start the stream in a `watch_party` channel. Everyone else there is
      * the audience -- see the bit's own doc on web for why it is not
      * `STREAM`.

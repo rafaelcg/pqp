@@ -13,6 +13,10 @@ describe("who reaches the Soundboard tab", () => {
     expect(showsServerSettingsEntry({ ...none, canManageSoundboard: true })).toBe(true);
   });
 
+  it("shows it to a cargo that only manages the server (the Baú switches are in Overview)", () => {
+    expect(showsServerSettingsEntry({ ...none, canManageServer: true })).toBe(true);
+  });
+
   it("still hides it from a plain member and keeps the old doors", () => {
     expect(showsServerSettingsEntry(none)).toBe(false);
     expect(showsServerSettingsEntry({ ...none, canManage: true })).toBe(true);

@@ -10,6 +10,18 @@ extension APIClient {
         return (try? await get("/api/stories/config", query: query)) ?? .off
     }
 
+    /// Like `storiesConfig`, but a failure to ASK is thrown, so the composer
+    /// can say so and offer a retry instead of reading it as "stories off".
+    /// An API that has no such route (404) still reads as off.
+    func storiesConfigOrThrow(serverId: String? = nil) async throws -> StoriesConfig {
+        let query = serverId.map { [URLQueryItem(name: "serverId", value: $0)] } ?? []
+        do {
+            return try await get("/api/stories/config", query: query)
+        } catch APIError.notFound {
+            return .off
+        }
+    }
+
     /// A server's strip. With the flag off the server answers
     /// `{enabled:false}`, which draws nothing; nil means it could not ask.
     func serverStoryStrip(serverId: String) async -> StoryStrip? {
@@ -35,6 +47,19 @@ extension APIClient {
 
     func createStory(_ request: CreateStoryRequest) async throws -> CreateStoryResponse {
         try await post("/api/stories", body: request)
+    }
+
+    /// Eager upload: where to PUT a story's file before the story exists.
+    /// `kind` is `base` (the photo or video) or `layer` (a placed photo or the
+    /// drawing); `byteLength` is signed into the PUT.
+    func mintStoryUpload(kind: String, contentType: String, byteLength: Int) async throws -> StoryUploadTicket {
+        struct Body: Encodable { let kind: String; let contentType: String; let byteLength: Int }
+        return try await post("/api/stories/uploads", body: Body(kind: kind, contentType: contentType, byteLength: byteLength))
+    }
+
+    /// Throws an unused upload away (the object and its row).
+    func deleteStoryUpload(id: String) async throws {
+        let _: EmptyResponse = try await delete("/api/stories/uploads/\(id)")
     }
 
     func publishStory(id: String) async throws -> Story {
