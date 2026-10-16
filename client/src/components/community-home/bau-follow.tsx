@@ -211,11 +211,6 @@ function FollowRow({
         <p className="truncate text-xs text-text-tertiary">
           # {follow.targetChannelName}
         </p>
-        {follow.rolePingName && (
-          <p className="truncate text-xs text-text-tertiary">
-            {t("bauFollow.pings", { role: follow.rolePingName })}
-          </p>
-        )}
         {follow.status === "paused" && (
           <p className="mt-0.5 text-xs text-warning">
             {t(follow.pausedReason === "banned" ? "bauFollow.pausedHintBanned" : "bauFollow.pausedHint")}
@@ -256,8 +251,7 @@ function FollowRow({
 }
 
 /**
- * Pick a server of yours, a channel there, optionally a role to mention, and
- * follow. The server list is the viewer's own servers where they may manage
+ * Pick a server of yours, a channel there, and follow. The server list is the viewer's own servers where they may manage
  * webhooks or channels (the API answers it; the channel is checked again on
  * create).
  */
@@ -280,7 +274,6 @@ export function BauFollowDialog({
   const formId = useId();
   const serverSelectId = useId();
   const channelSelectId = useId();
-  const roleSelectId = useId();
   const [destinations, setDestinations] = useState<BauFollowDestination[] | null>(
     null,
   );
@@ -288,7 +281,6 @@ export function BauFollowDialog({
   const [loadError, setLoadError] = useState<"failed" | "off" | null>(null);
   const [destinationId, setDestinationId] = useState("");
   const [channelId, setChannelId] = useState("");
-  const [roleId, setRoleId] = useState("");
   const [busy, setBusy] = useState(false);
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -348,15 +340,12 @@ export function BauFollowDialog({
   );
   const full = destination !== null && destination.followCount >= maxPerServer;
 
-  // Keep the channel and role picks valid for the server on show.
+  // Keep the channel pick valid for the server on show.
   useEffect(() => {
     setChannelId((current) =>
       freeChannels.some((channel) => channel.id === current)
         ? current
         : (freeChannels[0]?.id ?? ""),
-    );
-    setRoleId((current) =>
-      destination?.roles.some((role) => role.id === current) ? current : "",
     );
   }, [freeChannels, destination]);
 
@@ -369,10 +358,7 @@ export function BauFollowDialog({
     setError(null);
     setNotice(null);
     try {
-      const res = await createBauFollow(serverId, {
-        channelId,
-        rolePingId: roleId || null,
-      });
+      const res = await createBauFollow(serverId, { channelId });
       setNotice(
         t("bauFollow.followed", {
           channel: res.follow.targetChannelName,
@@ -561,29 +547,6 @@ export function BauFollowDialog({
                     ))}
                   </select>
                 </label>
-                {destination && destination.roles.length > 0 && (
-                  <label htmlFor={roleSelectId} className="block">
-                    <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary">
-                      {t("bauFollow.role")}
-                    </span>
-                    <select
-                      id={roleSelectId}
-                      value={roleId}
-                      onChange={(event) => setRoleId(event.target.value)}
-                      disabled={busy}
-                      className={SELECT_CLASS}
-                onKeyDown={noEnterSubmit}
-                      data-bau-follow-role
-                    >
-                      <option value="">{t("bauFollow.noRole")}</option>
-                      {destination.roles.map((role) => (
-                        <option key={role.id} value={role.id}>
-                          @{role.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
               </>
             )}
           </form>

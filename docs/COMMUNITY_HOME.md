@@ -390,9 +390,7 @@ user and never in a member list.
   where they hold MANAGE_WEBHOOKS or MANAGE_CHANNELS (tested per channel, cargo
   bits plus that channel's overwrites, the same test as creating and delivering,
   so a grant that exists only as a channel overwrite counts and a channel that
-  denies it does not appear), then a text channel and an optional role to
-  ping (a role of the destination that is mentionable, or any role for someone
-  who may mention everyone). `POST /api/servers/:id/home/follow`; the channel is
+  denies it does not appear). `POST /api/servers/:id/home/follow`; the channel is
   checked for the same authority, so a per-channel grant counts there. The
   destination channel's settings list what it follows with **Deixar de seguir**
   (`GET /api/channels/:id/bau-follows`, `DELETE /api/bau-follows/:id`).
@@ -417,8 +415,21 @@ user and never in a member list.
   locking it for members deletes the delivered messages; a post that comes back
   free is delivered again. A card a destination moderator deleted by hand is not
   posted again. Unfollowing stops future cards and leaves the delivered ones.
-- **The ping.** Only the follow's own role, recorded as mentions for the role's
-  members (`@everyone` and `@here` never fire, and the snapshot pings nobody).
+- **Nothing pings.** A delivery carries no mention at all: no role, no user, no
+  `@everyone` or `@here`, and no `message_mentions` rows. (Seguir first shipped a
+  per-follow role ping; a source with several staff could amplify it into every
+  destination, so it was removed. `role_ping_id` stays in the table, inert, and
+  `rolePingId` / `rolePingName` stay in the API contract, always null, so older
+  clients still parse it; a create or patch that sends one is accepted and
+  ignored, and the destinations list offers no roles.) The snapshot is made
+  inert like a forward's (`defangSnapshot`: markup to plain words, a zero-width
+  space after every `@name`), so the card and its fallback body hold nothing a
+  client could scan into a mention. A card delivered while pings existed loses
+  its `@Role` line and its mention rows in a cleanup that runs on a process's
+  first tick and then hourly (`cleanLegacyPingCards`, a bounded batch over the
+  last 90 days; not in the every-tick sweep), or at once when its post is edited,
+  even if the edit changes nothing on the card. A card whose text held an `@word`
+  or mention markup is made inert the next time its post is edited.
 - **Auto-pause.** Delivery re-checks the authority the follow was made under
   (`created_by` must still manage webhooks or channels in the channel). Three
   consecutive failures pause the follow (`paused_reason: permissions`), write an
@@ -438,9 +449,9 @@ user and never in a member list.
 - **The card's link.** The post's public page when it has one (`getBauPublicUrl`,
   `bau_public_posts` on, a public community with an address), so a follower who
   is not a member of the source opens a real page; otherwise the in-app Baú post
-  address, which only a member of the source can open. A delivery that pings a role writes `@Role` alone on the first
-  line and the fallback below it; clients that draw the card use
-  `forwardBodyComment` (`@pqp/shared`) to strip the fallback and keep the mention.
+  address, which only a member of the source can open. The body of a delivery is the fallback line alone. Cards delivered
+  while pings existed carry an `@Role` line above it, which `forwardBodyComment`
+  (`@pqp/shared`) still handles.
 
 Tests: `server/src/services/bau-follow.test.ts` (flag per source, permissions,
 delivery, scheduled, edit, delete, pause, source staff, limits) and

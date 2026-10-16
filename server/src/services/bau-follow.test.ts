@@ -402,25 +402,28 @@ describeDb("Seguir: following a Baú into a channel", () => {
     expect((await follow(alice, destChannelId)).status).toBe(409);
   });
 
-  it("a role to ping must belong to the destination and be pingable", async () => {
-    const hidden = await createRole(destId, {
-      name: "Quieto",
-      permissions: Permission.VIEW_CHANNEL,
-      mentionable: false,
-    });
-    // The destination's owner may mention anyone, so even a plain role is fine for them...
-    // ...but a role of ANOTHER server never is.
+  it("a role ping from an older client is accepted and ignored: the follow reports none", async () => {
+    const role = await createRole(destId, { name: "novidades", permissions: Permission.VIEW_CHANNEL, mentionable: true });
+    // Even a role of another server, which used to be a 400, is simply not stored.
     const foreign = await createRole(qgId, { name: "Staff", permissions: Permission.VIEW_CHANNEL, mentionable: true });
-    expect((await follow(alice, destChannelId, foreign.id)).status).toBe(400);
-    expect((await follow(alice, destChannelId, hidden.id)).status).toBe(201);
-    // A non-owner manager without MENTION_EVERYONE may only pick mentionable roles.
-    await addMember(qgId, bob);
-    const manager = await createRole(destId, {
-      name: "Gerente",
-      permissions: Permission.VIEW_CHANNEL | Permission.MANAGE_WEBHOOKS,
-    });
-    await assignRole(destId, bob.id, manager.id);
-    expect((await follow(bob, destOwnerOnlyChannel, hidden.id)).status).toBe(400);
+    const created = await follow(alice, destChannelId, role.id);
+    expect(created.status).toBe(201);
+    expect(created.body.follow.rolePingId).toBeNull();
+    expect(created.body.follow.rolePingName).toBeNull();
+    expect((await follow(alice, destOwnerOnlyChannel, foreign.id)).status).toBe(201);
+    const stored = await getPool().query(`SELECT 1 FROM bau_follows WHERE role_ping_id IS NOT NULL`);
+    expect(stored.rowCount).toBe(0);
+    const patched = await call(alice, "PATCH", `/api/bau-follows/${created.body.follow.id}`, { rolePingId: role.id });
+    expect(patched.status).toBe(200);
+    expect(patched.body.follow.rolePingId).toBeNull();
+    // The destination picker offers no role to ping.
+    const destinations = await call<{ servers: Array<{ roles: unknown[] }> }>(
+      alice,
+      "GET",
+      `${home()}/follow/destinations`,
+    );
+    expect(destinations.body.servers.length).toBeGreaterThan(0);
+    expect(destinations.body.servers.every((server) => server.roles.length === 0)).toBe(true);
   });
 
   it("a destination server holds at most 20 follows", async () => {
@@ -535,39 +538,85 @@ describeDb("Seguir: following a Baú into a channel", () => {
     expect(messageForwardSchema.parse(rows[0]!.forward).title).toBe("Agendado");
   });
 
-  it("a role ping mentions the role's members once, and only when the follow set one", async () => {
+  it("a delivery never pings, whatever the follow row holds or the post says", async () => {
     const role = await createRole(destId, { name: "novidades", permissions: Permission.VIEW_CHANNEL, mentionable: true });
     await assignRole(destId, bob.id, role.id);
-    await follow(alice, destChannelId, role.id);
+    await follow(alice, destChannelId);
     await follow(alice, destOwnerOnlyChannel);
-    await publish();
+    // A follow row that still holds a role (written before pings were removed).
+    await getPool().query(`UPDATE bau_follows SET role_ping_id = $1 WHERE target_channel_id = $2`, [
+      role.id,
+      destChannelId,
+    ]);
+    await publish({
+      title: `@everyone olha <@&${role.id}>`,
+      body: `@here tambem <@${bob.id}> <@&${role.id}> @novidades`,
+    });
     await tick();
-    const pinged = await getPool().query<{ user_id: string; channel_id: string }>(
-      `SELECT mm.user_id, m.channel_id FROM message_mentions mm JOIN messages m ON m.id = mm.message_id`,
-    );
-    expect(pinged.rows).toEqual([{ user_id: bob.id, channel_id: destChannelId }]);
-    const withPing = (await cards(destChannelId))[0]!;
-    // The mention alone on the first line, the fallback on its own line below.
-    expect(withPing.body.startsWith("@novidades\nEncaminhado: ")).toBe(true);
-    const parsed = messageForwardSchema.parse(withPing.forward);
-    expect(forwardBodyComment(withPing.body, parsed)).toBe("@novidades");
-    expect(isForwardFallbackBody(withPing.body, parsed)).toBe(true);
-    const plain = (await cards(destOwnerOnlyChannel))[0]!;
-    expect(plain.body.startsWith("Encaminhado: ")).toBe(true);
-    // The snapshot never carries an @everyone through.
-    const everyone = await publish({ title: "@everyone olha", body: "@here tambem" });
+    const delivered = await getPool().query<{
+      id: string;
+      body: string;
+      mention_everyone: boolean;
+      mention_here: boolean;
+    }>(`SELECT id, body, mention_everyone, mention_here FROM messages WHERE forward IS NOT NULL`);
+    expect(delivered.rows).toHaveLength(2);
+    // The mention set is empty: no user, no everyone, no here, no role.
+    const mentions = await getPool().query(`SELECT * FROM message_mentions`);
+    expect(mentions.rows).toEqual([]);
+    for (const row of delivered.rows) {
+      expect(row.mention_everyone).toBe(false);
+      expect(row.mention_here).toBe(false);
+      expect(row.body.startsWith("Encaminhado: ")).toBe(true);
+      expect(row.body).not.toMatch(/<@&?[0-9a-f-]+>/);
+      // Every @ in the body is followed by an invisible space, so no scan finds a name.
+      expect(row.body).not.toMatch(/@(?!\u200b)/u);
+    }
+    const first = (await cards(destChannelId))[0]!;
+    const parsed = messageForwardSchema.parse(first.forward);
+    expect(forwardBodyComment(first.body, parsed)).toBe("");
+    expect(isForwardFallbackBody(first.body, parsed)).toBe(true);
+  });
+
+  /** A card as the old code left it: a mention line above the fallback, and the role's member recorded as mentioned. */
+  async function makeLegacyPingCard(): Promise<string> {
+    const role = await createRole(destId, { name: "novidades", permissions: Permission.VIEW_CHANNEL, mentionable: true });
+    await assignRole(destId, bob.id, role.id);
+    await follow(alice, destChannelId);
+    const postId = await publish();
     await tick();
-    // The role's one member was pinged by each delivery that carried the ping,
-    // and nobody else was pinged by an @everyone or @here sitting in the post.
-    const mentions = await getPool().query<{ user_id: string }>(
-      `SELECT user_id FROM message_mentions`,
-    );
-    expect(mentions.rows.map((r) => r.user_id)).toEqual([bob.id, bob.id]);
-    expect(everyone).toBeTruthy();
-    const flags = await getPool().query<{ mention_everyone: boolean; mention_here: boolean }>(
-      `SELECT mention_everyone, mention_here FROM messages WHERE forward IS NOT NULL`,
-    );
-    expect(flags.rows.every((r) => !r.mention_everyone && !r.mention_here)).toBe(true);
+    const [card] = await cards(destChannelId);
+    await getPool().query(`UPDATE messages SET body = '@novidades' || chr(10) || body WHERE id = $1`, [card!.id]);
+    await getPool().query(`INSERT INTO message_mentions (message_id, user_id) VALUES ($1, $2)`, [card!.id, bob.id]);
+    return postId;
+  }
+
+  it("a card delivered while pings existed loses its role line and mention rows in the periodic cleanup, once", async () => {
+    await makeLegacyPingCard();
+    // The cleanup is hourly, not every tick: an ordinary tick leaves it alone...
+    await tick();
+    expect((await cards(destChannelId))[0]!.body.startsWith("@novidades")).toBe(true);
+    // ...and the first tick of a process (or the next hour) does it.
+    resetBauFollowAuthorCacheForTests();
+    await tick();
+    const row = (await cards(destChannelId))[0]!;
+    expect(row.body.startsWith("Encaminhado: ")).toBe(true);
+    expect(row.edited_at).not.toBeNull();
+    expect((await getPool().query(`SELECT 1 FROM message_mentions`)).rowCount).toBe(0);
+    // Clean cards are not touched again.
+    const before = row.edited_at!.getTime();
+    resetBauFollowAuthorCacheForTests();
+    await tick();
+    expect((await cards(destChannelId))[0]!.edited_at!.getTime()).toBe(before);
+  });
+
+  it("an edit of the post that leaves the snapshot unchanged still removes a legacy ping line", async () => {
+    const postId = await makeLegacyPingCard();
+    // A pin bumps updated_at but changes nothing the card shows: the hash is the same.
+    expect((await call(qgOwner, "POST", `${home()}/posts/${postId}/pin`, { pinned: true })).status).toBe(200);
+    await tick();
+    const row = (await cards(destChannelId))[0]!;
+    expect(row.body.startsWith("Encaminhado: ")).toBe(true);
+    expect((await getPool().query(`SELECT 1 FROM message_mentions`)).rowCount).toBe(0);
   });
 
   // ----------------------------------------------- edits, deletes, retraction

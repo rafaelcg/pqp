@@ -7,7 +7,7 @@ import {
   youtubePosterUrl,
   type MessageForward,
 } from "@pqp/shared";
-import { forwardExcerpt } from "./forwards.js";
+import { defangSnapshot, forwardExcerpt } from "./forwards.js";
 
 /**
  * The forward card a followed Baú post is delivered as: a SNAPSHOT of the post
@@ -15,9 +15,12 @@ import { forwardExcerpt } from "./forwards.js";
  * read. This is the `bau_post` kind of the shared forward contract; the shape
  * is `messageForwardSchema` in `@pqp/shared` (Part 1, Encaminhar).
  *
- * Mentions inside the post are plain text in the excerpt and are never
- * re-resolved: nothing here can ping anybody. The only ping a delivery ever
- * carries is the follow's own role ping, recorded separately.
+ * Mentions inside the post are plain text and are never re-resolved: nothing
+ * here can ping anybody, and a delivery carries no ping of its own either.
+ * `buildInertBauPostSnapshot` is what a delivery stores: the same snapshot run
+ * through the Encaminhar defang (markup to plain words, a zero-width space after
+ * every `@name`), so the card and its fallback body hold no mention a client
+ * could scan out of them.
  */
 
 export interface PostForSnapshot {
@@ -121,6 +124,13 @@ export function buildBauPostSnapshot(
   });
 }
 
+/** `buildBauPostSnapshot`, made inert (`defangSnapshot`): the one a delivery stores and hashes. */
+export async function buildInertBauPostSnapshot(
+  ...args: Parameters<typeof buildBauPostSnapshot>
+): Promise<BauPostSnapshot> {
+  return defangSnapshot(buildBauPostSnapshot(...args));
+}
+
 /** Stable across key order, so an unchanged post never reads as edited. */
 export function snapshotHash(snapshot: BauPostSnapshot): string {
   const ordered = Object.fromEntries(
@@ -138,14 +148,14 @@ export function followFallbackBody(snapshot: BauPostSnapshot): string {
 }
 
 /**
- * The message body of a delivery: the fallback line, and when the follow pings a
- * role, the mention alone on the line above it. A client that draws the card
- * strips the fallback (`forwardBodyComment` in `@pqp/shared`) and keeps the
- * mention; an old client reads a mention, then a title and a link.
+ * The message body of a delivery: the fallback line and nothing else. A
+ * delivery NEVER pings: no `@role` line, no `message_mentions` rows, no
+ * everyone or here. A source with several staff could otherwise amplify a ping
+ * into every destination that follows it, once per post. The snapshot text is
+ * already inert (`buildBauPostSnapshot`), and this body adds no mention.
  */
-export function followBody(snapshot: BauPostSnapshot, rolePingName: string | null): string {
-  const fallback = followFallbackBody(snapshot);
-  return rolePingName ? `@${rolePingName.replace(/\s+/g, "")}\n${fallback}` : fallback;
+export function followBody(snapshot: BauPostSnapshot): string {
+  return followFallbackBody(snapshot);
 }
 
 /** A card with nothing to show (no title, no text, no media) is not delivered. */
