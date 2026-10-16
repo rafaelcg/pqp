@@ -78,7 +78,27 @@ class StoriesTest {
         assertEquals(constant("STORY_IMAGE_MAX_EDGE"), StoriesRules.IMAGE_MAX_EDGE.toLong())
         assertEquals(list("STORY_REACTIONS"), StoriesRules.REACTIONS)
         assertEquals(list("STORY_BACKGROUNDS"), StoriesRules.BACKGROUNDS)
+        assertEquals(list("STORY_BACKGROUNDS_SOLID"), StoriesRules.BACKGROUNDS_SOLID)
+        assertEquals(list("STORY_BACKGROUNDS_GRADIENT"), StoriesRules.BACKGROUNDS_GRADIENT)
+        assertEquals(list("STORY_BACKGROUND_FAMILIES"), StoriesRules.BACKGROUND_FAMILIES)
         assertEquals(list("STORY_IMAGE_TYPES"), StoriesRules.IMAGE_TYPES)
+    }
+
+    @Test
+    fun `every card background key has its own colours and its family`() {
+        val fallback = gg.pqp.app.stories.ui.backgroundColors("hotpink")
+        val every = StoriesRules.BACKGROUND_FAMILIES.flatMap { family -> StoriesRules.backgroundsOf(family).map { family to it } }
+        assertEquals(18, every.size)
+        assertEquals(every.size, every.map { it.second }.toSet().size)
+        for ((family, key) in every) {
+            assertEquals(key, family, StoriesRules.backgroundFamily(key))
+            // "night" is the fallback itself; every other key must not fall through to it.
+            if (key != "night") assertTrue(key, gg.pqp.app.stories.ui.backgroundColors(key) != fallback)
+        }
+        assertEquals("glow", StoriesRules.backgroundFamily("hotpink"))
+        // A solid colour is one stop twice; a gradient is two different stops.
+        StoriesRules.BACKGROUNDS_SOLID.forEach { key -> gg.pqp.app.stories.ui.backgroundColors(key).let { assertEquals(key, it.first, it.second) } }
+        StoriesRules.BACKGROUNDS_GRADIENT.forEach { key -> gg.pqp.app.stories.ui.backgroundColors(key).let { assertTrue(key, it.first != it.second) } }
     }
 
     @Test

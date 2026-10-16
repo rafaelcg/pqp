@@ -65,8 +65,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.LinearGradientShader
+import androidx.compose.ui.graphics.Shader
+import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -941,21 +946,78 @@ fun TextCard(text: String, background: String?, modifier: Modifier = Modifier, f
     }
 }
 
-/** `STORY_BACKGROUNDS`: two stops each, so a card has depth without an image. */
+/**
+ * A card's fill. The glow family is two stops top to bottom, so a card has depth without an image; the
+ * solid family is one flat colour; the gradient family runs on the same 160 degree line the web draws
+ * (CSS `linear-gradient(160deg, ...)`), so a card reads the same on every platform.
+ */
 fun backgroundBrush(key: String?): Brush {
     val (top, bottom) = backgroundColors(key)
-    return Brush.verticalGradient(listOf(top, bottom))
+    return if (StoriesRules.backgroundFamily(key) == "gradient") CssAngleBrush(160f, top, bottom) else Brush.verticalGradient(listOf(top, bottom))
 }
 
-/** A card's two stops, top then bottom. */
+/**
+ * A two-stop gradient along a CSS angle (0 is up, 90 right, 160 down and a little right), with the
+ * gradient line sized the way CSS sizes it so the first and last colours land exactly on the corners.
+ */
+private class CssAngleBrush(private val degrees: Float, private val from: Color, private val to: Color) : ShaderBrush() {
+    override fun createShader(size: Size): Shader {
+        val radians = Math.toRadians(degrees.toDouble())
+        val dx = Math.sin(radians).toFloat()
+        val dy = -Math.cos(radians).toFloat()
+        val half = (Math.abs(size.width * dx) + Math.abs(size.height * dy)) / 2f
+        val centre = Offset(size.width / 2f, size.height / 2f)
+        return LinearGradientShader(
+            from = Offset(centre.x - dx * half, centre.y - dy * half),
+            to = Offset(centre.x + dx * half, centre.y + dy * half),
+            colors = listOf(from, to),
+        )
+    }
+}
+
+/**
+ * The colours of the bars around a 9:16 card, top then bottom: the card's colour at the middle of its
+ * top edge and of its bottom edge, so there is no seam where the canvas meets them. For every family
+ * but the angled gradient that is just the two stops; on the 160 degree line the top edge's middle is
+ * a little way in from the first stop, and the bottom edge's a little short of the last.
+ */
+fun backgroundBarColors(key: String?): Pair<Color, Color> {
+    val (first, last) = backgroundColors(key)
+    if (StoriesRules.backgroundFamily(key) != "gradient") return first to last
+    val radians = Math.toRadians(160.0)
+    val dx = Math.abs(Math.sin(radians)).toFloat()
+    val dy = Math.abs(Math.cos(radians)).toFloat()
+    // A 9 by 16 canvas; the gradient line is as long as the canvas is deep along it.
+    val line = 9f * dx + 16f * dy
+    val inset = (8f * dy) / line
+    return androidx.compose.ui.graphics.lerp(first, last, 0.5f - inset) to androidx.compose.ui.graphics.lerp(first, last, 0.5f + inset)
+}
+
+/** A card's two stops, top then bottom. A solid colour is the same stop twice. */
 fun backgroundColors(key: String?): Pair<Color, Color> = when (key) {
         "lime" -> Palette.Signal to Palette.SignalDim
         "ember" -> Color(0xFF7A1F12) to Color(0xFFE0662E)
         "grape" -> Color(0xFF2B1446) to Color(0xFF7B3FB0)
         "sand" -> Color(0xFF8C6A3E) to Color(0xFFE2C48E)
         "ink" -> Color(0xFF0A0A0A) to Color(0xFF2A2F36)
+        // The solid family: `--story-bg-*` in client/src/index.css, converted from oklch.
+        "cobalt" -> solid(0xFF1957D2)
+        "crimson" -> solid(0xFFBB061E)
+        "pine" -> solid(0xFF00633F)
+        "plum" -> solid(0xFF892784)
+        "teal" -> solid(0xFF007475)
+        "onyx" -> solid(0xFF0C0D0F)
+        // The gradient family: the first and the last stop of the 160 degree line.
+        "sunset" -> Color(0xFFD34100) to Color(0xFF990062)
+        "ocean" -> Color(0xFF007E96) to Color(0xFF013E8B)
+        "aurora" -> Color(0xFF007950) to Color(0xFF4B2E96)
+        "dusk" -> Color(0xFF3334A0) to Color(0xFFC32E85)
+        "berry" -> Color(0xFFB80F79) to Color(0xFF52187E)
+        "lagoon" -> Color(0xFF00817B) to Color(0xFF006527)
         else -> Color(0xFF0B1020) to Color(0xFF1E2A4A)
     }
+
+private fun solid(argb: Long): Pair<Color, Color> = Color(argb).let { it to it }
 
 fun textOn(background: String?): Color = when (background) {
     "lime", "sand" -> Palette.Ink

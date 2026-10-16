@@ -251,7 +251,7 @@ private fun StoryBackdrop(story: Story, barShare: Float, modifier: Modifier = Mo
     when {
         // The card's gradient runs across the canvas only; the bars carry its end colours, so there is no seam.
         story.kind == "text" -> {
-            val (top, bottom) = backgroundColors(story.background)
+            val (top, bottom) = backgroundBarColors(story.background)
             val bar = barShare.coerceIn(0f, 0.49f)
             Box(
                 modifier.background(

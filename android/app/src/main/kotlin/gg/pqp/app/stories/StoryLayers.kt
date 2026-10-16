@@ -29,6 +29,9 @@ object StoryLayers {
     const val TEXT_SIZE_MIN = 0.5f
     const val TEXT_SIZE_MAX = 3f
     const val ALT_TEXT_MAX = 500
+
+    /** What the author may write about a picture: leaves room in `altText` for the words on the layers. */
+    const val DESCRIPTION_MAX = 300
     const val MAX_BYTES = 8 * 1024 * 1024
 
     val FONTS = listOf("classic", "bold", "typewriter", "serif", "neon")
