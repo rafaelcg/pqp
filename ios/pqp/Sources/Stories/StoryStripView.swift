@@ -382,7 +382,7 @@ enum StoryOwnPlusTarget {
 
     static func frame(hasStory: Bool) -> CGRect {
         hasStory
-            ? CGRect(x: 42, y: 41, width: 34, height: 34)
+            ? CGRect(x: 43, y: 40, width: 32, height: 30)
             : CGRect(x: 33, y: 32, width: 48, height: 48)
     }
 }
