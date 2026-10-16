@@ -847,6 +847,7 @@ final class HomeModel {
         guard let session else { return [] }
         let api = session.api
         let startedAt = activitySeq
+        let epoch = session.unreadEpoch
         var failed: [String] = []
         await withTaskGroup(of: (String, [UnreadEntry]?).self) { group in
             var next = 0
@@ -858,7 +859,7 @@ final class HomeModel {
             }
             for _ in 0..<min(ServerUnread.concurrency, ids.count) { start() }
             for await (id, entries) in group {
-                if pass == unreadPass, !Task.isCancelled {
+                if pass == unreadPass, !Task.isCancelled, epoch == session.unreadEpoch {
                     if let entries {
                         applyUnread(entries, serverId: id, startedAt: startedAt)
                     } else {
@@ -969,7 +970,16 @@ final class HomeModel {
     /// The server list as the server has it now: only the ORDER is taken, every
     /// other field on the rows stays as it is.
     private func reloadServerOrder() async {
-        guard let session, let fresh = try? await session.api.servers() else { return }
+        guard let session else { return }
+        // One more try after a pause: the order the other device made is only
+        // known from this read, and a single dropped request would otherwise
+        // leave the list as it was until some later event happened to fix it.
+        var fresh = try? await session.api.servers()
+        if fresh == nil, !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(3))
+            if !Task.isCancelled { fresh = try? await session.api.servers() }
+        }
+        guard let fresh else { return }
         servers = ServerOrder.applying(fresh.map(\.id), to: servers)
     }
 

@@ -69,6 +69,9 @@ struct ChannelListView: View {
 
     @State private var channels: [Channel] = []
     @State private var unread: [String: UnreadEntry] = [:]
+    /// The counts above came from a read, not from the empty starting value:
+    /// only then do they say anything about the hub's tile for this server.
+    @State private var unreadFetched = false
     @State private var isLoading = true
     @State private var error: String?
     /// The Baú's instance flags. Nil until asked; off on any failure. The row
@@ -965,12 +968,20 @@ struct ChannelListView: View {
         .onDisappear {
             if session.openedServerId == server.id { session.openedServerId = nil }
         }
-        .onChange(of: unread, initial: true) { _, latest in
-            let preferences = session.preferences
-            session.noteServerUnread(server.id, ServerUnread.totals(from: Array(latest.values)) {
-                ChannelMute.isMuted(channelId: $0, serverId: server.id, preferences: preferences)
-            })
-        }
+        // The empty value before the first read is not a count (it would wipe
+        // the badge the hub hydrated), and a mute changes the total with no
+        // unread change at all.
+        .onChange(of: unread, initial: true) { _, _ in publishServerUnread() }
+        .onChange(of: unreadFetched) { _, _ in publishServerUnread() }
+        .onChange(of: session.preferences) { _, _ in publishServerUnread() }
+    }
+
+    private func publishServerUnread() {
+        guard unreadFetched else { return }
+        let preferences = session.preferences
+        session.noteServerUnread(server.id, ServerUnread.totals(from: Array(unread.values)) {
+            ChannelMute.isMuted(channelId: $0, serverId: server.id, preferences: preferences)
+        })
     }
 
     /// Where a row goes: a forum's list, or a chat.
@@ -1024,6 +1035,7 @@ struct ChannelListView: View {
         guard !channels.isEmpty else { return }
         if let entries = try? await session.api.unread(serverId: server.id) {
             unread = Dictionary(uniqueKeysWithValues: entries.map { ($0.channelId, $0) })
+            unreadFetched = true
         }
         await refreshBau()
     }

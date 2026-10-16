@@ -93,6 +93,10 @@ final class SessionStore {
     /// frame the list is already counting.
     var openedServerId: String?
 
+    /// Bumped on sign-out: a hydration read still in flight for the previous
+    /// account checks it before writing (`HomeModel.readUnread`).
+    @ObservationIgnored private(set) var unreadEpoch = 0
+
     /// One server's totals, written whole. Absent at zero, and equal writes are
     /// dropped so the hub does not redraw for nothing.
     func noteServerUnread(_ serverId: String, _ totals: ServerUnreadTotals) {
@@ -698,6 +702,7 @@ final class SessionStore {
         // The next account's tiles are not lit by this one's unread.
         serverUnread = [:]
         openedServerId = nil
+        unreadEpoch += 1
         answeredAgeGateThisLaunch = false
         PendingInvite.clear()
         pendingInviteCode = nil

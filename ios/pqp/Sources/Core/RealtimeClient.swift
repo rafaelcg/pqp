@@ -399,6 +399,9 @@ actor RealtimeClient {
     private var statusHandler: (@Sendable (RealtimeStatus) -> Void)?
     private var reconnectAttempt = 0
     private var joinedChannelId: String?
+    /// Who holds the primary slot, so a screen's late `leave` cannot drop the
+    /// join of a newer screen for the same channel (`leave(channelId:owner:)`).
+    private var joinedOwner: String?
     /// The thread panel's slot, re-asserted on reconnect for the same reason
     /// the primary channel is: the server forgets both when the socket dies.
     private var joinedThreadChannelId: String?
@@ -689,8 +692,9 @@ actor RealtimeClient {
         }
     }
 
-    func join(channelId: String) async {
+    func join(channelId: String, owner: String? = nil) async {
         joinedChannelId = channelId
+        joinedOwner = owner
         await send(raw: ["type": "join-channel", "channelId": channelId])
     }
 
@@ -705,9 +709,16 @@ actor RealtimeClient {
     /// new message in #geral was swallowed: no badge on the list, none on the
     /// server's tile, until some other channel was opened. The live unread on
     /// the server list found it.
-    func leave(channelId: String) async {
+    ///
+    /// `owner` is the screen that joined. Closing and reopening the same chat
+    /// puts the old screen's leave (an unstructured task) behind the new
+    /// screen's join, and both name the same channel: only the owner's own
+    /// leave may take the slot back.
+    func leave(channelId: String, owner: String? = nil) async {
         guard joinedChannelId == channelId else { return }
+        if let owner, let holder = joinedOwner, holder != owner { return }
         joinedChannelId = nil
+        joinedOwner = nil
         await send(raw: ["type": "leave-channel"])
     }
 

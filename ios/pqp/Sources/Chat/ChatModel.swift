@@ -191,7 +191,7 @@ final class ChatModel {
         // (see `ForumHomeModel`). Everything else is the primary slot.
         async let joined: Void = joinsAsThread
             ? session.realtime.joinThread(channelId: channelId)
-            : session.realtime.join(channelId: channelId)
+            : session.realtime.join(channelId: channelId, owner: handlerKey)
         // Attachments are off entirely unless the deployment configured
         // storage, so the button is hidden rather than failing on tap.
         async let attachments = (try? await session.api.attachmentConfig())?.enabled ?? false
@@ -279,7 +279,8 @@ final class ChatModel {
             // The primary slot: left only if it is still this channel's (a
             // forum post's own channel was never joined there, and the next
             // screen may already hold its own).
-            Task { await realtime.leave(channelId: channelId) }
+            let owner = handlerKey
+            Task { await realtime.leave(channelId: channelId, owner: owner) }
         }
         typingSweeper?.cancel()
         typingSweeper = nil
