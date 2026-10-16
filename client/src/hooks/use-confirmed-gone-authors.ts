@@ -178,6 +178,8 @@ function createTracker(
         publish();
       }
       if (queued) {
+        // A new check, so it gets the whole retry schedule again.
+        failures = 0;
         void drain();
       }
     },

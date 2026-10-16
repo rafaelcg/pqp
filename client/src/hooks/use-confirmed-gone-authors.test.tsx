@@ -189,6 +189,11 @@ describe("useConfirmedGoneAuthors", () => {
         await vi.advanceTimersByTimeAsync(0);
       });
       expect(calls).toBe(5);
+      // The fresh check fails too, and has its own retries.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(calls).toBe(6);
     });
 
     it("stops trying when the list goes away", async () => {
