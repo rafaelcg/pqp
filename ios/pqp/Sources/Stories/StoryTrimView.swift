@@ -201,6 +201,9 @@ struct StoryTrimView: View {
             let size = natural.applying(transform)
             fillsCanvas = StoryCanvas.fillsCanvas(width: Int(abs(size.width)), height: Int(abs(size.height)))
         }
+        // The trimmer may have gone while the track was being read: nothing may
+        // start playing or observing behind it.
+        guard !gone, !Task.isCancelled else { return }
         let item = AVPlayerItem(asset: asset)
         player.replaceCurrentItem(with: item)
         player.isMuted = true
