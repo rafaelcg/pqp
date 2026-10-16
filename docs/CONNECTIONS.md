@@ -93,8 +93,11 @@ app: the pair lives in `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET`, and
 redirect URL on THAT app. Test the pair from the box:
 
 ```bash
-curl -s -X POST https://id.twitch.tv/oauth2/token -d "client_id=$TWITCH_CLIENT_ID&client_secret=$TWITCH_CLIENT_SECRET&grant_type=client_credentials"
+printf 'client_id=%s&client_secret=%s&grant_type=client_credentials' "$TWITCH_CLIENT_ID" "$TWITCH_CLIENT_SECRET" \
+  | curl -s -X POST https://id.twitch.tv/oauth2/token --data @-
 ```
+
+The body goes in on stdin so the secret never appears in the process list.
 
 An `access_token` means the pair is good; `{"status":403,"message":"invalid client secret"}`
 means regenerate it in the console and update the secret. Battle.net is the
