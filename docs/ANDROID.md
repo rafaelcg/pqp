@@ -2275,6 +2275,17 @@ home above, unchanged.
 
 The rules are pure and tested in `ConversasTest` (`social/ConversationList.kt`).
 
+## Phone gaps closed (2026-10-16)
+
+The phone gaps listed in `docs/HANDOVER.md` ("Phones"), each against what the web and iOS do.
+
+- **Conversas: Fixadas, mute and swipe.** `social/ConversationPrefs.kt`. A row swipes right to pin or unpin (iOS does the same) and left to close (the existing confirmation), and a long press opens Fixar, Silenciar and Fechar conversa. The pin is the web rail's own `pinnedConversations` (the whole array, newest pin first like iOS, 15 at most, a snackbar says so at the limit), drawn as a **Fixadas** section over **Recentes** with a pin glyph. A mute is the per-channel notification level `none` (a conversation is a channel in that map), the same one the web's notification menu writes: the row dims, loses its badge and shows a bell-off, and the Chats tab badge and the Não lidas chip stop counting it. Both are optimistic and saved one at a time (the last tap wins, a refused save puts back what the server last confirmed, in the server's own sentence). **A mute reads the levels fresh before it writes**, because the server replaces `notifications.channels` whole (it merges `notifications` one level deep): sending the sign-in copy would erase a mute set on the web a minute ago.
+- **Unread on the server list.** `unread/ServerUnread.kt`. There is no all-servers endpoint, so the list reads `GET /api/servers/:id/unread` per server like the web rail (two at a time, thirty at most, a server muted as a whole skipped), when it comes to the front (at most every 30 s, and at once for a server whose channel was just read) and keeps it right with live `channel-activity` frames in between. The row shows a lime `@N` at the icon's bottom corner when somebody pinged this person, otherwise a dot, and the name goes bold; the Baú keeps the top corner. A failed read keeps what was on screen.
+- **Collapsed category.** A folded category adds up the mentions inside (muted channels left out) and shows the lime `@N` the rows show, instead of the plain dot; a mention with no unread count (a forum) still counts as news.
+- **Server order follows live.** The `server-order-update` frame is handled in `SessionStore`: another tab's or device's drag reorders the list at once. The phone names its own saves (`origin`) and ignores its echo, and ignores a frame while one of its own saves is in flight.
+- **"Mandar um oi".** When a friendship starts, a snackbar says "Tu e Bia agora são amigos" with **Mandar um oi**, which opens (or reuses) the conversation. It shows after the person accepts a request, and when somebody accepts one they sent (the web's rule, `newlyAcceptedFriends`: the friends list gained somebody who was not an incoming request), on Conversas or Friends, once, and not at all if it is more than two minutes old.
+- **Spanish for Compartilhar: not done, on purpose.** Neither phone ships Spanish at all (`localeFilters` on Android, `knownRegions` on iOS). Adding `values-es` for one feature would give Spanish phones an English app with one translated menu, and adding `es` to the filters promises a language nobody has translated. A whole-app pass (about 1,100 Android strings) is the real fix and is its own piece of work.
+
 ## Stories
 
 `stories/` and `stories/ui/`, against `packages/shared/src/stories.ts`. The

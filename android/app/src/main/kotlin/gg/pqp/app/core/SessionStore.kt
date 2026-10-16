@@ -15,6 +15,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonArray
+import gg.pqp.app.ui.screens.ServerActions
 import gg.pqp.app.onboarding.markOnboarded
 import okhttp3.OkHttpClient
 
@@ -271,6 +273,7 @@ class SessionStore(
                 "passed" -> {
                     _phase.value = SessionPhase.Ready(me)
                     realtime.connect()
+                    followRemoteServerOrder()
                     refreshServers()
                 }
                 "blocked" -> _phase.value = SessionPhase.Blocked(me.ageGate)
@@ -300,6 +303,18 @@ class SessionStore(
         val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
         _phase.value = SessionPhase.Ready(
             updated.copy(ageGate = current.ageGate, preferences = current.preferences),
+        )
+    }
+
+    /**
+     * Change the stored preferences held by the session, at once. The writer
+     * (`ConversationPrefs`) owns the request; this is only the local half, so
+     * every screen reads one value.
+     */
+    fun updatePreferences(transform: (MePreferences) -> MePreferences) {
+        val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
+        _phase.value = SessionPhase.Ready(
+            current.copy(preferences = transform(current.preferences ?: MePreferences())),
         )
     }
 
@@ -373,6 +388,22 @@ class SessionStore(
     fun startInviteJoin(code: String): kotlinx.coroutines.Deferred<JoinInviteResponse?> =
         inviteJoin ?: scope.async { redeemInvite(code) }.also { inviteJoin = it }
 
+    /**
+     * An API client that speaks for [account] and only for it, or null when somebody else is
+     * (or nobody is) signed in. The session's own [api] follows whoever signs in next, so a
+     * write that outlives a sign-out could go out with the NEXT account's credentials; this one
+     * carries the token that was current for [account] and nothing else. The account is read
+     * on both sides of fetching the token, so a switch in between is seen and refused.
+     */
+    suspend fun apiFor(account: String?): ApiClient? {
+        if (account == null || currentUserId() != account) return null
+        val token = tokens.currentToken()
+        if (currentUserId() != account) return null
+        return ApiClient(TokenProvider { token }, http)
+    }
+
+    private fun currentUserId(): String? = (_phase.value as? SessionPhase.Ready)?.me?.id
+
     fun refreshServers() {
         scope.launch {
             runCatching { api.servers() }
@@ -422,21 +453,33 @@ class SessionStore(
                 orderSaves.withLock {
                     val ids = _servers.value.map { it.id }
                     if (ids == synchronized(orderLock) { confirmedOrder }) return@withLock
-                    runCatching { api.saveServerOrder(ids) }
-                        .onSuccess { synchronized(orderLock) { confirmedOrder = ids } }
+                    runCatching { api.saveServerOrder(ids, orderOrigin) }
+                        .onSuccess {
+                            synchronized(orderLock) {
+                                confirmedOrder = ids
+                                orderLedger.saveSucceeded()
+                            }
+                        }
                         .onFailure {
                             synchronized(orderLock) {
                                 val back = confirmedOrder.orEmpty()
                                 _servers.value = gg.pqp.app.ui.screens.ServerActions
                                     .applyOrder(_servers.value, back)
                             }
+                            synchronized(orderLock) { orderLedger.saveFailed() }
                             onError(it.message.orEmpty())
                         }
                 }
             } finally {
                 synchronized(orderLock) {
                     orderSavesPending -= 1
-                    if (orderSavesPending == 0) confirmedOrder = null
+                    if (orderSavesPending == 0) {
+                        confirmedOrder = null
+                        // A reorder from another device that arrived while saves were out was
+                        // ignored (the order here was the newer one). If a save FAILED, ours is
+                        // not the newest any more, so the one that was ignored is.
+                        orderLedger.settle(_servers.value)?.let { _servers.value = it }
+                    }
                 }
             }
         }
@@ -446,6 +489,43 @@ class SessionStore(
     private val orderLock = Any()
     private var orderSavesPending = 0
     private var confirmedOrder: List<String>? = null
+
+    /** What a remote `server-order-update` that arrived during our saves means once they settle. */
+    private val orderLedger = ServerOrderLedger()
+
+    /** Named on every save, so this phone's own `server-order-update` echo is recognised. */
+    private val orderOrigin = "android-" + java.util.UUID.randomUUID().toString().take(8)
+
+    private var orderFollowJob: Job? = null
+
+    /**
+     * Follow the order this account drew on another tab or device, live. The
+     * server addresses the frame to every socket of the person; the list
+     * already answers in the saved order on open, so this is only about not
+     * waiting for the next open ([ServerActions.followRemoteOrder] is the rule).
+     */
+    private fun followRemoteServerOrder() {
+        orderFollowJob?.cancel()
+        orderFollowJob = scope.launch {
+            realtime.frames.collect { frame ->
+                when ((frame["type"] as? JsonPrimitive)?.contentOrNull) {
+                    "server-order-update" -> {
+                        val ids = (frame["serverIds"] as? JsonArray)
+                            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                            ?: return@collect
+                        val sender = (frame["origin"] as? JsonPrimitive)?.contentOrNull
+                        synchronized(orderLock) {
+                            val saving = orderSavesPending > 0
+                            if (saving && sender != orderOrigin) orderLedger.ignored(ids)
+                            ServerActions.followRemoteOrder(
+                                _servers.value, ids, sender, orderOrigin, saving = saving,
+                            )?.let { _servers.value = it }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /**
      * `idempotencyKey`, when given, is forwarded to [ApiClient.createServer]

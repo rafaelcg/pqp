@@ -72,6 +72,45 @@ class ServerActionsTest {
     }
 
     @Test
+    fun `another device's order is followed, this phone's own echo and a save in flight are not`() {
+        val list = listOf(server("a"), server("b"), server("c"))
+        val order = listOf("c", "a", "b")
+        assertEquals(
+            listOf("c", "a", "b"),
+            ServerActions.followRemoteOrder(list, order, origin = "web-1", ownOrigin = "android-1", saving = false)!!
+                .map { it.id },
+        )
+        // Its own echo.
+        assertNull(ServerActions.followRemoteOrder(list, order, "android-1", "android-1", saving = false))
+        // A frame with no origin is somebody else's.
+        assertEquals(
+            listOf("c", "a", "b"),
+            ServerActions.followRemoteOrder(list, order, null, "android-1", saving = false)!!.map { it.id },
+        )
+        // A save of this phone's is in flight: the order on screen is the newer.
+        assertNull(ServerActions.followRemoteOrder(list, order, "web-1", "android-1", saving = true))
+        // Nothing would move.
+        assertNull(ServerActions.followRemoteOrder(list, listOf("a", "b", "c"), "web-1", "android-1", saving = false))
+        // A server joined a moment ago, not named yet, keeps its place after the named ones.
+        assertEquals(
+            listOf("b", "a", "c"),
+            ServerActions.followRemoteOrder(list, listOf("b", "a"), "web-1", "android-1", saving = false)!!
+                .map { it.id },
+        )
+    }
+
+    @Test
+    fun `a remote order ignored during saves is applied once they settle, only if one failed`() {
+        val list = listOf(server("a"), server("b"), server("c"))
+        val remote = listOf("c", "b", "a")
+        assertEquals(listOf("c", "b", "a"), ServerActions.afterSaves(list, remote, anySaveFailed = true)!!.map { it.id })
+        // Every save landed: this phone's order is the newest, the remote one is history.
+        assertNull(ServerActions.afterSaves(list, remote, anySaveFailed = false))
+        assertNull(ServerActions.afterSaves(list, null, anySaveFailed = true))
+        assertNull(ServerActions.afterSaves(list, listOf("a", "b", "c"), anySaveFailed = true))
+    }
+
+    @Test
     fun `surrounding space and case are forgiven`() {
         assertTrue(ServerActions.deleteConfirmationMatches("  owned with others ", "Owned With Others"))
         assertTrue(ServerActions.deleteConfirmationMatches("PQP", " pqp "))

@@ -316,11 +316,6 @@ class WireProtocolTest {
         // yet — same follow-up as the warning itself, and no correctness
         // gap: the phone was never showing a stale countdown to begin with.
         "voice-idle-warning-cancelled" to "no warning banner on the phone yet to cancel; same follow-up as voice-idle-warning",
-        // Another tab or device of this account dragged its web server rail.
-        // `GET /api/servers` already answers in the saved order, and the phone
-        // re-reads that list every time the Servers screen opens, so it picks
-        // the order up there; following a drag live is a follow-up.
-        "server-order-update" to "GET /api/servers is already in the saved order and is re-read on open; live follow is a follow-up",
     )
 
     /**

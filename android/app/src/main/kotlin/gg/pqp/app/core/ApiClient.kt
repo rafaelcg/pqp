@@ -85,8 +85,8 @@ class ApiClient(
      * not an error. The answer (the order as stored) is not read: the caller
      * already shows it, and a refusal still arrives as an [ApiException].
      */
-    suspend fun saveServerOrder(serverIds: List<String>) {
-        val body = json.encodeToString(ServerOrderRequest.serializer(), ServerOrderRequest(serverIds))
+    suspend fun saveServerOrder(serverIds: List<String>, origin: String? = null) {
+        val body = json.encodeToString(ServerOrderRequest.serializer(), ServerOrderRequest(serverIds, origin))
         execute(
             Request.Builder()
                 .url(url("/api/servers/order"))
