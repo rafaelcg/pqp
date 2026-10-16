@@ -55,7 +55,7 @@
     <!-- Conversa -->
     <string name="chat_composer_hint">Mensagem</string>
     <string name="chat_send">Enviar</string>
-    <string name="chat_empty">Nada aqui ainda. Diga alguma coisa.</string>
+    <string name="chat_empty">Nada aqui ainda. Diz alguma coisa.</string>
     <string name="chat_load_failed">Não foi possível carregar esta conversa. %1$s</string>
     <string name="chat_edited">editada</string>
     <string name="chat_typing_one">%1$s está digitando…</string>
