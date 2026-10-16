@@ -1,6 +1,7 @@
 import { MAX_AVATAR_BYTES, type User } from "@pqp/shared";
 import { claimAvatar, createAvatarUpload } from "@/lib/api";
 import { cropImageToSquare } from "@/lib/avatar";
+import type { CropRegion } from "@/lib/image-crop";
 
 /**
  * A picked file, all the way to being this account's avatar.
@@ -13,6 +14,9 @@ import { cropImageToSquare } from "@/lib/avatar";
  *     buffering image uploads;
  *  3. `POST /api/me/avatar/claim` HEADs the object and swaps the columns.
  *
+ * `region` is what the person framed in the crop step; without one it is the
+ * centre crop.
+ *
  * The crop happens before any of it. What the server is asked to sign is the
  * length of the *cropped* JPEG, so the browser cannot mint a URL for a 40 KB
  * avatar and then push 5 MiB through it — the length is in the signature.
@@ -21,10 +25,13 @@ import { cropImageToSquare } from "@/lib/avatar";
  * claim never happens is never referenced by any row, and the account keeps the
  * avatar it already had.
  */
-export async function uploadAvatar(file: Blob): Promise<User> {
+export async function uploadAvatar(
+  file: Blob,
+  region: CropRegion | null = null,
+): Promise<User> {
   let cropped: Blob;
   try {
-    cropped = await cropImageToSquare(file);
+    cropped = await cropImageToSquare(file, undefined, region);
   } catch {
     // `createImageBitmap` refuses anything that is not a decodable image, which
     // is the only validation this needs: the file picker's `accept` is a hint,

@@ -49,6 +49,7 @@ import {
   avatarUploadEnabled,
   localizedUploadFailure,
 } from "@/components/user/avatar-picker";
+import { ImageCropDialog } from "@/components/user/image-crop-dialog";
 import { UserAvatar } from "@/components/user/user-avatar";
 import {
   deleteUserBanner,
@@ -60,6 +61,7 @@ import { uploadUserBanner } from "@/lib/banner-upload";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation } from "@/lib/i18n";
+import type { CropRegion } from "@/lib/image-crop";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 
@@ -876,14 +878,22 @@ function BannerRow({
   const busy = write.state.kind === "saving";
   const hasBanner = Boolean(user?.bannerUrl);
   const enabled = storage?.banner ?? false;
+  // The picked file while the person frames it; the upload starts on Save.
+  const [cropping, setCropping] = useState<File | null>(null);
 
+  /** A picked or dropped file opens the crop step; nothing uploads yet. */
   function handleFile(file: File) {
     if (busy) return;
+    setCropping(file);
+  }
+
+  function uploadCropped(file: File, region: CropRegion) {
+    setCropping(null);
     const failed = t("settings.profile.banner.failed");
     setAction("upload");
     void write.run(async () => {
       try {
-        onUserUpdated(await uploadUserBanner(file));
+        onUserUpdated(await uploadUserBanner(file, region));
       } catch (error) {
         throw localizedUploadFailure(error, failed);
       }
@@ -1023,6 +1033,14 @@ function BannerRow({
       }
     >
     </SettingsRow>
+    <ImageCropDialog
+      file={cropping}
+      shape="banner"
+      onCancel={() => setCropping(null)}
+      onConfirm={(region) => {
+        if (cropping) uploadCropped(cropping, region);
+      }}
+    />
     </FileDropZone>
   );
 }
