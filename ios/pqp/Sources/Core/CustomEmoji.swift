@@ -168,6 +168,11 @@ final class EmojiImages {
         }
     }
 
+    /// An emoji is a few hundred pixels at most. Past these it is not one.
+    nonisolated static func fitsDecodeBudget(width: Int, height: Int) -> Bool {
+        width > 0 && height > 0 && width <= 2048 && height <= 2048 && width * height <= 2_000_000
+    }
+
     private nonisolated static func fetch(_ id: String) async -> Outcome {
         guard let url = CustomEmoji.imageURL(id: id) else { return .rejected }
         var request = URLRequest(url: url)
@@ -197,7 +202,14 @@ final class EmojiImages {
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceThumbnailMaxPixelSize: Int(side * scale * 2),
         ]
+        // The size is read from the header BEFORE anything is decoded: a small
+        // file can claim enormous dimensions, and a thumbnail may need the whole
+        // bitmap to make a 44 px one.
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              fitsDecodeBudget(width: width, height: height),
               let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
         else { return .rejected }
         // Drawn once at the size it is shown, at the screen's scale: a 128 px

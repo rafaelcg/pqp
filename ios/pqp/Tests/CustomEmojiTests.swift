@@ -53,4 +53,13 @@ final class CustomEmojiTests: XCTestCase {
             "https://api.pqp.gg/api/emoji/\(id)"
         )
     }
+
+    @MainActor
+    func testAPictureIsRefusedBeforeDecodingWhenItsHeaderClaimsTooMuch() {
+        XCTAssertTrue(EmojiImages.fitsDecodeBudget(width: 128, height: 128))
+        XCTAssertTrue(EmojiImages.fitsDecodeBudget(width: 2048, height: 976))
+        XCTAssertFalse(EmojiImages.fitsDecodeBudget(width: 30_000, height: 30_000))
+        XCTAssertFalse(EmojiImages.fitsDecodeBudget(width: 4096, height: 8))
+        XCTAssertFalse(EmojiImages.fitsDecodeBudget(width: 0, height: 10))
+    }
 }
