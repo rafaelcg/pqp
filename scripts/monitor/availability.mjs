@@ -417,9 +417,12 @@ async function checkStatusComponents() {
  * Four checks below look at different fields of the same report. Fetching it
  * four times would be four `SELECT 1`s and, worse, four draws on the endpoint's
  * rate limit (5 burst, 2/s per address, and behind Cloudflare the address the
- * app sees can be a shared edge one), so the first read is reused for 60
- * seconds. `api-ready` passes `maxAgeMs: 0` because its retries exist to
- * observe a recovery and must see a fresh answer each time.
+ * app sees can be a shared edge one), so the FIRST attempt of each check reuses
+ * a read up to 60 seconds old. Every RETRY (attempt 2 onwards) asks for a fresh
+ * one via `maxAgeMs: 0`: a retry exists to see whether the condition persists,
+ * and answering it from the sample that raised the doubt would count one
+ * reading three times (a brief pool spike would look sustained, and each retry
+ * would wait 20 seconds for no new evidence). `api-ready` always reads fresh.
  */
 let readyMemo = null;
 
@@ -427,7 +430,12 @@ export function resetReadyMemo() {
   readyMemo = null;
 }
 
-async function readReady({ maxAgeMs = 60_000 } = {}) {
+const SHARED_READ_MS = 60_000;
+
+/** Attempt 1 may share a recent read; a retry must see a new one. */
+export const maxAgeFor = (attempt) => (attempt > 1 ? 0 : SHARED_READ_MS);
+
+async function readReady({ maxAgeMs = SHARED_READ_MS } = {}) {
   if (readyMemo && Date.now() - readyMemo.at < maxAgeMs) {
     return readyMemo.value;
   }
@@ -564,9 +572,9 @@ async function checkApiReady() {
  * samples the pool once a second and flips `pool.ok` only when the queue has
  * been non-empty for 10s or every connection has been checked out for 30s
  * (`POOL_QUEUE_GRACE_MS`, `POOL_FULL_GRACE_MS`). This check adds the half that
- * is only visible from outside: HEADROOM. A pool pinned near its maximum for
- * all three attempts (~40s) is not yet "not serving" and is how 2026-09-05 and
- * 2026-09-12 started.
+ * is only visible from outside: HEADROOM. A pool still pinned near its maximum
+ * on a fresh reading 40 seconds after the first is not yet "not serving" and is
+ * how 2026-09-05 and 2026-09-12 started.
  *
  * It reads ONE replica: Caddy balances across api-a and api-b, and each has its
  * own pool (`PG_POOL_MAX` is split per replica by `pqp-deploy`), so `max` here
@@ -576,8 +584,8 @@ async function checkApiReady() {
  * taken at 08:17 in Sao Paulo describes the quietest hour of the day.
  */
 async function checkApiPool() {
-  const result = await untilOk(async () => {
-    const r = await readReady();
+  const result = await untilOk(async (attempt) => {
+    const r = await readReady({ maxAgeMs: maxAgeFor(attempt) });
     if (r.status === 429) {
       return { ok: false, limited: true, level: "skip", note: "HTTP 429, rate limited" };
     }
@@ -632,8 +640,8 @@ async function checkApiPool() {
  * `LIVEKIT_REGIONS` is unset, which is a single-region deployment.
  */
 async function checkSfuRegions() {
-  const result = await untilOk(async () => {
-    const r = await readReady();
+  const result = await untilOk(async (attempt) => {
+    const r = await readReady({ maxAgeMs: maxAgeFor(attempt) });
     if (r.status === 429) {
       return { ok: false, limited: true, level: "skip", note: "HTTP 429, rate limited" };
     }
@@ -689,8 +697,8 @@ async function checkSfuRegions() {
  * moment they do. There is nothing to remember to turn on.
  */
 async function checkLiveHls() {
-  const result = await untilOk(async () => {
-    const res = await readReady();
+  const result = await untilOk(async (attempt) => {
+    const res = await readReady({ maxAgeMs: maxAgeFor(attempt) });
     const check = res.parsed?.checks?.liveHls;
     // A 503 for some OTHER dependency still carries a truthful liveHls block,
     // and blaming the bucket for a Postgres outage would send somebody to the

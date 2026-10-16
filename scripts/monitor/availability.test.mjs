@@ -22,6 +22,7 @@ import {
   judgePool,
   judgeReadyDependencies,
   judgeRegions,
+  maxAgeFor,
   retiredAvailabilityKeys,
 } from "./availability.mjs";
 import { retiredErrorKeys, runErrorChecks } from "./errors.mjs";
@@ -104,6 +105,14 @@ describe("judgePool", () => {
   test("no pool block is a skip, never a pass", () => {
     assert.equal(judgePool(undefined).level, "skip");
     assert.equal(judgePool({}).level, "skip");
+  });
+});
+
+describe("the shared /ready read", () => {
+  test("the first attempt may share a recent read, a retry never does", () => {
+    assert.ok(maxAgeFor(1) > 0);
+    assert.equal(maxAgeFor(2), 0);
+    assert.equal(maxAgeFor(3), 0);
   });
 });
 
