@@ -16,8 +16,9 @@ final class ForumSmallItemsTests: XCTestCase {
         XCTAssertEqual(ForumPinnedCount.resolve(narrowing: true, shown: 0, unfiltered: 3), 3)
     }
 
-    func testUnderAFilterBeforeTheReadItFallsBackToWhatIsShown() {
-        XCTAssertEqual(ForumPinnedCount.resolve(narrowing: true, shown: 0, unfiltered: nil), 0)
+    func testUnderAFilterBeforeTheReadTheCountIsUnknownNotTheFilteredOne() {
+        // A filtered list is no answer for the cap: three could be pinned and hidden.
+        XCTAssertNil(ForumPinnedCount.resolve(narrowing: true, shown: 0, unfiltered: nil))
     }
 
     func testOneNewReplyIsSingular() {

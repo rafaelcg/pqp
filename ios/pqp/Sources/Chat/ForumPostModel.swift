@@ -111,7 +111,7 @@ final class ForumPostModel {
     /// Tags this person may put on or take off: staff-only ones are staff's.
     var editableTags: [ForumTag] { isStaff ? tags : tags.filter { !$0.moderated } }
 
-    var pinnedCount: Int { home?.pinnedCount ?? 0 }
+    var pinnedCount: Int? { home?.pinnedCount }
 
     var link: URL? {
         URL(string: "https://pqp.gg/app/server/\(serverId)/channel/\(forumId)/post/\(postId)")
@@ -362,7 +362,7 @@ final class ForumPostModel {
     }
 
     func setPinned(_ pinned: Bool) async {
-        if pinned, home != nil, pinnedCount >= ForumLimits.maxPinned {
+        if pinned, let count = pinnedCount, count >= ForumLimits.maxPinned {
             notice = String(localized: "\(ForumLimits.maxPinned) posts are already pinned. Unpin one first.")
             return
         }

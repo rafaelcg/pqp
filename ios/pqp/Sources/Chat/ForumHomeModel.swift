@@ -349,28 +349,37 @@ final class ForumHomeModel {
     /// is on: the list's own pinned row follows the filters (a Bug filter hides
     /// the rules post), so counting it said "0 de 3" with one pinned.
     private(set) var unfilteredPinned: Int?
+    /// Bumped by every read; an answer for an older number is dropped.
+    @ObservationIgnored private var pinnedReadGeneration = 0
 
     /// Where the pinned count stands, for "2 de 3" in a post's menu. Under a
-    /// filter it is the unfiltered count once that has been read.
-    var pinnedCount: Int {
+    /// filter it is the forum-wide count, and nil until that has been read (a
+    /// filtered list is not an answer for the cap, so nothing is guessed).
+    var pinnedCount: Int? {
         ForumPinnedCount.resolve(narrowing: filters.isNarrowing, shown: state.pinned.count, unfiltered: unfilteredPinned)
     }
 
     /// Reads the forum's pinned count without the filters. Only asked while a
-    /// filter is on; without one the list already holds the answer.
+    /// filter is on; without one the list already holds the answer. A failed
+    /// read leaves the count unknown, and the server still refuses a pin over
+    /// the cap.
     func refreshPinnedTotal() async {
         guard filters.isNarrowing, let session else { return }
+        pinnedReadGeneration += 1
+        let generation = pinnedReadGeneration
+        unfilteredPinned = nil
         let plain = ForumFilters(sort: filters.sort)
-        if let page = try? await session.api.forumPosts(forumId: forum.id, filters: plain, limit: 1) {
-            unfilteredPinned = page.pinned.count
-        }
+        let page = try? await session.api.forumPosts(forumId: forum.id, filters: plain, limit: 1)
+        guard generation == pinnedReadGeneration else { return }
+        unfilteredPinned = page?.pinned.count
     }
 }
 
 /// Which pinned count a post's menu shows: the list's own when nothing narrows
 /// it, the forum-wide one (once read) when a filter hides pinned posts.
 enum ForumPinnedCount {
-    static func resolve(narrowing: Bool, shown: Int, unfiltered: Int?) -> Int {
-        narrowing ? (unfiltered ?? shown) : shown
+    /// Nil: a filter hides pinned posts and the forum-wide count is not known.
+    static func resolve(narrowing: Bool, shown: Int, unfiltered: Int?) -> Int? {
+        narrowing ? unfiltered : shown
     }
 }

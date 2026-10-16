@@ -1001,6 +1001,16 @@
         }
       }
     },
+    "Pin post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fixar post"
+          }
+        }
+      }
+    },
     "Posts will show up here." : {
       "localizations" : {
         "pt-BR" : {
