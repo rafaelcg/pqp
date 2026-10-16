@@ -329,7 +329,7 @@ export const DOWNLOAD_PRERENDER_WORKFLOW_URL = `${CONTACT_PRERENDER_SOURCE_URL}/
 export const DOWNLOAD_PRERENDER_TEAM = {
   committers: [
     { name: "Rafael Cammarano Guglielmi", handle: "rafaelcg" },
-    { name: "André", handle: "AndreCamm" },
+    { name: "André", handle: "ndre-dev" },
   ],
   approvers: [{ name: "Rafael Cammarano Guglielmi", handle: "rafaelcg" }],
 } as const;
