@@ -416,6 +416,17 @@ object ServerActions {
         return if (next.map { it.id } == servers.map { it.id }) null else next
     }
 
+    /**
+     * When this phone's saves have all settled: the order of a remote update that was ignored
+     * while they were out, if one of them failed (so this phone's order never reached the
+     * server and the remote one is the newest). Null when nothing changes.
+     */
+    fun afterSaves(servers: List<ServerSummary>, ignoredRemote: List<String>?, anySaveFailed: Boolean): List<ServerSummary>? {
+        if (ignoredRemote == null || !anySaveFailed) return null
+        val next = applyOrder(servers, ignoredRemote)
+        return if (next.map { it.id } == servers.map { it.id }) null else next
+    }
+
     fun reordered(servers: List<ServerSummary>, id: String, delta: Int): List<ServerSummary>? {
         val from = servers.indexOfFirst { it.id == id }
         if (from < 0) return null

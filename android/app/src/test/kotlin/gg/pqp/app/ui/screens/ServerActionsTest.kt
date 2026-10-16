@@ -100,6 +100,17 @@ class ServerActionsTest {
     }
 
     @Test
+    fun `a remote order ignored during saves is applied once they settle, only if one failed`() {
+        val list = listOf(server("a"), server("b"), server("c"))
+        val remote = listOf("c", "b", "a")
+        assertEquals(listOf("c", "b", "a"), ServerActions.afterSaves(list, remote, anySaveFailed = true)!!.map { it.id })
+        // Every save landed: this phone's order is the newest, the remote one is history.
+        assertNull(ServerActions.afterSaves(list, remote, anySaveFailed = false))
+        assertNull(ServerActions.afterSaves(list, null, anySaveFailed = true))
+        assertNull(ServerActions.afterSaves(list, listOf("a", "b", "c"), anySaveFailed = true))
+    }
+
+    @Test
     fun `surrounding space and case are forgiven`() {
         assertTrue(ServerActions.deleteConfirmationMatches("  owned with others ", "Owned With Others"))
         assertTrue(ServerActions.deleteConfirmationMatches("PQP", " pqp "))

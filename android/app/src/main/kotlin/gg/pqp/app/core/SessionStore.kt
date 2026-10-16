@@ -447,18 +447,23 @@ class SessionStore(
                                 _servers.value = gg.pqp.app.ui.screens.ServerActions
                                     .applyOrder(_servers.value, back)
                             }
-                            // A reorder from another device that arrived while this save was
-                            // in flight was ignored (the order here was the newer one). This
-                            // save is the one that failed, so the server's order is the truth
-                            // again: read it instead of staying behind.
-                            refreshServers()
+                            synchronized(orderLock) { orderSaveFailed = true }
                             onError(it.message.orEmpty())
                         }
                 }
             } finally {
                 synchronized(orderLock) {
                     orderSavesPending -= 1
-                    if (orderSavesPending == 0) confirmedOrder = null
+                    if (orderSavesPending == 0) {
+                        confirmedOrder = null
+                        // A reorder from another device that arrived while saves were out was
+                        // ignored (the order here was the newer one). If a save FAILED, ours is
+                        // not the newest any more, so the one that was ignored is.
+                        ServerActions.afterSaves(_servers.value, ignoredRemoteOrder, orderSaveFailed)
+                            ?.let { _servers.value = it }
+                        ignoredRemoteOrder = null
+                        orderSaveFailed = false
+                    }
                 }
             }
         }
@@ -468,6 +473,10 @@ class SessionStore(
     private val orderLock = Any()
     private var orderSavesPending = 0
     private var confirmedOrder: List<String>? = null
+
+    /** The newest `server-order-update` that arrived while a save of this phone's was out. */
+    private var ignoredRemoteOrder: List<String>? = null
+    private var orderSaveFailed = false
 
     /** Named on every save, so this phone's own `server-order-update` echo is recognised. */
     private val orderOrigin = "android-" + java.util.UUID.randomUUID().toString().take(8)
@@ -491,8 +500,10 @@ class SessionStore(
                             ?: return@collect
                         val sender = (frame["origin"] as? JsonPrimitive)?.contentOrNull
                         synchronized(orderLock) {
+                            val saving = orderSavesPending > 0
+                            if (saving && sender != orderOrigin) ignoredRemoteOrder = ids
                             ServerActions.followRemoteOrder(
-                                _servers.value, ids, sender, orderOrigin, saving = orderSavesPending > 0,
+                                _servers.value, ids, sender, orderOrigin, saving = saving,
                             )?.let { _servers.value = it }
                         }
                     }

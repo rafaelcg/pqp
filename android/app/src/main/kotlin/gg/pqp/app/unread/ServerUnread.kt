@@ -112,6 +112,10 @@ class ServerUnreadStore(
     /** The newest read started for a server: an older one that lands after it is dropped. */
     private val readSeq = HashMap<String, Int>()
 
+    /** Servers with a read out right now, and those asked for again meanwhile. */
+    private val inFlight = HashSet<String>()
+    private val askedAgain = HashSet<String>()
+
     /** Whose servers these are; another account starts from nothing. */
     private var account: String? = null
 
@@ -157,10 +161,37 @@ class ServerUnreadStore(
         // until the interval comes round.
         scope.launch {
             toRead.map { serverId ->
-                async {
-                    gate.withPermit { readOne(serverId) }
-                }
+                async { readServerOnce(serverId) }
             }.awaitAll()
+        }
+    }
+
+    /**
+     * ONE READ PER SERVER AT A TIME. A server asked for while a read of it is out (a full pass
+     * still running, then somebody reads a channel and comes back) is not read in parallel: the
+     * ask is remembered and read once more the moment the first lands, so the answer that
+     * counts is always the one that left LAST and repeated returns cannot pile requests up.
+     */
+    private suspend fun readServerOnce(serverId: String) {
+        val mine = synchronized(lock) {
+            if (!inFlight.add(serverId)) {
+                askedAgain += serverId
+                false
+            } else {
+                true
+            }
+        }
+        if (!mine) return
+        try {
+            do {
+                synchronized(lock) { askedAgain -= serverId }
+                gate.withPermit { readOne(serverId) }
+            } while (synchronized(lock) { serverId in askedAgain })
+        } finally {
+            synchronized(lock) {
+                inFlight -= serverId
+                askedAgain -= serverId
+            }
         }
     }
 
@@ -226,6 +257,7 @@ class ServerUnreadStore(
             stale.clear()
             generation.clear()
             readSeq.clear()
+            askedAgain.clear()
         }
     }
 

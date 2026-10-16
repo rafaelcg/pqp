@@ -237,22 +237,24 @@ class ServerUnreadTest {
     }
 
     @Test
-    fun `an older read of a server cannot overwrite a newer one`() {
+    fun `a server asked for while a read of it is out is read once more after it, never in parallel`() {
         val f = Fixture()
         f.answers["a"] = listOf(unread("a1", 5))
         val slow = CompletableDeferred<Unit>()
         f.gate = slow
         f.store.hydrate(listOf(server("a")))
-        // While that read is out, the person reads a channel and the list asks again:
-        // this second read answers at once, with nothing unread.
-        f.gate = null
+        assertEquals(1, f.reads.size)
+
+        // Meanwhile the person reads a channel and the list asks again: no second request yet.
         f.answers["a"] = emptyList()
         f.store.markStale("a")
         f.store.hydrate(listOf(server("a")))
-        assertTrue(f.store.unread.value.isEmpty())
+        assertEquals("still one request out", 1, f.reads.size)
 
-        // The first read finally lands with its old answer: dropped.
+        // The first lands (old answer), and the follow-up read, which left later, settles it.
+        f.gate = null
         slow.complete(Unit)
+        assertEquals(2, f.reads.size)
         assertTrue(f.store.unread.value.isEmpty())
     }
 }
