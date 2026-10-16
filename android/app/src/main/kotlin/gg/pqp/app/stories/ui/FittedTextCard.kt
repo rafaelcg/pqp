@@ -86,7 +86,8 @@ fun FittedTextCard(
         )
         // Heights by size, kept while the words and the width are the same: the box's height moves on every frame of
         // the keyboard's animation, and each size is laid out once, not once per frame.
-        val heights = remember(text, boxWidth, family, base) { mutableMapOf<Int, Int>() }
+        // Density and font scale are keys too: the same sp is a different number of pixels after either changes.
+        val heights = remember(text, boxWidth, family, base, density.density, density.fontScale) { mutableMapOf<Int, Int>() }
         val size = StoryTextFit.fontSize { sp ->
             heights.getOrPut(sp) {
                 measurer.measure(text, styleAt(sp), constraints = Constraints(maxWidth = boxWidth)).size.height
