@@ -405,6 +405,25 @@ describe("LivePreviewPanel", () => {
     }
   });
 
+  it("closes the page of a visitor who is watching when the listing says the preview is gone", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await mount();
+      await watchNow();
+      await answerStart(0, okResult());
+      expect(page()).not.toBeNull();
+
+      vi.mocked(fetchLivePreviewListing).mockResolvedValueOnce("absent");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(page()).toBeNull();
+      expect(siteRoot!.inert).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts the restart budget over after the visitor leaves and watches again", async () => {
     await mount();
     await watchNow();

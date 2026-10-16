@@ -161,6 +161,9 @@ function LivePreviewPanelForSource({
   // Bumped by every start, by leaving the page and by picking a channel: an
   // answer that comes back after any of those is stale and must not draw.
   const generation = useRef(0);
+  // The channel being watched keeps its latest listing row (title, count),
+  // and stays drawn when it drops out of a later listing mid-window.
+  const lastShown = useRef<LivePreviewListedChannel | null>(null);
   const sourceKey = source.kind === "community" ? `c:${source.slug}` : `i:${source.code}`;
 
   // The listing: on mount and every 30 s, watching or not, so a party that
@@ -180,8 +183,14 @@ function LivePreviewPanelForSource({
           return;
         }
         // A 404 is different: the preview is gone for this page (switched
-        // off, suspended, invite expired), so nothing is live any more.
+        // off, suspended, invite expired), so nothing is live any more. The
+        // channel being watched is not kept drawn from its last row either:
+        // the page closes and a start still in flight is dropped.
         if (answer === "absent") {
+          generation.current += 1;
+          lastShown.current = null;
+          setChannelId(null);
+          setPhase({ kind: "idle" });
           setChannels([]);
           setUpcoming([]);
           return;
@@ -202,9 +211,6 @@ function LivePreviewPanelForSource({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey]);
 
-  // The channel being watched keeps its latest listing row (title, count),
-  // and stays drawn when it drops out of a later listing mid-window.
-  const lastShown = useRef<LivePreviewListedChannel | null>(null);
   const listed =
     (channelId ? channels?.find((row) => row.id === channelId) : channels?.[0]) ?? null;
   if (listed) {
