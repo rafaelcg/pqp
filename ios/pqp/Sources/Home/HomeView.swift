@@ -966,6 +966,9 @@ final class HomeModel {
     private let orderOrigin = UUID().uuidString.lowercased()
     /// A frame from another device arrived while a save of ours was in the air.
     private var remoteOrderSeen = false
+    /// Bumped by every remote order frame, so a re-read that began before one is
+    /// known to be older than it (`reloadServerOrder`).
+    private var remoteOrderGeneration = 0
 
     /// Another device of this account moved its server list: this one follows,
     /// unless the frame is the echo of its own save, or a save of its own is
@@ -974,8 +977,12 @@ final class HomeModel {
     func followRemoteServerOrder(_ ids: [String], origin: String?) {
         switch ServerOrder.remoteAction(origin: origin, ownOrigin: orderOrigin, saving: serverOrderSaving) {
         case .ignore: return
-        case .resyncAfterSave: remoteOrderSeen = true
-        case .apply: servers = ServerOrder.applying(ids, to: servers)
+        case .resyncAfterSave:
+            remoteOrderSeen = true
+            remoteOrderGeneration += 1
+        case .apply:
+            remoteOrderGeneration += 1
+            servers = ServerOrder.applying(ids, to: servers)
         }
     }
 
@@ -983,6 +990,7 @@ final class HomeModel {
     /// other field on the rows stays as it is.
     private func reloadServerOrder() async {
         guard let session else { return }
+        let generation = remoteOrderGeneration
         // One more try after a pause: the order the other device made is only
         // known from this read, and a single dropped request would otherwise
         // leave the list as it was until some later event happened to fix it.
@@ -991,7 +999,8 @@ final class HomeModel {
             try? await Task.sleep(for: .seconds(3))
             if !Task.isCancelled { fresh = try? await session.api.servers() }
         }
-        guard let fresh else { return }
+        // A frame that arrived while this was in the air is newer than the answer.
+        guard let fresh, generation == remoteOrderGeneration else { return }
         servers = ServerOrder.applying(fresh.map(\.id), to: servers)
     }
 
