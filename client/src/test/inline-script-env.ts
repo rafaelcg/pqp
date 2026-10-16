@@ -13,6 +13,9 @@ import vm from "node:vm";
 
 export interface CreatedScript {
   src?: string;
+  /** A `<link>` made by the script (`rel`, `href`). */
+  rel?: string;
+  href?: string;
   type?: string;
   async?: boolean;
   crossOrigin?: string;
@@ -40,6 +43,8 @@ export function inlineEnv(opts: {
   readyState?: string;
   hasIdleCallback?: boolean;
   hasObserver?: boolean;
+  /** `location.pathname` the script sees. Defaults to `/`. */
+  path?: string;
 }): InlineEnv {
   const appended: CreatedScript[] = [];
   const listeners = new Map<string, Listener[]>();
@@ -98,6 +103,7 @@ export function inlineEnv(opts: {
     ...win,
     document,
     window: win,
+    location: { pathname: opts.path ?? "/" },
     addEventListener: win.addEventListener,
     setTimeout,
     clearTimeout,

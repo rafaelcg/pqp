@@ -255,7 +255,17 @@ function deferEntry(): Plugin {
     apply: "build",
     transformIndexHtml: {
       order: "post",
-      handler: (html) => deferEntryScript(html),
+      handler: (html, ctx) => {
+        // The chat client's chunk, when this is a production build: preloaded
+        // beside the entry on `/app` routes (see `src/lib/defer-entry.ts`).
+        const appChunk = Object.values(ctx.bundle ?? {}).find(
+          (output) =>
+            output.type === "chunk" &&
+            output.isDynamicEntry &&
+            /[\\/]src[\\/]App\.tsx$/.test(output.facadeModuleId ?? ""),
+        );
+        return deferEntryScript(html, appChunk?.fileName);
+      },
     },
   };
 }
