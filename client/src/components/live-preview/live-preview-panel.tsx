@@ -179,6 +179,13 @@ function LivePreviewPanelForSource({
         if (!answer) {
           return;
         }
+        // A 404 is different: the preview is gone for this page (switched
+        // off, suspended, invite expired), so nothing is live any more.
+        if (answer === "absent") {
+          setChannels([]);
+          setUpcoming([]);
+          return;
+        }
         setChannels(answer.livePreview.channels);
         setUpcoming(answer.livePreview.upcoming);
         setWindowSeconds(answer.livePreview.seconds);

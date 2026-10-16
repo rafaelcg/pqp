@@ -386,6 +386,25 @@ describe("LivePreviewPanel", () => {
     }
   });
 
+  it("takes the live card away when the listing says the preview is gone (404)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const onLiveChange = vi.fn();
+      await mount(() => render(COMMUNITY.slug!, { onLiveChange }));
+      expect(host!.querySelector("[data-live-preview='idle']")).not.toBeNull();
+
+      // Switched off, suspended or the invite expired while the page was open.
+      vi.mocked(fetchLivePreviewListing).mockResolvedValueOnce("absent");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(host!.querySelector("[data-live-preview='idle']")).toBeNull();
+      expect(onLiveChange).toHaveBeenLastCalledWith(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts the restart budget over after the visitor leaves and watches again", async () => {
     await mount();
     await watchNow();
