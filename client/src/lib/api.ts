@@ -274,7 +274,78 @@ async function resolveAuthToken(
   }
 }
 
-export async function apiFetch<T>(
+/**
+ * Reads that ask the server for a SWITCH, not for data that moves with what the
+ * person just did: the same answer for everybody who asks in the same moment.
+ *
+ * Several modules each ask for the same one at start-up (`/api/onboarding/config`
+ * from the Discord notice and from the invite moment, `/api/fun/config` from the
+ * nudge and from the retro look, `/api/push/config`, `/api/voice/config`, ...),
+ * so one page load sent seven of them twice at the very same millisecond, each
+ * with its own CORS preflight. Exact paths, no query, so a per-server variant
+ * (`/api/live-hls/config?serverId=...`) is a different read.
+ *
+ * NOT in here, on purpose: anything a mutation can change (unread counts, lists,
+ * messages, members). An in-flight read started before a mutation and shared with
+ * a caller that asked after it would hand that caller the old answer.
+ */
+const SHARED_IN_FLIGHT_READS: ReadonlySet<string> = new Set([
+  "/api/attachments/config",
+  "/api/live-hls/config",
+  "/api/share/config",
+  "/api/voice/config",
+  "/api/voice/backend",
+  "/api/push/config",
+  "/api/fun/config",
+  "/api/onboarding/config",
+  "/api/dms/config",
+  "/api/forwards/config",
+  "/api/forum/config",
+  "/api/gifs/config",
+  "/api/communities/config",
+  "/api/community-home/config",
+  "/api/connections/config",
+]);
+
+const inFlightReads = new Map<string, Promise<unknown>>();
+
+/** Tests only: forget the reads in flight. */
+export function resetInFlightReads(): void {
+  inFlightReads.clear();
+}
+
+/**
+ * Callers that ask for the same switch while one request for it is already out
+ * share that request, and each gets its own copy of the answer. Nothing is kept
+ * once it settles: the next ask is a real request, so a flag the operator flips
+ * is seen on the very next read, exactly as before.
+ */
+export function apiFetch<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  // Only the plain read: a GET with no other option at all. A caller that passes
+  // a signal can cancel (sharing its request would let it cancel somebody
+  // else's read), and headers, a cache mode or anything else would be silently
+  // dropped for every caller after the first.
+  const plainGet = Object.keys(options).every(
+    (key) =>
+      key === "method" && (options.method ?? "GET").toUpperCase() === "GET",
+  );
+  if (!plainGet || !SHARED_IN_FLIGHT_READS.has(path)) {
+    return apiFetchOnce<T>(path, options);
+  }
+  let shared = inFlightReads.get(path) as Promise<T> | undefined;
+  if (!shared) {
+    shared = apiFetchOnce<T>(path, options).finally(() => {
+      inFlightReads.delete(path);
+    });
+    inFlightReads.set(path, shared);
+  }
+  return shared.then((answer) => structuredClone(answer));
+}
+
+async function apiFetchOnce<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
