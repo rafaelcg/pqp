@@ -51,7 +51,10 @@ export function ConnectionCallbackOverlay({
           takeConnectionCallbackFromWindow() ??
           fallbackFromLocation(location.pathname, location.search);
         if (!pending) {
-          stashConnectionErrorFromWindow(completeFailed);
+          // The provider's answer is the query string. Arriving without one
+          // (Clerk dropped it on a sign-in round trip, a bookmarked URL) is
+          // not a failed connection, so it says what happened.
+          stashConnectionErrorFromWindow(t("settings.connections.callbackEmpty"));
           return "error" as const;
         }
         try {
@@ -63,6 +66,7 @@ export function ConnectionCallbackOverlay({
               alreadyLinked: t("settings.connections.alreadyLinked"),
               expired: t("settings.connections.expired"),
               cancelled: t("settings.connections.cancelled"),
+              serviceDown: t("settings.connections.serviceDown"),
               fallback: completeFailed,
             }),
           );

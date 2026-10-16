@@ -2067,6 +2067,8 @@
   "settings.connections.loadFailed": "Não deu para carregar as conexões.",
   "settings.connections.connectFailed": "Não deu para começar essa conexão.",
   "settings.connections.completeFailed": "Não deu para terminar essa conexão.",
+  "settings.connections.serviceDown": "O serviço de conexão está com problema do nosso lado. Tenta de novo mais tarde.",
+  "settings.connections.callbackEmpty": "A página voltou sem a resposta do provedor. Tenta conectar de novo.",
   "settings.connections.alreadyLinked": "Essa conta já está conectada a outra pessoa no pqp.",
   "settings.connections.expired": "Esse pedido de conexão expirou. Tenta conectar de novo.",
   "settings.connections.saveFailed": "Não deu para salvar isso.",
