@@ -335,6 +335,13 @@ test("the controls bar keeps clear of the home indicator", async ({ page }, test
   await startShare(page);
   await page.setViewportSize(LANDSCAPE[project]);
 
+  // The floating bar comes back a render or two after the resize, once the
+  // app has laid itself out sideways. Read the geometry only after it is
+  // there: on a loaded CI runner a read straight after the resize found no
+  // bar at all, while the failure screenshot taken a moment later showed it.
+  await expect(page.getByTestId("call-controls-bar")).toBeAttached({
+    timeout: 10_000,
+  });
   const g = await geometry(page);
   expect(g.controlsClass).toContain("env(safe-area-inset-bottom)");
   expect(g.controlsClass).toContain("env(safe-area-inset-left)");
