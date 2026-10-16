@@ -124,6 +124,10 @@ final class BauFollowSheetModel {
     /// A mutation failed and the list could not be read again since: what is on
     /// show may omit a follow that did commit, so it is not trusted for a submit.
     private var mineUnknown = false
+    /// What is on show for "what you already follow" is not known to be current
+    /// (the read failed, at the start or after a change): the sheet says so with a
+    /// retry and does not offer row actions on it.
+    var listIsStale: Bool { mineUnknown }
     /// The header re-reads its own state after every change, including a
     /// failed one: a lost response can hide a change that did commit.
     private let onChanged: @MainActor () -> Void
@@ -150,6 +154,8 @@ final class BauFollowSheetModel {
         if let fresh = await state {
             mine = fresh.mine
             mineUnknown = false
+        } else {
+            mineUnknown = true
         }
     }
 
@@ -191,7 +197,7 @@ final class BauFollowSheetModel {
     func select(role id: String) { picker?.selectRole(id) }
 
     func submit(session: SessionStore) async {
-        guard let picker, picker.canSubmit, !isSubmitting, busyRowId == nil else { return }
+        guard !isSubmitting, busyRowId == nil else { return }
         if mineUnknown {
             // A retry on a list that may be missing a committed follow would be
             // refused as a duplicate: read it first, and say so if that fails.
@@ -201,6 +207,9 @@ final class BauFollowSheetModel {
                 return
             }
         }
+        // After the refresh, so the choice is checked against what the
+        // destinations say NOW (the channel may already follow this Baú).
+        guard let picker, picker.canSubmit else { return }
         isSubmitting = true
         notice = nil
         error = nil
@@ -211,6 +220,8 @@ final class BauFollowSheetModel {
                 channelId: picker.selectedChannelId,
                 rolePingId: picker.selectedRoleId.isEmpty ? nil : picker.selectedRoleId
             )
+            // The confirmed follow is shown at once; a read reconciles it after.
+            if !mine.contains(where: { $0.id == follow.id }) { mine.append(follow) }
             notice = String(localized: "Done. New posts will arrive in #\(follow.targetChannelName) of \(follow.targetServerName).")
         } catch {
             self.error = BauFollowFailure.from(error).message
@@ -286,6 +297,15 @@ struct BauFollowSheet: View {
                         .foregroundStyle(Palette.paperMuted)
                 }
 
+                if model.listIsStale {
+                    Section {
+                        Text("Could not load what you already follow here. Try again.")
+                            .foregroundStyle(Palette.danger)
+                            .accessibilityIdentifier("bau.follow.stale")
+                        Button("Try again") { Task { await model.start(session: session) } }
+                    }
+                }
+
                 if !model.mine.isEmpty {
                     Section("What you already follow here") {
                         ForEach(model.mine) { follow in
@@ -295,7 +315,7 @@ struct BauFollowSheet: View {
                                 subtitle: "# \(follow.targetChannelName)",
                                 iconName: follow.targetServerName,
                                 iconUrl: nil,
-                                busy: model.busyRowId != nil,
+                                busy: model.busyRowId != nil || model.listIsStale,
                                 onUnfollow: { Task { await model.unfollow(follow, session: session) } },
                                 onResume: { Task { await model.resume(follow, session: session) } }
                             )
@@ -533,7 +553,9 @@ final class BauFollowersModel {
         do {
             data = try await session.api.bauFollowers(serverId: serverId)
         } catch {
-            if data == nil { loadFailed = true }
+            // Even with older data on show: after a change that may have
+            // committed, that data is not known to be current.
+            loadFailed = true
         }
     }
 
@@ -629,7 +651,7 @@ struct BauFollowersSheet: View {
                                 }
                             }
                             .tint(Palette.signal)
-                            .disabled(model.busyKey != nil)
+                            .disabled(model.busyKey != nil || model.loadFailed)
                             .accessibilityIdentifier("bau.follow.allow")
                         }
                     }
