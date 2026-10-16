@@ -1,4 +1,4 @@
-pqp is open source voice and text chat for your crew: share your screen with the sound on, watch movies, games and streams together in a watch party, and build a community with servers, channels and direct messages. Free, no ads, made by two brothers.
+pqp is open source voice and text chat for your crew: watch a friend's shared screen with the sound on, enjoy movies, games and streams together in a watch party, and build a community with servers, channels and direct messages. Free, no ads, made by two brothers.
 
 The full source is public on GitHub. It works in the browser, on desktop and on your phone, all on one account.
 
@@ -9,7 +9,7 @@ VOICE AND CALLS
 Join a voice channel and talk with clear audio. Ring a friend directly for a one-on-one call: it rings, and you can answer or decline like a real phone call, while the app is open. Mute your mic, flip on speakerphone, and see who is talking.
 
 SCREEN SHARE
-Share your screen on a direct call or in a small room, sound included. Watching someone else's shared screen works in any room, big or small.
+Share your screen on a direct call or in a small room. Watching someone else's shared screen works in any room, big or small.
 
 WATCH PARTY
 Watch a watch party with the room's chat beside it and, if you have permission in the channel, host one from your phone.

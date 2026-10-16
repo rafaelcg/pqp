@@ -1,4 +1,4 @@
-pqp é chat de voz e texto de código aberto pra tua galera: compartilha a tela com o som junto, assiste filme, jogo ou live em watch party e monta a tua comunidade com servidores, canais e mensagem direta. De graça, sem anúncio, feito por dois irmãos.
+pqp é chat de voz e texto de código aberto pra tua galera: assiste a tela de quem compartilhou, com o som junto, vê filme, jogo ou live junto num watch party e monta a tua comunidade com servidores, canais e mensagem direta. De graça, sem anúncio, feito por dois irmãos.
 
 O código inteiro é público no GitHub. Funciona no navegador, no desktop e no celular, tudo na mesma conta.
 
@@ -9,7 +9,7 @@ VOZ E CHAMADA
 Entra num canal de voz e conversa com áudio limpo. Liga direto pra um amigo com uma chamada individual: toca, atende ou recusa, como uma ligação de verdade enquanto o app tá aberto. Silencia o microfone, ativa o viva-voz, e o app avisa quem tá falando.
 
 TELA COMPARTILHADA
-Compartilha a tua tela numa chamada direta ou numa sala pequena, com o som junto. Assistir a tela de quem compartilhou funciona em qualquer sala, grande ou pequena.
+Compartilha a tua tela numa chamada direta ou numa sala pequena. Assistir a tela de quem compartilhou funciona em qualquer sala, grande ou pequena.
 
 WATCH PARTY
 Assiste a um watch party com o chat da sala ao lado e, se tu tiver permissão no canal, comanda um direto do celular.

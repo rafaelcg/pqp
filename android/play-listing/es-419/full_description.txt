@@ -1,4 +1,4 @@
-pqp es un chat de voz y texto de código abierto para tu banda: comparte tu pantalla con el sonido, mira películas, partidas o streams juntos en una watch party y arma tu comunidad con servidores, canales y mensajes directos. Gratis, sin anuncios, hecho por dos hermanos.
+pqp es un chat de voz y texto de código abierto para tu banda: mira la pantalla que alguien comparte, con el sonido, ve películas, partidas o streams juntos en una watch party y arma tu comunidad con servidores, canales y mensajes directos. Gratis, sin anuncios, hecho por dos hermanos.
 
 Todo el código es público en GitHub. Funciona en el navegador, en el escritorio y en el celular, todo con la misma cuenta.
 
@@ -9,7 +9,7 @@ VOZ Y LLAMADAS
 Entra a un canal de voz y habla con audio limpio. Llama directo a un amigo con una llamada individual: suena, y puedes contestar o rechazar como una llamada de verdad mientras la app está abierta. Silencia el micrófono, activa el altavoz y ve quién está hablando.
 
 PANTALLA COMPARTIDA
-Comparte tu pantalla en una llamada directa o en una sala pequeña, con el sonido incluido. Mirar la pantalla que alguien comparte funciona en cualquier sala, grande o pequeña.
+Comparte tu pantalla en una llamada directa o en una sala pequeña. Mirar la pantalla que alguien comparte funciona en cualquier sala, grande o pequeña.
 
 WATCH PARTY
 Mira una watch party con el chat de la sala al lado y, si tienes permiso en el canal, conduce una desde tu celular.
