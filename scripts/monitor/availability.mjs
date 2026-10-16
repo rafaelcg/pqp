@@ -6,19 +6,29 @@
  * the alert issue, so renaming one orphans an open incident.
  *
  * Every probe here is wrapped in `untilOk` (3 attempts over ~40s) because a
- * rolling deploy of the single Fly machine makes all of them fail briefly on
- * every release. See the note on `untilOk` in net.mjs.
+ * rolling deploy of the API replicas makes all of them fail briefly on every
+ * release. See the note on `untilOk` in net.mjs.
+ *
+ * WHERE PRODUCTION RUNS: the Vultr box behind Cloudflare since 2026-09-17
+ * (docs/deploy-vultr.md). Everything below reads only what a GitHub runner can
+ * reach with no secret: `/health`, `/ready`, `/status.json`, the WebSocket and
+ * the public site. The three Fly-only checks (`fly-machines`,
+ * `worker-image-drift`, and the `fly logs` reader in errors.mjs) are kept for a
+ * rollback and run only with `MONITOR_FLY_ROLLBACK=true`.
  */
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { httpGet, untilOk, wsProbe } from "./net.mjs";
+import { flyRollback, httpGet, untilOk, wsProbe } from "./net.mjs";
 
 const exec = promisify(execFile);
 
 export const API_ORIGIN = process.env.MONITOR_API_ORIGIN ?? "https://api.pqp.gg";
 export const WEB_ORIGIN = process.env.MONITOR_WEB_ORIGIN ?? "https://pqp.gg";
 const FLY_APP = process.env.MONITOR_FLY_APP ?? "pqp-api";
+// ROLLBACK ONLY (see checkFlyMachines). The rollback recipe in
+// docs/deploy-vultr.md scales pqp-api to two machines; override if it differs.
+const FLY_EXPECTED_MACHINES = Number(process.env.MONITOR_FLY_EXPECTED_MACHINES ?? 2);
 
 // Overridable only so the failure path can be exercised in seconds instead of
 // two minutes. Leave it alone in CI — the spacing is what makes a deploy
@@ -53,16 +63,18 @@ async function checkApiHealth() {
     key: "api-health",
     title: `API health (${API_ORIGIN}/health)`,
     status: result.ok ? "ok" : "fail",
-    // /health does a real `SELECT 1`, so a 200 here is "process up AND database
-    // reachable" — which is why this is the check that gates a deploy too.
+    // /health is process liveness only (no query; docs/plans/ALWAYS_ON.md A3.1):
+    // a 200 is "up and not draining". The database is `api-ready`'s business.
     summary: result.ok
       ? `200 ok:true, serving ${result.version ?? "unknown"} (attempt ${result.attempt})`
       : `No healthy response after ${result.tries.length} attempts over ~40s.`,
     detail: trail(result.tries),
     runbook: [
-      "1. `fly status -a pqp-api` and `fly logs -a pqp-api`.",
-      "2. A 503 with `database unavailable` means the process is up and Postgres is not — check `fly mpg status <cluster>`.",
-      "3. No response at all means the machine is gone: `fly machines list -a pqp-api`, then `fly machine start <id>`.",
+      "1. `ssh root@<box>` (address: docs/deploy-vultr.md), then `cd /opt/pqp && COMPOSE_PROFILES=replicas docker compose ps`.",
+      "2. `docker compose logs --tail=200 api-a api-b worker caddy`; the same lines are in Grafana Loki under `{container=~\"api.*|worker\"}`.",
+      "3. A Cloudflare 52x/502 with a healthy `docker compose ps` means Caddy or the origin firewall (443 is open to Cloudflare ranges only); a 5xx from the app itself means a replica is crash-looping, read `docker compose logs api-a`.",
+      "4. Do NOT run a bare `docker compose up` (docs/deploy-vultr.md section 8): recreate one replica at a time with `APP_IMAGE_TAG` set, never during a live watch party.",
+      "5. If the box itself is gone, the rollback to Fly is in docs/deploy-vultr.md (\"Rollback\").",
     ].join("\n"),
   };
 }
@@ -137,13 +149,18 @@ async function checkWebsocket() {
     detail: trail(result.tries),
     runbook: [
       "Chat, presence and voice signalling all ride this socket, so this being down is a total outage even while /health is green.",
-      "1. `fly logs -a pqp-api | grep '\\[pqp\\] ws\\.'` — `ws.connect` with no `ws.auth` means the auth path is broken, no `ws.connect` at all means the upgrade never reaches the app.",
-      "2. Check nothing new sits in front of Fly (proxied Cloudflare DNS on api.pqp.gg would add its own idle timeout).",
+      "1. `ssh root@<box>`, then `cd /opt/pqp && docker compose logs --tail=300 api-a api-b | grep '\\[pqp\\] ws\\.'`, `ws.connect` with no `ws.auth` means the auth path is broken, no `ws.connect` at all means the upgrade never reaches the app.",
+      "2. api.pqp.gg is proxied by Cloudflare and terminated again by Caddy: check the Cloudflare dashboard for WebSocket and rule changes, and `docker compose logs caddy` for upgrade errors.",
     ].join("\n"),
   };
 }
 
 /**
+ * ROLLBACK ONLY (`MONITOR_FLY_ROLLBACK=true`). Production left Fly on
+ * 2026-09-17; with the apps at zero machines this reported a stale `stopped`
+ * machine as an outage for a month (issue #607) and never meant anything about
+ * the Vultr box. Kept, behind the variable, for the day the API rolls back.
+ *
  * Exactly one machine, started, in gru.
  *
  * The machine count is a decision, not a side effect: fly.toml's
@@ -174,7 +191,8 @@ async function checkFlyMachines() {
       const machines = JSON.parse(stdout).filter((m) => m.state !== "destroyed");
       const summary = machines.map((m) => `${m.id} ${m.state} ${m.region}`).join("; ") || "none";
       const ok =
-        machines.length === 1 && machines[0].state === "started" && machines[0].region === "gru";
+        machines.length === FLY_EXPECTED_MACHINES &&
+        machines.every((m) => m.state === "started" && m.region === "gru");
       return { ok, count: machines.length, note: summary };
     },
     { attempts: 2, delayMs: RETRY.delayMs },
@@ -182,15 +200,15 @@ async function checkFlyMachines() {
 
   return {
     key: "fly-machines",
-    title: "Fly machine count (expects exactly 1 started machine in gru)",
+    title: `Fly machine count (rollback: expects ${FLY_EXPECTED_MACHINES} started in gru)`,
     status: result.ok ? "ok" : "fail",
     summary: result.ok
-      ? `1 machine, started, gru: ${result.note}`
-      : `Expected exactly one started machine in gru, found: ${result.note.replace(/\s+/g, " ").trim()}`,
+      ? `${FLY_EXPECTED_MACHINES} machine(s), started, gru: ${result.note}`
+      : `Expected ${FLY_EXPECTED_MACHINES} started machine(s) in gru, found: ${result.note.replace(/\s+/g, " ").trim()}`,
     detail: trail(result.tries),
     runbook: [
-      "More than one machine is a machine nobody decided to run. The bus and the registry share chat, presence and rooms across machines, but the mesh guard hangs up peer-to-peer joins whose room is pinned on the other one (voice.meshRefusedMultiInstance), which is why the count is one today (docs/deploy-fly.md 6a-bis).",
-      "Fix: `fly scale count 1 --region gru --app pqp-api`, then confirm with `fly machines list -a pqp-api`.",
+      "This check only runs during a rollback to Fly (MONITOR_FLY_ROLLBACK=true). The count is a decision (docs/deploy-fly.md 6a-bis, docs/deploy-vultr.md rollback recipe), and a different number is a machine nobody decided to run, or one that is gone.",
+      `Fix: \`fly scale count ${FLY_EXPECTED_MACHINES} --region gru --app pqp-api\`, then confirm with \`fly machines list -a pqp-api\`.`,
       "Zero machines, or one that is `stopped`: `fly machine start <id>` (auto_start_machines is off on purpose, so nothing will do it for you).",
       "See the header of fly.toml before changing anything about machine count.",
     ].join("\n"),
@@ -198,6 +216,7 @@ async function checkFlyMachines() {
 }
 
 const WORKER_APP = process.env.MONITOR_WORKER_FLY_APP ?? "pqp-worker";
+
 
 /** `.image_ref.digest`, falling back the same way deploy-api-fly.yml's own
  * assertion does, so the two never disagree about what "the image" means. */
@@ -385,9 +404,271 @@ async function checkStatusComponents() {
     detail: trail(result.tries),
     runbook: [
       "These are the app's own probes (server/src/services/status.ts), sampled every minute.",
-      "`database` — the pg pool cannot `SELECT 1`; check `fly mpg status <cluster>`.",
-      "`storage` — the R2 bucket rejected a HEAD; check the S3_* secrets and the R2 dashboard. Attachments break, the rest of the app does not.",
+      "`database`, the pg pool cannot `SELECT 1`; check the managed Postgres cluster in the Vultr dashboard (the box has no database of its own), then `ssh root@<box>` and `docker compose logs --tail=200 api-a | grep -i 'connection\\|pool'`.",
+      "`storage`, the R2 bucket rejected a HEAD; check the S3_* values in `/opt/pqp/.env` on the box and the R2 dashboard. Attachments break, the rest of the app does not.",
       "`voice` — only ever fails when LIVEKIT_* is half-configured.",
+    ].join("\n"),
+  };
+}
+
+/**
+ * `/ready`, read once and shared.
+ *
+ * Four checks below look at different fields of the same report. Fetching it
+ * four times would be four `SELECT 1`s and, worse, four draws on the endpoint's
+ * rate limit (5 burst, 2/s per address, and behind Cloudflare the address the
+ * app sees can be a shared edge one), so the first read is reused for 60
+ * seconds. `api-ready` passes `maxAgeMs: 0` because its retries exist to
+ * observe a recovery and must see a fresh answer each time.
+ */
+let readyMemo = null;
+
+export function resetReadyMemo() {
+  readyMemo = null;
+}
+
+async function readReady({ maxAgeMs = 60_000 } = {}) {
+  if (readyMemo && Date.now() - readyMemo.at < maxAgeMs) {
+    return readyMemo.value;
+  }
+  const res = await httpGet(`${API_ORIGIN}/ready`, { timeoutMs: 10_000 });
+  let parsed = null;
+  try {
+    parsed = JSON.parse(res.body);
+  } catch {
+    /* a Cloudflare error page, or a proxy 5xx: reported by the caller */
+  }
+  const value = { status: res.status, ms: res.ms, parsed, body: res.body };
+  readyMemo = { at: Date.now(), value };
+  return value;
+}
+
+const readyNote = (r) =>
+  `HTTP ${r.status} in ${r.ms}ms${r.parsed ? "" : ` (not JSON: ${r.body.slice(0, 120).replace(/\s+/g, " ")})`}`;
+
+/**
+ * Which of postgres / livekit / storage is not ok, from a parsed `/ready`.
+ *
+ * Deliberately NOT `pool` and NOT `liveHls`: each has its own check key
+ * (`api-pool`, `live-hls`), and one incident should open one issue, not two.
+ * `skipped` entries are `ok: true` by the endpoint's own contract.
+ */
+export function judgeReadyDependencies(parsed) {
+  const checks = parsed?.checks;
+  if (!checks || typeof checks !== "object") {
+    return { ok: false, failing: ["no usable report"] };
+  }
+  const failing = ["postgres", "livekit", "storage"].filter((name) => checks[name]?.ok !== true);
+  return { ok: failing.length === 0, failing };
+}
+
+/** Warn when this fraction of one replica's pool is checked out. */
+export const POOL_WARN_FRACTION = Number(process.env.MONITOR_POOL_WARN_FRACTION ?? 0.85);
+
+/** `ok`, `warn` (headroom nearly gone), `fail` (the endpoint says it is not serving) or `skip`. */
+export function judgePool(pool) {
+  if (!pool || typeof pool.ok !== "boolean") {
+    return { level: "skip", note: "no pool block in /ready" };
+  }
+  const { inUse = 0, max = 0, queued = 0 } = pool;
+  const note = `inUse ${inUse}/${max}, queued ${queued}`;
+  if (!pool.ok) {
+    return { level: "fail", note };
+  }
+  // max 0 means "no pool yet" (a cold process); there is nothing to be short of.
+  if (max > 0 && inUse / max >= POOL_WARN_FRACTION) {
+    return { level: "warn", note };
+  }
+  return { level: "ok", note };
+}
+
+/** Every non-home SFU region that is down, from `checks.livekitRegions`. */
+export function judgeRegions(regions) {
+  if (!regions || typeof regions !== "object" || Object.keys(regions).length === 0) {
+    return { level: "skip", down: [], all: [] };
+  }
+  const entries = Object.entries(regions);
+  const down = entries.filter(([, check]) => check?.ok !== true).map(([id]) => id);
+  return {
+    level: down.length ? "fail" : "ok",
+    down,
+    all: entries.map(
+      ([id, check]) =>
+        `${id}=${check?.ok === true ? "ok" : "down"}${check?.host ? ` (${check.host})` : ""}`,
+    ),
+  };
+}
+
+/**
+ * The deep check: can the API reach Postgres, the SFU and the attachment
+ * bucket right now?
+ *
+ * `/health` is liveness only by design, so until this existed nothing in the
+ * repo's own probes asked the database a question: `status-components` reads
+ * the app's own once-a-minute samples, which lag. `/ready` is the endpoint
+ * built for an external monitor (services/ready.ts).
+ *
+ * A run in which every attempt was a 429 is a SKIP: the limiter protects
+ * Postgres from a scraper, and "the limiter said slow down" is not evidence
+ * about the database.
+ */
+async function checkApiReady() {
+  const result = await untilOk(async () => {
+    const r = await readReady({ maxAgeMs: 0 });
+    if (r.status === 429) {
+      return { ok: false, limited: true, note: "HTTP 429, rate limited" };
+    }
+    const verdict = judgeReadyDependencies(r.parsed);
+    return {
+      ok: verdict.ok,
+      failing: verdict.failing,
+      version: r.parsed?.version,
+      host: r.parsed?.checks?.livekit?.host,
+      note: `${readyNote(r)}; ${verdict.ok ? "postgres, livekit, storage ok" : `failing: ${verdict.failing.join(", ")}`}`,
+    };
+  }, RETRY);
+
+  const title = `API dependencies (${API_ORIGIN}/ready)`;
+  if (!result.ok && result.tries.every((t) => t.limited)) {
+    return {
+      key: "api-ready",
+      title,
+      status: "skip",
+      summary: "Skipped: /ready rate-limited every attempt (HTTP 429), so there is no reading.",
+      detail: trail(result.tries),
+    };
+  }
+
+  return {
+    key: "api-ready",
+    title,
+    status: result.ok ? "ok" : "fail",
+    summary: result.ok
+      ? `Postgres, SFU and attachment storage all answer (attempt ${result.attempt}), serving ${result.version ?? "unknown"}${result.host ? `, SFU ${result.host}` : ""}.`
+      : !result.failing || result.failing[0] === "no usable report"
+        ? "/ready did not return a usable report (no connection, a proxy error page, or a malformed body)."
+        : `/ready says the API cannot reach: ${result.failing.join(", ")}.`,
+    detail: trail(result.tries),
+    runbook: [
+      "`/ready` names the dependency. `api-health` green with this red means the process is fine and something behind it is not.",
+      "`postgres`: the managed cluster is in the Vultr dashboard (the box has no database of its own). Also `ssh root@<box>`, then `cd /opt/pqp && docker compose logs --tail=200 api-a | grep -i 'connection\\|pool\\|ECONN'`. Never resize the cluster during a live event (docs/DB_RUNBOOK.md).",
+      "`livekit`: the SFU box (`sfu.pqp.gg`) is a separate machine with its own Grafana alerts; see 'The SFU box' in docs/MONITORING.md.",
+      "`storage`: the ATTACHMENT bucket (`S3_*` in `/opt/pqp/.env`) rejected a signed HEAD; the watch-party bucket is `live-hls`.",
+      "A failing `livekit` or `storage` does not stop chat; a failing `postgres` stops nearly everything.",
+    ].join("\n"),
+  };
+}
+
+/**
+ * The pool, from the same report. The server already does the hard part: it
+ * samples the pool once a second and flips `pool.ok` only when the queue has
+ * been non-empty for 10s or every connection has been checked out for 30s
+ * (`POOL_QUEUE_GRACE_MS`, `POOL_FULL_GRACE_MS`). This check adds the half that
+ * is only visible from outside: HEADROOM. A pool pinned near its maximum for
+ * all three attempts (~40s) is not yet "not serving" and is how 2026-09-05 and
+ * 2026-09-12 started.
+ *
+ * It reads ONE replica: Caddy balances across api-a and api-b, and each has its
+ * own pool (`PG_POOL_MAX` is split per replica by `pqp-deploy`), so `max` here
+ * is that replica's, not the cluster's.
+ *
+ * This lives in the 10-minute group, not the daily limits one: a pool reading
+ * taken at 08:17 in Sao Paulo describes the quietest hour of the day.
+ */
+async function checkApiPool() {
+  const result = await untilOk(async () => {
+    const r = await readReady();
+    if (r.status === 429) {
+      return { ok: false, limited: true, level: "skip", note: "HTTP 429, rate limited" };
+    }
+    const verdict = judgePool(r.parsed?.checks?.pool);
+    return {
+      ok: verdict.level === "ok" || verdict.level === "skip",
+      level: verdict.level,
+      pool: verdict.note,
+      note: `${readyNote(r)}; pool ${verdict.note}`,
+    };
+  }, RETRY);
+
+  const title = "API database pool (/ready checks.pool)";
+  // No level at all means the request itself threw (no connection, timeout):
+  // that is `api-health` and `api-ready`'s outage, not a pool reading.
+  if (result.level === "skip" || result.level === undefined) {
+    return {
+      key: "api-pool",
+      title,
+      status: "skip",
+      summary:
+        "Skipped: /ready gave no pool reading (rate limited, or unreachable, which `api-ready` owns).",
+      detail: trail(result.tries),
+    };
+  }
+  const limit = `warn at ${Math.round(POOL_WARN_FRACTION * 100)}% in use`;
+  return {
+    key: "api-pool",
+    title,
+    status: result.level,
+    summary:
+      result.level === "ok"
+        ? `Pool has headroom (${result.pool}).`
+        : result.level === "warn"
+          ? `Pool nearly exhausted on every attempt (${result.pool}; ${limit}).`
+          : `The pool is not serving: queue not draining for >10s, or every connection held for >30s (${result.pool}).`,
+    detail: trail(result.tries),
+    runbook: [
+      "A saturated pool shows as slow or failing requests while `/health` stays green (the 2026-09-05 and 2026-09-12 shape).",
+      "1. `ssh root@<box>`, then `cd /opt/pqp && docker compose logs --tail=300 api-a api-b worker | grep -i 'pool\\|Connection terminated\\|timeout'`.",
+      "2. Grafana Loki: the `Connection terminated` panel on the pqp API events dashboard shows the shape over time.",
+      "3. Budget: `PG_POOL_MAX` is the TOTAL across API replicas and is split by `pqp-deploy` (docs/DB_RUNBOOK.md). Never raise it past the managed cluster's connection limit during a live event.",
+      "4. A pool full of hung connections usually clears with a rolling restart, one replica at a time (docs/deploy-vultr.md section 8), but find the slow query first or it comes back.",
+    ].join("\n"),
+  };
+}
+
+/**
+ * The extra SFU regions, which `/ready` deliberately keeps OUT of its own
+ * verdict (a Miami box being down must not fail an API deploy gate in Sao
+ * Paulo), and which therefore nothing else here sees. `skip` while
+ * `LIVEKIT_REGIONS` is unset, which is a single-region deployment.
+ */
+async function checkSfuRegions() {
+  const result = await untilOk(async () => {
+    const r = await readReady();
+    if (r.status === 429) {
+      return { ok: false, limited: true, level: "skip", note: "HTTP 429, rate limited" };
+    }
+    const verdict = judgeRegions(r.parsed?.checks?.livekitRegions);
+    return {
+      ok: verdict.level !== "fail",
+      level: r.parsed ? verdict.level : "skip",
+      down: verdict.down,
+      regions: verdict.all.join(", "),
+      note: `${readyNote(r)}; regions ${verdict.all.join(", ") || "none"}`,
+    };
+  }, RETRY);
+
+  const title = "SFU regions (/ready checks.livekitRegions)";
+  if (result.level === "skip" || result.level === undefined) {
+    return {
+      key: "sfu-regions",
+      title,
+      status: "skip",
+      summary:
+        "Skipped: no extra SFU regions in /ready (LIVEKIT_REGIONS unset), or no readable report.",
+    };
+  }
+  return {
+    key: "sfu-regions",
+    title,
+    status: result.ok ? "ok" : "fail",
+    summary: result.ok
+      ? `Every extra SFU region answers: ${result.regions}.`
+      : `SFU region(s) down: ${result.down.join(", ")}. Rooms already pinned there are down with it.`,
+    detail: trail(result.tries),
+    runbook: [
+      "The home SFU is part of `api-ready`; this is the OTHER regions, which `/ready` keeps out of its verdict on purpose.",
+      "Rooms already pinned to a dead region are that region's outage. The runbook is docs/plans/SFU_REGIONS.md: route its countries home.",
+      "The region boxes have their own Grafana alerts (see 'The SFU box' in docs/MONITORING.md).",
     ].join("\n"),
   };
 }
@@ -409,14 +690,8 @@ async function checkStatusComponents() {
  */
 async function checkLiveHls() {
   const result = await untilOk(async () => {
-    const res = await httpGet(`${API_ORIGIN}/ready`, { timeoutMs: 10_000 });
-    let parsed = null;
-    try {
-      parsed = JSON.parse(res.body);
-    } catch {
-      /* reported below */
-    }
-    const check = parsed?.checks?.liveHls;
+    const res = await readReady();
+    const check = res.parsed?.checks?.liveHls;
     // A 503 for some OTHER dependency still carries a truthful liveHls block,
     // and blaming the bucket for a Postgres outage would send somebody to the
     // wrong dashboard. So this reads its own field and ignores the envelope.
@@ -431,20 +706,24 @@ async function checkLiveHls() {
               ? "ok"
               : "failing",
       ms: check?.ms,
-      note: `HTTP ${res.status} in ${res.ms}ms, liveHls=${JSON.stringify(check ?? null)}`,
+      note: `${readyNote(res)}, liveHls=${JSON.stringify(check ?? null)}`,
     };
   }, RETRY);
 
-  // `absent` is an API older than the check, not an outage.
-  if (result.state === "absent" || result.state === "skipped") {
+  // `absent` is an API older than the check, not an outage. No state at all
+  // means the request itself threw, which is `api-health`'s outage to report:
+  // an unreachable API says nothing about the bucket.
+  if (result.state === undefined || result.state === "absent" || result.state === "skipped") {
     return {
       key: "live-hls",
       title: "Watch party HLS bucket (/ready checks.liveHls)",
       status: "skip",
       summary:
-        result.state === "absent"
-          ? "The deployed API has no liveHls check yet."
-          : "LIVE_HLS_ENABLED is off, so there is no bucket to watch.",
+        result.state === undefined
+          ? "Skipped: /ready could not be read (the API itself is unreachable, which api-health reports)."
+          : result.state === "absent"
+            ? "The deployed API has no liveHls check yet."
+            : "LIVE_HLS_ENABLED is off, so there is no bucket to watch.",
     };
   }
 
@@ -459,9 +738,9 @@ async function checkLiveHls() {
     runbook: [
       "This is the LIVE_HLS_S3_* bucket, not the attachment S3_* one. `status-components` -> storage watches the other.",
       "The probe is a signed HEAD of a key that cannot exist, so a 404 passes.",
-      "403 means the key pair was rejected or lost its grant on the bucket: check the R2 API token in the Cloudflare dashboard and `fly secrets list -a pqp-api`.",
+      "403 means the key pair was rejected or lost its grant on the bucket: check the R2 API token in the Cloudflare dashboard and the `LIVE_HLS_S3_*` values in `/opt/pqp/.env` on the box (`ssh root@<box>`).",
       "A transport failure means R2 or the endpoint is unreachable: check the Cloudflare status page.",
-      "To turn the feature off while fixing it: `fly secrets unset LIVE_HLS_ENABLED -a pqp-api`. Rooms go back to the ordinary transport policy on their next pin.",
+      "To turn the feature off while fixing it, prefer the per-server switch in the operator dashboard (`servers.live_hls_enabled`, no deploy). The master switch `LIVE_HLS_ENABLED` is in `/opt/pqp/.env` and needs a rolling deploy to take effect (docs/deploy-vultr.md section 8), never a bare `docker compose up`.",
       "Full runbook: docs/WATCH_PARTY.md, 'Turning it on in production'.",
     ].join("\n"),
   };
@@ -549,6 +828,16 @@ async function checkPrecache() {
   };
 }
 
+/**
+ * Issue keys this group used to own and no longer reports. `run.mjs` closes any
+ * that are still open, with a comment saying so: a check that is removed
+ * leaves its last alert open forever otherwise (issue #607, `fly-machines`,
+ * sat open and red for a month against a Fly app nobody was running).
+ */
+export function retiredAvailabilityKeys() {
+  return flyRollback() ? [] : ["fly-machines", "worker-image-drift"];
+}
+
 export async function runAvailabilityChecks() {
   // Sequential on purpose. Running five probes in parallel against one small
   // machine means the monitor's own load is part of what it is measuring, and
@@ -558,10 +847,19 @@ export async function runAvailabilityChecks() {
     ["web-app", checkWebsite],
     ["sw-precache", checkPrecache],
     ["websocket", checkWebsocket],
-    ["fly-machines", checkFlyMachines],
-    ["worker-image-drift", checkWorkerImageDrift],
+    ["api-ready", checkApiReady],
+    ["api-pool", checkApiPool],
     ["status-components", checkStatusComponents],
     ["live-hls", checkLiveHls],
+    ["sfu-regions", checkSfuRegions],
+    // Rollback to Fly only: with the apps at zero machines these two read
+    // nothing true, so they are off unless somebody sets the variable.
+    ...(flyRollback()
+      ? [
+          ["fly-machines", checkFlyMachines],
+          ["worker-image-drift", checkWorkerImageDrift],
+        ]
+      : []),
   ];
   const results = [];
   for (const [key, check] of checks) {

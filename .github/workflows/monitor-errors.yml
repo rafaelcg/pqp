@@ -1,6 +1,21 @@
 name: Monitor (errors)
 
-# "Is it throwing?" — every 15 minutes, reading the actual production logs.
+# "Is it throwing?", every 15 minutes, reading logs from Fly.
+#
+# STATE SINCE 2026-09-17: THE API LOGS ARE NOT READ HERE ANY MORE
+#
+# Production moved to the Vultr box behind Cloudflare, and the Fly apps
+# `pqp-api` and `pqp-worker` run zero machines. `fly logs` on them returns a
+# stale buffer, so the `api-error-rate` check below kept reporting on lines
+# from the day of the cutover and could not mean anything. It now runs only
+# when the repository variable MONITOR_FLY_ROLLBACK is "true" (a rollback to
+# Fly). The API's and worker's log errors are Grafana Loki alerts, which read
+# every line (docs/MONITORING.md, "Logs in Grafana Cloud"); a GitHub runner has
+# no SSH key and no repo secret that reaches the box.
+#
+# What still runs by default is `support-bot-alive`: `pqp-support` (the QG help
+# bot) is still a Fly app. The comments below describe the original design and
+# stay accurate for both checks.
 #
 # WHY THIS IS SEPARATE FROM Monitor (uptime)
 #
@@ -101,8 +116,10 @@ jobs:
           FLY_ORG_TOKEN: ${{ secrets.FLY_ORG_TOKEN }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           MONITOR_REPO: ${{ github.repository }}
+          # ROLLBACK ONLY: brings the `fly logs` API error-rate check back.
+          MONITOR_FLY_ROLLBACK: ${{ vars.MONITOR_FLY_ROLLBACK }}
           # Comma-separated check keys to silence without disabling the monitor.
-          # `gh variable set MONITOR_MUTED --body "api-error-rate"`.
+          # `gh variable set MONITOR_MUTED --body "support-bot-alive"`.
           MONITOR_MUTED: ${{ vars.MONITOR_MUTED }}
         run: |
           set +e

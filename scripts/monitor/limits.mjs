@@ -8,13 +8,17 @@
  *     never a silent pass. `LIMITS_NOT_AUTOMATED` at the bottom carries the
  *     things no credential can fix, and it is printed on every run so the gap
  *     stays visible instead of being forgotten in a doc.
+ *
+ * Production runs on the Vultr box and a Vultr managed Postgres since
+ * 2026-09-17. The old `postgres-disk` check (a Fly Managed Postgres volume
+ * read through `fly mpg proxy`) is gone: that cluster no longer exists, and
+ * nothing a GitHub runner holds can reach the Vultr one, so the Postgres size
+ * and the box's disk are listed under LIMITS_NOT_AUTOMATED instead of being
+ * faked. Pool saturation, the one database number /ready does expose, is
+ * `api-pool` in the 10-minute availability group.
  */
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { httpGet, httpGetJson, httpPostJson, tlsCertificate, whois } from "./net.mjs";
-
-const exec = promisify(execFile);
 
 /**
  * Alert on a certificate this close to expiry. 21 days is chosen against the
@@ -47,11 +51,18 @@ function levelFor(used, limit) {
 /**
  * TLS expiry for all three hostnames.
  *
- * Both issuers here renew automatically — Cloudflare (Google Trust Services)
- * for pqp.gg and www, Fly (Let's Encrypt) for api — so this should never fire.
- * That is the point: it fires only when automatic renewal has stopped working,
+ * Every hostname is proxied by Cloudflare, so what this reads is Cloudflare's
+ * EDGE certificate (Universal SSL, auto-renewed), for all three names. This
+ * should never fire; it fires only when automatic renewal has stopped working,
  * which is a silent failure with a hard deadline, and 21 days is enough runway
  * to fix a DNS validation problem by hand.
+ *
+ * What it can NOT see is the origin: Caddy on the API box presents a
+ * Cloudflare Origin CA certificate (tools/api-host/Caddyfile, MODE A) to
+ * Cloudflare only, and a runner connecting to api.pqp.gg never reaches it. A
+ * lapsed origin certificate breaks Cloudflare "Full (strict)" and shows up as
+ * `api-health` going 52x, not here. Origin CA certificates are issued for
+ * years; the expiry date is a calendar item (LIMITS_NOT_AUTOMATED).
  */
 async function checkTlsExpiry() {
   const rows = [];
@@ -86,7 +97,7 @@ async function checkTlsExpiry() {
     detail: rows.join("\n"),
     runbook: [
       "pqp.gg / www.pqp.gg are Cloudflare Universal SSL — check the zone's SSL/TLS > Edge Certificates page; renewal fails when the domain stops pointing at Cloudflare's nameservers.",
-      "api.pqp.gg is Fly-managed Let's Encrypt — `fly certs show api.pqp.gg -a pqp-api` and `fly certs check api.pqp.gg -a pqp-api`.",
+      "api.pqp.gg is also proxied through Cloudflare (since 2026-09-17), so the certificate this reads is the same Universal SSL edge cert. The origin certificate on the Vultr box (Cloudflare Origin CA in /opt/pqp/caddy/certs/) is not visible from here.",
     ].join("\n"),
   };
 }
@@ -160,7 +171,7 @@ async function checkDomainRegistration() {
       summary: `The registry does not know ${domain} — it is unregistered or has been deleted.`,
       detail: text.slice(0, 300),
       runbook:
-        "Go to porkbun.com immediately. A .gg name that lapses can be re-registered by anyone, and the whole deployment (Clerk origins, Cloudflare zone, Fly certificate) is keyed to this name.",
+        "Go to porkbun.com immediately. A .gg name that lapses can be re-registered by anyone, and the whole deployment (Clerk origins, Cloudflare zone, the box certificates) is keyed to this name.",
     };
   }
 
@@ -221,115 +232,6 @@ async function checkDomainRegistration() {
       "If the status left 'Active', treat it as urgent: resolution stops within days and re-registration is not guaranteed.",
     ].join("\n"),
   };
-}
-
-/**
- * Postgres volume usage against the 10 GB provisioned by Fly Managed Postgres.
- *
- * The 10 GB figure is not guessed: `fly mpg status <cluster> --json` reports
- * `"disk": 10` for this cluster (the Basic plan's volume, in GB).
- *
- * There is no usage field in that output, so the size has to come from the
- * database itself — and the cluster only has a private 6PN address
- * (`fdaa:…`), unreachable from a GitHub runner without a tunnel. Hence
- * `fly mpg proxy` + psql. Two consequences worth knowing:
- *   * this needs an ORG-scoped Fly token. The FLY_API_TOKEN used for deploys is
- *     app-scoped (`fly tokens create deploy -a pqp-api`) and cannot read an MPG
- *     cluster, so the check reports `skip` rather than pretending;
- *   * the query is `pg_database_size`, which is read-only.
- */
-async function checkPostgresSize() {
-  const cluster = process.env.MONITOR_MPG_CLUSTER;
-  if (!cluster) {
-    return {
-      key: "postgres-disk",
-      title: "Postgres volume usage",
-      status: "skip",
-      summary:
-        "Skipped: MONITOR_MPG_CLUSTER is not set. Find it with `fly mpg list --org <org>` and set it as a repository variable.",
-    };
-  }
-  if (!process.env.FLY_API_TOKEN && !process.env.MONITOR_FLY_LOCAL) {
-    return {
-      key: "postgres-disk",
-      title: "Postgres volume usage",
-      status: "skip",
-      summary: "Skipped: no Fly credential.",
-    };
-  }
-
-  let status;
-  try {
-    const { stdout } = await exec("flyctl", ["mpg", "status", cluster, "--json"], {
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    status = JSON.parse(stdout);
-  } catch (error) {
-    return {
-      key: "postgres-disk",
-      title: "Postgres volume usage",
-      status: "skip",
-      summary:
-        "Skipped: `fly mpg status` failed. The deploy token is app-scoped and cannot read the database cluster — this needs an org-scoped token (`fly tokens create org --name pqp-monitor`) stored as FLY_API_TOKEN or FLY_ORG_TOKEN.",
-      detail: error.message,
-    };
-  }
-
-  const limitGb = status?.data?.disk;
-  const creds = status?.credentials;
-  if (!limitGb || !creds?.password) {
-    return {
-      key: "postgres-disk",
-      title: "Postgres volume usage",
-      status: "skip",
-      summary: "Skipped: `fly mpg status --json` did not include a disk size and credentials.",
-    };
-  }
-
-  const port = Number(process.env.MONITOR_MPG_PORT ?? 16543);
-  const proxy = exec("flyctl", ["mpg", "proxy", cluster, "--local-port", String(port)]);
-  try {
-    // The tunnel is a WireGuard peer flyctl brings up in userspace; it takes a
-    // few seconds before the local port answers.
-    await new Promise((r) => setTimeout(r, 12_000));
-    const { stdout } = await exec(
-      "psql",
-      [
-        "--no-psqlrc",
-        "-t",
-        "-A",
-        "-c",
-        "SELECT pg_database_size(current_database())",
-        `postgresql://${creds.user}:${encodeURIComponent(creds.password)}@127.0.0.1:${port}/${creds.dbname}`,
-      ],
-      { env: { ...process.env, PGCONNECT_TIMEOUT: "15" } },
-    );
-    const bytes = Number(stdout.trim());
-    const usedGb = bytes / 1024 ** 3;
-    const level = levelFor(usedGb, limitGb);
-    return {
-      key: "postgres-disk",
-      title: `Postgres volume usage (${limitGb} GB provisioned)`,
-      status: level,
-      summary: `${usedGb.toFixed(3)} GB of ${limitGb} GB used (${pct(usedGb, limitGb)}).`,
-      detail: `pg_database_size(${creds.dbname}) = ${bytes} bytes`,
-      runbook: [
-        "The retention sweeps in server/src/index.ts already prune audit logs, reports and status samples. If this is climbing anyway, the growth is message history or message_attachments rows.",
-        "`fly mpg connect <cluster>` then: SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) FROM pg_catalog.pg_statio_user_tables ORDER BY pg_total_relation_size(relid) DESC LIMIT 10;",
-        "Growing the volume is a Fly plan change, not a flag.",
-      ].join("\n"),
-    };
-  } catch (error) {
-    return {
-      key: "postgres-disk",
-      title: "Postgres volume usage",
-      status: "skip",
-      summary: `Skipped: could not query through the tunnel (${error.message.slice(0, 200)}). psql must be on PATH.`,
-    };
-  } finally {
-    proxy.child.kill("SIGTERM");
-    await proxy.catch(() => {});
-  }
 }
 
 /**
@@ -554,7 +456,7 @@ async function checkClerkUsers() {
       title: "Clerk user count",
       status: "skip",
       summary:
-        "Skipped: CLERK_SECRET_KEY is not available to CI (it lives only as a Fly secret). Optional — the free plan allows 50,000 monthly retained users, so this is a long way off.",
+        "Skipped: CLERK_SECRET_KEY is not available to CI (it lives only in /opt/pqp/.env on the API box). Optional, the free plan allows 50,000 monthly retained users, so this is a long way off.",
     };
   }
   try {
@@ -616,7 +518,7 @@ async function checkRecentUptime() {
       .map((c) => `${c.key}: 24h ${(c.uptime24h * 100).toFixed(2)}%, 7d ${(c.uptime7d * 100).toFixed(2)}%`)
       .join("\n"),
     runbook:
-      "This means something flapped rather than fell over. `fly logs -a pqp-api` around the dips; the per-minute samples are in the status_samples table if you need the exact times.",
+      "This means something flapped rather than fell over. `ssh root@<box>` then `cd /opt/pqp && docker compose logs --since 24h api-a api-b` around the dips (or Grafana Loki, `{container=~\"api.*\"}`); the per-minute samples are in the status_samples table if you need the exact times.",
   };
 }
 
@@ -638,16 +540,34 @@ export const LIMITS_NOT_AUTOMATED = [
     cadence: "never, unless the repo goes private",
   },
   {
-    what: "LiveKit Cloud participant-minutes",
-    limit: "n/a",
-    why: "LIVEKIT_* is not configured — voice is full-mesh, so there is no SFU account to meter. Add a check here if that changes.",
-    cadence: "n/a until LiveKit is configured",
+    what: "Vultr managed Postgres: disk, connections, CPU",
+    limit: "the plan's volume (Vultr dashboard)",
+    why: "Not reachable from GitHub: no credential for the Vultr API or the database exists in this repo's secrets, and agents hold a read-only role only. The old `postgres-disk` check read a Fly volume that no longer exists. `api-pool` (every 10 minutes) sees the symptom of connection pressure; nothing sees disk filling.",
+    cadence: "monthly glance in the Vultr dashboard, and before any big event; DB_RUNBOOK.md has the connection budget",
   },
   {
-    what: "Fly bandwidth and machine hours",
+    what: "API box (Vultr) CPU, memory, disk",
+    limit: "the box's plan",
+    why: "Alloy on the box ships node metrics to Grafana Cloud under box=\"api-pqp\" (tools/api-host/config.alloy). Whether the Grafana alert rules cover that box label (the documented ones are for the SFU boxes) is not verifiable from here.",
+    cadence: "confirm once in Grafana that the rules match box=api-pqp",
+  },
+  {
+    what: "Origin certificate expiry (Cloudflare Origin CA on the box)",
+    limit: "set when the certificate was issued",
+    why: "Caddy presents it to Cloudflare only, so no public probe can read it; `tls-expiry` sees the Cloudflare edge certificate.",
+    cadence: "put the expiry date in a calendar when it is issued",
+  },
+  {
+    what: "LiveKit usage (SFU box transfer and load)",
+    limit: "6 TB/month on the box plan",
+    why: "Owned by Grafana: Alloy on the SFU boxes alerts at 60% and 80% of the monthly allowance, plus CPU, memory, disk and container state. See 'The SFU box' in docs/MONITORING.md.",
+    cadence: "automated, in Grafana",
+  },
+  {
+    what: "Vultr and Fly spend",
     limit: "billed usage, no free-tier wall",
-    why: "Fly bills usage rather than cutting off, so the failure mode is a surprise invoice, not an outage. Fly's own spend-alert setting handles it better than a probe could.",
-    cadence: "set a spend alert once in the Fly dashboard, then monthly glance",
+    why: "Both bill rather than cut off, so the failure mode is a surprise invoice, not an outage. The provider's own spend alert handles it better than a probe could. The Fly apps are kept only as a rollback and go away around 2026-10-17.",
+    cadence: "set a spend alert once in each dashboard, then monthly glance",
   },
   {
     what: "Clerk MRU (as opposed to total users)",
@@ -657,11 +577,18 @@ export const LIMITS_NOT_AUTOMATED = [
   },
 ];
 
+/**
+ * Issue keys this group no longer reports. `run.mjs` closes any still open, so
+ * the last `postgres-disk` alert cannot outlive the Fly cluster it measured.
+ */
+export function retiredLimitKeys() {
+  return ["postgres-disk"];
+}
+
 export async function runLimitChecks() {
   const checks = [
     ["tls-expiry", checkTlsExpiry],
     ["domain-registration", checkDomainRegistration],
-    ["postgres-disk", checkPostgresSize],
     ["r2-usage", checkR2Usage],
     ["pages-builds", checkPagesBuilds],
     ["clerk-users", checkClerkUsers],
