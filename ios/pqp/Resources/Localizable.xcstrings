@@ -211,6 +211,56 @@
         }
       }
     },
+    "Anyone on pqp can find this community and join with one tap." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qualquer pessoa no pqp acha esta comunidade e entra com um toque."
+          }
+        }
+      }
+    },
+    "Anyone with a pqp account will be able to find this community and join without an invite. They will see every channel that is not restricted. Reports about it go to the people who run pqp, who can take the listing down." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qualquer pessoa com conta no pqp vai poder achar esta comunidade e entrar sem convite, e vai ver todos os canais que não são restritos. Denúncia sobre ela vai pra quem cuida do pqp, que pode tirar a listagem."
+          }
+        }
+      }
+    },
+    "Anyone with an account can find the community and join without an invite. Reports about it go to the people who run pqp." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qualquer pessoa com conta acha a comunidade e entra sem convite. Denúncia sobre ela vai pra quem cuida do pqp."
+          }
+        }
+      }
+    },
+    "Anyone with the link can join with one tap." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem tiver o link entra com um toque."
+          }
+        }
+      }
+    },
+    "Anyone with the link pqp.gg/c/… will be able to join with one tap, no invite. They will see every channel that is not restricted. Reports about it go to the people who run pqp." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem tiver o link pqp.gg/c/… vai poder entrar com um toque, sem convite, e vai ver todos os canais que não são restritos. Denúncia sobre ela vai pra quem cuida do pqp."
+          }
+        }
+      }
+    },
     "channel" : {
       "localizations" : {
         "pt-BR" : {
@@ -277,6 +327,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Não deu pra mandar pra essa pessoa."
+          }
+        }
+      }
+    },
+    "Creates pqp.gg/c/… Anyone with the link can join with one tap, no invite." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cria pqp.gg/c/… Quem tiver o link entra com um toque, sem convite."
           }
         }
       }
@@ -367,6 +427,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Os posts livres chegam como cartões nos canais que as pessoas escolherem. Numa comunidade pública qualquer membro pode configurar; nas outras, só quem gerencia o servidor. Posts só pra membros nunca saem."
+          }
+        }
+      }
+    },
+    "In the directory" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No diretório"
           }
         }
       }
@@ -821,6 +891,176 @@
         }
       }
     },
+    "Link copied" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Link copiado"
+          }
+        }
+      }
+    },
+    "List in the directory?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar no diretório?"
+          }
+        }
+      }
+    },
+    "List it" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar"
+          }
+        }
+      }
+    },
+    "Made from the name when you turn the address on. You can change it here; old links stop working." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feito a partir do nome quando tu liga o endereço. Dá pra mudar aqui, os links antigos param de funcionar."
+          }
+        }
+      }
+    },
+    "Make public" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deixar pública"
+          }
+        }
+      }
+    },
+    "Make this community public?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deixar esta comunidade pública?"
+          }
+        }
+      }
+    },
+    "Only people you invite can join." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só entra quem tu convidar."
+          }
+        }
+      }
+    },
+    "Only the owner turns the directory on or off. The public address above is yours to edit." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só quem é dono liga ou desliga o diretório. O endereço público aqui em cima tu edita normal."
+          }
+        }
+      }
+    },
+    "Private community" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comunidade privada"
+          }
+        }
+      }
+    },
+    "Public" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pública"
+          }
+        }
+      }
+    },
+    "Public access" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acesso público"
+          }
+        }
+      }
+    },
+    "Public community" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comunidade pública"
+          }
+        }
+      }
+    },
+    "Save address" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salvar endereço"
+          }
+        }
+      }
+    },
+    "Show in the pqp directory" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aparecer no diretório do pqp"
+          }
+        }
+      }
+    },
+    "That address is taken. Try another one." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse endereço já é de outra comunidade. Escolhe outro."
+          }
+        }
+      }
+    },
+    "The people who run pqp took this community down. The room itself has not changed and everyone inside carries on as normal; only the public page and the directory listing are gone." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem cuida do pqp tirou esta comunidade do ar. A sala em si não mudou e quem está dentro continua usando normal, só a página pública e o diretório sumiram."
+          }
+        }
+      }
+    },
+    "The room stays yours: kicks, bans and private channels work the same. But reports about a public community go to the people who run pqp, who can take the page and the listing down." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A sala continua sendo tua: expulsar, banir e canal privado funcionam igual. Mas denúncia sobre comunidade pública vai pra quem cuida do pqp, que pode tirar do ar a página e a listagem."
+          }
+        }
+      }
+    },
     "This can only go inside this server." : {
       "localizations" : {
         "pt-BR" : {
@@ -991,6 +1231,26 @@
         }
       }
     },
+    "This community is in the directory. Only the owner can take it out, so the address cannot be turned off here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A comunidade está no diretório. Só quem é dono tira ela de lá, então o endereço não desliga aqui."
+          }
+        }
+      }
+    },
+    "This name cannot become a web address. Type one below." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse nome não vira endereço. Digita um aí embaixo."
+          }
+        }
+      }
+    },
     "This one stays in its own server." : {
       "localizations" : {
         "pt-BR" : {
@@ -1037,6 +1297,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Muitas mensagens. Tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "Turn on the public address" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ligar o endereço público"
+          }
+        }
+      }
+    },
+    "Turn on with this address" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ligar com este endereço"
+          }
+        }
+      }
+    },
+    "Turn the public address on first." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liga o endereço público primeiro."
           }
         }
       }
@@ -10537,6 +10827,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Teu story, postar"
+          }
+        }
+      }
+    },
+    "your-address" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "teu-endereco"
           }
         }
       }

@@ -88,7 +88,7 @@ struct Server: Codable, Identifiable, Hashable, Sendable {
     /// what decides whether the rail offers "show this on my profile" at all — a
     /// private server is never chipped onto anybody's card, so offering the
     /// switch there would be offering a no-op.
-    let isCommunity: Bool
+    var isCommunity: Bool
     /// This membership's badge opt-out, TRUE by default. Meaningless unless
     /// `isCommunity`.
     var showOnProfile: Bool
