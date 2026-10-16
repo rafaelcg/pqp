@@ -191,3 +191,11 @@
 /.well-known/agent-skills/*
   Access-Control-Allow-Origin: *
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+
+# The blog's words as HTML fragments, written by the build
+# (`pqp-static-pages`, `src/lib/static-pages.ts`) and read ONLY by the Pages
+# middleware through the asset binding. They are not pages: not linked, not in
+# the sitemap, and kept out of an index if a crawler ever guesses one.
+/prerender/*
+  X-Robots-Tag: noindex
+  Cache-Control: no-cache

@@ -24,6 +24,12 @@
 
 import { escapeHtml } from "./marketing-meta";
 import {
+  markdownTwinPath,
+  pageLocaleFor,
+  registeredBlogPage,
+  type PageLocale,
+} from "./page-registry";
+import {
   ARTICLES,
   articleBySlug,
   articleFaq,
@@ -211,6 +217,23 @@ function postCardLocale(
   return postLocale(post, servedLocale === "es" ? "es" : locale);
 }
 
+function markdownAlternate(
+  url: string,
+  locale: BlogLocale,
+  servedLocale: string,
+): string[] {
+  const path = url.slice(CANONICAL_ORIGIN.length);
+  const page = registeredBlogPage(path);
+  if (!page) {
+    return [];
+  }
+  const wanted: PageLocale = servedLocale === "es" ? "es" : locale;
+  const twin = markdownTwinPath(page, pageLocaleFor(page, wanted));
+  return [
+    `<link rel="alternate" type="text/markdown" href="${escapeHtml(CANONICAL_ORIGIN + twin)}" />`,
+  ];
+}
+
 export function renderBlogHead(
   target: BlogTarget,
   locale: BlogLocale,
@@ -288,6 +311,11 @@ export function renderBlogHead(
     // which is what stops a crawler's English renderer overwriting this
     // head with the English one. See `lib/locale.ts`.
     `<meta name="pqp:locale" content="${servedLocale}" />`,
+    // The same words as markdown, for an agent that reads the head and wants
+    // the prose (`static-pages.ts` writes the file). One link, in the language
+    // this document is in: no `hreflang`, so it cannot be mistaken for a
+    // language alternate of the page.
+    ...markdownAlternate(url, locale, servedLocale),
     `<script type="application/ld+json">${
       isPost
         ? jsonLdForPost(target.post, postCopy)

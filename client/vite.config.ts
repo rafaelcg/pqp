@@ -16,6 +16,7 @@ import {
 } from "./src/lib/prerender-hero";
 import { NAVIGATE_DENYLIST, swBuildScript } from "./src/lib/sw-build-script";
 import { edgeConfigFrom } from "./src/lib/edge-config";
+import { assertMarketingBodies, buildBlogStaticFiles } from "./src/lib/static-pages";
 
 /**
  * Build-time source-map upload to Grafana Faro, so a production stack trace is
@@ -245,6 +246,43 @@ function prerenderHero(): Plugin {
 }
 
 /**
+ * The words of every blog page, for readers that run no JavaScript: a fragment
+ * per page and language that the Pages middleware writes into `#root`, and a
+ * markdown twin per page and language. Build only. See `src/lib/static-pages.ts`
+ * for what is written and why, and `src/lib/page-registry.ts` for which pages.
+ *
+ * It THROWS when a registered page has no prose or renders to an empty body:
+ * the empty `#root` this exists to remove looks exactly like a successful build.
+ */
+function staticPages(): Plugin {
+  const read = (file: string): string | null => {
+    try {
+      return fs.readFileSync(path.resolve(__dirname, file), "utf8");
+    } catch {
+      return null;
+    }
+  };
+  const catalogue = (locale: string): Record<string, string> => ({
+    ...JSON.parse(read("src/locales/en/translation.json") ?? "{}"),
+    ...JSON.parse(read(`src/locales/${locale}/translation.json`) ?? "{}"),
+  });
+  return {
+    name: "pqp-static-pages",
+    apply: "build",
+    generateBundle() {
+      assertMarketingBodies();
+      const files = buildBlogStaticFiles({
+        body: (slug, locale) => read(`src/content/blog/${slug}.${locale}.md`),
+        catalogue,
+      });
+      for (const file of files) {
+        this.emitFile({ type: "asset", fileName: file.path, source: file.content });
+      }
+    },
+  };
+}
+
+/**
  * Starts the app bundle after the first paint on the home page (and at once
  * everywhere else). Runs last, when Vite has already written the entry tag.
  * See `src/lib/defer-entry.ts`.
@@ -275,6 +313,7 @@ export default defineConfig(({ command }) => ({
     react(),
     edgeConfig(),
     prerenderHero(),
+    staticPages(),
     deferEntry(),
     versionManifest(),
     umami(),
