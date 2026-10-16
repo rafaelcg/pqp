@@ -481,20 +481,26 @@ private fun SignedInNav(
     // already dropped it; every screen inside it leaves too, because the API refuses every read and
     // send there and what is left would be a dead screen. Then the reason, once, as the web does.
     LaunchedEffect(Unit) {
-        session.serverGone.collect { gone ->
-            while (nav.currentBackStackEntry?.serverIdOrNull().equals(gone.serverId, ignoreCase = true)) {
-                if (!nav.popBackStack()) break
+        // A state, not an event: what arrived while nothing was collecting is still here, and is
+        // acknowledged only once it has been dealt with.
+        session.serverGone.collect { pending ->
+            if (pending.isEmpty()) return@collect
+            for (gone in pending) {
+                while (nav.currentBackStackEntry?.serverIdOrNull().equals(gone.serverId, ignoreCase = true)) {
+                    if (!nav.popBackStack()) break
+                }
+                if (!gone.quiet) {
+                    forwardNotice = context.getString(
+                        when (gone.reason) {
+                            gg.pqp.app.core.ServerRemovedReason.Kicked -> R.string.server_removed_kicked
+                            gg.pqp.app.core.ServerRemovedReason.Banned -> R.string.server_removed_banned
+                            gg.pqp.app.core.ServerRemovedReason.Deleted -> R.string.server_removed_deleted
+                        },
+                        gone.serverName,
+                    )
+                }
             }
-            if (!gone.quiet) {
-                forwardNotice = context.getString(
-                    when (gone.reason) {
-                        gg.pqp.app.core.ServerRemovedReason.Kicked -> R.string.server_removed_kicked
-                        gg.pqp.app.core.ServerRemovedReason.Banned -> R.string.server_removed_banned
-                        gg.pqp.app.core.ServerRemovedReason.Deleted -> R.string.server_removed_deleted
-                    },
-                    gone.serverName,
-                )
-            }
+            session.acknowledgeGone(pending)
         }
     }
 

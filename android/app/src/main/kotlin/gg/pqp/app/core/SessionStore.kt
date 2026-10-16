@@ -3,12 +3,10 @@ package gg.pqp.app.core
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -121,8 +119,18 @@ class SessionStore(
      * A server this account lost (kicked, banned, deleted), once the list has dropped it. The
      * screens that are open inside it leave, and the person is told why, once.
      */
-    private val _serverGone = MutableSharedFlow<ServerGone>(extraBufferCapacity = 8)
-    val serverGone: SharedFlow<ServerGone> = _serverGone.asSharedFlow()
+    private val _serverGone = MutableStateFlow<List<ServerGone>>(emptyList())
+
+    /**
+     * Held until the UI says it has dealt with them ([acknowledgeGone]), not emitted: a removal that lands while
+     * nothing is collecting (the navigation host is between lifecycles) must still pop the screens inside that
+     * server and say why once it is back.
+     */
+    val serverGone: StateFlow<List<ServerGone>> = _serverGone.asStateFlow()
+
+    fun acknowledgeGone(handled: List<ServerGone>) {
+        _serverGone.update { pending -> pending.filterNot { it in handled } }
+    }
 
     private fun onAccountFrame(frame: JsonObject) {
         when ((frame["type"] as? JsonPrimitive)?.contentOrNull) {
@@ -132,7 +140,7 @@ class SessionStore(
                     _servers.value = rest
                     lost
                 }
-                if (lost != null) _serverGone.tryEmit(lost)
+                if (lost != null) _serverGone.update { it + lost }
             }
             "own-status" -> AccountFrames.ownStatus(frame)?.let(::onRemoteStatus)
         }
@@ -174,10 +182,11 @@ class SessionStore(
     fun setOwnStatus(wanted: String, onError: () -> Unit) {
         val previous = ownStatus()
         if (wanted == previous || wanted !in OwnStatus.CHOICES) return
-        synchronized(statusLock) {
+        val mine = synchronized(statusLock) {
             statusSaving += 1
             statusGeneration += 1
             heldStatus.clear()
+            statusGeneration
         }
         applyOwnStatus(wanted)
         scope.launch {
@@ -192,9 +201,13 @@ class SessionStore(
             }
             when {
                 !saved -> {
-                    // Another device's choice that arrived meanwhile is newer than the one that failed.
-                    applyOwnStatus(held.lastOrNull() ?: previous)
-                    onError()
+                    // Only the newest choice puts the old one back: if another was made while this one was
+                    // in the air, that one owns the row and an earlier failure must not undo it.
+                    if (generation == mine) {
+                        // Another device's choice that arrived meanwhile is newer than the one that failed.
+                        applyOwnStatus(held.lastOrNull() ?: previous)
+                        onError()
+                    }
                 }
                 OwnStatus.needsReadBack(wanted, held) -> {
                     val stored = runSuspendCatching { api.me() }.getOrNull()
