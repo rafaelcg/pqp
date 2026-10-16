@@ -27,6 +27,52 @@ enum StoryStage {
     /// A story drawn with layers versus one from before them, which keeps its
     /// old look (the line of text in the middle).
     static func usesLayers(_ story: Story) -> Bool { !story.layers.isEmpty }
+
+    /// What the viewer's chrome can cover, as shares of the canvas: the twin
+    /// of `STORY_SAFE_AREA` in `packages/shared/src/stories.ts`.
+    static let safeAreaX: CGFloat = 0.05
+    static let safeAreaTop: CGFloat = 0.10
+    static let safeAreaBottom: CGFloat = 0.13
+
+    /// The biggest size (34 pt, as it always was, down to 12) at which `text`,
+    /// wrapped to `box`, still fits its height. Measured, not left to
+    /// `minimumScaleFactor`: that one shrinks a long unbroken word to a speck
+    /// because it first tries to keep the word on one line.
+    static func legacyFontSize(text: String, in box: CGSize) -> CGFloat {
+        guard !text.isEmpty, box.width > 0, box.height > 0 else { return 34 }
+        var size: CGFloat = 34
+        while size > 12 {
+            let base = UIFont.systemFont(ofSize: size, weight: .heavy)
+            let font = base.fontDescriptor.withDesign(.rounded).map { UIFont(descriptor: $0, size: size) } ?? base
+            let rect = (text as NSString).boundingRect(
+                with: CGSize(width: box.width - 4, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font], context: nil
+            )
+            if ceil(rect.height) <= box.height { return size }
+            size -= 1
+        }
+        return 12
+    }
+
+    /// Where a text story from before layers draws its words, in the card's
+    /// own coordinates: the canvas less its safe area (the web's
+    /// `usableBox`), and never under the footer. With the keyboard up the
+    /// footer (reactions and the reply field) rides above it and is far
+    /// taller than the 13% the safe area keeps, so `footerTop` (its measured
+    /// top edge) pulls the bottom up and the words shrink into what is left
+    /// instead of printing over the header, the pill and the field.
+    static func legacyTextBox(canvas: CGRect, headerBottom: CGFloat? = nil, footerTop: CGFloat?, gap: CGFloat = 12) -> CGRect {
+        let left = canvas.minX + canvas.width * safeAreaX
+        let right = canvas.maxX - canvas.width * safeAreaX
+        var top = canvas.minY + canvas.height * safeAreaTop
+        if let headerBottom, headerBottom + gap > top { top = headerBottom + gap }
+        var bottom = canvas.maxY - canvas.height * safeAreaBottom
+        if let footerTop, footerTop - gap < bottom { bottom = footerTop - gap }
+        // Never collapse: a keyboard on a short phone still leaves a line.
+        bottom = max(bottom, top + 60)
+        return CGRect(x: left, y: top, width: right - left, height: bottom - top)
+    }
 }
 
 /// The base, under the layers.
@@ -41,6 +87,11 @@ struct StoryStageBase: View {
     var revealed = true
     /// A video's first frame is on its layer.
     var onFirstFrame: (() -> Void)?
+    /// The bottom of the header and the top of the footer in this view's
+    /// coordinates, handed over while the keyboard is up (the canvas shrinks
+    /// with it and the chrome no longer sits inside its margins).
+    var headerBottom: CGFloat?
+    var footerTop: CGFloat?
 
     var body: some View {
         let canvas = StoryStage.canvas(in: size)
@@ -48,14 +99,16 @@ struct StoryStageBase: View {
             if revealed { backdrop }
             if story.isText {
                 if revealed, !StoryStage.usesLayers(story) {
-                    // From before layers: the line in the middle, as it was.
+                    // From before layers: the words, sized into the safe area
+                    // (never under the header or the footer) and centered in it.
+                    let box = StoryStage.legacyTextBox(canvas: canvas, headerBottom: headerBottom, footerTop: footerTop)
                     Text(verbatim: story.text ?? "")
-                        .font(.system(size: 34, weight: .heavy, design: .rounded))
+                        .font(.system(size: StoryStage.legacyFontSize(text: story.text ?? "", in: box.size), weight: .heavy, design: .rounded))
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
-                        .minimumScaleFactor(0.5)
-                        .padding(.horizontal, 28)
-                        .frame(width: canvas.width, height: canvas.height)
+                        .frame(width: box.width, height: box.height)
+                        .position(x: box.midX, y: box.midY)
+                        .animation(.easeOut(duration: 0.2), value: box.height)
                 }
             } else if let media = story.media {
                 mediaView(media)
