@@ -94,10 +94,32 @@ final class SessionStore {
     /// closes itself; the hub drops the tile.
     private(set) var removedServers: [String: ServerRemovedReason] = [:]
     private(set) var removedRevision = 0
+    /// The revision each removal happened at, so a server list read that began
+    /// before it is known to be stale (`reconcileFetched`).
+    @ObservationIgnored private var removedAt: [String: Int] = [:]
+
+    /// A server list as the API just answered it, reconciled with the removals
+    /// this session has seen. `startedAt` is `removedRevision` when the read
+    /// BEGAN: a server removed after that is still in the answer, which is older
+    /// than the frame, so it is dropped. A server removed before it that the
+    /// answer still lists was joined again, and its marker is forgotten (a stale
+    /// one would close the screens of a server the person is back in).
+    func reconcileFetched<S: Identifiable>(_ fetched: [S], startedAt revision: Int) -> [S]
+    where S.ID == String {
+        fetched.filter { server in
+            guard let at = removedAt[server.id] else { return true }
+            if at > revision { return false }
+            removedServers.removeValue(forKey: server.id)
+            removedAt.removeValue(forKey: server.id)
+            return true
+        }
+    }
 
     /// The status another device of this account just chose, raw. The Tu screen
-    /// adopts it (`ProfileView`); nil until a frame arrives.
+    /// adopts it (`ProfileView`) on every frame, even a repeat of the same value
+    /// (`remoteOwnStatusRevision`); nil until a frame arrives.
     private(set) var remoteOwnStatus: String?
+    private(set) var remoteOwnStatusRevision = 0
 
     /// The server whose channel list is on screen, so the hub does not count a
     /// frame the list is already counting.
@@ -728,6 +750,7 @@ final class SessionStore {
         unreadEpoch += 1
         listPublishedAt = [:]
         removedServers = [:]
+        removedAt = [:]
         remoteOwnStatus = nil
         answeredAgeGateThisLaunch = false
         PendingInvite.clear()
@@ -801,14 +824,16 @@ final class SessionStore {
 
     /// The two frames about the account itself, handled here (not in a screen)
     /// because the screen they concern may not be the one on top, or on screen.
-    private func applyAccountFrame(_ event: RealtimeEvent) {
+    func applyAccountFrame(_ event: RealtimeEvent) {
         switch event {
         case .serverRemoved(let serverId, let reason):
             removedServers[serverId] = reason
             removedRevision += 1
+            removedAt[serverId] = removedRevision
             serverUnread.removeValue(forKey: serverId)
         case .ownStatus(let status):
             remoteOwnStatus = status
+            remoteOwnStatusRevision += 1
         default:
             break
         }

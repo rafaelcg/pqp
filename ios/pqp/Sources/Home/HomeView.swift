@@ -698,7 +698,7 @@ final class HomeModel {
         // spinners below are already conditioned on the list being empty, so
         // filling them from disk is the whole of the fix here.
         if servers.isEmpty, let cached = await session.api.cachedServers() {
-            servers = cached
+            servers = cached.filter { session.removedServers[$0.id] == nil }
         }
         if conversations.isEmpty, let cached = await session.api.cachedConversations() {
             conversations = cached
@@ -708,9 +708,10 @@ final class HomeModel {
         do {
             // Both lists are the hub, side by side — fetching them together
             // means it never assembles in two visible stages.
+            let removalsBefore = session.removedRevision
             async let servers = session.api.servers()
             async let conversations = session.api.conversations()
-            self.servers = try await servers
+            self.servers = session.reconcileFetched(try await servers, startedAt: removalsBefore)
             self.conversations = try await conversations
             // Separate, non-fatal reads: the badge and the first-run checklist
             // are niceties and must not be able to blank the two lists that are
@@ -2031,8 +2032,9 @@ struct ProfileView: View {
     @Environment(SessionStore.self) private var session
     @State private var showingSettings = false
     @State private var manualStatus = "online"
-    /// A write of this screen's own is in the air.
-    @State private var statusSaving = false
+    /// Writes of this screen's own in the air (a second choice can be made
+    /// before the first is answered).
+    @State private var statusWrites = 0
 
     /// Only the two assertable states plus the default. `idle` is absent on
     /// purpose — it is a fact the device reports, not an opinion to pick.
@@ -2091,8 +2093,8 @@ struct ProfileView: View {
         // Another device of this account picked a status: follow it, unless this
         // screen has a write of its own in the air (that answer is the truth and
         // an older frame must not flick the menu back mid-choice).
-        .onChange(of: session.remoteOwnStatus) { _, next in
-            guard let next, !statusSaving else { return }
+        .onChange(of: session.remoteOwnStatusRevision) { _, _ in
+            guard let next = session.remoteOwnStatus, statusWrites == 0 else { return }
             manualStatus = next
         }
     }
@@ -2102,17 +2104,28 @@ struct ProfileView: View {
             ForEach(statusChoices, id: \.value) { choice in
                 Button {
                     let previous = manualStatus
+                    let remoteBefore = session.remoteOwnStatusRevision
                     manualStatus = choice.value
-                    statusSaving = true
+                    statusWrites += 1
                     Task {
                         do {
                             _ = try await session.api.setStatus(choice.value)
                         } catch {
                             // The server is the record; a failed set must not
                             // leave the menu claiming a status nobody else sees.
-                            manualStatus = previous
+                            // Only while this is still the choice on screen (a
+                            // newer one is not this one's to roll back), and a
+                            // status another device set meanwhile is the truth.
+                            if manualStatus == choice.value {
+                                if session.remoteOwnStatusRevision != remoteBefore,
+                                   let remote = session.remoteOwnStatus {
+                                    manualStatus = remote
+                                } else {
+                                    manualStatus = previous
+                                }
+                            }
                         }
-                        statusSaving = false
+                        statusWrites -= 1
                     }
                 } label: {
                     Label(choice.label, systemImage: manualStatus == choice.value ? "checkmark" : "circle")

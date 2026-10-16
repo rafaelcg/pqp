@@ -111,6 +111,40 @@ final class PhoneGapsTests: XCTestCase {
         XCTAssertFalse(session.listPublished("s1", since: session.listPublishCount), "a read that began after it is newer")
     }
 
+    // MARK: - Removals against a server list read
+
+    private struct Row: Identifiable { let id: String }
+
+    @MainActor
+    func testAListReadThatBeganBeforeARemovalDoesNotBringTheServerBack() {
+        let session = SessionStore()
+        let began = session.removedRevision
+        session.applyAccountFrame(.serverRemoved(serverId: "gone", reason: .kicked))
+        let kept = session.reconcileFetched([Row(id: "gone"), Row(id: "stay")], startedAt: began)
+        XCTAssertEqual(kept.map(\.id), ["stay"])
+        XCTAssertNotNil(session.removedServers["gone"], "the marker stays: screens of it still close")
+    }
+
+    @MainActor
+    func testAListReadAfterARemovalThatStillHasTheServerMeansRejoined() {
+        let session = SessionStore()
+        session.applyAccountFrame(.serverRemoved(serverId: "back", reason: .kicked))
+        let began = session.removedRevision
+        let kept = session.reconcileFetched([Row(id: "back")], startedAt: began)
+        XCTAssertEqual(kept.map(\.id), ["back"])
+        XCTAssertNil(session.removedServers["back"], "a stale marker would close the screens of a server they are back in")
+    }
+
+    @MainActor
+    func testARepeatedStatusFrameStillBumpsTheRevision() {
+        let session = SessionStore()
+        session.applyAccountFrame(.ownStatus("dnd"))
+        let first = session.remoteOwnStatusRevision
+        session.applyAccountFrame(.ownStatus("dnd"))
+        XCTAssertEqual(session.remoteOwnStatus, "dnd")
+        XCTAssertEqual(session.remoteOwnStatusRevision, first + 1)
+    }
+
     // MARK: - A folded section that hides a mention
 
     private func channel(_ id: String) throws -> Channel {
