@@ -37,6 +37,24 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 
 /** Follower rows drawn at a time. */
 const FOLLOWERS_PAGE = 50;
+/** The API's ceiling per page; a refresh after a change asks for what is on screen, up to this. */
+const FOLLOWERS_MAX = 500;
+/**
+ * The most follower rows on screen at once. Pages keep loading from the API, but
+ * the rows drawn are a sliding window of this many ("Show more" slides it
+ * forward, "Show earlier" back), so DOM size and render work stay flat however
+ * far someone pages.
+ */
+const FOLLOWERS_RENDER_CAP = 150;
+
+/**
+ * Where the window starts after "Show more", given `length` rows loaded: a page
+ * further on, never past the point where it would run off the loaded rows, and
+ * never backwards. A window that is not full yet stays at the top.
+ */
+export function slideFollowersWindow(from: number, length: number): number {
+  return Math.max(from, Math.min(from + FOLLOWERS_PAGE, Math.max(0, length - FOLLOWERS_RENDER_CAP)));
+}
 
 /**
  * Enter on a focused select must not submit the form: a follow starts sending
@@ -609,8 +627,14 @@ export function BauFollowersDialog({
   const [loadError, setLoadError] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // The list can hold hundreds of rows: draw a page at a time.
-  const [shown, setShown] = useState(FOLLOWERS_PAGE);
+  // The list can hold hundreds of rows: the API answers a page at a time.
+  const [moreBusy, setMoreBusy] = useState(false);
+  const loaded = useRef(0);
+  // Index of the first row drawn (see `FOLLOWERS_RENDER_CAP`).
+  const [from, setFrom] = useState(0);
+  // Ids already loaded, so a page is de-duplicated per incoming row, not by
+  // rebuilding a set of everything on screen on every load.
+  const seenIds = useRef(new Set<string>());
   // Blocking is not obvious to undo, so it asks first.
   const [confirmBlock, setConfirmBlock] = useState<BauFollower | null>(null);
 
@@ -619,9 +643,14 @@ export function BauFollowersDialog({
     loadGeneration.current += 1;
     const mine = loadGeneration.current;
     setLoadError(false);
-    return fetchBauFollowers(serverId)
+    // A reconcile after a change keeps the pages already on screen (up to the
+    // API's ceiling) instead of snapping the list back to the first page.
+    const limit = Math.min(Math.max(loaded.current, FOLLOWERS_PAGE), FOLLOWERS_MAX);
+    return fetchBauFollowers(serverId, { limit })
       .then((next) => {
         if (loadGeneration.current === mine) {
+          loaded.current = next.followers.length;
+          seenIds.current = new Set(next.followers.map((one) => one.id));
           setData(next);
         }
       })
@@ -636,10 +665,60 @@ export function BauFollowersDialog({
     if (open) {
       setData(null);
       setError(null);
-      setShown(FOLLOWERS_PAGE);
+      loaded.current = 0;
+      setFrom(0);
       void load();
     }
   }, [open, load]);
+
+  /** Loads the next page; answers how many new rows it added. */
+  async function loadMore(): Promise<number> {
+    const cursor = data?.nextCursor;
+    if (!cursor || moreBusy) {
+      return 0;
+    }
+    setMoreBusy(true);
+    const mine = loadGeneration.current;
+    try {
+      const next = await fetchBauFollowers(serverId, { limit: FOLLOWERS_PAGE, cursor });
+      if (loadGeneration.current !== mine) {
+        return 0;
+      }
+      const fresh = next.followers.filter((one) => !seenIds.current.has(one.id));
+      for (const one of fresh) {
+        seenIds.current.add(one.id);
+      }
+      loaded.current += fresh.length;
+      setData((current) =>
+        current
+          ? {
+              ...current,
+              count: next.count,
+              followers: current.followers.concat(fresh),
+              nextCursor: next.nextCursor ?? null,
+            }
+          : current,
+      );
+      return fresh.length;
+    } catch {
+      setError(t("bauFollow.error.action"));
+      return 0;
+    } finally {
+      setMoreBusy(false);
+    }
+  }
+
+  /** Slide the window forward, loading the next page first when it is at the end of what is loaded. */
+  async function showMore() {
+    if (!data) {
+      return;
+    }
+    let length = data.followers.length;
+    if (from + FOLLOWERS_RENDER_CAP >= length && data.nextCursor) {
+      length += await loadMore();
+    }
+    setFrom((f) => slideFollowersWindow(f, length));
+  }
 
   /**
    * Run a change, then reflect it on screen at once (`apply`) so a refresh that
@@ -664,6 +743,11 @@ export function BauFollowersDialog({
       setBusyId(null);
     }
   }
+
+  // A removal can leave the window past the end; keep it on rows.
+  const windowStart = data
+    ? Math.min(from, Math.max(0, data.followers.length - FOLLOWERS_RENDER_CAP))
+    : 0;
 
   return (
     <>
@@ -691,13 +775,25 @@ export function BauFollowersDialog({
             <p className="text-sm font-medium text-text" data-bau-followers-count>
               {t("bauFollow.followers.count", { count: data.count })}
             </p>
+            {windowStart > 0 && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className={TOUCH}
+                onClick={() => setFrom(Math.max(0, windowStart - FOLLOWERS_PAGE))}
+                data-bau-followers-earlier
+              >
+                {t("bauFollow.followers.earlier")}
+              </Button>
+            )}
             {data.followers.length === 0 ? (
               <p className="text-sm text-text-secondary">
                 {t("bauFollow.followers.empty")}
               </p>
             ) : (
               <ul className="space-y-2">
-                {data.followers.slice(0, shown).map((follower) => (
+                {data.followers.slice(windowStart, windowStart + FOLLOWERS_RENDER_CAP).map((follower) => (
                   <li
                     key={follower.id}
                     className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-control)] border border-border bg-surface-1 px-3 py-2"
@@ -758,13 +854,14 @@ export function BauFollowersDialog({
                 ))}
               </ul>
             )}
-            {data.followers.length > shown && (
+            {(data.nextCursor || windowStart + FOLLOWERS_RENDER_CAP < data.followers.length) && (
               <Button
                 type="button"
                 variant="secondary"
                 size="sm"
         className={TOUCH}
-                onClick={() => setShown((n) => n + FOLLOWERS_PAGE)}
+                onClick={() => void showMore()}
+                disabled={moreBusy}
                 data-bau-followers-more
               >
                 {t("bauFollow.followers.more")}

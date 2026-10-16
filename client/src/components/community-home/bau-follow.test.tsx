@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ChannelBauFollowsSection } from "@/components/layout/channel-bau-follows-section";
 import { ApiError } from "@/lib/api";
-import { BauFollowButton, bauFollowErrorKey } from "./bau-follow";
+import { BauFollowButton, bauFollowErrorKey, slideFollowersWindow } from "./bau-follow";
 
 const follow = (over: Partial<BauFollow> = {}): BauFollow => ({
   id: "11111111-1111-4111-8111-111111111111",
@@ -123,5 +123,21 @@ describe("a pause says why", () => {
     expect(paused("banned")).toContain("banned the Baú");
     expect(paused("banned")).not.toContain("lost permission");
     expect(paused("permissions")).toContain("lost permission");
+  });
+});
+
+describe("slideFollowersWindow", () => {
+  it("stays at the top until the window is full, then slides a page at a time and never off the loaded rows", () => {
+    // 150 is the render cap, 50 the page.
+    expect(slideFollowersWindow(0, 50)).toBe(0);
+    expect(slideFollowersWindow(0, 150)).toBe(0);
+    expect(slideFollowersWindow(0, 200)).toBe(50);
+    expect(slideFollowersWindow(50, 250)).toBe(100);
+    // Rows already loaded ahead: a page at a time, capped at the end.
+    expect(slideFollowersWindow(0, 600)).toBe(50);
+    expect(slideFollowersWindow(440, 600)).toBe(450);
+    expect(slideFollowersWindow(450, 600)).toBe(450);
+    // Never backwards.
+    expect(slideFollowersWindow(300, 200)).toBe(300);
   });
 });
