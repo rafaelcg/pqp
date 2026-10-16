@@ -40,6 +40,7 @@ class ForumViewModelTest {
         val queries = mutableListOf<ForumQuery>()
         val reads = mutableListOf<String>()
         val joins = mutableListOf<String>()
+        val leaves = mutableListOf<String>()
         var settings = ForumSettings()
         var bits: Long = Permission.SEND_MESSAGES
         var enabled = true
@@ -61,6 +62,9 @@ class ForumViewModelTest {
         override suspend fun permissions(serverId: String) = PermissionsSnapshot(server = bits.toString())
         override fun join(forumId: String) {
             joins += forumId
+        }
+        override fun leave(forumId: String) {
+            leaves += forumId
         }
         override fun markRead(channelId: String) {
             reads += channelId
@@ -116,6 +120,18 @@ class ForumViewModelTest {
         assertTrue(state.mayCreate)
         assertFalse(state.isStaff)
         assertEquals("no saved sort asks for the forum's default", null, backend.queries.single().sort)
+    }
+
+    @Test
+    fun `leaving the forum gives the socket's slot back so its row can light up in the channel list`() = runTest {
+        val backend = FakeBackend().apply { pages += page(post("a", 1)) }
+        val vm = model(backend)
+        assertEquals(listOf("f"), backend.joins)
+        assertTrue(backend.leaves.isEmpty())
+        vm.release()
+        assertEquals(listOf("f"), backend.leaves)
+        // The cursor moves too, as it did before.
+        assertEquals(listOf("f", "f"), backend.reads)
     }
 
     @Test
