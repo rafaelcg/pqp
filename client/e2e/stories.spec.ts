@@ -185,6 +185,13 @@ test("A posts a text story; B sees the ring, opens it, reacts and replies; A see
     await expect(second.page.getByRole("menu")).toBeHidden();
     await expect(viewer).toBeVisible();
 
+    // The page behind is inert: Tab never leaves the viewer for the chat (Safari walks fields first).
+    await expect(second.page.locator("body > [inert]")).not.toHaveCount(0);
+    for (let press = 0; press < 10; press += 1) {
+      await second.page.keyboard.press("Tab");
+      expect(await second.page.evaluate(() => Boolean(document.querySelector("[data-story-viewer]")?.contains(document.activeElement)))).toBe(true);
+    }
+
     // React: focusing the reply raises the reaction row.
     const reply = viewer.getByRole("textbox", { name: "Reply to Alice Story…" });
     await reply.click();

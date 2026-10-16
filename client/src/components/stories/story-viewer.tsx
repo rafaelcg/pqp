@@ -44,6 +44,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import { ApiError } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { useInertBackground } from "@/lib/use-inert-background";
 import {
   deleteStory,
   fetchStories,
@@ -218,6 +219,8 @@ export function StoryViewer({
   const [deck, setDeck] = useState<{ display: StoryDisplay; dir: "forward" | "back"; key: number } | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
+  // The page behind is unreachable while this is open; handed back just before focus returns to the ring.
+  const releaseBackground = useInertBackground(rootRef);
   const cardRef = useRef<HTMLDivElement>(null);
   const deckRef = useRef<HTMLDivElement>(null);
   const replyRef = useRef<HTMLInputElement>(null);
@@ -560,6 +563,8 @@ export function StoryViewer({
     onClosed();
     // The ring turns grey only once the card is back in it (design §4).
     window.setTimeout(commitSeenStories, 120);
+    // An inert ring cannot take the focus back.
+    releaseBackground();
     const ring = ringFor(person?.authorId ?? null) ?? restoreFocus.current;
     if (ring instanceof HTMLElement) {
       // Focus goes back so a keyboard user keeps their place, but after a
@@ -574,7 +579,7 @@ export function StoryViewer({
       }
       ring.focus({ preventScroll: true });
     }
-  }, [flushViews, onClosed, ringFor, person?.authorId, request.originByKeyboard]);
+  }, [flushViews, onClosed, releaseBackground, ringFor, person?.authorId, request.originByKeyboard]);
 
   const close = useCallback(() => {
     if (closingRef.current) {
