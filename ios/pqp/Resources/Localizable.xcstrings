@@ -11871,6 +11871,26 @@
         }
       }
     },
+    "Turn subtitles off" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desligar legendas"
+          }
+        }
+      }
+    },
+    "Turn subtitles on" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ligar legendas"
+          }
+        }
+      }
+    },
     "Turn on mic" : {
       "localizations" : {
         "pt-BR" : {

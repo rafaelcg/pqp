@@ -223,6 +223,12 @@ final class BauVideoSession: NSObject {
     @ObservationIgnored private var statusObservation: AnyCancellable?
     @ObservationIgnored private var prepareTask: Task<Void, Never>?
     @ObservationIgnored private var orientationOwner: UUID?
+    /// The subtitle line drawn over the picture (`BauCaptions`), and what keeps
+    /// it current: a clock on the player and the store's own changes.
+    @ObservationIgnored private var captionOverlay: BauCaptionOverlay?
+    @ObservationIgnored private var captionClock: Any?
+    @ObservationIgnored private var captionClockPlayer: AVPlayer?
+    @ObservationIgnored private var videoSeconds: Double?
 
     init(url: URL, postID: String?) {
         self.url = url
@@ -287,6 +293,56 @@ final class BauVideoSession: NSObject {
         controller?.player = player
         watchPlayback(of: player)
         watchHealth(of: item)
+        startCaptions(on: player, asset: asset)
+    }
+
+    // MARK: Subtitles
+
+    /// Draw the cue for the playhead. Nothing happens for a post without
+    /// subtitles: the clock only reads a dictionary, and the overlay stays hidden.
+    private func startCaptions(on player: AVPlayer, asset: AVAsset) {
+        captionClock.map { captionClockPlayer?.removeTimeObserver($0) }
+        captionClockPlayer = player
+        captionClock = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateCaption() }
+        }
+        trackCaptionChanges()
+        Task { [weak self] in
+            let seconds = try? await asset.load(.duration).seconds
+            guard let self, let seconds, seconds.isFinite else { return }
+            self.videoSeconds = seconds
+            self.updateCaption()
+        }
+    }
+
+    private func stopCaptions() {
+        captionClock.map { captionClockPlayer?.removeTimeObserver($0) }
+        captionClock = nil
+        captionClockPlayer = nil
+        captionOverlay?.show(nil)
+    }
+
+    /// The CC button and a late-arriving track change the line while the video
+    /// is paused, when the clock is not ticking.
+    private func trackCaptionChanges() {
+        withObservationTracking {
+            _ = BauCaptions.shared.stored
+            _ = BauCaptions.shared.entries
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, self.player != nil else { return }
+                self.updateCaption()
+                self.trackCaptionChanges()
+            }
+        }
+    }
+
+    private func updateCaption() {
+        guard let overlay = captionOverlay, let postID, let player else { return }
+        if let videoSeconds { BauCaptions.shared.noteVideoDuration(postID: postID, seconds: videoSeconds) }
+        overlay.show(BauCaptions.shared.text(postID: postID, at: player.currentTime().seconds))
     }
 
     /// The item failing outright, an error set on it (a range request that
@@ -312,6 +368,7 @@ final class BauVideoSession: NSObject {
 
     private func fail() {
         stopCompletely()
+        stopCaptions()
         player = nil
         controller?.player = nil
         status = .failed
@@ -339,10 +396,21 @@ final class BauVideoSession: NSObject {
         self.controller = controller
         // While the PiP layer holds the player the controller stays empty.
         controller.player = isPictureInPictureActive || pip != nil ? nil : player
+        // The content overlay sits under the system's controls, and goes into
+        // full screen with the controller, so one view serves both.
+        if let host = controller.contentOverlayView {
+            let overlay = captionOverlay ?? BauCaptionOverlay()
+            captionOverlay = overlay
+            overlay.removeFromSuperview()
+            overlay.frame = host.bounds
+            host.addSubview(overlay)
+            updateCaption()
+        }
     }
 
     func detach(_ controller: AVPlayerViewController) {
         guard self.controller === controller else { return }
+        captionOverlay?.removeFromSuperview()
         controller.player = nil
         self.controller = nil
     }
@@ -766,5 +834,59 @@ enum BauVideoHealth {
     /// `readyToPlay` is a statement about the probe, not about the stream.
     static func isFailure(status: AVPlayerItem.Status, error: Error?) -> Bool {
         status == .failed || error != nil
+    }
+}
+
+/// The subtitle line: white text on a dark pill, low over the picture, above the
+/// system's scrubber. Sized from the video's own height so it reads in the card
+/// and in full screen. No animation, so nothing to make reduced-motion safe.
+@MainActor
+final class BauCaptionOverlay: UIView {
+    private let pill = UIView()
+    private let label = UILabel()
+
+    init() {
+        super.init(frame: .zero)
+        autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        isUserInteractionEnabled = false
+        // The words are already in the video's sound; VoiceOver reading them
+        // over it would only talk across the speaker.
+        isAccessibilityElement = false
+        pill.backgroundColor = UIColor.black.withAlphaComponent(0.72)
+        pill.layer.cornerRadius = 6
+        pill.layer.cornerCurve = .continuous
+        pill.isHidden = true
+        label.numberOfLines = 0
+        label.textAlignment = .center
+        label.textColor = .white
+        addSubview(pill)
+        pill.addSubview(label)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    func show(_ text: String?) {
+        let shown = text.flatMap { $0.isEmpty ? nil : $0 }
+        guard label.text != shown || pill.isHidden != (shown == nil) else { return }
+        label.text = shown
+        pill.isHidden = shown == nil
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard !pill.isHidden else { return }
+        label.font = .systemFont(ofSize: max(12, min(22, bounds.height * 0.055)), weight: .semibold)
+        let inset = CGSize(width: 8, height: 4)
+        let maxWidth = max(40, bounds.width - 32)
+        let fit = label.sizeThatFits(CGSize(width: maxWidth - inset.width * 2, height: .greatestFiniteMagnitude))
+        let size = CGSize(width: min(maxWidth, fit.width + inset.width * 2), height: fit.height + inset.height * 2)
+        // Clear of the scrubber and the buttons the controller draws at the bottom.
+        pill.frame = CGRect(
+            x: (bounds.width - size.width) / 2, y: max(4, bounds.height - 44 - size.height),
+            width: size.width, height: size.height
+        )
+        label.frame = pill.bounds.insetBy(dx: inset.width, dy: inset.height)
     }
 }

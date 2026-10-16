@@ -199,6 +199,10 @@ struct CommunityHomePost: Codable, Identifiable, Sendable, Hashable {
     /// builds this URL; Compartilhar shows only when the server sends it
     /// (`BauPublicShare.shareURL`).
     let publicUrl: String?
+    /// Automatic subtitles exist for this video (`BauCaptions`). Nil on a locked
+    /// post, on anything but an uploaded video, with the flag off, and from an
+    /// older API.
+    let captions: BauPostCaptions?
 
     var isMembersOnly: Bool { visibility == "members" }
 
@@ -208,7 +212,7 @@ struct CommunityHomePost: Codable, Identifiable, Sendable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, serverId, author, authorBadge, title, body, teaser, visibility
         case commentsEnabled, media, locked, likeCount, likedByMe, commentCount
-        case commentTeaser, publishedAt, createdAt, publicUrl
+        case commentTeaser, publishedAt, createdAt, publicUrl, captions
     }
 
     init(from decoder: Decoder) throws {
@@ -232,6 +236,8 @@ struct CommunityHomePost: Codable, Identifiable, Sendable, Hashable {
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         // Absent on an older API; a wrong-typed value costs the share button only.
         publicUrl = (try? c.decodeIfPresent(String.self, forKey: .publicUrl)) ?? nil
+        // Same for the subtitles: a malformed block costs them, never the post.
+        captions = (try? c.decodeIfPresent(BauPostCaptions.self, forKey: .captions)) ?? nil
     }
 }
 

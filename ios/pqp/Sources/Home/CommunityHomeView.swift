@@ -242,6 +242,7 @@ private struct PostCard: View {
     let onComment: (String) async -> Bool
     /// Encaminhar: nil while the flag is off, which is what hides the menu.
     var onForward: (() -> Void)? = nil
+    @Environment(SessionStore.self) private var session
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -298,6 +299,8 @@ private struct PostCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .pqpSurface()
         .accessibilityIdentifier("bau.post")
+        // The subtitles are read once, only for a video that says it has them.
+        .task(id: post.id) { await BauCaptions.shared.prepare(post, api: session.api) }
     }
 
     private var header: some View {
@@ -376,6 +379,12 @@ private struct PostCard: View {
 
             Spacer(minLength: 0)
 
+            // Subtitles: only a video that has them, and the choice is the
+            // person's, remembered for every video after.
+            if BauCaptions.shared.hasCaptions(for: post.id) {
+                CaptionsButton(postID: post.id)
+            }
+
             // Only a post with a public page offers it, and only the server
             // knows which those are (`publicUrl`); a locked post never does.
             if let shareURL = BauPublicShare.shareURL(for: post) {
@@ -383,6 +392,25 @@ private struct PostCard: View {
             }
         }
         .padding(.top, 2)
+    }
+}
+
+/// CC: turn the subtitles on this video, and on every one after it, on or off.
+private struct CaptionsButton: View {
+    let postID: String
+
+    var body: some View {
+        let on = BauCaptions.shared.isOn(postID)
+        Button { BauCaptions.shared.toggle(postID) } label: {
+            Image(systemName: on ? "captions.bubble.fill" : "captions.bubble")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(on ? Palette.signal : Palette.paperMuted)
+                .frame(minWidth: 32, minHeight: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(on ? Text("Turn subtitles off") : Text("Turn subtitles on"))
+        .accessibilityIdentifier("bau.captions")
     }
 }
 

@@ -997,9 +997,18 @@ step: `communityHome.captions.enqueued`, `.skipped` (`flag-off`,
 `no-provider`, `over-budget`), `.noSpeech`, `.done`, `.failed`, and
 `communityHome.captions.translation.done | skipped | failed`.
 
-**Native apps** do not show subtitles yet. AVPlayer only takes external
-WebVTT through an HLS wrapper or an `AVMutableComposition`, and ExoPlayer
-through a `SubtitleConfiguration`; the endpoint above is what they will read.
+**iOS** shows them (`ios/pqp/Sources/Core/BauCaptions.swift`). AVPlayer only
+takes external WebVTT through an HLS wrapper or an `AVMutableComposition`, so
+the app parses the WebVTT itself and draws the current cue in the
+`AVPlayerViewController`'s content overlay (inline and in the system's full
+screen), driven by a 0.25 s clock on the player. The rules are the web's:
+reader-language track, else the source; on by default only when the video's
+language differs from the reader's; the CC button in the card's action row
+flips it and is remembered on the device (`pqp.communityHome.captions`); no
+subtitles when the played file is more than 1.5 s from `durationMs`. Picture in
+Picture shows none (the overlay is the controller's, not the PiP window's).
+**Android** does not show subtitles yet: ExoPlayer takes them through a
+`SubtitleConfiguration`, and the endpoint above is what it will read.
 **The phone cut** (`bau_mobile_rendition`, the vertical second file of a
 post) is transcribed once, through the main video: the tracks are keyed to the
 post and the main video's storage key. The web player shows them on the cut
