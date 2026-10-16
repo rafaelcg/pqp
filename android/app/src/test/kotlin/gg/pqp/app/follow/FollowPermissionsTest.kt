@@ -92,4 +92,16 @@ class FollowPermissionsTest {
         }
         assertEquals(FollowPermissions.MAX_SERVERS, FollowPermissions.held(api))
     }
+
+    @Test
+    fun `a snapshot the channel list already read answers without a request`() = runBlocking {
+        var fetches = 0
+        FollowPermissions.offer(api, "s", snapshot(Permission.SEND_MESSAGES, mapOf("a" to Permission.MANAGE_CHANNELS)), { 0L })
+        val fetch: suspend () -> PermissionsSnapshot = {
+            fetches += 1
+            snapshot(Permission.SEND_MESSAGES)
+        }
+        assertTrue(FollowPermissions.mayManage(api, "s", "a", { 1L }, fetch))
+        assertEquals(0, fetches)
+    }
 }

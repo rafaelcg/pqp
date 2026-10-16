@@ -54,19 +54,30 @@ object FollowPermissions {
         } catch (_: Exception) {
             return false
         }
+        offer(api, serverId, snapshot, now)
+        return mayManage(snapshot, channelId)
+    }
+
+    /**
+     * Keep a snapshot somebody already read. The channel list reads the server's permissions to
+     * decide its own buttons and offers them here, so opening a channel from it asks nothing.
+     * Expired entries are dropped whenever one is kept, and no more than [MAX_SERVERS] are held.
+     */
+    fun offer(
+        api: ApiClient,
+        serverId: String,
+        snapshot: PermissionsSnapshot,
+        now: () -> Long = System::currentTimeMillis,
+    ) {
         synchronized(cache) {
             val at = now()
             val perServer = cache.getOrPut(api) { HashMap() }
-            // What expired is dead weight (a snapshot carries every channel of its
-            // server): drop it whenever a new one is kept, and never hold more than
-            // [MAX_SERVERS] however many servers somebody visits within the minute.
             perServer.values.removeAll { at - it.at >= TTL_MS }
-            if (perServer.size >= MAX_SERVERS) {
+            if (perServer.size >= MAX_SERVERS && serverId !in perServer) {
                 perServer.entries.minByOrNull { it.value.at }?.let { perServer.remove(it.key) }
             }
             perServer[serverId] = Entry(snapshot, at)
         }
-        return mayManage(snapshot, channelId)
     }
 
     /** Tests only: how many snapshots are held for [api]. */

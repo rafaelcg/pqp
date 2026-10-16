@@ -23,7 +23,7 @@ interface FollowBackend {
     suspend fun channelFollows(channelId: String): List<BauFollow>
     suspend fun update(followId: String, request: UpdateBauFollowRequest): BauFollow
     suspend fun delete(followId: String)
-    suspend fun followers(serverId: String): BauFollowers
+    suspend fun followers(serverId: String, limit: Int? = null, cursor: String? = null): BauFollowers
     suspend fun setAllowed(serverId: String, allowed: Boolean): BauFollowers
     suspend fun removeFollower(serverId: String, followId: String, block: Boolean)
     suspend fun unblock(serverId: String, blockedServerId: String)
@@ -41,7 +41,8 @@ class SessionFollowBackend(private val session: SessionStore) : FollowBackend {
     override suspend fun update(followId: String, request: UpdateBauFollowRequest) =
         api.updateBauFollow(followId, request)
     override suspend fun delete(followId: String) = api.deleteBauFollow(followId)
-    override suspend fun followers(serverId: String) = api.bauFollowers(serverId)
+    override suspend fun followers(serverId: String, limit: Int?, cursor: String?) =
+        api.bauFollowers(serverId, limit, cursor)
     override suspend fun setAllowed(serverId: String, allowed: Boolean) =
         api.setBauFollowAllowed(serverId, allowed)
     override suspend fun removeFollower(serverId: String, followId: String, block: Boolean) =
@@ -319,6 +320,8 @@ data class FollowersState(
     val error: FollowFailure? = null,
     /** Follower rows drawn so far. */
     val shown: Int = FOLLOWERS_PAGE,
+    /** The next page is on its way. */
+    val loadingMore: Boolean = false,
     /** Blocking is not obvious to undo, so it asks first. */
     val confirmBlock: BauFollower? = null,
 )
@@ -349,18 +352,65 @@ class BauFollowersViewModel(
         load()
     }
 
+    /**
+     * The list, fifty at a time from the API (`?limit=`, where the server pages; one that does
+     * not sends everything and ignores the parameter). A reload after a change asks for as many
+     * rows as are on screen, so a removal does not fold the pages already loaded.
+     */
     fun load() {
         generation += 1
         val mine = generation
-        _state.update { it.copy(loadFailed = false) }
+        val onScreen = _state.value.data?.followers?.size ?: 0
+        _state.update { it.copy(loadFailed = false, loadingMore = false) }
         viewModelScope.launch {
-            runSuspendCatching { backend.followers(serverId) }
+            runSuspendCatching { backend.followers(serverId, limit = onScreen.coerceIn(FOLLOWERS_PAGE, FOLLOWERS_MAX_PAGE)) }
                 .onSuccess { next -> if (generation == mine) _state.update { it.copy(data = next) } }
                 .onFailure { if (generation == mine) _state.update { it.copy(loadFailed = true) } }
         }
     }
 
-    fun showMore() = _state.update { it.copy(shown = it.shown + FOLLOWERS_PAGE) }
+    /** Whether "Show more" has anything to show: rows held back, or another page on the server. */
+    val hasMore: Boolean
+        get() = _state.value.let { s -> s.data?.let { it.followers.size > s.shown || it.nextCursor != null } == true }
+
+    /** Reveal rows already loaded, and fetch the next page when they run out. */
+    fun showMore() {
+        val s = _state.value
+        val data = s.data ?: return
+        if (data.followers.size > s.shown) {
+            _state.update { it.copy(shown = it.shown + FOLLOWERS_PAGE) }
+            return
+        }
+        val cursor = data.nextCursor ?: return
+        if (s.loadingMore) return
+        val mine = generation
+        _state.update { it.copy(loadingMore = true, error = null) }
+        viewModelScope.launch {
+            runSuspendCatching { backend.followers(serverId, limit = FOLLOWERS_PAGE, cursor = cursor) }
+                .onSuccess { page ->
+                    // Dropped if anything reloaded or changed meanwhile: its rows may be stale.
+                    if (generation != mine) return@onSuccess
+                    _state.update { current ->
+                        val have = current.data ?: return@update current
+                        val known = have.followers.mapTo(HashSet()) { it.id }
+                        current.copy(
+                            loadingMore = false,
+                            shown = current.shown + FOLLOWERS_PAGE,
+                            data = have.copy(
+                                followers = have.followers + page.followers.filter { it.id !in known },
+                                nextCursor = page.nextCursor,
+                                count = page.count,
+                            ),
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    if (generation == mine) {
+                        _state.update { it.copy(loadingMore = false, error = FollowFailures.ofAction(error)) }
+                    }
+                }
+        }
+    }
 
     /** The owner's switch. The server answers the whole new picture. */
     fun setAllowed(next: Boolean) {

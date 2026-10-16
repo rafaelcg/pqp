@@ -51,8 +51,14 @@ suspend fun ApiClient.deleteBauFollow(followId: String) {
 }
 
 /** The source's staff (MANAGE_SERVER): who follows, who is blocked, and the owner's switch. */
-suspend fun ApiClient.bauFollowers(serverId: String): BauFollowers =
-    getJson("/api/servers/$serverId/home/followers")
+suspend fun ApiClient.bauFollowers(serverId: String, limit: Int? = null, cursor: String? = null): BauFollowers =
+    getJson(
+        "/api/servers/$serverId/home/followers",
+        buildMap {
+            limit?.let { put("limit", it.toString()) }
+            cursor?.let { put("cursor", it) }
+        },
+    )
 
 /** "Permitir seguir". Answers the same shape as [bauFollowers]. */
 suspend fun ApiClient.setBauFollowAllowed(serverId: String, allowed: Boolean): BauFollowers {

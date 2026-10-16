@@ -532,8 +532,12 @@ fun BauFollowersSheet(
                             onBlock = { model.askBlock(follower) },
                         )
                     }
-                    if (data.followers.size > state.shown) {
-                        OutlinedButton(onClick = model::showMore, modifier = Modifier.testTag("bau.followers.more")) {
+                    if (data.followers.size > state.shown || data.nextCursor != null) {
+                        OutlinedButton(
+                            onClick = model::showMore,
+                            enabled = !state.loadingMore,
+                            modifier = Modifier.testTag("bau.followers.more"),
+                        ) {
                             Text(stringResource(R.string.follow_followers_more))
                         }
                     }

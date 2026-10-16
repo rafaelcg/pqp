@@ -22,6 +22,9 @@ const val FOLLOW_MAX_PER_SERVER = 20
 /** How many follower rows are drawn before "Show more" (web draws the same fifty). */
 const val FOLLOWERS_PAGE = 50
 
+/** The most rows one read of the followers may ask for (the server's own cap). */
+const val FOLLOWERS_MAX_PAGE = 500
+
 @Serializable
 data class BauFollow(
     val id: String,
@@ -160,6 +163,11 @@ data class BauFollowers(
     /** Followers across every destination channel (a server with two channels counts twice). */
     val count: Int = 0,
     val followers: List<BauFollower> = emptyList(),
+    /**
+     * Pass back as `?cursor=` for the next page of [followers]; null on the last page and
+     * absent from a server that does not page (it sends every row, up to 500, at once).
+     */
+    val nextCursor: String? = null,
     val blocked: List<BauFollowBlock> = emptyList(),
 )
 
