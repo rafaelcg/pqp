@@ -457,13 +457,20 @@ async function cleanLegacyPingCards(): Promise<number> {
        )
        SELECT id, channel_id FROM fixed`,
     );
-    for (const row of rows.rows) {
+    // The rows are already fixed in the database (one statement, mentions
+    // included); the announcement is a courtesy to people with the channel open,
+    // and a client that misses it reads the card as it is on open.
+    await mapWithConcurrency(rows.rows, CONCURRENCY, async (row) => {
       invalidateLatestMessages(row.channel_id);
-      const message = await getHydratedMessage(row.id).catch(() => null);
-      if (message) {
-        broadcastToChannel(row.channel_id, { type: "message-update", message: mapMessage(message) });
+      try {
+        const message = await getHydratedMessage(row.id);
+        if (message) {
+          broadcastToChannel(row.channel_id, { type: "message-update", message: mapMessage(message) });
+        }
+      } catch (error) {
+        console.error("[bau-follow] legacy ping announce failed:", error);
       }
-    }
+    });
     cleaned += rows.rows.length;
     if (rows.rows.length < SWEEP_BATCH) {
       break;
@@ -492,6 +499,12 @@ async function syncOne(row: SyncRow): Promise<boolean> {
     return false;
   }
   const body = followBody(snapshot);
+  if (row.legacy_ping) {
+    // The ping this card once made no longer counts as a mention for anyone.
+    // BEFORE the body is rewritten: the body is what marks the card as legacy,
+    // so a failure here leaves the card marked and the next pass retries both.
+    await pool.query(`DELETE FROM message_mentions WHERE message_id = $1`, [row.message_id]);
+  }
   const changed = await pool.query(
     `UPDATE messages
         SET body = $2, forward = $3::jsonb, edited_at = NOW(),
@@ -518,10 +531,6 @@ async function syncOne(row: SyncRow): Promise<boolean> {
   );
   if ((changed.rowCount ?? 0) === 0) {
     return false;
-  }
-  if (row.legacy_ping) {
-    // The ping this card once made no longer counts as a mention for anyone.
-    await pool.query(`DELETE FROM message_mentions WHERE message_id = $1`, [row.message_id]);
   }
   invalidateLatestMessages(row.channel_id);
   const message = await getHydratedMessage(row.message_id).catch(() => null);
