@@ -2,6 +2,7 @@ package gg.pqp.app.soundboard
 
 import gg.pqp.app.core.PqpJson
 import gg.pqp.app.protocol.RepoSources
+import kotlinx.coroutines.async
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -105,5 +106,78 @@ class SoundboardTest {
         assertEquals(0.8, page.sounds.single().volume, 0.0)
         assertTrue(PqpJson.decodeFromString(VoiceConfig.serializer(), """{"audienceMode":false,"audioSelfHeal":true,"soundboard":true}""").soundboard)
         assertFalse(PqpJson.decodeFromString(VoiceConfig.serializer(), "{}").soundboard)
+    }
+
+    // --- which server holds the channel ---
+
+    @Test
+    fun `the search stops at the first server that holds the channel`() = kotlinx.coroutines.test.runTest {
+        val owners = ChannelOwners()
+        val asked = mutableListOf<String>()
+        val found = owners.find("c2", listOf("s1", "s2", "s3", "s4")) { server ->
+            asked += server
+            if (server == "s2") listOf("c2" to "s2", "c9" to "s2") else listOf("x$server" to server)
+        }
+        assertEquals(ChannelOwners.Lookup.Found("s2"), found)
+        assertEquals(listOf("s1", "s2"), asked)
+    }
+
+    @Test
+    fun `what was read is remembered, and a server is never read twice`() = kotlinx.coroutines.test.runTest {
+        val owners = ChannelOwners()
+        val asked = mutableListOf<String>()
+        val fetch: suspend (String) -> List<Pair<String, String>>? = { server ->
+            asked += server
+            listOf("c-$server" to server)
+        }
+        assertEquals(ChannelOwners.Lookup.Found("s1"), owners.find("c-s1", listOf("s1", "s2"), fetch))
+        assertEquals(ChannelOwners.Lookup.Found("s1"), owners.find("c-s1", listOf("s1", "s2"), fetch))
+        assertEquals(ChannelOwners.Lookup.Found("s2"), owners.find("c-s2", listOf("s1", "s2"), fetch))
+        assertEquals(ChannelOwners.Lookup.None, owners.find("conversation", listOf("s1", "s2"), fetch))
+        assertEquals(listOf("s1", "s2"), asked)
+    }
+
+    @Test
+    fun `a server that could not be read concludes nothing, unless another holds the channel`() = kotlinx.coroutines.test.runTest {
+        val owners = ChannelOwners()
+        val down: suspend (String) -> List<Pair<String, String>>? = { server -> if (server == "s1") null else listOf("c-$server" to server) }
+        assertEquals(ChannelOwners.Lookup.Failed, owners.find("conversation", listOf("s1", "s2"), down))
+        assertEquals(ChannelOwners.Lookup.Found("s2"), owners.find("c-s2", listOf("s1", "s2"), down))
+        // The failed server is tried again on the next ask.
+        val up: suspend (String) -> List<Pair<String, String>>? = { server -> listOf("c-$server" to server) }
+        assertEquals(ChannelOwners.Lookup.Found("s1"), owners.find("c-s1", listOf("s1", "s2"), up))
+    }
+
+    // --- one download per clip ---
+
+    @Test
+    fun `plays that arrive while a clip downloads wait for the same one`() = kotlinx.coroutines.test.runTest {
+        val flights = SingleFlight<String, Boolean>(backgroundScope)
+        var runs = 0
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val results = (1..4).map {
+            async {
+                flights.run("clip") {
+                    runs += 1
+                    gate.await()
+                    true
+                }
+            }
+        }
+        kotlinx.coroutines.yield()
+        gate.complete(Unit)
+        assertEquals(listOf(true, true, true, true), results.map { it.await() })
+        assertEquals(1, runs)
+    }
+
+    @Test
+    fun `a finished or failed download is forgotten, so the next play can try again`() = kotlinx.coroutines.test.runTest {
+        val flights = SingleFlight<String, Boolean>(backgroundScope)
+        var runs = 0
+        assertFalse(flights.run("clip") { runs += 1; false })
+        assertTrue(flights.run("clip") { runs += 1; true })
+        // Other clips do not wait for each other.
+        assertTrue(flights.run("other") { runs += 1; true })
+        assertEquals(3, runs)
     }
 }

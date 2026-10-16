@@ -13,12 +13,11 @@ import gg.pqp.app.core.runSuspendCatching
 import gg.pqp.app.social.getJson
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -183,7 +182,6 @@ class SoundboardController(
     /** Whether the board is on for the call this phone is in, and the clips to draw. */
     val available: StateFlow<Availability> = _available.asStateFlow()
 
-    private val serverByChannel = HashMap<String, String>()
     private var catalogAt = 0L
     private var catalogRead: Deferred<List<CustomSound>?>? = null
 
@@ -249,7 +247,7 @@ class SoundboardController(
 
     /** Read the catalog of [channelId]'s server and publish it; null when it could not be read. */
     private suspend fun readCatalog(channelId: String): List<CustomSound>? {
-        val serverId = (serverOf(channelId) as? ServerLookup.Found)?.serverId ?: return null
+        val serverId = (serverOf(channelId) as? ChannelOwners.Lookup.Found)?.serverId ?: return null
         val page = runSuspendCatching { session.api.soundboard(serverId) }.getOrNull() ?: return null
         catalogAt = now()
         if (channelId == seatedChannelId()) _available.value = Availability.On(channelId, serverId, page.sounds)
@@ -313,50 +311,51 @@ class SoundboardController(
         val dir = File(context.cacheDir, "soundboard").apply { mkdirs() }
         val file = File(dir, "${sound.id}-${url.substringBefore('?').hashCode().toUInt()}.clip")
         if (file.exists() && file.length() > 0) return file
-        val ok = withContext(Dispatchers.IO) {
-            runCatching {
-                val request = okhttp3.Request.Builder().url(url).build()
-                session.http.newCall(request).execute().use { response ->
-                    check(response.isSuccessful) { "HTTP ${response.code}" }
-                    val partial = File(dir, "${file.name}.part")
-                    partial.outputStream().use { out -> response.body.byteStream().copyTo(out) }
-                    check(partial.renameTo(file)) { "could not move into place" }
-                }
-            }.isSuccess
+        // One download per clip however many plays name it at once: the others wait for the same file.
+        val got = downloads.run(file.name) {
+            withContext(Dispatchers.IO) { download(url, dir, file) }
         }
-        if (!ok) {
-            catalogAt = 0
-            file.delete()
-            return null
+        if (!got) catalogAt = 0
+        return file.takeIf { got }
+    }
+
+    private val downloads = SingleFlight<String, Boolean>(scope)
+
+    /**
+     * Into a temporary file of its own, then moved over the destination. A failure removes only the temporary
+     * file, never the destination (which another play may be reading, or may have just finished writing).
+     */
+    private fun download(url: String, dir: File, file: File): Boolean {
+        val partial = File.createTempFile("${file.name}.", ".part", dir)
+        return try {
+            val request = okhttp3.Request.Builder().url(url).build()
+            session.http.newCall(request).execute().use { response ->
+                check(response.isSuccessful) { "HTTP ${response.code}" }
+                partial.outputStream().use { out -> response.body.byteStream().copyTo(out) }
+            }
+            check(partial.length() > 0) { "empty clip" }
+            check(partial.renameTo(file)) { "could not move into place" }
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "clip would not download: ${e.message}")
+            partial.delete()
+            false
         }
-        return file
     }
 
     // --- which server ---
 
-    private sealed interface ServerLookup {
-        data class Found(val serverId: String) : ServerLookup
+    private val owners = ChannelOwners()
 
-        /** Every server was read and none holds the channel: a conversation call. */
-        data object None : ServerLookup
-
-        /** At least one server could not be read: do not conclude anything. */
-        data object Failed : ServerLookup
-    }
-
-    /** Which server the call's channel belongs to: every server's channels are read at once, and remembered. */
-    private suspend fun serverOf(channelId: String): ServerLookup {
-        serverByChannel[channelId]?.let { return ServerLookup.Found(it) }
-        val servers = session.servers.value
-        val reads = coroutineScope {
-            servers.map { server ->
-                async { server to runSuspendCatching { session.api.channels(server.id) }.getOrNull() }
-            }.awaitAll()
+    /**
+     * Which server the call's channel belongs to. Servers are read one after the other and the search STOPS at
+     * the one that holds the channel, so a member of many servers is not sent a request for each of them; every
+     * channel read on the way is remembered, and a server already read is never read again.
+     */
+    private suspend fun serverOf(channelId: String): ChannelOwners.Lookup =
+        owners.find(channelId, session.servers.value.map { it.id }) { serverId ->
+            runSuspendCatching { session.api.channels(serverId) }.getOrNull()?.map { it.id to (it.serverId ?: serverId) }
         }
-        reads.forEach { (server, channels) -> channels?.forEach { serverByChannel[it.id] = it.serverId ?: server.id } }
-        serverByChannel[channelId]?.let { return ServerLookup.Found(it) }
-        return if (reads.any { it.second == null }) ServerLookup.Failed else ServerLookup.None
-    }
 
     // --- the board ---
 
@@ -392,10 +391,10 @@ class SoundboardController(
     /** The server's answer for [channelId], or null when a request failed and nothing can be said yet. */
     private suspend fun ask(channelId: String): Availability? {
         val serverId = when (val found = serverOf(channelId)) {
-            is ServerLookup.Found -> found.serverId
+            is ChannelOwners.Lookup.Found -> found.serverId
             // A conversation call: no server, no board.
-            ServerLookup.None -> return Availability.Off
-            ServerLookup.Failed -> return null
+            ChannelOwners.Lookup.None -> return Availability.Off
+            ChannelOwners.Lookup.Failed -> return null
         }
         val config = runSuspendCatching { session.api.voiceConfig(serverId) }.getOrNull() ?: return null
         if (!config.soundboard) return Availability.Off
@@ -424,5 +423,71 @@ class SoundboardController(
         /** A failed read of the board is asked again after 3 s, 6 s, 12 s, 24 s, then left. */
         const val RETRY_BASE_MS = 3_000L
         const val RETRY_LIMIT = 5
+    }
+}
+
+/**
+ * Which server a channel belongs to, found by reading servers' channel lists ONE AT A TIME and stopping at the
+ * first that holds it. Everything read is remembered (channel to server, and which servers were read), so a
+ * second lookup for a channel in a server already read costs nothing and none is read twice.
+ */
+class ChannelOwners {
+    sealed interface Lookup {
+        data class Found(val serverId: String) : Lookup
+
+        /** Every server was read and none holds the channel: a conversation call. */
+        data object None : Lookup
+
+        /** A server that was not yet read could not be: nothing can be concluded. */
+        data object Failed : Lookup
+    }
+
+    private val serverByChannel = HashMap<String, String>()
+    private val read = HashSet<String>()
+
+    /** [fetch] answers a server's channels as (channel id, owning server id), or null when it could not be read. */
+    suspend fun find(
+        channelId: String,
+        servers: List<String>,
+        fetch: suspend (serverId: String) -> List<Pair<String, String>>?,
+    ): Lookup {
+        synchronized(this) { serverByChannel[channelId] }?.let { return Lookup.Found(it) }
+        var failed = false
+        for (serverId in servers) {
+            if (synchronized(this) { serverId in read }) continue
+            val channels = fetch(serverId)
+            if (channels == null) {
+                failed = true
+                continue
+            }
+            val owner = synchronized(this) {
+                read += serverId
+                channels.forEach { (id, owning) -> serverByChannel[id] = owning }
+                serverByChannel[channelId]
+            }
+            if (owner != null) return Lookup.Found(owner)
+        }
+        return if (failed) Lookup.Failed else Lookup.None
+    }
+}
+
+/**
+ * One piece of work per key at a time: callers that arrive while it runs wait for the same result instead of
+ * starting another. The key is forgotten when the work ends, so a failure can be tried again.
+ */
+class SingleFlight<K, V>(private val scope: CoroutineScope) {
+    private val running = HashMap<K, Deferred<V>>()
+
+    suspend fun run(key: K, work: suspend () -> V): V {
+        val flight = synchronized(this) {
+            running[key] ?: scope.async(start = CoroutineStart.LAZY) {
+                try {
+                    work()
+                } finally {
+                    synchronized(this@SingleFlight) { running.remove(key) }
+                }
+            }.also { running[key] = it }
+        }
+        return flight.await()
     }
 }
