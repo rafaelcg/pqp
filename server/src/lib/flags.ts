@@ -844,6 +844,21 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/servers/:id/discord-import/config (enabled)",
   },
+  discord_import_notice: {
+    description:
+      "Aviso \"Veio do Discord? Traz teu servidor pra cá\" no canal principal de um servidor pequeno e novo, pra quem pode gerenciar e ainda não copiou um Discord. Só cliente: nada é apagado, o botão abre a importação.",
+    env: "DISCORD_IMPORT_NOTICE",
+    parseEnv: exactTrue,
+    // Off until the card has been seen on a real server: on, it puts a strip
+    // over the main channel of every small, new server its owner manages.
+    codeDefault: false,
+    // About an account's open server, read by the client as one answer; the
+    // arrivals route reads it to say whether the server came from an import.
+    // A per-server override would never be read.
+    perServer: false,
+    clientVia:
+      "GET /api/onboarding/config (discordImportNotice) and GET /api/servers/:id/import-arrivals (imported)",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

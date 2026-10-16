@@ -647,6 +647,48 @@ Turn it on from controles → interruptores or `PUT /api/admin/flags
 { key: "newcomer_invite_moment", enabled: true }`. Open tabs follow on the next
 config refresh (focus or 10 min).
 
+## `discord_import_notice` (global, client presentation plus one read-only field)
+
+"Veio do Discord? Traz teu servidor pra cá". Behind `DISCORD_IMPORT_NOTICE`
+(default off, global, born as a flag). A strip in the arrival strip's slot, in
+the **main text channel** (the first text channel) of a small, new server, for
+somebody who can manage it, with one **Importar do Discord** button and an X.
+The copy says nothing is deleted, here or on the Discord, and names only what
+the import really copies (categories and channels, not members or messages).
+Rules (`lib/discord-import-notice.ts`, all pinned by
+`discord-import-notice.test.ts`): owner or Manage Server; the server was not
+made by an import; created under 30 days ago, 20 members or fewer, 8 channels
+or fewer (categories not counted); never in a conversation, in a voice or
+other channel, over a live watch party or a live stream, during a call, or
+while any other strip, corner card or attached hint holds the screen. Closing
+it hides it for 14 days, it may then show **once more**, and a second close
+ends it; pressing the button ends it for good. History is per user and server,
+in the hints store (`pqp:discord-import-notice:<userId>:<serverId>`; nothing
+persists on localhost unless `pqp:hints-persist` is `1`).
+
+How the client learns two things:
+
+- The flag: `GET /api/onboarding/config` as `discordImportNotice`, asked once the
+  age gate has passed and on every config refresh, like `inviteMoment`.
+- "Was this server made by an import?": `imported` on
+  `GET /api/servers/:id/import-arrivals`, which the client already asks for
+  managers. It is answered **only while this flag is on** (absent otherwise, and
+  from an older API), independent of `discord_bring_crew`, and the client shows
+  the strip only on an explicit `false`: an unknown answer shows nothing. With
+  both flags off that route still reads nothing.
+
+The button opens the create-new Discord import (the same dialog as the hub's
+"Trazer do Discord"). When `discord_import_existing` lands, `App.tsx`'s
+`renderDiscordImportNotice` calls `openDiscordImport({ serverId })` for servers
+that flag is on for; the copy was written to be true either way. Measure with
+Umami: `discord_import_notice_view`, `_click`, `_dismiss` (each with
+`existing`), against `server.discord_import` rows in `audit_log`.
+
+Turn it on from controles → interruptores or `PUT /api/admin/flags
+{ key: "discord_import_notice", enabled: true }`. Open tabs follow on the next
+config refresh (focus or 10 min). Merging this PR restarts the API
+(`restarts-api`): it touches `server/` and `packages/shared`.
+
 
 ## `conversations_home` and `conversations_home_phone_tabs` (global, client presentation only)
 

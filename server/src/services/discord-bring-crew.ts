@@ -34,7 +34,13 @@ export async function getDiscordImportArrivals(
   now: number = Date.now(),
   db: Queryable = getPool(),
 ): Promise<DiscordImportArrivals> {
-  if (!isEnabled("discord_bring_crew", { serverId })) {
+  const bringCrew = isEnabled("discord_bring_crew", { serverId });
+  // `discord_import_notice` (the invite to import a Discord) asks this same
+  // question from the other side: has this server NOT come from an import?
+  // It is only answered while that flag is on, so with both off this route
+  // reads nothing, exactly as before.
+  const notice = isEnabled("discord_import_notice");
+  if (!bringCrew && !notice) {
     return OFF;
   }
   // The first import row: a server is made by one import, and a later one
@@ -49,7 +55,14 @@ export async function getDiscordImportArrivals(
   );
   const row = imported.rows[0];
   if (!row) {
-    return { ...OFF, enabled: true };
+    return {
+      ...OFF,
+      enabled: bringCrew,
+      ...(notice ? { imported: false } : {}),
+    };
+  }
+  if (!bringCrew) {
+    return { ...OFF, imported: true };
   }
   const importedAt = row.created_at;
 
@@ -96,6 +109,7 @@ export async function getDiscordImportArrivals(
     arrived,
     viaLink,
     inviteCode,
+    ...(notice ? { imported: true } : {}),
   };
 }
 
