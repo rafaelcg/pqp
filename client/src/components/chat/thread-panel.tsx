@@ -480,7 +480,10 @@ export function ThreadPanel({
       {canSend === false && (!forum?.locked || forum.canReplyLocked) && (
         <ComposerReadOnlyNotice />
       )}
-      {canSend !== false && (!forum?.locked || forum.canReplyLocked) && (
+      {/* Hidden, never unmounted, while the permission is gone: the draft and
+          attachments are the composer's own state, and they come back with it. */}
+      {(!forum?.locked || forum.canReplyLocked) && (
+      <div hidden={canSend === false}>
       <MessageComposer
         // Remount per thread, same reason the main composer keys by channel.
         key={thread.channelId}
@@ -508,7 +511,7 @@ export function ThreadPanel({
           setEditMessageId(last.id);
           return true;
         }}
-        disabled={isLoading}
+        disabled={isLoading || canSend === false}
         slowModeUntil={controller.getSlowModeHeldUntil() || null}
         placeholder={forum?.placeholder ?? t("thread.placeholder")}
         slashContext={
@@ -527,6 +530,7 @@ export function ThreadPanel({
             : undefined
         }
       />
+      </div>
       )}
     </aside>
   );

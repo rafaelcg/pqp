@@ -50,12 +50,8 @@ const thread = {
   archived: false,
 } as unknown as ThreadSummary;
 
-async function mount(canSend: boolean) {
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-  await act(async () => {
-    root!.render(
+function panelFor(canSend: boolean) {
+  return (
       <TooltipProvider>
         <ThreadPanel
           thread={thread}
@@ -72,8 +68,16 @@ async function mount(canSend: boolean) {
           showLinkEmbeds={false}
           onClose={() => {}}
         />
-      </TooltipProvider>,
-    );
+      </TooltipProvider>
+  );
+}
+
+async function mount(canSend: boolean) {
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => {
+    root!.render(panelFor(canSend));
   });
   await act(async () => {});
   return host.querySelector("aside")!;
@@ -121,11 +125,43 @@ describe("ThreadPanel composer", () => {
     expect(panel.querySelector("[data-composer-readonly]")).toBeNull();
   });
 
-  it("is a read-only notice, with no box, for a reader who cannot send", async () => {
+  it("is a read-only notice, with no usable box, for a reader who cannot send", async () => {
     const panel = await mount(false);
-    expect(panel.querySelector("textarea")).toBeNull();
+    const box = panel.querySelector("textarea");
+    expect(box?.disabled).toBe(true);
+    expect(box?.closest("[hidden]")).not.toBeNull();
     expect(panel.querySelector("[data-composer-readonly]")?.textContent).toBe(
       "You can read here, but you can't send messages.",
     );
+  });
+
+  it("keeps an unsent draft through a permission flip and gives it back", async () => {
+    const panel = await mount(true);
+    const box = panel.querySelector("textarea")!;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    act(() => {
+      setter.call(box, "meio da frase");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(box.value).toBe("meio da frase");
+
+    await act(async () => {
+      root!.render(panelFor(false));
+    });
+    // Same element, not a new one: unmounting would have dropped the text.
+    expect(panel.querySelector("textarea")).toBe(box);
+    expect(box.closest("[hidden]")).not.toBeNull();
+    expect(box.value).toBe("meio da frase");
+
+    await act(async () => {
+      root!.render(panelFor(true));
+    });
+    expect(panel.querySelector("textarea")).toBe(box);
+    expect(box.closest("[hidden]")).toBeNull();
+    expect(box.disabled).toBe(false);
+    expect(box.value).toBe("meio da frase");
   });
 });

@@ -12504,16 +12504,20 @@ function MainAppContent({
           onDismiss={() => setSanctionNotice(null)}
         />
       )}
-      {!canSendHere ? (
+      {!canSendHere && (
         // SEND_MESSAGES denied here: no box to type into (the message used to
         // appear, then fail with "You don't have permission to send here").
-        // The call dock and music bar still live in this well.
+        // The call dock and music bar still live in this well, so they are
+        // drawn here while the composer, which normally holds them, is hidden.
         <div>
           {musicInComposer ? <MusicComposer voiceState={voiceState} /> : null}
           <CallDockOutlet channelId={selectedChannel.id} />
           <ComposerReadOnlyNotice />
         </div>
-      ) : (
+      )}
+      {/* Hidden, never unmounted, while the permission is gone: the draft and
+          attachments are the composer's own state and come back with it. */}
+      <div hidden={!canSendHere}>
       <MessageComposer
         variant={isWatchPartySplit ? "stream" : "default"}
         // Remount per channel: the draft is component state, so without this a
@@ -12587,17 +12591,17 @@ function MainAppContent({
             }
           },
         }}
-        disabled={!selectedChannelId || messagesLoading}
+        disabled={!selectedChannelId || messagesLoading || !canSendHere}
         slowModeUntil={chat.getSlowModeHeldUntil() || null}
         placeholder={t("composer.placeholder", { name: selectedChannel.name })}
         // The voice-only call bar, when this channel is the one we are in.
         // Keyed by channel so the composer of any other channel stays plain.
-        dock={<CallDockOutlet channelId={selectedChannel.id} />}
+        dock={canSendHere ? <CallDockOutlet channelId={selectedChannel.id} /> : undefined}
         music={
-          musicInComposer ? <MusicComposer voiceState={voiceState} /> : undefined
+          musicInComposer && canSendHere ? <MusicComposer voiceState={voiceState} /> : undefined
         }
       />
-      )}
+      </div>
       </CallSplit>
       </CallDockProvider>
     </FileDropZone>
