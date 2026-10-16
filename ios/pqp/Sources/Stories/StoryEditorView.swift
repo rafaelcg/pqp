@@ -523,7 +523,14 @@ struct StoryEditorView: View {
         Section(title) {
             ForEach(keys, id: \.self) { key in
                 Button { background = key } label: {
-                    Label(StoryEditorView.backgroundName(key), systemImage: background == key ? "checkmark.circle.fill" : "circle.fill")
+                    // A real swatch: a Menu tints SF Symbols with one colour
+                    // (every dot was the same lime), but keeps an image that
+                    // asks for its own pixels.
+                    Label {
+                        Text(verbatim: StoryEditorView.backgroundName(key))
+                    } icon: {
+                        Image(uiImage: StorySwatch.image(key: key, selected: background == key))
+                    }
                 }
                 .accessibilityIdentifier("composer.background.\(key)")
             }

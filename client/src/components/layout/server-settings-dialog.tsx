@@ -28,6 +28,7 @@ import { AutomodSettingsSection } from "@/components/layout/automod-settings-sec
 import { ServerIdentitySection } from "@/components/layout/server-identity-section";
 import { ServerEmojiSection } from "@/components/layout/server-emoji-section";
 import { CommunityHomeSettingsSection } from "@/components/community-home/community-home-settings-section";
+import { DiscordImportSettingsRow } from "@/components/layout/discord-import-settings-row";
 import { CommunitySettingsSection } from "@/components/communities/community-settings-section";
 import { RolesSettingsSection } from "@/components/layout/roles-settings-section";
 import { SoundboardSettingsSection } from "@/components/layout/soundboard-settings-section";
@@ -82,6 +83,8 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "server.data_export": "serverSettings.audit.action.server.data_export",
   "server.discord_import":
     "serverSettings.audit.action.server.discord_import",
+  "server.discord_import_merge":
+    "serverSettings.audit.action.server.discord_import_merge",
   "invite.create": "serverSettings.audit.action.invite.create",
   "invite.delete": "serverSettings.audit.action.invite.delete",
   "server.sso_domain_update":
@@ -1073,6 +1076,13 @@ export function ServerSettingsDialog({
                     onUpdated={onRenamed}
                   />
                 )}
+
+              {/* Bring a Discord layout into this community (flag
+                  `discord_import_existing`; the row checks it for this server
+                  and draws nothing while it is off). */}
+              {serverId && (
+                <DiscordImportSettingsRow serverId={serverId} onBeforeOpen={onClose} />
+              )}
             </>
           )}
 
@@ -1083,6 +1093,7 @@ export function ServerSettingsDialog({
             <CommunitySettingsSection
               bare
               serverId={serverId}
+              serverName={server.name}
               canListPublicly={isOwner}
               onIdentitySaved={(patch) => onRenamed({ ...server, ...patch })}
             />

@@ -831,6 +831,19 @@ export const FEATURE_FLAGS = {
     clientVia:
       "POST /api/import/discord/apply (bringCrew) and GET /api/servers/:id/import-arrivals (enabled)",
   },
+  discord_import_existing: {
+    description:
+      "Importar um layout do Discord para uma comunidade que já existe: só adiciona categorias, canais e (se o dono marcar) cargos novos, nunca apaga nem muda nada do que está lá.",
+    env: "DISCORD_IMPORT_EXISTING",
+    parseEnv: exactTrue,
+    // Off until it has been run on a real community: it writes channels into a
+    // server that people already use.
+    codeDefault: false,
+    // Every reader has the server: the settings row, the preview and the apply
+    // all take its id.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/discord-import/config (enabled)",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

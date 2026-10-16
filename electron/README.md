@@ -248,13 +248,38 @@ terminal. The whole decision is `closeAction` in `lib/tray-menu.js`. Whenever
 the tray checkbox is off, close behaves as it always did. The preference
 (default on) lives in `userData/tray.json` and is toggled from the tray menu.
 
+## Spellcheck and the text context menu
+
+Electron draws no context menu, so the red underline used to be a dead end.
+`attachContextMenu` in `main.js` answers `webContents` `context-menu` with the
+template from `lib/context-menu.js`: up to five `dictionarySuggestions` (click
+calls `replaceMisspelling`), "Add to dictionary"
+(`addWordToSpellCheckerDictionary`), then undo/redo/cut/copy/paste/select all
+from `editFlags`. Selected text outside a field gets Copy; anything else gets no
+native menu, and the app's own React menus never reach it (they
+`preventDefault` the DOM event). Labels are `contextMenu.*` in `locales/`.
+`applySpellcheckLanguages` points `session.setSpellCheckerLanguages` at the app
+language plus English (`pt-BR` + `en-US`, `es-419` + `en-US`, `en-US`),
+filtered by `availableSpellCheckerLanguages`, at startup and on `pqp:set-locale`.
+macOS uses the system checker and ignores the language list. On Windows and
+Linux Chromium downloads a dictionary the first time, so a fresh offline install
+checks nothing (unverified on a real Windows machine).
+
 ## Notifications
 
 `showNotification` in `main.js` builds the OS banner from
 `lib/notify-options.js`. The optional `silent` field of `pqpDesktop.notify`
-decides the sound: `true` (the app plays its own cue) or absent (older
-renderer) keeps the banner silent, `false` (app sounds off) lets the OS play
-its own. On Windows `app.setAppUserModelId` is called at startup with
+decides the sound: `true` (the app plays its own cue for this event) or absent
+(older renderer) keeps the banner silent, `false` lets the OS play its own.
+The renderer decides per event in `client/src/lib/notification-sound.ts`: a
+banner is silent only while the window is in front or the app really plays a
+cue for it (master switch and that cue's switch on). A channel message has no
+app cue by design, so before bug #123 (a Windows user's report) its
+banner was silent AND the app played nothing. Still unverified on Windows: that
+Electron's `silent: false` plays the default toast sound on a real machine with
+Focus Assist off (Focus Assist and the per-app "Play a sound" toggle in
+Settings > System > Notifications still win, and are the OS's to own), and that
+the in-app cue is audible while the window is minimised or in the tray. On Windows `app.setAppUserModelId` is called at startup with
 `build.appId` from `package.json` (`gg.pqp.app`), which is what makes a toast
 carry the "pqp" name and icon.
 

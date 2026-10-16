@@ -141,6 +141,7 @@ import {
   voiceSessionRequestSchema,
   type Gif,
   discordImportSourceSchema,
+  discordImportMergeApplySchema,
   DiscordImportCapError,
   DiscordImportParseError,
   isDiscordInviteLink,
@@ -660,6 +661,11 @@ import {
   fetchMappedDiscordTemplate,
   replayImportedServer,
 } from "../services/discord-import.js";
+import {
+  applyDiscordMerge,
+  discordImportExistingEnabled,
+  previewDiscordMerge,
+} from "../services/discord-import-merge.js";
 import {
   bringCrewEnabledFor,
   getDiscordImportArrivals,
@@ -4601,6 +4607,126 @@ router.post("/api/import/discord/apply", async ({ req, user, res }) => {
     throwDiscordImportHttp(error, res);
   }
 });
+
+/**
+ * A Discord layout into a server that already exists (flag
+ * `discord_import_existing`, read for this server). Owner or Manage Server.
+ * 404 for a non-member and for the flag being off, so a server that has not
+ * been let in cannot be told apart from one that does not exist; 403 for a
+ * member who may not manage it. Strictly additive, see
+ * `services/discord-import-merge.ts`.
+ */
+async function requireDiscordMergeAccess(
+  serverId: string,
+  user: { id: string; is_character?: boolean },
+): Promise<void> {
+  if (user.is_character) {
+    throw new Forbidden("Character accounts cannot import a layout");
+  }
+  await requireServerMember(serverId, user.id);
+  if (!discordImportExistingEnabled(serverId)) {
+    throw new NotFound("Not found");
+  }
+  await requirePermission(serverId, user.id, Permission.MANAGE_SERVER);
+}
+
+/**
+ * What the settings row asks before it draws itself. Never 404s for a member:
+ * `enabled` is simply false for anybody who could not use the door.
+ */
+router.get(
+  "/api/servers/:serverId/discord-import/config",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    const enabled =
+      !user.is_character &&
+      discordImportExistingEnabled(serverId!) &&
+      (await memberHasPermission(serverId!, user.id, Permission.MANAGE_SERVER));
+    return { enabled };
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/discord-import/preview",
+  async ({ req, user, res }, { serverId }) => {
+    await requireDiscordMergeAccess(serverId!, user);
+    const body = discordImportSourceSchema.parse(await readJsonBody(req));
+    requireDiscordTemplateSource(body.source);
+    takeDiscordImportLimiters(user.id, res);
+    try {
+      const { plan } = await fetchMappedDiscordTemplate(body.source, serverId!);
+      const merge = await previewDiscordMerge(serverId!, plan);
+      logEvent("import.discordMergePreview", {
+        outcome: "ok",
+        added: merge.addedChannels.length,
+        skipped: merge.skipped.length,
+      });
+      return {
+        ...merge,
+        canCreateRoles: await memberHasPermission(
+          serverId!,
+          user.id,
+          Permission.MANAGE_ROLES,
+        ),
+      };
+    } catch (error) {
+      logEvent("import.discordMergePreview", {
+        outcome: error instanceof Error ? error.constructor.name : "unknown",
+      });
+      throwDiscordImportHttp(error, res);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/discord-import/apply",
+  async ({ req, user, res }, { serverId }) => {
+    await requireDiscordMergeAccess(serverId!, user);
+    const body = discordImportMergeApplySchema.parse(await readJsonBody(req));
+    requireDiscordTemplateSource(body.source);
+    const createRoles = [...new Set(body.createRoles ?? [])];
+    // Cargos are a second power on top of Manage Server: whoever may not make
+    // one by hand may not make one through here either.
+    if (
+      createRoles.length > 0 &&
+      !(await memberHasPermission(serverId!, user.id, Permission.MANAGE_ROLES))
+    ) {
+      throw new Forbidden("You do not have permission to create roles");
+    }
+    takeDiscordImportLimiters(user.id, res);
+    try {
+      const { code, plan } = await fetchMappedDiscordTemplate(body.source, serverId!);
+      const result = await applyDiscordMerge({
+        serverId: serverId!,
+        actorId: user.id,
+        code,
+        plan,
+        createRoleTemplateIds: createRoles,
+        actorPermissions: await computeMemberPermissions(serverId!, user.id),
+      });
+      logEvent("import.discordMerge", {
+        added: result.plan.addedChannels.length,
+        categories: result.plan.addedCategories.length,
+        skipped: result.plan.skipped.length,
+      });
+      if (result.channels.length > 0 || result.plan.addedCategories.length > 0) {
+        // Every sidebar row is named, so each member who can see any of it
+        // refetches. Fire and forget: the import is committed whatever this does.
+        nudgeWholeList(serverId!);
+      }
+      if (result.rolesCreated.length > 0 || result.channels.some((c) => c.is_private)) {
+        pingPermissions(serverId!);
+      }
+      return {
+        plan: result.plan,
+        channels: result.channels.map(mapChannel),
+        rolesCreated: result.rolesCreated,
+      };
+    } catch (error) {
+      throwDiscordImportHttp(error, res);
+    }
+  },
+);
 
 /**
  * Who came over since this server was copied from Discord, for the owner's

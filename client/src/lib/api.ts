@@ -77,6 +77,8 @@ import type {
   DmPrivacy,
   DmSummary,
   DiscordImportPlan,
+  DiscordMergePlan,
+  DiscordMergePreview,
   Gif,
   Invite,
   MemberTimeout,
@@ -1463,6 +1465,32 @@ export const applyDiscordImport = (source: string, idempotencyKey?: string) =>
     { source },
     idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
   );
+
+/**
+ * Whether the "Importar do Discord" row is offered on this server: the runtime
+ * flag `discord_import_existing` for it, and Manage Server for the caller.
+ * Never an error for a member, only `enabled: false`.
+ */
+export const fetchDiscordImportConfig = (serverId: string) =>
+  apiFetch<{ enabled: boolean }>(`/api/servers/${serverId}/discord-import/config`);
+
+/** What a Discord layout would add to this existing server. No writes. */
+export const previewDiscordMerge = (serverId: string, source: string) =>
+  post<DiscordMergePreview>(`/api/servers/${serverId}/discord-import/preview`, {
+    source,
+  });
+
+/** Adds it, in one transaction. `createRoles` are template ids; default none. */
+export const applyDiscordMerge = (
+  serverId: string,
+  source: string,
+  createRoles: number[],
+) =>
+  post<{
+    plan: DiscordMergePlan;
+    channels: Channel[];
+    rolesCreated: string[];
+  }>(`/api/servers/${serverId}/discord-import/apply`, { source, createRoles });
 
 export const updateServer = (
   serverId: string,

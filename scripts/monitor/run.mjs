@@ -21,14 +21,15 @@
  */
 
 import { reconcile } from "./alert.mjs";
-import { runAvailabilityChecks } from "./availability.mjs";
-import { ERRORS_NOT_AUTOMATED, runErrorChecks } from "./errors.mjs";
-import { LIMITS_NOT_AUTOMATED, runLimitChecks } from "./limits.mjs";
+import { retiredAvailabilityKeys, runAvailabilityChecks } from "./availability.mjs";
+import { ERRORS_NOT_AUTOMATED, retiredErrorKeys, runErrorChecks } from "./errors.mjs";
+import { LIMITS_NOT_AUTOMATED, retiredLimitKeys, runLimitChecks } from "./limits.mjs";
 import { SOCIAL_NOT_AUTOMATED, runSocialChecks } from "./social.mjs";
 
 const GROUPS = {
   availability: {
     run: runAvailabilityChecks,
+    retired: retiredAvailabilityKeys,
     // Every 10 minutes, so nagging every 6h is roughly 1 comment per 36 runs.
     // Enough to keep an unread email thread alive, quiet enough to not train
     // anyone to ignore it.
@@ -36,6 +37,7 @@ const GROUPS = {
   },
   errors: {
     run: runErrorChecks,
+    retired: retiredErrorKeys,
     // Every 15 minutes. Longer than the uptime group on purpose: an error rate
     // is a trend, and re-reading the same ~100-line buffer every ten minutes
     // would mostly re-report the same lines. 12h between nags because an
@@ -45,6 +47,7 @@ const GROUPS = {
   },
   limits: {
     run: runLimitChecks,
+    retired: retiredLimitKeys,
     // Daily checks. A quota does not become more urgent by being restated, so
     // this only speaks up once every three days.
     reminderHours: Number(process.env.MONITOR_REMINDER_HOURS ?? 72),
@@ -138,6 +141,7 @@ async function main() {
         repo,
         results: results.filter((r) => !muted.has(r.key)),
         reminderHours: config.reminderHours,
+        retiredKeys: config.retired?.() ?? [],
         runUrl:
           process.env.GITHUB_SERVER_URL && process.env.GITHUB_RUN_ID
             ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`

@@ -367,12 +367,21 @@ final class ChannelLayoutTests: XCTestCase {
         var reads = 0
         var inFlight = 0
         var maxInFlight = 0
+        // The first read stays in flight until the burst has been sent, however
+        // slow the runner: with a fixed number of yields it could finish first,
+        // and then every "burst" call ran a read of its own (CI: 6 reads, not 2).
+        var burstSent = false
         let body: @MainActor () async -> Void = {
             reads += 1
+            let mine = reads
             inFlight += 1
             maxInFlight = max(maxInFlight, inFlight)
-            await Task.yield()
-            await Task.yield()
+            if mine == 1 {
+                while !burstSent { await Task.yield() }
+            } else {
+                await Task.yield()
+                await Task.yield()
+            }
             inFlight -= 1
         }
         async let first = gate.run(body)
@@ -388,6 +397,7 @@ final class ChannelLayoutTests: XCTestCase {
             let ran = await gate.run(body)
             XCTAssertFalse(ran)
         }
+        burstSent = true
         let firstRan = await first
         XCTAssertTrue(firstRan)
         XCTAssertEqual(reads, 2)

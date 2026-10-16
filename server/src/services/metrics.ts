@@ -128,6 +128,7 @@ import { userStats, type UserStatsMetrics } from "./user-stats.js";
 import { callRatingAudioHealthCounts, callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
+import { connectionFailureCounts } from "./connections-failures.js";
 import { voiceNoteMetrics, type VoiceNoteMetrics } from "./voice-note-metrics.js";
 import {
   conversationMetrics,
@@ -986,7 +987,16 @@ export interface AdminMetrics {
    * exist, not accounts created in some window and not accounts that were
    * active. "12 of 400" here means twelve of everyone who ever signed up.
    */
-  connections: ConnectionAdoption & { ofUsers: number };
+  connections: ConnectionAdoption & {
+    ofUsers: number;
+    /**
+     * Failed completions since boot, keyed `<provider>.<step>` (for example
+     * `twitch.token_exchange`). A provider whose count climbs while its
+     * adoption row sits still is the rotated-secret outage of Oct 2026; the
+     * log line `connections.completeFailed` says why. Per process.
+     */
+    completeFailures: Record<string, number>;
+  };
   /**
    * Voice notes (mensagens de voz): usage, queue and transcription health,
    * the speech budget and the refusals. Almost all of it is read from the
@@ -1852,7 +1862,11 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     callRatings: { ...callRatings, audioHealthSinceBoot: callRatingAudioHealthCounts() },
     // The denominator travels with the numerators rather than leaving the
     // dashboard to pick one: it is the users total in this same payload.
-    connections: { ...connections, ofUsers: Number(users.rows[0]?.total ?? 0) },
+    connections: {
+      ...connections,
+      ofUsers: Number(users.rows[0]?.total ?? 0),
+      completeFailures: connectionFailureCounts(),
+    },
     voiceNotes,
     conversations,
 

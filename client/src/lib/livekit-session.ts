@@ -8,6 +8,11 @@ import type { ReceiveQuality } from "./receive-quality";
 import { drainJitterMs } from "./reconnect-jitter";
 import { emitNetworkHint } from "./network-hints";
 import { registerRemoteVideoBinding } from "./remote-video-binding";
+import {
+  createAdaptiveStreamSettings,
+  nudgeElementMeasure,
+  subscribeViewerFullscreen,
+} from "./viewer-fullscreen";
 import { screenCaptureCeiling } from "./screen-capture-ceiling";
 import {
   earlyShareQuality,
@@ -528,9 +533,17 @@ export async function connectLiveKit({
    * every video stream handed out below carries a binding that introduces the
    * element. See `remote-video-binding.ts`; without it adaptive streaming
    * would stop the picture after the first tab switch.
+   *
+   * THE ELEMENT IS MEASURED IN REAL PIXELS WHILE THE STAGE IS FULLSCREEN. The
+   * library's default density is 1 up to a device pixel ratio of 2, so a
+   * fullscreen share on a 1080p laptop at 150% scaling (a 1280x720 CSS
+   * viewport) asked for 720 lines and drew an upscaled 720p copy on a 1080
+   * line screen. `createAdaptiveStreamSettings` answers "screen" only while
+   * fullscreen; see `viewer-fullscreen.ts`. The object is a getter and not
+   * `{ pixelDensity: "screen" }` for that reason.
    */
   const room = new Room({
-    adaptiveStream: true,
+    adaptiveStream: createAdaptiveStreamSettings(),
     dynacast: true,
     reconnectPolicy,
   });
@@ -783,6 +796,18 @@ export async function connectLiveKit({
   }
 
   /**
+   * Every element the library measures for adaptive streaming, so a change in
+   * what "full" means (`viewer-fullscreen.ts`) can make it measure again NOW
+   * rather than whenever the stage next resizes.
+   */
+  const measuredVideos = new Set<HTMLVideoElement>();
+  const stopWatchingFullscreen = subscribeViewerFullscreen(() => {
+    for (const element of measuredVideos) {
+      nudgeElementMeasure(element);
+    }
+  });
+
+  /**
    * `remoteVideoTrack.stopObservingElement` is the half of `detach` that stops
    * measuring without touching `srcObject`. It is marked private in the
    * typings and public on the object; reached by name so a build where it has
@@ -816,6 +841,7 @@ export async function connectLiveKit({
     return {
       attach(element: HTMLVideoElement) {
         track.attach(element);
+        measuredVideos.add(element);
         delivery.attached(publication);
         releaseEarlyShareRequest(publication);
         if (
@@ -834,6 +860,7 @@ export async function connectLiveKit({
         }
       },
       detach(element: HTMLVideoElement) {
+        measuredVideos.delete(element);
         const watch = pipWatches.get(element);
         if (watch) {
           setPip(element, false);
@@ -3189,6 +3216,8 @@ export async function connectLiveKit({
       unregisterStats();
       delivery.dispose();
       audioDelivery.dispose();
+      stopWatchingFullscreen();
+      measuredVideos.clear();
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", onVisibilityChange);
       }

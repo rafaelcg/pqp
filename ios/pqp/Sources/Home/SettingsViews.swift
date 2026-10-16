@@ -610,9 +610,15 @@ struct ServerSettingsView: View {
     @Environment(SessionStore.self) private var session
     @Environment(\.dismiss) private var dismiss
     let server: Server
+    /// The account's resolved bits for this server, from the channel list. Nil
+    /// until they have loaded; the role covers the owner meanwhile.
+    var permissions: PermissionsSnapshot?
     let onChanged: (Server) -> Void
+    /// The room's public address went on or off (the header's flag follows).
+    var onCommunityChanged: (Bool) -> Void = { _ in }
     let onDeleted: () -> Void
 
+    @State private var community: CommunitySettingsModel?
     @State private var name = ""
     @State private var retention: Int?
     @State private var ssoDomain = ""
@@ -627,6 +633,9 @@ struct ServerSettingsView: View {
     @State private var shareURL: URL?
 
     private var isOwner: Bool { server.role == "owner" }
+    private var communityRules: CommunityEditRules {
+        CommunityEditRules(role: server.role, permissions: permissions)
+    }
 
     // Same verbatim trap as the pickers in `AccountSettingsView`: see the
     // comment there.
@@ -644,6 +653,10 @@ struct ServerSettingsView: View {
                     TextField("Community name", text: $name)
                     Button("Rename") { Task { await rename() } }
                         .disabled(!isOwner || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+
+                if let community {
+                    CommunitySettingsSections(model: community, rules: communityRules)
                 }
 
                 if isOwner {
@@ -748,6 +761,22 @@ struct ServerSettingsView: View {
             )) { item in
                 ShareSheet(url: item.url)
             }
+            .alert(
+                communityConfirmTitle,
+                isPresented: Binding(
+                    get: { community?.confirm != nil },
+                    // The buttons clear it themselves. Clearing it here would
+                    // run before "Make public" reads which switch was asked.
+                    set: { _ in }
+                )
+            ) {
+                Button("Cancel", role: .cancel) { community?.confirm = nil }
+                Button(communityConfirmAction) {
+                    Task { await community?.confirmed() }
+                }
+            } message: {
+                Text(communityConfirmMessage)
+            }
             .alert("Delete \(server.name)?", isPresented: $confirmingDelete) {
                 // Typed confirmation, matching the web client: a destructive
                 // action this total should cost more than one tap.
@@ -761,6 +790,14 @@ struct ServerSettingsView: View {
                 Text("This cannot be undone. Type \"\(server.name)\" to confirm.")
             }
             .task {
+                let model = CommunitySettingsModel(serverId: server.id, api: session.api)
+                // The parent applies the flag to its own, current copy of the
+                // server, so a rename made a moment earlier is not undone.
+                model.onSaved = { saved in onCommunityChanged(saved.isCommunity) }
+                community = model
+                await model.load(rules: communityRules)
+            }
+            .task {
                 name = server.name
                 retention = server.messageRetentionDays
                 ssoDomain = server.ssoEmailDomain ?? ""
@@ -769,6 +806,23 @@ struct ServerSettingsView: View {
                     .filter { $0.id != session.currentUser?.id }
             }
         }
+    }
+
+    /// The warning before a door opens. Says plainly who gets in and what they
+    /// can read, because the switch is one tap and the consequence is not.
+    private var communityConfirmTitle: LocalizedStringKey {
+        community?.confirm == .directory
+            ? "List in the directory?" : "Make this community public?"
+    }
+
+    private var communityConfirmAction: LocalizedStringKey {
+        community?.confirm == .directory ? "List it" : "Make public"
+    }
+
+    private var communityConfirmMessage: LocalizedStringKey {
+        community?.confirm == .directory
+            ? "Anyone with a pqp account will be able to find this community and join without an invite. They will see every channel that is not restricted. Reports about it go to the people who run pqp, who can take the listing down."
+            : "Anyone with the link pqp.gg/c/… will be able to join with one tap, no invite. They will see every channel that is not restricted. Reports about it go to the people who run pqp."
     }
 
     private func rename() async {

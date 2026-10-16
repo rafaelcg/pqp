@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import gg.pqp.app.R
+import gg.pqp.app.communities.ui.PublicBadge
 import gg.pqp.app.core.Backend
 import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.monogramColor
@@ -71,6 +72,8 @@ fun ServerBanner(
     /** How far the banner has scrolled up, in px, for the parallax. */
     scrolledPx: () -> Float,
     modifier: Modifier = Modifier,
+    /** Strangers can walk in (public address on, communities on here): wears the "Público" mark. */
+    isPublic: Boolean = false,
 ) {
     val colors = MaterialTheme.colorScheme
     val picture = Backend.absolute(bannerUrl)
@@ -121,14 +124,21 @@ fun ServerBanner(
                 .padding(horizontal = Spacing.gutter, vertical = Spacing.sm),
             verticalArrangement = Arrangement.Bottom,
         ) {
-            Text(
-                text = serverName,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = colors.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = serverName,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (isPublic) {
+                    Spacer(Modifier.width(Spacing.sm))
+                    PublicBadge()
+                }
+            }
             if (!activity.isEmpty) {
                 Spacer(Modifier.height(2.dp))
                 ActivityLine(activity)
@@ -191,6 +201,7 @@ fun CompactServerBar(
      * the back button sits on.
      */
     actions: @Composable (shown: Float) -> Unit = {},
+    isPublic: Boolean = false,
 ) {
     val colors = MaterialTheme.colorScheme
     val shown by animateFloatAsState(
@@ -235,14 +246,21 @@ fun CompactServerBar(
                         .alpha(shown)
                         .graphicsLayer { translationY = (1f - shown) * 12.dp.toPx() },
                 ) {
-                    Text(
-                        text = serverName,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colors.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = serverName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (isPublic) {
+                            Spacer(Modifier.width(Spacing.sm))
+                            PublicBadge()
+                        }
+                    }
                     if (!activity.isEmpty) ActivityLine(activity)
                 }
                 actions(shown)

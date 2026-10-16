@@ -53,5 +53,13 @@
   "tray.tooltipIdle": "pqp",
   "tray.tooltipLive": "pqp - mic on",
   "tray.tooltipMuted": "pqp - muted",
-  "tray.tooltipDeafened": "pqp - deafened"
+  "tray.tooltipDeafened": "pqp - deafened",
+  "contextMenu.undo": "Undo",
+  "contextMenu.redo": "Redo",
+  "contextMenu.cut": "Cut",
+  "contextMenu.copy": "Copy",
+  "contextMenu.paste": "Paste",
+  "contextMenu.selectAll": "Select all",
+  "contextMenu.addToDictionary": "Add to dictionary",
+  "contextMenu.noSuggestions": "No suggestions"
 }

@@ -53,5 +53,13 @@
   "tray.tooltipIdle": "pqp",
   "tray.tooltipLive": "pqp - micrófono activado",
   "tray.tooltipMuted": "pqp - silenciado",
-  "tray.tooltipDeafened": "pqp - audio desactivado"
+  "tray.tooltipDeafened": "pqp - audio desactivado",
+  "contextMenu.undo": "Deshacer",
+  "contextMenu.redo": "Rehacer",
+  "contextMenu.cut": "Cortar",
+  "contextMenu.copy": "Copiar",
+  "contextMenu.paste": "Pegar",
+  "contextMenu.selectAll": "Seleccionar todo",
+  "contextMenu.addToDictionary": "Añadir al diccionario",
+  "contextMenu.noSuggestions": "Sin sugerencias"
 }
