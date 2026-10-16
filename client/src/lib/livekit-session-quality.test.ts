@@ -3,6 +3,7 @@ import type { VoiceSessionInfo } from "@pqp/shared";
 import type { RemotePeer } from "./peer-connection-manager";
 import { bindRemoteVideo } from "./remote-video-binding";
 import { HIDDEN_GRACE_MS, OFFSCREEN_GRACE_MS } from "./remote-video-delivery";
+import { reportStageExpanded } from "./viewer-fullscreen";
 
 /**
  * The SFU half of the video quality control.
@@ -722,7 +723,27 @@ describe("the screen goes up as simulcast layers", () => {
 
   it("turns adaptive streaming on for the room", async () => {
     await session();
-    expect(roomOptions.adaptiveStream).toBe(true);
+    // An object, not `true`: the library hands this same object to every
+    // remote video track, and its `pixelDensity` is what follows the stage into
+    // fullscreen (`viewer-fullscreen.ts`).
+    expect(typeof roomOptions.adaptiveStream).toBe("object");
+    expect(roomOptions.adaptiveStream).toBeTruthy();
+  });
+
+  it("measures the stage in real pixels only while it is fullscreen", async () => {
+    await session();
+    const settings = roomOptions.adaptiveStream as {
+      pixelDensity?: number | "screen";
+    };
+    try {
+      reportStageExpanded(false);
+      expect(settings.pixelDensity).toBeUndefined();
+      reportStageExpanded(true);
+      expect(settings.pixelDensity).toBe("screen");
+    } finally {
+      reportStageExpanded(false);
+    }
+    expect(settings.pixelDensity).toBeUndefined();
   });
 
   /**
@@ -1683,11 +1704,17 @@ describe("video nobody is drawing", () => {
   const doc = {
     visibilityState: "visible" as "visible" | "hidden",
     listeners: new Set<() => void>(),
-    addEventListener(_type: string, listener: () => void) {
-      this.listeners.add(listener);
+    // Only the tab's own event: the session also listens for fullscreen
+    // changes (`viewer-fullscreen.ts`), which this suite is not about.
+    addEventListener(type: string, listener: () => void) {
+      if (type === "visibilitychange") {
+        this.listeners.add(listener);
+      }
     },
-    removeEventListener(_type: string, listener: () => void) {
-      this.listeners.delete(listener);
+    removeEventListener(type: string, listener: () => void) {
+      if (type === "visibilitychange") {
+        this.listeners.delete(listener);
+      }
     },
     setVisibility(state: "visible" | "hidden") {
       this.visibilityState = state;
