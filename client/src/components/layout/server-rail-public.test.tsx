@@ -7,8 +7,9 @@ import { ServerRail } from "./server-rail";
 /**
  * A public server says so on the rail. The setting used to be invisible, and a
  * private test server stayed open to the directory for weeks because nothing
- * anywhere showed it. The mark is the word in the accessible name (what a
- * screen reader and the tooltip say) and a globe on the icon.
+ * anywhere showed it. The mark is a globe on the icon, the word in the tooltip
+ * and in the button's accessible description. The accessible NAME stays the
+ * server's own, because people (and the e2e suite) find the button by it.
  */
 
 const S1 = "11111111-1111-4111-8111-111111111111";
@@ -64,23 +65,24 @@ function buttonFor(html: string, label: string): string {
 }
 
 describe("ServerRail public mark", () => {
-  it("names a public server as public and draws the globe, on an instance with communities", () => {
+  it("draws the globe and describes a public server as public, on an instance with communities", () => {
     const html = rail(true);
-    const open = buttonFor(html, "Aberta (public)");
+    const open = buttonFor(html, "Aberta");
     expect(open).toContain("data-server-public");
+    const describedBy = /aria-describedby="([^"]+)"/.exec(open)![1]!;
+    expect(open).toContain(`<span id="${describedBy}" class="sr-only">Public</span>`);
   });
 
-  it("leaves a private server's name and icon alone", () => {
+  it("leaves a private server's icon alone", () => {
     const html = rail(true);
     const closed = buttonFor(html, "Fechada");
     expect(closed).not.toContain("data-server-public");
-    expect(html).not.toContain("Fechada (public)");
+    expect(closed).not.toContain("aria-describedby");
   });
 
   it("says nothing while the instance has communities off", () => {
     const html = rail(false);
     expect(html).not.toContain("data-server-public");
-    expect(html).not.toContain("(public)");
-    expect(buttonFor(html, "Aberta")).toBeTruthy();
+    expect(buttonFor(html, "Aberta")).not.toContain("aria-describedby");
   });
 });

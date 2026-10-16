@@ -424,6 +424,9 @@ export function ServerRail({
         const muted = levels.level === "none";
         const isPublic = isServerPublic(server, communitiesEnabled);
         const publicName = t("chrome.railPublicName", { name: server.name });
+        // The name stays the server's own (people and tests find the button by
+        // it); "Public" is its description, which a screen reader reads after.
+        const publicDescId = `${reorderHintId}-public-${server.id}`;
         const { mentions, hasUnread, bauOnly, bauCue, bauCount } =
           railServerIndicator({
           totals,
@@ -556,8 +559,15 @@ export function ServerRail({
             <button
               type="button"
               onClick={() => onSelectServer(server.id)}
-              aria-label={isPublic ? publicName : server.name}
-              aria-describedby={onReorderServers ? reorderHintId : undefined}
+              aria-label={server.name}
+              aria-describedby={
+                [
+                  onReorderServers ? reorderHintId : null,
+                  isPublic ? publicDescId : null,
+                ]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
               aria-keyshortcuts={
                 onReorderServers ? "Alt+ArrowUp Alt+ArrowDown" : undefined
               }
@@ -608,15 +618,20 @@ export function ServerRail({
               {/* A PUBLIC ROOM SAYS SO. Bottom left, where nothing else sits (the
                   count is top right, the live dot bottom right), so the mark
                   never competes for a corner. The word lives in the tooltip
-                  and the accessible name; this is its icon. */}
+                  and the accessible description; this is its icon. */}
               {isPublic && (
-                <span
-                  data-server-public=""
-                  aria-hidden="true"
-                  className="absolute -bottom-0.5 -left-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail text-signal"
-                >
-                  <Globe className="h-3 w-3" />
-                </span>
+                <>
+                  <span
+                    data-server-public=""
+                    aria-hidden="true"
+                    className="absolute -bottom-0.5 -left-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail text-signal"
+                  >
+                    <Globe className="h-3 w-3" />
+                  </span>
+                  <span id={publicDescId} className="sr-only">
+                    {t("chrome.publicCommunity")}
+                  </span>
+                </>
               )}
               {liveServerIds?.has(server.id) && mentions === 0 && (
                 <span
