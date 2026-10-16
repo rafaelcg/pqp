@@ -329,6 +329,7 @@ struct ChannelListView: View {
                     name: current.name,
                     bannerURL: Avatar.resolve(current.bannerUrl),
                     activity: activity,
+                    isPublic: current.isCommunity,
                     topInset: topInset
                 )
                 .onGeometryChange(for: CGFloat.self) { proxy in
@@ -628,7 +629,7 @@ struct ChannelListView: View {
         .toolbarBackground(Palette.ink, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                ServerCompactTitle(name: current.name, activity: activity)
+                ServerCompactTitle(name: current.name, activity: activity, isPublic: current.isCommunity)
                     .opacity(headerCollapsed ? 1 : 0)
                     .accessibilityHidden(!headerCollapsed)
             }
@@ -662,6 +663,8 @@ struct ChannelListView: View {
                         Button { showingNewChannel = true } label: {
                             Label("New channel", systemImage: "plus.square")
                         }
+                    }
+                    if isManager || holdsManageServer {
                         Button { showingSettings = true } label: {
                             Label("Community settings", systemImage: "gearshape")
                         }
@@ -753,7 +756,9 @@ struct ChannelListView: View {
         .sheet(isPresented: $showingSettings) {
             ServerSettingsView(
                 server: current,
+                permissions: watchPartyPermissions,
                 onChanged: { current = $0 },
+                onCommunityChanged: { current.isCommunity = $0 },
                 onDeleted: { dismiss() }
             )
         }
@@ -1099,6 +1104,12 @@ struct ChannelListView: View {
     }
 
     private var isManager: Bool { server.role == "owner" || server.role == "admin" }
+
+    /// Manage Server from the resolved bits, for a member whose cargo grants it
+    /// without the admin rank: the community switches are theirs to reach.
+    private var holdsManageServer: Bool {
+        watchPartyPermissions?.can(PermissionBit.manageServer) ?? false
+    }
 
     private func createChannel(type: String) async {
         // The server only accepts letters, numbers, - and _; spaces are the
