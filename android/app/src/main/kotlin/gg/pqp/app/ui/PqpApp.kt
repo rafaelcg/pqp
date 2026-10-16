@@ -33,6 +33,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -472,6 +474,27 @@ private fun SignedInNav(
         push.pendingTarget.filterNotNull().collect { target ->
             push.consumeTarget()
             navigateToPush(nav, session, target)
+        }
+    }
+
+    // A server this account lost while the app was open (a kick, a ban, a delete). The list has
+    // already dropped it; every screen inside it leaves too, because the API refuses every read and
+    // send there and what is left would be a dead screen. Then the reason, once, as the web does.
+    LaunchedEffect(Unit) {
+        session.serverGone.collect { gone ->
+            while (nav.currentBackStackEntry?.serverIdOrNull().equals(gone.serverId, ignoreCase = true)) {
+                if (!nav.popBackStack()) break
+            }
+            if (!gone.quiet) {
+                forwardNotice = context.getString(
+                    when (gone.reason) {
+                        gg.pqp.app.core.ServerRemovedReason.Kicked -> R.string.server_removed_kicked
+                        gg.pqp.app.core.ServerRemovedReason.Banned -> R.string.server_removed_banned
+                        gg.pqp.app.core.ServerRemovedReason.Deleted -> R.string.server_removed_deleted
+                    },
+                    gone.serverName,
+                )
+            }
         }
     }
 
@@ -972,6 +995,20 @@ private fun SignedInNav(
 }
 
 /** The two yeses the Baú row needs (see `ChannelsScreen`), asked for a push tap. */
+/**
+ * The server a destination belongs to, or null for one that is not inside any (the home tabs, the
+ * account screen, a conversation, a chat that was opened from a notification with no server).
+ */
+private fun NavBackStackEntry.serverIdOrNull(): String? = when {
+    destination.hasRoute<ChannelsRoute>() -> toRoute<ChannelsRoute>().serverId
+    destination.hasRoute<BauRoute>() -> toRoute<BauRoute>().serverId
+    destination.hasRoute<ForumRoute>() -> toRoute<ForumRoute>().serverId
+    destination.hasRoute<ForumPostRoute>() -> toRoute<ForumPostRoute>().serverId
+    destination.hasRoute<ForumComposerRoute>() -> toRoute<ForumComposerRoute>().serverId
+    destination.hasRoute<ChatRoute>() -> toRoute<ChatRoute>().serverId
+    else -> null
+}
+
 internal suspend fun bauIsOn(session: SessionStore, serverId: String): Boolean {
     if (!CommunityHomeConfigs.resolve(session.api).enabled) {
         return false

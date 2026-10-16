@@ -427,6 +427,17 @@
     <string name="status_idle">Idle</string>
     <string name="status_dnd">Do not disturb</string>
     <string name="status_offline">Offline</string>
+    <string name="status_away">Away</string>
+    <string name="status_invisible">Invisible</string>
+    <string name="status_your">Your status</string>
+    <string name="status_change">Change your status</string>
+    <string name="status_away_hint">Stays until you change it. Nothing is silenced.</string>
+    <string name="status_dnd_hint">You stay visible. No notifications until you change it.</string>
+    <string name="status_invisible_hint">You show as offline to everyone. Voice channels you join still show you.</string>
+    <string name="status_save_failed">Could not change your status, try again</string>
+    <string name="server_removed_kicked">You were removed from %1$s. A new invite can bring you back.</string>
+    <string name="server_removed_banned">You were banned from %1$s.</string>
+    <string name="server_removed_deleted">The community %1$s was deleted. It is gone for everyone.</string>
 
     <!-- Your data. Both rights the privacy policy promises, and the second one
          is what Play requires of any app that lets you create an account. -->

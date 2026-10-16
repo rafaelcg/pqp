@@ -73,6 +73,8 @@ data class MePreferences(
     val notifications: MeNotificationPreferences? = null,
     /** Chamar a atenção, both ways. Absent reads as on (`nudgesAllowed`). */
     val allowNudges: Boolean? = null,
+    /** The manual status (`manualStatusSchema`); absent reads as online (see [OwnStatus]). */
+    val status: String? = null,
 )
 
 /** `notificationPreferencesSchema`, the one key this client reads. */

@@ -419,6 +419,17 @@
     <string name="status_idle">Ausente</string>
     <string name="status_dnd">Não perturbe</string>
     <string name="status_offline">Offline</string>
+    <string name="status_away">Ausente</string>
+    <string name="status_invisible">Invisível</string>
+    <string name="status_your">Teu status</string>
+    <string name="status_change">Mudar o teu status</string>
+    <string name="status_away_hint">Fica assim até tu mudar. Nada é silenciado.</string>
+    <string name="status_dnd_hint">Tu continua visível. Sem notificações até tu mudar.</string>
+    <string name="status_invisible_hint">Tu aparece como offline pra todo mundo. Nos canais de voz em que tu entrar, tu continua aparecendo.</string>
+    <string name="status_save_failed">Não deu pra mudar o teu status, tenta de novo</string>
+    <string name="server_removed_kicked">Tu foi removido de %1$s. Dá pra voltar com um convite novo.</string>
+    <string name="server_removed_banned">Tu foi banido de %1$s.</string>
+    <string name="server_removed_deleted">A comunidade %1$s foi apagada e não existe mais pra ninguém.</string>
 
     <!-- Seus dados. Os dois direitos que a política de privacidade promete, e o
          segundo é exigido pela Play de qualquer app que deixa criar conta. -->
