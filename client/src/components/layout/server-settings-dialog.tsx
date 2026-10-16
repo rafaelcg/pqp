@@ -979,7 +979,7 @@ export function ServerSettingsDialog({
       open
       title={server.name}
       eyebrow={t("serverSettings.eyebrow")}
-      size="xl"
+      size="2xl"
       fill
       closeOnBackdrop={!transferArmed && !deleteArmed}
       onClose={onClose}

@@ -710,7 +710,7 @@ export function ChannelSettingsDialog({
           <span className="truncate">{channel.name}</span>
         </span>
       }
-      size="xl"
+      size="2xl"
       fill
       closeOnBackdrop={!dirty}
       onClose={requestClose}

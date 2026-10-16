@@ -440,7 +440,11 @@ and a layer sized to `visualViewport` rather than to `vh`, because no browser
 shrinks `vh` for an on-screen keyboard.
 
 - **Props.** `title`, `eyebrow`, `description`, `footer`, `size`
-  (`sm` | `md` | `lg` | `xl`), `fill`, `closeOnBackdrop`, `dismissible`.
+  (`sm` | `md` | `lg` | `xl` | `2xl`), `fill`, `closeOnBackdrop`, `dismissible`.
+- **`2xl`** is the settings width (yours, the server's and a channel's): a
+  section rail beside a pane of forms needs more room than any other dialog.
+  With `fill` it is at most 56rem tall, so it does not run the height of a
+  tall monitor; each pane scrolls inside it.
 - **`fill`** gives the panel the layer's height and stops the body scrolling as
   one column, for a dialog whose content is its own layout.
 - **`dismissible={false}`** removes the close button, Escape and the backdrop
