@@ -47,7 +47,6 @@ class StoryEditorGestureTest {
         cardBackground = "night",
         audienceLabel = "Amigos",
         canPost = true,
-        posting = false,
         occupancy = emptyMap(),
     )
 

@@ -55,6 +55,7 @@ import type {
   ChannelKind,
   ChannelSession,
   ChannelType,
+  CommunityHomePost,
   CommunityListingNudge,
   DmSummary,
   MemberRole,
@@ -65,6 +66,7 @@ import type {
   User,
   VoiceRoomTransport,
 } from "@pqp/shared";
+import { ComposerReadOnlyNotice } from "@/components/chat/composer-read-only-notice";
 import { MessageComposer } from "@/components/chat/message-composer";
 import { VoiceNoteMiniPlayer } from "@/components/chat/voice-note-mini-player";
 import {
@@ -82,6 +84,18 @@ import { adoptVoiceTranscription } from "@/lib/voice-transcription-prefs";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
 import { BulkPurgeDialog } from "@/components/chat/bulk-purge-dialog";
 import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
+import {
+  ForwardPicker,
+  type ForwardedSummary,
+} from "@/components/forward/forward-picker";
+import { ForwardedToast } from "@/components/forward/forwarded-toast";
+import { NotInServerToast } from "@/components/forward/not-in-server-toast";
+import {
+  setForwardMemberServers,
+  startForwardConfig,
+  useForwardEnabled,
+  type ForwardSourceRequest,
+} from "@/lib/forward";
 import { ThreadPanel } from "@/components/chat/thread-panel";
 import {
   ReportDialog,
@@ -452,7 +466,13 @@ import {
 } from "@/components/watch-party/waitlist/watch-party-approved-toasts";
 import { sendFriendRequest } from "@/components/friends/friends-api";
 import { onboardingPath, shouldRunOnboarding } from "@/lib/onboarding";
-import { copyInvitePaste, setInviteCacheAccount } from "@/lib/invite-paste-copy";
+import {
+  copyInvitePaste,
+  inviteCodeFor,
+  setInviteCacheAccount,
+} from "@/lib/invite-paste-copy";
+import { bringCrewStrip } from "@/lib/bring-crew";
+import { useBringCrew } from "@/lib/use-bring-crew";
 import { track, trackFirstAction } from "@/lib/track";
 import { firstRunDismissedPatch } from "@/lib/first-run";
 import {
@@ -487,6 +507,7 @@ import { acknowledgeAcquisition, peekAcquisition } from "@/lib/acquisition";
 import { noteSignupCta, noteSignupReturn } from "@/lib/signup-assist";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
+import { BringCrewStrip } from "@/components/onboarding/bring-crew-strip";
 import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
 import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
 import { NudgeButton, useNudgeTrigger } from "@/components/dm/nudge-button";
@@ -1414,6 +1435,9 @@ function MainAppContent({
     setDraftsAccount(user?.id ?? null);
   }, [user?.id]);
   const [servers, setServers] = useState<Server[]>([]);
+  // The first list has arrived: an empty one is then a real answer (an account
+  // in no server), not "not loaded yet".
+  const [serversLoaded, setServersLoaded] = useState(false);
   const [channels, setChannels] = useState<Channel[]>([]);
   /**
    * Starts on the conversation view rather than on a server, because at this
@@ -2328,6 +2352,14 @@ function MainAppContent({
   const [serverMembers, setServerMembers] = useState<ServerMember[]>([]);
   const [serverRoles, setServerRoles] = useState<ServerRole[]>([]);
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
+  // Encaminhar (`forward_messages`): what is being forwarded, and the toast
+  // that follows. Off, `requestForward` below keeps the old quote-into-the-
+  // composer behaviour, so a self-host or a flag that is off loses nothing.
+  const forwardEnabled = useForwardEnabled();
+  const [forwardSource, setForwardSource] = useState<ForwardSourceRequest | null>(null);
+  const [forwardedToast, setForwardedToast] = useState<
+    (ForwardedSummary & { key: number }) | null
+  >(null);
   const unreadHoldRef = useRef(new Set<string>());
   const [unreadHeldIds, setUnreadHeldIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -3038,6 +3070,17 @@ function MainAppContent({
   const perms = usePermissions(selectedServerId);
   const permsRef = useRef(perms);
   permsRef.current = perms;
+  /**
+   * "Traz tua galera" (flag `discord_bring_crew`): who came over since the
+   * open server was copied from Discord, for whoever may manage it. Asks
+   * again as the member list changes length, which is what makes the count
+   * live. Drawn by `renderArrivalBanner`, in the arrival strip's slot.
+   */
+  const bringCrew = useBringCrew(
+    selectedServerId,
+    perms.can(Permission.MANAGE_SERVER),
+    serverMembers.length,
+  );
   /**
    * Every `watch_party` channel on the open server this viewer may see the
    * history of, that actually has a broadcast to show -- see the long
@@ -5117,6 +5160,7 @@ function MainAppContent({
         communityHomeConfigRef.current = homeConfig;
         setCommunityHomeConfig(homeConfig);
         setServers(serverList);
+        setServersLoaded(true);
 
         // Conversations and blocks are loaded whatever the first view is: the
         // Home badge counts across the whole account, and the block list drives
@@ -6592,6 +6636,59 @@ function MainAppContent({
       setComposerInsert(draft);
     },
     [forwardMessage, selectChannel, selectConversation, selectedServerId, t],
+  );
+
+  /**
+   * "Encaminhar" on a chat message. A message in a server channel opens the
+   * picker (the server refuses a conversation message as a source, so those,
+   * and everything while the flag is off, keep the quote-into-the-composer
+   * behaviour they always had).
+   */
+  const requestForward = useCallback(
+    (message: ChatMessage) => {
+      const inConversation = conversationsRef.current.some(
+        (one) => one.channelId === message.channelId,
+      );
+      if (!forwardEnabled || inConversation || !selectedServerId) {
+        setForwardMessage(message);
+        return;
+      }
+      const channel = channels.find((one) => one.id === message.channelId);
+      setForwardSource({
+        kind: "message",
+        id: message.id,
+        // A restricted card names the one server it may travel inside; a plain
+        // message is forwarded from the server it is in.
+        serverId:
+          (message.forward?.restricted === true
+            ? message.forward.restrictedToServerId
+            : undefined) ?? selectedServerId,
+        title:
+          message.forward?.title ||
+          buildReplyExcerpt(message.forward?.excerpt || message.body) ||
+          t("forward.messageFrom", { name: message.authorName }),
+        // Private, or a channel this list does not hold (a thread or a forum
+        // post, whose own flag may not carry its parent's privacy): restricted
+        // to this server, the safe reading. The server enforces it anyway.
+        restricted:
+          !channel || channel.isPrivate === true || message.forward?.restricted === true,
+      });
+    },
+    [channels, forwardEnabled, selectedServerId, t],
+  );
+
+  /** "Encaminhar" on a Baú post: the picker, restricted when members-only. */
+  const requestForwardPost = useCallback(
+    (post: CommunityHomePost) => {
+      setForwardSource({
+        kind: "bau_post",
+        id: post.id,
+        serverId: post.serverId,
+        title: post.title?.trim() || post.teaser?.trim() || t("forward.postFallback"),
+        restricted: post.visibility === "members",
+      });
+    },
+    [t],
   );
 
   /** Leave the conversation view open with nothing selected in it. */
@@ -9803,6 +9900,21 @@ function MainAppContent({
     voiceState.voiceChannelId,
   ]);
 
+  /** "Ver" on the toast: the first place the forward went. */
+  const viewForwarded = useCallback(
+    (summary: ForwardedSummary) => {
+      const target = summary.first;
+      if (target.kind === "conversation") {
+        void selectConversation(target.id);
+        return;
+      }
+      if (target.serverId) {
+        void applyChannelRoute(target.serverId, target.id);
+      }
+    },
+    [applyChannelRoute, selectConversation],
+  );
+
   /**
    * Everything the notification path needs to name a channel, conversations
    * included. Built here rather than in a sidebar because a sidebar unmounts
@@ -9930,6 +10042,18 @@ function MainAppContent({
   const funConfigUserId = ageGate ? null : (user?.id ?? null);
   useEffect(
     () => (funConfigUserId ? startFunConfig() : undefined),
+    [funConfigUserId],
+  );
+  // Encaminhar: which servers this account is in, so tapping a card from one it
+  // is not in says so instead of doing nothing. Unknown until the list loads.
+  useEffect(() => {
+    setForwardMemberServers(serversLoaded ? servers.map((one) => one.id) : null);
+    return () => setForwardMemberServers(null);
+  }, [servers, serversLoaded]);
+  // Encaminhar: whether the action exists (`forward_messages`), same refresh
+  // pass and the same gate as the config above.
+  useEffect(
+    () => (funConfigUserId ? startForwardConfig() : undefined),
     [funConfigUserId],
   );
   const nudgeShake = useNudgeShake(
@@ -10546,6 +10670,31 @@ function MainAppContent({
     // party surface makes (see `ArrivalSurface`). The Baú home keeps its own.
     if (surface !== "home" && watchNowStreams.length > 0) {
       return null;
+    }
+    // A server copied from Discord in the last week, for its owner: the
+    // counter of who came over replaces the arrival strip (whose owner
+    // variant says the same thing with less). Not over a live party.
+    const crew = bringCrewStrip(bringCrew.arrivals, bringCrew.dismissed);
+    if (
+      crew &&
+      surface !== "party" &&
+      selection.kind === "server" &&
+      !activeConversation &&
+      selectedServer
+    ) {
+      const serverId = selectedServer.id;
+      const importInvite = bringCrew.arrivals?.inviteCode ?? null;
+      return (
+        <BringCrewStrip
+          kind={crew.kind}
+          count={crew.count}
+          serverName={selectedServer.name}
+          resolveInviteCode={() =>
+            importInvite ? Promise.resolve(importInvite) : inviteCodeFor(serverId)
+          }
+          onDismiss={bringCrew.dismiss}
+        />
+      );
     }
     // A newcomer alone in a public community: the one thing that changes that
     // is bringing somebody, so this strip takes the arrival strip's place.
@@ -12362,7 +12511,7 @@ function MainAppContent({
         unreadSince={unreadSince}
         editMessageId={editMessageId}
         onEditMessageHandled={clearEditMessageId}
-        onForward={setForwardMessage}
+        onForward={requestForward}
         onMarkUnread={handleMarkUnread}
         onMarkRead={handleMarkRead}
         onLiveEndChange={handleMessageListLiveEnd}
@@ -12398,6 +12547,20 @@ function MainAppContent({
           onDismiss={() => setSanctionNotice(null)}
         />
       )}
+      {!canSendHere && (
+        // SEND_MESSAGES denied here: no box to type into (the message used to
+        // appear, then fail with "You don't have permission to send here").
+        // The call dock and music bar still live in this well, so they are
+        // drawn here while the composer, which normally holds them, is hidden.
+        <div>
+          {musicInComposer ? <MusicComposer voiceState={voiceState} /> : null}
+          <CallDockOutlet channelId={selectedChannel.id} />
+          <ComposerReadOnlyNotice />
+        </div>
+      )}
+      {/* Hidden, never unmounted, while the permission is gone: the draft and
+          attachments are the composer's own state and come back with it. */}
+      <div hidden={!canSendHere}>
       <MessageComposer
         variant={isWatchPartySplit ? "stream" : "default"}
         // Remount per channel: the draft is component state, so without this a
@@ -12471,16 +12634,17 @@ function MainAppContent({
             }
           },
         }}
-        disabled={!selectedChannelId || messagesLoading}
+        disabled={!selectedChannelId || messagesLoading || !canSendHere}
         slowModeUntil={chat.getSlowModeHeldUntil() || null}
         placeholder={t("composer.placeholder", { name: selectedChannel.name })}
         // The voice-only call bar, when this channel is the one we are in.
         // Keyed by channel so the composer of any other channel stays plain.
-        dock={<CallDockOutlet channelId={selectedChannel.id} />}
+        dock={canSendHere ? <CallDockOutlet channelId={selectedChannel.id} /> : undefined}
         music={
-          musicInComposer ? <MusicComposer voiceState={voiceState} /> : undefined
+          musicInComposer && canSendHere ? <MusicComposer voiceState={voiceState} /> : undefined
         }
       />
+      </div>
       </CallSplit>
       </CallDockProvider>
     </FileDropZone>
@@ -12985,6 +13149,7 @@ function MainAppContent({
           canManageMessages={canManageMessages}
           canManageSoundboard={canManageSoundboard && voiceConfig.soundboard === true}
           canManageEmoji={canManageEmoji}
+          canManageServer={canManageServer}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
           channelLive={voiceState.channelLive}
@@ -13360,6 +13525,7 @@ function MainAppContent({
             refreshSignal={communityHomeUpdateNudge}
             channels={channels}
             onOpenChannel={(channelId) => void openChannel(channelId)}
+            onForwardPost={forwardEnabled ? requestForwardPost : undefined}
             canSendInChannel={(channelId) =>
               perms.serverBits === 0n ||
               perms.can(Permission.SEND_MESSAGES, channelId)
@@ -13514,7 +13680,7 @@ function MainAppContent({
                   subjectName: message.authorName,
                 })
               }
-              onForward={setForwardMessage}
+              onForward={requestForward}
               droppedFiles={forumDroppedFiles}
               onDroppedFilesTaken={() => setForumDroppedFiles(null)}
             />
@@ -13590,7 +13756,7 @@ function MainAppContent({
           roles={serverRoles}
           unreadHeld={unreadHeldIds.has(openThread.thread.channelId)}
           unreadSince={threadUnreadSince}
-          onForward={setForwardMessage}
+          onForward={requestForward}
           onMarkUnread={handleMarkUnread}
           onMarkRead={() => clearUnread(openThread.thread.channelId)}
           onSent={() => {
@@ -13890,6 +14056,25 @@ function MainAppContent({
           setServerSettingsSection("roles");
           setServerSettingsOpen(true);
         }}
+      />
+
+      <ForwardPicker
+        open={forwardSource !== null}
+        source={forwardSource}
+        servers={servers}
+        conversations={conversations}
+        currentServerId={selectedServerId}
+        userId={user?.id ?? null}
+        onClose={() => setForwardSource(null)}
+        onForwarded={(summary) =>
+          setForwardedToast({ ...summary, key: Date.now() })
+        }
+      />
+      <NotInServerToast />
+      <ForwardedToast
+        summary={forwardedToast}
+        onView={viewForwarded}
+        onDismiss={() => setForwardedToast(null)}
       />
 
       <ForwardDialog

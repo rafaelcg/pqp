@@ -237,6 +237,17 @@ class EditorTest {
         assertEquals("um. dois", LayerOps.spokenText(layers))
     }
 
+    @Test
+    fun `the picture's description comes first in the alt text, and a blank one adds nothing`() {
+        val layers = listOf(TextLayer("a", text = "um"))
+        assertEquals("um gato no sofa. um", LayerOps.spokenText(layers, "  um gato no sofa "))
+        assertEquals("um", LayerOps.spokenText(layers, "   "))
+        assertEquals("so a descricao", LayerOps.spokenText(emptyList(), "so a descricao"))
+        assertNull(LayerOps.spokenText(emptyList(), ""))
+        // The words on the layers keep room: the description alone cannot fill the bound.
+        assertTrue(StoryLayers.DESCRIPTION_MAX < StoryLayers.ALT_TEXT_MAX)
+    }
+
     // --- geometry ---
 
     private val canvas = Canvas(360f, 640f)

@@ -33,6 +33,29 @@ object StoriesRules {
     /** `STORY_BACKGROUNDS`, in the order the picker draws them. */
     val BACKGROUNDS = listOf("lime", "night", "ember", "grape", "sand", "ink")
 
+    /** `STORY_BACKGROUNDS_SOLID`: flat colours. */
+    val BACKGROUNDS_SOLID = listOf("cobalt", "crimson", "pine", "plum", "teal", "onyx")
+
+    /** `STORY_BACKGROUNDS_GRADIENT`: two stops on a 160 degree line. */
+    val BACKGROUNDS_GRADIENT = listOf("sunset", "ocean", "aurora", "dusk", "berry", "lagoon")
+
+    /** `STORY_BACKGROUND_FAMILIES`, in the order the switch draws them. */
+    val BACKGROUND_FAMILIES = listOf("glow", "solid", "gradient")
+
+    /** The keys of one family, in picker order (`storyBackgroundsOf`). */
+    fun backgroundsOf(family: String): List<String> = when (family) {
+        "solid" -> BACKGROUNDS_SOLID
+        "gradient" -> BACKGROUNDS_GRADIENT
+        else -> BACKGROUNDS
+    }
+
+    /** Which family a key belongs to; an unknown key reads as the first (`storyBackgroundFamily`). */
+    fun backgroundFamily(key: String?): String = when (key) {
+        in BACKGROUNDS_SOLID -> "solid"
+        in BACKGROUNDS_GRADIENT -> "gradient"
+        else -> "glow"
+    }
+
     /** What a reaction looks like. GG is the house one and is a word, not an emoji. */
     fun reactionGlyph(reaction: String): String = when (reaction) {
         "gg" -> "GG"

@@ -84,6 +84,28 @@ describe("Dialog backdrop", () => {
   });
 });
 
+describe("Dialog close button", () => {
+  // jsdom has no layout, so the sizes are asserted on the classes that make them: the box is the
+  // control ladder's icon button (36px) and the phone hit area is that box plus 4px a side (44px).
+  it("is the control-md icon button, with a 44px reach on a phone", () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() =>
+      root!.render(
+        <Dialog open title="Mapa" onClose={() => {}}>
+          <p>conteúdo</p>
+        </Dialog>,
+      ),
+    );
+    const close = [...document.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.querySelector("svg"))!;
+    expect(close.className).toContain("h-[var(--control-md)]");
+    expect(close.className).toContain("w-[var(--control-md)]");
+    expect(close.className).toContain("max-sm:after:-inset-1");
+    expect(close.className).not.toContain("p-1.5");
+  });
+});
+
 describe("Dialog backdrop on a dialog it does not close", () => {
   it("keeps focus where it was", () => {
     host = document.createElement("div");

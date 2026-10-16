@@ -3,6 +3,7 @@ import {
   STORY_IDS_MAX,
   STORY_POSTS_PER_MINUTE,
   createStorySchema,
+  createStoryUploadSchema,
   storyModRemoveSchema,
   storyReactionSchema,
   storyReplySchema,
@@ -150,6 +151,8 @@ import {
   pinCommunityHomePostSchema,
   createCommunityHomeCommentSchema,
   createCommunityHomeMediaUploadSchema,
+  createBauFollowSchema,
+  updateBauFollowConfigSchema,
   createCommunityHomePostSchema,
   publishCommunityHomePostSchema,
   shareCommunityHomePostSchema,
@@ -159,6 +162,7 @@ import {
   parseCommunityHomeTeaser,
   parseCommunityHomeTitle,
   scheduleCommunityHomePostSchema,
+  updateBauFollowSchema,
   updateCommunityHomePostSchema,
   updateServerCommunityHomeConfigSchema,
   isVoiceRoomChannelType,
@@ -173,6 +177,7 @@ import {
   setVoiceAudienceSchema,
   setVoiceAudienceSpeakerSchema,
   updateServerOrderSchema,
+  createForwardSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -404,8 +409,8 @@ import {
   discardBannerObject,
   isAvatarUploadConfigured,
   isUserBannerUploadConfigured,
-  presignAvatarRead,
-  presignUserBannerRead,
+  readAvatarObject,
+  readUserBannerObject,
   setUserBanner,
   userBannerUrlForKey,
   verifyAvatarObject,
@@ -414,7 +419,7 @@ import {
 import {
   createServerImageUpload,
   isServerImageUploadConfigured,
-  presignServerImageRead,
+  readServerImageObject,
   scheduleDiscardServerImageObject,
   serverImageUrlForKey,
   setServerImage,
@@ -473,9 +478,27 @@ import {
 } from "../services/community-home.js";
 import { pushPendingCommunityHomePosts } from "../services/community-home-push.js";
 import {
+  BauFollowError,
+  setBauFollowAllowed,
+  createBauFollow,
+  deleteBauFollow,
+  getBauFollowState,
+  getFollowRef,
+  listBauFollowDestinations,
+  listBauFollowers,
+  BAU_FOLLOWERS_MAX_PAGE,
+  listChannelBauFollows,
+  removeBauFollower,
+  unblockBauFollower,
+  updateBauFollow,
+} from "../services/bau-follow.js";
+import { kickBauFollow } from "../services/bau-follow-delivery.js";
+import {
   ackStoryNotice,
   createStory,
+  createStoryUpload,
   deleteStoryEverywhere,
+  deleteStoryUpload,
   getStoriesForViewer,
   getStoryCard,
   listFriendsStrip,
@@ -498,7 +521,17 @@ import {
   unmuteAuthor,
 } from "../services/stories.js";
 import { notifyStoriesUpdate, notifyStoryAudiences } from "../ws/stories.js";
-import { copyObject, deleteObject, StorageError } from "../lib/s3.js";
+import {
+  copyObject,
+  deleteObject,
+  StorageError,
+  type StoredImage,
+} from "../lib/s3.js";
+import {
+  getPublicBauPost,
+  getPublicBauPostCover,
+} from "../services/community-home-public.js";
+import { serveCover } from "./public-bau-cover.js";
 import {
   getCommunityHomePostCard,
   listLatestCommunityHomeCards,
@@ -507,6 +540,14 @@ import {
   type ShareFailure,
 } from "../services/community-home-share.js";
 import { resolveRedirectOrigin } from "../services/connections.js";
+import {
+  ForwardError,
+  forwardAppOrigin,
+  forwardMessagesEnabled,
+  forwardToTargets,
+  listForwardDestinations,
+  resolveForwardSource,
+} from "../services/forwards.js";
 import {
   isCommunityHomeTranslationConfigured,
   isCommunityHomeTranslationOn,
@@ -618,6 +659,10 @@ import {
   fetchMappedDiscordTemplate,
   replayImportedServer,
 } from "../services/discord-import.js";
+import {
+  bringCrewEnabledFor,
+  getDiscordImportArrivals,
+} from "../services/discord-bring-crew.js";
 import {
   normalizeIdempotencyKey,
   peekServerIdempotencyKey,
@@ -744,6 +789,7 @@ import {
   ReportTargetNotVisibleError,
   resolveReport,
 } from "../services/reports.js";
+import { getReportContext } from "../services/report-context.js";
 import {
   ADMIN_FEEDBACK_PATH,
   ADMIN_FEEDBACK_RESOLVE_PATH,
@@ -982,6 +1028,15 @@ const homeCommentLimiter = createRateLimiter({
 });
 const homeLikeLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
 const homePostLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 0.05 });
+/** Setting follows up, changing and removing them: a person doing admin, not a feed. */
+const bauFollowLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 0.1 });
+/**
+ * `POST /api/forwards`: a burst of eight, then one every five seconds. A
+ * forward fans out to up to five places, and each one ALSO spends the chat's
+ * own send budget (`takeMessageBudget`), so this is the ceiling on how often
+ * somebody may ask, not on how many messages they may send.
+ */
+const forwardLimiter = createRateLimiter({ capacity: 8, refillPerSecond: 0.2 });
 /**
  * User discovery is an enumeration surface over every account on the instance,
  * and unlike message search it is not scoped to anything the caller already
@@ -1167,6 +1222,74 @@ const publicProfileLimiter = createRateLimiter({
   refillPerSecond: 2,
 });
 /**
+ * The public Baú post page's reads (`servePublicBauPost`, its cover redirect).
+ * Their own bucket, for the reason the two above have theirs: a post link going
+ * around a group chat must not be starved by a crawler walking profiles.
+ *
+ * ROOMIER THAN ITS SIBLINGS, on purpose. This is the one public route whose
+ * traffic is a link going viral, and while the API still sees a Cloudflare
+ * edge address instead of the viewer (see the Caddy note in
+ * `tools/api-host/Caddyfile`) every viewer behind one edge shares this bucket.
+ * Three things keep that from becoming a 429 wall: a page view costs ONE hit
+ * (the Pages middleware embeds the answer it already fetched), Cloudflare
+ * absorbs repeats (`s-maxage`, below), and the budget itself is four times the
+ * poster's. A 404 costs the same as a 200, so the bucket is not an oracle.
+ */
+const publicBauPostLimiter = createRateLimiter({
+  capacity: 240,
+  refillPerSecond: 8,
+});
+
+/**
+ * What the public post routes tell caches. `s-maxage` lets Cloudflare serve the
+ * repeat views of a shared link from the edge (it needs a Cache Rule for
+ * `/api/public/*`; a path with no file extension is not cached by default), and
+ * `max-age=0` keeps a browser asking, so the edge is the only place a stale copy
+ * can sit. The window a post flipped to private stays readable is therefore at
+ * most `s-maxage` + `stale-while-revalidate` = two minutes at the edge, then
+ * the signed media URLs inside (10 minutes) run out. A refusal is cacheable for
+ * the same short time and with the SAME header on every kind of refusal, so a
+ * flood of guessed ids lands on Cloudflare too and the answers stay
+ * indistinguishable. The cost is the mirror image: a post published a moment
+ * after a miss is invisible for up to a minute.
+ */
+const PUBLIC_BAU_CACHE_HIT =
+  "public, max-age=0, s-maxage=60, stale-while-revalidate=60";
+const PUBLIC_BAU_CACHE_MISS = "public, max-age=0, s-maxage=60";
+
+/**
+ * Headers for a response a shared cache may keep: `Access-Control-Allow-Origin:
+ * *` and no `Vary: Origin`. The usual CORS helper echoes the caller's origin
+ * and varies on it, which Cloudflare does not honour, so the first origin to
+ * ask would be the only one a cached copy answers. The body is public and
+ * carries no credential, so `*` loses nothing.
+ */
+function publicBauHeaders(
+  req: IncomingMessage,
+  cacheControl: string,
+): Record<string, string> {
+  const { Vary: _vary, ...cors } = corsHeaders(req);
+  return {
+    "Cache-Control": cacheControl,
+    ...SECURITY_HEADERS,
+    ...cors,
+    "Access-Control-Allow-Origin": "*",
+  };
+}
+
+/** The one 404 every refusal on the public post routes sends. */
+function sendPublicBauNotFound(req: IncomingMessage, res: ServerResponse): void {
+  const body = JSON.stringify({ error: "Not found" });
+  res.writeHead(404, {
+    "Content-Type": "application/json",
+    // Explicit, so a HEAD (which Node answers without a length of its own)
+    // carries the very header the GET does.
+    "Content-Length": String(Buffer.byteLength(body)),
+    ...publicBauHeaders(req, PUBLIC_BAU_CACHE_MISS),
+  });
+  res.end(body);
+}
+/**
  * The public community page's read. Same posture as `publicProfileLimiter` and
  * deliberately its OWN bucket rather than a share of it: the two are reached
  * from different pages by different traffic, and a crawler walking profiles
@@ -1286,6 +1409,8 @@ export function resetApiRateLimits(): void {
   homeCommentLimiter.reset();
   homeLikeLimiter.reset();
   homePostLimiter.reset();
+  forwardLimiter.reset();
+  bauFollowLimiter.reset();
   userSearchLimiter.reset();
   exportLimiter.reset();
   discordImportLimiter.reset();
@@ -1301,6 +1426,7 @@ export function resetApiRateLimits(): void {
   depoimentoLimiter.reset();
   publicProfileLimiter.reset();
   publicCommunityLimiter.reset();
+  publicBauPostLimiter.reset();
   publicInviteLimiter.reset();
   voiceLeaveLimiter.reset();
   transcriptRequestLimiter.reset();
@@ -4373,8 +4499,18 @@ router.post("/api/import/discord/preview", async ({ req, user, res }) => {
   takeDiscordImportLimiters(user.id, res);
   try {
     const { plan } = await fetchMappedDiscordTemplate(body.source);
+    // "Started" in the import funnel: nothing else records a preview, and the
+    // audit row only exists once an import finishes. Logged after the
+    // limiter, so a flood of pastes cannot flood the log.
+    logEvent("import.discordPreview", {
+      outcome: "ok",
+      channels: plan.channels.length,
+    });
     return plan;
   } catch (error) {
+    logEvent("import.discordPreview", {
+      outcome: error instanceof Error ? error.constructor.name : "unknown",
+    });
     throwDiscordImportHttp(error, res);
   }
 });
@@ -4397,7 +4533,10 @@ router.post("/api/import/discord/apply", async ({ req, user, res }) => {
       const replay = await replayImportedServer(existingServerId, user.id);
       if (replay) {
         const { replayed: _replayed, ...replayBody } = replay;
-        return replayBody;
+        return {
+          ...replayBody,
+          bringCrew: bringCrewEnabledFor(replayBody.server.id),
+        };
       }
     }
   }
@@ -4410,11 +4549,29 @@ router.post("/api/import/discord/apply", async ({ req, user, res }) => {
       plan,
       idempotencyKey,
     );
-    return replayed ? createdServer : created(createdServer);
+    // `bringCrew`: whether the last screen is "Traz tua galera" (flag
+    // `discord_bring_crew`, read for the server just made).
+    const responseBody = {
+      ...createdServer,
+      bringCrew: bringCrewEnabledFor(createdServer.server.id),
+    };
+    return replayed ? responseBody : created(responseBody);
   } catch (error) {
     throwDiscordImportHttp(error, res);
   }
 });
+
+/**
+ * Who came over since this server was copied from Discord, for the owner's
+ * "Traz tua galera" strip. Same gate as the invite list it sits beside.
+ */
+router.get(
+  "/api/servers/:serverId/import-arrivals",
+  async ({ user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    return getDiscordImportArrivals(serverId!);
+  },
+);
 
 router.patch("/api/servers/:serverId", async ({ req, user }, { serverId }) => {
   const body = updateServerSchema.parse(await readJsonBody(req));
@@ -5343,6 +5500,7 @@ router.post(
       // A post created as published is announced by push (flag permitting).
       // Not awaited: it never fails the publish, and it never throws.
       void pushPendingCommunityHomePosts(serverId!);
+      kickBauFollow(serverId!);
       const announced =
         post.status === "published"
           ? await announceHomePost(
@@ -5390,6 +5548,9 @@ router.patch(
         posterUploadId: raw.posterUploadId,
       });
       await notifyHome(serverId!);
+      // An edit of a delivered post updates its cards, and an edit that makes
+      // a draft published or a published post members-only moves them.
+      kickBauFollow(serverId!);
       return { post };
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -5408,6 +5569,7 @@ router.delete(
     try {
       await deleteCommunityHomePost(serverId!, postId!, user.id);
       await notifyHome(serverId!);
+      kickBauFollow(serverId!);
       return { ok: true };
     } catch (error) {
       mapCommunityHomeError(error);
@@ -5479,6 +5641,267 @@ router.get(
   },
 );
 
+// ---------------------------------------------------------------- Seguir
+//
+// Following a Baú into a channel of another server (docs/COMMUNITY_HOME.md,
+// "Seguir"). Switched by the per-server flag `bau_follow`, read for the SOURCE
+// server: off, the state read says so and the rest is a 404, except removing a
+// follow, which always works.
+
+/**
+ * The audit entry for a follow change, written AFTER the change committed. A
+ * failure to write it is logged and never turns the committed change into an
+ * error (a retry would meet the follow it just made).
+ */
+async function auditBauFollow(entry: Parameters<typeof logAudit>[0]): Promise<void> {
+  try {
+    await logAudit(entry);
+  } catch (error) {
+    console.error("[bau-follow] audit write failed:", error);
+  }
+}
+
+function mapBauFollowError(error: unknown): never {
+  if (error instanceof BauFollowError) {
+    switch (error.code) {
+      case "not_found":
+      case "disabled":
+        throw new NotFound(error.message);
+      case "forbidden":
+      case "blocked":
+        throw new Forbidden(error.message);
+      case "exists":
+      case "limit":
+        throw new HttpError(409, error.message);
+      default:
+        throw new HttpError(400, error.message);
+    }
+  }
+  throw error;
+}
+
+router.get(
+  "/api/servers/:serverId/home/follow",
+  async ({ user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    return getBauFollowState(serverId!, user.id);
+  },
+);
+
+router.get(
+  "/api/servers/:serverId/home/follow/destinations",
+  async ({ user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    const state = await getBauFollowState(serverId!, user.id);
+    if (!state.enabled) {
+      throw new NotFound("Not found");
+    }
+    return listBauFollowDestinations(serverId!, user.id);
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/follow",
+  async ({ req, res, user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    const body = createBauFollowSchema.parse(await readJsonBody(req));
+    try {
+      const follow = await createBauFollow({
+        sourceServerId: serverId!,
+        channelId: body.channelId,
+        rolePingId: body.rolePingId ?? null,
+        actorId: user.id,
+      });
+      await auditBauFollow({
+        serverId: follow.targetServerId,
+        actorId: user.id,
+        action: "bau_follow.create",
+        targetType: "bau_follow",
+        targetId: follow.id,
+        changes: [
+          { key: "source", old: null, new: follow.sourceServerName },
+          { key: "channelId", old: null, new: follow.targetChannelId },
+        ],
+      });
+      return created({ follow });
+    } catch (error) {
+      mapBauFollowError(error);
+    }
+  },
+);
+
+router.get(
+  "/api/channels/:channelId/bau-follows",
+  async ({ user }, { channelId }) => {
+    requireCommunityHome();
+    try {
+      return { follows: await listChannelBauFollows(channelId!, user.id) };
+    } catch (error) {
+      mapBauFollowError(error);
+    }
+  },
+);
+
+router.patch(
+  "/api/bau-follows/:followId",
+  async ({ req, res, user }, { followId }) => {
+    requireCommunityHome();
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    const body = updateBauFollowSchema.parse(await readJsonBody(req));
+    try {
+      const before = await getFollowRef(followId!);
+      const follow = await updateBauFollow({
+        followId: followId!,
+        actorId: user.id,
+        rolePingId: body.rolePingId,
+        resume: body.resume,
+      });
+      if (before && body.resume === true && before.paused_at) {
+        await auditBauFollow({
+          serverId: follow.targetServerId,
+          actorId: user.id,
+          action: "bau_follow.resume",
+          targetType: "bau_follow",
+          targetId: follow.id,
+          changes: [
+            { key: "source", old: null, new: follow.sourceServerName },
+            { key: "channelId", old: null, new: follow.targetChannelId },
+          ],
+        });
+        kickBauFollow(follow.sourceServerId);
+      }
+      return { follow };
+    } catch (error) {
+      mapBauFollowError(error);
+    }
+  },
+);
+
+router.delete(
+  "/api/bau-follows/:followId",
+  async ({ res, user }, { followId }) => {
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    try {
+      const removed = await deleteBauFollow({ followId: followId!, actorId: user.id });
+      await auditBauFollow({
+        serverId: removed.target_server_id,
+        actorId: user.id,
+        action: "bau_follow.delete",
+        targetType: "bau_follow",
+        targetId: removed.id,
+        changes: [
+          { key: "sourceServerId", old: removed.source_server_id, new: null },
+          { key: "channelId", old: removed.target_channel_id, new: null },
+        ],
+      });
+      return { ok: true };
+    } catch (error) {
+      mapBauFollowError(error);
+    }
+  },
+);
+
+/**
+ * The owner's own switch for being followed ("Permitir seguir", Baú settings),
+ * default off. Needs MANAGE_SERVER; with the flag and the Baú on it is what
+ * makes the server followable at all.
+ */
+router.patch(
+  "/api/servers/:serverId/home/follow-config",
+  async ({ req, res, user }, { serverId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    const body = updateBauFollowConfigSchema.parse(await readJsonBody(req));
+    await setBauFollowAllowed(serverId!, body.allowed);
+    await auditBauFollow({
+      serverId: serverId!,
+      actorId: user.id,
+      action: body.allowed ? "bau_follow.allow" : "bau_follow.disallow",
+      targetType: "server",
+      targetId: serverId!,
+    });
+    if (!body.allowed) {
+      kickBauFollow(serverId!);
+    }
+    return listBauFollowers(serverId!);
+  },
+);
+
+/** The source's staff: who follows this Baú (server names, never people). */
+router.get(
+  "/api/servers/:serverId/home/followers",
+  async ({ url, user }, { serverId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    try {
+      return await listBauFollowers(serverId!, {
+        limit: clampLimit(
+          url.searchParams.get("limit"),
+          BAU_FOLLOWERS_MAX_PAGE,
+          BAU_FOLLOWERS_MAX_PAGE,
+        ),
+        cursor: url.searchParams.get("cursor"),
+      });
+    } catch (error) {
+      mapBauFollowError(error);
+    }
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/home/followers/:followId",
+  async ({ url, res, user }, { serverId, followId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    const block = url.searchParams.get("block") === "1";
+    try {
+      const removed = await removeBauFollower({
+        sourceServerId: serverId!,
+        followId: followId!,
+        actorId: user.id,
+        block,
+      });
+      await auditBauFollow({
+        serverId: serverId!,
+        actorId: user.id,
+        action: block ? "bau_follow.block" : "bau_follow.remove_follower",
+        targetType: "server",
+        targetId: removed.targetServerId,
+        changes: [{ key: "server", old: removed.targetServerName, new: null }],
+      });
+      return { ok: true, removed: removed.removed };
+    } catch (error) {
+      mapBauFollowError(error);
+    }
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/home/follow-blocks/:blockedServerId",
+  async ({ res, user }, { serverId, blockedServerId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    takeHomeBudget(bauFollowLimiter, res, user.id);
+    if (!(await unblockBauFollower(serverId!, blockedServerId!))) {
+      throw new NotFound("Not found");
+    }
+    await auditBauFollow({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "bau_follow.unblock",
+      targetType: "server",
+      targetId: blockedServerId!,
+    });
+    return { ok: true };
+  },
+);
+
 router.post(
   "/api/servers/:serverId/home/read",
   async ({ user }, { serverId }) => {
@@ -5527,6 +5950,7 @@ router.post(
       const post = await publishCommunityHomePost(serverId!, postId!, user.id);
       await notifyHome(serverId!);
       void pushPendingCommunityHomePosts(serverId!);
+      kickBauFollow(serverId!);
       const announced = await announceHomePost(
         req,
         user,
@@ -5553,6 +5977,7 @@ router.post(
         user.id,
       );
       await notifyHome(serverId!);
+      kickBauFollow(serverId!);
       return { post };
     } catch (error) {
       mapCommunityHomeError(error);
@@ -5754,8 +6179,16 @@ const storyPostLimiter = createRateLimiter({
 });
 const storyViewLimiter = createRateLimiter({ capacity: 60, refillPerSecond: 2 });
 const storyReactionLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
+/**
+ * Eager uploads: a story is a base plus up to seven layer files, and a
+ * re-trim or a removed photo mints another, so a burst of 20 and 30 a minute.
+ * The cap on unfinished uploads per account (and the 6 h sweep) bounds what a
+ * script could park in the bucket.
+ */
+const storyUploadLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 0.5 });
 
 export function resetStoryRateLimits(): void {
+  storyUploadLimiter.reset();
   storyPostLimiter.reset();
   storyViewLimiter.reset();
   storyReactionLimiter.reset();
@@ -5789,6 +6222,8 @@ function mapStoryError(error: unknown): never {
         throw new HttpError(413, error.message);
       case "budget":
         throw new HttpError(429, error.message);
+      case "claimed":
+        throw new HttpError(409, error.message);
       case "automod":
       case "refused":
         throw new HttpError(422, error.message);
@@ -5839,6 +6274,28 @@ router.get("/api/stories", async ({ url, user }) => ({
   stories: await getStoriesForViewer(user.id, storyIdsParam(url)),
 }));
 
+/**
+ * Eager upload: a PUT URL for a story's file before the story exists (see
+ * `createStoryUploadSchema`). `POST /api/stories` claims it by `uploadId`.
+ */
+router.post("/api/stories/uploads", async ({ req, res, user }) => {
+  takeStoryBudget(storyUploadLimiter, res, user.id);
+  const body = createStoryUploadSchema.parse(await readJsonBody(req));
+  try {
+    return created(await createStoryUpload(user, body));
+  } catch (error) {
+    mapStoryError(error);
+  }
+});
+
+/** Throw an upload away: the object now (best effort), the row, 204. */
+router.delete("/api/stories/uploads/:uploadId", async ({ user }, { uploadId }) => {
+  if (!isUuid(uploadId!) || !(await deleteStoryUpload(user.id, uploadId!))) {
+    throw new NotFound("Upload not found");
+  }
+  return noContent();
+});
+
 router.post("/api/stories", async ({ req, res, user }) => {
   takeStoryBudget(storyPostLimiter, res, user.id);
   const body = createStorySchema.parse(await readJsonBody(req));
@@ -5850,8 +6307,23 @@ router.post("/api/stories", async ({ req, res, user }) => {
         friends: result.liveFriends,
       });
     }
+    let story = result.story;
+    if (body.publish && story.own?.status === "pending") {
+      // Every file was uploaded ahead (the schema insists), so publishing
+      // here saves the client a round trip. A replay of a story the first
+      // attempt left pending lands here too and finishes it.
+      const published = await publishStory(user, story.id);
+      story = published.story;
+      if (published.wentLive) {
+        await storyAudienceTargets(story.id)
+          .then((targets) => notifyStoryAudiences(user.id, targets))
+          .catch((error: unknown) => {
+            console.error("[stories] publish nudge failed:", error);
+          });
+      }
+    }
     return created({
-      story: result.story,
+      story,
       upload: result.upload,
       layerUploads: result.layerUploads,
     });
@@ -9019,6 +9491,70 @@ router.post(
   },
 );
 
+/**
+ * Encaminhar. One request puts a Baú post or a chat message into up to five
+ * channels or conversations as a forward card (`forward.ts` in `@pqp/shared`
+ * is the contract; `services/forwards.ts` the rules). The flag is read here,
+ * per request: off is a 404, the answer of a route that does not exist.
+ *
+ * A bad body is a 400. A source the caller cannot read, or that does not
+ * exist, is one 404. A source that cannot be forwarded at all (a DM message,
+ * a nudge, nothing to show) is a 422 with a machine-readable message. Anything
+ * per target (no access, no SEND_MESSAGES, slow mode, a private source going
+ * to another server) is in `results`, and the request still answers 200.
+ */
+router.get("/api/forwards/config", async () => ({
+  enabled: forwardMessagesEnabled(),
+}));
+
+/**
+ * The channels of one server a forward may go to, in one request: the picker
+ * used to ask for the channel list and the permission snapshot per server.
+ * Not behind the flag (it lists only what the caller could already post in);
+ * the 404 of a non-member is `requireServerMember`'s.
+ */
+router.get(
+  "/api/servers/:serverId/forward-destinations",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    return listForwardDestinations(serverId!, user.id);
+  },
+);
+
+router.post("/api/forwards", async ({ req, res, user }) => {
+  if (!forwardMessagesEnabled() || user.is_character) {
+    throw new NotFound("Not found");
+  }
+  const key = `forward:${user.id}`;
+  if (!forwardLimiter.take(key)) {
+    res.setHeader("Retry-After", String(forwardLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  const body = createForwardSchema.parse(await readJsonBody(req));
+  // The deployment's own address, never the caller's Origin header: the url
+  // is stored on the message for everybody who reads it.
+  const origin = forwardAppOrigin();
+  try {
+    const resolved = await resolveForwardSource(user, body.source, origin);
+    const results = await forwardToTargets({
+      user,
+      resolved,
+      targets: body.targets,
+      ...(body.comment !== undefined ? { comment: body.comment } : {}),
+      ...(body.nonce ? { nonce: body.nonce } : {}),
+    });
+    return { results };
+  } catch (error) {
+    if (error instanceof ForwardError) {
+      if (error.status === 404) {
+        throw new NotFound(error.message);
+      }
+      throw new HttpError(error.status, error.message);
+    }
+    throw error;
+  }
+});
+
 router.get(
   "/api/channels/:channelId/messages",
   async ({ url, user }, { channelId }) => {
@@ -11543,6 +12079,52 @@ router.get("/api/reports/all", async ({ url, user }) => {
 });
 
 /**
+ * What a moderator needs to JUDGE one report: the reported account's age,
+ * behaviour, sanctions and recent words, and the neighbours of a reported
+ * message. See `services/report-context.ts` for what each lens holds.
+ *
+ * GATED EXACTLY LIKE THE QUEUE THE REPORT LIVES IN, and refusal is always the
+ * same 404 whatever the reason (no such report, not a moderator, not staff of
+ * that server): unlike the PATCH next door, which 403s a non-manager of a real
+ * report, this read hands back an account's history, so it must not confirm
+ * that a report id exists. An instance moderator gets the instance lens; a
+ * manager of the report's own server gets the server lens, which is narrowed
+ * to that server; anybody else gets nothing.
+ */
+router.get("/api/reports/:report/context", async ({ user }, { report }) => {
+  const reportId = reportIdParam(report);
+  const scope = await getReportScope(reportId);
+  if (!scope) {
+    throw new NotFound("Report not found");
+  }
+  const instance = isInstanceModerator(user);
+  if (!instance) {
+    if (!scope.serverId) {
+      throw new NotFound("Report not found");
+    }
+    try {
+      await requireAnyPermission(scope.serverId, user.id, [
+        Permission.KICK_MEMBERS,
+        Permission.BAN_MEMBERS,
+        Permission.MODERATE_MEMBERS,
+      ]);
+    } catch (error) {
+      // Only the expected refusals are the opaque 404. A failed dependency
+      // (the database, say) is an outage and must read as one.
+      if (error instanceof Forbidden || error instanceof NotFound) {
+        throw new NotFound("Report not found");
+      }
+      throw error;
+    }
+  }
+  const context = await getReportContext(reportId, { id: user.id, instance });
+  if (!context) {
+    throw new NotFound("Report not found");
+  }
+  return context;
+});
+
+/**
  * One server's queue. `requireManager`, like every other moderation read — and
  * it can only ever return reports about that server's own channels, because a
  * report about a conversation has no server id to match (see the `reports`
@@ -12514,6 +13096,57 @@ async function serveEmbedImage(
   }
 }
 
+/** How long a redirect, or a served picture, may be cached (the signature behind it lives an hour). */
+const STORED_IMAGE_CACHE = "public, max-age=300";
+
+/**
+ * The answer for a profile picture, a banner or a server picture that has been
+ * found: a redirect to the object store, or the bytes themselves.
+ *
+ * A PLAIN GET STAYS A REDIRECT. These are the highest-volume image routes in
+ * the app (every message row draws an avatar) and streaming each one through
+ * this process is the egress bill the presigned design exists to avoid. The
+ * redirect is cacheable because the URL carries `?v=<hash of the key>`: a new
+ * picture is a new address, so nothing here can serve a stale one, and the
+ * window stays under the presigned target's own hour.
+ *
+ * A HEAD, OR A GET THAT ASKS FOR A RANGE, IS SERVED FROM HERE, exactly as the
+ * public Baú cover is (`serveCover`: 200 with a type and a length, an ETag,
+ * `Accept-Ranges`, 206 and 416, 304, and over the size cap or for a type that is
+ * not an inert image it still redirects). Those are the two probes a link
+ * unfurler makes before it will use an image (the same ones X made of the Baú
+ * cover), and until now a HEAD fell through to the authenticated router and
+ * answered 401, which reads as "no image". The key is immutable (a replaced
+ * picture is a new key), so the ETag needs no storage call to revalidate.
+ *
+ * Every refusal is the one 404, whichever method asked.
+ */
+async function answerStoredImage(
+  req: IncomingMessage,
+  res: ServerResponse,
+  image: StoredImage | null,
+): Promise<void> {
+  if (!image) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  if (req.method === "HEAD" || req.headers.range !== undefined) {
+    await serveCover(req, res, image, {
+      headers: (cacheControl) => publicBauHeaders(req, cacheControl),
+      notFound: () => sendError(res, 404, "Not found", req),
+      unavailable: () => sendError(res, 503, "Images temporarily unavailable", req),
+      missCacheControl: STORED_IMAGE_CACHE,
+      cacheControl: STORED_IMAGE_CACHE,
+    });
+    return;
+  }
+  res.writeHead(302, {
+    location: image.signedUrl,
+    "cache-control": STORED_IMAGE_CACHE,
+  });
+  res.end();
+}
+
 const AVATAR_OBJECT_PATH =
   /^\/api\/avatars\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
@@ -12545,27 +13178,15 @@ async function serveAvatarObject(
   res: ServerResponse,
   userId: string,
 ): Promise<void> {
-  let url: string | null;
+  let image: StoredImage | null;
   try {
-    url = await presignAvatarRead(userId);
+    image = await readAvatarObject(userId);
   } catch (error) {
     console.error(`[avatars] could not resolve ${userId}:`, error);
     sendError(res, 404, "Not found", req);
     return;
   }
-  if (!url) {
-    sendError(res, 404, "Not found", req);
-    return;
-  }
-  // Cacheable because the URL carries `?v=<hash of the key>`: a new avatar is a
-  // new address, so nothing here can serve a stale picture. The window is kept
-  // under the presigned target's own hour so a cached redirect cannot outlive
-  // the URL it points at.
-  res.writeHead(302, {
-    location: url,
-    "cache-control": "public, max-age=300",
-  });
-  res.end();
+  await answerStoredImage(req, res, image);
 }
 
 const USER_BANNER_OBJECT_PATH =
@@ -12593,27 +13214,15 @@ async function serveUserBannerObject(
   res: ServerResponse,
   userId: string,
 ): Promise<void> {
-  let url: string | null;
+  let image: StoredImage | null;
   try {
-    url = await presignUserBannerRead(userId);
+    image = await readUserBannerObject(userId);
   } catch (error) {
     console.error(`[banners] could not resolve ${userId}:`, error);
     sendError(res, 404, "Not found", req);
     return;
   }
-  if (!url) {
-    sendError(res, 404, "Not found", req);
-    return;
-  }
-  // Cacheable because the URL carries `?v=<hash of the key>`: a new banner is a
-  // new address, so nothing here can serve a stale picture. The window stays
-  // under the presigned target's own hour so a cached redirect cannot outlive
-  // the URL it points at.
-  res.writeHead(302, {
-    location: url,
-    "cache-control": "public, max-age=300",
-  });
-  res.end();
+  await answerStoredImage(req, res, image);
 }
 
 const SERVER_IMAGE_OBJECT_PATH =
@@ -12652,27 +13261,15 @@ async function serveServerImageObject(
     sendError(res, 404, "Not found", req);
     return;
   }
-  let url: string | null;
+  let image: StoredImage | null;
   try {
-    url = await presignServerImageRead(kind, serverId);
+    image = await readServerImageObject(kind, serverId);
   } catch (error) {
     console.error(`[server-images] could not resolve ${serverId}:`, error);
     sendError(res, 404, "Not found", req);
     return;
   }
-  if (!url) {
-    sendError(res, 404, "Not found", req);
-    return;
-  }
-  // Cacheable because the URL carries `?v=<hash of the key>`: a new picture is
-  // a new address, so nothing here can serve a stale one. The window stays
-  // under the presigned target's own hour so a cached redirect cannot outlive
-  // the URL it points at.
-  res.writeHead(302, {
-    location: url,
-    "cache-control": "public, max-age=300",
-  });
-  res.end();
+  await answerStoredImage(req, res, image);
 }
 
 const SERVER_EMOJI_OBJECT_PATH =
@@ -12796,13 +13393,17 @@ async function servePublicProfile(
   // The 404 above stays `no-store` deliberately — it is what the claim landing
   // reads as "this handle is free", and a cached "free" is a cached wrong answer
   // the moment somebody claims it.
+  const payload = JSON.stringify({ profile });
   res.writeHead(200, {
     "Content-Type": "application/json",
+    // Explicit, so a HEAD (which Node answers without a length of its own)
+    // carries the very header the GET does.
+    "Content-Length": String(Buffer.byteLength(payload)),
     "Cache-Control": "public, max-age=60",
     ...SECURITY_HEADERS,
     ...corsHeaders(req),
   });
-  res.end(JSON.stringify({ profile }));
+  res.end(payload);
 }
 
 const PUBLIC_COMMUNITY_PATH = /^\/api\/public\/communities\/([^/]{1,64})$/;
@@ -12894,13 +13495,138 @@ async function servePublicCommunity(
   // credential, and shaped like a link going around a group chat. The 404 above
   // stays `no-store` — a community can be listed at any moment, and a cached
   // "no such page" would outlive the decision to publish it.
+  const payload = JSON.stringify({ community });
   res.writeHead(200, {
     "Content-Type": "application/json",
+    "Content-Length": String(Buffer.byteLength(payload)),
     "Cache-Control": "public, max-age=60",
     ...SECURITY_HEADERS,
     ...corsHeaders(req),
   });
-  res.end(JSON.stringify({ community }));
+  res.end(payload);
+}
+
+const PUBLIC_BAU_POST_PATH =
+  /^\/api\/public\/communities\/([^/]{1,64})\/posts\/([^/]{1,64})(\/cover)?$/;
+
+const BAU_POST_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * One Baú post's public page, by community slug and post id, and its cover.
+ *
+ * THE THIRD UNAUTHENTICATED READ OF A COMMUNITY, after the poster and the
+ * invite preview, and it exists for the same reason: `pqp.gg/c/<slug>/p/<id>`
+ * is a link pasted into X, Reddit, WhatsApp and Telegram, and a post that asks
+ * for a login before it renders is a post nobody opens. The Pages middleware
+ * that writes the unfurl card calls it too.
+ *
+ * WHAT MAKES THAT SAFE IS ONE PREDICATE AND ONE SHAPE. `bauPublicUrlFor` (in
+ * `services/community-home.ts`) is the only place that decides a post is
+ * public: published, free, in a community with an address, not suspended, with
+ * communities, the Baú and the `bau_public_posts` flag on. The shape is
+ * `publicBauPostResponseSchema`: no author, no comments, no channel ids, no
+ * member data of any kind. See `services/community-home-public.ts`.
+ *
+ * EVERY REFUSAL IS THE SAME 404, byte for byte and header for header: bad slug,
+ * bad id, unknown post, a post of another community, draft, scheduled, deleted,
+ * members-only, no address, suspended, any flag off. Telling them apart would
+ * tell a stranger holding a guessed id which posts exist and which are VIP.
+ * (The one thing it cannot hide is timing, and it does not try: it is a
+ * public page about posts that were published to be read.)
+ *
+ * THE COVER is the stable address of the post's picture. It redirects to a
+ * fresh signed GET, which is why an unfurl card can point at it: a signature
+ * lasts twelve hours and a card is kept for weeks.
+ */
+async function servePublicBauPost(
+  req: IncomingMessage,
+  res: ServerResponse,
+  rawSlug: string,
+  rawPostId: string,
+  cover: boolean,
+): Promise<void> {
+  const address = clientAddress(req as never);
+  if (!publicBauPostLimiter.take(`bau-post:${address}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(publicBauPostLimiter.retryAfter(`bau-post:${address}`)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+
+  if (!isCommunitiesEnabled()) {
+    sendPublicBauNotFound(req, res);
+    return;
+  }
+
+  let slug: string;
+  let postId: string;
+  try {
+    slug = decodeURIComponent(rawSlug).toLowerCase();
+    postId = decodeURIComponent(rawPostId).toLowerCase();
+  } catch {
+    sendPublicBauNotFound(req, res);
+    return;
+  }
+  // Shape-checked before Postgres, like the community read, and for the same
+  // reason: both halves are path segments from the open internet.
+  if (!COMMUNITY_SLUG_PATTERN.test(slug) || !BAU_POST_ID_PATTERN.test(postId)) {
+    sendPublicBauNotFound(req, res);
+    return;
+  }
+
+  if (cover) {
+    let found;
+    try {
+      found = await getPublicBauPostCover(slug, postId);
+    } catch (error) {
+      console.error(`[bau-public] cover failed for ${slug}:`, error);
+      sendError(res, 503, "Posts temporarily unavailable", req);
+      return;
+    }
+    if (!found) {
+      sendPublicBauNotFound(req, res);
+      return;
+    }
+    // The picture itself, from this origin, for a crawler that checks an
+    // og:image with a HEAD or a ranged GET and takes a redirect to another
+    // domain for "no image" (X did). Over the size cap, or not an inert image,
+    // it still redirects to a fresh signature. See `serveCover`.
+    await serveCover(req, res, found, {
+      headers: (cacheControl) => publicBauHeaders(req, cacheControl),
+      notFound: () => sendPublicBauNotFound(req, res),
+      unavailable: () => sendError(res, 503, "Posts temporarily unavailable", req),
+      missCacheControl: PUBLIC_BAU_CACHE_MISS,
+    });
+    return;
+  }
+
+  let result;
+  try {
+    result = await getPublicBauPost(slug, postId);
+  } catch (error) {
+    console.error(`[bau-public] could not resolve ${slug}:`, error);
+    sendError(res, 503, "Posts temporarily unavailable", req);
+    return;
+  }
+  if (!result) {
+    sendPublicBauNotFound(req, res);
+    return;
+  }
+
+  // Cacheable by a shared cache, for the reasons and the window written at
+  // `PUBLIC_BAU_CACHE_HIT`: identical for every caller by construction,
+  // obtained with no credential, and shaped like a link going around a group
+  // chat. The signed media URLs inside last ten minutes.
+  const payload = JSON.stringify(result);
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Content-Length": String(Buffer.byteLength(payload)),
+    ...publicBauHeaders(req, PUBLIC_BAU_CACHE_HIT),
+  });
+  res.end(payload);
 }
 
 const PUBLIC_INVITE_PATH = /^\/api\/public\/invites\/([^/]{1,64})$/;
@@ -13010,8 +13736,8 @@ function servePublicCommunitiesConfig(
   req: IncomingMessage,
   res: ServerResponse,
 ): void {
-  if (req.method !== "GET") {
-    res.setHeader("Allow", "GET, OPTIONS");
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.setHeader("Allow", "GET, HEAD, OPTIONS");
     sendError(res, 405, "Method not allowed", req);
     return;
   }
@@ -13024,13 +13750,15 @@ function servePublicCommunitiesConfig(
     sendError(res, 429, "Too many requests", req);
     return;
   }
+  const payload = JSON.stringify({ enabled: isCommunitiesEnabled() });
   res.writeHead(200, {
     "Content-Type": "application/json",
+    "Content-Length": String(Buffer.byteLength(payload)),
     "Cache-Control": "public, max-age=60",
     ...SECURITY_HEADERS,
     ...corsHeaders(req),
   });
-  res.end(JSON.stringify({ enabled: isCommunitiesEnabled() }));
+  res.end(payload);
 }
 
 const WEBHOOK_EXECUTE_PATH =
@@ -13220,22 +13948,30 @@ export async function handleApi(
     return;
   }
 
-  const avatarMatch =
-    req.method === "GET" ? AVATAR_OBJECT_PATH.exec(pathname) : null;
+  // HEAD is answered as GET is, minus the body (Node drops it), on every public
+  // read below that a link unfurler probes: the pictures (see
+  // `answerStoredImage`), the profile, and the community reads further down. A
+  // crawler HEADs an address before it fetches it and reads a 401 as "nothing
+  // here"; without this a HEAD fell through to the authenticated router.
+  const readsPublic = req.method === "GET" || req.method === "HEAD";
+
+  const avatarMatch = readsPublic ? AVATAR_OBJECT_PATH.exec(pathname) : null;
   if (avatarMatch) {
     await serveAvatarObject(req, res, avatarMatch[1]!);
     return;
   }
 
-  const userBannerMatch =
-    req.method === "GET" ? USER_BANNER_OBJECT_PATH.exec(pathname) : null;
+  const userBannerMatch = readsPublic
+    ? USER_BANNER_OBJECT_PATH.exec(pathname)
+    : null;
   if (userBannerMatch) {
     await serveUserBannerObject(req, res, userBannerMatch[1]!);
     return;
   }
 
-  const serverImageMatch =
-    req.method === "GET" ? SERVER_IMAGE_OBJECT_PATH.exec(pathname) : null;
+  const serverImageMatch = readsPublic
+    ? SERVER_IMAGE_OBJECT_PATH.exec(pathname)
+    : null;
   if (serverImageMatch) {
     await serveServerImageObject(
       req,
@@ -13253,8 +13989,7 @@ export async function handleApi(
     return;
   }
 
-  const profileMatch =
-    req.method === "GET" ? PUBLIC_PROFILE_PATH.exec(pathname) : null;
+  const profileMatch = readsPublic ? PUBLIC_PROFILE_PATH.exec(pathname) : null;
   if (profileMatch) {
     await servePublicProfile(req, res, profileMatch[1]!);
     return;
@@ -13265,10 +14000,25 @@ export async function handleApi(
     return;
   }
 
-  const publicCommunityMatch =
-    req.method === "GET" ? PUBLIC_COMMUNITY_PATH.exec(pathname) : null;
+  const publicCommunityMatch = readsPublic
+    ? PUBLIC_COMMUNITY_PATH.exec(pathname)
+    : null;
   if (publicCommunityMatch) {
     await servePublicCommunity(req, res, publicCommunityMatch[1]!);
+    return;
+  }
+
+  const publicBauPostMatch = readsPublic
+    ? PUBLIC_BAU_POST_PATH.exec(pathname)
+    : null;
+  if (publicBauPostMatch) {
+    await servePublicBauPost(
+      req,
+      res,
+      publicBauPostMatch[1]!,
+      publicBauPostMatch[2]!,
+      publicBauPostMatch[3] !== undefined,
+    );
     return;
   }
 

@@ -77,7 +77,7 @@ final class StoryViewerLayersUITests: XCTestCase {
         app.buttons["hub.server.\(serverId)"].tap()
         let own = app.buttons["stories.own"]
         XCTAssertTrue(own.waitForExistence(timeout: 20), "The strip has the new story")
-        own.tap()
+        own.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.3)).tap()
         XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10), "The viewer opens")
         return app
     }
@@ -180,7 +180,7 @@ final class StoryViewerLayersUITests: XCTestCase {
         post.tap()
         let own = app.buttons["stories.own"]
         XCTAssertTrue(own.waitForExistence(timeout: 30), "Posted")
-        own.tap()
+        own.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.3)).tap()
         XCTAssertTrue(app.buttons["story.close"].waitForExistence(timeout: 10))
         // The viewer opens on your oldest story; step to the one just posted.
         var guardCount = 0

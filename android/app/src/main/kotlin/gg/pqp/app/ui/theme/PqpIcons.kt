@@ -362,6 +362,11 @@ private object Lucide {
         "M9 17 4 12 9 7",
         "M20 18v-2a4 4 0 0 0-4-4H4",
     )
+    // Encaminhar. Lucide's `forward`: the curved arrow, which is not the chevron.
+    val forward by lucide(
+        "m15 17 5-5-5-5",
+        "M4 18v-2a4 4 0 0 1 4-4h12",
+    )
     val screenShareOff by lucide(
         "M13 3H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-3",
         "M8 21h8",
@@ -508,6 +513,18 @@ private object Lucide {
         "m2 2 20 20",
     )
     // The story editor.
+    val messageSquareText by lucide(
+        "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+        "M7 11h10",
+        "M7 7h6",
+    )
+    val captions by lucide(
+        "M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z",
+        "M7 15h4",
+        "M15 15h2",
+        "M7 11h2",
+        "M13 11h4",
+    )
     val type by lucide(
         "M12 4v16",
         "M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2",
@@ -587,6 +604,9 @@ object PqpIcons {
     val Close get() = Lucide.x
     val More get() = Lucide.ellipsisVertical
     val Forward get() = Lucide.chevronRight
+
+    /** Encaminhar: put this post or message into another channel or a DM. */
+    val ForwardMessage get() = Lucide.forward
     val Expand get() = Lucide.chevronDown
     val Confirm get() = Lucide.check
     val Add get() = Lucide.plus
@@ -697,6 +717,8 @@ object PqpIcons {
 
     // The story editor.
     val AddText get() = Lucide.type
+    val Describe get() = Lucide.messageSquareText
+    val Captions get() = Lucide.captions
     val AddPhoto get() = Lucide.imagePlus
     val Stickers get() = Lucide.sticker
     val Draw get() = Lucide.brush

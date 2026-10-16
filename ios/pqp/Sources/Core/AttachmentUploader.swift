@@ -9,8 +9,13 @@ struct AttachmentConfig: Decodable, Sendable {
     /// notes, which reads as off. Only means anything when `enabled` is true:
     /// a note is an upload.
     let voiceNotes: Bool?
+    /// The `voice_note_transcription` flag where this was asked (a server, or
+    /// the global value for a conversation). A transcript only exists for a
+    /// note, so it needs both flags.
+    let voiceTranscription: Bool?
 
     var offersVoiceNotes: Bool { enabled && voiceNotes == true }
+    var offersTranscription: Bool { offersVoiceNotes && voiceTranscription == true }
 }
 
 /// The `voice` block of a mint request: the recorder's own measurements.

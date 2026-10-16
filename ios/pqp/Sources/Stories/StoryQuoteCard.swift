@@ -73,7 +73,7 @@ struct StoryQuoteCard: View {
                     Palette.surfaceRaised
                 }
             } else {
-                LinearGradient(colors: StoryRules.backgroundColors(card.background), startPoint: .top, endPoint: .bottom)
+                StoryRules.backgroundGradient(card.background)
             }
         } else {
             // The hatched plate: nothing of the story is left to show.

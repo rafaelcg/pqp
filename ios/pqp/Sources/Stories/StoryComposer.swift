@@ -49,6 +49,8 @@ struct StoryComposer: View {
     @State private var finalMedia: StoryDraftMedia?
     @State private var builtRequest = StoryDraftRequest(kind: "text", text: nil, background: nil, caption: nil, sticker: nil)
     @State private var error: String?
+    /// The files going up ahead of Post, when the server offers it.
+    @State private var eager: StoryEagerUploads?
 
     var body: some View {
         ZStack {
@@ -77,6 +79,13 @@ struct StoryComposer: View {
                 cameraStep
             }
         }
+        .onDisappear {
+            StoryMetrics.mark("composer.closed")
+            // Closed without posting: whatever went up ahead is thrown away
+            // (a post has already taken its files, so this finds none).
+            eager?.discardAll()
+        }
+        .onChange(of: editor.filesRevision) { _, _ in syncEager() }
         .task {
             await loadConfig()
             #if DEBUG
@@ -115,6 +124,14 @@ struct StoryComposer: View {
                let url = try? await StoryTestVideo.write(duration: seconds, size: CGSize(width: 180, height: 320), fps: 5) {
                 await accept(videoAt: url)
             }
+            // The same with a real file, for a clip of a realistic size: it is
+            // copied first, because the composer deletes what it was handed.
+            if let path = ProcessInfo.processInfo.environment["PQP_STORY_FIXTURE_VIDEO_FILE"] {
+                let copy = FileManager.default.temporaryDirectory.appendingPathComponent("story-\(UUID().uuidString).mp4")
+                if (try? FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: copy)) != nil {
+                    await accept(videoAt: copy)
+                }
+            }
             #endif
         }
         .photosPicker(isPresented: $showingPicker, selection: $pickerItem,
@@ -145,12 +162,13 @@ struct StoryComposer: View {
                 preselectsFriends: preselectsFriends,
                 callServerId: builtRequest.callServerId,
                 request: builtRequest,
-                media: finalMedia
+                media: finalMedia,
+                eager: eager
             ) {
                 // Posted: the temporary exports are no longer needed.
                 StoryImport.remove(finalMedia?.fileURL)
                 StoryImport.remove(draft?.fileURL)
-                showingAudience = false
+                // Dismissing the composer takes the sheet with it: one animation, not two.
                 onPosted()
                 dismiss()
             }
@@ -169,6 +187,9 @@ struct StoryComposer: View {
             }
             #endif
             config = try await session.api.storiesConfigOrThrow(serverId: preselectedServerId)
+            if eager == nil {
+                eager = session.storyPosts.makeEagerUploads(enabled: config.eagerUploadsEnabled)
+            }
             configLoaded = true
             configFailed = false
             if !config.mediaEnabled, mode == .media { mode = .text }
@@ -315,6 +336,7 @@ struct StoryComposer: View {
     /// to the camera tab.
     private func leaveEditor() {
         error = nil
+        eager?.discardAll()
         StoryImport.remove(draft?.fileURL)
         editor.clear()
         editorSerial += 1
@@ -350,7 +372,12 @@ struct StoryComposer: View {
                 contentType: file.contentType, byteSize: file.data.count, width: file.width, height: file.height
             ))
         }
-        let altText = StoryAltText.make(layers: editor.layers, callRoomName: editor.callInfo?.roomName, caption: nil)
+        // The base picture's description is only for a photo or video (a text card
+        // has no picture to describe).
+        let altText = StoryAltText.make(
+            layers: editor.layers, callRoomName: editor.callInfo?.roomName, caption: nil,
+            baseAlt: media == nil ? nil : editor.baseAlt
+        )
         // Old builds show the caption and nothing else: the text the author
         // typed travels there too.
         let spoken = editor.layers.sorted { $0.y < $1.y }.compactMap { layer -> String? in
@@ -395,6 +422,7 @@ struct StoryComposer: View {
         }
         finalMedia = mode == .media ? media : nil
         builtRequest = buildRequest(media: finalMedia)
+        syncEager()
         showingAudience = true
     }
 
@@ -454,6 +482,29 @@ struct StoryComposer: View {
             mode = .media
             self.draft = draft
         }
+        syncEager()
+    }
+
+    /// Starts uploading what is final and abandons what is gone: the base the
+    /// moment there is one (a clip once it is trimmed), each placed photo the
+    /// moment it is added, the drawing as it stands. Never blocks the editor.
+    private func syncEager() {
+        guard let eager, eager.enabled else { return }
+        var wants: [StoryEagerWant] = []
+        if mode == .media, let media = finalMedia ?? draft {
+            wants.append(StoryEagerWant(
+                key: StoryEagerWant.baseKey(), kind: "base", contentType: media.contentType, byteSize: media.data.count,
+                fingerprint: StoryEagerWant.fingerprint(of: media.data),
+                data: media.isVideo ? nil : media.data, fileURL: media.isVideo ? media.fileURL : nil
+            ))
+        }
+        for (layerId, file) in editor.files {
+            wants.append(StoryEagerWant(
+                key: StoryEagerWant.layerKey(layerId), kind: "layer", contentType: file.contentType, byteSize: file.data.count,
+                fingerprint: StoryEagerWant.fingerprint(of: file.data), data: file.data
+            ))
+        }
+        eager.sync(wants)
     }
 
     /// A file from the Files app. The copy of a movie and the decode of a
@@ -809,6 +860,62 @@ struct StoryCallPicker: View {
     }
 }
 
+/// Where this account last posted a story, and the list it was offered, kept
+/// so that Post still works with no connection: the list cannot load, so the
+/// last one stands in, and the story waits in the queue for a connection.
+enum StoryAudienceMemory {
+    struct Choice: Codable, Equatable {
+        var serverIds: [String]
+        var friends: Bool
+        var repliesEnabled: Bool
+    }
+
+    private static func key(_ name: String, _ userId: String?) -> String {
+        "pqp.stories.\(name).\(userId ?? "anon")"
+    }
+
+    static func save(options: StoryAudienceOptions, userId: String?) {
+        if let data = try? JSONEncoder().encode(options) {
+            UserDefaults.standard.set(data, forKey: key("audienceOptions", userId))
+        }
+    }
+
+    static func options(_ userId: String?) -> StoryAudienceOptions? {
+        UserDefaults.standard.data(forKey: key("audienceOptions", userId))
+            .flatMap { try? JSONDecoder().decode(StoryAudienceOptions.self, from: $0) }
+    }
+
+    static func save(choice: Choice, userId: String?) {
+        if let data = try? JSONEncoder().encode(choice) {
+            UserDefaults.standard.set(data, forKey: key("lastAudience", userId))
+        }
+    }
+
+    static func lastChoice(_ userId: String?) -> Choice? {
+        UserDefaults.standard.data(forKey: key("lastAudience", userId))
+            .flatMap { try? JSONDecoder().decode(Choice.self, from: $0) }
+    }
+
+    /// What to tick when the list is the remembered one: where it was last
+    /// posted, as far as that is still on offer; else where the composer was
+    /// opened from.
+    static func selection(
+        last: Choice?, options: StoryAudienceOptions?, preselectedServerId: String?, preselectsFriends: Bool
+    ) -> (servers: Set<String>, friends: Bool) {
+        var servers = Set(last?.serverIds ?? [])
+        var friends = last?.friends ?? false
+        if let options {
+            servers = servers.intersection(options.servers.filter(\.canPost).map(\.serverId))
+            if !(options.friends.enabled && options.friends.canPost) { friends = false }
+        }
+        if servers.isEmpty, !friends {
+            if let preselectedServerId { servers.insert(preselectedServerId) }
+            friends = preselectsFriends
+        }
+        return (servers, friends)
+    }
+}
+
 /// "Quem vê": every server with stories on where this account may post,
 /// plus Amigos, pre-ticked where the composer opened; replies on or off;
 /// and the post itself, with real upload progress.
@@ -820,6 +927,8 @@ struct StoryAudienceSheet: View {
     let callServerId: String?
     let request: StoryDraftRequest
     let media: StoryDraftMedia?
+    /// Files already going up; the post takes them over.
+    var eager: StoryEagerUploads?
     let onPosted: () -> Void
 
     @State private var options: StoryAudienceOptions?
@@ -827,9 +936,10 @@ struct StoryAudienceSheet: View {
     @State private var friends = false
     @State private var repliesEnabled = true
     @State private var posting = false
-    @State private var failed = false
+    /// The list on screen is the remembered one: there was no connection.
+    @State private var offline = false
     @State private var error: String?
-    /// One per story this sheet posts, reused by "Tentar de novo", so a retry
+    /// One per story this sheet posts, kept in the post's record, so a retry
     /// after a lost answer is the same story and not a second one.
     @State private var requestId = UUID().uuidString
 
@@ -890,9 +1000,9 @@ struct StoryAudienceSheet: View {
             if let error {
                 Text(verbatim: error)
                     .font(Typography.callout)
-                    .foregroundStyle(Palette.danger)
+                    .foregroundStyle(offline ? Palette.paperMuted : Palette.danger)
                     .accessibilityIdentifier("audience.error")
-                if options == nil {
+                if options == nil || offline {
                     Button("Try again") { Task { await load() } }
                         .font(Typography.bodyMedium)
                         .foregroundStyle(Palette.signal)
@@ -901,9 +1011,9 @@ struct StoryAudienceSheet: View {
             }
 
             Button {
-                Task { await post() }
+                post()
             } label: {
-                Text(posting ? String(localized: "Posting…") : (failed ? String(localized: "Didn't upload. Try again") : String(localized: "Post story")))
+                Text("Post story")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(PrimaryButtonStyle(isEnabled: canPost && !posting))
@@ -956,9 +1066,11 @@ struct StoryAudienceSheet: View {
     private func load() async {
         error = nil
         guard let loaded = try? await session.api.storyAudiences() else {
-            error = String(localized: "Couldn't load where you can post.")
+            useRememberedAudience()
             return
         }
+        offline = false
+        StoryAudienceMemory.save(options: loaded, userId: session.currentUser?.id)
         options = loaded
         let postable = Set(loaded.servers.filter(\.canPost).map(\.serverId))
         if let preselectedServerId, postable.contains(preselectedServerId) {
@@ -972,73 +1084,63 @@ struct StoryAudienceSheet: View {
         }
     }
 
-    /// Create, PUT the bytes with exactly the signed headers, publish.
-    private func post() async {
-        posting = true
-        failed = false
-        error = nil
-        defer { posting = false }
-        let body = CreateStoryRequest(
-            requestId: requestId,
-            kind: request.kind,
-            caption: request.caption,
-            text: request.text,
-            background: request.background,
-            sticker: request.sticker,
-            repliesEnabled: repliesEnabled,
-            audiences: StoryAudienceTargets(serverIds: Array(servers), friends: friends),
-            media: media.map {
-                StoryMediaInput(contentType: $0.contentType, byteSize: $0.data.count,
-                                width: $0.width, height: $0.height, durationMs: $0.durationMs)
-            },
-            layers: request.layers.isEmpty ? nil : request.layers,
-            altText: request.altText
+    /// No connection: the list from the last time stands in, with where the
+    /// last story went ticked, so Post still works and the story waits in the
+    /// queue for a connection. With nothing remembered, the place the composer
+    /// was opened from.
+    private func useRememberedAudience() {
+        let user = session.currentUser?.id
+        let last = StoryAudienceMemory.lastChoice(user)
+        let remembered = StoryAudienceMemory.options(user)
+        let chosen = StoryAudienceMemory.selection(
+            last: last, options: remembered, preselectedServerId: preselectedServerId, preselectsFriends: preselectsFriends
         )
+        if let remembered { options = remembered }
+        servers = chosen.servers
+        friends = chosen.friends
+        if let last { repliesEnabled = last.repliesEnabled }
+        offline = true
+        error = remembered != nil
+            ? String(localized: "No connection. This is the list from last time, and the story posts when you're back online.")
+            : String(localized: "Couldn't load where you can post.")
+    }
+
+    /// Hands the story to the posting queue and closes: the create, the PUTs and
+    /// the publish run behind the person's own ring, with a progress fraction,
+    /// and a failure keeps the draft for "Tentar de novo" or "Descartar".
+    private func post() {
+        StoryMetrics.mark("post.tap")
+        guard canPost, !posting else { return }
+        posting = true
+        error = nil
         do {
-            let created = try await session.api.createStory(body)
-            // Every file goes up before the story is published: the base photo
-            // or video, and each placed photo and the drawing, all at once (they
-            // are independent, and the post waits for the slowest, not the sum).
-            // A story with nothing to upload (text, a call, a mention) is live
-            // on the create answer and has nothing to publish.
-            var files: [(Data, StoryUpload)] = []
-            if let upload = created.upload, let media { files.append((media.data, upload)) }
-            for target in created.layerUploads {
-                guard let file = request.layerFiles[target.layerId] else { continue }
-                files.append((file.data, StoryUpload(url: target.url, method: target.method, headers: target.headers)))
-            }
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                for (data, upload) in files {
-                    group.addTask { try await StoryUploader.put(data, to: upload) }
-                }
-                try await group.waitForAll()
-            }
-            if created.upload != nil || !created.layerUploads.isEmpty {
-                _ = try await session.api.publishStory(id: created.story.id)
-            }
-            // A failed attempt is retried with the same `requestId`, which the
-            // server answers with the SAME pending story and fresh upload
-            // URLs; a story that is never published is deleted after an hour.
+            let body = CreateStoryRequest(
+                requestId: requestId,
+                kind: request.kind,
+                caption: request.caption,
+                text: request.text,
+                background: request.background,
+                sticker: request.sticker,
+                repliesEnabled: repliesEnabled,
+                audiences: StoryAudienceTargets(serverIds: Array(servers), friends: friends),
+                media: media.map {
+                    StoryMediaInput(contentType: $0.contentType, byteSize: $0.data.count,
+                                    width: $0.width, height: $0.height, durationMs: $0.durationMs)
+                },
+                layers: request.layers.isEmpty ? nil : try request.layers.map { try JSONValue(encoding: $0) },
+                altText: request.altText
+            )
+            let base = media.map { StoryPostBytes(contentType: $0.contentType, data: $0.data, fileURL: $0.fileURL) }
+            let layers = request.layerFiles.mapValues { StoryPostBytes(contentType: $0.contentType, data: $0.data) }
+            try session.storyPosts.enqueue(request: body, base: base, layers: layers, userId: session.currentUser?.id, eager: eager)
+            StoryAudienceMemory.save(
+                choice: .init(serverIds: Array(servers), friends: friends, repliesEnabled: repliesEnabled),
+                userId: session.currentUser?.id
+            )
             onPosted()
         } catch {
-            failed = true
-            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-}
-
-/// The presigned PUT: exactly the headers the server signed, nothing else.
-enum StoryUploader {
-    static func put(_ data: Data, to upload: StoryUpload) async throws {
-        guard let url = URL(string: upload.url) else { throw APIError.transport("Bad upload URL") }
-        var request = URLRequest(url: url)
-        request.httpMethod = upload.method
-        for (name, value) in upload.headers {
-            request.setValue(value, forHTTPHeaderField: name)
-        }
-        let (_, response) = try await URLSession.shared.upload(for: request, from: data)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw APIError.transport(String(localized: "Didn't upload. Try again"))
+            posting = false
+            self.error = String(localized: "Couldn't keep your story to post it. Check your free space.")
         }
     }
 }

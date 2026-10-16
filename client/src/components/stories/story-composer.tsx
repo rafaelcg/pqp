@@ -1,4 +1,5 @@
 import {
+  Accessibility,
   ArrowUpToLine,
   Camera,
   ChevronLeft,
@@ -25,11 +26,10 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import {
-  STORY_BACKGROUNDS,
+  STORY_BACKGROUND_FAMILIES,
   STORY_CAPTION_MAX,
   STORY_LAYER_IMAGE_SHAPES,
   STORY_LAYER_IMAGES_MAX,
@@ -38,13 +38,18 @@ import {
   type StoriesConfig,
   type StoryAudienceOptions,
   type StoryBackground,
+  type StoryBackgroundFamily,
+  storyBackgroundFamily,
+  storyBackgroundsOf,
 } from "@pqp/shared";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { useInertBackground } from "@/lib/use-inert-background";
 import { fetchStoryAudiences } from "@/lib/stories/api";
 import { STORIES_CONFIG_OFF, loadStoriesConfig } from "@/lib/stories/config";
 import { captureStill } from "@/lib/stories/camera";
 import { colorFromTokens, hasInk, renderDrawingBlob, type Stroke } from "@/lib/stories/drawing";
+import { startEagerUpload, type EagerUpload } from "@/lib/stories/eager-upload";
 import {
   DEFAULT_TEXT,
   altTextFor,
@@ -58,7 +63,7 @@ import {
   type TextLayerFields,
 } from "@/lib/stories/layers";
 import { loadMentionPeople, type MentionPerson } from "@/lib/stories/mention-people";
-import { postStory } from "@/lib/stories/post";
+import { postStory, type StoryDraft } from "@/lib/stories/post";
 import {
   preparedFromStill,
   prepareLayerImage,
@@ -71,6 +76,7 @@ import {
 import { useCamera, useRecorder, type RecordedClip } from "@/lib/stories/use-camera";
 import type { ComposerRequest } from "@/lib/stories/ui-store";
 import { cn } from "@/lib/utils";
+import { AltTextSheet } from "./composer-alt";
 import { AudienceChip, AudienceSheet, audienceSummary } from "./composer-audience";
 import { CameraControlsRow, CameraStage } from "./composer-camera";
 import { ComposerCanvas } from "./composer-canvas";
@@ -121,7 +127,11 @@ interface StoryComposerProps {
 }
 
 type Mode = "camera" | "text";
-type Panel = "stickers" | "call" | "mention" | "audience" | null;
+/** What the key handler reads: a React key event on the root and a native one from the document both fit. */
+type RootKeyEvent = Pick<KeyboardEvent, "key" | "shiftKey" | "metaKey" | "ctrlKey" | "preventDefault" | "stopPropagation"> & {
+  target: EventTarget | null;
+};
+type Panel = "stickers" | "call" | "mention" | "audience" | "alt" | null;
 
 const PROBLEM_KEY: Record<StoryFileProblem["kind"], MessageKey> = {
   "wrong-type": "stories.compose.wrongType",
@@ -170,6 +180,9 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const [drawing, setDrawing] = useState(false);
   const [drawSettings, setDrawSettings] = useState<DrawSettings>(DEFAULT_DRAW);
   const [panel, setPanel] = useState<Panel>(null);
+  // The author's description of the picture, and what the description sheet is open for ("base" or a photo layer's id).
+  const [baseAlt, setBaseAlt] = useState("");
+  const [altTarget, setAltTarget] = useState<string | null>(null);
   const [mentionPeople, setMentionPeople] = useState<MentionPerson[] | null>(null);
   const [mentionLoading, setMentionLoading] = useState(false);
   const [gestureActive, setGestureActive] = useState(false);
@@ -186,6 +199,8 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const fileInput = useRef<HTMLInputElement>(null);
   const photoInput = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  // The page behind is unreachable while this is open (Safari tabs out of an aria-modal alone).
+  useInertBackground(rootRef);
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const autoOpenedText = useRef(false);
@@ -194,6 +209,44 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   const fileTicket = useRef(0);
   const layersRef = useRef(layers);
   layersRef.current = layers;
+
+  // Eager uploads (`eager-upload.ts`): each file starts going to storage the moment it is final, while
+  // the author is still editing, so Post only has to create and publish. They live in refs because
+  // they are side effects of the draft, not things to render; whatever is still here when the
+  // composer goes away was never posted, and is thrown away (aborted, and deleted on the server).
+  const baseUpload = useRef<EagerUpload | null>(null);
+  const layerUploads = useRef(new Map<string, EagerUpload>());
+  // The drawing is only final when the pen is put down: rendered and sent then, and again if it changes.
+  const drawingUpload = useRef<{ strokes: unknown; file: { blob: Blob; width: number; height: number }; handle: EagerUpload | null } | null>(null);
+  // Set when Post hands the uploads to the draft: from then on they are no longer this component's to cancel.
+  const handedOver = useRef(false);
+  // The server's runtime switch (`stories_eager_uploads`, in the stories config). Off, or a server that
+  // predates it, and every file goes up at Post the way it always did.
+  const eagerOn = useRef(false);
+  eagerOn.current = config.eagerUploads === true;
+  const startEager = useCallback(
+    (input: Parameters<typeof startEagerUpload>[0]) => (eagerOn.current ? startEagerUpload(input) : null),
+    [],
+  );
+
+  const cancelUploads = useCallback(() => {
+    baseUpload.current?.cancel();
+    baseUpload.current = null;
+    for (const handle of layerUploads.current.values()) {
+      handle.cancel();
+    }
+    layerUploads.current.clear();
+    drawingUpload.current?.handle?.cancel();
+    drawingUpload.current = null;
+  }, []);
+  useEffect(
+    () => () => {
+      if (!handedOver.current) {
+        cancelUploads();
+      }
+    },
+    [cancelUploads],
+  );
 
   const loadOptions = () => {
     setOptionsFailed(false);
@@ -263,6 +316,69 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     [],
   );
 
+  // A placed photo goes up as soon as it is on the canvas and is thrown away when it is taken off (the
+  // delete button, or an undo of its adding). Undoing a removal puts the layer back, and it goes up again.
+  useEffect(() => {
+    if (handedOver.current) {
+      return;
+    }
+    const wanted = new Map<string, Extract<EditorLayer, { type: "image" }>>();
+    for (const layer of layers) {
+      if (layer.type === "image") {
+        wanted.set(layer.id, layer);
+      }
+    }
+    for (const [id, handle] of layerUploads.current) {
+      if (!wanted.has(id)) {
+        handle.cancel();
+        layerUploads.current.delete(id);
+      }
+    }
+    for (const [id, layer] of wanted) {
+      if (!layerUploads.current.has(id)) {
+        const handle = startEager({ kind: "layer", blob: layer.blob, contentType: layer.contentType });
+        if (handle) {
+          layerUploads.current.set(id, handle);
+        }
+      }
+    }
+  }, [layers, config.eagerUploads, startEager]);
+
+  // The drawing, once the pen is up: rendered to its picture and sent, so Post does not wait for it. Any
+  // change to the strokes (another stroke, an undo) throws that copy away and sends the new one.
+  const drawingLayerNow = layers.find((layer): layer is Extract<EditorLayer, { type: "drawing" }> => layer.type === "drawing");
+  const drawingStrokes = drawingLayerNow?.strokes;
+  useEffect(() => {
+    if (handedOver.current || drawing) {
+      return;
+    }
+    const known = drawingUpload.current;
+    if (known && known.strokes === drawingStrokes) {
+      return;
+    }
+    if (known) {
+      known.handle?.cancel();
+      drawingUpload.current = null;
+    }
+    if (!drawingStrokes || !hasInk(drawingStrokes as Stroke[])) {
+      return;
+    }
+    let stale = false;
+    void renderDrawingBlob(drawingStrokes as Stroke[], colorFromTokens).then((file) => {
+      if (stale || !file || handedOver.current) {
+        return;
+      }
+      drawingUpload.current = {
+        strokes: drawingStrokes,
+        file,
+        handle: startEager({ kind: "layer", blob: file.blob, contentType: "image/png" }),
+      };
+    });
+    return () => {
+      stale = true;
+    };
+  }, [drawing, drawingStrokes, config.eagerUploads, startEager]);
+
   // The camera light goes out the moment the tab is not looked at.
   useEffect(() => {
     const onVisibility = () => setTabHidden(document.visibilityState === "hidden");
@@ -294,11 +410,25 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     }
     setProblem(null);
     setMedia(next);
+    // A different picture, a different description.
+    setBaseAlt("");
+    // The bytes are final (a photo is already cropped and encoded, a clip is recorded): start sending
+    // them now. A newer file replaces an older one, and the older one's upload is thrown away.
+    baseUpload.current?.cancel();
+    baseUpload.current = startEager({ kind: "base", blob: next.blob, contentType: next.contentType });
     setMode("camera");
     // Whatever was being typed or drawn on the way here is over: the picture is the base now.
     setEditing(null);
     setDrawing(false);
-  }, []);
+  }, [startEager]);
+
+  // The config can arrive after a file did (one handed over by a drop opens the composer already
+  // holding it): the base starts going up as soon as the server says it may.
+  useEffect(() => {
+    if (config.eagerUploads === true && media && mode === "camera" && !baseUpload.current && !handedOver.current) {
+      baseUpload.current = startEager({ kind: "base", blob: media.blob, contentType: media.contentType });
+    }
+  }, [config.eagerUploads, media, mode, startEager]);
 
   const showProblem = useCallback(
     (found: StoryFileProblem) => {
@@ -488,6 +618,10 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     fileTicket.current += 1;
     setPreparing(false);
     setMedia(null);
+    // The picture is being thrown away, and so is its upload.
+    baseUpload.current?.cancel();
+    baseUpload.current = null;
+    setBaseAlt("");
     setProblem(null);
     setDrawing(false);
     setEditing(null);
@@ -567,7 +701,14 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     const audiences = { serverIds: effectiveServerIds, friends };
     const current = layersRef.current;
     const drawingLayer = current.find((layer): layer is Extract<EditorLayer, { type: "drawing" }> => layer.type === "drawing");
-    const drawingFile = drawingLayer ? await renderDrawingBlob(drawingLayer.strokes as Stroke[], colorFromTokens) : null;
+    // Normally the drawing was rendered and is already on its way (the pen went up); only a drawing
+    // changed in the last moments is drawn again here.
+    const preDrawn = drawingLayer && drawingUpload.current?.strokes === drawingLayer.strokes ? drawingUpload.current : null;
+    const drawingFile = preDrawn
+      ? preDrawn.file
+      : drawingLayer
+        ? await renderDrawingBlob(drawingLayer.strokes as Stroke[], colorFromTokens)
+        : null;
     if (drawingLayer && hasInk(drawingLayer.strokes) && !drawingFile) {
       // The drawing could not be turned into a picture: posting without it would drop what was drawn.
       setProblem(t("stories.compose.unreadable"));
@@ -585,7 +726,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       const input = toLayerInput(layer, drawingFile ?? undefined);
       return input ? [input] : [];
     });
-    const altText = altTextFor(current, "", (name) => t("stories.editor.altMention", { name }));
+    const altText = altTextFor(current, "", (name) => t("stories.editor.altMention", { name }), mode === "camera" ? baseAlt : "");
     // The words go up twice: as layers, and as the plain caption older builds still read.
     const words = current
       .filter((layer): layer is Extract<EditorLayer, { type: "text" }> => layer.type === "text")
@@ -612,10 +753,41 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
             media: null,
             layerFiles,
           };
+    // The uploads that are on their way now belong to the draft, which waits for them and, if the
+    // author discards it from the ring, throws them away. A base from the other tab is not part of it.
+    const eagerLayers = new Map<string, EagerUpload>();
+    for (const layer of current) {
+      const handle =
+        layer.type === "image"
+          ? layerUploads.current.get(layer.id)
+          : layer.type === "drawing"
+            ? preDrawn?.handle
+            : null;
+      if (handle) {
+        eagerLayers.set(layer.id, handle);
+      }
+    }
+    const eagerBase = mode === "camera" && media ? baseUpload.current : null;
+    const unused = [
+      ...(eagerBase ? [] : [baseUpload.current]),
+      ...[...layerUploads.current.entries()].filter(([id]) => !eagerLayers.has(id)).map(([, handle]) => handle),
+      ...(drawingUpload.current && drawingUpload.current !== preDrawn ? [drawingUpload.current.handle] : []),
+    ];
+    for (const handle of unused) {
+      handle?.cancel();
+    }
+    handedOver.current = true;
+    baseUpload.current = null;
+    layerUploads.current = new Map();
+    drawingUpload.current = null;
+    const posted: StoryDraft = {
+      ...draft,
+      eager: { base: eagerBase, layers: eagerLayers },
+    };
     onPosted?.(previewRef.current);
     // The media's object URL now belongs to the post; do not revoke it here.
     setMedia(null);
-    void postStory(draft);
+    void postStory(posted);
     onClose();
   }
 
@@ -644,14 +816,14 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     });
   }, []);
 
-  function finishText(fields: TextLayerFields, scale: number) {
+  function finishText(fields: TextLayerFields, scale: number, center: { x: number; y: number }) {
     const trimmed = fields.text.trim();
     const { text: _text, ...style } = fields;
     setTextStyle(style);
     if (editing?.id) {
       if (trimmed) {
         // One history step for the whole edit: the words, their style and the scale together.
-        dispatch({ type: "patch", id: editing.id, patch: { ...style, text: trimmed, scale } });
+        dispatch({ type: "patch", id: editing.id, patch: { ...style, text: trimmed, scale, ...center } });
       } else {
         dispatch({ type: "remove", id: editing.id });
       }
@@ -659,10 +831,10 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       if (!canAddLayer(layersRef.current, "text")) {
         setProblem(t("stories.editor.limit.layers"));
       } else {
-        const { x, y, rotation } = editing!.geometry;
+        const { rotation } = editing!.geometry;
         dispatch({
           type: "add",
-          layer: { id: newLayerId(), type: "text", x, y, scale, rotation, ...style, text: trimmed },
+          layer: { id: newLayerId(), type: "text", ...center, scale, rotation, ...style, text: trimmed },
         });
       }
     }
@@ -817,6 +989,43 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
   }, [showingCamera, editing, drawing]);
 
   // ---------------------------------------------------------------- focus + keys
+  // Escape, Ctrl+Z and Tab are heard on the composer's own root, so focus has to be inside it. Two
+  // things took it away. The server menu hands focus back to its trigger (behind the modal) as it
+  // closes, after the composer has mounted; and the text editor, a sheet or a button that was just
+  // removed leaves focus on the page's body. Either way Escape did nothing and Tab walked the page
+  // behind. A key pressed with focus outside the composer (and not in a field) is therefore the
+  // composer's: focus comes back to the root and the key is handled as if it had been pressed there.
+  // This never moves focus on its own, so it cannot fight another focus trap (a menu closing).
+  // Declared BEFORE the opener-restoring effect below, so on close it stops listening before focus
+  // goes back to the opener.
+  const keyHandler = useRef(onRootKeyDown);
+  keyHandler.current = onRootKeyDown;
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (event.defaultPrevented || (target && root.contains(target))) {
+        return;
+      }
+      // Somebody typing in a field, or a menu or dialog above the composer, keeps its own keys.
+      if (
+        target &&
+        (target.isContentEditable ||
+          /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) ||
+          target.closest("[role='menu'], [role='listbox'], [role='dialog']"))
+      ) {
+        return;
+      }
+      root.focus({ preventScroll: true });
+      keyHandler.current(event);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // A field that took focus on its own (the text card's) keeps it.
@@ -830,7 +1039,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
     };
   }, []);
 
-  function onRootKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+  function onRootKeyDown(event: RootKeyEvent) {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -929,7 +1138,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       case "text":
         return t("stories.editor.layer.text", { text: layer.text });
       case "image":
-        return t("stories.editor.layer.image");
+        return layer.alt?.trim() ? t("stories.editor.layer.imageAlt", { alt: layer.alt.trim() }) : t("stories.editor.layer.image");
       case "drawing":
         return t("stories.editor.layer.drawing");
       case "call":
@@ -937,6 +1146,22 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
       case "mention":
         return t("stories.editor.layer.mention", { name: layer.name });
     }
+  }
+
+  function openAlt(target: string) {
+    setEditing(null);
+    setDrawing(false);
+    setAltTarget(target);
+    setPanel("alt");
+  }
+
+  function saveAlt(alt: string) {
+    if (altTarget === "base") {
+      setBaseAlt(alt);
+    } else if (altTarget) {
+      dispatch({ type: "patch", id: altTarget, patch: { alt } });
+    }
+    setPanel(null);
   }
 
   function cycleShape(layer: Extract<EditorLayer, { type: "image" }>) {
@@ -1075,7 +1300,8 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               onChooseFile={() => fileInput.current?.click()}
             />
           ) : (
-            <StoryContent story={display} still={false} playVideo muted={false} paused={false} loop withLayers={false} />
+            // Muted on purpose: editing is silent, the viewer is where a clip has sound (and a mute button).
+            <StoryContent story={display} still={false} playVideo muted paused={false} loop withLayers={false} />
           )}
 
           {hasBase && (
@@ -1115,7 +1341,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               className={cn(
                 "absolute inset-x-0 z-10 flex justify-center gap-1.5",
                 // In the text card the background picker holds the foot row.
-                barAtFoot ? (mode === "text" ? "bottom-[60px]" : "bottom-3") : "top-3",
+                barAtFoot ? (mode === "text" ? "bottom-[108px]" : "bottom-3") : "top-3",
               )}
             >
               {selected.type === "text" && (
@@ -1138,6 +1364,19 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
                   ) : (
                     <Square className="h-[18px] w-[18px]" aria-hidden />
                   )}
+                </button>
+              )}
+              {selected.type === "image" && (
+                <button
+                  type="button"
+                  className="story-cbtn"
+                  data-story-alt-layer=""
+                  data-active={selected.alt?.trim() ? "true" : undefined}
+                  aria-label={t("stories.editor.alt.titlePhoto")}
+                  title={t("stories.editor.alt.titlePhoto")}
+                  onClick={() => openAlt(selected.id)}
+                >
+                  <Accessibility className="h-[18px] w-[18px]" aria-hidden />
                 </button>
               )}
               <button
@@ -1167,6 +1406,7 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
               initial={editingFields}
               geometry={editing.geometry}
               onDone={finishText}
+              keepClearOfChrome={!editing.id}
               onCancel={() => setEditing(null)}
               onLift={setStageLift}
             />
@@ -1225,6 +1465,19 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
 
           {!showingCamera && !drawing && (
             <div className="flex items-center gap-2.5 px-2">
+              {mode === "camera" && media && (
+                <button
+                  type="button"
+                  className="story-cbtn shrink-0"
+                  data-story-alt-base=""
+                  data-active={baseAlt.trim() ? "true" : undefined}
+                  aria-label={t("stories.editor.alt.titleBase")}
+                  title={t("stories.editor.alt.titleBase")}
+                  onClick={() => openAlt("base")}
+                >
+                  <Accessibility className="h-[18px] w-[18px]" aria-hidden />
+                </button>
+              )}
               <AudienceChip summary={summary} onOpen={() => setPanel("audience")} />
               <StoryButton data-story-post="" disabled={!ready} onClick={() => void submit()}>
                 {t("stories.audience.post")}
@@ -1287,6 +1540,22 @@ export function StoryComposer({ request, meId, voiceRooms, onClose, onPosted }: 
             callAvailable={Boolean(voiceRooms)}
             callPlaced={Boolean(callLayer)}
             mentionFull={!canAddLayer(layers, "mention")}
+          />
+        )}
+        {panel === "alt" && altTarget && (
+          <AltTextSheet
+            key={altTarget}
+            kind={altTarget === "base" ? "base" : "photo"}
+            initial={
+              altTarget === "base"
+                ? baseAlt
+                : (() => {
+                    const target = layers.find((layer) => layer.id === altTarget);
+                    return target?.type === "image" ? (target.alt ?? "") : "";
+                  })()
+            }
+            onSave={saveAlt}
+            onClose={() => setPanel(null)}
           />
         )}
         {panel === "call" && voiceRooms && (
@@ -1397,6 +1666,16 @@ function DiscardDialog({ onKeep, onDiscard }: { onKeep: () => void; onDiscard: (
   );
 }
 
+const BACKGROUND_FAMILY_KEY: Record<StoryBackgroundFamily, MessageKey> = {
+  glow: "stories.compose.backgroundGlow",
+  solid: "stories.compose.backgroundSolid",
+  gradient: "stories.compose.backgroundGradient",
+};
+
+/**
+ * The text card's backgrounds, one family at a time: a row of swatches under a small switch. The
+ * switch only changes which row is shown; the chosen key is the author's until they pick another.
+ */
 function BackgroundPicker({
   value,
   onChange,
@@ -1405,34 +1684,50 @@ function BackgroundPicker({
   onChange: (next: StoryBackground) => void;
 }) {
   const { t } = useTranslation();
+  const [family, setFamily] = useState<StoryBackgroundFamily>(() => storyBackgroundFamily(value));
   return (
-    <div
-      role="radiogroup"
-      aria-label={t("stories.compose.background")}
-      className="absolute inset-x-0 bottom-3 z-10 flex justify-center gap-2.5 px-3"
-    >
-      {STORY_BACKGROUNDS.map((key, index) => (
-        <button
-          key={key}
-          type="button"
-          role="radio"
-          aria-checked={value === key}
-          aria-label={t("stories.compose.backgroundOption", { n: index + 1 })}
-          data-story-bg={key}
-          onClick={() => onChange(key)}
-          className={cn(
-            "story-text-card h-8 w-8 rounded-full transition-transform duration-[var(--duration-fast)] motion-reduce:transition-none",
-            value === key ? "scale-110" : "hover:scale-105",
-          )}
-          style={{
-            boxShadow:
-              value === key
-                ? "0 0 0 2px var(--story-card), 0 0 0 4px var(--story-on-media)"
-                : "0 0 0 1.5px var(--story-field-edge)",
-          }}
-          data-bg={key}
-        />
-      ))}
+    <div className="absolute inset-x-0 bottom-3 z-10 flex flex-col items-center gap-2.5 px-3" data-story-bg-picker="">
+      <div role="group" aria-label={t("stories.compose.backgroundFamily")} className="flex gap-1.5">
+        {STORY_BACKGROUND_FAMILIES.map((key) => (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={family === key}
+            data-story-bg-family={key}
+            onClick={() => setFamily(key)}
+            className={cn(
+              "h-7 rounded-full px-3 text-xs font-semibold transition-colors duration-[var(--duration-fast)] motion-reduce:transition-none",
+              family === key ? "bg-[var(--story-on-media)] text-[var(--story-on-accent)]" : "bg-[var(--story-field-fill)] text-[var(--story-on-media-2)] hover:text-[var(--story-on-media)]",
+            )}
+          >
+            {t(BACKGROUND_FAMILY_KEY[key])}
+          </button>
+        ))}
+      </div>
+      <div role="radiogroup" aria-label={t("stories.compose.background")} className="flex justify-center gap-2.5">
+        {storyBackgroundsOf(family).map((key, index) => (
+          <button
+            key={key}
+            type="button"
+            role="radio"
+            aria-checked={value === key}
+            aria-label={`${t(BACKGROUND_FAMILY_KEY[family])} ${t("stories.compose.backgroundOption", { n: index + 1 })}`}
+            data-story-bg={key}
+            onClick={() => onChange(key)}
+            className={cn(
+              "story-text-card h-8 w-8 rounded-full transition-transform duration-[var(--duration-fast)] motion-reduce:transition-none",
+              value === key ? "scale-110" : "hover:scale-105",
+            )}
+            style={{
+              boxShadow:
+                value === key
+                  ? "0 0 0 2px var(--story-card), 0 0 0 4px var(--story-on-media)"
+                  : "0 0 0 1.5px var(--story-field-edge)",
+            }}
+            data-bg={key}
+          />
+        ))}
+      </div>
     </div>
   );
 }

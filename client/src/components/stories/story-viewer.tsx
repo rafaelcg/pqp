@@ -44,6 +44,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import { ApiError } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { useInertBackground } from "@/lib/use-inert-background";
 import {
   deleteStory,
   fetchStories,
@@ -60,6 +61,7 @@ import {
   STORY_REACTION_ORDER,
   formatStoryAge,
 } from "@/lib/stories/format";
+import { assetsOfStory, rememberStories, rememberedStory, storyPreloader, warmStoryFonts } from "@/lib/stories/preload";
 import { commitSeenStories, noteStoriesSeen } from "@/lib/stories/seen-store";
 import { flushStoryViews, queueStoryViews } from "@/lib/stories/views-queue";
 import { useStoryCardSize } from "@/lib/stories/viewer-size";
@@ -69,6 +71,7 @@ import {
   currentPerson,
   currentStoryId,
   idsToPreload,
+  idsToWarm,
   isPaused,
   progressFraction,
   storyDisplayMs,
@@ -184,7 +187,16 @@ export function StoryViewer({
   const [state, dispatch] = useReducer(viewerReducer, request, (req) =>
     createViewerState(req.people, { personIndex: req.startIndex }),
   );
-  const [stories, setStories] = useState<ReadonlyMap<string, Story>>(new Map());
+  // Starts with whatever the strip warmed a moment ago, so the first story needs no request at all.
+  const [stories, setStories] = useState<ReadonlyMap<string, Story>>(
+    () =>
+      new Map(
+        idsToPreload(state).flatMap((id) => {
+          const known = rememberedStory(id);
+          return known ? [[id, known] as const] : [];
+        }),
+      ),
+  );
   const [missing, setMissing] = useState<ReadonlySet<string>>(new Set());
   // Fetches that failed (offline, a 5xx): retried after a pause, and shown as
   // a failure with a retry meanwhile, never an endless spinner.
@@ -207,6 +219,8 @@ export function StoryViewer({
   const [deck, setDeck] = useState<{ display: StoryDisplay; dir: "forward" | "back"; key: number } | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
+  // The page behind is unreachable while this is open; handed back just before focus returns to the ring.
+  const releaseBackground = useInertBackground(rootRef);
   const cardRef = useRef<HTMLDivElement>(null);
   const deckRef = useRef<HTMLDivElement>(null);
   const replyRef = useRef<HTMLInputElement>(null);
@@ -234,10 +248,32 @@ export function StoryViewer({
   const dialogOpen = Boolean(report || confirmDelete || modRemove);
 
   // ---------------------------------------------------------------- data
+  // Stories the strip (or an earlier look) read a moment ago are used as they are, without asking
+  // again: their presigned picture and clip URLs are the very ones that were warmed.
+  useEffect(() => {
+    const known = idsToPreload(state).flatMap((id) => {
+      const story = stories.has(id) ? null : rememberedStory(id);
+      return story ? [story] : [];
+    });
+    if (known.length === 0) {
+      return;
+    }
+    setStories((current) => {
+      const next = new Map(current);
+      for (const story of known) {
+        next.set(story.id, story);
+      }
+      return next;
+    });
+    // `state` is read through idsToPreload; the indices are what move it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.personIndex, state.storyIndex, state.people, stories]);
+
   useEffect(() => {
     const pending = inflight.current;
     const wanted = idsToPreload(state).filter(
-      (id) => !stories.has(id) && !missing.has(id) && !failed.has(id) && !pending.has(id),
+      (id) =>
+        !stories.has(id) && !missing.has(id) && !failed.has(id) && !pending.has(id) && !rememberedStory(id),
     );
     if (wanted.length === 0) {
       return;
@@ -264,14 +300,8 @@ export function StoryViewer({
           setMissing((current) => new Set([...current, ...gone]));
           dispatch({ type: "remove", storyIds: gone });
         }
-        // Warm the next pictures so a tap never waits on a download.
-        for (const item of found) {
-          if (item.kind === "image" && item.media?.url) {
-            const image = new Image();
-            image.decoding = "async";
-            image.src = item.media.url;
-          }
-        }
+        // Kept, so looking again within minutes (and the preloader's warmed files) match these URLs.
+        rememberStories(found);
       })
       .catch(() => {
         if (cancelled) {
@@ -334,6 +364,23 @@ export function StoryViewer({
   isOwnRef.current = isOwn;
   const currentPersonIdsRef = useRef<string[]>([]);
   currentPersonIdsRef.current = person?.storyIds ?? [];
+
+  // Warm what comes next (the next two of the queue across authors, and the next author's first), so
+  // going on shows its first frame with no wait: pictures decoded, a clip buffered, layer photos and
+  // the author's face loaded. Leaving the window cancels what is still downloading; closing cancels all.
+  useEffect(() => {
+    const assets = idsToWarm(state).flatMap((id) => {
+      const next = stories.get(id);
+      return next ? assetsOfStory(next, { video: true }) : [];
+    });
+    storyPreloader.setSource("viewer", 0, assets);
+    // `state` is read through idsToWarm; the indices and the queue are what move it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.personIndex, state.storyIndex, state.people, stories]);
+  useEffect(() => {
+    warmStoryFonts();
+    return () => storyPreloader.clearSource("viewer");
+  }, []);
 
   // Clock for ages and local expiry.
   useEffect(() => {
@@ -416,6 +463,28 @@ export function StoryViewer({
     return () => document.removeEventListener("visibilitychange", sync);
   }, []);
 
+  // A picture or clip is not "on" until it shows its first frame: its time does not start before that,
+  // so a slow connection gives a story its full time instead of spending it on a blank card (and a
+  // story whose clock ran out while it was still downloading was skipped unseen). One that does not
+  // load says so on its card, with a retry; the person can also tap on to the next.
+  const [readyId, setReadyId] = useState<string | null>(null);
+  const waitingForMedia = Boolean(
+    story &&
+      story.kind !== "text" &&
+      story.media?.url &&
+      story.own?.status !== "processing" &&
+      readyId !== story.id,
+  );
+  useEffect(() => {
+    dispatch({ type: waitingForMedia ? "pause" : "resume", reason: "load" });
+  }, [waitingForMedia]);
+  // The story on screen comes first: while it is still loading, nothing is warmed (what was going is
+  // cancelled), so the stories ahead cannot starve it. Warming resumes the moment it is revealed.
+  useEffect(() => {
+    storyPreloader.setPaused(waitingForMedia);
+    return () => storyPreloader.setPaused(false);
+  }, [waitingForMedia]);
+
   // Reset per story: the reply line, the sheet stays only on our own.
   useEffect(() => {
     setReplyState("idle");
@@ -494,6 +563,8 @@ export function StoryViewer({
     onClosed();
     // The ring turns grey only once the card is back in it (design §4).
     window.setTimeout(commitSeenStories, 120);
+    // An inert ring cannot take the focus back.
+    releaseBackground();
     const ring = ringFor(person?.authorId ?? null) ?? restoreFocus.current;
     if (ring instanceof HTMLElement) {
       // Focus goes back so a keyboard user keeps their place, but after a
@@ -508,7 +579,7 @@ export function StoryViewer({
       }
       ring.focus({ preventScroll: true });
     }
-  }, [flushViews, onClosed, ringFor, person?.authorId, request.originByKeyboard]);
+  }, [flushViews, onClosed, releaseBackground, ringFor, person?.authorId, request.originByKeyboard]);
 
   const close = useCallback(() => {
     if (closingRef.current) {
@@ -798,6 +869,11 @@ export function StoryViewer({
       if (event.key === "Escape" && document.querySelector("[data-profile-card]")) {
         return;
       }
+      // The same for the "More options" menu: this listener is on the window in the capture phase, so it
+      // runs before the menu's own, and the key is the menu's (it closes itself, the viewer stays).
+      if (event.key === "Escape" && document.querySelector("[role='menu']")) {
+        return;
+      }
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -894,7 +970,10 @@ export function StoryViewer({
         return current;
       }
       const next = new Map(current);
-      next.set(id, patch(existing));
+      const patched = patch(existing);
+      next.set(id, patched);
+      // The remembered copy follows, so reopening soon does not show a reaction that was just undone.
+      rememberStories([patched]);
       return next;
     });
   }
@@ -1216,6 +1295,8 @@ export function StoryViewer({
                 onVideoDuration={(ms) => dispatch({ type: "duration", durationMs: ms })}
                 onVideoTime={(ms) => dispatch({ type: "progress", elapsedMs: ms })}
                 onVideoEnded={() => dispatch({ type: "next" })}
+                onReady={() => setReadyId(display.id)}
+                gate
               />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center">
@@ -1625,7 +1706,9 @@ export function StoryViewer({
           type="button"
           aria-label={t("stories.viewer.close")}
           onClick={() => dispatch({ type: "close" })}
-          className="absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-full opacity-90 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          // z-10: the deck below is a positioned full-size box that comes later in the tree, so without it
+          // the X is painted under it and a click never reaches the button.
+          className="absolute right-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-full opacity-90 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           style={{ color: "var(--story-on-media)" }}
         >
           <X className="h-6 w-6" />
@@ -1748,12 +1831,14 @@ function ChromeButton({
 }
 
 /**
- * A header icon: 20 px drawn, a 32 px hit box on a desktop window and 44 px on
- * a phone (the negative margin keeps the header row as tall as the avatar, so
- * the bigger touch target costs no space).
+ * A header icon (mute, pause, more, close): 20 px drawn, the same 44 px hit box
+ * on a desktop window and on a phone (the negative margin keeps the header row
+ * as tall as the avatar, so the bigger touch target costs no space). The round look is the button's
+ * radius, which a pointer also respects, so a square pseudo-element makes the WHOLE 44 px box the
+ * target: a tap in its corner is the button's, never the stage's "next story".
  */
 const CHROME_BUTTON =
-  "-my-1.5 flex h-11 w-11 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring sm:my-0 sm:h-8 sm:w-8";
+  "relative -my-1.5 flex h-11 w-11 items-center justify-center rounded-full before:absolute before:inset-0 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
 
 function ArrowButton({
   label,

@@ -20,6 +20,8 @@ enum StoryLayerLimits {
     static let textSizeMax = 3.0
     static let maxBytes = 8 * 1024 * 1024
     static let altTextMax = 500
+    /// What the author wrote to describe one photo (`STORY_LAYER_ALT_MAX`).
+    static let altMax = 200
     /// A hair above pi, as the contract has it, so a 32-bit float pi passes.
     static let rotationMax = 3.1416
 }
@@ -161,6 +163,9 @@ struct StoryLayerPicture: Hashable, Sendable {
     var width: Int
     var height: Int
     var shape: StoryImageShape = .rect
+    /// What the author wrote to describe a placed photo, for screen readers
+    /// (`alt` on an image layer). Nil: none was written.
+    var alt: String? = nil
 
     var aspect: Double { height > 0 ? Double(width) / Double(height) : 1 }
 }
@@ -217,7 +222,8 @@ struct StoryLayer: Identifiable, Hashable, Sendable {
     var spokenLabel: String {
         switch content {
         case .text(let data): data.text
-        case .image: String(localized: "Photo")
+        case .image(let picture):
+            if let alt = StoryAltText.clean(picture.alt) { String(localized: "Photo: \(alt)") } else { String(localized: "Photo") }
         case .drawing: String(localized: "Drawing")
         case .call: String(localized: "Call sticker")
         case .mention(_, let user):
@@ -232,7 +238,7 @@ extension StoryLayer: Decodable {
     private enum CodingKeys: String, CodingKey {
         case id, type, x, y, scale, rotation
         case text, font, color, background, align, size
-        case shape, url, width, height
+        case shape, url, width, height, alt
         case serverId, channelId, userId, user
     }
 
@@ -264,7 +270,9 @@ extension StoryLayer: Decodable {
                 url: try c.decode(String.self, forKey: .url),
                 width: try c.decode(Int.self, forKey: .width),
                 height: try c.decode(Int.self, forKey: .height),
-                shape: (try? c.decode(StoryImageShape.self, forKey: .shape)) ?? .rect
+                shape: (try? c.decode(StoryImageShape.self, forKey: .shape)) ?? .rect,
+                // `null` when none was written, and absent for a story from before.
+                alt: StoryAltText.clean((try? c.decodeIfPresent(String.self, forKey: .alt)) ?? nil)
             ))
         case "drawing":
             content = .drawing(StoryLayerPicture(
@@ -334,7 +342,7 @@ struct StoryLayerInput: Encodable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, type, x, y, scale, rotation
         case text, font, color, background, align, size
-        case shape, upload, serverId, channelId, userId
+        case shape, upload, serverId, channelId, userId, alt
     }
 
     func encode(to encoder: Encoder) throws {
@@ -355,6 +363,9 @@ struct StoryLayerInput: Encodable, Sendable {
             try c.encode(min(max(data.size, StoryLayerLimits.textSizeMin), StoryLayerLimits.textSizeMax), forKey: .size)
         case .image(let picture):
             try c.encode(picture.shape, forKey: .shape)
+            // Optional on write: absent when none was written (the schema takes
+            // a non-empty string or nothing).
+            try c.encodeIfPresent(StoryAltText.clean(picture.alt), forKey: .alt)
             try c.encode(upload, forKey: .upload)
         case .drawing:
             try c.encode(upload, forKey: .upload)
@@ -374,7 +385,7 @@ extension StoryLayer: Encodable {
     private enum ReadKeys: String, CodingKey {
         case id, type, x, y, scale, rotation
         case text, font, color, background, align, size
-        case shape, url, width, height, serverId, channelId, userId, user
+        case shape, url, width, height, alt, serverId, channelId, userId, user
     }
 
     func encode(to encoder: Encoder) throws {
@@ -395,6 +406,7 @@ extension StoryLayer: Encodable {
             try c.encode(data.size, forKey: .size)
         case .image(let picture):
             try c.encode(picture.shape, forKey: .shape)
+            try c.encodeIfPresent(picture.alt, forKey: .alt)
             try c.encode(picture.url ?? "", forKey: .url)
             try c.encode(picture.width, forKey: .width)
             try c.encode(picture.height, forKey: .height)
@@ -556,11 +568,60 @@ enum StorySnap {
 // MARK: - Alt text
 
 enum StoryAltText {
-    /// A screen reader's version of the story: the text layers in reading
-    /// order (top to bottom), the mentions and a call, capped at the limit.
-    static func make(layers: [StoryLayer], callRoomName: String?, caption: String?) -> String? {
+    /// A description as it travels: whitespace collapsed, trimmed, at most
+    /// `StoryLayerLimits.altMax` characters, nil when nothing is left (the
+    /// schema refuses an empty string).
+    static func clean(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let collapsed = raw.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !collapsed.isEmpty else { return nil }
+        return capped(collapsed)
+    }
+
+    /// At most `altMax` UTF-16 code units, the unit the contract's `.max(200)`
+    /// counts in (so 101 emoji do not slip past a count of characters), without
+    /// cutting a character in half.
+    static func capped(_ value: String) -> String {
+        var out = ""
+        var units = 0
+        for character in value {
+            units += character.utf16.count
+            if units > StoryLayerLimits.altMax { break }
+            out.append(character)
+        }
+        return out
+    }
+
+    /// Whether `spoken` already carries `alt` as a phrase of its own, not as
+    /// letters inside other words ("art" is not said by "party").
+    static func says(_ alt: String, in spoken: String) -> Bool {
+        var from = spoken.startIndex
+        while let found = spoken.range(of: alt, range: from..<spoken.endIndex) {
+            let before = found.lowerBound == spoken.startIndex ? nil : spoken[spoken.index(before: found.lowerBound)]
+            let after = found.upperBound == spoken.endIndex ? nil : spoken[found.upperBound]
+            let edge: (Character?) -> Bool = { $0.map { !($0.isLetter || $0.isNumber) } ?? true }
+            if edge(before), edge(after) { return true }
+            from = found.upperBound
+        }
+        return false
+    }
+
+    /// How many more units fit, for the counter under the field.
+    static func remaining(_ value: String) -> Int { StoryLayerLimits.altMax - value.utf16.count }
+
+    /// A screen reader's version of the story, in the order the web composer
+    /// writes it (`altTextFor`): what the author wrote to describe the base
+    /// picture FIRST (it has no field of its own, so a build that only reads
+    /// `altText` speaks it), then each placed photo's description in reading
+    /// order (top to bottom, then left to right), the text layers, the mentions
+    /// and a call, then the caption. Capped at the limit.
+    static func make(layers: [StoryLayer], callRoomName: String?, caption: String?, baseAlt: String? = nil) -> String? {
         var parts: [String] = []
-        if let caption, !caption.isEmpty { parts.append(caption) }
+        if let base = clean(baseAlt) { parts.append(base) }
+        let reading: (StoryLayer, StoryLayer) -> Bool = { $0.y != $1.y ? $0.y < $1.y : $0.x < $1.x }
+        for layer in layers.filter({ if case .image = $0.content { true } else { false } }).sorted(by: reading) {
+            if case .image(let picture) = layer.content, let alt = clean(picture.alt) { parts.append(alt) }
+        }
         let ordered = layers.sorted { $0.y < $1.y }
         for layer in ordered {
             switch layer.content {
@@ -572,6 +633,7 @@ enum StoryAltText {
             case .image, .drawing: break
             }
         }
+        if let caption, !caption.isEmpty { parts.append(caption) }
         let joined = parts.filter { !$0.isEmpty }.joined(separator: ". ")
         guard !joined.isEmpty else { return nil }
         return String(joined.prefix(StoryLayerLimits.altTextMax))

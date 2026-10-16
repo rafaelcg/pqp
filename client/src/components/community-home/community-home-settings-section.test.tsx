@@ -14,7 +14,15 @@ import { CommunityHomeSettingsSection } from "./community-home-settings-section"
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
 
+const followers = vi.hoisted(() => ({
+  read: { flagOn: false, allowed: false, enabled: false, publicCommunity: false, count: 0, followers: [], blocked: [] } as Record<string, unknown>,
+}));
 vi.mock("@/lib/api", () => ({
+  fetchBauFollowers: vi.fn(async () => followers.read),
+  updateBauFollowConfig: vi.fn(async (_id: string, allowed: boolean) => ({
+    ...followers.read,
+    allowed,
+  })),
   updateServerCommunityHomeConfig: vi.fn(
     async (_id: string, body: { enabled: boolean }) => ({
       enabled: body.enabled,
@@ -135,6 +143,44 @@ describe("CommunityHomeSettingsSection discovery", () => {
     expect(localStorage.getItem(COMMUNITY_HOME_SETTINGS_SEEN_KEY)).toBeNull();
     act(() => {
       root.unmount();
+    });
+  });
+
+  it("offers the owner's Permitir seguir switch only where the feature is on, and flips it", async () => {
+    followers.read = { ...followers.read, flagOn: false };
+    let mounted = mount(
+      <CommunityHomeSettingsSection
+        serverId="11111111-1111-4111-8111-111111111111"
+        enabled
+        onUpdated={() => {}}
+      />,
+    );
+    await act(async () => {});
+    expect(mounted.host.querySelector("[data-bau-follow-allow]")).toBeNull();
+    act(() => {
+      mounted.root.unmount();
+    });
+
+    followers.read = { ...followers.read, flagOn: true, allowed: false };
+    mounted = mount(
+      <CommunityHomeSettingsSection
+        serverId="11111111-1111-4111-8111-111111111111"
+        enabled
+        onUpdated={() => {}}
+      />,
+    );
+    await act(async () => {});
+    const toggle = mounted.host.querySelector("[data-bau-follow-allow]") as HTMLButtonElement;
+    expect(toggle).not.toBeNull();
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    await act(async () => {
+      toggle.click();
+    });
+    expect(
+      (mounted.host.querySelector("[data-bau-follow-allow]") as HTMLButtonElement).getAttribute("aria-checked"),
+    ).toBe("true");
+    act(() => {
+      mounted.root.unmount();
     });
   });
 });

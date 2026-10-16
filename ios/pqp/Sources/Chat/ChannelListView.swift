@@ -25,19 +25,25 @@ struct ChannelListView: View {
     /// Set when a forum link or a push for a post brought us here: push the
     /// forum on top of this list, and the post on top of the forum.
     let initialForum: ForumFocus?
+    /// Set when a forwarded message's card brought us here: `initialChannel`
+    /// opens scrolled to this message, once.
+    let initialMessageId: String?
 
     init(
         server: Server,
         initialChannel: Channel? = nil,
         opensBau: Bool = false,
         initialBau: BauFocus? = nil,
-        initialForum: ForumFocus? = nil
+        initialForum: ForumFocus? = nil,
+        initialMessageId: String? = nil
     ) {
         self.server = server
         self.initialChannel = initialChannel
         self.opensBau = opensBau
         self.initialBau = initialBau
         self.initialForum = initialForum
+        self.initialMessageId = initialMessageId
+        _jumpMessageId = State(initialValue: initialMessageId)
         _current = State(initialValue: server)
         _collapsed = State(initialValue: CollapsedSections().load(serverId: server.id))
         _layoutConfig = State(initialValue: ChannelLayoutMemory().load(serverId: server.id))
@@ -159,6 +165,8 @@ struct ChannelListView: View {
     @State private var confirmingLeave = false
     @State private var showingSettings = false
     @State private var webhooksFor: Channel?
+    /// Seguir: the channel whose "Following" list is up.
+    @State private var bauFollowsFor: Channel?
     @State private var memberPickerFor: Channel?
     @State private var threadsFor: Channel?
     @State private var current: Server
@@ -171,6 +179,9 @@ struct ChannelListView: View {
     @State private var hasSeededInitialBau = false
     @State private var openedForum: ForumFocus?
     @State private var hasSeededInitialForum = false
+    /// The message a link asked for, until the chat it opened has scrolled to
+    /// it (so coming back to the channel later does not jump again).
+    @State private var jumpMessageId: String?
 
     /**
      A WATCH PARTY IS NOT A VOICE ROW, AND THIS IS WHERE THAT IS ENFORCED.
@@ -740,6 +751,7 @@ struct ChannelListView: View {
             )
         }
         .sheet(item: $webhooksFor) { channel in WebhooksView(channel: channel) }
+        .sheet(item: $bauFollowsFor) { channel in ChannelBauFollowsSheet(channel: channel) }
         .sheet(item: $memberPickerFor) { channel in
             ChannelMembersView(channel: channel, server: current)
         }
@@ -985,7 +997,9 @@ struct ChannelListView: View {
             canStartThreads: channel.isText,
             server: server,
             slowmodeSeconds: channel.slowmodeSeconds,
-            voiceChannel: channel.isVoice ? channel : nil
+            voiceChannel: channel.isVoice ? channel : nil,
+            jumpToMessageId: channel.id == initialChannel?.id ? jumpMessageId : nil,
+            onJumped: { jumpMessageId = nil }
         )
         .onAppear {
             if channel.isText {
@@ -1423,6 +1437,17 @@ struct ChannelListView: View {
             Button { threadsFor = channel } label: {
                 Label("Threads", systemImage: "bubble.left.and.text.bubble.right")
             }
+        }
+        // Seguir: what a text channel follows, for whoever may set a follow up
+        // there (Manage Webhooks or Manage Channels), while the Baú is on at
+        // all. Per-source switches decide whether anything can be followed; a
+        // channel that follows nothing says so.
+        if channel.isText, communityHome?.enabled == true,
+           isManager || BauFollowRules.mayManageFollows(watchPartyPermissions, channelId: channel.id) {
+            Button { bauFollowsFor = channel } label: {
+                Label("Following", systemImage: "bell")
+            }
+            .accessibilityIdentifier("channel.menu.following")
         }
         if isManager {
             Button {

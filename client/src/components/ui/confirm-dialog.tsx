@@ -58,7 +58,7 @@ export function ConfirmDialog({
             type="button"
             variant="ghost"
             autoFocus={focusCancel}
-            className="h-auto min-h-9 w-full min-w-0 whitespace-normal px-2 text-center"
+            className="h-auto min-h-9 w-full min-w-0 whitespace-normal px-2 text-center max-sm:min-h-11"
             onClick={onClose}
           >
             {cancelLabel ?? t("common.cancel")}
@@ -67,7 +67,7 @@ export function ConfirmDialog({
             type="button"
             variant={destructive ? "danger" : "default"}
             autoFocus={!focusCancel}
-            className="h-auto min-h-9 w-full min-w-0 whitespace-normal px-2 text-center"
+            className="h-auto min-h-9 w-full min-w-0 whitespace-normal px-2 text-center max-sm:min-h-11"
             onClick={() => {
               onConfirm();
               onClose();

@@ -33,15 +33,21 @@ enum StoryStage {
 struct StoryStageBase: View {
     let story: Story
     let player: AVPlayer?
-    @Binding var muted: Bool
     let size: CGSize
+    /// Everything the story draws is in memory, decoded: now, and not before,
+    /// the story is drawn, all of it in one frame. Until then nothing of it
+    /// shows (a video's player is the one thing that exists, hidden, because
+    /// its first frame is part of what is waited for).
+    var revealed = true
+    /// A video's first frame is on its layer.
+    var onFirstFrame: (() -> Void)?
 
     var body: some View {
         let canvas = StoryStage.canvas(in: size)
         ZStack {
-            backdrop
+            if revealed { backdrop }
             if story.isText {
-                if !StoryStage.usesLayers(story) {
+                if revealed, !StoryStage.usesLayers(story) {
                     // From before layers: the line in the middle, as it was.
                     Text(verbatim: story.text ?? "")
                         .font(.system(size: 34, weight: .heavy, design: .rounded))
@@ -66,17 +72,14 @@ struct StoryStageBase: View {
     @ViewBuilder
     private var backdrop: some View {
         if story.isText {
-            LinearGradient(colors: StoryRules.backgroundColors(story.background), startPoint: .top, endPoint: .bottom)
+            StoryRules.backgroundGradient(story.background)
         } else if let media = story.media {
             let source = media.isVideo ? media.posterUrl : media.url
             ZStack {
                 Color.black
                 if let url = source.flatMap({ Avatar.resolve($0) ?? URL(string: $0) }) {
-                    AsyncImage(url: url) { phase in
-                        if case .success(let image) = phase {
-                            image.resizable().scaledToFill().blur(radius: 32).scaleEffect(1.12).overlay(Color.black.opacity(0.28))
-                        }
-                    }
+                    StoryCachedImage(url: url, contentMode: .fill) { _ in Color.clear }
+                        .blur(radius: 32).scaleEffect(1.12).overlay(Color.black.opacity(0.28))
                 }
             }
         } else {
@@ -88,35 +91,30 @@ struct StoryStageBase: View {
     private func mediaView(_ media: StoryMedia) -> some View {
         let fills = StoryStage.fillsCanvas(width: media.width, height: media.height)
         ZStack {
-            // A video that does not fill the canvas sits on black, as it did
-            // in the editor.
-            if media.isVideo, !fills { Color.black }
-            if media.isVideo, let player {
-                StoryVideoSurface(player: player, fills: fills)
-                    .overlay(alignment: .topTrailing) {
-                        Button {
-                            muted.toggle()
-                            player.isMuted = muted
-                        } label: {
-                            Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(10)
-                                .background(Circle().fill(.black.opacity(0.4)))
-                        }
-                        .padding(.top, 90)
-                        .padding(.trailing, 14)
-                        .accessibilityLabel(Text(muted ? "Turn the sound on" : "Turn the sound off"))
-                    }
-            } else if let url = Avatar.resolve(media.url) ?? URL(string: media.url) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().aspectRatio(contentMode: fills ? .fill : .fit)
-                    case .failure:
+            if media.isVideo {
+                // A video that does not fill the canvas sits on black, as it did
+                // in the editor.
+                if revealed, !fills { Color.black }
+                // The poster is under the player: there is a picture from the
+                // first frame, and the video replaces it when it has its own.
+                if revealed, let poster = Avatar.resolve(media.posterUrl) ?? media.posterUrl.flatMap(URL.init(string:)) {
+                    StoryCachedImage(url: poster, contentMode: fills ? .fill : .fit, metric: "poster") { _ in Color.clear }
+                }
+                // Always there (its first frame is what the reveal waits for),
+                // and seen only with the rest. The sound button lives in the
+                // viewer's top bar, with the other controls.
+                if let player {
+                    StoryVideoSurface(player: player, fills: fills, onReady: onFirstFrame)
+                        .opacity(revealed ? 1 : 0)
+                }
+            } else if revealed, let url = Avatar.resolve(media.url) ?? URL(string: media.url) {
+                // Under the blurred backdrop while it loads; the viewer adds a
+                // spinner if it is late.
+                StoryCachedImage(url: url, contentMode: fills ? .fill : .fit, metric: "base") { failed in
+                    if failed {
                         Image(systemName: "photo").foregroundStyle(Palette.paperMuted)
-                    default:
-                        ProgressView().tint(.white)
+                    } else {
+                        Color.clear
                     }
                 }
             }
@@ -144,7 +142,10 @@ struct StoryLayersOverlay: View {
         )
         ZStack {
             ForEach(story.layers) { layer in
-                StoryPlacedLayer(layer: layer, context: context, interactive: true, spoken: layer.isInteractiveInViewer)
+                StoryPlacedLayer(
+                    layer: layer, context: context, interactive: true,
+                    spoken: layer.isInteractiveInViewer || layer.hasUnspokenAlt(in: story)
+                )
                     .allowsHitTesting(layer.isInteractiveInViewer)
             }
         }
@@ -158,6 +159,15 @@ struct StoryLayersOverlay: View {
 }
 
 extension StoryLayer {
+    /// A placed photo the author described, when the story's own `altText` does
+    /// not already say it (a build that wrote the layer's `alt` and nothing in
+    /// `altText`): the viewer names the photo then, and only then, so a screen
+    /// reader never hears the same description twice.
+    func hasUnspokenAlt(in story: Story) -> Bool {
+        guard case .image(let picture) = content, let alt = StoryAltText.clean(picture.alt) else { return false }
+        return !StoryAltText.says(alt, in: story.altText ?? "")
+    }
+
     /// Calls and mentions are doors; text, photos and drawings are only seen.
     var isInteractiveInViewer: Bool {
         switch content {

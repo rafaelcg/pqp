@@ -4,6 +4,11 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -54,10 +59,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -142,6 +149,16 @@ fun ServersScreen(
             null
         }
         onPauseOrDispose { read?.cancel() }
+    }
+
+    // Unread channel messages per server: read when the list comes to the front
+    // (at most every thirty seconds, and at once for a server whose channel was
+    // just read), and kept right between reads by live frames.
+    val unreadStore = remember(session) { gg.pqp.app.unread.ServerUnreadStore.of(session) }
+    val channelUnread by unreadStore.unread.collectAsStateWithLifecycle()
+    LifecycleResumeEffect(servers) {
+        unreadStore.hydrate(servers)
+        onPauseOrDispose { }
     }
 
     Scaffold(
@@ -251,6 +268,7 @@ fun ServersScreen(
                     items(servers, key = { it.id }) { server ->
                         ServerRow(
                             server = server,
+                            unread = channelUnread[server.id] ?: gg.pqp.app.unread.ServerUnreadSummary(),
                             bauUnread = if (communityHome.enabled && server.communityHomeEnabled) {
                                 BauBadge.unreadFor(server.id, bauUnread)
                             } else {
@@ -376,6 +394,39 @@ object ServerActions {
         return out
     }
 
+    /**
+     * What a `server-order-update` frame does to the list, or null when it must
+     * change nothing:
+     *  - it came from THIS phone (its own echo, named by `origin`);
+     *  - a save of this phone's is still in flight (the order on screen is the
+     *    newer one, and the save that follows says so on every other device);
+     *  - it would not move anything.
+     * Servers the frame does not name keep their place after the named ones
+     * (a server joined a moment ago), exactly [applyOrder].
+     */
+    fun followRemoteOrder(
+        servers: List<ServerSummary>,
+        ids: List<String>,
+        origin: String?,
+        ownOrigin: String,
+        saving: Boolean,
+    ): List<ServerSummary>? {
+        if (origin == ownOrigin || saving) return null
+        val next = applyOrder(servers, ids)
+        return if (next.map { it.id } == servers.map { it.id }) null else next
+    }
+
+    /**
+     * When this phone's saves have all settled: the order of a remote update that was ignored
+     * while they were out, if one of them failed (so this phone's order never reached the
+     * server and the remote one is the newest). Null when nothing changes.
+     */
+    fun afterSaves(servers: List<ServerSummary>, ignoredRemote: List<String>?, anySaveFailed: Boolean): List<ServerSummary>? {
+        if (ignoredRemote == null || !anySaveFailed) return null
+        val next = applyOrder(servers, ignoredRemote)
+        return if (next.map { it.id } == servers.map { it.id }) null else next
+    }
+
     fun reordered(servers: List<ServerSummary>, id: String, delta: Int): List<ServerSummary>? {
         val from = servers.indexOfFirst { it.id == id }
         if (from < 0) return null
@@ -396,6 +447,7 @@ object ServerActions {
 @Composable
 private fun ServerRow(
     server: ServerSummary,
+    unread: gg.pqp.app.unread.ServerUnreadSummary,
     bauUnread: Int,
     onClick: () -> Unit,
     onLeave: () -> Unit,
@@ -455,6 +507,12 @@ private fun ServerRow(
                 cornerRadius = 14.dp,
                 seed = server.id,
             )
+            // Channel unread, at the icon's other corner (the Baú owns the top one):
+            // a lime count when somebody pinged this person, otherwise a dot.
+            ServerUnreadMark(
+                unread = unread,
+                modifier = Modifier.align(Alignment.BottomEnd).offset(x = 4.dp, y = 4.dp),
+            )
             // Lime, at the icon's corner: a new Baú post is news for the whole
             // server, and the brand signal is what says so at a glance.
             BauBadge.label(bauUnread)?.let { label ->
@@ -474,6 +532,9 @@ private fun ServerRow(
             Text(
                 text = server.name,
                 style = MaterialTheme.typography.titleMedium,
+                // Something unread in a channel: the name is bold, the way a channel
+                // row with news is, and the badge on the icon says how much.
+                fontWeight = if (unread.hasUnread) FontWeight.Bold else null,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -692,4 +753,39 @@ private fun CreateServerDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit
         shape = MaterialTheme.shapes.large,
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
     )
+}
+
+/**
+ * The corner mark for a server with channel news: a lime `@N` when somebody
+ * pinged this person (capped at "9+" like every badge on an icon), otherwise a
+ * dot. It carries its own words for TalkBack, since a dot says nothing alone.
+ */
+@Composable
+private fun ServerUnreadMark(unread: gg.pqp.app.unread.ServerUnreadSummary, modifier: Modifier = Modifier) {
+    when {
+        unread.mentions > 0 -> {
+            val label = "@" + gg.pqp.app.bau.BauBadge.label(unread.mentions)
+            val words = pluralStringResource(R.plurals.servers_unread_mentions, unread.mentions, unread.mentions)
+            CountBadge(
+                count = unread.mentions,
+                loud = true,
+                label = label,
+                modifier = modifier
+                    .semantics { contentDescription = words }
+                    .testTag("servers.unread.mentions"),
+            )
+        }
+        unread.hasUnread -> {
+            val words = stringResource(R.string.servers_unread)
+            Box(
+                modifier
+                    .size(12.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary)
+                    .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                    .semantics { contentDescription = words }
+                    .testTag("servers.unread.dot"),
+            )
+        }
+    }
 }

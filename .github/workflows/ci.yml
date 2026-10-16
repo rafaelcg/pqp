@@ -65,60 +65,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  checks:
+  # The old single `checks` job ran lint, typecheck, every test suite and the
+  # builds one after the other (~12-15 min, 8.5-11 of them the Test step). It is
+  # split into `static` (lint, typecheck, builds, the small node suites),
+  # `test-server` (the DB-backed vitest suite, sharded) and `test-client`
+  # (every other vitest / node-test workspace). The `checks` job further down is
+  # an aggregator that keeps the old name, so a branch protection rule that
+  # requires `checks` keeps working: it is green only when all of these are.
+  static:
+    name: lint, typecheck, build
     runs-on: ubuntu-latest
-    # The server suite alone takes about ten minutes on a normal runner (4,286
-    # tests); at 15 any slow runner hit the limit with every step green and the
-    # job was cancelled, which read as a flake and cost a rerun each time.
-    timeout-minutes: 30
+    timeout-minutes: 20
 
-    # The authorization matrix is covered by integration tests that run against a
-    # real database — a mocked one would not catch a wrong SQL predicate.
-    services:
-      postgres:
-        image: mirror.gcr.io/library/postgres:16-alpine
-        env:
-          POSTGRES_USER: pqp
-          POSTGRES_PASSWORD: pqp
-          POSTGRES_DB: pqp
-        ports:
-          - 5432:5432
-        # CI data is disposable, so keep postgres off the runner's disk.
-        # The DB-backed suites are commit-latency-bound (thousands of tiny
-        # transactions and truncates, each an fsync), and hosted-runner disk
-        # latency varies wildly between VMs: the same Test step measured 3m06
-        # on one runner and 14+ min (cancelled) on another, with identical
-        # container args. tmpfs makes the fsync a memory write, which removes
-        # that lottery for the unit suites and the e2e shards alike.
-        options: >-
-          --tmpfs /var/lib/postgresql/data
-          --health-cmd "pg_isready -U pqp"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
-
+    # No Postgres service here: nothing in this job reads a database.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        # Version comes from the root package.json "packageManager" field.
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build shared
-        run: pnpm --filter @pqp/shared build
+      - name: Set up workspace
+        uses: ./.github/actions/setup-workspace
 
       - name: Check i18n catalogues
         run: pnpm --filter @pqp/client i18n:check
@@ -128,25 +93,6 @@ jobs:
 
       - name: Typecheck
         run: pnpm typecheck
-
-      # Before the tests: the DB-backed suites under server/test import the
-      # compiled output from server/dist.
-      - name: Build server
-        run: pnpm --filter @pqp/server build
-
-      # Client/shared/electron tests do not need Postgres. Server suites do,
-      # and they run serially (one database). Parallel here overlaps the
-      # cheap packages with the 4-minute server run instead of stacking them.
-      - name: Test
-        run: pnpm run -r --parallel test
-        env:
-          # Three files at once, each on a database of its own
-          # (server/test/setup/worker-databases.ts). The serial run was ~11.5
-          # of this job's ~15 minutes. Not more: this step also runs the
-          # client suite and the runner has four cores; at four server
-          # workers it sat at 3% idle and timing-sensitive tests started to
-          # starve.
-          PQP_TEST_DB_WORKERS: "3"
 
       # `scripts/` is outside the pnpm workspace, so `pnpm test` never saw it.
       # That was fine while the monitor was only "fetch a URL, look at the
@@ -161,6 +107,15 @@ jobs:
       # phantom test and fails; the glob collects every *.test.mjs and passes.
       - name: Test monitor scripts
         run: node --test scripts/monitor/*.test.mjs
+
+      # The API box's deploy script runs as root against production and had no
+      # test at all. These cut the Caddyfile layout and integrity-check
+      # functions out of the real script and run them against a stubbed
+      # `docker`; no daemon, no root.
+      - name: Test api-host deploy script
+        run: |
+          bash -n tools/api-host/pqp-deploy.sh
+          bash tools/api-host/test-pqp-deploy.sh
 
       # The Flatpak release bump (flatpak/bump.mjs) is outside the workspace
       # too, and `.github/workflows/flatpak-manifest.yml` runs it unattended
@@ -265,58 +220,22 @@ jobs:
         working-directory: client
         run: npx wrangler pages functions build --outfile=/tmp/functions-bundle.js
 
-  # The Playwright suite runs one worker per database (shared server state,
-  # computed-colour assertions), so it is split by `--shard` and the shards run
-  # side by side, each in a LANE: its own API port, client bundle and database
-  # (scripts/ci/e2e-lanes.sh). Two lanes share a runner: measured on the
-  # 4-core hosted runner, two lanes finish ~1.6x faster than the same two
-  # shards one after the other, at ~77% CPU, and every runner not started
-  # saves ~1.5 min of setup and one of the account's 20 job slots (which is
-  # what PRs queued behind). Three lanes would oversubscribe it, and the media
-  # specs are the ones that flake when starved of CPU.
-  #
-  # The client is a `vite build` served by `vite preview`, not `vite dev`: on a
-  # hosted runner the dev server cost ~40% of every test, serving the app as
-  # hundreds of unbundled modules on each fresh page.
-  #
-  # Voice / camera / screen-share files are a separate project (chromium-media)
-  # so Playwright's file-level shard does not dump all of them onto one lane.
-  # core = everything else + the Pixel phone spec; media = the slow files.
-  # WebKit is not installed: the iPhone project is local-only (PW_WEBKIT=1).
-  # The server runs from source (`tsx watch`, see client/playwright.config.ts
-  # webServer), so only @pqp/shared needs a build here.
-  e2e:
-    name: e2e (${{ matrix.suite }} ${{ matrix.label }})
+  # The server suite (~5,200 tests in ~335 files) against a real database; it
+  # was ~8.5 of the old job's 12 minutes. Sharded by file (`vitest --shard`):
+  # every file runs in exactly one shard, and each shard has a runner and a
+  # Postgres of its own with PQP_TEST_DB_WORKERS databases inside it. The
+  # authorization matrix is covered by integration tests that run against a real
+  # database; a mocked one would not catch a wrong SQL predicate.
+  test-server:
+    name: test server (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
+    # The whole server suite took about ten minutes on a normal runner before it
+    # was sharded; this is the margin for one shard on a slow runner.
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - suite: core
-            projects: --project=chromium --project=mobile-pixel
-            total: 4
-            shards: "1 2"
-            label: 1+2/4
-          - suite: core
-            projects: --project=chromium --project=mobile-pixel
-            total: 4
-            shards: "3 4"
-            label: 3+4/4
-          - suite: media
-            projects: --project=chromium-media
-            total: 3
-            shards: "2 3"
-            label: 2+3/3
-          # Media 1/3 is the short shard (~3 min), so it carries the two suites
-          # that need no API and no database, stale bundle and camera sync,
-          # one after the other.
-          - suite: media
-            projects: --project=chromium-media
-            total: 3
-            shards: "1"
-            label: 1/3 + stale bundle + camera sync
-            extras: true
+        shard: [1, 2, 3]
 
     services:
       postgres:
@@ -348,21 +267,170 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        # Version comes from the root package.json "packageManager" field.
-        uses: pnpm/action-setup@v4
+      - name: Set up workspace
+        uses: ./.github/actions/setup-workspace
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
+      # Before the tests: the DB-backed suites under server/test import the
+      # compiled output from server/dist.
+      - name: Build server
+        run: pnpm --filter @pqp/server build
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Test server (shard ${{ matrix.shard }}/3)
+        run: pnpm --filter @pqp/server test --shard=${{ matrix.shard }}/3
+        env:
+          # Three files at once, each on a database of its own
+          # (server/test/setup/worker-databases.ts). Not more: the runner has
+          # four cores, and at four server workers it sat at 3% idle and
+          # timing-sensitive tests started to starve.
+          PQP_TEST_DB_WORKERS: "3"
 
-      - name: Build shared
-        run: pnpm --filter @pqp/shared build
+  # Every vitest / node-test workspace except the server: client, shared,
+  # electron's helper tests and tools/watch-party-load. None needs Postgres.
+  test-client:
+    name: test client, shared, electron
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Test
+        # `!pqp` excludes the root package: with a filter in play pnpm
+        # includes it, and its `test` script is `pnpm run -r test`, which
+        # would run the server suite here too (with no database).
+        run: pnpm run -r --parallel --filter '!@pqp/server' --filter '!pqp' test
+
+  # Aggregator, named for the job it replaced. Required status checks match on
+  # the job name, so this keeps a rule on `checks` meaningful without anyone
+  # editing repo settings. `always()` so a failed or cancelled needed job turns
+  # this red instead of skipping it (a skipped required check counts as passing).
+  checks:
+    name: checks
+    needs: [static, test-server, test-client]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every checks job passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' > /dev/null
+
+  # The Playwright suite runs one worker per database (shared server state,
+  # computed-colour assertions), so it is split by `--shard` and the shards run
+  # side by side, each in a LANE: its own API port, client bundle and database
+  # (scripts/ci/e2e-lanes.sh). Two lanes share a runner: measured on the
+  # 4-core hosted runner, two lanes finish ~1.6x faster than the same two
+  # shards one after the other, at ~77% CPU, and every runner not started
+  # saves ~1.5 min of setup and one of the account's 20 job slots (which is
+  # what PRs queued behind). Three lanes would oversubscribe it, and the media
+  # specs are the ones that flake when starved of CPU.
+  #
+  # The client is a `vite build` served by `vite preview`, not `vite dev`: on a
+  # hosted runner the dev server cost ~40% of every test, serving the app as
+  # hundreds of unbundled modules on each fresh page.
+  #
+  # Voice / camera / screen-share files are a separate project (chromium-media)
+  # so Playwright's file-level shard does not dump all of them onto one lane.
+  # core = everything else + the Pixel phone spec; media = the slow files.
+  # WebKit is not installed: the iPhone project is local-only (PW_WEBKIT=1).
+  # The server runs from source (`tsx watch`, see client/playwright.config.ts
+  # webServer), so only @pqp/shared needs a build here.
+  #
+  # Balance. Lane minutes measured before this split (two lanes per runner):
+  # core as four shards 11.3 / 13.3 / 8.3 / 7.9, media 3.3 / 6.0 / 5.6, stale
+  # bundle ~5.8 and camera sync ~2.5, the last two both on the media 1/3 job
+  # (12.5 min). Playwright balances shards by test count, not duration (one
+  # eight-shard core run came out 2.6m to 7.5m per lane, and three media shards
+  # 3.3m / 6.9m / 6.3m), so core is ten shards and media four: more, smaller
+  # pieces average out the heavy files. Stale bundle and camera sync, which
+  # need no lanes, are jobs of their own.
+  e2e-shard:
+    name: e2e (${{ matrix.suite }} ${{ matrix.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: core
+            projects: --project=chromium --project=mobile-pixel
+            total: 10
+            shards: "1 2"
+            label: 1+2/10
+          - suite: core
+            projects: --project=chromium --project=mobile-pixel
+            total: 10
+            shards: "3 4"
+            label: 3+4/10
+          - suite: core
+            projects: --project=chromium --project=mobile-pixel
+            total: 10
+            shards: "5 6"
+            label: 5+6/10
+          - suite: core
+            projects: --project=chromium --project=mobile-pixel
+            total: 10
+            shards: "7 8"
+            label: 7+8/10
+          - suite: core
+            projects: --project=chromium --project=mobile-pixel
+            total: 10
+            shards: "9 10"
+            label: 9+10/10
+          - suite: media
+            projects: --project=chromium-media
+            total: 4
+            shards: "1 2"
+            label: 1+2/4
+          - suite: media
+            projects: --project=chromium-media
+            total: 4
+            shards: "3 4"
+            label: 3+4/4
+          # No lanes: camera sync needs no API and no database (about 3 min).
+          - suite: camera-sync
+            label: synthetic live HLS
+            camera: true
+          # No lanes: the stale-bundle suite needs no API and no database, only
+          # its own builds and a real service worker (Chromium and Firefox).
+          - suite: stale-bundle
+            label: real service worker
+            stale: true
+
+    services:
+      postgres:
+        image: mirror.gcr.io/library/postgres:16-alpine
+        env:
+          POSTGRES_USER: pqp
+          POSTGRES_PASSWORD: pqp
+          POSTGRES_DB: pqp
+        ports:
+          - 5432:5432
+        # CI data is disposable, so keep postgres off the runner's disk.
+        # See the note on the test-server job: tmpfs removes the runner-disk
+        # lottery for the DB-backed suites and the e2e shards alike.
+        options: >-
+          --tmpfs /var/lib/postgresql/data
+          --health-cmd "pg_isready -U pqp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up workspace
+        uses: ./.github/actions/setup-workspace
 
       - name: Cache Playwright browsers
         id: playwright-cache
@@ -381,16 +449,11 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: pnpm --filter @pqp/client exec playwright install-deps chromium
 
-      # Real builds and a real service worker, no API and no database
-      # (client/playwright.stale-bundle.config.ts). It does not depend on the
-      # shard, so one job carries it: the one with media 1/3, the short media
-      # shard. Not as a lane beside it: measured, that saved nothing (the suite
-      # waits on its own builds, not on CPU) and stretched its timings, which
-      # are the ones that flake. Firefox runs only the stale-bundle install
-      # specs, so only this job needs it. Its own cache key: the Chromium
-      # cache above is immutable once saved and cannot pick Firefox up.
+      # Firefox runs only the stale-bundle install specs, so only that job
+      # needs it. Its own cache key: the Chromium cache above is immutable once
+      # saved and cannot pick Firefox up.
       - name: Cache Playwright Firefox
-        if: matrix.extras
+        if: matrix.stale
         id: playwright-firefox-cache
         uses: actions/cache@v4
         with:
@@ -398,18 +461,21 @@ jobs:
           key: playwright-firefox-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install Playwright Firefox
-        if: matrix.extras && steps.playwright-firefox-cache.outputs.cache-hit != 'true'
+        if: matrix.stale && steps.playwright-firefox-cache.outputs.cache-hit != 'true'
         run: pnpm --filter @pqp/client exec playwright install --with-deps firefox
 
       - name: Install Playwright Firefox system deps
-        if: matrix.extras && steps.playwright-firefox-cache.outputs.cache-hit == 'true'
+        if: matrix.stale && steps.playwright-firefox-cache.outputs.cache-hit == 'true'
         run: pnpm --filter @pqp/client exec playwright install-deps firefox
 
       - name: E2E (${{ matrix.suite }} ${{ matrix.label }})
+        if: matrix.shards
         run: scripts/ci/e2e-lanes.sh "${{ matrix.projects }}" ${{ matrix.total }} ${{ matrix.shards }}
 
+      # Real builds and a real service worker, no API and no database
+      # (client/playwright.stale-bundle.config.ts).
       - name: E2E stale bundle (real service worker)
-        if: matrix.extras
+        if: matrix.stale
         run: pnpm --filter @pqp/client e2e:stale-bundle
 
       # The presenter's camera held to the film, measured off the pictures
@@ -418,7 +484,7 @@ jobs:
       # Chrome, which the runner image ships (Playwright's Chromium has no
       # H.264), and ffmpeg to make the media. The quick run, about 3 minutes.
       - name: E2E camera sync (real Chrome, synthetic live HLS)
-        if: matrix.extras
+        if: matrix.camera
         run: |
           command -v ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
           pnpm --filter @pqp/client e2e:camera-sync
@@ -433,3 +499,20 @@ jobs:
             client/test-results
             client/e2e-results*.json
           retention-days: 7
+
+  # Aggregator for the sharded e2e jobs, named for the job it replaced (see
+  # `checks` above). Without it a matrix leg that never started would leave
+  # nothing red.
+  e2e:
+    name: e2e
+    needs: [e2e-shard]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every e2e shard passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' > /dev/null

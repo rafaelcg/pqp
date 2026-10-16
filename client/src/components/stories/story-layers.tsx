@@ -31,7 +31,7 @@ export interface MentionTarget {
 
 export type DisplayLayer =
   | (LayerGeometry & { type: "text" } & TextLayerFields)
-  | (LayerGeometry & { type: "image"; src: string; width: number; height: number; shape: ImageShape })
+  | (LayerGeometry & { type: "image"; src: string; width: number; height: number; shape: ImageShape; alt?: string | null })
   | (LayerGeometry & { type: "drawing"; src?: string; strokes?: readonly Stroke[] })
   | (LayerGeometry & { type: "call" })
   | (LayerGeometry & { type: "mention"; userId: string; name: string; avatarUrl?: string | null });
@@ -52,7 +52,7 @@ export function displayLayerFrom(layer: StoryLayer): DisplayLayer {
         size: layer.size,
       };
     case "image":
-      return { ...geometry, type: "image", src: layer.url, width: layer.width, height: layer.height, shape: layer.shape };
+      return { ...geometry, type: "image", src: layer.url, width: layer.width, height: layer.height, shape: layer.shape, alt: layer.alt };
     case "drawing":
       return { ...geometry, type: "drawing", src: layer.url };
     case "call":
@@ -81,7 +81,7 @@ function ImageLayerView({ layer }: { layer: Extract<DisplayLayer, { type: "image
   return (
     <img
       src={layer.src}
-      alt=""
+      alt={layer.alt?.trim() || ""}
       draggable={false}
       decoding="async"
       className="block select-none"
@@ -209,13 +209,52 @@ export function layerBoxStyle(layer: DisplayLayer): CSSProperties {
 
 interface LayerBoxProps extends HTMLAttributes<HTMLDivElement> {
   layer: DisplayLayer;
+  /**
+   * Draw scaled text, mentions and call cards at their final size instead of
+   * stretching a small raster (a `transform: scale` on small text blurs). The
+   * scale moves from the transform to CSS `zoom` on an inner box, which lays the
+   * content out at its real size, so the glyphs are drawn sharp at any scale.
+   * Position and rotation stay on the outer box. Photos and drawings are
+   * pictures and keep the transform. The editor keeps the transform too, because
+   * its gestures and selection frame are measured on it.
+   */
+  crisp?: boolean;
+}
+
+/** `zoom` is in every engine that draws stories (Chromium, WebKit, Firefox 126+); anything else keeps the transform. */
+function supportsZoom(): boolean {
+  return typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("zoom", "2");
+}
+
+/** Which layers scale by zoom when asked to be crisp: the ones made of text. */
+export function isCrispLayer(layer: DisplayLayer): boolean {
+  return layer.type === "text" || layer.type === "mention" || layer.type === "call";
 }
 
 /** One placed layer: positioned, turned and scaled. The viewer uses it as it is. */
 export const LayerBox = forwardRef<HTMLDivElement, LayerBoxProps>(function LayerBox(
-  { layer, style, children, ...rest },
+  { layer, style, children, crisp = false, ...rest },
   ref,
 ) {
+  if (crisp && isCrispLayer(layer) && layer.scale !== 1 && supportsZoom()) {
+    const base = layerBoxStyle(layer);
+    return (
+      <div
+        ref={ref}
+        data-story-layer={layer.id}
+        data-layer-type={layer.type}
+        data-crisp=""
+        style={{
+          ...base,
+          transform: `translate(-50%, -50%) rotate(${layer.rotation}rad)`,
+          ...style,
+        }}
+        {...rest}
+      >
+        <div style={{ zoom: layer.scale }}>{children}</div>
+      </div>
+    );
+  }
   return (
     <div ref={ref} data-story-layer={layer.id} data-layer-type={layer.type} style={{ ...layerBoxStyle(layer), ...style }} {...rest}>
       {children}

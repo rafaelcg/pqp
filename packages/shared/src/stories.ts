@@ -58,8 +58,26 @@ export const STORY_CONTENT_TYPES = [...STORY_IMAGE_TYPES, ...STORY_VIDEO_TYPES] 
 
 export const STORY_KINDS = ["image", "video", "text"] as const;
 export const STORY_REACTIONS = ["gg", "fire", "joy", "wow", "skull", "clap"] as const;
-/** Palette keys for a text card. Each is chosen for at least 4.5:1 with white text. */
+/**
+ * Palette keys for a text card, the first family ("glow": a soft light over a dark gradient).
+ * Each is chosen for at least 4.5:1 with white text. THIS LIST IS WHAT THE PHONES KNOW: iOS and
+ * Android keep a copy, and an Android test pins it to this constant. A new key goes in a family
+ * below, never in here, so a build that has not learned it yet keeps parsing and falls back to its
+ * default card instead of failing.
+ */
 export const STORY_BACKGROUNDS = ["lime", "night", "ember", "grape", "sand", "ink"] as const;
+/** A family of flat colors. Same 4.5:1 with white text. */
+export const STORY_BACKGROUNDS_SOLID = ["cobalt", "crimson", "pine", "plum", "teal", "onyx"] as const;
+/** A family of two-stop diagonal gradients. Same 4.5:1 with white text at the lighter stop. */
+export const STORY_BACKGROUNDS_GRADIENT = ["sunset", "ocean", "aurora", "dusk", "berry", "lagoon"] as const;
+/** Every key a text card may carry, in the order a picker draws them. */
+export const STORY_CARD_BACKGROUNDS = [
+  ...STORY_BACKGROUNDS,
+  ...STORY_BACKGROUNDS_SOLID,
+  ...STORY_BACKGROUNDS_GRADIENT,
+] as const;
+export const STORY_BACKGROUND_FAMILIES = ["glow", "solid", "gradient"] as const;
+export type StoryBackgroundFamily = (typeof STORY_BACKGROUND_FAMILIES)[number];
 
 export const STORY_CAPTION_MAX = 200;
 export const STORY_TEXT_MAX = 280;
@@ -67,6 +85,8 @@ export const STORY_REPLY_MAX = 2000;
 export const STORY_REMOVE_REASON_MAX = 200;
 /** The spoken version of a story, for screen readers. Clients fill it from the text layers. */
 export const STORY_ALT_TEXT_MAX = 500;
+/** What the author wrote to describe one placed photo (`alt` on an image layer), or the base picture. */
+export const STORY_LAYER_ALT_MAX = 200;
 
 // ------------------------------------------------------------------ layers
 
@@ -237,6 +257,13 @@ export const STORY_VIEWERS_PAGE_SIZE = 50;
 export const STORY_POSTS_PER_DAY = 20;
 /** Posting budget: per author, per minute, per API process. */
 export const STORY_POSTS_PER_MINUTE = 3;
+/**
+ * EAGER UPLOADS (`POST /api/stories/uploads`). An upload nobody claims with a
+ * story is deleted, bytes and row, by the stories sweep after this many hours.
+ */
+export const STORY_UPLOAD_UNCLAIMED_HOURS = 6;
+/** Unclaimed uploads one account may hold at once (a story is at most a base, 6 photos and a drawing, with room for retries). */
+export const STORY_UPLOADS_OUTSTANDING_MAX = 24;
 /** In a listed community, an account must be this old to post a story there. */
 export const STORY_COMMUNITY_MIN_ACCOUNT_AGE_HOURS = 72;
 
@@ -259,8 +286,24 @@ export type StoryKind = z.infer<typeof storyKindSchema>;
 export const storyReactionValueSchema = z.enum(STORY_REACTIONS);
 export type StoryReaction = z.infer<typeof storyReactionValueSchema>;
 
-export const storyBackgroundSchema = z.enum(STORY_BACKGROUNDS);
+export const storyBackgroundSchema = z.enum(STORY_CARD_BACKGROUNDS);
 export type StoryBackground = z.infer<typeof storyBackgroundSchema>;
+
+/** Which family a card background belongs to (an unknown key reads as the first). */
+export function storyBackgroundFamily(key: string | null | undefined): StoryBackgroundFamily {
+  if ((STORY_BACKGROUNDS_SOLID as readonly string[]).includes(key ?? "")) {
+    return "solid";
+  }
+  if ((STORY_BACKGROUNDS_GRADIENT as readonly string[]).includes(key ?? "")) {
+    return "gradient";
+  }
+  return "glow";
+}
+
+/** The keys of one family, in picker order. */
+export function storyBackgroundsOf(family: StoryBackgroundFamily): readonly StoryBackground[] {
+  return family === "solid" ? STORY_BACKGROUNDS_SOLID : family === "gradient" ? STORY_BACKGROUNDS_GRADIENT : STORY_BACKGROUNDS;
+}
 
 export const storyContentTypeSchema = z.enum(STORY_CONTENT_TYPES);
 export type StoryContentType = z.infer<typeof storyContentTypeSchema>;
@@ -362,6 +405,13 @@ export const storiesConfigSchema = z.object({
    * editor instead. Image and drawing layers also need `mediaEnabled`.
    */
   layersMax: z.number().int().nonnegative().optional(),
+  /**
+   * Whether `POST /api/stories/uploads` is on (`stories_eager_uploads`, a runtime
+   * kill switch, on by default) and storage is configured. Absent from a server
+   * that predates eager uploads, which reads as off. With it off, or absent, a
+   * client uploads the way it always did: create, PUT, publish.
+   */
+  eagerUploads: z.boolean().optional(),
 });
 export type StoriesConfig = z.infer<typeof storiesConfigSchema>;
 
@@ -443,6 +493,7 @@ const layerGeometry = {
 };
 
 const layerText = z.string().trim().min(1).max(STORY_TEXT_MAX).pipe(safeTextSchema);
+const layerAlt = z.string().trim().min(1).max(STORY_LAYER_ALT_MAX).pipe(safeTextSchema);
 
 const textLayerFields = {
   ...layerGeometry,
@@ -475,6 +526,14 @@ const mentionLayerFields = {
   userId: z.string().uuid(),
 };
 
+/**
+ * An id from `POST /api/stories/uploads`: the bytes are already in storage and
+ * the server need not mint a URL for this file. When it is present the
+ * declared `contentType` and `byteSize` must be the ones the upload was made
+ * with; the server checks the stored object against them before it accepts.
+ */
+const eagerUploadIdSchema = z.string().uuid().optional();
+
 const imageDims = {
   width: z.number().int().positive().max(STORY_MAX_DIMENSION),
   height: z.number().int().positive().max(STORY_MAX_DIMENSION),
@@ -489,6 +548,8 @@ export const storyLayerUploadInputSchema = z.object({
   contentType: z.enum(STORY_LAYER_IMAGE_TYPES),
   byteSize: z.number().int().positive().max(STORY_LAYER_MAX_BYTES),
   ...imageDims,
+  /** Eager upload (see `createStoryUploadSchema`): no `layerUploads` entry comes back for this layer. */
+  uploadId: eagerUploadIdSchema,
 });
 export type StoryLayerUploadInput = z.infer<typeof storyLayerUploadInputSchema>;
 
@@ -496,6 +557,8 @@ const imageLayerInputFields = {
   ...layerGeometry,
   type: z.literal("image"),
   shape: z.enum(STORY_LAYER_IMAGE_SHAPES).default("rect"),
+  /** The author's own description of the photo, for screen readers. Optional; absent means none was written. */
+  alt: layerAlt.optional(),
   upload: storyLayerUploadInputSchema,
 };
 
@@ -541,6 +604,8 @@ export const storyLayerSchema = z.discriminatedUnion("type", [
     ...layerGeometry,
     type: z.literal("image"),
     shape: z.enum(STORY_LAYER_IMAGE_SHAPES).default("rect"),
+    /** The author's description of the photo. Null when none was written, and for stories from before it. */
+    alt: z.string().nullable().default(null),
     url: z.string(),
     ...imageDims,
   }),
@@ -779,6 +844,8 @@ export const storyMediaInputSchema = z.object({
   height: z.number().int().positive().max(STORY_MAX_DIMENSION),
   /** Video only, required there. Read off the file by the client. */
   durationMs: z.number().int().positive().max(STORY_MAX_VIDEO_MS).optional(),
+  /** Eager upload (see `createStoryUploadSchema`): the response's `upload` is then null. */
+  uploadId: eagerUploadIdSchema,
 });
 export type StoryMediaInput = z.infer<typeof storyMediaInputSchema>;
 
@@ -817,6 +884,13 @@ export type StoryAudienceTargets = z.infer<typeof storyAudienceTargetsSchema>;
  * a build that knows only `sticker` still shows it. Sending `sticker` alone
  * (an old build) works too; sending both requires them to agree.
  *
+ * EAGER UPLOADS. `media.uploadId` and a layer's `upload.uploadId` name files
+ * already stored through `POST /api/stories/uploads`. For those the response
+ * carries no `upload` / `layerUploads` entry, and the client calls
+ * `POST /api/stories/:storyId/publish` straight away, or sends `publish: true`
+ * with the create when every file is eager and gets the published story back in
+ * the one call. Without `uploadId` everything below is unchanged.
+ *
  * UPLOADS. A story with media or with image/drawing layers answers `upload`
  * (the base) and `layerUploads` (one per image/drawing layer, `layerId` naming
  * the layer): the client PUTs each file there with exactly its `headers`
@@ -850,10 +924,31 @@ export const createStorySchema = z
      * instead of posting a second one. Optional; strongly recommended.
      */
     requestId: z.string().uuid().optional(),
+    /**
+     * Create AND publish in one call, for a story whose every file is already
+     * uploaded (`uploadId` on the media and on each photo or drawing layer):
+     * one round trip instead of two, which is what makes Post feel instant on
+     * a slow link. The answer is the published story (`own.status` `live`, or
+     * `processing` for a video). Needs every file eager, else 400. A failure
+     * after the story was made (a scan refusal, storage trouble) answers as
+     * `POST /api/stories/:id/publish` would; a retry with the same
+     * `requestId` finds the story and publishes it again.
+     */
+    publish: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
     const fail = (message: string, path: string) =>
       ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: [path] });
+    if (value.publish) {
+      const everyFileUploaded =
+        (value.kind === "text" || Boolean(value.media?.uploadId)) &&
+        value.layers.every(
+          (layer) => (layer.type !== "image" && layer.type !== "drawing") || Boolean(layer.upload.uploadId),
+        );
+      if (!everyFileUploaded) {
+        fail("publish needs every file uploaded first (uploadId)", "publish");
+      }
+    }
     if (value.kind === "text") {
       if (!value.text && value.layers.length === 0) {
         fail("A text story needs text or at least one layer", "text");
@@ -876,6 +971,15 @@ export const createStorySchema = z
     }
     if (new Set(value.layers.map((layer) => layer.id)).size !== value.layers.length) {
       fail("Layer ids must be unique", "layers");
+    }
+    const uploadIds = [
+      value.media?.uploadId,
+      ...value.layers.map((layer) =>
+        layer.type === "image" || layer.type === "drawing" ? layer.upload.uploadId : undefined,
+      ),
+    ].filter((id): id is string => id !== undefined);
+    if (new Set(uploadIds).size !== uploadIds.length) {
+      fail("An upload can back one file only", "media");
     }
     const count = (type: StoryLayerType) =>
       value.layers.filter((layer) => layer.type === type).length;
@@ -922,6 +1026,57 @@ export const storyLayerUploadSchema = storyUploadSchema.extend({
   layerId: z.string().uuid(),
 });
 export type StoryLayerUpload = z.infer<typeof storyLayerUploadSchema>;
+
+/**
+ * `POST /api/stories/uploads`: start a story's file BEFORE the story exists, so
+ * the bytes are already in storage when the author taps Post.
+ *
+ * - `kind: "base"`: the photo or video behind the story. Any `STORY_CONTENT_TYPES`
+ *   type up to `STORY_MAX_BYTES` (a video must still be H.264 MP4; the same
+ *   checks as a create run when the story is published).
+ * - `kind: "layer"`: a placed photo or the drawing. Image types up to
+ *   `STORY_LAYER_MAX_BYTES`.
+ *
+ * `byteLength` is signed into the PUT (`Content-Length`), so the client sends
+ * exactly that many bytes. Answers 201 with `createStoryUploadResponseSchema`;
+ * 404 when stories are off for this account, 400 for a type the kind does not
+ * take, 429 over the rate budget or with `STORY_UPLOADS_OUTSTANDING_MAX`
+ * unclaimed uploads already, 503 with no storage. An upload nobody claims is
+ * deleted after `STORY_UPLOAD_UNCLAIMED_HOURS`.
+ */
+export const createStoryUploadSchema = z
+  .object({
+    kind: z.enum(["base", "layer"]),
+    contentType: storyContentTypeSchema,
+    byteLength: z.number().int().positive().max(STORY_MAX_BYTES),
+  })
+  .superRefine((value, ctx) => {
+    if (value.kind !== "layer") {
+      return;
+    }
+    if (!(STORY_LAYER_IMAGE_TYPES as readonly string[]).includes(value.contentType)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "A layer is a photo or a drawing",
+        path: ["contentType"],
+      });
+    }
+    if (value.byteLength > STORY_LAYER_MAX_BYTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Layer image too large",
+        path: ["byteLength"],
+      });
+    }
+  });
+export type CreateStoryUploadRequest = z.input<typeof createStoryUploadSchema>;
+export type CreateStoryUploadParsed = z.output<typeof createStoryUploadSchema>;
+
+export const createStoryUploadResponseSchema = storyUploadSchema.extend({
+  /** Put this in `media.uploadId` or a layer's `upload.uploadId` when creating the story. */
+  uploadId: z.string().uuid(),
+});
+export type CreateStoryUploadResponse = z.infer<typeof createStoryUploadResponseSchema>;
 
 export const createStoryResponseSchema = z.object({
   story: storySchema,

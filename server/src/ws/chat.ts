@@ -24,6 +24,7 @@ import {
   type FriendActivity,
   type MessagePreview,
   type MessageRejectReason,
+  type MessageForward,
   type MessageSystemKind,
   NUDGE_BODY,
   type NudgeFrame,
@@ -761,6 +762,49 @@ export function broadcastToChannel(
     // instance's viewers are covered by the loop above on their side.
     publishToCluster(BROADCAST_TOPIC, { channelId, message });
   }
+}
+
+/**
+ * A message written by the SERVER, not typed by a person (a followed Baú's card
+ * delivered into a channel, `services/bau-follow-delivery.ts`): the same
+ * fan-out a send gets after it commits, minus everything that belongs to a
+ * sender. The message reaches the channel's viewers; everybody else who can
+ * see the channel gets the activity frame (unread dot, and a mention flag for
+ * `mentionedUserIds`, the people a role ping was recorded for).
+ *
+ * Runs in the API or in the worker. In the worker there are no sockets, so
+ * `broadcastToChannel` only reaches the siblings over the cluster bus, and
+ * the activity frame is published for them to fan out (their copy is the one
+ * that sends web push, as it is for every message that crosses the bus). With
+ * the bus off the worker has nobody to tell, which is what a deployment with a
+ * worker and no bus already means for every other frame.
+ */
+export async function announceServiceMessage(
+  message: ReturnType<typeof mapMessage>,
+  mentionedUserIds: readonly string[] = [],
+): Promise<void> {
+  broadcastToChannel(message.channelId, {
+    type: "message-broadcast",
+    message,
+  });
+  if (isBusEnabled()) {
+    publishToCluster(ACTIVITY_TOPIC, {
+      channelId: message.channelId,
+      authorId: message.authorId,
+      mentions: [],
+      repliedToUserId: null,
+      ...(mentionedUserIds.length > 0 ? { mentionedUserIds } : {}),
+      preview: null,
+    });
+  }
+  // The message is already out: a failure in the activity leg (unread dots,
+  // push) is logged, never thrown, so the caller cannot mistake a completed
+  // broadcast for a failed one and replay it.
+  await notifyChannelActivity(message.channelId, message.authorId, [], null, {
+    mentionedUserIds,
+  }).catch((error: unknown) => {
+    console.error("[chat] service message activity failed:", error);
+  });
 }
 
 /**
@@ -2320,6 +2364,14 @@ export type PostChannelMessageInput = {
   systemKind?: MessageSystemKind;
   /** A story reply: the story the message quotes. Conversations only. */
   storyId?: string;
+  /**
+   * A forward (`POST /api/forwards`): the snapshot stored on the message and
+   * the forwarder's own comment. `body` is then the comment, or the fallback
+   * line when there is none. Nothing the snapshot says can mention anybody:
+   * names are read from the comment only, `@everyone` and `@here` never fire,
+   * and AutoMod reads the snapshot too, because that text lands in the channel.
+   */
+  forward?: { snapshot: MessageForward; comment: string };
 };
 
 export type PostChannelMessageResult =
@@ -2502,7 +2554,15 @@ async function postChannelMessageAttempt(
         channel.type === "thread" ? (channel.parent_id ?? null) : null,
       authorId: input.author.id,
       memberPerms,
-      body: input.body,
+      body: input.forward
+        ? [
+            input.forward.comment,
+            input.forward.snapshot.title ?? "",
+            input.forward.snapshot.excerpt,
+          ]
+            .filter((part) => part.length > 0)
+            .join("\n")
+        : input.body,
     };
     const verdict = await checkAutomod(automodInput);
     if (verdict) {
@@ -2523,14 +2583,23 @@ async function postChannelMessageAttempt(
 
   await input.beforeCreate?.();
 
-  const parsedMentions = extractMentions(input.body);
+  // What mentions are read from. A forward's body may be the server's
+  // fallback line (a title the forwarder never wrote), and the snapshot is
+  // never re-resolved, so only the forwarder's own comment can mention, and
+  // `@everyone` / `@here` never fire from a forward at all.
+  const mentionSource = input.forward ? input.forward.comment : input.body;
+  const parsedMentions = extractMentions(mentionSource);
   let hereUserIds: string[] = [];
   const mentionEveryone =
     channel?.kind === "server" &&
+    !input.forward &&
     parsedMentions.everyone &&
     canMentionEveryone;
   const mentionHere =
-    channel?.kind === "server" && parsedMentions.here && canMentionEveryone;
+    channel?.kind === "server" &&
+    !input.forward &&
+    parsedMentions.here &&
+    canMentionEveryone;
   if (mentionHere) {
     const hereAudience = await getChannelAudience(input.channelId);
     hereUserIds = (hereAudience?.userIds ?? []).filter(
@@ -2574,10 +2643,16 @@ async function postChannelMessageAttempt(
       mentionEveryone,
       mentionHere,
       extraUserIds: hereUserIds,
-      canMentionEveryone,
+      canMentionEveryone: canMentionEveryone && !input.forward,
+      ...(input.forward ? { mentionText: input.forward.comment } : {}),
     },
-    input.chance || input.poll || input.systemKind
-      ? { chance: input.chance, poll: input.poll, systemKind: input.systemKind }
+    input.chance || input.poll || input.systemKind || input.forward
+      ? {
+          chance: input.chance,
+          poll: input.poll,
+          systemKind: input.systemKind,
+          ...(input.forward ? { forward: input.forward.snapshot } : {}),
+        }
       : undefined,
     input.nonce,
     channel?.kind !== "server" ? (input.storyId ?? null) : null,
@@ -2639,7 +2714,9 @@ async function postChannelMessageAttempt(
   }
 
   const message = mapMessage(dbMessage);
-  const url = extractFirstUrl(input.body);
+  // A forward is its own preview: the fallback line's URL is the card's
+  // `url`, and unfurling it would draw the same thing twice under the card.
+  const url = input.forward ? null : extractFirstUrl(input.body);
   let cacheFresh = true;
   if (url) {
     const state = await getEmbedCacheState(url);
@@ -2659,7 +2736,7 @@ async function postChannelMessageAttempt(
     input.senderSocket,
   );
 
-  const mentions = extractMentionUsernames(input.body);
+  const mentions = extractMentionUsernames(mentionSource);
   const mentionedUserIds = mentionIdsFromDb
     ? (dbMessage.mentionedUserIds ?? [])
     : [];

@@ -402,6 +402,17 @@ describeDb("stories", () => {
       expect(await read(carol, [story.id])).toEqual([]);
     });
 
+    it("a text card keeps a solid or gradient background key, and an unknown key is refused", async () => {
+      for (const background of ["onyx", "sunset"]) {
+        const posted = await postText("oi", { serverIds: [serverId] }, { background });
+        expect(posted.status).toBe(201);
+        const [seen] = await read(bob, [(posted.body.story as Story).id]);
+        expect(seen!.background).toBe(background);
+      }
+      as(alice);
+      expect((await postText("oi", { serverIds: [serverId] }, { background: "hotpink" })).status).toBe(400);
+    });
+
     it("a block hides stories BOTH ways", async () => {
       const aliceStory = (await postText("da alice")).body.story as Story;
       as(bob);

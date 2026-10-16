@@ -11,6 +11,16 @@
         }
       }
     },
+    "%@ already follows %lld Baús, the most a server can." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ já segue %lld Baús, o máximo que um servidor pode."
+          }
+        }
+      }
+    },
     "%@ and %@ are typing" : {
       "localizations" : {
         "pt-BR" : {
@@ -181,6 +191,206 @@
         }
       }
     },
+    "Add a comment" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escreve um comentário"
+          }
+        }
+      }
+    },
+    "Add a story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar um story"
+          }
+        }
+      }
+    },
+    "channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "canal"
+          }
+        }
+      }
+    },
+    "Channels" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canais"
+          }
+        }
+      }
+    },
+    "Couldn't keep your story to post it. Check your free space." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra guardar teu story pra postar. Confere o espaço livre."
+          }
+        }
+      }
+    },
+    "Couldn't load all your places." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar todos os teus lugares."
+          }
+        }
+      }
+    },
+    "Couldn't post your story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra postar teu story"
+          }
+        }
+      }
+    },
+    "Couldn't send right now. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra enviar agora. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Couldn't send to this person." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra mandar pra essa pessoa."
+          }
+        }
+      }
+    },
+    "Didn't post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não postou"
+          }
+        }
+      }
+    },
+    "Didn't post. Try again" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não postou. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Forward" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaminhar"
+          }
+        }
+      }
+    },
+    "Forwarded" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaminhado"
+          }
+        }
+      }
+    },
+    "Forwarded from %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaminhado de %@"
+          }
+        }
+      }
+    },
+    "Forwarded from %@ · #%@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaminhado de %@ · #%@"
+          }
+        }
+      }
+    },
+    "Forwarded from %@ · Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaminhado de %@ · Baú"
+          }
+        }
+      }
+    },
+    "Forwarded to %lld places" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaminhado para %lld lugares"
+          }
+        }
+      }
+    },
+    "Free posts arrive as cards in the channels people choose. In a public community any member can set it up; otherwise only people who manage the server. Members-only posts never go out." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os posts livres chegam como cartões nos canais que as pessoas escolherem. Numa comunidade pública qualquer membro pode configurar; nas outras, só quem gerencia o servidor. Posts só pra membros nunca saem."
+          }
+        }
+      }
+    },
+    "It posts by itself when you're back online." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Posta sozinho quando tu voltar a ficar online."
+          }
+        }
+      }
+    },
+    "Keep posting" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continuar postando"
+          }
+        }
+      }
+    },
     "%lld attachments" : {
       "localizations" : {
         "pt-BR" : {
@@ -277,6 +487,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld d"
+          }
+        }
+      }
+    },
+    "%lld followers" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld follower"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld followers"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld seguidor"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld seguidores"
+                }
+              }
+            }
           }
         }
       }
@@ -491,6 +741,16 @@
         }
       }
     },
+    "%lld percent" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld por cento"
+          }
+        }
+      }
+    },
     "%lld posts" : {
       "localizations" : {
         "pt-BR" : {
@@ -561,12 +821,242 @@
         }
       }
     },
+    "This can only go inside this server." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isso só pode ir pra dentro deste servidor."
+          }
+        }
+      }
+    },
+    "Messages can't go here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aqui não dá pra mandar mensagem."
+          }
+        }
+      }
+    },
+    "No connection" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem conexão"
+          }
+        }
+      }
+    },
+    "No connection. This is the list from last time, and the story posts when you're back online." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem conexão. É a lista da última vez, e o story posta quando tu voltar a ficar online."
+          }
+        }
+      }
+    },
+    "Nothing matches." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nada encontrado."
+          }
+        }
+      }
+    },
+    "Opens the original" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre o original"
+          }
+        }
+      }
+    },
+    "Posting" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Postando"
+          }
+        }
+      }
+    },
+    "Posting your story" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Postando teu story"
+          }
+        }
+      }
+    },
     "(that's you)" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "(tu)"
+          }
+        }
+      }
+    },
+    "role" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "cargo"
+          }
+        }
+      }
+    },
+    "Search servers, channels and chats" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buscar servidores, canais e conversas"
+          }
+        }
+      }
+    },
+    "Send to %lld" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar para %lld"
+          }
+        }
+      }
+    },
+    "Slow mode is on here. Try again in %llds." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O modo lento tá ligado aqui. Tenta de novo em %llds."
+          }
+        }
+      }
+    },
+    "Slow mode is on here. Try again in a moment." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O modo lento tá ligado aqui. Tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "Stays in its server" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fica no próprio servidor"
+          }
+        }
+      }
+    },
+    "This can't be forwarded anymore." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isso não pode mais ser encaminhado."
+          }
+        }
+      }
+    },
+    "This can't be forwarded." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isso não pode ser encaminhado."
+          }
+        }
+      }
+    },
+    "This one stays in its own server." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse fica só no próprio servidor."
+          }
+        }
+      }
+    },
+    "This server's rules blocked it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As regras desse servidor bloquearam."
+          }
+        }
+      }
+    },
+    "Too many forwards. Try again in %llds." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muitos encaminhamentos. Tenta de novo em %llds."
+          }
+        }
+      }
+    },
+    "Too many forwards. Try again shortly." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muitos encaminhamentos. Tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "Too many messages. Try again shortly." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muitas mensagens. Tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "View" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver"
+          }
+        }
+      }
+    },
+    "Waiting for connection" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esperando conexão"
           }
         }
       }
@@ -1191,6 +1681,16 @@
         }
       }
     },
+    "Allow other servers to follow this Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permitir que outros servidores sigam este Baú"
+          }
+        }
+      }
+    },
     "Already added" : {
       "localizations" : {
         "pt-BR" : {
@@ -1247,6 +1747,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Qualquer pessoa"
+          }
+        }
+      }
+    },
+    "Anyone who can hear them can read the text. The audio goes through a transcription service. It applies to the next messages you send; the ones already sent stay as they are." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem pode ouvir também lê o texto. O áudio passa por um serviço de transcrição. Vale pros próximos áudios que tu mandar; os que já foram ficam como estão."
           }
         }
       }
@@ -1481,6 +1991,16 @@
         }
       }
     },
+    "Baú of %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baú de %@"
+          }
+        }
+      }
+    },
     "Baú post: %@" : {
       "localizations" : {
         "pt-BR" : {
@@ -1617,6 +2137,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Bloqueados"
+          }
+        }
+      }
+    },
+    "Blocked servers" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Servidores bloqueados"
           }
         }
       }
@@ -2291,6 +2821,16 @@
         }
       }
     },
+    "Could not follow right now. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra seguir agora. Tenta de novo."
+          }
+        }
+      }
+    },
     "Could not load channels" : {
       "localizations" : {
         "pt-BR" : {
@@ -2321,12 +2861,52 @@
         }
       }
     },
+    "Could not load the followers. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar os seguidores. Tenta de novo."
+          }
+        }
+      }
+    },
     "Could not load this file." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Não deu para carregar este arquivo."
+          }
+        }
+      }
+    },
+    "Could not load what this channel follows." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar o que este canal segue."
+          }
+        }
+      }
+    },
+    "Could not load what you already follow here. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar o que tu já segue aqui. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Could not load your servers. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar teus servidores. Tenta de novo."
           }
         }
       }
@@ -2387,6 +2967,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Não deu para ligar a câmera. Feche o que estiver usando a câmera e tente de novo."
+          }
+        }
+      }
+    },
+    "Could not transcribe this message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra transcrever esse áudio"
           }
         }
       }
@@ -2991,6 +3581,16 @@
         }
       }
     },
+    "Done. New posts will arrive in #%@ of %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pronto. Os posts novos vão chegar em #%@ de %@."
+          }
+        }
+      }
+    },
     "Double tap to edit" : {
       "localizations" : {
         "pt-BR" : {
@@ -3067,6 +3667,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Calma! Espera uns segundinhos pra chamar a atenção de novo."
+          }
+        }
+      }
+    },
+    "Easy, try again in a moment" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calma, tenta de novo daqui a pouco"
           }
         }
       }
@@ -3171,12 +3781,32 @@
         }
       }
     },
+    "Every channel of this server already follows this Baú." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos os canais deste servidor já seguem este Baú."
+          }
+        }
+      }
+    },
     "Every channel, message, and invite is deleted for everyone." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Todos os canais, mensagens e convites são excluídos para todo mundo."
+          }
+        }
+      }
+    },
+    "Every follow from that server stops now, and it cannot follow this Baú again until you unblock it. Cards already delivered stay." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos os seguimentos desse servidor param agora, e ele não poderá seguir este Baú de novo até tu desbloquear. Os cartões já entregues ficam."
           }
         }
       }
@@ -3341,12 +3971,62 @@
         }
       }
     },
+    "Follow this Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir este Baú"
+          }
+        }
+      }
+    },
+    "Follow this Baú into a channel of another server" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir este Baú num canal de outro servidor"
+          }
+        }
+      }
+    },
+    "Followers" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguidores"
+          }
+        }
+      }
+    },
+    "Followers of this Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguidores deste Baú"
+          }
+        }
+      }
+    },
     "Following" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Seguindo"
+          }
+        }
+      }
+    },
+    "Following this Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguindo este Baú"
           }
         }
       }
@@ -4471,12 +5151,42 @@
         }
       }
     },
+    "Mention a role on each post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcar um cargo a cada post"
+          }
+        }
+      }
+    },
+    "Mention nobody" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem marcar ninguém"
+          }
+        }
+      }
+    },
     "Mention someone" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mencionar alguém"
+          }
+        }
+      }
+    },
+    "Mentions %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marca %@"
           }
         }
       }
@@ -4811,6 +5521,16 @@
         }
       }
     },
+    "New free posts arrive as a card in the channel you pick, signed by this community. Members-only posts never go out." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os posts livres novos chegam como cartão no canal que tu escolher, assinados por esta comunidade. Posts só pra membros nunca saem."
+          }
+        }
+      }
+    },
     "New in the Baú" : {
       "localizations" : {
         "pt-BR" : {
@@ -5101,6 +5821,16 @@
         }
       }
     },
+    "No server follows this Baú yet." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhum servidor segue este Baú ainda."
+          }
+        }
+      }
+    },
     "No servers yet" : {
       "localizations" : {
         "pt-BR" : {
@@ -5117,6 +5847,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sem som"
+          }
+        }
+      }
+    },
+    "No speech in this message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não tem fala nesse áudio"
           }
         }
       }
@@ -6301,6 +7041,26 @@
         }
       }
     },
+    "Remove and block" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remover e bloquear"
+          }
+        }
+      }
+    },
+    "Remove and block %@?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remover e bloquear %@?"
+          }
+        }
+      }
+    },
     "Remove friend" : {
       "localizations" : {
         "pt-BR" : {
@@ -6591,6 +7351,16 @@
         }
       }
     },
+    "Resume following" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retomar"
+          }
+        }
+      }
+    },
     "Rooms for\neverything." : {
       "localizations" : {
         "pt-BR" : {
@@ -6741,6 +7511,16 @@
         }
       }
     },
+    "Server" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Servidor"
+          }
+        }
+      }
+    },
     "Server default" : {
       "localizations" : {
         "pt-BR" : {
@@ -6761,12 +7541,32 @@
         }
       }
     },
+    "Servers that receive your free posts as cards. You see server names, never people." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Servidores que recebem teus posts livres como cartões. Tu vê o nome dos servidores, nunca de pessoas."
+          }
+        }
+      }
+    },
     "Show what's up: a clip, your setup, when you're getting on. Gone in 24 h." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostra o que tá rolando: um clipe, teu setup, que horas tu entra. Some em 24 h."
+          }
+        }
+      }
+    },
+    "Shows the text under the voice messages you receive. Off, you see no transcripts at all." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostra o texto embaixo dos áudios que tu recebe. Desligado, tu não vê nenhuma transcrição."
           }
         }
       }
@@ -7151,6 +7951,16 @@
         }
       }
     },
+    "Share this post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compartilhar esse post"
+          }
+        }
+      }
+    },
     "Share your screen" : {
       "localizations" : {
         "pt-BR" : {
@@ -7187,6 +7997,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar menos"
+          }
+        }
+      }
+    },
+    "Show less" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver menos"
           }
         }
       }
@@ -7681,6 +8501,26 @@
         }
       }
     },
+    "That channel already follows this Baú." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse canal já segue este Baú."
+          }
+        }
+      }
+    },
+    "That did not work. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isso não funcionou. Tenta de novo."
+          }
+        }
+      }
+    },
     "That format won't work. Use JPG, PNG, WebP or MP4." : {
       "localizations" : {
         "pt-BR" : {
@@ -7707,6 +8547,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esse aí é reservado."
+          }
+        }
+      }
+    },
+    "That role cannot be mentioned." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse cargo não pode ser marcado."
+          }
+        }
+      }
+    },
+    "That server already follows as many Baús as it can." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse servidor já segue o máximo de Baús que pode."
           }
         }
       }
@@ -7951,6 +8811,16 @@
         }
       }
     },
+    "This Baú no longer accepts follows." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este Baú não aceita mais seguidores."
+          }
+        }
+      }
+    },
     "This call already has the maximum number of cameras." : {
       "localizations" : {
         "pt-BR" : {
@@ -8067,6 +8937,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Isso não tem volta. A gente não guarda backup pra te restaurar, e ninguém no pqp consegue trazer sua conta de volta."
+          }
+        }
+      }
+    },
+    "This channel does not follow any Baú yet. Open a Baú and tap the bell to follow it here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este canal ainda não segue nenhum Baú. Abre um Baú e toca no sininho pra seguir aqui."
+          }
+        }
+      }
+    },
+    "This community does not accept that server." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta comunidade não aceita esse servidor."
           }
         }
       }
@@ -8337,6 +9227,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nível principal"
+          }
+        }
+      }
+    },
+    "Transcribe" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcrever"
+          }
+        }
+      }
+    },
+    "Transcribe my voice messages" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcrever meus áudios"
+          }
+        }
+      }
+    },
+    "Transcribing…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcrevendo…"
           }
         }
       }
@@ -8771,6 +9691,16 @@
         }
       }
     },
+    "Voice messages" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mensagens de voz"
+          }
+        }
+      }
+    },
     "Watch" : {
       "localizations" : {
         "pt-BR" : {
@@ -8887,6 +9817,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "O que deu errado? (opcional)"
+          }
+        }
+      }
+    },
+    "What you already follow here" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O que tu já segue deste Baú"
           }
         }
       }
@@ -9121,6 +10061,16 @@
         }
       }
     },
+    "You can pick up to 5." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dá pra escolher até 5."
+          }
+        }
+      }
+    },
     "You can pin up to 15 conversations. Unpin one first." : {
       "localizations" : {
         "pt-BR" : {
@@ -9161,12 +10111,32 @@
         }
       }
     },
+    "You can't see this channel." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não pode ver esse canal."
+          }
+        }
+      }
+    },
     "You can't send in this channel" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você não pode mandar mensagem neste canal"
+          }
+        }
+      }
+    },
+    "You can't send messages here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não pode mandar mensagem aqui."
           }
         }
       }
@@ -9207,6 +10177,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você saiu da sala, então sua tela não está indo ao ar. Volte pra continuar transmitindo."
+          }
+        }
+      }
+    },
+    "You need to manage webhooks or channels in that channel." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu precisa gerenciar webhooks ou canais nesse canal."
           }
         }
       }
@@ -9257,6 +10237,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você vai precisar de um novo convite para voltar."
+          }
+        }
+      }
+    },
+    "Your story didn't post. Double tap for options" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teu story não postou. Toca duas vezes pra ver as opções"
+          }
+        }
+      }
+    },
+    "Your story is waiting for a connection. Double tap for options" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teu story tá esperando conexão. Toca duas vezes pra ver as opções"
           }
         }
       }
@@ -9597,6 +10597,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "mudou o domínio de e-mail SSO"
+          }
+        }
+      }
+    },
+    "Channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Canal"
           }
         }
       }
@@ -9947,6 +10957,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar a transmissão"
+          }
+        }
+      }
+    },
+    "Show transcripts" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar transcrições"
           }
         }
       }
@@ -11381,6 +12401,26 @@
         }
       }
     },
+    "Turn subtitles off" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desligar legendas"
+          }
+        }
+      }
+    },
+    "Turn subtitles on" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ligar legendas"
+          }
+        }
+      }
+    },
     "Turn on mic" : {
       "localizations" : {
         "pt-BR" : {
@@ -11621,6 +12661,36 @@
         }
       }
     },
+    "Paused" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausado"
+          }
+        }
+      }
+    },
+    "Paused because this server banned the Baú's account. Unban it to resume, or unfollow." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausado porque este servidor baniu a conta do Baú. Desbane pra retomar, ou deixa de seguir."
+          }
+        }
+      }
+    },
+    "Paused because whoever set it up lost permission to manage this channel. Resuming makes you the one it answers to." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausado porque quem configurou perdeu a permissão de gerenciar este canal. Ao retomar, tu passa a ser quem responde por ele."
+          }
+        }
+      }
+    },
     "Playback speed" : {
       "localizations" : {
         "pt-BR" : {
@@ -11751,6 +12821,16 @@
         }
       }
     },
+    "Unfollow" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deixar de seguir"
+          }
+        }
+      }
+    },
     "You are on a call. Leave it to record a voice message." : {
       "localizations" : {
         "pt-BR" : {
@@ -11847,6 +12927,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Título"
+          }
+        }
+      }
+    },
+    "To follow a Baú you need to manage webhooks or channels in a server of yours." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pra seguir um Baú, tu precisa gerenciar webhooks ou canais num servidor teu."
           }
         }
       }
@@ -11981,6 +13071,16 @@
         }
       }
     },
+    "The Baús this channel follows. New free posts arrive here as cards." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os Baús que este canal segue. Os posts livres novos chegam aqui como cartões."
+          }
+        }
+      }
+    },
     "That file is too large for the Baú." : {
       "localizations" : {
         "pt-BR" : {
@@ -11997,6 +13097,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Calma, tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "Slow down a little and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vai com calma e tenta de novo."
           }
         }
       }
@@ -12077,6 +13187,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "O texto está grande demais pra um post."
+          }
+        }
+      }
+    },
+    "The text shows up under the audio, for people who would rather read." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O texto aparece embaixo do áudio, pra quem prefere ler."
           }
         }
       }
@@ -12343,6 +13463,226 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Concluir"
+          }
+        }
+      }
+    },
+    "A dog running on the beach" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um cachorro correndo na praia"
+          }
+        }
+      }
+    },
+    "Aurora" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aurora"
+          }
+        }
+      }
+    },
+    "Berry" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Amora"
+          }
+        }
+      }
+    },
+    "Cobalt" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cobalto"
+          }
+        }
+      }
+    },
+    "Crimson" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carmesim"
+          }
+        }
+      }
+    },
+    "Describe the photo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descreve a foto"
+          }
+        }
+      }
+    },
+    "Describe the picture" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descreve a imagem"
+          }
+        }
+      }
+    },
+    "Describe" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descrever"
+          }
+        }
+      }
+    },
+    "Described" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descrito"
+          }
+        }
+      }
+    },
+    "Dusk" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entardecer"
+          }
+        }
+      }
+    },
+    "For people who use a screen reader. Say what is in it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pra quem usa leitor de tela. Conta o que tem aí."
+          }
+        }
+      }
+    },
+    "Glow" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brilho"
+          }
+        }
+      }
+    },
+    "Gradient" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Degradê"
+          }
+        }
+      }
+    },
+    "Lagoon" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lagoa"
+          }
+        }
+      }
+    },
+    "Ocean" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oceano"
+          }
+        }
+      }
+    },
+    "Onyx" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ônix"
+          }
+        }
+      }
+    },
+    "Photo: %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Foto: %@"
+          }
+        }
+      }
+    },
+    "Pine" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pinho"
+          }
+        }
+      }
+    },
+    "Plum" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ameixa"
+          }
+        }
+      }
+    },
+    "Solid" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sólido"
+          }
+        }
+      }
+    },
+    "Sunset" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pôr do sol"
+          }
+        }
+      }
+    },
+    "Teal" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verde-azulado"
           }
         }
       }

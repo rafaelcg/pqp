@@ -100,6 +100,7 @@ export function toPostCard(
     likeCount: post.likeCount,
     commentCount: post.commentCount,
     publishedAt: post.publishedAt,
+    publicUrl: post.publicUrl ?? null,
   };
 }
 

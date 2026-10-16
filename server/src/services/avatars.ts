@@ -14,6 +14,7 @@ import {
   isStorageConfigured,
   presignGet,
   presignPut,
+  type StoredImage,
 } from "../lib/s3.js";
 
 /**
@@ -239,6 +240,11 @@ export async function discardAvatarObject(key: string): Promise<void> {
  * unauthenticated image request that has no session row to ride on.
  */
 export async function presignAvatarRead(userId: string): Promise<string | null> {
+  return (await readAvatarObject(userId))?.signedUrl ?? null;
+}
+
+/** `presignAvatarRead` with the key kept: a route that serves the bytes itself needs both. */
+export async function readAvatarObject(userId: string): Promise<StoredImage | null> {
   if (!isStorageConfigured()) {
     return null;
   }
@@ -250,7 +256,7 @@ export async function presignAvatarRead(userId: string): Promise<string | null> 
   if (!key) {
     return null;
   }
-  return presignGet(key, { ttlSeconds: READ_URL_TTL_SECONDS });
+  return { key, signedUrl: presignGet(key, { ttlSeconds: READ_URL_TTL_SECONDS }) };
 }
 
 // ------------------------------------------------------------- user banners
@@ -466,6 +472,13 @@ export async function setUserBanner(
 export async function presignUserBannerRead(
   userId: string,
 ): Promise<string | null> {
+  return (await readUserBannerObject(userId))?.signedUrl ?? null;
+}
+
+/** `presignUserBannerRead` with the key kept (see `readAvatarObject`). */
+export async function readUserBannerObject(
+  userId: string,
+): Promise<StoredImage | null> {
   if (!isStorageConfigured()) {
     return null;
   }
@@ -477,5 +490,5 @@ export async function presignUserBannerRead(
   if (!key) {
     return null;
   }
-  return presignGet(key, { ttlSeconds: READ_URL_TTL_SECONDS });
+  return { key, signedUrl: presignGet(key, { ttlSeconds: READ_URL_TTL_SECONDS }) };
 }

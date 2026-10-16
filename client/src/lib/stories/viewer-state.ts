@@ -33,7 +33,9 @@ export type PauseReason =
   | "menu"
   | "dialog"
   | "hidden"
-  | "key";
+  | "key"
+  /** The picture or clip has not shown its first frame yet: its time has not started. */
+  | "load";
 
 export type PersonMove = "none" | "forward" | "back";
 
@@ -329,6 +331,41 @@ export function idsToPreload(state: ViewerState): string[] {
   const previous = state.people[state.personIndex - 1];
   if (previous?.storyIds[0]) {
     ids.push(previous.storyIds[0]);
+  }
+  // The next two of the queue, across authors: the second may be the next person's second story.
+  for (const id of upcomingStoryIds(state, WARM_AHEAD)) {
+    if (!ids.includes(id)) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+/** How many stories ahead of the current one are warmed. */
+export const WARM_AHEAD = 2;
+
+/** The stories that play after the current one, in play order across people, at most `count`. */
+export function upcomingStoryIds(state: ViewerState, count: number): string[] {
+  const out: string[] = [];
+  for (let p = state.personIndex; p < state.people.length && out.length < count; p += 1) {
+    const ids = state.people[p]!.storyIds;
+    for (let s = p === state.personIndex ? state.storyIndex + 1 : 0; s < ids.length && out.length < count; s += 1) {
+      out.push(ids[s]!);
+    }
+  }
+  return out;
+}
+
+/**
+ * What to warm while this story is open (spec): the next two of the queue
+ * across authors, and the first story of the next author, in that order and
+ * without repeats.
+ */
+export function idsToWarm(state: ViewerState): string[] {
+  const ids = upcomingStoryIds(state, WARM_AHEAD);
+  const firstOfNext = state.people[state.personIndex + 1]?.storyIds[0];
+  if (firstOfNext && !ids.includes(firstOfNext)) {
+    ids.push(firstOfNext);
   }
   return ids;
 }

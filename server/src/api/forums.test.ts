@@ -603,8 +603,22 @@ describeDb("forum posts", () => {
 
     const andFilter = await list(bob, `?tag=${bug!.id}&tag=${linux!.id}`);
     expect(titles(andFilter)).toEqual(["Notebook não liga"]);
-    // Pinned posts ignore the tag filter.
-    expect(andFilter.pinned.map((p) => p.id)).toEqual([pinned.body.post.id]);
+    // The pinned post answers to the same filters as the list under it
+    // (docs/plans/FORUM_CHANNELS.md): it carries Docs only, so Bug+Linux
+    // hides it, and Docs keeps it.
+    expect(andFilter.pinned).toEqual([]);
+    expect((await list(bob, `?tag=${docs!.id}`)).pinned.map((p) => p.id)).toEqual([
+      pinned.body.post.id,
+    ]);
+    expect((await list(bob, "?status=open")).pinned.map((p) => p.id)).toEqual([
+      pinned.body.post.id,
+    ]);
+    expect((await list(bob, "?status=resolved")).pinned).toEqual([]);
+    expect((await list(bob, "?mine=true")).pinned).toEqual([]);
+    expect((await list(alice, "?mine=true")).pinned.map((p) => p.id)).toEqual([
+      pinned.body.post.id,
+    ]);
+    expect((await list(bob)).pinned.map((p) => p.id)).toEqual([pinned.body.post.id]);
     expect(titles(await list(bob, `?tag=${bug!.id}`))).toEqual([
       "Notebook não liga",
       "Tela azul",

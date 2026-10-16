@@ -392,6 +392,11 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     /// nil. The quote is drawn from `GET /api/stories/:id/card`, which stops
     /// carrying the picture and the caption once the story expires.
     var storyId: String? = nil
+    /// Encaminhar: the snapshot this message is a card of, or nil for an
+    /// ordinary message. Lenient like `chance` and `systemKind`: a version this
+    /// build does not know, or a snapshot that fails today's parse, is an
+    /// ordinary message that shows its body (the shared schema's `.catch(null)`).
+    var forward: MessageForward? = nil
 
     /// Client-only. A message sent optimistically has not been acknowledged by
     /// the server yet; the `nonce` echo on `message-broadcast` replaces it.
@@ -403,7 +408,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, channelId, authorId, authorName, authorTag, authorAvatarUrl
         case body, createdAt, editedAt, reactions, replyTo, attachments, embeds
-        case blocked, pinnedAt, isWebhook, webhookEmbeds, thread, chance, systemKind, storyId
+        case blocked, pinnedAt, isWebhook, webhookEmbeds, thread, chance, systemKind, storyId, forward
     }
 
     init(from decoder: Decoder) throws {
@@ -436,6 +441,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         let kind = (try? c.decodeIfPresent(String.self, forKey: .systemKind)) ?? nil
         systemKind = kind == "nudge" ? kind : nil
         storyId = (try? c.decodeIfPresent(String.self, forKey: .storyId)) ?? nil
+        forward = (try? c.decodeIfPresent(MessageForward.self, forKey: .forward)) ?? nil
         isPending = false
         pendingNonce = nil
     }
@@ -817,6 +823,9 @@ struct UserPreferences: Codable, Hashable, Sendable {
     /// Chamar a atenção. Absent reads as on. Off works in BOTH directions:
     /// nobody nudges this account and it nudges nobody.
     var allowNudges: Bool?
+    /// Voice note transcription, both halves on until turned off (absent reads
+    /// as on; see `VoiceTranscriptionPreferences`). Replaced as a whole on write.
+    var voiceTranscription: VoiceTranscriptionPreferences?
 }
 
 struct PreferencesResponse: Codable, Sendable { let preferences: UserPreferences }

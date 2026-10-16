@@ -154,19 +154,30 @@ fun rowBadge(unread: ChannelUnread?, muted: Boolean): RowBadge {
 fun mutedChannelIds(channels: Map<String, String>?): Set<String> =
     channels.orEmpty().filterValues { it == "none" }.keys
 
-/** What a folded category shows in place of its channels. */
-data class FoldedSummary(val channelCount: Int, val hasUnread: Boolean)
+/**
+ * What a folded category shows in place of its channels. [mentions] is how many
+ * times somebody pinged this person inside it: folding must not turn "somebody
+ * called your name" into the same white dot as "there are some messages".
+ */
+data class FoldedSummary(val channelCount: Int, val hasUnread: Boolean, val mentions: Int = 0)
 
+/**
+ * The row's own rule, summed: a channel counts when it is not muted and has
+ * unread messages OR a mention (a forum can carry a mention with no count), and
+ * a muted channel shows nothing at all, mentions included.
+ */
 fun foldedSummary(
     channels: List<Channel>,
     unread: Map<String, ChannelUnread>,
     muted: Set<String>,
-): FoldedSummary = FoldedSummary(
-    channelCount = channels.size,
-    hasUnread = channels.any { channel ->
-        channel.id !in muted && (unread[channel.id]?.count ?: 0) > 0
-    },
-)
+): FoldedSummary {
+    val live = channels.filter { it.id !in muted }.mapNotNull { unread[it.id] }
+    return FoldedSummary(
+        channelCount = channels.size,
+        hasUnread = live.any { it.count > 0 || it.mentions > 0 },
+        mentions = live.sumOf { it.mentions.coerceAtLeast(0) },
+    )
+}
 
 /**
  * Who is listed under a voice room.

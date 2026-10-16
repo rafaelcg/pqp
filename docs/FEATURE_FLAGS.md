@@ -120,6 +120,21 @@ a push when a Baú post goes live, to members who have not muted the server;
 never the author, members-only posts only to people who can open them. Server
 only, no client reads it. Counted under `product.pushSkipped.bau.*`; rules in
 `docs/COMMUNITY_HOME.md` §"Push on a new post".
+`BAU_FOLLOW` (`bau_follow`, **per server, read for the SOURCE**, default off, born
+as a flag): Seguir, following a Baú so its new free posts are delivered as forward
+cards into a channel of another server. Off for a source: no Seguir button
+(`GET /api/servers/:id/home/follow` answers `enabled: false`), creating a follow is
+a 404, nothing is delivered (a delivery already queued waits and goes out if the
+flag returns within six hours), and removing a follow always works. Turn it on
+for the QG with its override first. See `docs/COMMUNITY_HOME.md` §"Seguir".
+`BAU_PUBLIC_POSTS` (`bau_public_posts`, **per server**, default off, born as a
+flag): a free published Baú post of a community with a public address gets a page
+anybody can open, `pqp.gg/c/<slug>/p/<postId>`, with an edge-written unfurl card
+and a Compartilhar button. Needs `COMMUNITIES_ENABLED` and the Baú on; with any of
+them off the public read answers the same 404 as an unknown post. The clients
+learn it as `publicUrl` on each post of `GET /api/servers/:id/home/posts`, which is
+null unless the post qualifies. Rules in `docs/COMMUNITY_HOME.md` §"A public page
+per post".
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
 Born as a flag (no old reader): `COMMUNITY_HOME_VIDEO_CAPTIONS`
 (`community_home_video_captions`, **per server**, default off), automatic
@@ -133,6 +148,14 @@ The translated track also needs `community_home_translation` on for the server.
 Producing anything needs `VOICE_STT_PROVIDER`, its key and ffmpeg on the worker;
 it shares `VOICE_STT_DAILY_SECONDS` with voice notes. See
 `docs/COMMUNITY_HOME.md` §"Video subtitles".
+`DISCORD_BRING_CREW` (`discord_bring_crew`, **per server**, default off, born
+as a flag): "Traz tua galera" after a Discord import. The import's last screen
+becomes a ready announcement for the old Discord, and whoever manages the
+server sees how many people arrived for a week, with one reminder a day later
+if fewer than three did. Served as `bringCrew` on `POST /api/import/discord/apply`
+(read for the server just made, so the global value decides the last screen)
+and `enabled` on `GET /api/servers/:id/import-arrivals`. Web only. See
+`docs/DISCORD_IMPORT.md` §"Bring your people".
 `WATCH_PARTY_SERVER_AUDIENCE` (`watch_party_server_audience`, **per server**, default
 off, born as a flag): the in-app watch party count is the server's, distinct
 accounts on the playlist from every API machine, instead of the sockets one
