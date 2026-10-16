@@ -337,6 +337,12 @@ interface MessageListProps {
   activeThreadId?: string | null;
   /** Roster lookup for name colour, rank glyph, and presence. */
   authors?: ReadonlyMap<string, MessageAuthorInfo>;
+  /**
+   * `authors` is this server's whole roster, loaded: an author missing from it
+   * is no longer a member (left, kicked, banned) and gets a quiet "saiu" tag.
+   * False while it loads, in a conversation, or anywhere the map is partial.
+   */
+  authorsComplete?: boolean;
   /** Painted roles, for the highest-position colour on a name. */
   roles?: readonly MessageRoleColor[];
   /** True while Mark unread is holding this channel's read cursor. */
@@ -622,6 +628,7 @@ export const MessageList = memo(function MessageList({
   unreadThreadIds = EMPTY_BLOCKED,
   activeThreadId = null,
   authors = EMPTY_AUTHORS,
+  authorsComplete = false,
   roles = EMPTY_ROLES,
   unreadHeld = false,
   onForward,
@@ -2226,6 +2233,7 @@ export const MessageList = memo(function MessageList({
                 },
               )}
               authors={authors}
+              authorsComplete={authorsComplete}
               roles={roles}
               unreadHeld={unreadHeld}
               onForward={
@@ -2852,6 +2860,7 @@ interface MessageRowProps {
    * somewhere more useful (reply, edit, add-reaction all move it themselves). */
   onMenuClose: (refocus: boolean) => void;
   authors: ReadonlyMap<string, MessageAuthorInfo>;
+  authorsComplete: boolean;
   roles: readonly MessageRoleColor[];
   unreadHeld: boolean;
   onForward?: () => void;
@@ -2926,6 +2935,7 @@ const MessageRow = memo(function MessageRow({
   onMenuOpenRow,
   onMenuClose,
   authors,
+  authorsComplete,
   roles,
   unreadHeld,
   onForward,
@@ -2978,6 +2988,10 @@ const MessageRow = memo(function MessageRow({
       : message.body;
   const hideBodyForBauCard = shownBody === "";
   const authorInfo = authors.get(message.authorId);
+  // Not in a loaded roster: the author left, was removed or banned. Webhooks
+  // and AutoMod were never members, so they are never "gone".
+  const authorGone =
+    authorsComplete && !authorInfo && !message.isWebhook && !message.isAutomod;
   const mentionsYou = messageMentionsYou(
     message,
     currentUsername,
@@ -3594,6 +3608,14 @@ const MessageRow = memo(function MessageRow({
                       title={t("forum.badge.opHint")}
                     >
                       {t("forum.badge.op")}
+                    </span>
+                  )}
+                  {authorGone && (
+                    <span
+                      className="self-center rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-text-tertiary"
+                      title={t("chat.authorGoneHint", { name: message.authorName })}
+                    >
+                      {t("chat.authorGone")}
                     </span>
                   )}
                   {message.isAutomod ? (

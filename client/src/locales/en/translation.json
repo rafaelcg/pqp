@@ -6004,5 +6004,7 @@
   "bauPublic.missing.community": "But {name} is still here.",
   "bauPublic.unavailable.title": "Could not load that post",
   "bauPublic.unavailable.body": "Something went wrong on our end. Try again in a moment.",
-  "bauPublic.channelGeneric": "channel"
+  "bauPublic.channelGeneric": "channel",
+  "chat.authorGone": "left",
+  "chat.authorGoneHint": "{name} is no longer in this server."
 }

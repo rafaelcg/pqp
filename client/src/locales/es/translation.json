@@ -6073,5 +6073,7 @@
   "bauPublic.missing.community": "Pero {name} sigue aquí.",
   "bauPublic.unavailable.title": "No se pudo cargar ese post",
   "bauPublic.unavailable.body": "Algo salió mal de nuestro lado. Inténtalo de nuevo en un momento.",
-  "bauPublic.channelGeneric": "canal"
+  "bauPublic.channelGeneric": "canal",
+  "chat.authorGone": "salió",
+  "chat.authorGoneHint": "{name} ya no está en el servidor."
 }

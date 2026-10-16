@@ -6004,5 +6004,7 @@
   "bauPublic.missing.community": "Mas {name} continua por aí.",
   "bauPublic.unavailable.title": "Não deu pra carregar esse post",
   "bauPublic.unavailable.body": "Deu ruim do nosso lado. Tenta de novo daqui a pouco.",
-  "bauPublic.channelGeneric": "canal"
+  "bauPublic.channelGeneric": "canal",
+  "chat.authorGone": "saiu",
+  "chat.authorGoneHint": "{name} não está mais no servidor."
 }
