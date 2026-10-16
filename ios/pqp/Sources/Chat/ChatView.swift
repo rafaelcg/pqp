@@ -744,7 +744,16 @@ struct ChatView: View {
                     }
                     if model.hasMore {
                         Button("Load earlier messages") {
-                            Task { await model.loadEarlier() }
+                            // The message the reader was on, before the older
+                            // page is put above it: the scroll offset does not
+                            // move on its own, so without this the transcript
+                            // stays at the top of the NEW page and the reader
+                            // is fifty messages from where they were.
+                            let keep = model.messages.first?.id
+                            Task {
+                                await model.loadEarlier()
+                                if let keep { keepPlace(on: keep, proxy) }
+                            }
                         }
                         .font(Typography.callout)
                         .foregroundStyle(Palette.paperMuted)
@@ -974,6 +983,18 @@ struct ChatView: View {
                 }
             }
             .animation(Motion.standard, value: showsForumJumpPill)
+        }
+    }
+
+    /// After older history lands above the reader: put them back on the message
+    /// they were on, no animation. Twice, the second pass once the lazy stack
+    /// has measured the rows it just built.
+    private func keepPlace(on id: String, _ proxy: ScrollViewProxy) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { proxy.scrollTo(id, anchor: .top) }
+        DispatchQueue.main.async {
+            withTransaction(transaction) { proxy.scrollTo(id, anchor: .top) }
         }
     }
 

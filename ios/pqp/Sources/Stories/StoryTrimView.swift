@@ -25,6 +25,10 @@ struct StoryTrimView: View {
     @State private var player = AVPlayer()
     @State private var observer: Any?
     @State private var edgeTick = 0
+    /// Whether the clip is shaped like the story canvas. Until the track says,
+    /// it is assumed to be (the common phone clip), so a portrait video never
+    /// flashes letterboxed.
+    @State private var fillsCanvas = true
 
     private var maxMs: Int { request.maxMs }
     @State private var seekTask: Task<Void, Never>?
@@ -55,7 +59,7 @@ struct StoryTrimView: View {
                 }
                 .padding(.horizontal, 14)
 
-                LoopPlayerView(player: player)
+                LoopPlayerView(player: player, fills: fillsCanvas)
                     .aspectRatio(9 / 16, contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .frame(maxHeight: .infinity)
@@ -189,6 +193,17 @@ struct StoryTrimView: View {
 
     private func load() async {
         let asset = AVURLAsset(url: request.url)
+        // The preview shows what will be posted: a clip shaped like the canvas
+        // fills it, any other is shown whole (the editor and the viewer do the
+        // same, over black), never cropped to portrait.
+        if let track = try? await asset.loadTracks(withMediaType: .video).first,
+           let (natural, transform) = try? await track.load(.naturalSize, .preferredTransform) {
+            let size = natural.applying(transform)
+            fillsCanvas = StoryCanvas.fillsCanvas(width: Int(abs(size.width)), height: Int(abs(size.height)))
+        }
+        // The trimmer may have gone while the track was being read: nothing may
+        // start playing or observing behind it.
+        guard !gone, !Task.isCancelled else { return }
         let item = AVPlayerItem(asset: asset)
         player.replaceCurrentItem(with: item)
         player.isMuted = true
@@ -223,6 +238,9 @@ struct StoryTrimView: View {
 /// An `AVPlayerLayer` with no controls: a loop, not a player.
 private struct LoopPlayerView: UIViewRepresentable {
     let player: AVPlayer
+    /// `resizeAspectFill` for a clip shaped like the canvas, `resizeAspect`
+    /// (the whole frame, bars) for any other.
+    let fills: Bool
 
     final class View: UIView {
         override class var layerClass: AnyClass { AVPlayerLayer.self }
@@ -232,10 +250,12 @@ private struct LoopPlayerView: UIViewRepresentable {
     func makeUIView(context: Context) -> View {
         let view = View()
         view.playerLayer.player = player
-        view.playerLayer.videoGravity = .resizeAspectFill
+        view.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
         view.backgroundColor = .black
         return view
     }
 
-    func updateUIView(_ uiView: View, context: Context) {}
+    func updateUIView(_ uiView: View, context: Context) {
+        uiView.playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
+    }
 }
