@@ -4,6 +4,7 @@ import {
   Compass,
   Eye,
   EyeOff,
+  Globe,
   LogOut,
   MessageCircle,
   PinOff,
@@ -39,6 +40,7 @@ import {
   railServerIndicator,
 } from "@/lib/community-home/rail-unread";
 import { useTranslation } from "@/lib/i18n";
+import { isServerPublic } from "@/lib/community-access";
 import {
   resolveNotificationLevel,
   setServerStreamAlerts,
@@ -53,6 +55,12 @@ import { cn } from "@/lib/utils";
 
 interface ServerRailProps {
   servers: Server[];
+  /**
+   * The instance has public communities on. A server with a public address
+   * says so on its rail icon (tooltip, accessible name and a small globe), but
+   * only while this is true: with it off the address answers 404.
+   */
+  communitiesEnabled?: boolean;
   selectedServerId: string | null;
   /**
    * Unread totalled per server, for every server — not only the selected one.
@@ -173,6 +181,7 @@ interface ServerRailProps {
 export const RAIL_UNREAD_FACES = 3;
 
 export function ServerRail({
+  communitiesEnabled = false,
   liveServerIds,
   servers,
   selectedServerId,
@@ -413,6 +422,8 @@ export function ServerRail({
         const totals = serverUnread[server.id] ?? null;
         const levels = serverNotificationControls(server.id, notifications);
         const muted = levels.level === "none";
+        const isPublic = isServerPublic(server, communitiesEnabled);
+        const publicName = t("chrome.railPublicName", { name: server.name });
         const { mentions, hasUnread, bauOnly, bauCue, bauCount } =
           railServerIndicator({
           totals,
@@ -509,7 +520,12 @@ export function ServerRail({
           // Tooltip wraps a span so the context-menu trigger can still be the
           // button. Both primitives want `asChild` on the same node, and
           // neither forwards through the other.
-          <Tooltip key={server.id} label={server.name} side="right" tone="rail">
+          <Tooltip
+            key={server.id}
+            label={isPublic ? publicName : server.name}
+            side="right"
+            tone="rail"
+          >
             <span
               ref={reorder.itemRef(server.id)}
               data-rail-item={server.id}
@@ -540,7 +556,7 @@ export function ServerRail({
             <button
               type="button"
               onClick={() => onSelectServer(server.id)}
-              aria-label={server.name}
+              aria-label={isPublic ? publicName : server.name}
               aria-describedby={onReorderServers ? reorderHintId : undefined}
               aria-keyshortcuts={
                 onReorderServers ? "Alt+ArrowUp Alt+ArrowDown" : undefined
@@ -589,6 +605,19 @@ export function ServerRail({
                   in the live vocabulary the sidebar block uses, and the
                   pulse only under motion-safe. A mention count wins the
                   corner: a number is more specific than a dot. */}
+              {/* A PUBLIC ROOM SAYS SO. Bottom left, where nothing else sits (the
+                  count is top right, the live dot bottom right), so the mark
+                  never competes for a corner. The word lives in the tooltip
+                  and the accessible name; this is its icon. */}
+              {isPublic && (
+                <span
+                  data-server-public=""
+                  aria-hidden="true"
+                  className="absolute -bottom-0.5 -left-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail text-signal"
+                >
+                  <Globe className="h-3 w-3" />
+                </span>
+              )}
               {liveServerIds?.has(server.id) && mentions === 0 && (
                 <span
                   data-server-live=""

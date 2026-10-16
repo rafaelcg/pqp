@@ -237,6 +237,39 @@ describe("the server header", () => {
     expect(row).not.toContain(">Community<");
   });
 
+  describe("the Public mark", () => {
+    const publicServer = { ...server, isCommunity: true, communitySlug: "qg" };
+
+    it("sits in the header of a server with a public address, on an instance with communities", () => {
+      const html = render(
+        <ChannelList {...baseProps} server={publicServer} communitiesEnabled />,
+      );
+      const row = headerBlock(html);
+      expect(occurrences(row, "data-public-badge")).toBe(1);
+      expect(row).toContain(">Public<");
+    });
+
+    it("is part of what a screen reader gets with the name", () => {
+      const html = render(
+        <ChannelList {...baseProps} server={publicServer} communitiesEnabled />,
+      );
+      const trigger = /<button[^>]*data-server-menu-trigger=""[^>]*>/.exec(html)!;
+      const ids = /aria-describedby="([^"]+)"/.exec(trigger[0])![1]!.split(" ");
+      expect(ids).toHaveLength(2);
+      expect(html).toContain(`id="${ids[1]}"`);
+    });
+
+    it("is absent on a private server", () => {
+      const html = render(<ChannelList {...baseProps} communitiesEnabled />);
+      expect(html).not.toContain("data-public-badge");
+    });
+
+    it("is absent while the instance has communities off, since the address answers 404", () => {
+      const html = render(<ChannelList {...baseProps} server={publicServer} />);
+      expect(html).not.toContain("data-public-badge");
+    });
+  });
+
   it("the trigger's accessible name is 'Server menu', not the server's own name", () => {
     const html = render(<ChannelList {...baseProps} />);
     expect(html).toContain('data-server-menu-trigger=""');
