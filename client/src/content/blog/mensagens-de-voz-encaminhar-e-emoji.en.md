@@ -58,8 +58,41 @@ Drag servers on the left rail to reorder them. On iPhone it is from the server's
 
 In Settings, Appearance & Language, there are three community palettes (Ocean, Catppuccin and Everforest) and a Halloween look, until November 2, with a card that lets you try it and undo. The Christmas one turns itself on on December 1.
 
+## Notifications that arrive
+
+Notifications were tuned for the desktop app and for the browser.
+
+- In the desktop app, banners come turned on. In Settings, Notifications, there are now two separate levels, one for DMs and one for servers. By default, a DM and a mention become a banner, and an ordinary server message does not.
+- In the browser, if a DM or a mention arrives while the tab is hidden and notifications are not on yet, a card shows up in the corner when you come back: "Want to hear when someone writes to you?", with a **Turn on notifications** button.
+- The channel you left open also notifies you when the window is minimized, hidden or in the background. Before, it was the only one that stayed quiet.
+- Mentioning a role, like `@mods`, now really notifies the people who have it, right away and by push. Before, a fresh message reached nobody, and only the number after reloading the page was right.
+- Push on your phone is no longer silenced by a forgotten tab open on your computer. pqp now checks whether any tab or window is really in front of you.
+
+## Live stream: Watch
+
+When someone is sharing a screen in a voice channel of the server you have open, a strip shows up under the header: "Somebody is sharing their screen in #channel", with how many are watching and a **Watch** button. Watch seats you in the audience: the microphone does not even open and there is no permission prompt. If you do not want to watch, click Not now, and the strip stays quiet until another stream starts. The strip also shows inside a DM.
+
+When someone starts sharing, people who turned on desktop notifications get a notice, as long as the window is not in front and Do Not Disturb is off. People with no tab open get a push. Tapping the notice opens the channel and joins nothing. In a very large server the notice is held back much more.
+
+## Screen share on Windows
+
+In the Windows desktop app on Windows 10 and 11, sharing a screen or a window sends your computer's sound without the pqp call in it. On a window, only that app's sound goes. The checkbox for the sound comes already ticked in the screen picker.
+
+Sharing a game at a very high frame rate, like 360 Hz, could make the picture stutter for the people watching. Now, when the computer is under pressure, the app holds the share: it drops one resolution step first, then the frame rate. On Windows, pqp also raises its own priority while the screen is live.
+
+## Bring your crew
+
+The last screen of copying a Discord server layout now helps you bring your people. It has a ready announcement to paste into Discord, in Portuguese, English or Spanish, and a **Copy announcement** button. The invite that goes with it does not expire.
+
+Whoever manages the server sees a counter for 7 days: "12 people from your crew are here". If fewer than 3 have arrived a day later, a reminder shows up to paste the announcement again or pin it. Website only, since that is where you copy the layout.
+
+## Baú in your language
+
+A Baú post written in Portuguese is read in English by someone who reads in English and in Spanish by someone who reads in Spanish. Under the post there is a line, "Automatically translated", with **See original**. The translation is done by an AI model, and takes about a minute after the post is published or edited. A post for VIP members only stays locked the same way.
+
 ## The rest
 
+- Someone new in a public server sees a strip under the channel or Baú header: "Bring your friends here", with an **Invite friends** button. It opens Create room with a suggested name and ends on the invite.
 - When someone shares a screen, whoever watches has a **Picture-in-picture** button, on the screen's card and in the call bar, to keep watching from another tab or app. Computers only.
 - The music player has a captions button and an Open on YouTube.
 - Text and Voice in the sidebar fold, like categories do. Folded, it shows how many channels it hid and a dot if something is new.

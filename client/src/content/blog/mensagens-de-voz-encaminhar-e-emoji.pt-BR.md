@@ -58,8 +58,41 @@ Arrasta os servidores na barra da esquerda pra reordenar. No iPhone é pelo menu
 
 Em Configurações, Aparência e idioma, entraram três paletas da comunidade (Ocean, Catppuccin e Everforest) e um look de Halloween, até 2 de novembro, com um card que deixa testar e desfazer. O de Natal liga sozinho em 1º de dezembro.
 
+## Avisos que chegam
+
+Os avisos foram acertados pra quem usa o app de desktop e pra quem usa o navegador.
+
+- No app de desktop, o banner já vem ligado. Em Configurações, Notificações, agora tem dois níveis separados, um pra DMs e outro pra servidores. Por padrão, DM e menção viram banner, e mensagem comum de servidor não.
+- No navegador, se chegar uma DM ou uma menção com a aba escondida e o aviso ainda não estiver ligado, aparece um card no canto quando tu volta: "Quer ser avisado quando te chamarem?", com o botão **Ativar notificações**.
+- O canal que tu deixou aberto também avisa quando a janela tá minimizada, escondida ou em segundo plano. Antes ele era o único que ficava quieto.
+- Marcar um cargo, tipo `@mods`, agora avisa de verdade quem tem o cargo, na hora e por push. Antes a mensagem nova não chegava pra ninguém, e só o número depois de recarregar a página aparecia certo.
+- O push no celular não é mais calado por uma aba esquecida aberta no computador. O pqp passou a ver se tem alguma aba ou janela realmente na tua frente.
+
+## Transmissão ao vivo: Assistir
+
+Quando alguém tá compartilhando a tela num canal de voz do servidor que tu tem aberto, aparece uma faixa embaixo do cabeçalho: "Fulano está compartilhando a tela em #canal", com quantos estão assistindo e o botão **Assistir**. O Assistir te coloca como plateia: o microfone nem abre, e não pede permissão. Quem não quer ver clica em Agora não, e a faixa fica quieta até começar outra transmissão. A faixa também aparece dentro de uma DM.
+
+Quando alguém começa a compartilhar, quem ligou os avisos de desktop recebe um aviso, desde que a janela não esteja na frente e o Não perturbe esteja desligado. Quem não tem nenhuma aba aberta recebe push. Tocar no aviso abre o canal e não entra em nada. Em servidor muito grande o aviso é bem mais contido.
+
+## Compartilhar tela no Windows
+
+No app de desktop do Windows 10 e 11, compartilhar uma tela ou uma janela manda o som do computador sem mandar a call junto. Na janela, vai só o som daquele app. A caixa pra marcar o som já vem ligada na tela de escolher o que compartilhar.
+
+Compartilhar um jogo com taxa de quadros altíssima, tipo 360 Hz, podia engasgar a imagem de quem assiste. Agora, quando o computador aperta, o app segura o compartilhamento: baixa primeiro um degrau de resolução, depois a taxa de quadros. No Windows o pqp também sobe a prioridade dele enquanto a tela tá no ar.
+
+## Traz tua galera
+
+A última tela de copiar o layout de um servidor do Discord agora te ajuda a trazer o pessoal. Ela traz um anúncio pronto pra colar no Discord, em português, inglês ou espanhol, e o botão **Copiar anúncio**. O convite que vai junto não expira.
+
+Quem gerencia o servidor vê, por 7 dias, um contador: "12 pessoas da tua galera já chegaram". Se um dia depois tiverem chegado menos de 3, aparece um lembrete pra colar o anúncio de novo ou fixar. Só no site, porque é lá que se copia o layout.
+
+## Baú no teu idioma
+
+Um post do Baú escrito em português é lido em inglês por quem lê em inglês e em espanhol por quem lê em espanhol. Embaixo do post fica uma linha, "Traduzido automaticamente", com **Ver original**. A tradução é feita por um modelo de IA, e leva cerca de um minuto depois que o post é publicado ou editado. Post só pra membros VIP continua trancado do mesmo jeito.
+
 ## O resto
 
+- Quem é novo num servidor público vê uma faixa embaixo do cabeçalho do canal ou do Baú: "Chama teus amigos pra cá", com o botão **Chamar amigos**. Ele abre o Criar sala já com um nome sugerido e termina no convite.
 - Quando alguém compartilha tela, quem assiste tem o botão **Janela flutuante**, no card da tela e na barra da call, pra continuar vendo de outra aba ou app. Só no computador.
 - O player de música tem um botão de legendas e um Abrir no YouTube.
 - Texto e Voz na barra lateral dobram, que nem as categorias. Dobrado mostra quantos canais escondeu e uma bolinha se tem algo novo.
