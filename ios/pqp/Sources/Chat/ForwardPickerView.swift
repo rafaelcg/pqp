@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 
 // ENCAMINHAR, the picker: where does this go?
@@ -126,6 +127,8 @@ final class ForwardPickerModel {
     }
 
     private static let concurrency = 4
+    /// `GET /api/servers/:id/forward-destinations` answered 404 (an older API).
+    private nonisolated static let routeMissing = OSAllocatedUnfairLock(initialState: false)
 
     private struct ServerTargets: Sendable {
         let targets: [ForwardTarget]
@@ -141,13 +144,17 @@ final class ForwardPickerModel {
         // One request that also carries the threads. An API that predates the
         // route answers 404 and falls through to the two older reads (no
         // threads there).
-        do {
-            let destinations = try await api.forwardDestinations(serverId: server.id)
-            return ServerTargets(targets: destinations.targets(in: server), permissionsKnown: true)
-        } catch APIError.notFound {
-            // the older reads below
-        } catch {
-            return nil
+        // Once one server has answered 404 the whole API predates the route:
+        // the rest skip the probe instead of each paying a round trip for it.
+        if !routeMissing.withLock({ $0 }) {
+            do {
+                let destinations = try await api.forwardDestinations(serverId: server.id)
+                return ServerTargets(targets: destinations.targets(in: server), permissionsKnown: true)
+            } catch APIError.notFound {
+                routeMissing.withLock { $0 = true }
+            } catch {
+                return nil
+            }
         }
         return await legacyTargets(in: server, api: api)
     }
