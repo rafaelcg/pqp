@@ -139,6 +139,13 @@ import {
 import { getApiBaseUrl } from "./utils";
 import { takePublicPostEmbed } from "./community-home/public-post-embed";
 import { parseRetryAfterMs } from "./reconnect-jitter";
+import type { AppRouteTarget } from "./app-route";
+import {
+  channelsPrefetchKey,
+  messagesPrefetchKey,
+  putBootPrefetch,
+  takeOrFetch,
+} from "./boot-prefetch";
 
 const API_TIMEOUT_MS = 12_000;
 
@@ -1696,8 +1703,17 @@ export const fetchUnread = (serverId: string) =>
 
 // ----------------------------------------------------------------- channels
 
-export const fetchChannels = (serverId: string) =>
+const fetchChannelsFromNetwork = (serverId: string) =>
   apiFetch<{ channels: Channel[] }>(`/api/servers/${serverId}/channels`);
+
+/**
+ * A server's channels. The first ask after `prefetchBootReads` started this very
+ * read is answered by it; every later ask goes to the network.
+ */
+export const fetchChannels = (serverId: string) =>
+  takeOrFetch(channelsPrefetchKey(serverId), () =>
+    fetchChannelsFromNetwork(serverId),
+  );
 
 /**
  * --- threads --- the active threads of a server, keyed by the channel they
@@ -1845,7 +1861,7 @@ export const markChannelRead = (
 
 // ----------------------------------------------------------------- messages
 
-export const fetchMessages = (
+const fetchMessagesFromNetwork = (
   channelId: string,
   options: { limit?: number; before?: string } = {},
 ) => {
@@ -1861,6 +1877,45 @@ export const fetchMessages = (
     `/api/channels/${channelId}/messages${query ? `?${query}` : ""}`,
   );
 };
+
+/**
+ * A channel's newest page. Only the plain call (no `limit`, no `before`, which is
+ * what opening a channel asks) may be answered by the read `prefetchBootReads`
+ * started; paging older history always goes to the network.
+ */
+export const fetchMessages = (
+  channelId: string,
+  options: { limit?: number; before?: string } = {},
+) =>
+  options.limit || options.before
+    ? fetchMessagesFromNetwork(channelId, options)
+    : takeOrFetch(messagesPrefetchKey(channelId), () =>
+        fetchMessagesFromNetwork(channelId, options),
+      );
+
+/**
+ * Start the reads the page address names, now, in parallel with `/api/me`
+ * (see `boot-prefetch.ts` for why this is safe and what bounds it). A route
+ * with a channel starts its channel list and its newest page; a route with only
+ * a server starts the channel list. Anything else starts nothing.
+ */
+export function prefetchBootReads(route: AppRouteTarget | null): void {
+  if (route?.kind !== "channel") {
+    return;
+  }
+  putBootPrefetch(
+    channelsPrefetchKey(route.serverId),
+    fetchChannelsFromNetwork(route.serverId),
+  );
+  // A link to one message (or a forum post) opens around that message, not at
+  // the newest page, so the newest page would go unused.
+  if (route.channelId && !route.messageId && !route.postId) {
+    putBootPrefetch(
+      messagesPrefetchKey(route.channelId),
+      fetchMessagesFromNetwork(route.channelId),
+    );
+  }
+}
 
 /**
  * Full-text search across every channel of one server the caller can see.

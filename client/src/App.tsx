@@ -386,6 +386,7 @@ import {
   saveServerOrder,
   fetchUnread,
   fetchVoiceBackend,
+  prefetchBootReads,
   hideConversation,
   joinCommunity as joinCommunityApi,
   joinInvite,
@@ -411,6 +412,7 @@ import {
   type ServerMember,
   type ServerRole,
 } from "@/lib/api";
+import { clearBootPrefetch } from "@/lib/boot-prefetch";
 import {
   channelRoutePath,
   forumPostRoutePath,
@@ -5100,6 +5102,35 @@ function MainAppContent({
         // Noted before the read: a look or a find chosen while it is in flight
         // is newer than its answer (`preferenceWrittenSince`).
         const readGeneration = preferenceWriteGeneration();
+        // EVERY READ THAT DOES NOT NEED THE ANSWER FROM `/api/me` STARTS WITH
+        // IT. This function used to ask for them one after another: me, ICE,
+        // the voice backend, the servers, the channels, the messages. Each is
+        // its own round trip (and, to a different origin, behind its own CORS
+        // preflight), so on a 180 ms link the first message appeared about
+        // 2.3 s after `/api/me`, and three of those six hops were waiting for
+        // nothing. They are started here and awaited further down in the same
+        // order as before, so what the code does with each answer, and when, is
+        // unchanged; only the waiting overlaps.
+        //
+        // An account that has not passed the age gate gets 403s for the ones
+        // that follow, and they are simply never read: the gate below still
+        // returns before any of them is used. The rejection is marked handled
+        // here so a never-read failure cannot surface as an unhandled one.
+        const iceRead = fetchIceServers().then(
+          ({ iceServers }) => iceServers,
+          () => [] as Awaited<ReturnType<typeof fetchIceServers>>["iceServers"],
+        );
+        const backendRead = isMeshForced()
+          ? null
+          : fetchVoiceBackend().then(
+              ({ backend }) => backend,
+              () => null,
+            );
+        const serversRead = fetchServers();
+        serversRead.catch(() => {});
+        const homeConfigRead = loadCommunityHomeConfig();
+        // The channels and newest messages the address already names.
+        prefetchBootReads(parseAppRoute(window.location.pathname));
         const me = await fetchMe();
         if (cancelled) {
           return;
@@ -5164,13 +5195,11 @@ function MainAppContent({
         setLocalSettings(merged);
         saveLocalSettings(merged);
 
-        try {
-          const { iceServers } = await fetchIceServers();
-          if (!cancelled && iceServers.length > 0) {
-            voice.setIceServers(iceServers);
-          }
-        } catch {
-          // STUN / VITE_TURN fallbacks still apply
+        // A failed read is an empty list: the STUN / VITE_TURN fallbacks still
+        // apply.
+        const iceServers = await iceRead;
+        if (!cancelled && iceServers.length > 0) {
+          voice.setIceServers(iceServers);
         }
 
         // Declare whether this build can run the SFU media path. This is a
@@ -5181,14 +5210,12 @@ function MainAppContent({
         // fallback for a server too old to state the transport. When it failed
         // this tab used to be pinned to mesh for its whole life, which on an SFU
         // deployment meant sitting in calls nobody could hear.
-        if (!cancelled && !isMeshForced()) {
-          let legacyTransport: VoiceRoomTransport = "mesh";
-          try {
-            const { backend } = await fetchVoiceBackend();
-            legacyTransport = backend === "livekit" ? "livekit" : "mesh";
-          } catch {
-            // Older server without /api/voice/backend, or a blip.
-          }
+        if (!cancelled && backendRead) {
+          // Null when the read failed: an older server without
+          // /api/voice/backend, or a blip.
+          const backend = await backendRead;
+          const legacyTransport: VoiceRoomTransport =
+            backend === "livekit" ? "livekit" : "mesh";
           if (!cancelled) {
             voice.setSessionProvider(
               (voiceChannelId, peerId) =>
@@ -5199,8 +5226,8 @@ function MainAppContent({
         }
 
         const [{ servers: serverList }, homeConfig] = await Promise.all([
-          fetchServers(),
-          loadCommunityHomeConfig(),
+          serversRead,
+          homeConfigRead,
         ]);
         if (cancelled) {
           return;
@@ -6201,6 +6228,8 @@ function MainAppContent({
 
     return () => {
       cancelled = true;
+      // Whatever the boot read ahead of the answer belongs to this session.
+      clearBootPrefetch();
       if (bootstrapTimer !== null) {
         clearTimeout(bootstrapTimer);
       }
