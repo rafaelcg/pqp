@@ -275,6 +275,11 @@ final class ChatModel {
         if joinedAsThread, let realtime = session?.realtime, let channelId {
             joinedAsThread = false
             Task { await realtime.leaveThread(channelId: channelId) }
+        } else if let realtime = session?.realtime, let channelId {
+            // The primary slot: left only if it is still this channel's (a
+            // forum post's own channel was never joined there, and the next
+            // screen may already hold its own).
+            Task { await realtime.leave(channelId: channelId) }
         }
         typingSweeper?.cancel()
         typingSweeper = nil
@@ -959,7 +964,7 @@ final class ChatModel {
         // transcript's: if this channel is one you have just lost, the server
         // has already evicted this socket from it, so nothing more arrives here
         // either way.
-        case .friendActivity, .permissionsUpdate, .communityHomeUpdate, .channelsUpdate,
+        case .friendActivity, .permissionsUpdate, .communityHomeUpdate, .channelsUpdate, .serverOrderUpdate,
              .presence, .activity, .other, .storiesUpdate,
              .voiceWelcome, .voicePeerJoined, .voicePeerUpdated, .voicePeerLeft, .voiceRoster,
              .voiceSpeakChanged, .voiceRoomFull, .voiceTransportUnsupported,

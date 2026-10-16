@@ -4221,6 +4221,22 @@
         }
       }
     },
+    "friend.accepted.cta" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Say hi"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mandar um oi"
+          }
+        }
+      }
+    },
     "Friends" : {
       "localizations" : {
         "pt-BR" : {
@@ -10027,6 +10043,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tu"
+          }
+        }
+      }
+    },
+    "You and %@ are friends now" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu e %@ agora são amigos"
           }
         }
       }

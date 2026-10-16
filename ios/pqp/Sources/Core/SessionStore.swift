@@ -82,6 +82,24 @@ final class SessionStore {
     /// success, drawn at the app root so it outlives the sheet that made it.
     var forwardToast: ForwardToast?
 
+    /// Unread channel messages per server, for the hub's tiles and rows
+    /// (`ServerUnread`). Written by the hub (a hydration pass, live frames for
+    /// servers that are not open) and by the open server's own channel list,
+    /// which is the authority while it is on screen. A server with nothing
+    /// unread is absent.
+    var serverUnread: [String: ServerUnreadTotals] = [:]
+
+    /// The server whose channel list is on screen, so the hub does not count a
+    /// frame the list is already counting.
+    var openedServerId: String?
+
+    /// One server's totals, written whole. Absent at zero, and equal writes are
+    /// dropped so the hub does not redraw for nothing.
+    func noteServerUnread(_ serverId: String, _ totals: ServerUnreadTotals) {
+        let next: ServerUnreadTotals? = totals.isUnread ? totals : nil
+        if serverUnread[serverId] != next { serverUnread[serverId] = next }
+    }
+
     /// Whether this launch walked the account through the age gate, which is
     /// what marks a brand-new account (see `Onboarding.shouldRun`).
     private var answeredAgeGateThisLaunch = false
@@ -677,6 +695,9 @@ final class SessionStore {
         linkError = nil
         firstRun = nil
         arrivalCelebration = nil
+        // The next account's tiles are not lit by this one's unread.
+        serverUnread = [:]
+        openedServerId = nil
         answeredAgeGateThisLaunch = false
         PendingInvite.clear()
         pendingInviteCode = nil

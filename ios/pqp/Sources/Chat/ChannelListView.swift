@@ -959,6 +959,18 @@ struct ChannelListView: View {
         // Coming back from a chat re-reads the counts: the chat marked itself
         // read on the server, and this is what clears its badge locally.
         .onAppear { Task { await refreshUnread() } }
+        // The hub's tile for this server: while this list is up it is the
+        // authority, and it keeps what it knew when it goes (`ServerUnread`).
+        .onAppear { session.openedServerId = server.id }
+        .onDisappear {
+            if session.openedServerId == server.id { session.openedServerId = nil }
+        }
+        .onChange(of: unread, initial: true) { _, latest in
+            let preferences = session.preferences
+            session.noteServerUnread(server.id, ServerUnread.totals(from: Array(latest.values)) {
+                ChannelMute.isMuted(channelId: $0, serverId: server.id, preferences: preferences)
+            })
+        }
     }
 
     /// Where a row goes: a forum's list, or a chat.

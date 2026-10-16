@@ -77,6 +77,12 @@ enum RealtimeEvent: Sendable {
     /// one may have just been switched on for this server). Content-free like
     /// `permissionsUpdate`, and only sent to people who can see what changed.
     case channelsUpdate(serverId: String)
+    /// This account's OTHER tab or device dragged (or moved) its own server
+    /// list, and `serverIds` is the order as saved. Per person, sent on every
+    /// socket the account holds. `origin` is the random string the saving
+    /// client sent with its `PUT /api/servers/order`, so that client can skip
+    /// the echo of its own save (`ServerOrder.remoteAction`).
+    case serverOrderUpdate(serverIds: [String], origin: String?)
     /// Somebody played a voice note. Goes to the author's sockets (in a
     /// conversation, where receipts are shown) and to the listener's OWN other
     /// sockets, so the unplayed dot clears on every device. `userId` says which
@@ -688,6 +694,23 @@ actor RealtimeClient {
         await send(raw: ["type": "join-channel", "channelId": channelId])
     }
 
+    /// Gives up the primary channel slot, but only if `channelId` is still the
+    /// one held: a screen is torn down AFTER the next one's model is built, and
+    /// by then the next one has joined its own channel, which a blind leave
+    /// would drop.
+    ///
+    /// WHY IT MATTERS. The server does not send `channel-activity` for the
+    /// channel a socket is joined to (it is already receiving the messages).
+    /// This client never left one, so after reading #geral and going back, every
+    /// new message in #geral was swallowed: no badge on the list, none on the
+    /// server's tile, until some other channel was opened. The live unread on
+    /// the server list found it.
+    func leave(channelId: String) async {
+        guard joinedChannelId == channelId else { return }
+        joinedChannelId = nil
+        await send(raw: ["type": "leave-channel"])
+    }
+
     /// Open a thread's live view *beside* the primary channel.
     ///
     /// Deliberately not `join-channel`: a connection has exactly one primary
@@ -901,6 +924,9 @@ actor RealtimeClient {
         let added: Bool?
         let users: [PresenceUser]?
         let serverId: String?
+        /// `server-order-update`: the saved order of this account's servers.
+        let serverIds: [String]?
+        let origin: String?
         let mention: Bool?
         /// `channel-activity` for a conversation: the redacted preview line
         /// and who wrote it. All three absent for a server channel, and for a
@@ -970,6 +996,7 @@ actor RealtimeClient {
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
             case candidate, limit, transport, version, resumed, resumeToken
             case canSpeak, canStream
+            case serverIds, origin
             case seq, size, joined, updated, left
             case conversationId, kind, caller, reason, thread, retryAfterMs, automodMessage
             // `self` is a Swift keyword, so the wire key is remapped.
@@ -1340,6 +1367,9 @@ actor RealtimeClient {
         case "permissions-update":
             guard let serverId = envelope.serverId else { return }
             event = .permissionsUpdate(serverId: serverId, version: envelope.version)
+        case "server-order-update":
+            guard let ids = envelope.serverIds else { return }
+            event = .serverOrderUpdate(serverIds: ids, origin: envelope.origin)
         case "community-home-update":
             guard let serverId = envelope.serverId else { return }
             event = .communityHomeUpdate(serverId: serverId)
