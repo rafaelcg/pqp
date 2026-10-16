@@ -89,6 +89,8 @@ fun StoryCanvas(
     onJoinCall: (StoryCallLive) -> Unit,
     onOpenMention: (StoryAuthor) -> Unit,
     modifier: Modifier = Modifier,
+    /** The chrome's edges while a reply is typed: a text card keeps its words clear of them. */
+    textAvoid: StoryTextAvoid = StoryTextAvoid(),
 ) {
     val density = LocalDensity.current
     val servers by session.servers.collectAsStateWithLifecycle()
@@ -151,6 +153,7 @@ fun StoryCanvas(
                 onHasAudio = onHasAudio,
                 onReady = { baseReady = true },
                 onLoading = onLoading,
+                textAvoid = textAvoid,
             )
             // The words are on the base's description when there are any; reading them
             // again from each text layer would say everything twice.
@@ -305,6 +308,7 @@ private fun StoryBase(
     onHasAudio: (Boolean) -> Unit,
     onReady: () -> Unit,
     onLoading: (Boolean) -> Unit,
+    textAvoid: StoryTextAvoid,
 ) {
     val media = story.media
     val describe = if (spoken != null) Modifier.semantics { contentDescription = spoken } else Modifier
@@ -313,7 +317,7 @@ private fun StoryBase(
             // A card is a gradient, and its words are layers. One posted before layers has
             // only `text`: drawn centred, as it always was.
             if (story.layers.none { it is TextStoryLayer } && !story.text.isNullOrBlank()) {
-                TextCard(story.text, story.background, describe)
+                FittedTextCard(story.text, story.background, textAvoid, describe)
             } else {
                 Box(Modifier.fillMaxSize().background(backgroundBrush(story.background)).then(describe))
             }
