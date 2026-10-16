@@ -169,8 +169,16 @@ export function ImageCropDialog({
           setUnreadable(true);
           return;
         }
+        try {
+          copy = previewOf(bitmap);
+        } catch {
+          // Drawing the copy can fail under memory pressure. The step cannot
+          // show anything, so it lets go of the decode at once.
+          bitmap.close();
+          setUnreadable(true);
+          return;
+        }
         ownedRef.current = bitmap;
-        copy = previewOf(bitmap);
         setPreview(copy);
         setView(initialCropView(bitmap.width, bitmap.height, aspect));
       })

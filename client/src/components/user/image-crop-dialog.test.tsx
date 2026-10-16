@@ -114,6 +114,26 @@ describe("the crop step", () => {
     decode.mockRestore();
   });
 
+  it("lets go of the decode when the preview copy cannot be drawn", async () => {
+    const getContext = HTMLCanvasElement.prototype.getContext;
+    // A browser short of memory: the 2D context exists, drawing into it fails.
+    HTMLCanvasElement.prototype.getContext = (() => ({
+      drawImage() {
+        throw new DOMException("out of memory", "InvalidStateError");
+      },
+    })) as never;
+    try {
+      await open("avatar");
+      // Big enough to need the bounded copy.
+      const bitmap = await loadCropImage(4000, 3000);
+      expect(bitmap.closed).toBe(true);
+      expect(document.querySelector('[role="alert"]')).not.toBeNull();
+      expect(save().disabled).toBe(true);
+    } finally {
+      HTMLCanvasElement.prototype.getContext = getContext;
+    }
+  });
+
   it("releases the decode when the step closes without saving", async () => {
     await open("avatar");
     const bitmap = await loadCropImage(800, 600);
