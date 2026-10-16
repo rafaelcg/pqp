@@ -95,6 +95,61 @@ final class StoryEditorUITests: XCTestCase {
         XCTAssertTrue(app.buttons["stories.own"].waitForExistence(timeout: 20), "Posted, with the text as a layer")
     }
 
+    /// The text card's three families: pick a solid and a gradient from the
+    /// menu, the card follows, and the story posts with the key.
+    func testSolidAndGradientBackgroundsCanBePicked() throws {
+        let (app, serverId) = try launch()
+        openComposer(app, serverId: serverId)
+        app.buttons["composer.mode.text"].tap()
+        addText(app, "fundo novo")
+        let menu = app.buttons["composer.background"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        menu.tap()
+        snap(app, "editor-background-menu")
+        let cobalt = app.buttons["composer.background.cobalt"]
+        XCTAssertTrue(cobalt.waitForExistence(timeout: 5), "The solid family is in the menu")
+        cobalt.tap()
+        snap(app, "editor-background-cobalt")
+        menu.tap()
+        let sunset = app.buttons["composer.background.sunset"]
+        XCTAssertTrue(sunset.waitForExistence(timeout: 5), "and the gradient family")
+        sunset.tap()
+        snap(app, "editor-background-sunset")
+        app.buttons["composer.next"].tap()
+        let post = app.buttons["audience.post"]
+        XCTAssertTrue(post.waitForExistence(timeout: 10))
+        post.tap()
+        XCTAssertTrue(app.buttons["stories.own"].waitForExistence(timeout: 20), "Posted on the gradient")
+    }
+
+    /// "Describe": the picture's description is written, shown as written, and
+    /// the story posts with it.
+    func testDescribeThePicture() throws {
+        let (app, serverId) = try launch()
+        openComposer(app, serverId: serverId)
+        let shutter = app.buttons["camera.shutter"]
+        XCTAssertTrue(shutter.waitForExistence(timeout: 15))
+        shutter.tap()
+        let describe = app.buttons["editor.describe"]
+        XCTAssertTrue(describe.waitForExistence(timeout: 15), "A photo has Describe on its foot row")
+        snap(app, "editor-describe-button")
+        describe.tap()
+        let input = app.textViews["alt.input"].exists ? app.textViews["alt.input"] : app.textFields["alt.input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10), "The sheet opens with the field focused")
+        input.typeText("a praia ao por do sol")
+        snap(app, "editor-describe-sheet")
+        app.buttons["alt.save"].tap()
+        XCTAssertTrue(waitForGone(app.buttons["alt.save"]))
+        let written = NSPredicate(format: "value != ''")
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: written, object: describe)], timeout: 5), .completed, "The button says it is described")
+        snap(app, "editor-described")
+        app.buttons["composer.next"].tap()
+        let post = app.buttons["audience.post"]
+        XCTAssertTrue(post.waitForExistence(timeout: 10))
+        post.tap()
+        XCTAssertTrue(app.buttons["stories.own"].waitForExistence(timeout: 20), "Posted with the description")
+    }
+
     /// Drag a layer and it follows the finger; drop it on the bin and it is gone.
     func testDragMovesALayerAndTheBinDeletesIt() throws {
         let (app, serverId) = try launch()

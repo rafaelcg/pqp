@@ -465,12 +465,39 @@ enum StoryRules {
         reactions.first { $0.key == reaction }?.glyph ?? reaction
     }
 
-    /// The text card palette. Each key is chosen for at least 4.5:1 with
-    /// white text (`STORY_BACKGROUNDS`).
+    /// The text card palette, family one ("glow"): `STORY_BACKGROUNDS`, which
+    /// stays the original six (Android pins it). Each key is chosen for at least
+    /// 4.5:1 with white text.
     static let backgrounds = ["lime", "night", "ember", "grape", "sand", "ink"]
+    /// Family two: one flat colour each (`STORY_BACKGROUNDS_SOLID`).
+    static let solidBackgrounds = ["cobalt", "crimson", "pine", "plum", "teal", "onyx"]
+    /// Family three: a 160 degree two-stop linear gradient each
+    /// (`STORY_BACKGROUNDS_GRADIENT`).
+    static let gradientBackgrounds = ["sunset", "ocean", "aurora", "dusk", "berry", "lagoon"]
+    /// Every key a text card may carry, in the order a picker draws them
+    /// (`STORY_CARD_BACKGROUNDS`).
+    static let cardBackgrounds = backgrounds + solidBackgrounds + gradientBackgrounds
 
+    /// The two ends a card is drawn between. The stops of the new families are
+    /// the web's `--story-bg-*` tokens (`client/src/index.css`, OKLCH) converted
+    /// to sRGB; a solid is the same colour twice. The glow six are this app's
+    /// own flattened versions of the web's radial-over-linear cards. A key this
+    /// build does not know draws the default dark card, so a story from a newer
+    /// build never fails to show.
     static func backgroundColors(_ key: String?) -> [Color] {
         switch key {
+        case "cobalt": [Color(red: 0.097, green: 0.343, blue: 0.825), Color(red: 0.097, green: 0.343, blue: 0.825)]
+        case "crimson": [Color(red: 0.732, green: 0.025, blue: 0.119), Color(red: 0.732, green: 0.025, blue: 0.119)]
+        case "pine": [Color(red: 0.000, green: 0.387, blue: 0.246), Color(red: 0.000, green: 0.387, blue: 0.246)]
+        case "plum": [Color(red: 0.535, green: 0.153, blue: 0.517), Color(red: 0.535, green: 0.153, blue: 0.517)]
+        case "teal": [Color(red: 0.000, green: 0.456, blue: 0.458), Color(red: 0.000, green: 0.456, blue: 0.458)]
+        case "onyx": [Color(red: 0.047, green: 0.052, blue: 0.061), Color(red: 0.047, green: 0.052, blue: 0.061)]
+        case "sunset": [Color(red: 0.828, green: 0.257, blue: 0.000), Color(red: 0.600, green: 0.000, blue: 0.383)]
+        case "ocean": [Color(red: 0.000, green: 0.493, blue: 0.589), Color(red: 0.002, green: 0.242, blue: 0.544)]
+        case "aurora": [Color(red: 0.000, green: 0.475, blue: 0.314), Color(red: 0.293, green: 0.180, blue: 0.586)]
+        case "dusk": [Color(red: 0.200, green: 0.205, blue: 0.629), Color(red: 0.764, green: 0.179, blue: 0.520)]
+        case "berry": [Color(red: 0.721, green: 0.060, blue: 0.476), Color(red: 0.320, green: 0.092, blue: 0.494)]
+        case "lagoon": [Color(red: 0.000, green: 0.504, blue: 0.484), Color(red: 0.000, green: 0.397, blue: 0.153)]
         case "lime": [Color(red: 0.22, green: 0.42, blue: 0.08), Color(red: 0.12, green: 0.27, blue: 0.05)]
         case "night": [Color(red: 0.10, green: 0.16, blue: 0.42), Color(red: 0.05, green: 0.07, blue: 0.22)]
         case "ember": [Color(red: 0.66, green: 0.20, blue: 0.10), Color(red: 0.38, green: 0.08, blue: 0.06)]
@@ -478,6 +505,21 @@ enum StoryRules {
         case "sand": [Color(red: 0.52, green: 0.38, blue: 0.16), Color(red: 0.32, green: 0.22, blue: 0.08)]
         default: [Color(red: 0.12, green: 0.14, blue: 0.17), Color(red: 0.03, green: 0.04, blue: 0.06)]
         }
+    }
+
+    /// The card as a view fill. The gradient family runs at 160 degrees (CSS:
+    /// clockwise from the top), which on the 9:16 canvas is from just right of
+    /// the top-left corner to just left of the bottom-right; the other families
+    /// keep the top-to-bottom they always had.
+    static func backgroundGradient(_ key: String?) -> LinearGradient {
+        let colors = backgroundColors(key)
+        if gradientBackgrounds.contains(key ?? "") {
+            return LinearGradient(
+                colors: colors,
+                startPoint: UnitPoint(x: 0.155, y: -0.033), endPoint: UnitPoint(x: 0.845, y: 1.033)
+            )
+        }
+        return LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
     }
 
     /// A ring is gone once its newest story expires. Expiry sends no frame,

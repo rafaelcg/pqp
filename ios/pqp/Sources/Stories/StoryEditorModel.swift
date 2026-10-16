@@ -66,6 +66,12 @@ final class StoryEditorModel {
     /// keeps drawing on top of the first.
     private(set) var drawing = PKDrawing()
 
+    /// What the author wrote to describe the base photo or video, for screen
+    /// readers. It has no field of its own: it is written FIRST into the
+    /// story's `altText` (`StoryAltText.make`). Not part of undo. Cleared with
+    /// the rest.
+    var baseAlt = ""
+
     private(set) var guides = Guides()
     private(set) var isDragging = false
     private(set) var overTrash = false
@@ -203,6 +209,15 @@ final class StoryEditorModel {
         selectedId = layer.id
         record(before)
         return layer.id
+    }
+
+    /// Describe a placed photo. Not an undo step (text in a sheet the author
+    /// just closed is not a gesture to take back); an empty string clears it.
+    func setAlt(id: String, alt: String) {
+        guard let index = layers.firstIndex(where: { $0.id == id }),
+              case .image(var picture) = layers[index].content else { return }
+        picture.alt = StoryAltText.clean(alt)
+        layers[index].content = .image(picture)
     }
 
     func cycleShape(id: String) {
@@ -361,6 +376,7 @@ final class StoryEditorModel {
         canUndo = false
         selectedId = nil
         callInfo = nil
+        baseAlt = ""
     }
 
     private func pruneFiles() {

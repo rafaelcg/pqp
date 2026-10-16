@@ -12836,6 +12836,226 @@
           }
         }
       }
+    },
+    "A dog running on the beach" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um cachorro correndo na praia"
+          }
+        }
+      }
+    },
+    "Aurora" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aurora"
+          }
+        }
+      }
+    },
+    "Berry" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Amora"
+          }
+        }
+      }
+    },
+    "Cobalt" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cobalto"
+          }
+        }
+      }
+    },
+    "Crimson" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carmesim"
+          }
+        }
+      }
+    },
+    "Describe the photo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descreve a foto"
+          }
+        }
+      }
+    },
+    "Describe the picture" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descreve a imagem"
+          }
+        }
+      }
+    },
+    "Describe" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descrever"
+          }
+        }
+      }
+    },
+    "Described" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descrito"
+          }
+        }
+      }
+    },
+    "Dusk" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entardecer"
+          }
+        }
+      }
+    },
+    "For people who use a screen reader. Say what is in it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pra quem usa leitor de tela. Conta o que tem aí."
+          }
+        }
+      }
+    },
+    "Glow" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brilho"
+          }
+        }
+      }
+    },
+    "Gradient" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Degradê"
+          }
+        }
+      }
+    },
+    "Lagoon" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lagoa"
+          }
+        }
+      }
+    },
+    "Ocean" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oceano"
+          }
+        }
+      }
+    },
+    "Onyx" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ônix"
+          }
+        }
+      }
+    },
+    "Photo: %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Foto: %@"
+          }
+        }
+      }
+    },
+    "Pine" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pinho"
+          }
+        }
+      }
+    },
+    "Plum" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ameixa"
+          }
+        }
+      }
+    },
+    "Solid" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sólido"
+          }
+        }
+      }
+    },
+    "Sunset" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pôr do sol"
+          }
+        }
+      }
+    },
+    "Teal" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verde-azulado"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

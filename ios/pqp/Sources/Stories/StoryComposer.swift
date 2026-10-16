@@ -372,7 +372,12 @@ struct StoryComposer: View {
                 contentType: file.contentType, byteSize: file.data.count, width: file.width, height: file.height
             ))
         }
-        let altText = StoryAltText.make(layers: editor.layers, callRoomName: editor.callInfo?.roomName, caption: nil)
+        // The base picture's description is only for a photo or video (a text card
+        // has no picture to describe).
+        let altText = StoryAltText.make(
+            layers: editor.layers, callRoomName: editor.callInfo?.roomName, caption: nil,
+            baseAlt: media == nil ? nil : editor.baseAlt
+        )
         // Old builds show the caption and nothing else: the text the author
         // typed travels there too.
         let spoken = editor.layers.sorted { $0.y < $1.y }.compactMap { layer -> String? in
