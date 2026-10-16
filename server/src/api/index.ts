@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   STORY_IDS_MAX,
@@ -45,6 +46,7 @@ import {
   MAX_SERVER_EMOJI_BYTES,
   SERVER_EMOJI_SIZE,
   type ServerEmojiList,
+  type UserStatus,
   createBlockSchema,
   createChannelMessageSchema,
   createChannelSchema,
@@ -10769,26 +10771,100 @@ router.get("/api/servers/:serverId/search", async (ctx, { serverId }) => {
 router.get("/api/servers/:serverId/members", async ({ user }, { serverId }) => {
   await requireServerMember(serverId!, user.id);
   const members = await listServerMembers(serverId!);
-  const statuses = resolveStatuses(members.map((member) => member.id));
-  // Characters that only POST have no socket, so the registry calls them
-  // offline. Paint them online on this roster while the server's outgoing
-  // hook is `active` — that is "Grok can still be woken", not a stored
-  // presence bit. A live socket still wins (idle / dnd / invisible).
-  const hookListening = members.some((member) => member.isCharacter)
-    ? await serverHasActiveOutgoingWebhook(serverId!)
-    : false;
+  const statuses = await resolveMemberStatuses(serverId!, members);
   return {
+    // Who is in the list, as one short token. `/members/status` answers with the
+    // same token, so a client holding this roster can tell its copy is still the
+    // whole membership without reading the whole membership again.
+    roster: rosterToken(members),
     members: members.map((member) => ({
       ...member,
       // `offline` is the floor, and it is what an invisible member resolves to.
-      status: statusWithCharacterHook(
+      status: statuses.get(member.id) ?? "offline",
+    })),
+  };
+});
+
+/**
+ * A member's status as the member list shows it: the live registry's answer with
+ * the character rule applied. Characters that only POST have no socket, so the
+ * registry calls them offline; they are painted online while the server's
+ * outgoing hook is `active` ("Grok can still be woken", not a stored presence
+ * bit). A live socket still wins (idle / dnd / invisible).
+ */
+async function resolveMemberStatuses(
+  serverId: string,
+  members: ReadonlyArray<{ id: string; isCharacter: boolean }>,
+): Promise<Map<string, UserStatus>> {
+  const statuses = resolveStatuses(members.map((member) => member.id));
+  const hookListening = members.some((member) => member.isCharacter)
+    ? await serverHasActiveOutgoingWebhook(serverId)
+    : false;
+  const out = new Map<string, UserStatus>();
+  for (const member of members) {
+    out.set(
+      member.id,
+      statusWithCharacterHook(
         statuses.get(member.id) ?? "offline",
         member.isCharacter,
         hookListening,
       ),
-    })),
-  };
-});
+    );
+  }
+  return out;
+}
+
+/**
+ * Who is in a server's member list, as one token (a hash of the SORTED ids). It
+ * changes when somebody joins or leaves and does not change when a name, avatar,
+ * role or status does, which is the point: it is what a poll compares to know the
+ * membership it already holds is still the membership.
+ *
+ * Sorted because the list is ordered by name: a rename reorders the rows, and a
+ * token over list order would call that a membership change and send every tab
+ * back to the whole 2.4 MB list.
+ */
+function rosterToken(members: ReadonlyArray<{ id: string }>): string {
+  const hash = createHash("sha1");
+  for (const id of members.map((member) => member.id).sort()) {
+    hash.update(id);
+  }
+  return hash.digest("base64url").slice(0, 16);
+}
+
+/**
+ * THE LIVE HALF OF THE MEMBER LIST, ON ITS OWN.
+ *
+ * `GET /members` is a roster plus a status for every row, and the member panel
+ * polls it every 15 s to keep the pips honest. On a community of 6000 people that
+ * is 2.4 MB of JSON (460 KB compressed), built and re-parsed every 15 s by every
+ * open tab, to learn that a handful of people changed from online to away. The
+ * statuses are the part that moves; the roster (names, avatars, roles) is not.
+ *
+ * This answers only the statuses that are NOT `offline` (everybody absent from
+ * `statuses` is offline, the floor, which is also what an invisible member
+ * resolves to, exactly as in `/members`), the member count, and `roster`, the
+ * same token `/members` returned. A client whose copy carries that token knows
+ * nobody joined or left since; any other token means read `/members` again. The
+ * same membership check, the same `resolveStatuses` and the same character rule
+ * as `/members` (one function, `resolveMemberStatuses`), so the two cannot
+ * disagree about who is online.
+ */
+router.get(
+  "/api/servers/:serverId/members/status",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    const members = await listServerMembers(serverId!);
+    const resolved = await resolveMemberStatuses(serverId!, members);
+    const statuses: Record<string, UserStatus> = {};
+    for (const [id, status] of resolved) {
+      if (status !== "offline") {
+        statuses[id] = status;
+      }
+    }
+    return { roster: rosterToken(members), count: members.length, statuses };
+  },
+);
 
 router.get(
   "/api/servers/:serverId/permissions",

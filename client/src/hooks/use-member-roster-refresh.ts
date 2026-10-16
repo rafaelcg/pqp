@@ -1,5 +1,11 @@
-import { useCallback, useEffect, useRef } from "react";
-import { fetchMembers, type ServerMember } from "@/lib/api";
+import { useCallback, useEffect, useRef, type MutableRefObject } from "react";
+import type { UserStatus } from "@pqp/shared";
+import {
+  fetchMemberStatuses,
+  fetchMembers,
+  type ServerMember,
+} from "@/lib/api";
+import { readMemberStatusesIfSame } from "@/lib/member-roster";
 
 const STATUS_REFRESH_MS = 15_000;
 
@@ -43,24 +49,70 @@ export function useMemberRosterRefresh(
   refreshNudge: number,
   onMembers: (members: ServerMember[]) => void,
   rosterSize = 0,
+  lean?: {
+    /**
+     * The `roster` token and member count of the last WHOLE list read, and which
+     * server it was for. The shell writes it when it reads the whole list; this
+     * hook writes it whenever IT reads the whole list. With it, a poll of a big
+     * roster asks only for the statuses (`/members/status`) and reads the whole
+     * list again only when the token or the count says somebody joined or left.
+     */
+    held: MutableRefObject<{
+      serverId: string;
+      token: string | null;
+      count: number;
+    } | null>;
+    onStatuses: (statuses: Readonly<Record<string, UserStatus>>) => void;
+  },
 ): () => Promise<ReadonlySet<string> | null> {
   const rosterSizeRef = useRef(rosterSize);
   rosterSizeRef.current = rosterSize;
   const onMembersRef = useRef(onMembers);
   onMembersRef.current = onMembers;
   const lastLoadAt = useRef(0);
+  const leanRef = useRef(lean);
+  leanRef.current = lean;
 
   /** The members of a fresh roster that was read and handed on, else null. */
   const load = useCallback(
-    async (signal: { cancelled: boolean }): Promise<ServerMember[] | null> => {
+    async (
+      signal: { cancelled: boolean },
+      options: { whole?: boolean } = {},
+    ): Promise<ServerMember[] | null> => {
       if (!serverId) {
         return null;
       }
       lastLoadAt.current = Date.now();
       try {
+        // The poll and the nudge only need to know who is online. For a big
+        // roster that is a few KB instead of the whole list; a caller that needs
+        // the ids (`refreshNow`) always reads the whole list.
+        const held = leanRef.current?.held.current;
+        if (!options.whole && leanRef.current && held?.serverId === serverId) {
+          const statuses = await readMemberStatusesIfSame(
+            () => fetchMemberStatuses(serverId),
+            { token: held.token, size: held.count },
+          );
+          if (signal.cancelled) {
+            return null;
+          }
+          if (statuses) {
+            leanRef.current.onStatuses(statuses);
+            // Not the members: nothing here has them. Only `refreshNow` uses
+            // the return value, and it asks for the whole list.
+            return null;
+          }
+        }
         const res = await fetchMembers(serverId);
         if (signal.cancelled) {
           return null;
+        }
+        if (leanRef.current) {
+          leanRef.current.held.current = {
+            serverId,
+            token: res.roster ?? null,
+            count: res.members.length,
+          };
         }
         onMembersRef.current(res.members);
         return res.members;
@@ -89,7 +141,7 @@ export function useMemberRosterRefresh(
         return serverIdRef.current !== asked;
       },
     };
-    const members = await load(signal);
+    const members = await load(signal, { whole: true });
     return members ? new Set(members.map((member) => member.id)) : null;
   }, [serverId, load]);
 
