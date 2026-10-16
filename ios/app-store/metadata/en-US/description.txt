@@ -1,6 +1,6 @@
-pqp is open source voice and text chat for your group, Discord-style: communities with servers, voice and text channels, direct messages, and a public directory to discover new ones.
+pqp is open source voice and text chat for your crew: watch a friend's shared screen with the sound on, join a watch party, and build a community with servers, channels and direct messages. Free, no ads, made by two brothers.
 
-A watch party already drew over 100 people watching together in one room, in September 2026. Free, no ads, and the full source is public on GitHub.
+A watch party already drew over 100 people watching together in one room, in September 2026. The full source is public on GitHub.
 
 VOICE AND VIDEO
 Join a voice channel and talk with clear audio: a peer-to-peer connection for small groups, or a dedicated media server for bigger rooms, picked automatically by the app so you never have to think about it. Turn your camera on, watch someone else's shared screen, see who is speaking, mute or deafen yourself, and rate the call quality when you hang up. Ring a friend directly for a one-on-one call.
@@ -23,4 +23,4 @@ Report a message, a person or a community in a couple of taps. Server owners get
 OPEN SOURCE
 pqp is free, has no ads, and its full source is public on GitHub (rafaelcg/pqp) under the AGPL license. Anyone can read the code, self-host their own instance, or contribute.
 
-This build is a beta. A few things are still catching up to the web app: group DMs, raising your hand in a voice call, and starting your own watch party are not on iOS yet, though they already work on pqp's website and desktop app. We ship improvements often, iOS included.
+This app is still a beta. Raising your hand in a voice call and a few other things from the website are still on their way to iOS, though they already work on pqp's website and desktop app. We ship improvements often, iOS included.

@@ -9,7 +9,11 @@ notes the same for release-notes text). Paste it in by hand, or wire up
 pt-BR is the primary language (the audience, per `CLAUDE.md`), not a
 translation of the English. Write each locale on its own, in the product's
 own voice (`docs/ASO.md` has the keyword research and reasoning behind the
-word choices).
+word choices). Locales: `pt-BR`, `en-US` and `es-419` (Spanish, Latin America;
+pending native review). Limits, rules and the per-release checklist are in
+`docs/STORE_LISTINGS.md`, and `client/src/lib/store-metadata.test.ts` fails CI
+when a file breaks them (title 30, short description 80, no other product's
+name in the title or short description, no "voce" in pt-BR, no em dash).
 
 ## Files, and where they go in Play Console
 
@@ -42,9 +46,11 @@ real content or voice ships. Propose the same **8 scenes iOS already
 captured** (`ios/app-store/screenshots/README.md`) instead, adjusted for what
 Android actually does. iOS and Android parity is not 1:1
 (`docs/PARITY.md`), and a screenshot claiming a feature the build does not
-have is a Play policy problem, not just an honesty one. Camera send, watch
-parties and the community directory are all missing on Android today, so
-they are dropped from this list rather than carried over from the iOS set.
+have is a Play policy problem, not just an honesty one. Camera send and the
+community directory are missing on Android today, so they are dropped from
+this list rather than carried over from the iOS set. Watch parties shipped on
+Android after this list was written (0.4.2): add a stage shot as scene 02 or 03
+and lead with the shared-screen viewer, per `docs/STORE_LISTINGS.md`.
 
 | # | Scene | Shows | Notes |
 |---|---|---|---|
