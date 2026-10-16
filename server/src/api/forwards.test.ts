@@ -68,6 +68,7 @@ const { createRole, assignRole, upsertChannelOverwrite } = await import(
   "../services/roles.js"
 );
 const { createMessage } = await import("../services/messages.js");
+const { createThreadForMessage } = await import("../services/threads.js");
 const chatModule = await import("../ws/chat.js");
 const { handleChatMessage, resetChatRateLimits } = chatModule;
 const {
@@ -685,6 +686,79 @@ describeDb("POST /api/forwards", () => {
       `/api/servers/${serverId}/forward-destinations`,
     );
     expect(mine.body.channels.map((channel) => channel.id)).toContain(privateId);
+  });
+
+  it("forward-destinations lists the threads you are in and may post in, with the permission of the thread itself", async () => {
+    const postId = await publish();
+    const noSend = await createChannel(serverId, "so-leitura", "text");
+    const role = await createRole(serverId, { name: "Leitor", permissions: Permission.VIEW_CHANNEL });
+    await assignRole(serverId, member.id, role.id);
+    await upsertChannelOverwrite(noSend.id, serverId, "role", role.id, 0n, Permission.SEND_MESSAGES);
+
+    async function threadIn(channelId: string, author: TestUser, name: string): Promise<string> {
+      const origin = await createMessage(channelId, author as never, `origem ${name}`);
+      const started = await createThreadForMessage(origin!.id, name, author.id);
+      return started!.thread.channelId;
+    }
+    const open = await threadIn(generalId, member, "bate-papo");
+    const readOnly = await threadIn(noSend.id, owner, "so-lendo");
+    const hidden = await threadIn(privateId, owner, "diretoria-thread");
+    // A thread the member is not in (someone else's, never spoken in) is not offered.
+    const strangers = await threadIn(generalId, owner, "do-owner");
+
+    const list = async (as: TestUser) => {
+      const res = await call<{ channels: { id: string }[]; threads: unknown[] }>(
+        as,
+        "GET",
+        `/api/servers/${serverId}/forward-destinations`,
+      );
+      expect(res.status).toBe(200);
+      return forwardDestinationsSchema.parse(res.body).threads;
+    };
+
+    const mine = await list(member);
+    expect(mine).toEqual([
+      { id: open, name: "bate-papo", parentId: generalId, parentName: expect.any(String) },
+    ]);
+
+    // Whatever is listed, the send accepts; what is not listed, the send refuses for the same reason.
+    const sent = await forward(member, postSource(postId), [{ channelId: open }]);
+    expect(sent.body.results[0]).toMatchObject({ ok: true, channelId: open });
+    const refused = await forward(member, postSource(postId), [
+      { channelId: readOnly },
+      { channelId: hidden },
+    ]);
+    expect(refused.body.results.map((r) => (r.ok ? "ok" : r.reason))).toEqual([
+      "cannot_send",
+      "no_access",
+    ]);
+
+    // The owner is in the private channel's thread and sees it.
+    const owners = (await list(owner)).map((thread) => thread.id);
+    expect(owners).toEqual(expect.arrayContaining([hidden, readOnly, strangers]));
+  });
+
+  it("threads: read-only channels' threads never take a slot, and a channel offers its five most recent", async () => {
+    const noSend = await createChannel(serverId, "so-leitura", "text");
+    const role = await createRole(serverId, { name: "Leitor", permissions: Permission.VIEW_CHANNEL });
+    await assignRole(serverId, member.id, role.id);
+    await upsertChannelOverwrite(noSend.id, serverId, "role", role.id, 0n, Permission.SEND_MESSAGES);
+    const made: string[] = [];
+    for (let i = 0; i < 7; i += 1) {
+      const origin = await createMessage(generalId, member as never, `origem ${i}`);
+      const started = await createThreadForMessage(origin!.id, `t${i}`, member.id);
+      made.push(started!.thread.channelId);
+      await createMessage(started!.thread.channelId, member as never, `resposta ${i}`);
+    }
+    // Newer than all of them, but under a channel the member cannot speak in.
+    for (let i = 0; i < 3; i += 1) {
+      const origin = await createMessage(noSend.id, member as never, `lido ${i}`);
+      const started = await createThreadForMessage(origin!.id, `ro${i}`, member.id);
+      await createMessage(started!.thread.channelId, member as never, `resposta ro${i}`);
+    }
+    const res = await call<unknown>(member, "GET", `/api/servers/${serverId}/forward-destinations`);
+    const threads = forwardDestinationsSchema.parse(res.body).threads;
+    expect(threads.map((thread) => thread.name)).toEqual(["t6", "t5", "t4", "t3", "t2"]);
   });
 
   it("slow mode applies as on a normal send: the second forward is refused with a retry time", async () => {

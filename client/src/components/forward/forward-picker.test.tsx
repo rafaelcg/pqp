@@ -115,6 +115,41 @@ describe("ForwardPicker destinations", () => {
     expect(api.fetchMemberPermissions).not.toHaveBeenCalled();
   });
 
+  it("offers the threads the server lists after the channels, with their parent channel under the name, and sends one as a plain channel id", async () => {
+    const text = channel(SERVER_A.id, 1);
+    const threadId = "dddddddd-dddd-4ddd-8ddd-ddddddddddd1";
+    api.fetchForwardDestinations.mockResolvedValue({
+      channels: [text],
+      threads: [{ id: threadId, name: "ideias de clip", parentId: text.id, parentName: "canal-1" }],
+    });
+    api.createForward.mockResolvedValue({
+      results: [
+        { ok: true, target: { channelId: threadId }, channelId: threadId, serverId: SERVER_A.id, message: {} },
+      ],
+    });
+    mount(SOURCE);
+    await flush();
+    expect(rows().map((row) => row.getAttribute("data-forward-target"))).toEqual([text.id, threadId]);
+    const row = rows()[1]!;
+    expect(row.textContent).toContain("ideias de clip");
+    expect(row.textContent).toContain("#canal-1");
+    // A thread answers to its parent's name too.
+    const search = document.querySelector<HTMLInputElement>("[data-forward-search]")!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(search, "canal-1");
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(rows().map((r) => r.getAttribute("data-forward-target"))).toEqual([text.id, threadId]);
+    click(rows()[1]!.querySelector("button"));
+    await act(async () => { sendButton().click(); await Promise.resolve(); });
+    await flush();
+    expect(api.createForward.mock.calls[0]![0]).toMatchObject({ targets: [{ channelId: threadId }] });
+    expect(onForwarded).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 1, first: expect.objectContaining({ id: threadId, threadOf: "canal-1" }) }),
+    );
+  });
+
   it("against an API without the route, the older two reads give the same list: text and a voice room's chat, never a category or a forum, nor one you cannot speak in", async () => {
     api.fetchForwardDestinations.mockRejectedValue(new ApiError(404, "Not found"));
     const text = channel(SERVER_A.id, 1);

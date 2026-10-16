@@ -297,6 +297,8 @@ export interface PickerTarget {
   label: string;
   /** A voice room's chat (drawn with a speaker, not a hash). */
   voice?: boolean;
+  /** A thread: the channel it hangs off, for the line under its name. */
+  threadOf?: string;
   /** For a conversation: who to draw. */
   avatarName?: string;
   avatarUrl?: string | null;
@@ -311,7 +313,7 @@ export function normalizeForSearch(text: string): string {
     .trim();
 }
 
-/** Whether a target answers to the query: its name, or its server's. */
+/** Whether a target answers to the query: its name, its parent channel's (a thread) or its server's. */
 export function targetMatches(target: PickerTarget, query: string): boolean {
   const needle = normalizeForSearch(query);
   if (!needle) {
@@ -319,6 +321,7 @@ export function targetMatches(target: PickerTarget, query: string): boolean {
   }
   return (
     normalizeForSearch(target.label).includes(needle) ||
+    normalizeForSearch(target.threadOf ?? "").includes(needle) ||
     normalizeForSearch(target.serverName ?? "").includes(needle)
   );
 }
