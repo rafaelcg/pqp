@@ -145,6 +145,38 @@ final class PhoneGapsTests: XCTestCase {
         XCTAssertEqual(session.remoteOwnStatusRevision, first + 1)
     }
 
+    // MARK: - The status menu
+
+    func testTheLatestFailedChoiceFallsBackToTheLastConfirmedStatus() {
+        var menu = OwnStatusMenu("online")
+        let first = menu.choose("dnd")
+        let second = menu.choose("dnd")
+        menu.failed(first)
+        XCTAssertEqual(menu.shown, "dnd", "an older write failing leaves the newer choice alone")
+        menu.succeeded(second, status: "dnd")
+        XCTAssertEqual(menu.shown, "dnd")
+        XCTAssertEqual(menu.confirmed, "dnd")
+    }
+
+    func testAFailureNeverRestoresAnUnconfirmedNeighbour() {
+        var menu = OwnStatusMenu("online")
+        let a = menu.choose("dnd")
+        menu.remote("invisible")
+        XCTAssertEqual(menu.shown, "dnd", "a frame does not flick the menu mid-choice")
+        let b = menu.choose("online")
+        menu.failed(a)
+        menu.failed(b)
+        XCTAssertEqual(menu.shown, "invisible", "back to what the server confirmed, not to choice A")
+    }
+
+    func testARemoteStatusShowsAtOnceWhenNothingIsInTheAir() {
+        var menu = OwnStatusMenu("online")
+        menu.remote("dnd")
+        XCTAssertEqual(menu.shown, "dnd")
+        menu.remote("dnd")
+        XCTAssertEqual(menu.shown, "dnd")
+    }
+
     // MARK: - A folded section that hides a mention
 
     private func channel(_ id: String) throws -> Channel {

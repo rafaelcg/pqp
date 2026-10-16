@@ -2031,10 +2031,9 @@ struct UnreadBadge: View {
 struct ProfileView: View {
     @Environment(SessionStore.self) private var session
     @State private var showingSettings = false
-    @State private var manualStatus = "online"
-    /// Writes of this screen's own in the air (a second choice can be made
-    /// before the first is answered).
-    @State private var statusWrites = 0
+    /// What the menu shows and what the server last confirmed (`OwnStatusMenu`).
+    @State private var statusMenuState = OwnStatusMenu()
+    private var manualStatus: String { statusMenuState.shown }
 
     /// Only the two assertable states plus the default. `idle` is absent on
     /// purpose — it is a fact the device reports, not an opinion to pick.
@@ -2088,14 +2087,14 @@ struct ProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingSettings) { AccountSettingsView() }
         .task {
-            manualStatus = (try? await session.api.preferences())?.status ?? "online"
+            statusMenuState.loaded((try? await session.api.preferences())?.status ?? "online")
         }
         // Another device of this account picked a status: follow it, unless this
         // screen has a write of its own in the air (that answer is the truth and
         // an older frame must not flick the menu back mid-choice).
         .onChange(of: session.remoteOwnStatusRevision) { _, _ in
-            guard let next = session.remoteOwnStatus, statusWrites == 0 else { return }
-            manualStatus = next
+            guard let next = session.remoteOwnStatus else { return }
+            statusMenuState.remote(next)
         }
     }
 
@@ -2103,29 +2102,16 @@ struct ProfileView: View {
         Menu {
             ForEach(statusChoices, id: \.value) { choice in
                 Button {
-                    let previous = manualStatus
-                    let remoteBefore = session.remoteOwnStatusRevision
-                    manualStatus = choice.value
-                    statusWrites += 1
+                    let token = statusMenuState.choose(choice.value)
                     Task {
                         do {
                             _ = try await session.api.setStatus(choice.value)
+                            statusMenuState.succeeded(token, status: choice.value)
                         } catch {
                             // The server is the record; a failed set must not
                             // leave the menu claiming a status nobody else sees.
-                            // Only while this is still the choice on screen (a
-                            // newer one is not this one's to roll back), and a
-                            // status another device set meanwhile is the truth.
-                            if manualStatus == choice.value {
-                                if session.remoteOwnStatusRevision != remoteBefore,
-                                   let remote = session.remoteOwnStatus {
-                                    manualStatus = remote
-                                } else {
-                                    manualStatus = previous
-                                }
-                            }
+                            statusMenuState.failed(token)
                         }
-                        statusWrites -= 1
                     }
                 } label: {
                     Label(choice.label, systemImage: manualStatus == choice.value ? "checkmark" : "circle")
