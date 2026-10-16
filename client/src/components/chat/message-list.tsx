@@ -655,7 +655,7 @@ export const MessageList = memo(function MessageList({
   // Authors the loaded roster does not hold, for a re-read before any of them
   // reads "saiu" (a person who just joined is missing until the roster
   // catches up). Webhooks and AutoMod were never members.
-  // TODO(#1188): a custom bot author is not a server member either; exclude
+  // TODO(PR 1188): a custom bot author is not a server member either; exclude
   // it here and in the row's `authorGone` when that lands.
   const missingAuthorKey = useMemo(() => {
     if (!authorsComplete || !reportMissingAuthors) {
@@ -3025,7 +3025,7 @@ const MessageRow = memo(function MessageRow({
   // Not in a loaded roster and still not in a fresh read of it (the caller
   // folds that into `authorsComplete`): the author left, was removed or was
   // banned. Webhooks and AutoMod were never members, so they are never "gone".
-  // TODO(#1188): custom bots are not members either; exclude them here too.
+  // TODO(PR 1188): custom bots are not members either; exclude them here too.
   const authorGone =
     authorsComplete && !authorInfo && !message.isWebhook && !message.isAutomod;
   const mentionsYou = messageMentionsYou(
