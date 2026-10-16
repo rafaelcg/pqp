@@ -29,6 +29,11 @@ enum PermissionBit {
     /// the staff-only tags (`forumPerms` on the server).
     static let manageChannels: UInt64 = 1 << 4
 
+    /// `Permission.MANAGE_WEBHOOKS` = `1n << 20n`. With MANAGE_CHANNELS, what
+    /// lets somebody set up a Seguir follow into a channel (`mayManageFollow`
+    /// on the server).
+    static let manageWebhooks: UInt64 = 1 << 20
+
     /// `Permission.MANAGE_MESSAGES` = `1n << 8n`.
     static let manageMessages: UInt64 = 1 << 8
 
