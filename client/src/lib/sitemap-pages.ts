@@ -46,6 +46,7 @@ const PRIORITY: Record<string, number> = {
   "/vem": 0.9,
   "/tela": 0.9,
   "/garanta": 0.9,
+  "/compare": 0.9,
   "/contact": 0.4,
   "/privacy": 0.3,
   "/terms": 0.3,
@@ -76,7 +77,8 @@ export function sitemapPages(
     (page: MarketingPage): SitemapPage => ({
       path: page,
       lastmod: lastmodFor(page),
-      priority: PRIORITY[page] ?? DEFAULT_PRIORITY,
+      priority:
+        PRIORITY[page] ?? (page.startsWith("/compare/") ? 0.7 : DEFAULT_PRIORITY),
       alternates: marketingUrlsFor(page, "pt-BR").alternates,
     }),
   );

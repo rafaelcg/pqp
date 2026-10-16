@@ -40,6 +40,13 @@ export const MARKETING_SOURCES: Record<string, readonly string[]> = {
   "/garanta": ["src/pages/claim-page.tsx"],
   "/apoie": ["src/pages/apoie-page.tsx"],
   "/contact": ["src/pages/contact-page.tsx"],
+  // The comparison pages are dated by their page file AND the facts they print:
+  // a re-checked cell (`compare-facts.ts`) is a change to the page. A path that
+  // does not exist yet (before the hub merges) is simply not a commit.
+  "/compare": ["src/pages/compare-page.tsx", "src/content/compare-facts.ts"],
+  "/compare/stoat": ["src/pages/compare-product-page.tsx", "src/content/compare-facts.ts"],
+  "/compare/teamspeak": ["src/pages/compare-product-page.tsx", "src/content/compare-facts.ts"],
+  "/compare/slack": ["src/pages/compare-product-page.tsx", "src/content/compare-facts.ts"],
   "/status": ["src/pages/status-page.tsx"],
 };
 
