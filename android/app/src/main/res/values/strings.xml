@@ -1450,6 +1450,8 @@
     <string name="community_state_public_body">Anyone with the link joins with one tap, no invite, and sees every channel that is not restricted. Nobody finds it without being sent the link.</string>
     <string name="community_state_listed">In the directory</string>
     <string name="community_state_listed_body">Anyone with a pqp account can find it in the directory and join, no invite, and sees every channel that is not restricted.</string>
+    <string name="community_state_suspended">Taken down</string>
+    <string name="community_state_suspended_body">The people who run pqp took this community down. The page and the directory listing are gone, so nobody can join through them.</string>
     <string name="community_address_title">Public address</string>
     <string name="community_address_hint">Creates a page anyone with the link can join from. The owner and people who manage the server can change this.</string>
     <string name="community_address_locked">This community is in the directory. Only the owner can take it out, so the address cannot be turned off here.</string>

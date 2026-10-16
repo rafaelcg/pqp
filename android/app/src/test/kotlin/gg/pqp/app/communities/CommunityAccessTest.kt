@@ -57,6 +57,16 @@ class CommunityAccessTest {
         assertEquals(Visibility.Private, CommunityAccess.visibility(settings(false, true, null)))
     }
 
+    @Test
+    fun `a suspended community is not reported as open`() {
+        val pulled = CommunitySettings(isCommunity = true, isListed = true, slug = "casa", suspended = true)
+        assertEquals(Visibility.Suspended, CommunityAccess.visibility(pulled))
+        assertEquals(
+            Visibility.Private,
+            CommunityAccess.visibility(CommunitySettings(isCommunity = false, suspended = true)),
+        )
+    }
+
     // --- who sees the section ---
 
     @Test
@@ -163,10 +173,10 @@ class CommunityAccessTest {
 
         val old = PqpJson.decodeFromString(
             CommunitySettingsResponse.serializer(),
-            """{"community":{"isCommunity":true,"slug":"casa","suspended":true}}""",
+            """{"community":{"isCommunity":true,"slug":"casa","suspended":false}}""",
         ).community
         assertEquals(Visibility.Listed, CommunityAccess.visibility(old))
-        assertTrue(old.suspended)
+        assertFalse(old.suspended)
     }
 
     @Test

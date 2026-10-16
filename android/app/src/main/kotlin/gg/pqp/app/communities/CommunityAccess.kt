@@ -16,10 +16,13 @@ import gg.pqp.app.core.hasPermission
 object CommunityAccess {
 
     /** How open the room is right now, in the three words the sheet and the badge use. */
-    enum class Visibility { Private, PublicLink, Listed }
+    enum class Visibility { Private, PublicLink, Listed, Suspended }
 
     fun visibility(settings: CommunitySettings): Visibility = when {
         !settings.isCommunity -> Visibility.Private
+        // The operator pulled the page and the listing: the switches are still
+        // on, but nobody can walk in, and saying otherwise would be a lie.
+        settings.suspended -> Visibility.Suspended
         settings.listed -> Visibility.Listed
         else -> Visibility.PublicLink
     }

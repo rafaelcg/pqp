@@ -1443,6 +1443,8 @@
     <string name="community_state_public_body">Quem tem o link entra com um toque, sem convite, e vê todos os canais que não forem restritos. Ninguém acha a comunidade sem receber o link.</string>
     <string name="community_state_listed">No diretório</string>
     <string name="community_state_listed_body">Qualquer pessoa com conta no pqp acha a comunidade no diretório e entra, sem convite, e vê todos os canais que não forem restritos.</string>
+    <string name="community_state_suspended">Tirada do ar</string>
+    <string name="community_state_suspended_body">Quem cuida do pqp tirou esta comunidade do ar. A página e a listagem sumiram, então ninguém entra por elas.</string>
     <string name="community_address_title">Endereço público</string>
     <string name="community_address_hint">Cria uma página de onde quem tem o link entra. O dono e quem gerencia a comunidade mexem nisso.</string>
     <string name="community_address_locked">A comunidade está no diretório. Só o dono tira ela de lá, então o endereço não desliga aqui.</string>

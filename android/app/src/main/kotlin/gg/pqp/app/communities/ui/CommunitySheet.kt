@@ -148,6 +148,19 @@ fun CommunitySheet(
                 refusal = why
                 // The address is the one refusal the person can fix on the spot.
                 retry = if (CommunityAccess.isAddressRefusal(why)) change else null
+                // A transport or decode failure does not say whether the server
+                // applied the change, so read the truth back rather than leave a
+                // switch showing a state that may be out of date.
+                if (why is Refusal.Other) {
+                    try {
+                        settings = api.communitySettings(server.id)
+                        onChanged()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // Still offline: the refusal text stays, the next open reads again.
+                    }
+                }
             }
             busy = false
         }
@@ -413,8 +426,13 @@ private fun StateCard(visibility: Visibility) {
             R.string.community_state_listed_body,
             PqpIcons.Public,
         )
+        Visibility.Suspended -> Triple(
+            R.string.community_state_suspended,
+            R.string.community_state_suspended_body,
+            PqpIcons.Warning,
+        )
     }
-    val open = visibility != Visibility.Private
+    val open = visibility == Visibility.PublicLink || visibility == Visibility.Listed
     Surface(
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
