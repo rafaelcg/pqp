@@ -127,8 +127,11 @@ final class ForwardPickerModel {
     }
 
     private static let concurrency = 4
-    /// `GET /api/servers/:id/forward-destinations` answered 404 (an older API).
-    private nonisolated static let routeMissing = OSAllocatedUnfairLock(initialState: false)
+    /// `GET /api/servers/:id/forward-destinations` answered 404 (an older API),
+    /// remembered until this moment and then asked again: the API can be
+    /// upgraded under a running app, and threads should appear without a relaunch.
+    private nonisolated static let routeMissingUntil = OSAllocatedUnfairLock<Date?>(initialState: nil)
+    private nonisolated static let routeRecheck: TimeInterval = 300
 
     private struct ServerTargets: Sendable {
         let targets: [ForwardTarget]
@@ -146,12 +149,12 @@ final class ForwardPickerModel {
         // threads there).
         // Once one server has answered 404 the whole API predates the route:
         // the rest skip the probe instead of each paying a round trip for it.
-        if !routeMissing.withLock({ $0 }) {
+        if !routeMissingUntil.withLock({ ($0 ?? .distantPast) > Date() }) {
             do {
                 let destinations = try await api.forwardDestinations(serverId: server.id)
                 return ServerTargets(targets: destinations.targets(in: server), permissionsKnown: true)
             } catch APIError.notFound {
-                routeMissing.withLock { $0 = true }
+                routeMissingUntil.withLock { $0 = Date().addingTimeInterval(routeRecheck) }
             } catch {
                 return nil
             }
