@@ -6,6 +6,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -110,6 +114,112 @@ class SessionStore(
     val realtime: RealtimeClient = RealtimeClient(delegating, scope, http)
 
     private var restoreJob: Job? = null
+
+    /**
+     * A server this account lost (kicked, banned, deleted), once the list has dropped it. The
+     * screens that are open inside it leave, and the person is told why, once.
+     */
+    private val _serverGone = MutableStateFlow<List<ServerGone>>(emptyList())
+
+    /**
+     * Held until the UI says it has dealt with them ([acknowledgeGone]), not emitted: a removal that lands while
+     * nothing is collecting (the navigation host is between lifecycles) must still pop the screens inside that
+     * server and say why once it is back.
+     */
+    val serverGone: StateFlow<List<ServerGone>> = _serverGone.asStateFlow()
+
+    fun acknowledgeGone(handled: List<ServerGone>) {
+        _serverGone.update { pending -> pending.filterNot { it in handled } }
+    }
+
+    private fun onAccountFrame(frame: JsonObject) {
+        when ((frame["type"] as? JsonPrimitive)?.contentOrNull) {
+            "server-removed" -> AccountFrames.serverRemoved(frame)?.let { removed ->
+                val lost = synchronized(orderLock) {
+                    val (rest, lost) = AccountFrames.apply(_servers.value, removed) ?: return@synchronized null
+                    _servers.value = rest
+                    lost
+                }
+                if (lost != null) _serverGone.update { it + lost }
+            }
+            "own-status" -> AccountFrames.ownStatus(frame)?.let(::onRemoteStatus)
+        }
+    }
+
+    private val statusLock = Any()
+    private var statusSaving = 0
+    private var statusGeneration = 0
+    private val heldStatus = mutableListOf<String>()
+
+    /** The account's own manual status, as the session holds it. */
+    fun ownStatus(): String = OwnStatus.read((_phase.value as? SessionPhase.Ready)?.me?.preferences?.status)
+
+    private fun applyOwnStatus(status: String) {
+        val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
+        _phase.value = SessionPhase.Ready(
+            current.copy(preferences = (current.preferences ?: MePreferences()).copy(status = status)),
+        )
+    }
+
+    /** Another device of this account chose a status. Held while this phone's own write is in the air. */
+    private fun onRemoteStatus(status: String) {
+        synchronized(statusLock) {
+            if (statusSaving > 0) {
+                heldStatus += status
+                return
+            }
+            statusGeneration += 1
+        }
+        applyOwnStatus(status)
+    }
+
+    /**
+     * Choose a status. Optimistic, then awaited: this is the one preference that must not be
+     * fire-and-forget, because "I picked invisible, the request failed, nobody told me" is
+     * somebody believing they are hidden while they are not. A failure puts the old choice back
+     * and calls [onError]. See [OwnStatus.needsReadBack] for what arrives meanwhile.
+     */
+    fun setOwnStatus(wanted: String, onError: () -> Unit) {
+        val previous = ownStatus()
+        if (wanted == previous || wanted !in OwnStatus.CHOICES) return
+        val mine = synchronized(statusLock) {
+            statusSaving += 1
+            statusGeneration += 1
+            heldStatus.clear()
+            statusGeneration
+        }
+        applyOwnStatus(wanted)
+        scope.launch {
+            val saved = runSuspendCatching { api.setStatus(wanted) }.isSuccess
+            val held: List<String>
+            val generation: Int
+            synchronized(statusLock) {
+                statusSaving -= 1
+                held = heldStatus.toList()
+                heldStatus.clear()
+                generation = statusGeneration
+            }
+            when {
+                !saved -> {
+                    // Only the newest choice puts the old one back: if another was made while this one was
+                    // in the air, that one owns the row and an earlier failure must not undo it.
+                    if (generation == mine) {
+                        // Another device's choice that arrived meanwhile is newer than the one that failed.
+                        applyOwnStatus(held.lastOrNull() ?: previous)
+                        onError()
+                    }
+                }
+                OwnStatus.needsReadBack(wanted, held) -> {
+                    val stored = runSuspendCatching { api.me() }.getOrNull()
+                        ?.let { OwnStatus.read(it.preferences?.status) }
+                    // A newer save or frame has a fresher answer than this read, issued before it.
+                    if (synchronized(statusLock) { statusGeneration == generation }) {
+                        applyOwnStatus(stored ?: held.last())
+                    }
+                }
+            }
+        }
+    }
 
     /**
      * Whether the account sitting at the age gate will be shown the wizard
@@ -431,6 +541,14 @@ class SessionStore(
             }
             signOutLocally()
         }
+    }
+
+    // The frames addressed to the account itself, which no screen owns: a server taken away
+    // (`server-removed`) and a status chosen on another device (`own-status`). Started with the
+    // store, because the socket outlives every screen. Last in the class on purpose: the collector
+    // may run at once, and everything it touches has to exist by then.
+    init {
+        scope.launch { realtime.frames.collect(::onAccountFrame) }
     }
 
     companion object {

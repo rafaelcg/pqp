@@ -40,6 +40,7 @@ import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.ConnectionDoctorDialog
 import gg.pqp.app.ui.components.SectionLabel
 import gg.pqp.app.ui.components.SettingsRow
+import gg.pqp.app.ui.components.StatusRow
 import gg.pqp.app.ui.components.pqpTopBarColors
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
@@ -164,6 +165,8 @@ fun YouScreen(
                 label = stringResource(R.string.you_version),
                 value = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             )
+
+            StatusRow(session)
 
             Spacer(Modifier.height(Spacing.lg))
             PushSettingsSection(
