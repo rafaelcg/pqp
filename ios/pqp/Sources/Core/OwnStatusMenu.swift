@@ -41,6 +41,9 @@ struct OwnStatusMenu: Equatable {
     mutating func succeeded(_ token: Int, status: String) {
         inFlight = max(0, inFlight - 1)
         confirmed = status
+        // The last write in the air has answered: the menu shows what the server
+        // holds (an older choice succeeding after a newer one failed).
+        if inFlight == 0 { shown = confirmed }
     }
 
     mutating func failed(_ token: Int) {

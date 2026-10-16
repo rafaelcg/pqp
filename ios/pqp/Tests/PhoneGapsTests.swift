@@ -169,6 +169,17 @@ final class PhoneGapsTests: XCTestCase {
         XCTAssertEqual(menu.shown, "invisible", "back to what the server confirmed, not to choice A")
     }
 
+    func testAnOlderWriteSucceedingAfterANewerOneFailedShowsWhatTheServerHolds() {
+        var menu = OwnStatusMenu("online")
+        let dnd = menu.choose("dnd")
+        let online = menu.choose("online")
+        menu.failed(online)
+        XCTAssertEqual(menu.shown, "online", "the older write is still in the air, so nothing is settled yet")
+        menu.succeeded(dnd, status: "dnd")
+        XCTAssertEqual(menu.shown, "dnd")
+        XCTAssertEqual(menu.confirmed, "dnd")
+    }
+
     func testARemoteStatusShowsAtOnceWhenNothingIsInTheAir() {
         var menu = OwnStatusMenu("online")
         menu.remote("dnd")
