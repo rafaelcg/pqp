@@ -61,6 +61,9 @@ internal class BauCaptionsState(
     /** "Português (automática)", or "Áudio original" when the track's language has no name. */
     val label: String?,
     val toggle: () -> Unit,
+    /** The read of the subtitles failed: the button is drawn anyway and a press asks again. */
+    val failed: Boolean = false,
+    val retry: () -> Unit = {},
 )
 
 /**
@@ -82,10 +85,15 @@ internal fun rememberBauCaptions(player: Player?, source: BauCaptionsSource?): B
 
     var tracks by remember(source) { mutableStateOf<List<BauCaptionTrack>>(emptyList()) }
     var attempt by remember(source) { mutableStateOf(0) }
+    var failed by remember(source) { mutableStateOf(false) }
     LaunchedEffect(source, readerTag, attempt) {
         if (session == null) return@LaunchedEffect
         runSuspendCatching { session.api.bauCaptions(source.serverId, source.postId, BauCaptions.requestLang(readerTag)) }
-            .onSuccess { tracks = it }
+            .onSuccess {
+                tracks = it
+                failed = false
+            }
+            .onFailure { failed = true }
     }
 
     // null until the reader presses CC: the default can only be worked out once the subtitles are known to fit.
@@ -137,9 +145,11 @@ internal fun rememberBauCaptions(player: Player?, source: BauCaptionsSource?): B
             val next = !on
             BauCaptionsPreference.write(context, next)
             choice = next
-            // A blip must not cost the subtitles for as long as the card stays: a press asks again.
-            if (tracks.isEmpty()) attempt += 1
         },
+        // A blip must not cost the subtitles for as long as the card stays: with nothing read, the button is
+        // still there and a press asks again (it does not change the remembered on/off choice).
+        failed = failed && !available,
+        retry = { attempt += 1 },
     )
 }
 
@@ -148,7 +158,7 @@ private const val CUE_POLL_MS = 120L
 /** The CC button, and the language it is showing while on. */
 @Composable
 internal fun BauCaptionsButton(state: BauCaptionsState, modifier: Modifier = Modifier) {
-    if (!state.available) return
+    if (!state.available && !state.failed) return
     val description = stringResource(if (state.on) R.string.bau_captions_off else R.string.bau_captions_on)
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -169,7 +179,7 @@ internal fun BauCaptionsButton(state: BauCaptionsState, modifier: Modifier = Mod
             }
         }
         IconButton(
-            onClick = state.toggle,
+            onClick = if (state.failed) state.retry else state.toggle,
             modifier = Modifier
                 .size(40.dp)
                 .semantics { contentDescription = description }
