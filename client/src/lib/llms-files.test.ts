@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import LLMS from "../../public/llms.txt?raw";
 import LLMS_FULL from "../../public/llms-full.txt?raw";
-import SITEMAP from "../../public/sitemap.xml?raw";
 import { ARTICLES } from "./blog/articles";
 import { COMPARE_PAGES } from "../content/compare-products";
+import { marketingPageFromMetaPath } from "./marketing-meta";
 
 /**
  * `llms.txt` and `llms-full.txt` are hand-written, and they went stale: the
@@ -27,9 +27,11 @@ describe("llms.txt and llms-full.txt", () => {
     }
   });
 
-  it("only link pages the sitemap lists or the app serves", () => {
+  it("only link comparison pages the site answers for", () => {
+    // The sitemap is generated from the same registry, so a page the edge
+    // knows is a page the sitemap lists.
     for (const path of ["/compare", "/compare/stoat", "/compare/teamspeak", "/compare/slack"]) {
-      expect(SITEMAP).toContain(`<loc>https://pqp.gg${path}</loc>`);
+      expect(marketingPageFromMetaPath(path), path).toBe(path);
     }
   });
 
