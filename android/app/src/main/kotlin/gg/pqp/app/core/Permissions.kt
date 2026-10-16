@@ -151,6 +151,8 @@ object PermissionsCache {
         entries[key(userId, serverId)]?.takeIf { now - it.at in 0 until TTL_MS }?.snapshot
 
     fun put(userId: String?, serverId: String, snapshot: PermissionsSnapshot, now: Long) {
+        // Expired entries go on every write, so the map holds at most the servers opened in the last [TTL_MS].
+        entries.values.removeIf { now - it.at !in 0 until TTL_MS }
         entries[key(userId, serverId)] = Entry(now, snapshot)
     }
 }

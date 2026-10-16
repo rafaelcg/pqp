@@ -95,6 +95,11 @@ class PermissionsTest {
         assertEquals(null, PermissionsCache.fresh("me", "other-server", now = 1_500L))
         // A clock that went backwards is not a hit.
         assertEquals(null, PermissionsCache.fresh("me", "srv", now = 500L))
+        // A later write evicts what has expired, so the map does not keep every server ever opened.
+        val later = 1_000L + PermissionsCache.TTL_MS + 5
+        PermissionsCache.put("me", "second", snapshot, now = later)
+        assertEquals(null, PermissionsCache.fresh("me", "srv", now = later))
+        assertEquals(snapshot, PermissionsCache.fresh("me", "second", now = later))
     }
 
     @Test
