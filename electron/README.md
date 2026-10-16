@@ -248,6 +248,23 @@ terminal. The whole decision is `closeAction` in `lib/tray-menu.js`. Whenever
 the tray checkbox is off, close behaves as it always did. The preference
 (default on) lives in `userData/tray.json` and is toggled from the tray menu.
 
+## Spellcheck and the text context menu
+
+Electron draws no context menu, so the red underline used to be a dead end.
+`attachContextMenu` in `main.js` answers `webContents` `context-menu` with the
+template from `lib/context-menu.js`: up to five `dictionarySuggestions` (click
+calls `replaceMisspelling`), "Add to dictionary"
+(`addWordToSpellCheckerDictionary`), then undo/redo/cut/copy/paste/select all
+from `editFlags`. Selected text outside a field gets Copy; anything else gets no
+native menu, and the app's own React menus never reach it (they
+`preventDefault` the DOM event). Labels are `contextMenu.*` in `locales/`.
+`applySpellcheckLanguages` points `session.setSpellCheckerLanguages` at the app
+language plus English (`pt-BR` + `en-US`, `es-419` + `en-US`, `en-US`),
+filtered by `availableSpellCheckerLanguages`, at startup and on `pqp:set-locale`.
+macOS uses the system checker and ignores the language list. On Windows and
+Linux Chromium downloads a dictionary the first time, so a fresh offline install
+checks nothing (unverified on a real Windows machine).
+
 ## Notifications
 
 `showNotification` in `main.js` builds the OS banner from

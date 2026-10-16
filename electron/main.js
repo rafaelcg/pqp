@@ -24,6 +24,10 @@ const { loadWindowState, trackWindowState, DEFAULTS } = require("./lib/window-st
 const { loadTheme, saveTheme, BACKGROUNDS } = require("./lib/theme-state");
 const { loadLocale, saveLocale } = require("./lib/locale-state");
 const { setLanguage, t } = require("./lib/i18n");
+const {
+  buildContextMenuTemplate,
+  spellcheckLanguagesFor,
+} = require("./lib/context-menu");
 const { startStaticServer } = require("./lib/static-server");
 const { waitForUrl, isLocalDevUrl } = require("./lib/wait-for-url");
 const { classifyNavigation } = require("./lib/nav-policy");
@@ -691,6 +695,44 @@ async function reloadCleanFromNetwork() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.reloadIgnoringCache();
   }
+}
+
+/**
+ * Point Chromium's spellchecker at the app's language rather than whatever the
+ * OS happens to report (a Brazilian on an English Windows got English
+ * underlines on every Portuguese word). macOS uses the system checker and
+ * ignores this; elsewhere a dictionary not on disk is downloaded once on first
+ * use, so offline it simply stays unchecked. See `spellcheckLanguagesFor`.
+ */
+function applySpellcheckLanguages(locale) {
+  try {
+    const ses = session.defaultSession;
+    const languages = spellcheckLanguagesFor(locale, ses.availableSpellCheckerLanguages);
+    if (languages.length > 0) {
+      ses.setSpellCheckerLanguages(languages);
+    }
+  } catch (err) {
+    console.error("[pqp] spellcheck languages:", err?.message || err);
+  }
+}
+
+/**
+ * The text context menu: spelling suggestions, "Add to dictionary", and the
+ * standard cut/copy/paste. Nothing else gets a native menu (see
+ * `lib/context-menu.js`), and the app's own React menus never reach here.
+ */
+function attachContextMenu(win) {
+  win.webContents.on("context-menu", (_event, params) => {
+    const template = buildContextMenuTemplate(params, t, {
+      replaceMisspelling: (word) => win.webContents.replaceMisspelling(word),
+      addToDictionary: (word) =>
+        win.webContents.session.addWordToSpellCheckerDictionary(word),
+    });
+    if (template.length === 0) {
+      return;
+    }
+    Menu.buildFromTemplate(template).popup({ window: win });
+  });
 }
 
 function createAppMenu() {
@@ -1650,6 +1692,8 @@ function createWindow(appUrl, allowedOrigin) {
     attachPasskeyHint(child);
   });
 
+  attachContextMenu(mainWindow);
+
   mainWindow.webContents.on("will-navigate", (event, url) => {
     const decision = classifyNavigation(url, allowedOrigin);
     if (decision === "allow") {
@@ -2417,6 +2461,7 @@ if (probingShareAudio) {
     saveLocale(app.getPath("userData"), locale);
     const next = loadLocale(app.getPath("userData"), app.getLocale());
     setLanguage(next);
+    applySpellcheckLanguages(next);
     createAppMenu();
     // The tray menu is built from the same catalogue and would otherwise keep
     // the old language until the next state change.
@@ -2676,6 +2721,7 @@ if (probingShareAudio) {
     registerProtocolClient();
     const locale = loadLocale(app.getPath("userData"), app.getLocale());
     setLanguage(locale);
+    applySpellcheckLanguages(locale);
     createAppMenu();
     trayPrefs = loadTrayPrefs(app.getPath("userData"));
     // Asked before the tray exists so `trayHostAtCreation` is the real
