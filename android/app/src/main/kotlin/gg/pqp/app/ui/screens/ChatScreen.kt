@@ -106,6 +106,7 @@ import gg.pqp.app.attachments.formatAttachmentSize
 import gg.pqp.app.core.ApiClient
 import gg.pqp.app.core.Gif
 import gg.pqp.app.core.Message
+import gg.pqp.app.core.PermissionsCache
 import gg.pqp.app.core.PermissionsSnapshot
 import gg.pqp.app.core.Reaction
 import gg.pqp.app.core.SendGate
@@ -276,10 +277,26 @@ fun ChatScreen(
     // server; a conversation and a notification-tap open have no server and are
     // never gated here. Unknown, including a failed read, is allowed: the
     // server stays the gate and says so on send.
-    val sendSnapshot by produceState<PermissionsSnapshot?>(null, serverId) {
-        value = null
-        val id = serverId ?: return@produceState
-        value = runCatching { session.api.serverPermissions(id) }.getOrNull()
+    val sendSnapshot by produceState<PermissionsSnapshot?>(null, serverId, me?.id) {
+        val id = serverId
+        if (id == null) {
+            value = null
+            return@produceState
+        }
+        val cached = PermissionsCache.fresh(me?.id, id, System.currentTimeMillis())
+        value = cached
+        if (cached != null) return@produceState
+        // Not runCatching: a read cancelled by the next server must end this
+        // producer, not write a null over the one that replaced it.
+        val read = try {
+            session.api.serverPermissions(id)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        if (read != null) PermissionsCache.put(me?.id, id, read, System.currentTimeMillis())
+        value = read
     }
     val canSendHere = SendGate.canSend(sendSnapshot, extras?.primaryChannelId ?: channelId)
     // Encaminhar is offered while the runtime flag is on (read per use, kept a

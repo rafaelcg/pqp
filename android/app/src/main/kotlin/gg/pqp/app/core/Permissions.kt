@@ -128,3 +128,29 @@ object SendGate {
     fun canSend(snapshot: PermissionsSnapshot?, channelId: String): Boolean =
         snapshot == null || hasPermission(snapshot.channelBits(channelId), Permission.SEND_MESSAGES)
 }
+
+/**
+ * A server's snapshot kept for a short while, for the screens that only need
+ * one bit of it as they open (the chat composer's SEND_MESSAGES): opening
+ * channel after channel on one server reads it once, not once per channel.
+ * Keyed by account as well as server, so a second account on the same phone
+ * never reads the first one's bits. Short on purpose, a role change shows up
+ * the next time the channel list resumes (which always re-reads) or within
+ * [TTL_MS] of opening a chat.
+ */
+object PermissionsCache {
+    const val TTL_MS = 30_000L
+
+    private class Entry(val at: Long, val snapshot: PermissionsSnapshot)
+
+    private val entries = java.util.concurrent.ConcurrentHashMap<String, Entry>()
+
+    private fun key(userId: String?, serverId: String) = "${userId.orEmpty()}:$serverId"
+
+    fun fresh(userId: String?, serverId: String, now: Long): PermissionsSnapshot? =
+        entries[key(userId, serverId)]?.takeIf { now - it.at in 0 until TTL_MS }?.snapshot
+
+    fun put(userId: String?, serverId: String, snapshot: PermissionsSnapshot, now: Long) {
+        entries[key(userId, serverId)] = Entry(now, snapshot)
+    }
+}

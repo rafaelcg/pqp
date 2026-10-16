@@ -86,6 +86,18 @@ class PermissionsTest {
     }
 
     @Test
+    fun `the cache hands a snapshot back within its time, never to another account or server`() {
+        val snapshot = PermissionsSnapshot(server = "0")
+        PermissionsCache.put("me", "srv", snapshot, now = 1_000L)
+        assertEquals(snapshot, PermissionsCache.fresh("me", "srv", now = 1_000L + PermissionsCache.TTL_MS - 1))
+        assertEquals(null, PermissionsCache.fresh("me", "srv", now = 1_000L + PermissionsCache.TTL_MS))
+        assertEquals(null, PermissionsCache.fresh("somebody-else", "srv", now = 1_500L))
+        assertEquals(null, PermissionsCache.fresh("me", "other-server", now = 1_500L))
+        // A clock that went backwards is not a hit.
+        assertEquals(null, PermissionsCache.fresh("me", "srv", now = 500L))
+    }
+
+    @Test
     fun `a channel overwrite granting send wins over the server bits`() {
         val snapshot = PermissionsSnapshot(server = "0", channels = mapOf("forum" to Permission.SEND_MESSAGES.toString()))
         assertTrue(SendGate.canSend(snapshot, "forum"))
