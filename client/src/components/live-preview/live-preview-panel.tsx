@@ -143,6 +143,8 @@ function LivePreviewPanelForSource({
   const { t } = useTranslation();
   const [channels, setChannels] = useState<LivePreviewListedChannel[] | null>(null);
   const [upcoming, setUpcoming] = useState<LivePreviewUpcoming[]>([]);
+  // The last listing answered 404: there is no preview here any more.
+  const [absent, setAbsent] = useState(false);
   const [windowSeconds, setWindowSeconds] = useState<number | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [phase, setPhase] = useState<LivePreviewPhase>({ kind: "idle" });
@@ -183,18 +185,17 @@ function LivePreviewPanelForSource({
           return;
         }
         // A 404 is different: the preview is gone for this page (switched
-        // off, suspended, invite expired), so nothing is live any more. The
-        // channel being watched is not kept drawn from its last row either:
-        // the page closes and a start still in flight is dropped.
+        // off, suspended, the invite expired or ran out of uses), so nothing
+        // is live any more. A visitor already watching keeps the page until
+        // their window ends or they leave (see `shown` below): somebody else
+        // using up the invite must not cut off a film in progress.
         if (answer === "absent") {
-          generation.current += 1;
-          lastShown.current = null;
-          setChannelId(null);
-          setPhase({ kind: "idle" });
+          setAbsent(true);
           setChannels([]);
           setUpcoming([]);
           return;
         }
+        setAbsent(false);
         setChannels(answer.livePreview.channels);
         setUpcoming(answer.livePreview.upcoming);
         setWindowSeconds(answer.livePreview.seconds);
@@ -216,7 +217,10 @@ function LivePreviewPanelForSource({
   if (listed) {
     lastShown.current = listed;
   }
-  const shown = listed ?? (channelId ? lastShown.current : null);
+  // Once the preview is gone (404), the last row is kept only while the page
+  // is open, so the card does not come back from it after the visitor leaves.
+  const keepLastShown = channelId !== null && (!absent || previewShowsPage(phase));
+  const shown = listed ?? (keepLastShown ? lastShown.current : null);
   const live = (channels?.length ?? 0) > 0;
 
   useEffect(() => {

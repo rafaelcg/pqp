@@ -405,7 +405,7 @@ describe("LivePreviewPanel", () => {
     }
   });
 
-  it("closes the page of a visitor who is watching when the listing says the preview is gone", async () => {
+  it("lets a visitor who is watching finish when the preview goes away, then drops the card", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       await mount();
@@ -413,11 +413,16 @@ describe("LivePreviewPanel", () => {
       await answerStart(0, okResult());
       expect(page()).not.toBeNull();
 
+      // Somebody else used the invite's last slot, or the host switched it off.
       vi.mocked(fetchLivePreviewListing).mockResolvedValueOnce("absent");
       await act(async () => {
         await vi.advanceTimersByTimeAsync(30_000);
       });
+      expect(page()).not.toBeNull();
+
+      await untilPopstate(() => exitControl()!.click());
       expect(page()).toBeNull();
+      expect(host!.querySelector("[data-live-preview='idle']")).toBeNull();
       expect(siteRoot!.inert).toBe(false);
     } finally {
       vi.useRealTimers();
