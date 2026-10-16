@@ -14,6 +14,7 @@ import {
   presignPut,
   type StoredImage,
 } from "../lib/s3.js";
+import { STABLE_IMAGE_READ } from "../lib/stable-image-read.js";
 
 /**
  * A server's icon and banner.
@@ -39,9 +40,6 @@ import {
 
 /** Same fifteen minutes an attachment's and an avatar's upload URL gets. */
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
-
-/** Same hour `presignAvatarRead` uses, for the same reason — see that comment. */
-const READ_URL_TTL_SECONDS = 60 * 60;
 
 /**
  * Extension per content type, never per anything the client sends. A `Record`
@@ -344,6 +342,6 @@ export async function readServerImageObject(
   }
   return {
     key: storageKey,
-    signedUrl: presignGet(storageKey, { ttlSeconds: READ_URL_TTL_SECONDS }),
+    signedUrl: presignGet(storageKey, STABLE_IMAGE_READ),
   };
 }

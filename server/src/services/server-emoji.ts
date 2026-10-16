@@ -16,6 +16,7 @@ import {
   presignGet,
   presignPut,
 } from "../lib/s3.js";
+import { STABLE_IMAGE_READ } from "../lib/stable-image-read.js";
 
 /**
  * Custom server emoji.
@@ -27,7 +28,6 @@ import {
  */
 
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
-const READ_URL_TTL_SECONDS = 60 * 60;
 
 const EXTENSION_BY_CONTENT_TYPE: Record<ServerEmojiContentType, string> = {
   "image/jpeg": ".jpg",
@@ -387,5 +387,5 @@ export async function presignServerEmojiRead(emojiId: string): Promise<string | 
     [emojiId],
   );
   const key = result.rows[0]?.storage_key;
-  return key ? presignGet(key, { ttlSeconds: READ_URL_TTL_SECONDS }) : null;
+  return key ? presignGet(key, STABLE_IMAGE_READ) : null;
 }

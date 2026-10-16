@@ -497,6 +497,18 @@ export interface PresignGetOptions {
    * as a top-level document renders in the bucket's own origin.
    */
   downloadFilename?: string;
+  /**
+   * Sign at the start of the current window of this many seconds instead of at
+   * this instant, so every address minted inside the window is identical (and a
+   * browser's cache can recognise it). `ttlSeconds` must then cover the window
+   * AND however long the address is meant to stay good after its last use.
+   * See `stable-image-read.ts`; only for unauthenticated pictures.
+   */
+  stableWindowSeconds?: number;
+  /** A `Cache-Control` the bucket sends with the bytes, signed into the query. */
+  cacheControl?: string;
+  /** Injectable clock. Tests only. */
+  now?: Date;
 }
 
 /** An object in the bucket and a signed address for it: what a route that may redirect OR serve needs. */
@@ -506,20 +518,27 @@ export interface StoredImage {
 }
 
 export function presignGet(key: string, options: PresignGetOptions): string {
+  const query: Record<string, string> = {};
+  if (options.downloadFilename) {
+    query["response-content-disposition"] = contentDisposition(
+      options.downloadFilename,
+    );
+  }
+  if (options.cacheControl) {
+    query["response-cache-control"] = options.cacheControl;
+  }
+  let now: Date | undefined = options.now;
+  if (options.stableWindowSeconds && options.stableWindowSeconds > 0) {
+    const windowMs = options.stableWindowSeconds * 1000;
+    now = new Date(Math.floor((options.now ?? new Date()).getTime() / windowMs) * windowMs);
+  }
   return signRequest({
     method: "GET",
     key,
     ttlSeconds: options.ttlSeconds,
     forRead: true,
-    ...(options.downloadFilename
-      ? {
-          query: {
-            "response-content-disposition": contentDisposition(
-              options.downloadFilename,
-            ),
-          },
-        }
-      : {}),
+    ...(Object.keys(query).length > 0 ? { query } : {}),
+    ...(now ? { now } : {}),
   }).url;
 }
 
