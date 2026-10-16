@@ -508,6 +508,26 @@ export async function computeMemberPermissionsForChannels(
     }
     return out;
   }
+  return permissionsForChannelsOf(ctx, channels);
+}
+
+/** What a member holds with no channel in view: the cargo bits alone. */
+export function memberServerPermissions(ctx: MemberPermissionContext): bigint {
+  return permissionsFromOverwriteRows(ctx, []);
+}
+
+/**
+ * `computeMemberPermissionsForChannels` for a context the caller already holds
+ * (a caller that also wants `memberServerPermissions` reads the member once).
+ */
+export async function permissionsForChannelsOf(
+  ctx: MemberPermissionContext,
+  channels: readonly PermissionChannelRef[],
+): Promise<Map<string, bigint>> {
+  const out = new Map<string, bigint>();
+  if (channels.length === 0) {
+    return out;
+  }
   const effectiveId = (channel: PermissionChannelRef): string =>
     channel.type === "thread" && channel.parent_id ? channel.parent_id : channel.id;
   const wanted = [...new Set(channels.map(effectiveId))];

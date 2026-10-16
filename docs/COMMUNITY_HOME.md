@@ -386,8 +386,11 @@ user and never in a member list.
   the cards out (one per interval, the rest wait), and the identity cannot be
   sent a friend request.
 - **Setting it up.** A **Seguir** button on the Baú header of a followable
-  server opens a picker of the viewer's own servers where they hold
-  MANAGE_WEBHOOKS or MANAGE_CHANNELS, then a text channel and an optional role to
+  server opens a picker of the viewer's own servers, each with the text channels
+  where they hold MANAGE_WEBHOOKS or MANAGE_CHANNELS (tested per channel, cargo
+  bits plus that channel's overwrites, the same test as creating and delivering,
+  so a grant that exists only as a channel overwrite counts and a channel that
+  denies it does not appear), then a text channel and an optional role to
   ping (a role of the destination that is mentionable, or any role for someone
   who may mention everyone). `POST /api/servers/:id/home/follow`; the channel is
   checked for the same authority, so a per-channel grant counts there. The

@@ -13,7 +13,12 @@ import { getPool } from "../db.js";
 import { mapWithConcurrency } from "../lib/admission.js";
 import { isEnabled } from "../lib/flags.js";
 import { isCommunityHomeEnabled } from "./community-home.js";
-import { computeMemberPermissions } from "./permissions.js";
+import {
+  computeMemberPermissions,
+  loadMemberPermissionContext,
+  memberServerPermissions,
+  permissionsForChannelsOf,
+} from "./permissions.js";
 import { isServerMember } from "./users.js";
 import { listChannels, listServersForUser } from "./servers.js";
 
@@ -214,11 +219,18 @@ export async function getBauFollowState(
 
 /**
  * Every server of the viewer where they may set a follow up, with the text
- * channels they may point it at and the roles they may ping. Server-level
- * authority only: a per-channel overwrite that grants MANAGE_WEBHOOKS on one
- * channel is honoured when the follow is created (the check there reads the
- * channel), but is not discovered here, because answering it for every channel
- * of every server a person is in is a query per channel.
+ * channels they may point it at and the roles they may ping.
+ *
+ * THE SAME TEST AS CREATING AND DELIVERING, PER CHANNEL. A follow is made, and
+ * every delivery re-checked, against the permissions in the destination
+ * CHANNEL (cargo bits plus that channel's overwrites), so a person who holds
+ * MANAGE_WEBHOOKS only through an overwrite on one channel may follow into it,
+ * and a person with the bit server-wide but denied on a channel may not. The
+ * picker answers the same: a server qualifies when the bit is held server-wide
+ * OR some text channel of it has an overwrite that allows one of the pair (one
+ * query for every server), and then each channel is tested with
+ * `mayManageFollow` on its own resolved permissions (three queries for a
+ * server, not three per channel).
  */
 export async function listBauFollowDestinations(
   sourceServerId: string,
@@ -253,12 +265,35 @@ export async function listBauFollowDestinations(
   );
   const blockedIds = new Set(blocked.rows.map((row) => row.blocked_server_id));
 
+  // Servers where an overwrite on a text channel allows one of the pair: the
+  // only places a person without the bit server-wide can still qualify.
+  const manageMask = FOLLOW_MANAGE_BITS.reduce((all, bit) => all | bit, 0n);
+  const overwriteGrants = await pool.query<{ server_id: string }>(
+    `SELECT DISTINCT c.server_id
+       FROM channel_overwrites o
+       JOIN channels c ON c.id = o.channel_id
+      WHERE c.server_id = ANY($1::uuid[]) AND c.type = 'text'
+        AND (o.allow & $2::bigint) <> 0`,
+    [servers.map((server) => server.id), manageMask.toString()],
+  );
+  const overwriteServers = new Set(overwriteGrants.rows.map((row) => row.server_id));
+
   const built = await mapWithConcurrency(
     servers.filter((server) => !blockedIds.has(server.id)),
     4,
     async (server): Promise<BauFollowDestination | null> => {
-      const permissions = await computeMemberPermissions(server.id, viewerId);
-      if (!FOLLOW_MANAGE_BITS.some((bit) => hasPermission(permissions, bit))) {
+      // The member is read ONCE for the server: the cargo bits for the early
+      // exit and the roles' MENTION_EVERYONE, and the same context for the
+      // per-channel resolution below.
+      const context = await loadMemberPermissionContext(server.id, viewerId);
+      if (!context) {
+        return null;
+      }
+      const permissions = memberServerPermissions(context);
+      if (
+        !FOLLOW_MANAGE_BITS.some((bit) => hasPermission(permissions, bit)) &&
+        !overwriteServers.has(server.id)
+      ) {
         return null;
       }
       const [visible, roles] = await Promise.all([
@@ -271,7 +306,14 @@ export async function listBauFollowDestinations(
           [server.id, hasPermission(permissions, Permission.MENTION_EVERYONE)],
         ),
       ]);
-      const channels = visible.filter((channel) => channel.type === "text");
+      const text = visible.filter((channel) => channel.type === "text");
+      const channelPermissions = await permissionsForChannelsOf(
+        context,
+        text.map((channel) => ({ id: channel.id, type: channel.type, parent_id: null })),
+      );
+      const channels = text.filter((channel) =>
+        mayManageFollow(channelPermissions.get(channel.id) ?? 0n),
+      );
       if (channels.length === 0) {
         return null;
       }
