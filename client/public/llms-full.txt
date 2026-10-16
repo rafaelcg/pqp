@@ -6,14 +6,17 @@ pqp (https://pqp.gg) is an open-source voice and text chat for groups of friends
 
 - Servers (called halls in the code) with text channels and voice channels.
 - Voice is WebRTC, and the server picks the transport per room: small servers and DM calls stay peer-to-peer, while listed communities and servers of ten or more members go through a media server (LiveKit). The hosted instance at pqp.gg runs one, so a big room is not capped at a handful of people; a self-host with no LiveKit configured is peer-to-peer only, which tops out around eight per channel.
-- Screen share with audio from the browser, and watch parties.
+- Screen share with audio from the browser, up to 1080p, with the frame rate adapting to the connection. Two screens at once in a small room, four in a large one. Sound comes with a Chrome or Edge tab, and with a whole screen on Windows; a whole screen on a Mac, Firefox and Safari do not carry sound (a browser limit).
+- Watch parties: share a tab and people watch in the browser, on a computer or a phone, with the chat beside it. Early access, switched on one server at a time; one with more than a hundred people has run.
+- Discord layout import: paste a `discord.new` template link and pqp recreates the categories, channels and main permissions. Messages, members and custom emoji do not come along.
 - Direct messages, friends, reactions, attachments (S3-compatible storage, off unless configured), GIFs.
 - Roles: a seeded staff ladder (owner, admin, manager, moderator, VIP, @everyone) plus roles a server invents, each with permission bits and per-channel overwrites. Invites are links; joining needs an account.
 - Communities: an opt-in public directory of joinable servers. Off by default on a self-host.
 - Public handles: a person can claim `pqp.gg/@handle` and get a public profile page. Communities that opt in get `pqp.gg/c/slug`.
 - Baú: a durable media feed inside a server, behind its own flag.
 - Game connections: Steam, Battle.net and Twitch can be linked to a profile and shown publicly if the person opts in.
-- Written in Brazilian Portuguese first, with English as the second language.
+- Brazilian Portuguese first, with English and Spanish (the Spanish still awaits a native review). The product is for adults, 18 and over.
+- Made by two brothers in an open beta. Next to Discord it has a far smaller community and no bot ecosystem or bot store yet (incoming and outgoing webhooks and built-in commands only).
 
 ## Platforms
 
@@ -34,11 +37,20 @@ What is reachable without an account:
 - `https://pqp.gg/app/invite/<code>`: an invite door. The page tells nothing about the server behind it; joining needs an account.
 - `https://api.pqp.gg/status.json`: live status
 
-Neither profiles nor communities are enumerable. There is no listing endpoint and the sitemap lists only static pages, on purpose.
+Neither profiles nor communities are enumerable. There is no listing endpoint and the sitemap lists only static pages, the blog and the guides, on purpose.
+
+## Comparisons and guides
+
+- https://pqp.gg/compare: pqp, Discord, Stoat, TeamSpeak 6 and Slack huddles in one feature table (price, open source, self-hosting, screen share, sound on a shared screen, watch party, Discord layout import, apps, ecosystem). Every cell links its source and carries the date it was checked (2026-10-16 at the time of writing); a cell nobody could verify says "not verified". It lists what pqp does not have yet.
+- https://pqp.gg/vs-discord, https://pqp.gg/compare/stoat, https://pqp.gg/compare/teamspeak, https://pqp.gg/compare/slack: one page per product, with the same rows.
+- https://pqp.gg/tela: four ways to share a screen from the browser.
+- https://pqp.gg/blog: release notes, and six guides (Portuguese; the Discord comparison and the watch party guide also in English): pqp vs Discord, watching a film together, screen share with audio, moving a Discord server, voice chat for a streamer's community, and installing on Android, iPhone and PC.
+
+The comparison pages state features, not opinions about companies. If a line is out of date, the corrections address is contato@pqp.gg.
 
 ## Open source and self-hosting
 
-The whole product is at https://github.com/rafaelcg/pqp under the AGPL. It is a pnpm monorepo: a React and Vite client, a Node API with WebSocket chat and voice signaling, Postgres, a shared Zod protocol package, an Electron shell, and the native iOS and Android clients. The README and `docs/` cover running it locally and deploying it. The hosted instance runs the SPA on Cloudflare Pages and the API on Fly.io in São Paulo. Analytics, advertising tags and donation links are gated behind hosted-only environment variables so a self-host does not inherit them.
+The whole product is at https://github.com/rafaelcg/pqp under the AGPL. It is a pnpm monorepo: a React and Vite client, a Node API with WebSocket chat and voice signaling, Postgres, a shared Zod protocol package, an Electron shell, and the native iOS and Android clients. The README and `docs/` cover running it locally and deploying it. A self-hosted copy needs Postgres and its own Clerk account today: there is no Clerk-free sign-in path yet. The hosted instance runs the SPA on Cloudflare Pages and the API on a server in São Paulo behind Cloudflare, with a managed Postgres. Analytics, advertising tags and donation links are gated behind hosted-only environment variables so a self-host does not inherit them.
 
 ## Content and safety
 
