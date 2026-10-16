@@ -47,8 +47,8 @@ import { cn } from "@/lib/utils";
  *
  * ONE DECODE. The picture is decoded once, here, with the same
  * `createImageBitmap(…, { imageOrientation: "from-image" })` the upload has
- * always used, and the preview is drawn from that bitmap into a canvas the size
- * of the frame. Save hands the bitmap itself to the upload, which crops from it
+ * always used. The preview is drawn into a canvas the size of the frame, from
+ * a copy of that bitmap no more than 2048 pixels on a side. Save hands the bitmap itself to the upload, which crops from it
  * and closes it. A full-resolution decode of a 48 MP phone photo is about
  * 190 MB, so a preview `<img>` plus a second decode for the upload was two of
  * them at once, which is how a tab gets evicted on a phone.
@@ -69,6 +69,39 @@ const ASPECT: Record<ImageCropShape, number> = {
 const KEY_PAN_STEP = 10;
 /** One + or - press. Ten presses from 1 is about 2.6×. */
 const KEY_ZOOM_STEP = 1.1;
+
+/** The longest side of the copy the frame redraws from while it moves. */
+const PREVIEW_MAX_SIDE = 2048;
+
+/**
+ * A bounded copy of the picture for the frame to redraw from on every pan and
+ * zoom, so a 48 MP photo is resampled once here rather than on every pointer
+ * move. About 12 MB at most. The full bitmap is left alone for the upload.
+ */
+function previewOf(bitmap: ImageBitmap): HTMLCanvasElement | ImageBitmap {
+  const scale = Math.min(1, PREVIEW_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  if (scale >= 1) {
+    return bitmap;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return bitmap;
+  }
+  context.imageSmoothingQuality = "high";
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+/** Lets go of a preview copy's pixels now rather than at the next GC. */
+function releasePreview(preview: HTMLCanvasElement | ImageBitmap | null) {
+  if (preview instanceof HTMLCanvasElement) {
+    preview.width = 0;
+    preview.height = 0;
+  }
+}
 
 interface ImageCropDialogProps {
   /** The picked file. The dialog is open while this is set. */
@@ -96,8 +129,10 @@ export function ImageCropDialog({
   // frame element itself: the dialog may mount it a render after it opens.
   const [frame, setFrame] = useState<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  /** The decoded picture, while this dialog still owns it. */
-  const [picture, setPicture] = useState<ImageBitmap | null>(null);
+  /** What the frame draws: a bounded copy of the decoded picture. */
+  const [preview, setPreview] = useState<HTMLCanvasElement | ImageBitmap | null>(
+    null,
+  );
   /** The same bitmap, for the cleanup that closes it unless Save handed it on. */
   const ownedRef = useRef<ImageBitmap | null>(null);
   const [view, setView] = useState<CropView | null>(null);
@@ -114,7 +149,7 @@ export function ImageCropDialog({
   // unless Save handed it to the upload first. EXIF orientation is applied
   // here, so the frame and the upload see the same upright picture.
   useEffect(() => {
-    setPicture(null);
+    setPreview(null);
     setView(null);
     setUnreadable(false);
     setSaved(false);
@@ -122,6 +157,7 @@ export function ImageCropDialog({
       return;
     }
     let alive = true;
+    let copy: HTMLCanvasElement | ImageBitmap | null = null;
     createImageBitmap(file, { imageOrientation: "from-image" })
       .then((bitmap) => {
         if (!alive) {
@@ -134,7 +170,8 @@ export function ImageCropDialog({
           return;
         }
         ownedRef.current = bitmap;
-        setPicture(bitmap);
+        copy = previewOf(bitmap);
+        setPreview(copy);
         setView(initialCropView(bitmap.width, bitmap.height, aspect));
       })
       .catch(() => {
@@ -144,6 +181,7 @@ export function ImageCropDialog({
       });
     return () => {
       alive = false;
+      releasePreview(copy);
       ownedRef.current?.close();
       ownedRef.current = null;
     };
@@ -295,36 +333,39 @@ export function ImageCropDialog({
     update(change);
   }
 
-  const layout = view && frameWidth > 0 ? imageLayout(view, frameWidth) : null;
   const isGif = file?.type === "image/gif";
 
-  // The preview: the bitmap drawn at the view's position into a canvas the
-  // frame's size (in device pixels, so it stays sharp), never a second copy of
-  // the full picture.
-  useLayoutEffect(() => {
+  // The preview: the bounded copy drawn at the view's position into a canvas
+  // the frame's size (in device pixels, so it stays sharp), at most once per
+  // animation frame however many pointer moves arrive in it.
+  useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !picture || !layout || saved) {
+    if (!canvas || !preview || !view || frameWidth <= 0 || saved) {
       return;
     }
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.max(1, Math.round(frameWidth * ratio));
-    const height = Math.max(1, Math.round((frameWidth / aspect) * ratio));
-    if (canvas.width !== width) canvas.width = width;
-    if (canvas.height !== height) canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) {
-      return;
-    }
-    context.imageSmoothingQuality = "medium";
-    context.clearRect(0, 0, width, height);
-    context.drawImage(
-      picture,
-      layout.left * ratio,
-      layout.top * ratio,
-      layout.width * ratio,
-      layout.height * ratio,
-    );
-  });
+    const frameRequest = requestAnimationFrame(() => {
+      const layout = imageLayout(view, frameWidth);
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.round(frameWidth * ratio));
+      const height = Math.max(1, Math.round((frameWidth / aspect) * ratio));
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) {
+        return;
+      }
+      context.imageSmoothingQuality = "medium";
+      context.clearRect(0, 0, width, height);
+      context.drawImage(
+        preview,
+        layout.left * ratio,
+        layout.top * ratio,
+        layout.width * ratio,
+        layout.height * ratio,
+      );
+    });
+    return () => cancelAnimationFrame(frameRequest);
+  }, [preview, view, frameWidth, aspect, saved]);
 
   function save() {
     const bitmap = ownedRef.current;
@@ -394,7 +435,7 @@ export function ImageCropDialog({
           onPointerCancel={onPointerEnd}
           onKeyDown={onKeyDown}
         >
-          {picture && !saved ? (
+          {preview && !saved ? (
             <canvas
               ref={canvasRef}
               aria-hidden
