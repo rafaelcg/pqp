@@ -525,6 +525,66 @@ export async function listForumPosts(
   };
 }
 
+/**
+ * The filters a reader can turn on (tags, status, My posts) as WHERE
+ * fragments on `forum_posts p`. One place for the list AND the pinned rows
+ * above it, so a pinned post never stays on screen under a filter it does
+ * not match (docs/plans/FORUM_CHANNELS.md: pinned read with "same filters").
+ */
+function filterClauses(
+  args: { tags: string[]; status: "open" | "resolved" | null; authorId: string | null },
+  param: (value: unknown) => string,
+): string[] {
+  const clauses: string[] = [];
+  if (args.tags.length > 0) {
+    // AND: the post carries EVERY selected tag. One probe of
+    // forum_post_tags' primary key per selected tag.
+    const tags = param(args.tags);
+    clauses.push(
+      `(SELECT count(*) FROM forum_post_tags t
+         WHERE t.post_id = p.channel_id AND t.tag_id = ANY(${tags}::uuid[]))
+       = cardinality(${tags}::uuid[])`,
+    );
+  }
+  if (args.status) {
+    clauses.push(
+      args.status === "resolved" ? "p.resolved_at IS NOT NULL" : "p.resolved_at IS NULL",
+    );
+  }
+  if (args.authorId) {
+    clauses.push(`p.author_id = ${param(args.authorId)}`);
+  }
+  return clauses;
+}
+
+/** The pinned posts (at most FORUM_MAX_PINNED) that match the active filters. */
+async function readPinnedIds(args: {
+  forumId: string;
+  tags: string[];
+  status: "open" | "resolved" | null;
+  authorId: string | null;
+}): Promise<string[]> {
+  const params: unknown[] = [args.forumId];
+  const param = (value: unknown) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  const where = [
+    "p.forum_id = $1",
+    "p.pinned_at IS NOT NULL",
+    "p.published_at IS NOT NULL",
+    ...filterClauses(args, param),
+  ];
+  const result = await getPool().query<{ channel_id: string }>(
+    `SELECT p.channel_id FROM forum_posts p
+      WHERE ${where.join(" AND ")}
+      ORDER BY p.pinned_at ASC, p.channel_id ASC
+      LIMIT ${FORUM_MAX_PINNED}`,
+    params,
+  );
+  return result.rows.map((row) => row.channel_id);
+}
+
 async function readSharedPage(args: {
   forumId: string;
   sort: ForumSort;
@@ -554,24 +614,7 @@ async function readSharedPage(args: {
       `(${column}, p.channel_id) < (${param(args.cursor.at)}::timestamptz, ${param(args.cursor.id)}::uuid)`,
     );
   }
-  if (args.tags.length > 0) {
-    // AND: the post carries EVERY selected tag. One probe of
-    // forum_post_tags' primary key per selected tag.
-    const tags = param(args.tags);
-    where.push(
-      `(SELECT count(*) FROM forum_post_tags t
-         WHERE t.post_id = p.channel_id AND t.tag_id = ANY(${tags}::uuid[]))
-       = cardinality(${tags}::uuid[])`,
-    );
-  }
-  if (args.status) {
-    where.push(
-      args.status === "resolved" ? "p.resolved_at IS NOT NULL" : "p.resolved_at IS NULL",
-    );
-  }
-  if (args.authorId) {
-    where.push(`p.author_id = ${param(args.authorId)}`);
-  }
+  where.push(...filterClauses(args, param));
   let join = "";
   if (args.q) {
     const unaccent = await hasUnaccent();
@@ -603,16 +646,7 @@ async function readSharedPage(args: {
     ? await Promise.all([
         args.q
           ? Promise.resolve([] as string[])
-          : getPool()
-              .query<{ channel_id: string }>(
-                `SELECT channel_id FROM forum_posts
-                  WHERE forum_id = $1 AND pinned_at IS NOT NULL
-                    AND published_at IS NOT NULL
-                  ORDER BY pinned_at ASC, channel_id ASC
-                  LIMIT ${FORUM_MAX_PINNED}`,
-                [args.forumId],
-              )
-              .then((result) => result.rows.map((row) => row.channel_id)),
+          : readPinnedIds(args),
         getPool()
           .query<{ posts: number; open: number }>(
             `SELECT count(*)::int AS posts,

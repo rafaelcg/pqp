@@ -214,8 +214,8 @@ describe("forum list reducer", () => {
     expect(order(next)).toEqual(["Post 30", "Post 20"]);
   });
 
-  it("keeps pinned posts above every filter, and moves posts in and out of pins", () => {
-    const filters: ForumFilters = { ...activity, status: "resolved" };
+  it("a pinned post answers to the filters, and moves posts in and out of pins", () => {
+    const filters: ForumFilters = { ...activity, status: "open" };
     const pinnedOpen = post(2, { pinnedAt: at(50) });
     const next = applyForumUpsert(base, pinnedOpen, {
       filters,
@@ -224,6 +224,23 @@ describe("forum list reducer", () => {
     });
     expect(next.pinned.map((one) => one.id)).toEqual([id(2)]);
     expect(next.posts.some((one) => one.id === id(2))).toBe(false);
+
+    // Resolved under Open: the pin leaves the screen altogether, not the list.
+    const resolved = applyForumUpsert(
+      next,
+      post(2, { pinnedAt: at(50), resolvedAt: at(60) }),
+      { filters, viewerId: ME, hold: false },
+    );
+    expect(resolved.pinned).toEqual([]);
+    expect(resolved.posts.some((one) => one.id === id(2))).toBe(false);
+    // A pin the reader's tag filter does not match never shows either.
+    const tagged = applyForumUpsert(
+      base,
+      post(3, { pinnedAt: at(50) }),
+      { filters: { ...activity, tagIds: ["tag-x"] }, viewerId: ME, hold: false },
+    );
+    expect(tagged.pinned).toEqual([]);
+    expect(tagged.posts.some((one) => one.id === id(3))).toBe(false);
 
     const unpinned = applyForumUpsert(
       next,
