@@ -17,6 +17,9 @@ struct OwnStatusMenu: Equatable {
     private(set) var shown: String
     private(set) var confirmed: String
     private var latest = 0
+    /// The newest write that has succeeded. An older write answering after it is
+    /// history: the last choice made is the one the server is taken to hold.
+    private var confirmedToken = 0
     private(set) var inFlight = 0
 
     init(_ status: String = "online") {
@@ -40,7 +43,10 @@ struct OwnStatusMenu: Equatable {
 
     mutating func succeeded(_ token: Int, status: String) {
         inFlight = max(0, inFlight - 1)
-        confirmed = status
+        if token >= confirmedToken {
+            confirmedToken = token
+            confirmed = status
+        }
         // The last write in the air has answered: the menu shows what the server
         // holds (an older choice succeeding after a newer one failed).
         if inFlight == 0 { shown = confirmed }

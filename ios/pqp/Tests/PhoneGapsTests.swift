@@ -180,6 +180,16 @@ final class PhoneGapsTests: XCTestCase {
         XCTAssertEqual(menu.confirmed, "dnd")
     }
 
+    func testAnOlderWriteAnsweringAfterANewerOneSucceededChangesNothing() {
+        var menu = OwnStatusMenu("online")
+        let dnd = menu.choose("dnd")
+        let online = menu.choose("online")
+        menu.succeeded(online, status: "online")
+        menu.succeeded(dnd, status: "dnd")
+        XCTAssertEqual(menu.confirmed, "online")
+        XCTAssertEqual(menu.shown, "online")
+    }
+
     func testARemoteStatusShowsAtOnceWhenNothingIsInTheAir() {
         var menu = OwnStatusMenu("online")
         menu.remote("dnd")
