@@ -1033,7 +1033,10 @@ struct ChannelListView: View {
 
     private func refreshUnread() async {
         guard !channels.isEmpty else { return }
-        if let entries = try? await session.api.unread(serverId: server.id) {
+        // An answer that outlives a sign-out is the previous account's: it is
+        // neither shown nor published into the next one's tiles.
+        let epoch = session.unreadEpoch
+        if let entries = try? await session.api.unread(serverId: server.id), epoch == session.unreadEpoch {
             unread = Dictionary(uniqueKeysWithValues: entries.map { ($0.channelId, $0) })
             unreadFetched = true
         }
