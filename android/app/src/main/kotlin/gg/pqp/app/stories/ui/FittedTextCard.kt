@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -71,26 +72,30 @@ fun FittedTextCard(
         )
         val boxWidth = box.width.roundToInt()
         val boxHeight = box.height.roundToInt()
-        val size = remember(text, boxWidth, boxHeight, family) {
-            StoryTextFit.fontSize { sp ->
-                val style = TextStyle(
-                    fontSize = sp.sp,
-                    lineHeight = (sp + 6).sp,
-                    fontFamily = family,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center,
-                )
-                measurer.measure(text, style, constraints = Constraints(maxWidth = boxWidth)).size.height <= boxHeight
-            }
+        // The style the words are drawn with, and measured with: `Text` merges the ambient style (letter spacing and
+        // all), so a standalone one would wrap a line differently from what is on screen.
+        val base = LocalTextStyle.current
+        fun styleAt(sp: Int) = base.merge(
+            TextStyle(
+                fontSize = sp.sp,
+                lineHeight = (sp + 6).sp,
+                fontFamily = family,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+            ),
+        )
+        // Heights by size, kept while the words and the width are the same: the box's height moves on every frame of
+        // the keyboard's animation, and each size is laid out once, not once per frame.
+        val heights = remember(text, boxWidth, family, base) { mutableMapOf<Int, Int>() }
+        val size = StoryTextFit.fontSize { sp ->
+            heights.getOrPut(sp) {
+                measurer.measure(text, styleAt(sp), constraints = Constraints(maxWidth = boxWidth)).size.height
+            } <= boxHeight
         }
         Text(
             text = text,
             color = color,
-            fontSize = size.sp,
-            lineHeight = (size + 6).sp,
-            fontFamily = family,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
+            style = styleAt(size),
             modifier = Modifier
                 .offset { IntOffset(box.left.roundToInt(), box.top.roundToInt()) }
                 .size(
