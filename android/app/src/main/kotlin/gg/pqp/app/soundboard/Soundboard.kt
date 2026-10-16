@@ -11,7 +11,16 @@ import gg.pqp.app.core.Backend
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.core.runSuspendCatching
 import gg.pqp.app.social.getJson
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -150,9 +159,13 @@ object SoundboardFrames {
  *
  * Application-scoped, like the voice controller: the call outlives every screen. A clip plays only while this
  * device is seated in the frame's channel and not deafened (a deafened client draws nothing and plays nothing,
- * `soundboardPlayedMessageSchema`); a custom clip's file is fetched from the server's catalog the first time it
- * is heard, and the catalog is read again, at most every [CATALOG_REFRESH_MS], when a play names a clip it does
- * not have (somebody added one since).
+ * `soundboardPlayedMessageSchema`), and that is checked again at the moment a clip that had to be looked up or
+ * downloaded is about to sound, so leaving or deafening mid-lookup stays silent.
+ *
+ * A custom clip is downloaded once to the cache and played from there; the catalog is read again, at most every
+ * [CATALOG_REFRESH_MS], when a play names a clip it does not have, by ONE shared read that every waiting play
+ * resolves against. A clip whose file would not download (its link expired) forgets the catalog so the next play
+ * reads a fresh one.
  */
 class SoundboardController(
     private val context: Context,
@@ -172,9 +185,17 @@ class SoundboardController(
 
     private val serverByChannel = HashMap<String, String>()
     private var catalogAt = 0L
+    private var catalogRead: Deferred<List<CustomSound>?>? = null
+
+    /** Which refresh is the current one: an older one that finishes late writes nothing. */
+    private var refreshGeneration = 0
+    private var refreshJob: Job? = null
 
     sealed interface Availability {
+        /** Not asked yet, or the last ask failed and is being tried again: nothing is drawn. */
         data object Unknown : Availability
+
+        /** Asked and answered: no board here (a conversation call, or the flag is off). */
         data object Off : Availability
         data class On(val channelId: String, val serverId: String, val sounds: List<CustomSound>) : Availability
     }
@@ -191,8 +212,10 @@ class SoundboardController(
 
     // --- hearing ---
 
+    private fun stillAudible(channelId: String): Boolean = channelId == seatedChannelId() && !deafened()
+
     private fun onPlayed(played: PlayedSound) {
-        if (played.channelId != seatedChannelId() || deafened()) return
+        if (!stillAudible(played.channelId)) return
         val builtin = SoundboardBuiltins.byId(played.soundId)
         if (builtin != null) {
             play(builtin.raw, null, LISTENER_VOLUME.toFloat())
@@ -200,25 +223,40 @@ class SoundboardController(
         }
         scope.launch {
             val sound = customSound(played.channelId, played.soundId) ?: return@launch
-            val url = Backend.absolute(sound.url) ?: return@launch
-            play(0, url, SoundboardFrames.gain(LISTENER_VOLUME, sound.volume))
+            val file = clipFile(sound) ?: return@launch
+            // The lookup and the download took time: the call may have been left, or the phone deafened, since.
+            if (!stillAudible(played.channelId)) return@launch
+            play(0, file, SoundboardFrames.gain(LISTENER_VOLUME, sound.volume))
         }
     }
 
-    private suspend fun customSound(channelId: String, soundId: String): CustomSound? {
+    private fun known(channelId: String, soundId: String): CustomSound? =
         (_available.value as? Availability.On)?.takeIf { it.channelId == channelId }
-            ?.sounds?.firstOrNull { it.id == soundId }?.let { return it }
-        // Not known: the catalog may be older than the clip.
-        val at = now()
-        if (at - catalogAt < CATALOG_REFRESH_MS) return null
-        catalogAt = at
-        val serverId = serverOf(channelId) ?: return null
-        val page = runSuspendCatching { session.api.soundboard(serverId) }.getOrNull() ?: return null
-        _available.value = Availability.On(channelId, serverId, page.sounds)
-        return page.sounds.firstOrNull { it.id == soundId }
+            ?.sounds?.firstOrNull { it.id == soundId }
+
+    private suspend fun customSound(channelId: String, soundId: String): CustomSound? {
+        known(channelId, soundId)?.let { return it }
+        // Not known: the catalog may be older than the clip. One read at a time; every waiting play resolves against it.
+        val running = catalogRead
+        val read = when {
+            running != null && running.isActive -> running
+            now() - catalogAt < CATALOG_REFRESH_MS -> return null
+            else -> scope.async { readCatalog(channelId) }.also { catalogRead = it }
+        }
+        val sounds = read.await() ?: return null
+        return sounds.firstOrNull { it.id == soundId }
     }
 
-    private fun play(@RawRes raw: Int, url: String?, volume: Float) {
+    /** Read the catalog of [channelId]'s server and publish it; null when it could not be read. */
+    private suspend fun readCatalog(channelId: String): List<CustomSound>? {
+        val serverId = (serverOf(channelId) as? ServerLookup.Found)?.serverId ?: return null
+        val page = runSuspendCatching { session.api.soundboard(serverId) }.getOrNull() ?: return null
+        catalogAt = now()
+        if (channelId == seatedChannelId()) _available.value = Availability.On(channelId, serverId, page.sounds)
+        return page.sounds
+    }
+
+    private fun play(@RawRes raw: Int, file: File?, volume: Float) {
         // Twelve at once is the room's own cap; a phone holds fewer players than that and the extra is dropped.
         if (live.size >= MAX_LIVE) return
         val player = MediaPlayer()
@@ -230,19 +268,25 @@ class SoundboardController(
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .build(),
             )
-            if (url != null) {
-                player.setDataSource(url)
+            if (file != null) {
+                player.setDataSource(file.absolutePath)
             } else {
                 context.resources.openRawResourceFd(raw).use { player.setDataSource(it.fileDescriptor, it.startOffset, it.length) }
             }
             player.setVolume(volume, volume)
             player.setOnPreparedListener { it.start() }
             player.setOnCompletionListener { release(it) }
-            player.setOnErrorListener { it, _, _ -> release(it); true }
+            player.setOnErrorListener { it, _, _ ->
+                // A file that will not play is not kept: the next play downloads it again.
+                file?.delete()
+                release(it)
+                true
+            }
             live += player
             player.prepareAsync()
         } catch (e: Exception) {
             Log.w(TAG, "clip would not play: ${e.message}")
+            file?.delete()
             release(player)
         }
     }
@@ -252,44 +296,112 @@ class SoundboardController(
         runCatching { player.release() }
     }
 
-    // --- playing ---
+    // --- the clips on disk ---
 
-    /** Which server the call's channel belongs to: asked of the server list once and remembered. */
-    private suspend fun serverOf(channelId: String): String? {
-        serverByChannel[channelId]?.let { return it }
-        for (server in session.servers.value) {
-            val channels = runSuspendCatching { session.api.channels(server.id) }.getOrNull() ?: continue
-            channels.forEach { serverByChannel[it.id] = it.serverId ?: server.id }
-            serverByChannel[channelId]?.let { return it }
+    /**
+     * The custom clip as a file in the cache, downloaded once. The name carries the clip's id and the storage
+     * path of its link without the signature, so the same clip is never fetched twice and a replaced one is.
+     * A link that will not download (it expired, or storage had none) forgets the catalog, so the next play
+     * reads a fresh one instead of reusing the dead link for the rest of the call.
+     */
+    private suspend fun clipFile(sound: CustomSound): File? {
+        val url = Backend.absolute(sound.url)
+        if (url == null) {
+            catalogAt = 0
+            return null
         }
-        return null
+        val dir = File(context.cacheDir, "soundboard").apply { mkdirs() }
+        val file = File(dir, "${sound.id}-${url.substringBefore('?').hashCode().toUInt()}.clip")
+        if (file.exists() && file.length() > 0) return file
+        val ok = withContext(Dispatchers.IO) {
+            runCatching {
+                val request = okhttp3.Request.Builder().url(url).build()
+                session.http.newCall(request).execute().use { response ->
+                    check(response.isSuccessful) { "HTTP ${response.code}" }
+                    val partial = File(dir, "${file.name}.part")
+                    partial.outputStream().use { out -> response.body.byteStream().copyTo(out) }
+                    check(partial.renameTo(file)) { "could not move into place" }
+                }
+            }.isSuccess
+        }
+        if (!ok) {
+            catalogAt = 0
+            file.delete()
+            return null
+        }
+        return file
     }
+
+    // --- which server ---
+
+    private sealed interface ServerLookup {
+        data class Found(val serverId: String) : ServerLookup
+
+        /** Every server was read and none holds the channel: a conversation call. */
+        data object None : ServerLookup
+
+        /** At least one server could not be read: do not conclude anything. */
+        data object Failed : ServerLookup
+    }
+
+    /** Which server the call's channel belongs to: every server's channels are read at once, and remembered. */
+    private suspend fun serverOf(channelId: String): ServerLookup {
+        serverByChannel[channelId]?.let { return ServerLookup.Found(it) }
+        val servers = session.servers.value
+        val reads = coroutineScope {
+            servers.map { server ->
+                async { server to runSuspendCatching { session.api.channels(server.id) }.getOrNull() }
+            }.awaitAll()
+        }
+        reads.forEach { (server, channels) -> channels?.forEach { serverByChannel[it.id] = it.serverId ?: server.id } }
+        serverByChannel[channelId]?.let { return ServerLookup.Found(it) }
+        return if (reads.any { it.second == null }) ServerLookup.Failed else ServerLookup.None
+    }
+
+    // --- the board ---
 
     /**
      * Read whether the board is on for [channelId]'s server and what clips it holds. Called when the call bar
-     * shows; nothing is drawn while the answer is [Availability.Unknown] or [Availability.Off].
+     * shows. Only the latest call's answer is written (an older one finishing late is ignored, and a newer ask
+     * cancels it), and a read that FAILED leaves the state unknown and is tried again with a growing wait: `Off`
+     * is only ever the server's own answer, never a dropped request.
      */
     fun refresh(channelId: String?) {
+        refreshJob?.cancel()
+        val generation = ++refreshGeneration
         if (channelId == null) {
             _available.value = Availability.Unknown
             return
         }
-        scope.launch {
-            val serverId = serverOf(channelId)
-            if (serverId == null) {
-                // A conversation call, or a server this phone cannot place: no board.
-                _available.value = Availability.Off
-                return@launch
+        refreshJob = scope.launch {
+            var wait = RETRY_BASE_MS
+            repeat(RETRY_LIMIT) {
+                val answer = ask(channelId)
+                if (generation != refreshGeneration) return@launch
+                if (answer != null) {
+                    _available.value = answer
+                    return@launch
+                }
+                _available.value = Availability.Unknown
+                delay(wait)
+                wait *= 2
             }
-            val on = runSuspendCatching { session.api.voiceConfig(serverId) }.getOrNull()?.soundboard == true
-            if (!on) {
-                _available.value = Availability.Off
-                return@launch
-            }
-            val page = runSuspendCatching { session.api.soundboard(serverId) }.getOrNull()
-            catalogAt = now()
-            _available.value = Availability.On(channelId, serverId, page?.sounds.orEmpty())
         }
+    }
+
+    /** The server's answer for [channelId], or null when a request failed and nothing can be said yet. */
+    private suspend fun ask(channelId: String): Availability? {
+        val serverId = when (val found = serverOf(channelId)) {
+            is ServerLookup.Found -> found.serverId
+            // A conversation call: no server, no board.
+            ServerLookup.None -> return Availability.Off
+            ServerLookup.Failed -> return null
+        }
+        val config = runSuspendCatching { session.api.voiceConfig(serverId) }.getOrNull() ?: return null
+        if (!config.soundboard) return Availability.Off
+        val page = runSuspendCatching { session.api.soundboard(serverId) }.getOrNull() ?: return null
+        catalogAt = now()
+        return Availability.On(channelId, serverId, page.sounds)
     }
 
     /** A tile was tapped. False when the budget said wait (nothing was sent). */
@@ -308,5 +420,9 @@ class SoundboardController(
         const val LISTENER_VOLUME = 0.6
         const val MAX_LIVE = 8
         const val CATALOG_REFRESH_MS = 15_000L
+
+        /** A failed read of the board is asked again after 3 s, 6 s, 12 s, 24 s, then left. */
+        const val RETRY_BASE_MS = 3_000L
+        const val RETRY_LIMIT = 5
     }
 }
