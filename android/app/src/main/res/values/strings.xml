@@ -1439,4 +1439,39 @@
     <!-- A friendship started -->
     <string name="friend_accepted_title">You and %1$s are friends now</string>
     <string name="friend_accepted_cta">Say hi</string>
+
+    <!-- Public access: the address and the directory (server list menu, channel list menu, sheet) -->
+    <string name="community_menu">Public access</string>
+    <string name="community_sheet_title">Public access</string>
+    <string name="community_badge">Public</string>
+    <string name="community_state_private">Private</string>
+    <string name="community_state_private_body">Only people with an invite can join.</string>
+    <string name="community_state_public">Public link</string>
+    <string name="community_state_public_body">Anyone with the link joins with one tap, no invite, and sees every channel that is not restricted. Nobody finds it without being sent the link.</string>
+    <string name="community_state_listed">In the directory</string>
+    <string name="community_state_listed_body">Anyone with a pqp account can find it in the directory and join, no invite, and sees every channel that is not restricted.</string>
+    <string name="community_address_title">Public address</string>
+    <string name="community_address_hint">Creates a page anyone with the link can join from. The owner and people who manage the server can change this.</string>
+    <string name="community_address_locked">This community is in the directory. Only the owner can take it out, so the address cannot be turned off here.</string>
+    <string name="community_directory_title">Show in the directory</string>
+    <string name="community_directory_hint">Anyone with an account can find it and join without an invite. Only the owner can change this.</string>
+    <string name="community_directory_owner_only">Only the owner turns the directory on or off. The public address above is yours to change.</string>
+    <string name="community_directory_needs_address">Turn the public address on first.</string>
+    <string name="community_copy_link">Copy link</string>
+    <string name="community_suspended">The people who run pqp took this community down. The room itself has not changed; only the public page and the directory listing are gone.</string>
+    <string name="community_moderation">Kicks, bans and private channels work the same. Reports about a public community go to the people who run pqp, who can take the page and the listing down.</string>
+    <string name="community_confirm_address_title">Make %1$s public?</string>
+    <string name="community_confirm_address_body">Anyone with the link can join with one tap, no invite, and will see every channel that is not restricted. Reports about it go to the people who run pqp.</string>
+    <string name="community_confirm_address_action">Make public</string>
+    <string name="community_confirm_directory_title">List %1$s in the directory?</string>
+    <string name="community_confirm_directory_body">Anyone with a pqp account can find it, join without an invite, and will see every channel that is not restricted. Only you, as the owner, can take it out again.</string>
+    <string name="community_confirm_directory_action">List it</string>
+    <string name="community_slug_label">Choose an address</string>
+    <string name="community_slug_taken">That address is taken. Try another one.</string>
+    <string name="community_slug_rejected">This name cannot become a web address. Type one.</string>
+    <string name="community_try_again">Try again</string>
+    <string name="community_load_failed">Could not load the public settings.</string>
+    <string name="community_save_failed">Could not save.</string>
+    <string name="community_no_access">Only people who manage this server can see this.</string>
+    <string name="community_unavailable">Public communities are not available here.</string>
 </resources>
