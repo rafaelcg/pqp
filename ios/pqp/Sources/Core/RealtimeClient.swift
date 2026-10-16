@@ -77,6 +77,15 @@ enum RealtimeEvent: Sendable {
     /// one may have just been switched on for this server). Content-free like
     /// `permissionsUpdate`, and only sent to people who can see what changed.
     case channelsUpdate(serverId: String)
+    /// This account is no longer in `serverId` (`kicked`, `banned`) or the server
+    /// is gone for everybody (`deleted`). Addressed per person, and it carries no
+    /// name: a client that does not hold the server has nothing to say. Before it
+    /// was handled, a removed server stayed on the list and its screens stayed
+    /// open until the app was relaunched.
+    case serverRemoved(serverId: String, reason: ServerRemovedReason)
+    /// The status this account's OTHER device just picked (`online`, `dnd` or
+    /// `invisible`; the raw choice, which only this account's own sockets see).
+    case ownStatus(String)
     /// This account's OTHER tab or device dragged (or moved) its own server
     /// list, and `serverIds` is the order as saved. Per person, sent on every
     /// socket the account holds. `origin` is the random string the saving
@@ -938,6 +947,8 @@ actor RealtimeClient {
         /// `server-order-update`: the saved order of this account's servers.
         let serverIds: [String]?
         let origin: String?
+        /// `own-status`: the raw manual choice.
+        let status: String?
         let mention: Bool?
         /// `channel-activity` for a conversation: the redacted preview line
         /// and who wrote it. All three absent for a server channel, and for a
@@ -1007,7 +1018,7 @@ actor RealtimeClient {
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
             case candidate, limit, transport, version, resumed, resumeToken
             case canSpeak, canStream
-            case serverIds, origin
+            case serverIds, origin, status
             case seq, size, joined, updated, left
             case conversationId, kind, caller, reason, thread, retryAfterMs, automodMessage
             // `self` is a Swift keyword, so the wire key is remapped.
@@ -1378,6 +1389,13 @@ actor RealtimeClient {
         case "permissions-update":
             guard let serverId = envelope.serverId else { return }
             event = .permissionsUpdate(serverId: serverId, version: envelope.version)
+        case "server-removed":
+            guard let serverId = envelope.serverId, let raw = envelope.reason,
+                  let reason = ServerRemovedReason(rawValue: raw) else { return }
+            event = .serverRemoved(serverId: serverId, reason: reason)
+        case "own-status":
+            guard let status = envelope.status else { return }
+            event = .ownStatus(status)
         case "server-order-update":
             guard let ids = envelope.serverIds else { return }
             event = .serverOrderUpdate(serverIds: ids, origin: envelope.origin)
@@ -1564,4 +1582,9 @@ actor RealtimeClient {
         }
         continuation?.yield(event)
     }
+}
+
+/// `serverRemovedSchema.reason` in `packages/shared/src/moderation.ts`.
+enum ServerRemovedReason: String, Sendable, Equatable {
+    case kicked, banned, deleted
 }

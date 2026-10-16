@@ -181,4 +181,34 @@ final class PhoneGapsTests: XCTestCase {
         let same = FriendsResponse(friends: [friend("a")], incoming: [], outgoing: [])
         XCTAssertTrue(FriendsDigest.newlyAccepted(before: same, after: same).isEmpty)
     }
+
+    // MARK: - Removed from a server
+
+    @MainActor
+    func testARemovedServerLeavesTheListWithItsSentence() throws {
+        let model = HomeModel()
+        let kept = try server("00000000-0000-4000-8000-000000000001")
+        let gone = try server("00000000-0000-4000-8000-000000000002")
+        model.servers = [kept, gone]
+        model.dropRemovedServer(gone.id, reason: .banned)
+        XCTAssertEqual(model.servers.map(\.id), [kept.id])
+        XCTAssertEqual(model.removalNotice, ServerRemovedCopy.sentence(.banned, server: gone.name))
+        XCTAssertTrue(model.removalNotice?.contains(gone.name) == true)
+        XCTAssertNil(model.error, "its own slot: a re-read of the hub clears `error`")
+    }
+
+    @MainActor
+    func testAServerThePhoneDoesNotHoldHasNothingToSay() throws {
+        let model = HomeModel()
+        model.servers = [try server("00000000-0000-4000-8000-000000000001")]
+        model.dropRemovedServer("00000000-0000-4000-8000-0000000000ff", reason: .kicked)
+        XCTAssertEqual(model.servers.count, 1)
+        XCTAssertNil(model.removalNotice)
+    }
+
+    func testEveryRemovalHasASentenceThatNamesTheServer() {
+        for reason: ServerRemovedReason in [.kicked, .banned, .deleted] {
+            XCTAssertTrue(ServerRemovedCopy.sentence(reason, server: "QG").contains("QG"), "\(reason)")
+        }
+    }
 }

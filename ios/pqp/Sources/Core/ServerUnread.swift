@@ -114,3 +114,36 @@ enum ServerUnread {
         return Indicator(showsPill: true, mentions: max(0, totals.mentions))
     }
 }
+
+/// A screen of a server closes itself when a `server-removed` frame names it
+/// (`SessionStore.removedServers`). Each screen of the server does this for
+/// itself: `dismiss()` from the list does not reliably pop what is pushed above
+/// it, so the chat closes first and the list after.
+private struct DismissWhenServerRemoved: ViewModifier {
+    @Environment(SessionStore.self) private var session
+    @Environment(\.dismiss) private var dismiss
+    let serverId: String?
+
+    func body(content: Content) -> some View {
+        content.onChange(of: session.removedRevision) { _, _ in
+            if let serverId, session.removedServers[serverId] != nil { dismiss() }
+        }
+    }
+}
+
+extension View {
+    func dismissWhenServerRemoved(_ serverId: String?) -> some View {
+        modifier(DismissWhenServerRemoved(serverId: serverId))
+    }
+}
+
+/// The one sentence a removal says (`SERVER_REMOVED_COPY` on the web).
+enum ServerRemovedCopy {
+    static func sentence(_ reason: ServerRemovedReason, server: String) -> String {
+        switch reason {
+        case .kicked: String(localized: "You were removed from \(server). You can come back with a new invite.")
+        case .banned: String(localized: "You were banned from \(server).")
+        case .deleted: String(localized: "The community \(server) was deleted and no longer exists for anybody.")
+        }
+    }
+}

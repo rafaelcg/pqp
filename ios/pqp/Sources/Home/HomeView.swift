@@ -543,6 +543,11 @@ final class HomeModel {
                 Task { await self.refreshFriendBadge() }
                 return
             }
+            // Removed from a server (or it was deleted): drop its tile, say why.
+            if case .serverRemoved(let serverId, let reason) = event {
+                self.dropRemovedServer(serverId, reason: reason)
+                return
+            }
             // The account's other device or tab moved its servers: follow it.
             if case .serverOrderUpdate(let ids, let origin) = event {
                 self.followRemoteServerOrder(ids, origin: origin)
@@ -986,6 +991,31 @@ final class HomeModel {
         }
     }
 
+    /// A `server-removed` frame: the server leaves the list, and one sentence
+    /// says why (the web puts it in the error slot too). A server this phone does
+    /// not hold has nothing to update and nothing to say. The owner's own delete
+    /// is quiet: telling them what they just did is noise.
+    func dropRemovedServer(_ serverId: String, reason: ServerRemovedReason) {
+        guard let gone = servers.first(where: { $0.id == serverId }) else { return }
+        servers.removeAll { $0.id == serverId }
+        session?.noteServerUnread(serverId, .none)
+        if reason == .deleted && gone.role == "owner" { return }
+        // Its own slot, not `error`: the hub re-reads on every appear (it is
+        // about to, as the closing screen hands the stack back) and a re-read
+        // clears `error`, which would wipe the sentence before anyone saw it.
+        removalNotice = ServerRemovedCopy.sentence(reason, server: gone.name)
+        removalNoticeTask?.cancel()
+        removalNoticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(12))
+            guard !Task.isCancelled else { return }
+            self?.removalNotice = nil
+        }
+    }
+
+    /// Said once after a removal, for a few seconds (`dropRemovedServer`).
+    var removalNotice: String?
+    @ObservationIgnored private var removalNoticeTask: Task<Void, Never>?
+
     /// The server list as the server has it now: only the ORDER is taken, every
     /// other field on the rows stays as it is.
     private func reloadServerOrder() async {
@@ -1112,6 +1142,13 @@ struct HubView: View {
                     VStack(alignment: .leading, spacing: 22) {
                         if let error = model.error {
                             errorNote(error)
+                        }
+                        if let notice = model.removalNotice {
+                            Text(notice)
+                                .font(Typography.callout)
+                                .foregroundStyle(Palette.warning)
+                                .padding(.horizontal, Metrics.hPadding)
+                                .accessibilityIdentifier("hub.removalNotice")
                         }
                         // First, because on a fresh account it is the reason the
                         // screen is not empty — and because two of its three
@@ -1994,6 +2031,8 @@ struct ProfileView: View {
     @Environment(SessionStore.self) private var session
     @State private var showingSettings = false
     @State private var manualStatus = "online"
+    /// A write of this screen's own is in the air.
+    @State private var statusSaving = false
 
     /// Only the two assertable states plus the default. `idle` is absent on
     /// purpose — it is a fact the device reports, not an opinion to pick.
@@ -2049,6 +2088,13 @@ struct ProfileView: View {
         .task {
             manualStatus = (try? await session.api.preferences())?.status ?? "online"
         }
+        // Another device of this account picked a status: follow it, unless this
+        // screen has a write of its own in the air (that answer is the truth and
+        // an older frame must not flick the menu back mid-choice).
+        .onChange(of: session.remoteOwnStatus) { _, next in
+            guard let next, !statusSaving else { return }
+            manualStatus = next
+        }
     }
 
     private var statusMenu: some View {
@@ -2057,6 +2103,7 @@ struct ProfileView: View {
                 Button {
                     let previous = manualStatus
                     manualStatus = choice.value
+                    statusSaving = true
                     Task {
                         do {
                             _ = try await session.api.setStatus(choice.value)
@@ -2065,6 +2112,7 @@ struct ProfileView: View {
                             // leave the menu claiming a status nobody else sees.
                             manualStatus = previous
                         }
+                        statusSaving = false
                     }
                 } label: {
                     Label(choice.label, systemImage: manualStatus == choice.value ? "checkmark" : "circle")

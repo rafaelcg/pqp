@@ -89,6 +89,16 @@ final class SessionStore {
     /// unread is absent.
     var serverUnread: [String: ServerUnreadTotals] = [:]
 
+    /// Servers this account was removed from (or that were deleted) since launch,
+    /// with why. A screen of such a server watches `removedRevision` and
+    /// closes itself; the hub drops the tile.
+    private(set) var removedServers: [String: ServerRemovedReason] = [:]
+    private(set) var removedRevision = 0
+
+    /// The status another device of this account just chose, raw. The Tu screen
+    /// adopts it (`ProfileView`); nil until a frame arrives.
+    private(set) var remoteOwnStatus: String?
+
     /// The server whose channel list is on screen, so the hub does not count a
     /// frame the list is already counting.
     var openedServerId: String?
@@ -717,6 +727,8 @@ final class SessionStore {
         openedServerId = nil
         unreadEpoch += 1
         listPublishedAt = [:]
+        removedServers = [:]
+        remoteOwnStatus = nil
         answeredAgeGateThisLaunch = false
         PendingInvite.clear()
         pendingInviteCode = nil
@@ -787,6 +799,21 @@ final class SessionStore {
     /// opens the server, so the rosters sent at `auth` have to land somewhere.
     private static let occupancyHandlerKey = "voice-occupancy"
 
+    /// The two frames about the account itself, handled here (not in a screen)
+    /// because the screen they concern may not be the one on top, or on screen.
+    private func applyAccountFrame(_ event: RealtimeEvent) {
+        switch event {
+        case .serverRemoved(let serverId, let reason):
+            removedServers[serverId] = reason
+            removedRevision += 1
+            serverUnread.removeValue(forKey: serverId)
+        case .ownStatus(let status):
+            remoteOwnStatus = status
+        default:
+            break
+        }
+    }
+
     private func startRealtime() async {
         guard eventTask == nil else { return }
         eventHandlers[Self.cacheHandlerKey] = { event in
@@ -806,6 +833,7 @@ final class SessionStore {
                     // The new socket does not know what the old one was told.
                     Task { await self.realtime.sendIdle(true) }
                 }
+                self.applyAccountFrame(event)
                 for handler in self.eventHandlers.values {
                     handler(event)
                 }

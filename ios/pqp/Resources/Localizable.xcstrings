@@ -13712,6 +13712,36 @@
           }
         }
       }
+    },
+    "You were removed from %@. You can come back with a new invite." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu foi removido de %@. Dá pra voltar com um convite novo."
+          }
+        }
+      }
+    },
+    "You were banned from %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu foi banido de %@."
+          }
+        }
+      }
+    },
+    "The community %@ was deleted and no longer exists for anybody." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A comunidade %@ foi apagada e não existe mais pra ninguém."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
