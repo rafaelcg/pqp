@@ -21,7 +21,7 @@ import { RateCap } from "../../ambient/src/schedule.js";
 import { loadFacts } from "../src/facts.js";
 import { Budget } from "../src/budget.js";
 import { decideReply, makeEscalator } from "../src/bot.js";
-import { FIXED } from "../src/answer.js";
+import { FIXED, fallbackAnswer } from "../src/answer.js";
 
 const facts = loadFacts(
   join(dirname(fileURLToPath(import.meta.url)), "..", "facts.md"),
@@ -67,7 +67,7 @@ function runtime(reply, overrides = {}) {
   rt.logged = logged;
   rt.escalate = (message, question, why) => {
     rt.logged.push({ event: "escalation", why });
-    return "essa eu não sei responder. @rafa consegue te dizer.";
+    return fallbackAnswer("rafa");
   };
   return rt;
 }
@@ -146,6 +146,26 @@ describe("decideReply: not knowing", () => {
     assert.equal(result.reason, "unknown");
     assert.match(result.post, /não sei responder/);
     assert.match(result.post, /@rafa/);
+  });
+
+  test("hands off to the team by that name, and still pings the owner", () => {
+    // The public sentence says "a equipe" and never a person's name, because
+    // /contact names nobody. The mention is how a human is actually pulled in,
+    // so it stays on the escalated line and only there.
+    const escalated = fallbackAnswer("@rafa");
+    assert.match(escalated, /a equipe/);
+    assert.match(escalated, /@rafa\b/);
+    const capped = fallbackAnswer("rafa", { canEscalate: false });
+    assert.match(capped, /a equipe/);
+    assert.doesNotMatch(capped, /@/);
+    for (const line of [escalated, capped, fallbackAnswer(null)]) {
+      assert.doesNotMatch(line, /rafael/i);
+    }
+  });
+
+  test("the fact file defers to the team, not to a named person", () => {
+    assert.match(facts.text, /que a equipe responde/);
+    assert.doesNotMatch(facts.text, /o Rafael responde/);
   });
 
   test("treats a screened-out answer as not knowing", async () => {

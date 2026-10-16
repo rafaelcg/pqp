@@ -8,7 +8,10 @@ import {
   FORUM_SHELL_TTL_MS,
   FORUM_SIMILAR_MAX,
   FORUM_UNREAD_CAP,
+  FORUM_TAG_PRESETS,
   FORUM_WEBHOOK_DEDUPE_HOURS_MAX,
+  forumTagIconForEmoji,
+  isForumTagPresetName,
   type ForumAcceptedAnswer,
   type ForumPostListResponse,
   type ForumPostSummary,
@@ -16,9 +19,12 @@ import {
   type ForumSettings,
   type ForumSort,
   type ForumTag,
+  type ForumTagIconKey,
+  type ForumTagPreset,
   type ListForumPostsQuery,
   type PutForumTagsRequest,
   type UpdateForumSettingsRequest,
+  type WebhookEmbed,
   stripMarkdownForPreview,
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
@@ -140,6 +146,7 @@ interface SummaryRow {
   resolved_message_id: string | null;
   om_id: string | null;
   om_body: string | null;
+  om_embeds: unknown;
   webhook_username: string | null;
   webhook_avatar_url: string | null;
   author_display_name: string | null;
@@ -163,7 +170,7 @@ const SUMMARY_SQL = `
   SELECT p.channel_id, p.forum_id, c.name AS title, p.author_id,
          p.created_at, p.last_activity_at, p.pinned_at, p.locked_at,
          p.resolved_at, p.resolved_message_id,
-         om.id AS om_id, om.body AS om_body,
+         om.id AS om_id, om.body AS om_body, om.webhook_embeds AS om_embeds,
          om.webhook_username, om.webhook_avatar_url,
          COALESCE(NULLIF(sm.nickname, ''), u.display_name) AS author_display_name,
          u.avatar_url AS author_avatar_url,
@@ -218,6 +225,43 @@ function flatten(body: string | null, max: number): string | null {
   return points.length > max ? points.slice(0, max).join("") : flat;
 }
 
+/**
+ * What a feed post says when its opening message has no text of its own: a
+ * monitoring alert or an RSS item often arrives as an embed and nothing else
+ * (`content` empty), and the card used to draw no preview line at all. The
+ * words come from the first embed that has any: its title, then the
+ * description, then each field as "name: value". A title that only repeats
+ * the post's own title is skipped, so the line never says the heading twice.
+ */
+export function embedPreviewText(embeds: unknown, postTitle: string): string {
+  if (!Array.isArray(embeds)) {
+    return "";
+  }
+  for (const raw of embeds) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const embed = raw as Partial<WebhookEmbed>;
+    const parts: string[] = [];
+    const title = typeof embed.title === "string" ? embed.title.trim() : "";
+    if (title && title !== postTitle.trim()) {
+      parts.push(title);
+    }
+    if (typeof embed.description === "string" && embed.description.trim()) {
+      parts.push(embed.description.trim());
+    }
+    for (const field of Array.isArray(embed.fields) ? embed.fields : []) {
+      if (field && typeof field.name === "string" && typeof field.value === "string") {
+        parts.push(`${field.name.trim()}: ${field.value.trim()}`);
+      }
+    }
+    if (parts.length > 0) {
+      return parts.join(" · ");
+    }
+  }
+  return "";
+}
+
 function toSummary(row: SummaryRow): Omit<
   ForumPostSummary,
   | "thumbnailUrl"
@@ -227,7 +271,10 @@ function toSummary(row: SummaryRow): Omit<
   | "thumbnailVideoUrl"
 > {
   const openingDeleted = row.om_id === null;
-  const preview = openingDeleted ? null : flatten(row.om_body, FORUM_PREVIEW_MAX);
+  const preview = openingDeleted
+    ? null
+    : (flatten(row.om_body, FORUM_PREVIEW_MAX) ??
+      flatten(embedPreviewText(row.om_embeds, row.title), FORUM_PREVIEW_MAX));
   const openingKind = openingDeleted
     ? null
     : row.opening_is_voice
@@ -478,6 +525,66 @@ export async function listForumPosts(
   };
 }
 
+/**
+ * The filters a reader can turn on (tags, status, My posts) as WHERE
+ * fragments on `forum_posts p`. One place for the list AND the pinned rows
+ * above it, so a pinned post never stays on screen under a filter it does
+ * not match (docs/plans/FORUM_CHANNELS.md: pinned read with "same filters").
+ */
+function filterClauses(
+  args: { tags: string[]; status: "open" | "resolved" | null; authorId: string | null },
+  param: (value: unknown) => string,
+): string[] {
+  const clauses: string[] = [];
+  if (args.tags.length > 0) {
+    // AND: the post carries EVERY selected tag. One probe of
+    // forum_post_tags' primary key per selected tag.
+    const tags = param(args.tags);
+    clauses.push(
+      `(SELECT count(*) FROM forum_post_tags t
+         WHERE t.post_id = p.channel_id AND t.tag_id = ANY(${tags}::uuid[]))
+       = cardinality(${tags}::uuid[])`,
+    );
+  }
+  if (args.status) {
+    clauses.push(
+      args.status === "resolved" ? "p.resolved_at IS NOT NULL" : "p.resolved_at IS NULL",
+    );
+  }
+  if (args.authorId) {
+    clauses.push(`p.author_id = ${param(args.authorId)}`);
+  }
+  return clauses;
+}
+
+/** The pinned posts (at most FORUM_MAX_PINNED) that match the active filters. */
+async function readPinnedIds(args: {
+  forumId: string;
+  tags: string[];
+  status: "open" | "resolved" | null;
+  authorId: string | null;
+}): Promise<string[]> {
+  const params: unknown[] = [args.forumId];
+  const param = (value: unknown) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  const where = [
+    "p.forum_id = $1",
+    "p.pinned_at IS NOT NULL",
+    "p.published_at IS NOT NULL",
+    ...filterClauses(args, param),
+  ];
+  const result = await getPool().query<{ channel_id: string }>(
+    `SELECT p.channel_id FROM forum_posts p
+      WHERE ${where.join(" AND ")}
+      ORDER BY p.pinned_at ASC, p.channel_id ASC
+      LIMIT ${FORUM_MAX_PINNED}`,
+    params,
+  );
+  return result.rows.map((row) => row.channel_id);
+}
+
 async function readSharedPage(args: {
   forumId: string;
   sort: ForumSort;
@@ -507,24 +614,7 @@ async function readSharedPage(args: {
       `(${column}, p.channel_id) < (${param(args.cursor.at)}::timestamptz, ${param(args.cursor.id)}::uuid)`,
     );
   }
-  if (args.tags.length > 0) {
-    // AND: the post carries EVERY selected tag. One probe of
-    // forum_post_tags' primary key per selected tag.
-    const tags = param(args.tags);
-    where.push(
-      `(SELECT count(*) FROM forum_post_tags t
-         WHERE t.post_id = p.channel_id AND t.tag_id = ANY(${tags}::uuid[]))
-       = cardinality(${tags}::uuid[])`,
-    );
-  }
-  if (args.status) {
-    where.push(
-      args.status === "resolved" ? "p.resolved_at IS NOT NULL" : "p.resolved_at IS NULL",
-    );
-  }
-  if (args.authorId) {
-    where.push(`p.author_id = ${param(args.authorId)}`);
-  }
+  where.push(...filterClauses(args, param));
   let join = "";
   if (args.q) {
     const unaccent = await hasUnaccent();
@@ -556,16 +646,7 @@ async function readSharedPage(args: {
     ? await Promise.all([
         args.q
           ? Promise.resolve([] as string[])
-          : getPool()
-              .query<{ channel_id: string }>(
-                `SELECT channel_id FROM forum_posts
-                  WHERE forum_id = $1 AND pinned_at IS NOT NULL
-                    AND published_at IS NOT NULL
-                  ORDER BY pinned_at ASC, channel_id ASC
-                  LIMIT ${FORUM_MAX_PINNED}`,
-                [args.forumId],
-              )
-              .then((result) => result.rows.map((row) => row.channel_id)),
+          : readPinnedIds(args),
         getPool()
           .query<{ posts: number; open: number }>(
             `SELECT count(*)::int AS posts,
@@ -809,6 +890,8 @@ interface TagRow {
   id: string;
   name: string;
   emoji: string | null;
+  icon: ForumTagIconKey | null;
+  preset: ForumTagPreset | null;
   moderated: boolean;
   position: number;
   post_count: number;
@@ -819,6 +902,8 @@ function mapTag(row: TagRow): ForumTag {
     id: row.id,
     name: row.name,
     emoji: row.emoji,
+    icon: row.icon,
+    preset: row.preset,
     moderated: row.moderated,
     position: row.position,
     postCount: row.post_count,
@@ -830,7 +915,7 @@ export async function listForumTags(
   runner: Pick<PoolClient, "query"> = getPool(),
 ): Promise<ForumTag[]> {
   const result = await runner.query<TagRow>(
-    `SELECT t.id, t.name, t.emoji, t.moderated, t.position,
+    `SELECT t.id, t.name, t.emoji, t.icon, t.preset, t.moderated, t.position,
             (SELECT count(*) FROM forum_post_tags pt
                JOIN forum_posts p ON p.channel_id = pt.post_id
               WHERE pt.tag_id = t.id AND p.published_at IS NOT NULL)::int AS post_count
@@ -887,6 +972,42 @@ export function checkTagChange(
 }
 
 /**
+ * Whether "require a tag" actually binds this poster. A rule nobody can meet
+ * is not a rule: with no tags at all, or only staff-only ones for a member,
+ * the composer has nothing to offer, so refusing the post for a missing tag
+ * would dead-end the forum until staff add one. The composer says the same
+ * thing (`forum.composer.tagsNoneToPick`), so the two stay in step.
+ */
+export function tagRequirementBinds(
+  requireTag: boolean,
+  forumTags: readonly ForumTagRef[],
+  isStaff: boolean,
+): boolean {
+  return requireTag && forumTags.some((tag) => isStaff || !tag.moderated);
+}
+
+/**
+ * The preset a NEW tag is stored with. A client that knows presets says so
+ * (a key, or null for a custom tag); the key counts only when the name really
+ * is one of that preset's names, so a request cannot make "Whatever" display
+ * as "Question". A client that does not know presets (an older web bundle)
+ * sends nothing, and its starter chips are recognised by name instead, so a
+ * tab that has not reloaded still creates localizable starters.
+ */
+function presetForNewTag(
+  name: string,
+  requested: ForumTagPreset | null | undefined,
+): ForumTagPreset | null {
+  if (requested === null) {
+    return null;
+  }
+  if (requested !== undefined) {
+    return isForumTagPresetName(requested, name) ? requested : null;
+  }
+  return FORUM_TAG_PRESETS.find((preset) => isForumTagPresetName(preset, name)) ?? null;
+}
+
+/**
  * Replace a forum's tag list (the PUT). An entry with `id` edits that tag, one
  * without creates a tag, a tag missing from the list is deleted along with
  * its post links. One transaction, under a per-forum advisory lock so two
@@ -932,18 +1053,47 @@ export async function replaceForumTags(
       );
     }
     for (const [position, tag] of request.tags.entries()) {
+      const emoji = tag.emoji ?? null;
       if (tag.id) {
+        // Unknown ids were refused above, so the row is there.
+        const prior = existing.get(tag.id)!;
+        // The icon follows the request when it names one (null clears it).
+        // An older client sends only the emoji: a changed emoji means the
+        // icon would now disagree with the glyph beside it, so the icon is
+        // re-derived from the new emoji, and an unchanged one is kept.
+        const icon =
+          tag.icon !== undefined
+            ? tag.icon
+            : emoji === prior.emoji
+              ? (prior.icon ?? null)
+              : forumTagIconForEmoji(emoji);
+        // A rename ends the localization: the staff's own words show from
+        // then on. So does an explicit null: a staff member who types the
+        // stored name over a translated one ("Dúvida" to "Question") is
+        // choosing that wording for everybody, and the name alone cannot say
+        // so. A key is never taken from the request for an existing tag, and
+        // an older client that sends nothing keeps what is there.
+        const preset =
+          prior.name !== tag.name || tag.preset === null ? null : (prior.preset ?? null);
         await client.query(
           `UPDATE forum_tags
-              SET name = $3, emoji = $4, moderated = $5, position = $6
+              SET name = $3, emoji = $4, icon = $5, preset = $6, moderated = $7, position = $8
             WHERE forum_id = $1 AND id = $2`,
-          [forumId, tag.id, tag.name, tag.emoji ?? null, tag.moderated, position],
+          [forumId, tag.id, tag.name, emoji, icon, preset, tag.moderated, position],
         );
       } else {
         await client.query(
-          `INSERT INTO forum_tags (forum_id, name, emoji, moderated, position)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [forumId, tag.name, tag.emoji ?? null, tag.moderated, position],
+          `INSERT INTO forum_tags (forum_id, name, emoji, icon, preset, moderated, position)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            forumId,
+            tag.name,
+            emoji,
+            tag.icon !== undefined ? tag.icon : forumTagIconForEmoji(emoji),
+            presetForNewTag(tag.name, tag.preset),
+            tag.moderated,
+            position,
+          ],
         );
       }
     }

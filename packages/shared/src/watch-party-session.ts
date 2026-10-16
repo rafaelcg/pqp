@@ -687,6 +687,18 @@ export const watchPartyOptionsSchema = z.object({
    * mode must never turn on by itself.
    */
   lowLatency: z.boolean().default(false),
+  /**
+   * "Prévia pública": people with no account may watch this party for a few
+   * minutes from the community's public page (the signed-out live preview,
+   * `docs/WATCH_PARTY.md` §"Watching without an account"). OFF BY DEFAULT,
+   * and a host opts each party in: the `live_preview` flag says a community
+   * MAY offer previews, this says THIS party does. Every other rule still
+   * applies on the server (a community, a public watch party channel
+   * @everyone can view), and the switch is only offered where they could
+   * pass. Editable while live: turning it off refuses new preview windows at
+   * once, and a window already running may finish.
+   */
+  publicPreview: z.boolean().default(false),
 });
 
 export type WatchPartyOptions = z.infer<typeof watchPartyOptionsSchema>;
@@ -699,6 +711,7 @@ export const WATCH_PARTY_DEFAULT_OPTIONS: WatchPartyOptions = Object.freeze({
   slowModeSeconds: 0,
   reactionsEnabled: true,
   lowLatency: false,
+  publicPreview: false,
 });
 
 /**

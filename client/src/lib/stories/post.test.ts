@@ -5,6 +5,7 @@ const api = vi.hoisted(() => ({
   createStory: vi.fn(),
   publishStory: vi.fn(),
   fetchStories: vi.fn(),
+  deleteStory: vi.fn(async () => undefined),
 }));
 const upload = vi.hoisted(() => ({
   putStoryMedia: vi.fn(),

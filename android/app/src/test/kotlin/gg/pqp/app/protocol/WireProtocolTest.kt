@@ -213,6 +213,12 @@ class WireProtocolTest {
             "voice-join-refused",
             // the Baú's one live frame
             "community-home-update",
+            // Addressed to the account, not to a channel. `server-removed` drops a
+            // server the person lost (kick, ban, delete) from the list and takes
+            // the screens inside it away; `own-status` is the status another
+            // device chose, which this phone's own picker reads.
+            "server-removed",
+            "own-status",
             // The forum list's two frames. Losing either leaves the list
             // frozen (no new posts, no bumps) or showing a deleted post that
             // 404s on tap; the post screen also reads both (a lock or resolve
@@ -259,10 +265,6 @@ class WireProtocolTest {
         // Permissions are enforced server-side and this client draws no
         // manager controls, so a version bump has nothing to invalidate.
         "permissions-update" to "no permission-gated controls on the phone to refresh",
-        // Tells the account's OTHER tabs and devices which status it just
-        // chose. The phone draws no status picker or own-status pip yet, so
-        // there is nothing on it that could go stale.
-        "own-status" to "no status picker on the phone to keep in sync",
         // Polls render as their message body; votes and closes are web only.
         "poll-update" to "no poll surface on the phone",
         // The party's own CHAT frame, which the phone has no panel to put
@@ -287,6 +289,11 @@ class WireProtocolTest {
         // (docs/MUSIC.md), which is a feature and not a frame.
         "music" to "no music player on the phone yet",
         "channel-music" to "no now-playing row on the phone's channel list yet",
+        // A soundboard play. The clip is not in the frame: each web and
+        // desktop client plays a file it already has. The phone has no
+        // board and no local player for it yet, so dropping the frame is
+        // silence, not a missed message. See docs/SOUNDBOARD.md.
+        "soundboard-play" to "no soundboard on the phone yet; the clip is local playback, not a message",
         // "Alberto started streaming in #filminho", sent only to people the
         // server chose (flag `stream_start_notifications`, off by default).
         // The same notice reaches a phone with no socket as a push, whose tap
@@ -309,12 +316,6 @@ class WireProtocolTest {
         // yet — same follow-up as the warning itself, and no correctness
         // gap: the phone was never showing a stale countdown to begin with.
         "voice-idle-warning-cancelled" to "no warning banner on the phone yet to cancel; same follow-up as voice-idle-warning",
-        // Kicked, banned, or the server deleted, told to the people it
-        // happened to. The web drops the server live. The phone re-reads its
-        // server list every time the list screen opens, and every read or
-        // send in the lost server is already refused by the API, so nothing
-        // leaks; the live drop and its one-line reason are a follow-up.
-        "server-removed" to "server list is re-read on open and the API already refuses the lost server; live drop is a follow-up",
     )
 
     /**

@@ -11,6 +11,8 @@ import {
   getMusicPaintDock,
 } from "@/components/voice/music-embed-host";
 import { lookupAddedBy } from "@/components/voice/music-now-playing";
+import { MusicCaptionsButton } from "@/components/voice/music-captions-button";
+import { useMusicCaptions } from "@/lib/music-captions";
 import type { VoiceState } from "@/hooks/use-voice";
 
 export const MUSIC_STAGE_TILE_ID = "music-stage";
@@ -65,6 +67,11 @@ export function MusicStageTile({
 }) {
   const { t } = useTranslation();
   const addedBy = lookupAddedBy(voiceState, addedByUserId, addedByName);
+  // YouTube draws captions along the bottom of the frame, exactly where the
+  // title sits, and nothing outside the iframe can move them. The bar under
+  // the call names the track already, so the title steps aside for them.
+  const captions = useMusicCaptions();
+  const captionsShowing = captions.on && (captions.tracks?.length ?? 0) > 0;
   const fullscreenLabel = isFullscreen
     ? t("voice.share.exitFullscreen")
     : t("voice.share.fullscreen");
@@ -90,11 +97,12 @@ export function MusicStageTile({
       ) : null}
       <div
         className={cn(
-          "pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-surface-0/90 to-transparent p-2",
+          "pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-2",
+          !captionsShowing && "bg-gradient-to-t from-surface-0/90 to-transparent",
           STAGE_LAYER.labels,
         )}
       >
-        <div className="min-w-0">
+        <div className={cn("min-w-0", captionsShowing && "invisible")}>
           <p className="truncate text-[13px] font-medium text-text">{title}</p>
           <p className="truncate text-[11px] text-text-secondary">
             {t("music.addedBy", { name: addedBy.name })}
@@ -112,6 +120,7 @@ export function MusicStageTile({
               <X className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
           </Tooltip>
+          <MusicCaptionsButton />
           {onToggleFullscreen ? (
             <Tooltip label={fullscreenLabel} side="top">
               <button

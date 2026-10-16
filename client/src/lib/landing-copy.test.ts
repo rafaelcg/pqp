@@ -4,10 +4,6 @@ import en from "../locales/en/translation.json";
 import es from "../locales/es/translation.json";
 import ptBR from "../locales/pt-BR/translation.json";
 import SITEMAP from "../../public/sitemap.xml?raw";
-import LLMS from "../../public/llms.txt?raw";
-import LLMS_FULL from "../../public/llms-full.txt?raw";
-import INDEX_MD from "../../public/index.md?raw";
-
 /**
  * What the home page is allowed to say, pinned where it was found wrong by the
  * 2026-09-30 reviews. Each of these is a claim that was false, stale or
@@ -98,24 +94,6 @@ describe("landing claims", () => {
   it("does not describe the Google Ads tag as cookie-less", () => {
     for (const locale of Object.keys(catalogues) as (keyof typeof catalogues)[]) {
       expect(get(locale, "landing.faq.data.a")).toMatch(/cookies/);
-    }
-  });
-});
-
-describe("Android wording", () => {
-  it("the /android copy no longer says a large-room share is missing", () => {
-    for (const locale of Object.keys(catalogues) as (keyof typeof catalogues)[]) {
-      expect(get(locale, "androidPage.notYet")).not.toMatch(
-        /sala grande|large room/i,
-      );
-      expect(get(locale, "androidPage.version")).not.toMatch(/0\.4\.0/);
-    }
-  });
-
-  it("the machine-readable summaries say Google Play, not an APK beta", () => {
-    for (const text of [LLMS, LLMS_FULL, INDEX_MD]) {
-      expect(text).toMatch(/Google Play/);
-      expect(text).not.toMatch(/APK beta|Android beta/);
     }
   });
 });

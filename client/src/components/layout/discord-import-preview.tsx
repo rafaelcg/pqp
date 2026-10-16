@@ -15,12 +15,13 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
-import { legacyTypeRank } from "@pqp/shared";
+import { forumTagIconForEmoji, legacyTypeRank } from "@pqp/shared";
 import type {
   DiscordImportPlan,
   MappedAwayReason,
   NotInTemplateReason,
 } from "@pqp/shared";
+import { ForumTagIcon } from "@/components/forum/forum-tag-icon";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -319,7 +320,8 @@ function PreviewChannelRow({
                   : "border-ink-4 bg-ink-3/40 text-paper-muted",
               )}
             >
-              {tag.emoji && <span aria-hidden="true">{tag.emoji}</span>}
+              {/* What the import will store: the nearest icon, else the emoji. */}
+              <ForumTagIcon tag={{ icon: forumTagIconForEmoji(tag.emoji), emoji: tag.emoji }} />
               <span className="truncate">{tag.name}</span>
               {tag.moderated && (
                 <span className="sr-only">{t("importDiscord.preview.tagStaff")}</span>

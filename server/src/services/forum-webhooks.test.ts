@@ -119,6 +119,52 @@ describe("resolveWebhookTags", () => {
     expect(resolveWebhookTags(["Bug"], forumTags, withDefaults).tagIds).toEqual([bug]);
     expect(resolveWebhookTags(undefined, forumTags, withDefaults).tagIds).toEqual([noticias]);
   });
+
+  describe("starter tags answer to every language they are shown in", () => {
+    const question = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const release = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const custom = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const starters = [
+      { id: question, name: "Question", moderated: false, preset: "question" as const },
+      { id: release, name: "Lançamento", moderated: false, preset: "release" as const },
+      { id: custom, name: "Duda", moderated: false, preset: null },
+    ];
+
+    it("matches the stored name and the preset's name in any shipped language", () => {
+      // "Duda" is a real tag name in this forum (below), so it is left out.
+      for (const sent of ["Question", "Dúvida", "duvida"]) {
+        expect(resolveWebhookTags([sent], starters, open).tagIds, sent).toEqual([question]);
+      }
+      for (const sent of ["Release", "Lanzamiento", "lancamento"]) {
+        expect(resolveWebhookTags([sent], starters, open).tagIds, sent).toEqual([release]);
+      }
+    });
+
+    it("a stored name beats a preset's translation of it", () => {
+      expect(resolveWebhookTags(["Duda"], starters, open).tagIds).toEqual([custom]);
+    });
+
+    it("a tag that was renamed (no preset) answers only to its own name", () => {
+      const renamed = [{ id: question, name: "Ask us", moderated: false, preset: null }];
+      expect(resolveWebhookTags(["Ask us"], renamed, open).tagIds).toEqual([question]);
+      expect(resolveWebhookTags(["Question", "Dúvida"], renamed, open)).toEqual({
+        tagIds: [],
+        ignored: ["Question", "Dúvida"],
+      });
+    });
+
+    it("a preset this build has no names for is skipped; the stored name still matches", () => {
+      const future = [
+        { id: question, name: "Question", moderated: false, preset: "brand-new" as never },
+      ];
+      expect(resolveWebhookTags(["Question"], future, open).tagIds).toEqual([question]);
+      expect(resolveWebhookTags(["Dúvida"], future, open).tagIds).toEqual([]);
+    });
+
+    it("rows that carry no preset at all keep matching as before", () => {
+      expect(resolveWebhookTags(["Bug"], forumTags, open).tagIds).toEqual([bug]);
+    });
+  });
 });
 
 describe("the dedupe key", () => {

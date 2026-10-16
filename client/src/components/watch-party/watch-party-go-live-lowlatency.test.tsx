@@ -54,6 +54,7 @@ function scheduledParty(over: Partial<WatchParty>): WatchParty {
       slowModeSeconds: 0,
       reactionsEnabled: true,
       lowLatency: false,
+      publicPreview: false,
     },
     viewerRole: "host",
     reminding: false,
@@ -129,6 +130,7 @@ describe("go-live never mixes lowLatency between two parties on screen at once",
         slowModeSeconds: 0,
         reactionsEnabled: true,
         lowLatency: true,
+        publicPreview: false,
       },
     });
     const partyB = scheduledParty({
@@ -142,6 +144,7 @@ describe("go-live never mixes lowLatency between two parties on screen at once",
         slowModeSeconds: 0,
         reactionsEnabled: true,
         lowLatency: false,
+        publicPreview: false,
       },
     });
 
@@ -179,6 +182,7 @@ describe("go-live never mixes lowLatency between two parties on screen at once",
         slowModeSeconds: 0,
         reactionsEnabled: true,
         lowLatency: true,
+        publicPreview: false,
       },
     });
     const partyFalse = scheduledParty({
@@ -192,6 +196,7 @@ describe("go-live never mixes lowLatency between two parties on screen at once",
         slowModeSeconds: 0,
         reactionsEnabled: true,
         lowLatency: false,
+        publicPreview: false,
       },
     });
 

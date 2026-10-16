@@ -5,6 +5,7 @@ import {
 import { useId, type ReactNode } from "react";
 import { Switch } from "@/components/ui/switch";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { previewWindowMinutes } from "@/lib/live-preview";
 import { cn } from "@/lib/utils";
 import { WatchPartyGuestsSetting } from "./guests/watch-party-guests-setting";
 
@@ -155,6 +156,7 @@ export function WatchPartyOptionsPanel({
   stacked = false,
   isHost = false,
   lowLatencyAvailable = false,
+  publicPreviewSeconds = null,
   live = false,
 }: {
   options: WatchPartyOptions;
@@ -184,6 +186,16 @@ export function WatchPartyOptionsPanel({
    * rehearsal script, production 2026-09-25) goes live without.
    */
   lowLatencyAvailable?: boolean | null;
+  /**
+   * "Prévia pública": the signed-out live preview's window in seconds when
+   * the switch may be drawn, null when it may not (the flag is off for this
+   * server, it is not a community, or @everyone cannot see the channel). The
+   * row is ABSENT, not disabled, when null: the server would refuse the
+   * preview anyway. Any role that sees this panel may flip it (host, co-host,
+   * MANAGE_CHANNELS), and it stays live while the party runs so a host can
+   * turn it off mid-show.
+   */
+  publicPreviewSeconds?: number | null;
   /**
    * Whether the party is live right now. The switch itself is always a
    * standing preference (`options.lowLatency`, saved the moment it is
@@ -252,6 +264,24 @@ export function WatchPartyOptionsPanel({
             onCheckedChange={(checked) => onChange({ reactionsEnabled: checked })}
           />
         </div>
+
+        {/* PRÉVIA PÚBLICA, off by default: people with no account may watch
+            this party for a few minutes from the community's public page.
+            Only drawn where the server would honour it, and the server
+            checks every rule again on each preview. */}
+        {publicPreviewSeconds !== null && (
+          <div data-watch-party-public-preview className="px-1 py-0.5">
+            <Switch
+              label={t("watchParty.options.publicPreview")}
+              description={t("watchParty.options.publicPreviewBody", {
+                count: previewWindowMinutes(publicPreviewSeconds),
+              })}
+              checked={options.publicPreview}
+              disabled={disabled}
+              onCheckedChange={(checked) => onChange({ publicPreview: checked })}
+            />
+          </div>
+        )}
 
         {/* HOST-ONLY, AND ABSENT WHEN THE DEPLOYMENT HAS NOTHING TO OFFER.
             A co-host can flip every other row here; this one stays out of

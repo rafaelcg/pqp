@@ -1,4 +1,5 @@
 import {
+  applyServerOrder,
   formatUserTag,
   parseStoredCommunityLinks,
   type ChannelKind,
@@ -199,6 +200,29 @@ async function serverImageKeys(serverId: string): Promise<string[]> {
 }
 
 /**
+ * The server's custom emoji objects. Their rows cascade with the server, and
+ * nothing else names the bytes. Refused uploads are not here: their
+ * quarantine row outlives the server and its own sweep owns them.
+ *
+ * Read inside the delete, after the server row is locked: an emoji claim
+ * locks the same row before it inserts, so it either lands before this read
+ * or fails on the missing server.
+ */
+async function serverEmojiKeys(
+  db: Pick<PoolClient, "query">,
+  serverId: string,
+): Promise<string[]> {
+  if (!isStorageConfigured()) {
+    return [];
+  }
+  const result = await db.query<{ storage_key: string }>(
+    `SELECT storage_key FROM server_emoji WHERE server_id = $1`,
+    [serverId],
+  );
+  return result.rows.map((row) => row.storage_key);
+}
+
+/**
  * Drop the objects a completed delete just orphaned, best effort.
  *
  * Neither awaited nor allowed to fail, matching `deleteMessage`: the row that
@@ -232,6 +256,27 @@ export function deleteObjectsInBackground(keys: string[]): void {
   })();
 }
 
+/**
+ * Every soundboard object the server owns: saved clips plus uploads still on
+ * the ledger. Both tables cascade away with the server, and with them the
+ * only record of the keys, so they are read before the delete like the rest.
+ */
+async function serverSoundboardKeys(
+  serverId: string,
+  db: Pick<PoolClient, "query"> = getPool(),
+): Promise<string[]> {
+  if (!isStorageConfigured()) {
+    return [];
+  }
+  const result = await db.query<{ storage_key: string }>(
+    `SELECT storage_key FROM soundboard_sounds WHERE server_id = $1
+     UNION
+     SELECT storage_key FROM soundboard_pending_uploads WHERE server_id = $1`,
+    [serverId],
+  );
+  return result.rows.map((row) => row.storage_key);
+}
+
 async function ownerLocaleFor(
   db: Pick<PoolClient, "query">,
   userId: string,
@@ -251,10 +296,72 @@ export async function listServersForUser(userId: string): Promise<DbServer[]> {
      FROM servers s
      JOIN server_members sm ON sm.server_id = s.id
      WHERE sm.user_id = $1
-     ORDER BY s.created_at ASC`,
+     ORDER BY sm.rail_position ASC NULLS LAST, s.created_at ASC, s.id ASC`,
     [userId],
   );
   return result.rows;
+}
+
+/**
+ * Save the order this account drew on its own server rail, and return the
+ * order as stored (every server the account holds, top to bottom).
+ *
+ * The request is a statement of RELATIVE order, applied to whatever the
+ * account holds right now, under a lock on its own membership rows:
+ *  - an id the account does not hold (left, kicked, deleted since the tab last
+ *    looked, or somebody else's server) is dropped, not refused: the caller
+ *    cannot see that race and must not fail on it, and dropping it leaks
+ *    nothing because the answer only ever names the caller's own servers;
+ *  - a server the account holds that the request omits (joined in another tab
+ *    mid-drag) keeps its place in the current list and lands after the named
+ *    ones, so a stale save cannot hide a membership;
+ *  - positions are rewritten for ALL of the account's servers (0..n-1), so a
+ *    later join, which starts NULL, sorts after every placed one: new servers
+ *    go to the bottom. See `rail_position` in schema.sql.
+ *
+ * The lock serialises two saves from two tabs: last write wins as a whole, never
+ * a splice of both. It is on `server_members` rows only, never on `servers`,
+ * so it cannot sit in a cycle with `deleteServer` (server row first, then the
+ * cascade into these rows).
+ */
+export async function setServerOrder(
+  userId: string,
+  requested: readonly string[],
+): Promise<string[]> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const current = await client.query<{ id: string }>(
+      `SELECT sm.server_id AS id
+         FROM server_members sm
+         JOIN servers s ON s.id = sm.server_id
+        WHERE sm.user_id = $1
+        ORDER BY sm.rail_position ASC NULLS LAST, s.created_at ASC, s.id ASC
+          FOR UPDATE OF sm`,
+      [userId],
+    );
+    // Canonical ids: a UUID typed in uppercase is the same server.
+    const final = applyServerOrder(
+      current.rows,
+      requested.map((id) => id.toLowerCase()),
+    ).map((row) => row.id);
+    if (final.length > 0) {
+      await client.query(
+        `UPDATE server_members sm
+            SET rail_position = v.pos
+           FROM unnest($2::uuid[], $3::int[]) AS v(server_id, pos)
+          WHERE sm.user_id = $1 AND sm.server_id = v.server_id`,
+        [userId, final, final.map((_, index) => index)],
+      );
+    }
+    await client.query("COMMIT");
+    return final;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function createServer(
@@ -1010,10 +1117,14 @@ export async function deleteServer(
       [serverId],
     );
     if ((locked.rowCount ?? 0) > 0) {
+      // Read under the server lock: an upload ticket takes the same lock, so
+      // none can slip in between this read and the cascade.
+      keys.push(...(await serverSoundboardKeys(serverId, client)));
       const members = await client.query<{ user_id: string }>(
         `SELECT user_id FROM server_members WHERE server_id = $1`,
         [serverId],
       );
+      keys.push(...(await serverEmojiKeys(client, serverId)));
       await client.query(`DELETE FROM servers WHERE id = $1`, [serverId]);
       memberIds = members.rows.map((row) => row.user_id);
     }

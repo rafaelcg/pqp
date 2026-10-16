@@ -129,3 +129,30 @@ export function parseSegmentPath(pathname: string): SegmentRouteMatch | null {
   }
   return { channelId: match[1]!, startedAt: match[2]!, name: match[3]! };
 }
+
+/**
+ * The signed-out live preview's viewer id prefix (`previewViewerId` in
+ * `server/src/voice/hls-viewer-token.ts`): a preview token names a random
+ * visitor, never an account, as `preview:<id>`.
+ */
+export const PREVIEW_VIEWER_PREFIX = "preview:";
+
+/**
+ * The presenter's camera rendition (`CAMERA_RUNG_NAME` in
+ * `server/src/voice/hls-ladder.ts`). Ported as a literal for the reason the
+ * LL names above are: this Worker deploys apart from the API.
+ */
+export const CAMERA_RUNG = "cam360p30";
+
+/**
+ * Whether this request is a preview token asking for the presenter's camera.
+ * A host who turns "Prévia pública" on shows the FILM to people with no
+ * account, not their face, and the token's channel and session claims alone
+ * would open the camera too. Refused here BEFORE the shared cache and the
+ * coalesced origin fetch: the origin refuses the same request, and a
+ * refusal that rode a coalesced fetch would reach the members polling the
+ * camera at the same moment.
+ */
+export function previewRungRefused(userId: string, rung: string | undefined): boolean {
+  return rung === CAMERA_RUNG && userId.startsWith(PREVIEW_VIEWER_PREFIX);
+}

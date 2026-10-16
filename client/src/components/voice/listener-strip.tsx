@@ -4,9 +4,14 @@ import {
   PeerAudioMenu,
   usePeerAudioMenu,
 } from "@/components/voice/peer-audio-menu";
+import {
+  SoundboardFloat,
+  SoundboardMutedMark,
+} from "@/components/voice/soundboard-float";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
+import { useSoundboardUserMuted } from "@/lib/soundboard";
 import { cn } from "@/lib/utils";
 import { listenerStripSlots } from "@/components/voice/stage-layout";
 
@@ -28,6 +33,14 @@ import { listenerStripSlots } from "@/components/voice/stage-layout";
 
 export interface StripListener {
   key: string;
+  /** Whose clips light this chip. Absent where the caller has no id. */
+  userId?: string;
+  /**
+   * Set where this person's soundboard clips can be muted from their menu:
+   * somebody else, in a server call with the board on. Does not depend on
+   * their voice, which may have failed.
+   */
+  soundboardUserId?: string;
   name: string;
   avatarUrl: string | null;
   speaking: boolean;
@@ -162,11 +175,14 @@ function ListenerChip({
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu<HTMLSpanElement>();
+  const [soundboardMuted] = useSoundboardUserMuted(person.soundboardUserId);
   const name = person.isSelf ? `${person.name} ${youLabel}` : person.name;
   // A chip you can act on is a button. One with no knob behind it (ourselves,
   // or a caller that wired no setter) stays a label, because a button that
   // opens nothing is worse than no button at all.
-  const actionable = Boolean(person.onSetVolume || person.onRetry);
+  const actionable = Boolean(
+    person.onSetVolume || person.onRetry || person.soundboardUserId,
+  );
   const trigger: HTMLAttributes<HTMLSpanElement> & { tabIndex?: number } =
     actionable
       ? {
@@ -174,7 +190,11 @@ function ListenerChip({
           tabIndex: 0,
           "aria-haspopup": "dialog",
           "aria-expanded": menu.open,
-          "aria-label": t("voice.audio.title", { name: person.name }),
+          // The muted glyph is inside this button, which a screen reader reads
+          // as one name, so the state rides on the name.
+          "aria-label": soundboardMuted
+            ? `${t("voice.audio.title", { name: person.name })}. ${t("voice.audio.soundboardMarkMuted", { name: person.name })}`
+            : t("voice.audio.title", { name: person.name }),
           onClick: menu.toggle,
           onKeyDown: (event) => {
             // Keys pressed inside the panel reach here too, because React
@@ -202,13 +222,18 @@ function ListenerChip({
           "cursor-pointer hover:bg-ink-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-signal",
       )}
     >
-      <VoiceAvatar
-        name={person.name}
-        avatarUrl={person.avatarUrl}
-        isSpeaking={person.speaking}
-        muted={person.muted}
-        size="sm"
-      />
+      {/* The badge sits on the face's own box: the row is one chip tall and
+          scrolls sideways, so anything poking out of it would be clipped. */}
+      <span className="relative inline-flex shrink-0">
+        <SoundboardFloat userId={person.userId} size="sm" />
+        <VoiceAvatar
+          name={person.name}
+          avatarUrl={person.avatarUrl}
+          isSpeaking={person.speaking}
+          muted={person.muted}
+          size="sm"
+        />
+      </span>
       <span
         className={cn(
           "truncate text-[11px]",
@@ -218,6 +243,12 @@ function ListenerChip({
       >
         {name}
       </span>
+      {person.soundboardUserId && (
+        <SoundboardMutedMark
+          userId={person.soundboardUserId}
+          name={person.name}
+        />
+      )}
       {person.serverMuted ? (
         <ShieldBan
           className="h-3 w-3 shrink-0 text-warning"
@@ -249,6 +280,7 @@ function ListenerChip({
               }
             : undefined
         }
+        soundboardUserId={person.soundboardUserId}
         failed={person.failed}
         onRetry={person.onRetry}
         side="top"

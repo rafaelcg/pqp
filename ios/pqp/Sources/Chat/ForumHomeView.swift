@@ -531,8 +531,8 @@ struct ForumHomeView: View {
 
                 ForEach(orderedTags) { tag in
                     ForumFilterChip(
-                        title: Text(verbatim: tag.name),
-                        emoji: tag.emoji,
+                        title: Text(verbatim: tag.displayName),
+                        tag: tag,
                         isActive: model.filters.tagIds.contains(tag.id)
                     ) {
                         model.toggleTag(tag.id)
@@ -717,15 +717,16 @@ struct ForumHomeView: View {
 /// with an X, so "why is my list short" answers itself.
 struct ForumFilterChip: View {
     let title: Text
-    var emoji: String?
+    /// A tag filter draws the tag's own icon (or its emoji) before the name.
+    var tag: ForumTag?
     let isActive: Bool
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                if let emoji, !emoji.isEmpty {
-                    Text(verbatim: emoji).font(.system(size: 13))
+                if let tag {
+                    ForumTagGlyph(tag: tag, size: 13)
                 }
                 title
                 if isActive {

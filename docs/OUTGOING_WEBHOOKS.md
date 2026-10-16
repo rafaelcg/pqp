@@ -11,7 +11,7 @@ webhooks (`webhooks` table, channel-row panel) are unchanged.
 
 1. Open the community. Open server settings.
 2. Open **Integrations**. You need the Manage webhooks permission.
-3. Name the hook, paste an HTTPS URL, tick at least one text channel.
+3. Name the hook, paste an HTTPS URL, tick at least one text channel or forum.
 4. Optional: an auth header (`Authorization`, `X-Webhook-Secret`, or
    `X-Api-Key`) and its value. Grok Bot wants `Authorization` and
    `Bearer <sender key>`.
@@ -81,11 +81,29 @@ v1 sends only `message.created`. The body looks like:
 }
 ```
 
+A message in a forum post adds three fields, after `replyToId`. They are omitted on a text channel and on a chat thread.
+
+```json
+{
+  "channelId": "<post id>",
+  "channelName": "<post title>",
+  "forumId": "<forum channel id>",
+  "postTitle": "<post title>",
+  "isPostStart": true
+}
+```
+
+`channelId` is the post, not the forum. `isPostStart` is true for the opening message and false for a reply. The hook is configured on the forum. A thread or a post cannot be a target itself.
+
+`forum_channels` has to be on for that server. While it is off, a forum cannot be newly selected, and messages in its posts are not enqueued. A forum already saved on the hook stays selected.
+
+You can only add a forum you can view. A private forum you cannot see is refused with `forum_not_visible`.
+
 ## Skip rules
 
 No row is enqueued when:
 
-- the channel is not a server text channel (no DMs, no voice)
+- the channel is not a server text channel or a thread under a text channel or a forum (no DMs, no voice). A forum post fires only when that forum is selected and `forum_channels` is on
 - the author is an incoming webhook (`is_webhook`), a character account
   (`is_character`), or a labeled bot (`is_bot`)
 - the author is on that hook's skip list (`skip_user_ids`)

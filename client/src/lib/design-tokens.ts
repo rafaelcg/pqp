@@ -53,6 +53,7 @@ export const COLOR_TOKEN_GROUPS: readonly TokenGroup[] = [
     tokens: ["--color-danger", "--color-on-danger", "--color-warning", "--color-success"],
   },
   { id: "code", tokens: ["--color-code-bg", "--color-code-text"] },
+  { id: "media", tokens: ["--color-on-media", "--color-on-media-muted"] },
   {
     id: "state",
     tokens: [

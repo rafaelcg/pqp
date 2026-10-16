@@ -1,7 +1,7 @@
 /**
  * One card at a time.
  *
- * The update card, QG, the Android/iOS beta invite, Novidades, and cargos
+ * QG, the Android/iOS beta invite, Novidades, and cargos
  * all pin to `right-4 bottom-4`. Showing two is a stack, not a queue: the
  * one underneath still records its impression, so the person never sees it.
  * First match in this list is the only one allowed to mount. Not every id
@@ -11,10 +11,10 @@
  * layout one.
  *
  * Order is product, not recency:
- *  1. update — a waiting build beats every campaign (it is also mounted
- *     outside App; see `lib/update-prompt-state.ts` for how it reports in)
+ *  (A waiting build used to be 1 here, a card that beat every campaign. It is
+ *  the quiet update indicator now and takes no corner at all.)
  *  2. communityHomePost — a live Baú publish in the open server; not a
- *     campaign, so it beats the first-run cards and yields only to update
+ *     campaign, so it beats the first-run cards
  *  3. notifyOffer — a DM or mention reached a hidden tab and banners are off;
  *     a moment rather than a campaign (`lib/notifications.ts`, `NotifyOfferHint`)
  *  4. qg — the house, first-run
@@ -22,19 +22,21 @@
  *     that is not in the directory (`lib/community-listing-nudge.ts`)
  *  5. voiceClean — the one-time Voz limpa nudge, above the user bar; after
  *     the first-run cards, before the app-invite campaigns (`lib/voice-clean.ts`)
- *  6. mobileBeta — phone browsers only; the campaign for the native apps
- *  7. whatsNew — Novidades now lives on the rail
- *  8. cargos — staff who can manage roles
- *  9. shortcuts — Cmd+/ map; last, and skipped while an attached feature
+ *  6. seasonalLook: "the Halloween look is here", once per season; a short
+ *     window, so it goes before the year-round campaigns (`lib/seasonal-looks.ts`)
+ *  7. mobileBeta — phone browsers only; the campaign for the native apps
+ *  8. whatsNew — Novidades now lives on the rail
+ *  9. cargos — staff who can manage roles
+ * 10. shortcuts — Cmd+/ map; last, and skipped while an attached feature
  *     hint is up (see `lib/feature-hints.ts`)
  */
 export const CORNER_HINT_ORDER = [
-  "update",
   "communityHomePost",
   "notifyOffer",
   "qg",
   "listingNudge",
   "voiceClean",
+  "seasonalLook",
   "mobileBeta",
   "whatsNew",
   "cargos",

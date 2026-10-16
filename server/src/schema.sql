@@ -2800,6 +2800,16 @@ ALTER TABLE server_members ADD COLUMN IF NOT EXISTS show_on_profile BOOLEAN NOT 
 CREATE INDEX IF NOT EXISTS idx_server_members_profile
   ON server_members (user_id, server_id)
   WHERE show_on_profile;
+
+-- Where THIS member's server rail puts this server (0 is the top). A fact
+-- about one account's view, never shared: the member dragged their own rail
+-- (`PUT /api/servers/order`). NULL is "never placed": every membership before
+-- the feature, and every server joined or created since the last save. The
+-- list sorts placed ones first by position, then the NULLs by the server's
+-- creation date, which is the order the rail always had, so nobody's rail moves
+-- until they drag it, and a new join lands at the bottom beside the "+".
+-- Nullable with no default: a catalog-only change, no table rewrite.
+ALTER TABLE server_members ADD COLUMN IF NOT EXISTS rail_position INTEGER;
 -- Public handles: the `pqp.gg/@rafa` half of an account
 -- ---------------------------------------------------------------------------
 --
@@ -3318,6 +3328,14 @@ CREATE INDEX IF NOT EXISTS idx_server_members_join_source_joined_at
 -- so it gets a partial index rather than a scan of the whole log.
 CREATE INDEX IF NOT EXISTS idx_audit_log_discord_import
   ON audit_log (created_at) WHERE action = 'server.discord_import';
+-- The same rows by server, for the owner's "did people come over" strip
+-- (`getDiscordImportArrivals`). It runs for every manager of every server
+-- once `discord_bring_crew` is on, and almost none were imported: without
+-- this the only way in is `idx_audit_log_server_id`, which walks every audit
+-- row of the server (up to the retention window) to find nothing. Imports are
+-- a handful a day, so this stays tiny.
+CREATE INDEX IF NOT EXISTS idx_audit_log_discord_import_server
+  ON audit_log (server_id, id) WHERE action = 'server.discord_import';
 
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS mention_everyone BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS mention_here BOOLEAN NOT NULL DEFAULT FALSE;
@@ -3573,7 +3591,11 @@ $$;
 -- Moderator extras: KICK(2) | MANAGE_MESSAGES(256) | MUTE(16384) |
 -- MANAGE_NICKNAMES(65536) | MODERATE_MEMBERS(262144) | MOVE(4194304) |
 -- START_WATCH_PARTY(8388608) = 12927234.
--- Manager: ALL(16777215) minus ADMINISTRATOR(8) = 16777207.
+-- Manager: ALL(536870911) minus ADMINISTRATOR(8) and MANAGE_EMOJI(268435456)
+-- = 268435447.
+-- POST_STORIES is bit 25, USE_SOUNDBOARD bit 26 and MANAGE_SOUNDBOARD bit
+-- 27. The number below is only for a hall that still has no manager row.
+-- Existing rows gain the soundboard bits in soundboard_bits_2026_10b.
 -- VIP is a colour and a hoist with no extra bits (0).
 -- Insert colours match STAFF_ROLE_COLORS in packages/shared/src/permissions.ts.
 CREATE OR REPLACE FUNCTION pqp_ensure_staff_ladder(p_server_id UUID)
@@ -3632,7 +3654,7 @@ BEGIN
       mentionable, hoist, show_badge, color
     )
     VALUES (
-      p_server_id, pqp_unique_role_name(p_server_id, 'Manager'), 16777207, 2,
+      p_server_id, pqp_unique_role_name(p_server_id, 'Manager'), 268435447, 2,
       FALSE, 'manager', FALSE, TRUE, TRUE, '#6BA3E8'
     );
   END IF;
@@ -5322,6 +5344,41 @@ CREATE TABLE IF NOT EXISTS user_activity_days (
 CREATE INDEX IF NOT EXISTS idx_user_activity_days_day
   ON user_activity_days (day);
 
+-- Per person, per São Paulo day: what the Retrospectiva needs and nothing
+-- else kept. Counts only. No room, no channel, no other person: who was in a
+-- call with whom is never recorded. `voice_seconds` and `share_seconds` come
+-- from a one-minute sampler over live seats in rooms of two or more people
+-- (services/user-stats.ts); `voice_sampled_at` is the time of the last
+-- sample that added a minute, and a sample inside 45 seconds of it, or older
+-- than it, adds nothing: two samplers, a retried statement that had in fact
+-- committed, or a late sample add that minute once. `music_queued` counts tracks this
+-- person put in a call's queue. Starts the day it shipped: nothing before it
+-- can be rebuilt. Kept for as long as the account exists; the cascade removes
+-- it with an art. 18 deletion. Runtime flag `user_stats` stops new writes.
+CREATE TABLE IF NOT EXISTS user_daily_stats (
+  user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day              DATE NOT NULL,
+  voice_seconds    INTEGER NOT NULL DEFAULT 0,
+  share_seconds    INTEGER NOT NULL DEFAULT 0,
+  music_queued     INTEGER NOT NULL DEFAULT 0,
+  voice_sampled_at TIMESTAMPTZ,
+  PRIMARY KEY (user_id, day)
+);
+
+-- Which watch parties a person watched. Copied from `hls_session_viewers`
+-- before its 24h prune, one row per party (`started_at_ms` survives an
+-- in-place transcode restart, so one show is one row). `channel_id` carries no
+-- foreign key on purpose: deleting a channel must not erase a person's own
+-- history of having watched something in it. Same retention and cascade as
+-- `user_daily_stats`.
+CREATE TABLE IF NOT EXISTS user_watch_parties (
+  user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  channel_id    UUID NOT NULL,
+  started_at_ms BIGINT NOT NULL,
+  first_seen_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (user_id, channel_id, started_at_ms)
+);
+
 -- Who watched a party, by coarse class only. `device_class` is one of
 -- phone / tablet / desktop as the viewer's own browser judged it from screen
 -- size and pointer type (no user agent is read or stored); NULL for a client
@@ -5355,6 +5412,124 @@ CREATE TABLE IF NOT EXISTS hls_session_presence (
   PRIMARY KEY (channel_id, started_at_ms, instance_id)
 );
 
+-- Soundboard clips for a server. Play clicks are not rows: a play is a
+-- socket frame. SOUNDBOARD_MAX_SOUNDS (6) is the hard cap, enforced again in
+-- the claim transaction.
+CREATE TABLE IF NOT EXISTS soundboard_sounds (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id    UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  emoji        TEXT NOT NULL,
+  storage_key  TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  bytes        INTEGER NOT NULL,
+  duration_ms  INTEGER NOT NULL,
+  volume       REAL NOT NULL DEFAULT 1,
+  created_by   UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT soundboard_sounds_name_len CHECK (char_length(name) BETWEEN 2 AND 24),
+  CONSTRAINT soundboard_sounds_volume CHECK (volume >= 0 AND volume <= 1),
+  CONSTRAINT soundboard_sounds_duration CHECK (duration_ms > 0 AND duration_ms <= 5200),
+  CONSTRAINT soundboard_sounds_bytes CHECK (bytes > 0 AND bytes <= 524288)
+);
+
+CREATE INDEX IF NOT EXISTS idx_soundboard_sounds_server
+  ON soundboard_sounds (server_id, created_at);
+
+-- A signed upload nobody has claimed yet. Durable and shared, so the cap of
+-- 24 holds across both API machines and a deploy cannot lose the record of an
+-- object that still has to be swept. The claim deletes its row in the same
+-- transaction that inserts the sound. A cleanup leases the row (cleanup_until),
+-- deletes the object, and only then deletes the row, so exactly one of them
+-- owns a file at a time and a failed or interrupted cleanup is retried.
+CREATE TABLE IF NOT EXISTS soundboard_pending_uploads (
+  storage_key TEXT PRIMARY KEY,
+  server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  -- Set while a cleanup holds the file: the object is being deleted, so a
+  -- claim must not take the ticket. A cleanup that dies or fails simply lets
+  -- the lease lapse and the ticket becomes sweepable again.
+  cleanup_until TIMESTAMPTZ
+);
+
+-- An earlier revision of this table (this feature's own branch, never on
+-- main) had no lease column; add it where the table already exists. Every
+-- revision had expires_at, so it needs no migration.
+ALTER TABLE soundboard_pending_uploads
+  ADD COLUMN IF NOT EXISTS cleanup_until TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_soundboard_pending_uploads_server
+  ON soundboard_pending_uploads (server_id);
+CREATE INDEX IF NOT EXISTS idx_soundboard_pending_uploads_expiry
+  ON soundboard_pending_uploads (expires_at);
+
+-- One object, one row. An earlier revision of this table could claim the
+-- same key twice. Drop the later row before the unique index, or a database
+-- that already has those rows fails to boot. The kept row still points at
+-- the file, so the object stays.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'soundboard_storage_key_unique_2026_10'
+  ) THEN
+    RETURN;
+  END IF;
+
+  DELETE FROM soundboard_sounds AS extra
+   USING soundboard_sounds AS kept
+   WHERE extra.storage_key = kept.storage_key
+     AND (extra.created_at, extra.id) > (kept.created_at, kept.id);
+
+  CREATE UNIQUE INDEX IF NOT EXISTS soundboard_sounds_storage_key
+    ON soundboard_sounds (storage_key);
+
+  INSERT INTO data_migrations (name) VALUES ('soundboard_storage_key_unique_2026_10');
+END $$;
+
+-- USE_SOUNDBOARD (bit 26 = 67108864) onto @everyone, so a channel overwrite
+-- is what turns the board off. MANAGE_SOUNDBOARD (bit 27 = 134217728) onto
+-- manager and admin. Owner already resolves to every bit in application
+-- code. One-shot, like manage_music_bit_2026_09.
+--
+-- Named `_b`: the branch first used bits 25 and 26, and main gave bit 25 to
+-- POST_STORIES. A database that ran the first version (a dev box) granted
+-- those old numbers, which mean stories and play now, both harmless; this
+-- name runs the grant again with the right numbers.
+DO $$
+DECLARE
+  use_soundboard CONSTANT BIGINT := 67108864;
+  manage_soundboard CONSTANT BIGINT := 134217728;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'soundboard_bits_2026_10b'
+  ) THEN
+    RETURN;
+  END IF;
+
+  WITH changed AS (
+    UPDATE roles
+       SET permissions = permissions | use_soundboard
+     WHERE is_everyone
+       AND (permissions & use_soundboard) = 0
+    RETURNING server_id
+  ),
+  staff AS (
+    UPDATE roles
+       SET permissions = permissions | use_soundboard | manage_soundboard
+     WHERE system_key IN ('manager', 'admin')
+       AND (permissions & manage_soundboard) = 0
+    RETURNING server_id
+  )
+  UPDATE servers
+     SET permissions_version = permissions_version + 1
+   WHERE id IN (
+     SELECT server_id FROM changed
+     UNION
+     SELECT server_id FROM staff
+   );
+
+  INSERT INTO data_migrations (name) VALUES ('soundboard_bits_2026_10b');
+END $$;
 -- THE ONE ROW THAT MAKES A START-OF-STREAM NOTICE HAPPEN ONCE. One row per
 -- channel: when a share has been stable long enough, every API machine that saw
 -- it races one upsert on this row, and only the one that finds
@@ -5557,6 +5732,152 @@ CREATE TABLE IF NOT EXISTS forum_tags (
 -- Leads with forum_id, so it also serves the cascade from channels.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_forum_tags_name
   ON forum_tags (forum_id, lower(name));
+
+-- A tag's picture is an ICON KEY from a curated set (`FORUM_TAG_ICONS` in
+-- packages/shared/src/forums.ts); each client draws its own art for it.
+-- `emoji` stays for rows that predate icons, imports and old phone builds; a
+-- client that knows icons draws the icon and falls back to the emoji.
+-- No CHECK on the key on purpose: adding a key to the set must not need a
+-- migration, and the PUT validates it.
+ALTER TABLE forum_tags ADD COLUMN IF NOT EXISTS icon TEXT
+  CHECK (icon IS NULL OR char_length(icon) <= 32);
+-- A starter tag ("question", "release"...) shows in each viewer's language
+-- while this is set. The PUT clears it when staff rename the tag.
+ALTER TABLE forum_tags ADD COLUMN IF NOT EXISTS preset TEXT
+  CHECK (preset IS NULL OR char_length(preset) <= 32);
+
+-- One-shot: existing tags get the icon that reads as the emoji they have, and
+-- a starter tag nobody renamed (its name is one of the preset's names in en,
+-- pt-BR or es) gets its preset. The two lists below are the TypeScript tables
+-- `FORUM_TAG_ICONS` + `FORUM_TAG_EMOJI_ALIASES` and `FORUM_TAG_PRESET_NAMES`;
+-- `forum-tag-icons.test.ts` fails if they drift. A starter tag with no emoji
+-- takes the preset's own icon, but one whose emoji staff chose and we cannot
+-- map keeps that emoji and no icon, so the glyph they picked still shows.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'forum_tag_icons_presets_2026_10'
+  ) THEN
+    RETURN;
+  END IF;
+
+  UPDATE forum_tags t
+     SET preset = p.preset
+    FROM (VALUES
+      ('question', 'question'),
+      ('duvida', 'question'),
+      ('dúvida', 'question'),
+      ('duda', 'question'),
+      ('bug', 'bug'),
+      ('suggestion', 'suggestion'),
+      ('sugestao', 'suggestion'),
+      ('sugestão', 'suggestion'),
+      ('sugerencia', 'suggestion'),
+      ('guide', 'tutorial'),
+      ('tutorial', 'tutorial'),
+      ('release', 'release'),
+      ('lancamento', 'release'),
+      ('lançamento', 'release'),
+      ('lanzamiento', 'release'),
+      ('wip', 'wip'),
+      ('discussion', 'discussion'),
+      ('discussao', 'discussion'),
+      ('discussão', 'discussion'),
+      ('discusion', 'discussion'),
+      ('discusión', 'discussion')
+    ) AS p(name, preset)
+   WHERE t.preset IS NULL AND lower(t.name) = p.name;
+
+  UPDATE forum_tags t
+     SET icon = e.icon
+    FROM (VALUES
+      ('❓', 'question'),
+      ('🆘', 'help'),
+      ('🐛', 'bug'),
+      ('💡', 'idea'),
+      ('📝', 'feedback'),
+      ('💬', 'discussion'),
+      ('🗳️', 'poll'),
+      ('📢', 'announcement'),
+      ('📰', 'news'),
+      ('🚀', 'release'),
+      ('🔄', 'update'),
+      ('🛠️', 'wip'),
+      ('💻', 'code'),
+      ('📚', 'guide'),
+      ('📜', 'rules'),
+      ('✅', 'solved'),
+      ('⚠️', 'warning'),
+      ('🔒', 'security'),
+      ('📌', 'pinned'),
+      ('📅', 'event'),
+      ('✨', 'showcase'),
+      ('🎨', 'art'),
+      ('📷', 'photo'),
+      ('🎬', 'video'),
+      ('🎞️', 'clip'),
+      ('📺', 'stream'),
+      ('🎵', 'music'),
+      ('🎮', 'game'),
+      ('😂', 'meme'),
+      ('☕', 'offtopic'),
+      ('👥', 'community'),
+      ('🎁', 'gift'),
+      ('🏆', 'trophy'),
+      ('🔥', 'hot'),
+      ('⭐', 'star'),
+      ('❤️', 'heart'),
+      ('🔗', 'link'),
+      ('🛠', 'wip'),
+      ('🔧', 'wip'),
+      ('🔨', 'wip'),
+      ('🚧', 'wip'),
+      ('🗳', 'poll'),
+      ('⚠', 'warning'),
+      ('🚨', 'warning'),
+      ('❤', 'heart'),
+      ('💖', 'heart'),
+      ('🎞', 'clip'),
+      ('✂️', 'clip'),
+      ('📣', 'announcement'),
+      ('📖', 'guide'),
+      ('🎉', 'event'),
+      ('🗓️', 'event'),
+      ('☑️', 'solved'),
+      ('✔️', 'solved'),
+      ('🙋', 'help'),
+      ('🤔', 'question'),
+      ('❔', 'question'),
+      ('🧠', 'idea'),
+      ('🎥', 'video'),
+      ('📹', 'video'),
+      ('🖼️', 'art'),
+      ('🎧', 'music'),
+      ('🎶', 'music'),
+      ('🕹️', 'game'),
+      ('🤣', 'meme'),
+      ('🔐', 'security'),
+      ('🛡️', 'security'),
+      ('📍', 'pinned'),
+      ('🌟', 'star'),
+      ('🎙️', 'stream')
+    ) AS e(emoji, icon)
+   WHERE t.icon IS NULL AND btrim(t.emoji) = e.emoji;
+
+  UPDATE forum_tags t
+     SET icon = CASE t.preset
+       WHEN 'question' THEN 'question'
+       WHEN 'bug' THEN 'bug'
+       WHEN 'suggestion' THEN 'idea'
+       WHEN 'tutorial' THEN 'guide'
+       WHEN 'release' THEN 'release'
+       WHEN 'wip' THEN 'wip'
+       WHEN 'discussion' THEN 'discussion'
+     END
+   WHERE t.icon IS NULL AND t.preset IS NOT NULL AND t.emoji IS NULL;
+
+  INSERT INTO data_migrations (name) VALUES ('forum_tag_icons_presets_2026_10');
+END $$;
 
 CREATE TABLE IF NOT EXISTS forum_post_tags (
   post_id UUID NOT NULL REFERENCES forum_posts(channel_id) ON DELETE CASCADE,
@@ -5876,6 +6197,25 @@ CREATE TABLE IF NOT EXISTS story_media_processors (
   seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- COMPOSER V2: layers placed on the story's 9:16 canvas (text, photos, the
+-- call, mentions, a drawing), validated by `createStorySchema`
+-- (packages/shared/src/stories.ts) before they get here. `layers` is the
+-- author's own array with one difference: an image or drawing layer holds the
+-- storage key of its object (`mediaKey`, server-minted, never client chosen)
+-- and the read path swaps it for a presigned URL. `layer_keys` is the same
+-- keys as a column, so the media sweep can find a story's layer objects
+-- without parsing JSON, and a story with only layer objects (a text card with
+-- a photo on it) is swept like any other. `alt_text` is the spoken version.
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS layers JSONB NOT NULL DEFAULT '[]'::jsonb
+  CHECK (jsonb_typeof(layers) = 'array' AND jsonb_array_length(layers) <= 20);
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS alt_text TEXT
+  CHECK (char_length(alt_text) <= 500);
+ALTER TABLE stories ADD COLUMN IF NOT EXISTS layer_keys TEXT[] NOT NULL DEFAULT '{}';
+-- The media sweep's claim for a story whose only bytes are layer objects.
+CREATE INDEX IF NOT EXISTS idx_stories_layer_sweep
+  ON stories (expires_at)
+  WHERE media_deleted_at IS NULL AND cardinality(layer_keys) > 0;
+
 -- A DM reply quotes the story it answers. SET NULL when the story row is
 -- finally deleted; the quote reads "Story expirou" long before that. Added
 -- without the constraint first, then the constraint NOT VALID: every existing
@@ -5955,6 +6295,36 @@ BEGIN
   INSERT INTO data_migrations (name) VALUES ('post_stories_bit_2026_10');
 END $$;
 
+-- MANAGE_EMOJI (bit 28 = 268435456; bits 26 and 27 are the call soundboard's): upload, rename and delete custom server
+-- emoji. ORed onto the seeded Admin cargo, whose stored mask means
+-- "everything", like post_stories_bit_2026_10. Never onto the Manager,
+-- @everyone, the Moderator or a homemade cargo: an owner grants it there from
+-- the role editor. The owner person already resolves to every bit. One-shot
+-- via data_migrations, so a bit an owner turns off never comes back.
+DO $$
+DECLARE
+  manage_emoji CONSTANT BIGINT := 268435456;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'manage_emoji_bit_2026_10_b28'
+  ) THEN
+    RETURN;
+  END IF;
+
+  WITH changed AS (
+    UPDATE roles
+       SET permissions = permissions | manage_emoji
+     WHERE (permissions & manage_emoji) = 0
+       AND system_key = 'admin'
+    RETURNING server_id
+  )
+  UPDATE servers
+     SET permissions_version = permissions_version + 1
+   WHERE id IN (SELECT DISTINCT server_id FROM changed);
+
+  INSERT INTO data_migrations (name) VALUES ('manage_emoji_bit_2026_10_b28');
+END $$;
+
 -- THE CHANNEL LIST, ONE ORDER PER PARENT (services/channel-layout.ts).
 --
 -- Step 0, once per database: the loose channels of every server (no category,
@@ -6006,3 +6376,229 @@ CREATE TABLE IF NOT EXISTS channel_layout_migrations (
   migrated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   reverted_at TIMESTAMPTZ
 );
+
+-- Custom server emoji (`packages/shared/src/server-emoji.ts`). A row per emoji
+-- because a message stores `<:name:id>` and must keep resolving across a
+-- rename. The bytes live in the attachment bucket under
+-- `servers/<server_id>/emoji/`, exactly like the icon; the row is only written
+-- after the claim has HEADed the object. The name CHECK mirrors
+-- `SERVER_EMOJI_NAME_PATTERN`; the count limit is enforced by the route.
+CREATE TABLE IF NOT EXISTS server_emoji (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL CHECK (name ~ '^[a-z0-9_]{2,32}$'),
+  storage_key TEXT NOT NULL,
+  created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- The image scan's verdict, same columns and meaning as on
+  -- `message_attachments` (docs/CONTENT_SAFETY.md). A row only exists for an
+  -- emoji the scan let through, so `rejected` never appears here: a refused
+  -- upload goes to `server_emoji_quarantine` instead.
+  scan_status   TEXT NOT NULL DEFAULT 'unscanned'
+    CHECK (scan_status IN ('unscanned', 'skipped', 'pass', 'flagged', 'error')),
+  scan_provider TEXT,
+  scan_score    REAL,
+  scan_labels   JSONB,
+  scanned_at    TIMESTAMPTZ,
+  UNIQUE (server_id, name)
+);
+
+-- Emoji uploads the image scan refused. The object is kept as evidence and is
+-- never served (no `server_emoji` row names it); `sweepQuarantinedServerEmoji`
+-- deletes it after CONTENT_SCAN_QUARANTINE_DAYS, and never one labelled
+-- `illegal` or `csam_suspected`. Same hold as Baú's `quarantined_at`.
+-- `server_id` goes NULL when the server is deleted, so the row (the only thing
+-- that names the object) outlives it and the hold and the sweep still apply.
+CREATE TABLE IF NOT EXISTS server_emoji_quarantine (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id      UUID REFERENCES servers(id) ON DELETE SET NULL,
+  uploader_id    UUID REFERENCES users(id) ON DELETE SET NULL,
+  name           TEXT NOT NULL,
+  storage_key    TEXT NOT NULL UNIQUE,
+  scan_provider  TEXT,
+  scan_score     REAL,
+  scan_labels    JSONB,
+  quarantined_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_server_emoji_quarantine_at
+  ON server_emoji_quarantine (quarantined_at);
+
+-- ============================================================ story uploads
+--
+-- Eager story uploads (`POST /api/stories/uploads`): a photo, a video or a
+-- layer image is put in storage the moment the author has it, before any story
+-- row exists, so Post only has to create and publish. A row is one object
+-- under `stories/<user>/uploads/<id>.<ext>`, never client chosen.
+--
+-- CLAIM: `POST /api/stories` with the id copies the object (server side) to
+-- the new story's own prefix and stamps `claimed_story_id` in the same
+-- transaction as the story insert, so an upload backs one story, once. The
+-- story owns the copy from then on; the source is deleted at once and again
+-- by the sweep (a claimed row is a one hour tombstone).
+--
+-- SWEEP (`sweepStories`): an UNCLAIMED upload older than
+-- `STORY_UPLOAD_UNCLAIMED_HOURS` (6) loses its object and its row, as does one
+-- whose account is gone (`user_id` is nulled, never cascaded, because the row
+-- is the only thing that names the object).
+CREATE TABLE IF NOT EXISTS story_uploads (
+  id                UUID PRIMARY KEY,
+  user_id           UUID REFERENCES users(id) ON DELETE SET NULL,
+  kind              TEXT NOT NULL CHECK (kind IN ('base', 'layer')),
+  storage_key       TEXT NOT NULL,
+  content_type      TEXT NOT NULL,
+  byte_size         INTEGER NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  claimed_story_id  UUID,
+  claimed_at        TIMESTAMPTZ,
+  -- The story-side key the claim copied this object to.
+  claimed_key       TEXT,
+  -- Lease for the sweep's delete, same idea as `stories.media_delete_claimed_at`.
+  delete_claimed_at TIMESTAMPTZ,
+  -- The author threw it away (`DELETE /api/stories/uploads/:id`). Nothing may
+  -- claim it from here on. The row outlives the object by two hours so the
+  -- sweep can delete the object once more, after the presigned PUT URL has
+  -- expired: an aborted browser PUT can still land after the first delete.
+  discarded_at      TIMESTAMPTZ,
+  -- Every story-prefix key a create attempt MEANT to copy this object to,
+  -- written BEFORE the copy: a copy made ahead of the story's transaction has
+  -- no story row yet, so this row is what lets the sweep find it if the
+  -- process dies or the cleanup fails. The key the claim kept is `claimed_key`
+  -- and belongs to the story; the others are leftovers of refused attempts.
+  copy_keys         TEXT[] NOT NULL DEFAULT '{}'
+);
+ALTER TABLE story_uploads ADD COLUMN IF NOT EXISTS discarded_at TIMESTAMPTZ;
+ALTER TABLE story_uploads ADD COLUMN IF NOT EXISTS copy_keys TEXT[] NOT NULL DEFAULT '{}';
+
+CREATE INDEX IF NOT EXISTS idx_story_uploads_user_open
+  ON story_uploads (user_id) WHERE claimed_story_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_story_uploads_created
+  ON story_uploads (created_at);
+
+-- ------------------------------------------------------------------ forwards
+-- Encaminhar: a message that carries a SNAPSHOT of a Baú post or of another
+-- message, drawn as a card under the body (the forwarder's own comment, or a
+-- plain fallback line). The shape is `messageForwardSchema` in
+-- packages/shared/src/forward.ts. Nullable, no default, so adding it is a
+-- metadata-only change on a table this size and every ordinary message stays
+-- NULL. The column is only ever written by `createMessage` for a message the
+-- forward route built, and read back through `mapMessage`, which validates it:
+-- a value this build cannot parse leaves as an ordinary message.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS forward JSONB;
+
+-- ============================================================ Seguir (Baú follows)
+--
+-- The owner's own switch for being followed: off by default, so a server that
+-- opens Seguir through the flag is still not followable until its Manage Server
+-- staff turn this on in the Baú settings. Read with the flag and the Baú switch.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS bau_follow_allowed BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- A follow points ONE source server's Baú at ONE text channel of another
+-- server. When the source publishes a free post, `bau-follow-delivery.ts`
+-- posts a forward card into every followed channel as the source (a
+-- webhook-style pseudo identity, never a person). Behind the per-server
+-- runtime flag `bau_follow`, read for the SOURCE.
+--
+-- `created_by` is the authority the delivery re-checks: the person who set the
+-- follow up must still be able to manage webhooks or channels in the
+-- destination. Nulled (not cascaded) when their account goes, which the
+-- delivery reads as lost authority and pauses on.
+--
+-- `since_at` is the line no post may be older than: a follow only ever carries
+-- what is published AFTER it was made (or after it was last resumed), never
+-- the backlog.
+CREATE TABLE IF NOT EXISTS bau_follows (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_server_id  UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  target_server_id  UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  target_channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  created_by        UUID REFERENCES users(id) ON DELETE SET NULL,
+  role_ping_id      UUID REFERENCES roles(id) ON DELETE SET NULL,
+  since_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  paused_at         TIMESTAMPTZ,
+  paused_reason     TEXT CHECK (paused_reason IS NULL OR paused_reason IN ('permissions', 'banned')),
+  permission_failures INT NOT NULL DEFAULT 0,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (source_server_id, target_channel_id)
+);
+
+-- A database that has the older two-word check (permissions only) gets the wider one.
+DO $$
+BEGIN
+  -- Only a table that still has the narrow check is touched, so a replay of this
+  -- file on a current database does no work and takes no lock.
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'bau_follows_paused_reason_check'
+       AND conrelid = 'bau_follows'::regclass
+       AND pg_get_constraintdef(oid) NOT LIKE '%banned%'
+  ) THEN
+    ALTER TABLE bau_follows DROP CONSTRAINT bau_follows_paused_reason_check;
+    ALTER TABLE bau_follows
+      ADD CONSTRAINT bau_follows_paused_reason_check
+      CHECK (paused_reason IS NULL OR paused_reason IN ('permissions', 'banned'));
+  END IF;
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_bau_follows_target_server
+  ON bau_follows (target_server_id);
+CREATE INDEX IF NOT EXISTS idx_bau_follows_target_channel
+  ON bau_follows (target_channel_id);
+
+-- A source may refuse a destination server: its follows are removed and a new
+-- one is refused. Keyed on the destination SERVER, not the channel.
+CREATE TABLE IF NOT EXISTS bau_follow_blocks (
+  source_server_id  UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  blocked_server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  created_by        UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (source_server_id, blocked_server_id)
+);
+
+-- One row per (post, follow): the dedupe. `post_id` deliberately has NO
+-- foreign key: a deleted post must still find the messages it delivered, so
+-- the delivery rows outlive the post and the sweep deletes the messages, then
+-- the row. `message_id` is SET NULL when somebody deletes the delivered
+-- message by hand, which leaves a `delivered` row with no message: done, never
+-- redelivered.
+--
+-- status: pending (due at `next_attempt_at`), delivering (claimed under
+-- `claim_id` until `claimed_until`), delivered, retracted (the post stopped
+-- being a free published post, the message is gone; goes back to pending when
+-- it qualifies again), dead (retries used up).
+CREATE TABLE IF NOT EXISTS bau_follow_deliveries (
+  post_id          UUID NOT NULL,
+  follow_id        UUID NOT NULL REFERENCES bau_follows(id) ON DELETE CASCADE,
+  source_server_id UUID NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'delivering', 'delivered', 'retracted', 'dead')),
+  message_id       UUID REFERENCES messages(id) ON DELETE SET NULL,
+  attempts         INT NOT NULL DEFAULT 0,
+  next_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  claim_id         UUID,
+  claimed_until    TIMESTAMPTZ,
+  last_error       TEXT,
+  snapshot_hash    TEXT,
+  post_updated_at  TIMESTAMPTZ,
+  delivered_at     TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (post_id, follow_id)
+);
+
+-- Serves the claim: the posts with something due (a skip scan on `post_id`) and,
+-- per post, its due rows in order.
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_due_by_post
+  ON bau_follow_deliveries (post_id, next_attempt_at, follow_id)
+  WHERE status IN ('pending', 'delivering');
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_follow
+  ON bau_follow_deliveries (follow_id);
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_message
+  ON bau_follow_deliveries (message_id) WHERE message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_delivered
+  ON bau_follow_deliveries (post_id) WHERE status = 'delivered';
+-- The quota (what went out in the last minute) and the retract / edit passes
+-- (delivered in the last 90 days) read the ledger by time, not by post.
+CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_delivered_at
+  ON bau_follow_deliveries (delivered_at) WHERE delivered_at IS NOT NULL;

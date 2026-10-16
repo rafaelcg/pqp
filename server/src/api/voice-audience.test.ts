@@ -134,12 +134,35 @@ describeDb("audience mode routes", () => {
     expect((await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body).toEqual({
       audienceMode: true,
       audioSelfHeal: true,
+      soundboard: false,
     });
     process.env.AUDIENCE_MODE = "false";
     expect((await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body).toEqual({
       audienceMode: false,
       audioSelfHeal: true,
+      soundboard: false,
     });
+  });
+
+  it("GET /api/voice/config answers the soundboard flag for the server", async () => {
+    const { serverId } = await makeServer();
+    const previous = process.env.SOUNDBOARD;
+    try {
+      delete process.env.SOUNDBOARD;
+      expect((await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body).toMatchObject({
+        soundboard: false,
+      });
+      process.env.SOUNDBOARD = "true";
+      expect((await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body).toMatchObject({
+        soundboard: true,
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.SOUNDBOARD;
+      } else {
+        process.env.SOUNDBOARD = previous;
+      }
+    }
   });
 
   it("GET /api/voice/config answers audioSelfHeal without a server, and follows its variable", async () => {

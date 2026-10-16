@@ -104,7 +104,12 @@ import { PartyPassRevocationGate } from "./party-pass-revocation.js";
 import { authorizeViewer, logRejection, statusForRejection } from "./viewer-access.js";
 import { cacheKeyRequest, safeCacheMatch, safeCachePut } from "./edge-cache.js";
 import { handleLlMediaRequest } from "./ll-media.js";
-import { parsePlaylistPath, parseSegmentPath, requestsLlMode } from "./playlist-route.js";
+import {
+  parsePlaylistPath,
+  parseSegmentPath,
+  previewRungRefused,
+  requestsLlMode,
+} from "./playlist-route.js";
 import { handleSegmentRequest, warmNewSegments, type SegmentEnv } from "./segment-media.js";
 import { ApiPlaylistOrigin, type PlaylistOrigin } from "./playlist-origin.js";
 import { LlPlaylistOrigin } from "./ll-playlist-origin.js";
@@ -408,6 +413,14 @@ export async function handlePlaylistRequest(
     return json(access.status, { error: "Unauthorized", reason: access.reason });
   }
   const { verified, usedPartyPass, token, credential } = access;
+
+  // A signed-out live preview token gets the film only, never the
+  // presenter's camera. Before the cache and the coalesced fetch below, so
+  // this refusal is never shared with a member (`previewRungRefused`).
+  if (previewRungRefused(verified.userId, rung)) {
+    logRejection(channelId, rung, "preview-rung");
+    return json(404, { error: "Not Found", reason: "preview-rung" });
+  }
 
   if (!origins.api.ready) {
     logEvent("hlsEdge.originNotConfigured", { channelId, rung: rung ?? null });

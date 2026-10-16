@@ -21,6 +21,7 @@ const MEDIA_FILES = [
   "screen-quality-received.spec.ts",
   "screen-reshare.spec.ts",
   "screen-share-fullscreen.spec.ts",
+  "screen-share-pip.spec.ts",
   "screen-share-system-audio.spec.ts",
   "screen-watch-now.spec.ts",
   "share-cursor.spec.ts",

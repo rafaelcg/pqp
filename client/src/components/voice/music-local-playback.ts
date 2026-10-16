@@ -14,12 +14,15 @@ export interface MusicLocalPlayback {
   volume: number;
   muted: boolean;
   needsTap: boolean;
+  /** The embed reported that YouTube will not play the current video here. */
+  playbackFailed: boolean;
 }
 
 let snapshot: MusicLocalPlayback = {
   volume: readMusicVolume(),
   muted: false,
   needsTap: false,
+  playbackFailed: false,
 };
 let player: YTPlayer | null = null;
 const listeners = new Set<() => void>();
@@ -61,6 +64,14 @@ export function setMusicLocalNeedsTap(needsTap: boolean): void {
   emit();
 }
 
+export function setMusicLocalPlaybackFailed(playbackFailed: boolean): void {
+  if (snapshot.playbackFailed === playbackFailed) {
+    return;
+  }
+  snapshot = { ...snapshot, playbackFailed };
+  emit();
+}
+
 export function tapMusicLocalToPlay(): void {
   if (!player) {
     // Nothing answered, so the tap bought nothing: the button stays up
@@ -97,7 +108,7 @@ export function useMusicLocalPlayback(): MusicLocalPlayback {
 }
 
 export function resetMusicLocalPlaybackForTests(): void {
-  snapshot = { volume: readMusicVolume(), muted: false, needsTap: false };
+  snapshot = { volume: readMusicVolume(), muted: false, needsTap: false, playbackFailed: false };
   player = null;
   listeners.clear();
 }

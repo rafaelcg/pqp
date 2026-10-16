@@ -295,6 +295,10 @@ export function CallDockOutlet({ channelId }: { channelId: string }) {
   // The bar kept on screen while the row closes; null while live or gone.
   const [held, setHeld] = useState<ReactElement | null>(null);
   const [open, setOpen] = useState(false);
+  // Open and done animating. Only then does the row stop clipping, so a
+  // popover the bar opens above itself (received video quality) is seen
+  // rather than cut to a sliver by the box the animation needs.
+  const [settled, setSettled] = useState(false);
 
   // Leaving: start closing now, and drop the bar at once when nothing will
   // animate. Arriving again mid-exit lets the held copy go.
@@ -304,6 +308,7 @@ export function CallDockOutlet({ channelId }: { channelId: string }) {
       return;
     }
     setOpen(false);
+    setSettled(false);
     setHeld(reducedMotion ? null : lastContent.current);
     lastContent.current = null;
   }, [active, reducedMotion]);
@@ -321,6 +326,20 @@ export function CallDockOutlet({ channelId }: { channelId: string }) {
     return () => cancelAnimationFrame(frame);
   }, [active, open, reducedMotion]);
 
+  // Backstop for a row that opens without a `transitionend` (a pane hidden
+  // with the `hidden` attribute runs no transitions).
+  useEffect(() => {
+    if (!active || !open || settled) {
+      return;
+    }
+    if (reducedMotion) {
+      setSettled(true);
+      return;
+    }
+    const timer = setTimeout(() => setSettled(true), EXIT_BACKSTOP_MS);
+    return () => clearTimeout(timer);
+  }, [active, open, settled, reducedMotion]);
+
   useEffect(() => {
     if (active || held === null) {
       return;
@@ -332,9 +351,14 @@ export function CallDockOutlet({ channelId }: { channelId: string }) {
   const onTransitionEnd = (event: TransitionEvent<HTMLDivElement>) => {
     if (
       event.target !== event.currentTarget ||
-      event.propertyName !== "grid-template-rows" ||
-      active
+      event.propertyName !== "grid-template-rows"
     ) {
+      return;
+    }
+    if (active) {
+      if (open) {
+        setSettled(true);
+      }
       return;
     }
     setHeld(null);
@@ -364,7 +388,12 @@ export function CallDockOutlet({ channelId }: { channelId: string }) {
         )}
         onTransitionEnd={onTransitionEnd}
       >
-        <div className="min-h-0 overflow-hidden">
+        <div
+          className={cn(
+            "min-h-0",
+            active && open && settled ? "overflow-visible" : "overflow-hidden",
+          )}
+        >
           {/* Same 12px sides as the text field, so the first face, the pill
               and the field's text share a left edge. On a 360 phone that
               leaves 238px, and the six tiles a phone gets (mute, hand, music,

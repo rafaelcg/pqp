@@ -1742,6 +1742,12 @@ export function createChatController(
             return;
           }
 
+          // A message is the end of "is typing": the sender's line goes the
+          // moment it lands, not up to TYPING_TTL_MS later.
+          if (message.message.authorId && typing.delete(message.message.authorId)) {
+            emit();
+          }
+
           const incoming = toChatMessage(message.message);
 
           // Our own message coming back: swap the optimistic bubble in place so

@@ -1,6 +1,8 @@
 import type {
   CreateStoryRequest,
   CreateStoryResponse,
+  CreateStoryUploadRequest,
+  CreateStoryUploadResponse,
   PublishStoryResponse,
   StoriesConfig,
   StoriesResponse,
@@ -118,6 +120,14 @@ export async function fetchStories(ids: readonly string[]): Promise<Story[]> {
 
 export const createStory = (body: CreateStoryRequest) =>
   apiFetch<CreateStoryResponse>("/api/stories", json("POST", body));
+
+/** Start a file's upload before the story exists (`createStoryUploadSchema`). */
+export const mintStoryUpload = (body: CreateStoryUploadRequest) =>
+  apiFetch<CreateStoryUploadResponse>("/api/stories/uploads", json("POST", body));
+
+/** Throw an unclaimed upload away (the server deletes the object). Callers fire and forget. */
+export const deleteStoryUpload = (uploadId: string) =>
+  noContent(`/api/stories/uploads/${uploadId}`, json("DELETE"));
 
 export const publishStory = (storyId: string) =>
   apiFetch<PublishStoryResponse>(

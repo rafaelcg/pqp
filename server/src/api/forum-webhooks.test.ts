@@ -307,6 +307,52 @@ describeDb("webhooks into a forum", () => {
     expect(answer.body.ignored_tags).toBeUndefined();
   });
 
+  it("an embed-only post's card previews the embed, in the answer and in the list", async () => {
+    const webhook = await makeWebhook();
+    const alert = await execute(webhook.url, {
+      thread_name: "CPU alta em web-2",
+      embeds: [
+        {
+          title: "CPU alta em web-2",
+          description: "Acima de 90% há 5 minutos.",
+          fields: [{ name: "Host", value: "web-2" }],
+        },
+      ],
+    });
+    expect(alert.status, JSON.stringify(alert.body)).toBe(200);
+    // The embed's title is the post's own title: not said twice.
+    expect(alert.body.post!.preview).toBe("Acima de 90% há 5 minutos. · Host: web-2");
+    expect(alert.body.post!.openingKind).toBe("text");
+    const fields = await execute(webhook.url, {
+      thread_name: "Só campos",
+      embeds: [{ fields: [{ name: "Valor", value: "93%" }] }],
+    });
+    expect(fields.body.post!.preview).toBe("Valor: 93%");
+    // A title that adds something is the first words.
+    const titled = await execute(webhook.url, {
+      thread_name: "Aviso",
+      embeds: [{ title: "Manutenção hoje", url: "https://exemplo.com/a" }],
+    });
+    expect(titled.body.post!.preview).toBe("Manutenção hoje");
+    // Nothing to say stays empty, and the text, when there is any, wins.
+    const bare = await execute(webhook.url, {
+      thread_name: "Igual",
+      embeds: [{ title: "Igual", url: "https://exemplo.com/b" }],
+    });
+    expect(bare.body.post!.preview).toBeNull();
+    const withText = await execute(webhook.url, {
+      thread_name: "Com texto",
+      content: "Corpo do aviso",
+      embeds: [{ description: "Não aparece" }],
+    });
+    expect(withText.body.post!.preview).toBe("Corpo do aviso");
+
+    const list = await call<{ posts: ForumPostSummary[] }>(bob, "GET", `/api/channels/${forumId}/posts`);
+    const byId = new Map(list.body.posts.map((row) => [row.id, row.preview]));
+    expect(byId.get(alert.body.post!.id)).toBe("Acima de 90% há 5 minutos. · Host: web-2");
+    expect(byId.get(bare.body.post!.id)).toBeNull();
+  });
+
   it("n8n-http-request: titled from the first line with the link stripped; the row shows the override", async () => {
     const webhook = await makeWebhook();
     const answer = await execute(webhook.url, fixture("n8n-http-request"));
@@ -424,6 +470,39 @@ describeDb("webhooks into a forum", () => {
     });
     expect(third.body.post!.tagIds).toEqual([]);
     expect(third.body.ignored_tags).toEqual(["Dúvida"]);
+  });
+
+  it("starter tags: a feed can name them in any shipped language while they are untouched", async () => {
+    // "Lançamento" and "Dúvida" were created by an older client, so the server
+    // recognised them as the `release` and `question` starters.
+    const webhook = await makeWebhook();
+    const localized = await execute(webhook.url, {
+      content: "Nova versão",
+      thread_name: "Versão 3.0",
+      applied_tags: ["Release", "Question", "lanzamiento"],
+    });
+    expect(localized.status, JSON.stringify(localized.body)).toBe(200);
+    expect(new Set(localized.body.post!.tagIds)).toEqual(
+      new Set([tags["Lançamento"], tags["Dúvida"]]),
+    );
+
+    // Once staff rename one, only its own name answers.
+    const renamed = await call(alice, "PUT", `/api/channels/${forumId}/forum-tags`, {
+      tags: [
+        { id: tags["Notícias"]!, name: "Notícias", moderated: false },
+        { id: tags["Lançamento"]!, name: "Novidade", moderated: false },
+        { id: tags["Dúvida"]!, name: "Dúvida", moderated: false },
+        { id: tags["Oficial"]!, name: "Oficial", moderated: true },
+      ],
+    });
+    expect(renamed.status).toBe(200);
+    const after = await execute(webhook.url, {
+      content: "Outra versão",
+      thread_name: "Versão 3.1",
+      applied_tags: ["Release", "Novidade"],
+    });
+    expect(after.body.post!.tagIds).toEqual([tags["Lançamento"]]);
+    expect(after.body.ignored_tags).toEqual(["Release"]);
   });
 
   it("thread-id-reply: lands in this forum's post; a locked post refuses; another forum's post is 404", async () => {

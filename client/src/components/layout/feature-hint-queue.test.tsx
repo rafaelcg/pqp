@@ -13,6 +13,7 @@ import {
   winningFeatureHint,
   type AttachedFeatureHintId,
 } from "@/lib/feature-hints";
+import { HINTS_PERSIST_OVERRIDE_KEY } from "@/lib/hints";
 
 /*
  * THE QUEUE HAS TO MOVE THE MOMENT A CARD IS SPENT.
@@ -71,6 +72,7 @@ describe("the attached hint queue", () => {
   beforeEach(() => {
     resetFeatureHintsForTests();
     window.localStorage.clear();
+    window.localStorage.setItem(HINTS_PERSIST_OVERRIDE_KEY, "1");
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);

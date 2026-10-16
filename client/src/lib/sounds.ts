@@ -1042,6 +1042,29 @@ if (typeof window !== "undefined") {
   window.addEventListener("keydown", unlock, { capture: true });
 }
 
+/**
+ * The same context the cues use, so `setSinkId` covers a soundboard bus.
+ * Null when this browser has no Web Audio.
+ */
+export function sharedAudioContext(): AudioContext | null {
+  return ensureContext();
+}
+
+/** Decode into the shared context. Null when this browser cannot. */
+export async function decodeAudioBuffer(
+  bytes: ArrayBuffer,
+): Promise<AudioBuffer | null> {
+  const ctx = ensureContext();
+  if (!ctx) {
+    return null;
+  }
+  try {
+    return await ctx.decodeAudioData(bytes.slice(0));
+  } catch {
+    return null;
+  }
+}
+
 /** Test seam: drop buffers, loops, and the context without touching prefs. */
 export function resetSoundEngineForTests(): void {
   playGeneration++;

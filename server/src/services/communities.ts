@@ -17,6 +17,7 @@ import {
   type PublicCommunity,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { isEnabled } from "../lib/flags.js";
 import { invalidateServerAudience } from "./servers.js";
 import { recordActivationStep } from "./activation.js";
 // A cycle (default-community.ts imports this file), and a harmless one: only a
@@ -585,39 +586,29 @@ export async function joinCommunity(
  * before they were banned, and the join behind the CTA re-checks the ban under
  * a lock the way it always has.
  */
-export async function getPublicCommunity(
-  slug: string,
-): Promise<PublicCommunity | null> {
-  const result = await getPool().query<{
-    name: string;
-    community_slug: string;
-    community_tagline: string | null;
-    community_about: string | null;
-    community_links: unknown;
-    community_featured_kind: string | null;
-    community_featured_embed_url: string | null;
-    community_featured_url: string | null;
-    community_category: CommunityCategory;
-    member_count: number;
-    icon_url: string | null;
-    banner_url: string | null;
-    created_at: Date;
-  }>(
-    `SELECT s.name, s.community_slug, s.community_tagline, s.community_about,
-            s.community_links, s.community_featured_kind,
-            s.community_featured_embed_url, s.community_featured_url,
-            s.community_category, s.member_count, s.icon_url, s.banner_url,
-            s.created_at
-       FROM servers s
-      WHERE s.community_slug = $1
-        AND s.is_community
-        AND NOT s.is_community_suspended`,
-    [slug],
-  );
-  const row = result.rows[0];
-  if (!row) {
-    return null;
-  }
+export interface PublicCommunityRow {
+  id: string;
+  name: string;
+  community_slug: string;
+  community_tagline: string | null;
+  community_about: string | null;
+  community_links: unknown;
+  community_featured_kind: string | null;
+  community_featured_embed_url: string | null;
+  community_featured_url: string | null;
+  community_category: CommunityCategory;
+  member_count: number;
+  icon_url: string | null;
+  banner_url: string | null;
+  created_at: Date;
+}
+
+/**
+ * The poster, from a row. Shared by the community page's own read and by the
+ * Baú post page, which joins these columns onto its post query to answer in one
+ * round trip, so the two can never draw a community differently.
+ */
+export function toPublicCommunity(row: PublicCommunityRow): PublicCommunity {
   return {
     slug: row.community_slug,
     name: row.name,
@@ -637,7 +628,32 @@ export async function getPublicCommunity(
     // exact creation second is nobody's business and "desde julho de 2026" is
     // the whole of what a stranger gets from it anyway.
     createdMonth: monthStamp(row.created_at),
+    // The signed-out live preview's door, only while its flag is on for this
+    // community. Absent otherwise, so the body is what it always was. The id
+    // is read to ask the flag and goes no further.
+    ...(isEnabled("live_preview", { serverId: row.id })
+      ? { livePreview: true as const }
+      : {}),
   };
+}
+
+export async function getPublicCommunity(
+  slug: string,
+): Promise<PublicCommunity | null> {
+  const result = await getPool().query<PublicCommunityRow>(
+    `SELECT s.id, s.name, s.community_slug, s.community_tagline, s.community_about,
+            s.community_links, s.community_featured_kind,
+            s.community_featured_embed_url, s.community_featured_url,
+            s.community_category, s.member_count, s.icon_url, s.banner_url,
+            s.created_at
+       FROM servers s
+      WHERE s.community_slug = $1
+        AND s.is_community
+        AND NOT s.is_community_suspended`,
+    [slug],
+  );
+  const row = result.rows[0];
+  return row ? toPublicCommunity(row) : null;
 }
 
 /**

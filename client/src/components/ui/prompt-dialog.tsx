@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { CATEGORY_NAME_MAX_LENGTH } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -72,6 +72,24 @@ export function PromptDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const formId = useId();
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  // `autoFocus` alone loses to whatever opened the dialog: a menu item gives
+  // focus back to its trigger as it closes, the Dialog then moves focus to its
+  // first control (the Close button), and the name field ended up unfocused.
+  // Said again once those have run.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const field = nameRef.current;
+      if (field && document.activeElement !== field) {
+        field.focus();
+      }
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [open]);
 
   useEffect(() => {
     if (open) {
@@ -135,6 +153,7 @@ export function PromptDialog({
             {label ?? t("channelSettings.name")}
           </span>
           <Input
+            ref={nameRef}
             value={value}
             onChange={(e) => {
               setValue(

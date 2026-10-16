@@ -62,6 +62,8 @@ test.describe("voice lobby", () => {
 
     const leave = page.getByRole("main").getByRole("button", { name: "Leave", exact: true });
     await expect(leave).toBeInViewport();
+    // The dock's Leave is one way out. The sidebar card keeps its own red
+    // hang-up, camera and share beside it, so both are on screen at once.
     await expect(
       page.getByRole("button", { name: "Disconnect from voice" }),
     ).toBeVisible();
@@ -96,14 +98,14 @@ test.describe("voice lobby", () => {
       expect((await stagePane.boundingBox())?.height ?? 0).toBeLessThan(2);
     }
 
-    // With the same actions in the composer, the sidebar keeps its one-line
-    // status and hang-up and drops the camera/share pair.
+    // The sidebar card keeps its camera button (and share, where the platform
+    // can share a screen) under its status even with the composer's call bar
+    // on screen, as Discord's Voice Connected panel does.
     await expect(
-      page.getByRole("button", { name: "Turn camera on", exact: true }),
-    ).toHaveCount(1);
-    await expect(
-      page.getByRole("button", { name: "Share screen", exact: true }),
-    ).toHaveCount(0);
+      page
+        .locator("[data-voice-status-bar]")
+        .getByRole("button", { name: "Turn camera on", exact: true }),
+    ).toBeVisible();
 
     await expect(
       bar.getByRole("button", { name: "Mute microphone" }),

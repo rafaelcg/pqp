@@ -1,6 +1,8 @@
 package gg.pqp.app.ui.screens
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,6 +37,77 @@ class ServerActionsTest {
         assertTrue(ServerActions.deleteConfirmationMatches("Owned With Others", "Owned With Others"))
         assertFalse(ServerActions.deleteConfirmationMatches("Owned With Other", "Owned With Others"))
         assertFalse(ServerActions.deleteConfirmationMatches("", "Owned With Others"))
+    }
+
+    private fun server(id: String) = gg.pqp.app.core.ServerSummary(
+        id = id,
+        name = id,
+        ownerId = "u",
+        createdAt = "2026-01-01T00:00:00Z",
+    )
+
+    @Test
+    fun `a server moves one place up or down in the list`() {
+        val list = listOf(server("a"), server("b"), server("c"))
+        assertEquals(listOf("b", "a", "c"), ServerActions.reordered(list, "a", 1)!!.map { it.id })
+        assertEquals(listOf("a", "c", "b"), ServerActions.reordered(list, "c", -1)!!.map { it.id })
+    }
+
+    @Test
+    fun `applying an order changes only the order`() {
+        val list = listOf(server("a"), server("b"), server("c"))
+        assertEquals(listOf("c", "a", "b"), ServerActions.applyOrder(list, listOf("c", "a", "b")).map { it.id })
+        // An id the list does not hold is ignored; one the order does not name
+        // keeps its place after the named ones.
+        assertEquals(listOf("b", "a", "c"), ServerActions.applyOrder(list, listOf("zzz", "b")).map { it.id })
+    }
+
+    @Test
+    fun `moving past either end, or an unknown server, changes nothing`() {
+        val list = listOf(server("a"), server("b"), server("c"))
+        assertNull(ServerActions.reordered(list, "a", -1))
+        assertNull(ServerActions.reordered(list, "c", 1))
+        assertNull(ServerActions.reordered(list, "zzz", 1))
+        assertNull(ServerActions.reordered(emptyList(), "a", 1))
+    }
+
+    @Test
+    fun `another device's order is followed, this phone's own echo and a save in flight are not`() {
+        val list = listOf(server("a"), server("b"), server("c"))
+        val order = listOf("c", "a", "b")
+        assertEquals(
+            listOf("c", "a", "b"),
+            ServerActions.followRemoteOrder(list, order, origin = "web-1", ownOrigin = "android-1", saving = false)!!
+                .map { it.id },
+        )
+        // Its own echo.
+        assertNull(ServerActions.followRemoteOrder(list, order, "android-1", "android-1", saving = false))
+        // A frame with no origin is somebody else's.
+        assertEquals(
+            listOf("c", "a", "b"),
+            ServerActions.followRemoteOrder(list, order, null, "android-1", saving = false)!!.map { it.id },
+        )
+        // A save of this phone's is in flight: the order on screen is the newer.
+        assertNull(ServerActions.followRemoteOrder(list, order, "web-1", "android-1", saving = true))
+        // Nothing would move.
+        assertNull(ServerActions.followRemoteOrder(list, listOf("a", "b", "c"), "web-1", "android-1", saving = false))
+        // A server joined a moment ago, not named yet, keeps its place after the named ones.
+        assertEquals(
+            listOf("b", "a", "c"),
+            ServerActions.followRemoteOrder(list, listOf("b", "a"), "web-1", "android-1", saving = false)!!
+                .map { it.id },
+        )
+    }
+
+    @Test
+    fun `a remote order ignored during saves is applied once they settle, only if one failed`() {
+        val list = listOf(server("a"), server("b"), server("c"))
+        val remote = listOf("c", "b", "a")
+        assertEquals(listOf("c", "b", "a"), ServerActions.afterSaves(list, remote, anySaveFailed = true)!!.map { it.id })
+        // Every save landed: this phone's order is the newest, the remote one is history.
+        assertNull(ServerActions.afterSaves(list, remote, anySaveFailed = false))
+        assertNull(ServerActions.afterSaves(list, null, anySaveFailed = true))
+        assertNull(ServerActions.afterSaves(list, listOf("a", "b", "c"), anySaveFailed = true))
     }
 
     @Test

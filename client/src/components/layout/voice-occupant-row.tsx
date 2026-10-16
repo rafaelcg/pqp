@@ -11,7 +11,13 @@ import {
   type PeerAudioTrack,
 } from "@/components/voice/peer-audio-menu";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import {
+  SoundboardMutedMark,
+  SoundboardOccupantMark,
+  soundboardSoundLabel,
+} from "@/components/voice/soundboard-float";
 import { useTranslation } from "@/lib/i18n";
+import { useSoundboardMark, useSoundboardUserMuted } from "@/lib/soundboard";
 import { VOICE_OCCUPANT_DRAG_MIME } from "@/lib/voice-occupant-dnd";
 import {
   voiceOccupantAudioAffordance,
@@ -76,11 +82,23 @@ export function VoiceOccupantRow({
    * with them. Absent for ourselves, and for anyone we are not listening to
    * (a channel we have not joined), where a volume knob would govern nothing.
    */
-  audio?: { voice?: PeerAudioTrack; share?: PeerAudioTrack };
+  audio?: {
+    voice?: PeerAudioTrack;
+    share?: PeerAudioTrack;
+    /**
+     * Whether this server's soundboard is on. The person's menu offers the
+     * soundboard switch only then; their clips travel on the voice socket, so
+     * a voice track that failed does not change it.
+     */
+    soundboard?: boolean;
+  };
   onDragStart: (person: VoiceParticipant, channelId: string) => void;
   onDragEnd: () => void;
 }) {
   const { t } = useTranslation();
+  const mark = useSoundboardMark(person.userId);
+  const playing = mark ? soundboardSoundLabel(mark.soundId, t) : null;
+  const [soundboardMuted] = useSoundboardUserMuted(person.userId);
   const rowRef = useRef<HTMLDivElement>(null);
   const ghostRef = useRef<HTMLElement | null>(null);
   const menu = usePeerAudioMenu<HTMLLIElement>();
@@ -107,6 +125,18 @@ export function VoiceOccupantRow({
         ...items,
       ] satisfies ContextMenuItemDef[])
     : items;
+
+  const baseLabel = playing
+    ? t("voice.occupant.rowPlaying", {
+        name: person.displayName,
+        sound: playing,
+      })
+    : t("voice.occupant.row", { name: person.displayName });
+  // The muted glyph is inside a labelled button, so a screen reader never
+  // reaches it: the row's own name carries the state.
+  const rowLabel = soundboardMuted
+    ? `${baseLabel}. ${t("voice.audio.soundboardMarkMuted", { name: person.displayName })}`
+    : baseLabel;
 
   function clearGhost() {
     ghostRef.current?.remove();
@@ -171,7 +201,7 @@ export function VoiceOccupantRow({
           data-voice-occupant={person.userId}
           data-voice-occupant-channel={channelId}
           data-voice-occupant-draggable={canDrag ? "true" : "false"}
-          aria-label={t("voice.occupant.row", { name: person.displayName })}
+          aria-label={rowLabel}
           onDragStart={handleDragStart}
           onDragEnd={() => {
             clearGhost();
@@ -193,7 +223,14 @@ export function VoiceOccupantRow({
             muted={person.muted || person.deafened}
             size="sm"
           />
-          <span className="min-w-0 flex-1 truncate">{person.displayName}</span>
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span className="truncate">{person.displayName}</span>
+            <SoundboardOccupantMark userId={person.userId} />
+            <SoundboardMutedMark
+              userId={person.userId}
+              name={person.displayName}
+            />
+          </span>
           {/* The speaker slot sits BEFORE the badges, so the mute and deafen
               icons end at the row's right edge for everybody. After them, a
               hover-only slot that is invisible but still 18px wide pushed
@@ -227,8 +264,13 @@ export function VoiceOccupantRow({
         open={menu.open}
         voice={audio?.voice}
         share={audio?.share}
+        soundboardUserId={audio?.soundboard ? person.userId : undefined}
         side="bottom"
-        align="start"
+        // Portalled beside the row, so Escape and Tab hand the focus back to
+        // the row that opened it, and the sidebar's own scrolling cannot clip it.
+        anchorRef={rowRef}
+        panelRef={menu.panelRef}
+        onClose={menu.close}
         className="w-[13.5rem]"
       />
     </li>

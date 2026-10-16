@@ -217,9 +217,11 @@ function geometry(page: Page) {
     const hidden = Array.from(
       document.querySelectorAll("[data-immersive-hide]"),
     ).map((el) => getComputedStyle(el).display === "none");
+    // Upright, the controls are in the composer's strip and there is no
+    // floating bar; sideways the composer is hidden and the bar comes back.
     const controls = document.querySelector(
       '[data-testid="call-controls-bar"]',
-    ) as HTMLElement;
+    ) as HTMLElement | null;
     return {
       stageLeft: rect.left,
       stageWidth: rect.width,
@@ -227,12 +229,35 @@ function geometry(page: Page) {
       innerHeight: window.innerHeight,
       immersive: document.documentElement.hasAttribute("data-immersive-stage"),
       hiddenColumns: hidden,
-      controlsClass: controls.className,
-      controlsPaddingBottom: parseFloat(getComputedStyle(controls).paddingBottom),
+      controlsClass: controls?.className ?? "",
+      controlsPaddingBottom: controls
+        ? parseFloat(getComputedStyle(controls).paddingBottom)
+        : 0,
       scrollWidth: document.scrollingElement!.scrollWidth,
       fullscreenElement: document.fullscreenElement?.getAttribute("data-testid") ?? null,
     };
   });
+}
+
+/**
+ * Stage fullscreen lives in the bar's "More" menu. Its row names the way
+ * out while the stage is fullscreen, which is the state the test reads.
+ */
+async function stageFullscreenRow(page: Page) {
+  await page
+    .getByTestId("call-controls-bar")
+    .getByTestId("call-more")
+    .click();
+  return page.getByRole("menuitem", { name: /^(View|Exit) fullscreen/ });
+}
+
+async function expectStageFullscreen(page: Page, on: boolean): Promise<void> {
+  const row = await stageFullscreenRow(page);
+  await expect(row).toHaveAccessibleName(
+    on ? /^Exit fullscreen/ : /^View fullscreen/,
+  );
+  await page.keyboard.press("Escape");
+  await expect(row).toBeHidden();
 }
 
 async function expectNoSidewaysScroll(page: Page): Promise<void> {
@@ -330,10 +355,8 @@ test("the fullscreen button asks the platform, and its state follows the platfor
   await startShare(page);
   await page.setViewportSize(LANDSCAPE[project]);
 
-  const button = page.getByTestId("stage-fullscreen");
-  await expect(button).toBeVisible();
-  await expect(button).toHaveAttribute("aria-pressed", "false");
-  await button.click();
+  await expect(page.getByTestId("call-controls-bar")).toBeVisible();
+  await (await stageFullscreenRow(page)).click();
 
   if (project === "mobile-iphone") {
     await expect
@@ -343,8 +366,8 @@ test("the fullscreen button asks the platform, and its state follows the platfor
     expect(await page.evaluate(() => window.__fsCalls)).not.toContain(
       "requestFullscreen",
     );
-    // The stub raised `webkitbeginfullscreen`; the button follows it.
-    await expect(button).toHaveAttribute("aria-pressed", "true");
+    // The stub raised `webkitbeginfullscreen`; the menu row follows it.
+    await expectStageFullscreen(page, true);
     // The call's audio sinks are separate <audio> elements and untouched.
     const audioState = await page.evaluate(() =>
       Array.from(document.querySelectorAll("audio")).map((a) => ({
@@ -359,7 +382,7 @@ test("the fullscreen button asks the platform, and its state follows the platfor
         .querySelector('[data-testid="call-stage"] video')!
         .dispatchEvent(new Event("webkitendfullscreen"));
     });
-    await expect(button).toHaveAttribute("aria-pressed", "false");
+    await expectStageFullscreen(page, false);
   } else {
     await expect
       .poll(() => page.evaluate(() => window.__fsCalls))
@@ -369,14 +392,13 @@ test("the fullscreen button asks the platform, and its state follows the platfor
         timeout: 10_000,
       })
       .toBe("call-stage");
-    await expect(button).toHaveAttribute("aria-pressed", "true");
     const g = await geometry(page);
     expect(g.stageWidth).toBe(g.innerWidth);
-    await button.click();
+    await (await stageFullscreenRow(page)).click();
     await expect
       .poll(async () => (await geometry(page)).fullscreenElement)
       .toBeNull();
-    await expect(button).toHaveAttribute("aria-pressed", "false");
+    await expectStageFullscreen(page, false);
   }
   await expectNoSidewaysScroll(page);
   await leaveVoiceIfConnected(page);

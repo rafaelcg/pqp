@@ -6,6 +6,12 @@ import {
 } from "./dm-preview.js";
 
 describe("stripMarkdownForPreview", () => {
+  it("shows a custom emoji token as the :name: that was typed", () => {
+    expect(
+      stripMarkdownForPreview("gg <:pog:3f2a1c9e-0b1d-4c5e-8f6a-7b8c9d0e1f2a> wp"),
+    ).toBe("gg :pog: wp");
+  });
+
   it("strips bold, italic, strikethrough and inline code", () => {
     expect(stripMarkdownForPreview("**bora** hoje à *noite*?")).toBe(
       "bora hoje à noite?",

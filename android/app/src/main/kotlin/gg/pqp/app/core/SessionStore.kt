@@ -6,9 +6,17 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonArray
+import gg.pqp.app.ui.screens.ServerActions
 import gg.pqp.app.onboarding.markOnboarded
 import okhttp3.OkHttpClient
 
@@ -69,6 +77,13 @@ class SessionStore(
     val servers: StateFlow<List<ServerSummary>> = _servers.asStateFlow()
 
     /**
+     * Whether [servers] has ever been answered since sign-in. An account in no
+     * server and a list that has not arrived are both empty; this tells them apart.
+     */
+    private val _serversLoaded = MutableStateFlow(false)
+    val serversLoaded: StateFlow<Boolean> = _serversLoaded.asStateFlow()
+
+    /**
      * Why the last `pqp://` link went nowhere, in the server's own words.
      *
      * A followed link that silently does nothing is indistinguishable from a
@@ -101,6 +116,112 @@ class SessionStore(
     val realtime: RealtimeClient = RealtimeClient(delegating, scope, http)
 
     private var restoreJob: Job? = null
+
+    /**
+     * A server this account lost (kicked, banned, deleted), once the list has dropped it. The
+     * screens that are open inside it leave, and the person is told why, once.
+     */
+    private val _serverGone = MutableStateFlow<List<ServerGone>>(emptyList())
+
+    /**
+     * Held until the UI says it has dealt with them ([acknowledgeGone]), not emitted: a removal that lands while
+     * nothing is collecting (the navigation host is between lifecycles) must still pop the screens inside that
+     * server and say why once it is back.
+     */
+    val serverGone: StateFlow<List<ServerGone>> = _serverGone.asStateFlow()
+
+    fun acknowledgeGone(handled: List<ServerGone>) {
+        _serverGone.update { pending -> pending.filterNot { it in handled } }
+    }
+
+    private fun onAccountFrame(frame: JsonObject) {
+        when ((frame["type"] as? JsonPrimitive)?.contentOrNull) {
+            "server-removed" -> AccountFrames.serverRemoved(frame)?.let { removed ->
+                val lost = synchronized(orderLock) {
+                    val (rest, lost) = AccountFrames.apply(_servers.value, removed) ?: return@synchronized null
+                    _servers.value = rest
+                    lost
+                }
+                if (lost != null) _serverGone.update { it + lost }
+            }
+            "own-status" -> AccountFrames.ownStatus(frame)?.let(::onRemoteStatus)
+        }
+    }
+
+    private val statusLock = Any()
+    private var statusSaving = 0
+    private var statusGeneration = 0
+    private val heldStatus = mutableListOf<String>()
+
+    /** The account's own manual status, as the session holds it. */
+    fun ownStatus(): String = OwnStatus.read((_phase.value as? SessionPhase.Ready)?.me?.preferences?.status)
+
+    private fun applyOwnStatus(status: String) {
+        val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
+        _phase.value = SessionPhase.Ready(
+            current.copy(preferences = (current.preferences ?: MePreferences()).copy(status = status)),
+        )
+    }
+
+    /** Another device of this account chose a status. Held while this phone's own write is in the air. */
+    private fun onRemoteStatus(status: String) {
+        synchronized(statusLock) {
+            if (statusSaving > 0) {
+                heldStatus += status
+                return
+            }
+            statusGeneration += 1
+        }
+        applyOwnStatus(status)
+    }
+
+    /**
+     * Choose a status. Optimistic, then awaited: this is the one preference that must not be
+     * fire-and-forget, because "I picked invisible, the request failed, nobody told me" is
+     * somebody believing they are hidden while they are not. A failure puts the old choice back
+     * and calls [onError]. See [OwnStatus.needsReadBack] for what arrives meanwhile.
+     */
+    fun setOwnStatus(wanted: String, onError: () -> Unit) {
+        val previous = ownStatus()
+        if (wanted == previous || wanted !in OwnStatus.CHOICES) return
+        val mine = synchronized(statusLock) {
+            statusSaving += 1
+            statusGeneration += 1
+            heldStatus.clear()
+            statusGeneration
+        }
+        applyOwnStatus(wanted)
+        scope.launch {
+            val saved = runSuspendCatching { api.setStatus(wanted) }.isSuccess
+            val held: List<String>
+            val generation: Int
+            synchronized(statusLock) {
+                statusSaving -= 1
+                held = heldStatus.toList()
+                heldStatus.clear()
+                generation = statusGeneration
+            }
+            when {
+                !saved -> {
+                    // Only the newest choice puts the old one back: if another was made while this one was
+                    // in the air, that one owns the row and an earlier failure must not undo it.
+                    if (generation == mine) {
+                        // Another device's choice that arrived meanwhile is newer than the one that failed.
+                        applyOwnStatus(held.lastOrNull() ?: previous)
+                        onError()
+                    }
+                }
+                OwnStatus.needsReadBack(wanted, held) -> {
+                    val stored = runSuspendCatching { api.me() }.getOrNull()
+                        ?.let { OwnStatus.read(it.preferences?.status) }
+                    // A newer save or frame has a fresher answer than this read, issued before it.
+                    if (synchronized(statusLock) { statusGeneration == generation }) {
+                        applyOwnStatus(stored ?: held.last())
+                    }
+                }
+            }
+        }
+    }
 
     /**
      * Whether the account sitting at the age gate will be shown the wizard
@@ -152,6 +273,7 @@ class SessionStore(
                 "passed" -> {
                     _phase.value = SessionPhase.Ready(me)
                     realtime.connect()
+                    followRemoteServerOrder()
                     refreshServers()
                 }
                 "blocked" -> _phase.value = SessionPhase.Blocked(me.ageGate)
@@ -185,6 +307,18 @@ class SessionStore(
     }
 
     /**
+     * Change the stored preferences held by the session, at once. The writer
+     * (`ConversationPrefs`) owns the request; this is only the local half, so
+     * every screen reads one value.
+     */
+    fun updatePreferences(transform: (MePreferences) -> MePreferences) {
+        val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
+        _phase.value = SessionPhase.Ready(
+            current.copy(preferences = transform(current.preferences ?: MePreferences())),
+        )
+    }
+
+    /**
      * Chamar a atenção's opt-out, reflected into the session the moment it is
      * chosen, so every screen reads one value and a remount never shows the
      * one from launch. The write itself is `NudgePreference`'s.
@@ -193,6 +327,17 @@ class SessionStore(
         val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
         _phase.value = SessionPhase.Ready(
             current.copy(preferences = (current.preferences ?: MePreferences()).copy(allowNudges = allow)),
+        )
+    }
+
+    /**
+     * Voice note transcription's two switches, reflected into the session the moment they are chosen,
+     * so every screen reads one value. The write itself is `VoiceTranscriptionPreference`'s.
+     */
+    fun applyVoiceTranscription(prefs: VoiceTranscriptionPrefs) {
+        val current = (_phase.value as? SessionPhase.Ready)?.me ?: return
+        _phase.value = SessionPhase.Ready(
+            current.copy(preferences = (current.preferences ?: MePreferences()).copy(voiceTranscription = prefs)),
         )
     }
 
@@ -243,11 +388,142 @@ class SessionStore(
     fun startInviteJoin(code: String): kotlinx.coroutines.Deferred<JoinInviteResponse?> =
         inviteJoin ?: scope.async { redeemInvite(code) }.also { inviteJoin = it }
 
+    /**
+     * An API client that speaks for [account] and only for it, or null when somebody else is
+     * (or nobody is) signed in. The session's own [api] follows whoever signs in next, so a
+     * write that outlives a sign-out could go out with the NEXT account's credentials; this one
+     * carries the token that was current for [account] and nothing else. The account is read
+     * on both sides of fetching the token, so a switch in between is seen and refused.
+     */
+    suspend fun apiFor(account: String?): ApiClient? {
+        if (account == null || currentUserId() != account) return null
+        val token = tokens.currentToken()
+        if (currentUserId() != account) return null
+        return ApiClient(TokenProvider { token }, http)
+    }
+
+    private fun currentUserId(): String? = (_phase.value as? SessionPhase.Ready)?.me?.id
+
     fun refreshServers() {
         scope.launch {
             runCatching { api.servers() }
-                .onSuccess { _servers.value = it }
+                .onSuccess { fresh ->
+                    _serversLoaded.value = true
+                    // A read that began before a move can land while that move's
+                    // save is still queued or in the air: keep the order the
+                    // person just chose over the one the read carries.
+                    synchronized(orderLock) {
+                        _servers.value = if (orderSavesPending > 0) {
+                            gg.pqp.app.ui.screens.ServerActions
+                                .applyOrder(fresh, _servers.value.map { it.id })
+                        } else {
+                            fresh
+                        }
+                    }
+                }
                 .onFailure { Log.w(TAG, "servers failed: ${it.message}") }
+        }
+    }
+
+    /**
+     * Move a server up or down one place in this account's own list, and save
+     * it. Optimistic: the list moves now. Nothing happens at the ends.
+     *
+     * SAVES RUN ONE AT A TIME (the [orderSaves] mutex). Two requests in the air
+     * can be processed in either order and leave the stored order older than
+     * the one shown. Each queued save sends the order as it is when its turn
+     * comes, so several quick moves collapse into one request (a later turn
+     * that finds the stored order already current sends nothing). A refused
+     * save puts the order back to the last one the server confirmed, never to
+     * an intermediate one that was not saved, changing only the order, and
+     * [onError] gets the server's own sentence.
+     */
+    fun moveServer(serverId: String, delta: Int, onError: (String) -> Unit) {
+        synchronized(orderLock) {
+            val moved = gg.pqp.app.ui.screens.ServerActions
+                .reordered(_servers.value, serverId, delta) ?: return
+            if (confirmedOrder == null) {
+                confirmedOrder = _servers.value.map { it.id }
+            }
+            orderSavesPending += 1
+            _servers.value = moved
+        }
+        scope.launch {
+            try {
+                orderSaves.withLock {
+                    val ids = _servers.value.map { it.id }
+                    if (ids == synchronized(orderLock) { confirmedOrder }) return@withLock
+                    runCatching { api.saveServerOrder(ids, orderOrigin) }
+                        .onSuccess {
+                            synchronized(orderLock) {
+                                confirmedOrder = ids
+                                orderLedger.saveSucceeded()
+                            }
+                        }
+                        .onFailure {
+                            synchronized(orderLock) {
+                                val back = confirmedOrder.orEmpty()
+                                _servers.value = gg.pqp.app.ui.screens.ServerActions
+                                    .applyOrder(_servers.value, back)
+                            }
+                            synchronized(orderLock) { orderLedger.saveFailed() }
+                            onError(it.message.orEmpty())
+                        }
+                }
+            } finally {
+                synchronized(orderLock) {
+                    orderSavesPending -= 1
+                    if (orderSavesPending == 0) {
+                        confirmedOrder = null
+                        // A reorder from another device that arrived while saves were out was
+                        // ignored (the order here was the newer one). If a save FAILED, ours is
+                        // not the newest any more, so the one that was ignored is.
+                        orderLedger.settle(_servers.value)?.let { _servers.value = it }
+                    }
+                }
+            }
+        }
+    }
+
+    private val orderSaves = Mutex()
+    private val orderLock = Any()
+    private var orderSavesPending = 0
+    private var confirmedOrder: List<String>? = null
+
+    /** What a remote `server-order-update` that arrived during our saves means once they settle. */
+    private val orderLedger = ServerOrderLedger()
+
+    /** Named on every save, so this phone's own `server-order-update` echo is recognised. */
+    private val orderOrigin = "android-" + java.util.UUID.randomUUID().toString().take(8)
+
+    private var orderFollowJob: Job? = null
+
+    /**
+     * Follow the order this account drew on another tab or device, live. The
+     * server addresses the frame to every socket of the person; the list
+     * already answers in the saved order on open, so this is only about not
+     * waiting for the next open ([ServerActions.followRemoteOrder] is the rule).
+     */
+    private fun followRemoteServerOrder() {
+        orderFollowJob?.cancel()
+        orderFollowJob = scope.launch {
+            realtime.frames.collect { frame ->
+                when ((frame["type"] as? JsonPrimitive)?.contentOrNull) {
+                    "server-order-update" -> {
+                        val ids = (frame["serverIds"] as? JsonArray)
+                            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                            ?: return@collect
+                        val sender = (frame["origin"] as? JsonPrimitive)?.contentOrNull
+                        synchronized(orderLock) {
+                            val saving = orderSavesPending > 0
+                            if (saving && sender != orderOrigin) orderLedger.ignored(ids)
+                            ServerActions.followRemoteOrder(
+                                _servers.value, ids, sender, orderOrigin, saving = saving,
+                            )?.let { _servers.value = it }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -332,6 +608,7 @@ class SessionStore(
     fun signOutLocally() {
         realtime.disconnect()
         _servers.value = emptyList()
+        _serversLoaded.value = false
         _linkError.value = null
         _landing.value = null
         inviteJoin?.cancel()
@@ -355,6 +632,14 @@ class SessionStore(
             }
             signOutLocally()
         }
+    }
+
+    // The frames addressed to the account itself, which no screen owns: a server taken away
+    // (`server-removed`) and a status chosen on another device (`own-status`). Started with the
+    // store, because the socket outlives every screen. Last in the class on purpose: the collector
+    // may run at once, and everything it touches has to exist by then.
+    init {
+        scope.launch { realtime.frames.collect(::onAccountFrame) }
     }
 
     companion object {

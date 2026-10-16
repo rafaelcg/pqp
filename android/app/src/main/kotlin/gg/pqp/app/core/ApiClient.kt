@@ -59,6 +59,10 @@ class ApiClient(
     suspend fun servers(): List<ServerSummary> =
         get<ServersResponse>("/api/servers").servers
 
+    /** `GET /api/servers/:id/emoji`: the server's custom emoji, for a message that names one. */
+    suspend fun serverEmoji(serverId: String): ServerEmojiList =
+        get("/api/servers/$serverId/emoji")
+
     /**
      * `idempotencyKey`, when given, rides the `Idempotency-Key` header: a
      * repeat with the same key inside its 24h window answers with the same
@@ -72,6 +76,22 @@ class ApiClient(
         val body = json.encodeToString(CreateServerRequest.serializer(), CreateServerRequest(name, serverLocale()))
         val headers = idempotencyKey?.let { mapOf("Idempotency-Key" to it) } ?: emptyMap()
         return post("/api/servers", body, headers)
+    }
+
+    /**
+     * `PUT /api/servers/order`: save the order this account drew for its own
+     * server list. Per person, nobody else's list moves. The server drops ids
+     * this account no longer holds rather than refusing, so a stale list is
+     * not an error. The answer (the order as stored) is not read: the caller
+     * already shows it, and a refusal still arrives as an [ApiException].
+     */
+    suspend fun saveServerOrder(serverIds: List<String>, origin: String? = null) {
+        val body = json.encodeToString(ServerOrderRequest.serializer(), ServerOrderRequest(serverIds, origin))
+        execute(
+            Request.Builder()
+                .url(url("/api/servers/order"))
+                .put(body.toRequestBody(JSON_MEDIA_TYPE)),
+        ).close()
     }
 
     /**
@@ -108,19 +128,23 @@ class ApiClient(
     /**
      * Oldest-first, always. `before` walks backwards through history while
      * `hasMore`; only one cursor may be set per call, which the server enforces
-     * with a 400 rather than picking one.
+     * with a 400 rather than picking one. `around` is the jump: a page with the
+     * named message in it and room on both sides, `hasMore` and `hasNewer` both
+     * meaningful (a forward card's link lands on its message this way).
      */
     suspend fun messages(
         channelId: String,
         limit: Int = 50,
         before: String? = null,
         after: String? = null,
+        around: String? = null,
     ): MessagesResponse = get(
         "/api/channels/$channelId/messages",
         buildMap {
             put("limit", limit.coerceIn(1, 100).toString())
             before?.let { put("before", it) }
             after?.let { put("after", it) }
+            around?.let { put("around", it) }
         },
     )
 

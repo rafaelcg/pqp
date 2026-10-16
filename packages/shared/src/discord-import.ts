@@ -45,6 +45,8 @@ export const DiscordPermission = {
   CHANGE_NICKNAME: 1n << 26n,
   MANAGE_NICKNAMES: 1n << 27n,
   MANAGE_ROLES: 1n << 28n,
+  /** Formerly MANAGE_EMOJIS_AND_STICKERS; same bit. */
+  MANAGE_GUILD_EXPRESSIONS: 1n << 30n,
   MODERATE_MEMBERS: 1n << 40n,
 } as const;
 
@@ -70,6 +72,7 @@ const DISCORD_TO_PQP: ReadonlyArray<{ discord: bigint; pqp: bigint }> = [
   { discord: DiscordPermission.MANAGE_NICKNAMES, pqp: Permission.MANAGE_NICKNAMES },
   { discord: DiscordPermission.MANAGE_ROLES, pqp: Permission.MANAGE_ROLES },
   { discord: DiscordPermission.MODERATE_MEMBERS, pqp: Permission.MODERATE_MEMBERS },
+  { discord: DiscordPermission.MANAGE_GUILD_EXPRESSIONS, pqp: Permission.MANAGE_EMOJI },
 ];
 
 const OVERWRITE_PQP_BITS =
@@ -88,7 +91,8 @@ const EVERYONE_IMPORT_DENIED =
   Permission.MANAGE_ROLES |
   Permission.MANAGE_MESSAGES |
   Permission.MUTE_MEMBERS |
-  Permission.MANAGE_NICKNAMES;
+  Permission.MANAGE_NICKNAMES |
+  Permission.MANAGE_EMOJI;
 
 export function mapDiscordPermissions(discordBits: bigint): bigint {
   let mapped = 0n;

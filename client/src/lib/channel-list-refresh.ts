@@ -29,6 +29,39 @@ export function vanishedChannelFallback(
 }
 
 /**
+ * What to do with a refetched list, given whether this fetch was itself the
+ * confirmation of an earlier one that came back without the open channel.
+ *
+ * ONE LIST IS NOT PROOF. A spectator of a live watch party was sent to
+ * #general on their own, once, and nothing in the logs said why; the only
+ * code that leaves a channel on its own is this fallback, and it believed a
+ * single list. So the first list without the open channel only asks for a
+ * second one (`confirm`), and the viewer leaves only when that one agrees
+ * and they are still on the same channel. A channel that really was
+ * deleted, or that this viewer really lost access to, still sends them out,
+ * a fetch later.
+ */
+export type VanishedChannelDecision =
+  | { action: "stay" }
+  | { action: "confirm"; channelId: string }
+  | { action: "leave"; channelId: string; nextId: string | null };
+
+export function vanishedChannelDecision(
+  list: readonly Channel[],
+  currentId: string | null,
+  confirmingId: string | null,
+): VanishedChannelDecision {
+  const fallback = vanishedChannelFallback(list, currentId);
+  if (!fallback.vanished || !currentId) {
+    return { action: "stay" };
+  }
+  if (confirmingId !== currentId) {
+    return { action: "confirm", channelId: currentId };
+  }
+  return { action: "leave", channelId: currentId, nextId: fallback.nextId };
+}
+
+/**
  * How long to wait before the next try at a `channels-update` refetch that
  * failed, by how many tries have failed so far. `null` once the schedule is
  * spent: the list is then marked stale and refetched when the socket next

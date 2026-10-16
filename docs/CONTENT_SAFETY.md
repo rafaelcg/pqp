@@ -30,6 +30,7 @@ the row and is not a pass.
 | Baú video cover (custom poster) | **yes** | A cover is an ordinary Baú image upload through the same claim | same |
 | Baú video (main file and phone cut) / PDF | skipped | same claim | same |
 | Server icon imported from Discord | **yes** | During the import, before it is set | not recorded; refused icons are discarded |
+| Custom server emoji | **yes** | On `POST /api/servers/:id/emoji`, before the emoji exists | `server_emoji.scan_*`; refused ones in `server_emoji_quarantine` |
 | Avatars and profile banners (`avatars.ts`) | **no** | | |
 | Server icon / banner / community featured image uploaded in the app (`server-images.ts`) | **no** | | |
 
@@ -155,6 +156,18 @@ once: a re-claim of a row that passed, was flagged or was skipped does not call
 the provider again, while an `error` is scanned again on retry and a
 quarantined row is refused outright.
 
+Custom server emoji follow the Baú rules on their own claim,
+`POST /api/servers/:id/emoji` (`checkServerEmojiUpload` in
+`server/src/services/server-emoji-scan.ts`). The claim copies the upload to a
+`servers/<server>/emoji/pinned/` key, deletes the original, HEADs and scans the
+copy, and only then writes the `server_emoji` row, so a refused emoji is never
+served: `/api/emoji/:id` answers only for a row. A claim naming a `pinned/` key
+itself is refused. A rejection answers the same "could not be verified" as a
+failed HEAD, and the pinned object is kept in `server_emoji_quarantine`. An
+`error` under the default fail mode is refused and the object discarded,
+because nothing was found wrong with it. With no provider configured the claim
+neither copies nor scans, and the row says `unscanned`.
+
 The cost is latency, bounded by `CONTENT_SCAN_TIMEOUT_MS` (default 6s) and paid
 only by messages carrying a freshly uploaded image (and, for Baú, by the claim
 of a freshly uploaded image). That bound is the "never
@@ -224,7 +237,14 @@ adapters therefore fail when they understand **nothing** in a response, and
    `channel_label` "Baú · <server name>"): only Manage Server can upload to a
    Baú, so the uploader is somebody who reads that server's own queue, and the
    finding would land in front of the accused. Same rule as a community
-   report.
+   report. **A custom emoji goes there too**, for the same reason, with
+   `channel_label` "Emoji · <server name>".
+
+A refused emoji has no row in `server_emoji` to stamp, so steps 2 and 3 are one
+row in `server_emoji_quarantine` (server, uploader, name, pinned key, provider,
+score, labels, `quarantined_at`) instead. The row outlives the server: deleting
+the server sets its `server_id` to NULL, and the retention rules below still
+apply.
 
 ### Flagged
 
@@ -261,6 +281,12 @@ SELECT id, uploader_id, server_id, scan_status, scan_provider,
 FROM community_home_media_uploads
 WHERE quarantined_at IS NOT NULL
 ORDER BY quarantined_at DESC;
+
+-- Custom emoji: every row here was refused.
+SELECT id, uploader_id, server_id, name, storage_key, scan_provider,
+       scan_score, scan_labels, quarantined_at
+FROM server_emoji_quarantine
+ORDER BY quarantined_at DESC;
 ```
 
 ### Retention
@@ -270,9 +296,10 @@ ORDER BY quarantined_at DESC;
 | Ordinary rejection (e.g. gore) | `CONTENT_SCAN_QUARANTINE_DAYS`, default 30 |
 | Labelled `illegal` or `csam_suspected` | **Forever, until deleted by hand** |
 
-Both tables follow this, each with its own sweep
-(`sweepQuarantinedAttachments`, `sweepQuarantinedCommunityHomeMedia`), and the
-ordinary orphan sweeps skip a quarantined row on both.
+All three tables follow this, each with its own sweep
+(`sweepQuarantinedAttachments`, `sweepQuarantinedCommunityHomeMedia`,
+`sweepQuarantinedServerEmoji`), and the ordinary orphan sweeps skip a
+quarantined row on the first two. Emoji have no orphan sweep.
 
 Thirty days is long enough to answer an appeal and short enough that the bucket
 does not become a private archive of everything the scanner ever disliked. The
@@ -299,6 +326,8 @@ was no screen to open it.
 | `GET /api/reports/all` | `isInstanceModerator` — 404 for anyone else, route effectively absent with `INSTANCE_MODERATOR_CLERK_IDS` unset, same as `GET /api/reports/instance` | Every report on the instance in one page, server-scoped or not. Each row names its server (`serverId`/`serverName`, both null for the instance queue) and, for an automated report (`reporterId` null), the scanner's own evidence — `scan_status` / `scan_score` / `scan_labels` / `scan_provider`, content type, and whether the attachment is still attached to a live message — the same columns the SQL above reads by hand |
 | `PATCH /api/reports/:reportId` | Unchanged route, widened rule: a manager of the report's server, **or now also** an instance moderator regardless of standing in that server | An instance moderator may close any report. Issuing a **timeout** through the same request still requires an actual management permission in that particular server — a timeout is a server-rank sanction, and resolving the queue entry is not the same grant as silencing one of its members |
 | `POST /api/reports/:reportId/remove-message` | Same rule as the PATCH above | Deletes the reported message outright (the existing attachment sweep then removes any object it carried, same as any other message delete) and writes `[moderation] operator removed message` to the log with the report id, the message id and the moderator's id — unconditionally, because a conversation message has no server and therefore no `audit_log` row to carry the removal otherwise |
+
+| `GET /api/reports/:reportId/context` | `isInstanceModerator` (instance lens), or the same permissions as the server queue for a server-scoped report (server lens). 404 for everyone else, indistinguishable from a missing report | What a card needs to be judged: the reported account's age, last country (instance only), counts of DMs started and missed calls to non-friends, how many people blocked it, its other reports, bans and timeouts, its last 20 server messages, servers it owns, and for a message report five messages either side. The reporter/reported 1:1 thread is shown to an instance moderator only. A server's staff get the same shape narrowed to their server, with every cross-instance field null or empty. Never the content of a conversation with a third party, and a group conversation's neighbours are withheld |
 
 The client surfaces this as **Moderação da instância** in Settings, visible
 only when `GET /api/reports/all` answers 200.
@@ -685,7 +714,8 @@ failure mode reproduced with better latency.
 | Affordance | Where |
 |---|---|
 | Every directory read requires auth | the router's own gate; there is no anonymous browsing, so the 18+ gate cannot be routed around |
-| The one public page — `pqp.gg/c/<slug>` — is a **poster, not a window**, and it exists for an addressed community whether or not it is listed | `publicCommunitySchema`: name, address, tagline, about, official links, one featured clip or image, category, member **count**, the two pictures, a month. No member list, no messages, no Baú posts, no channels, no owner, no id **field**. Uploaded picture URLs are `/api/servers/<id>/{icon,banner,featured}` |
+| The one public page — `pqp.gg/c/<slug>` — is a **poster, not a window**, and it exists for an addressed community whether or not it is listed | `publicCommunitySchema`: name, address, tagline, about, official links, one featured clip or image, category, member **count**, the two pictures, a month. No member list, no messages, no channels, no owner, no id **field** (the server id is nonetheless readable in the uploaded picture URLs, `/api/servers/<id>/{icon,banner,featured}`, and joining by id needs auth, so it is not a secret). The poster carries no Baú post either; the one exception is the opt-in post page below |
+| A Baú post can be read by anybody **only** behind the runtime flag `bau_public_posts` (per server, default off), and only if it is published, **free**, and in an addressed, unsuspended community | `GET /api/public/communities/:slug/posts/:postId`; `bauPublicUrlFor` in `server/src/services/community-home.ts` is the single predicate. A members-only post, a draft, a scheduled post and every other reason to refuse are **one** 404, so a guessed id cannot sort posts into VIP and not. The answer has no author, no comments, no member data. A channel mention keeps its name and id only when `@everyone` can view that channel (a staff-only channel is a neutral reference), and the signed media URLs carry the server id in their path (`community-home/<serverId>/…`, the same id the icon URLs already expose) and live ten minutes. Cloudflare may keep an answer for up to two minutes, so a post made private can still be read from the edge for that long. The one exception is the post's picture (`/cover`, served from our origin since the unfurl fix, `s-maxage=3600`): a cached copy of the image can outlive the post at a shared cache for up to an hour, while the page and every refusal go dark within two minutes. The origin itself refuses it at once. This is public hosted content the operator publishes on purpose: turning the flag on is the same decision as `COMMUNITIES_ENABLED`, one community at a time |
 | A server you are banned from is **invisible**, not merely un-joinable | `LISTED_SQL` in `server/src/services/communities.ts` — grid, search and direct-id lookup alike |
 | Report a whole community from its card | `subjectType: "server"` on `POST /api/reports` |
 | Community reports go to the **instance** queue, never to that community's owner | `resolveServerSubject` writes `context_kind = 'none'` and a NULL `server_id`; the subject lives in `reported_server_id` |
@@ -994,7 +1024,9 @@ processing explicit images, so it is the wrong tool here regardless of price.
 | `server/src/services/attachments.ts` | Where the scan runs, quarantine, escalation |
 | `server/src/services/community-home-scan.ts` | The Baú scan: verdict, quarantine, instance-queue report, quarantine expiry |
 | `server/src/services/community-home.ts` | `claimCommunityHomeMediaUpload`, where the Baú scan runs |
+| `server/src/services/server-emoji-scan.ts` | The custom emoji scan: verdict, quarantine, instance-queue report, quarantine expiry |
 | `server/src/services/reports.ts` | `createAutomatedReport` |
 | `server/src/services/content-scan.test.ts` | Failure modes, per provider |
 | `server/src/services/attachments.test.ts` | `describe("scanning")` — the DB consequences |
 | `server/src/services/community-home-media-scan.test.ts` | The same consequences for Baú, through the real claim route |
+| `server/src/api/server-emoji-scan.test.ts` | The same consequences for custom emoji, through the real claim route |

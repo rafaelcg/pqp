@@ -11,6 +11,7 @@ import {
   streamAlertMetrics,
   type StreamAlertMetrics,
 } from "./stream-alerts.js";
+import { livePreviewMetrics } from "./live-preview.js";
 import { nudgeMetrics, type NudgeMetrics } from "./nudge.js";
 import { channelLayoutReport, type ChannelLayoutReport } from "./channel-layout.js";
 import {
@@ -123,6 +124,7 @@ import {
   dbTxByPath,
 } from "../lib/db-tx-metrics.js";
 import { readCacheMetrics } from "../lib/read-cache.js";
+import { userStats, type UserStatsMetrics } from "./user-stats.js";
 import { callRatingAudioHealthCounts, callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
@@ -363,6 +365,13 @@ export interface AdminMetrics {
    */
   streamAlerts: StreamAlertMetrics;
   /**
+   * The signed-out live preview (`services/live-preview.ts`), since this
+   * process started: windows started and resumed, visitors sent to sign up at
+   * the end of one, refusals by reason (start and playlist apart), and how
+   * many playlist answers went to a preview token. Per process; live.
+   */
+  livePreview: ReturnType<typeof livePreviewMetrics>;
+  /**
    * Chamar a atenção (`services/nudge.ts`), since this process started:
    * whether the `nudge` flag is on here, nudges sent, and refusals by reason
    * (`cooldown`, `unanswered`, `busy`, `self-off`, `unavailable`). Per process
@@ -458,6 +467,13 @@ export interface AdminMetrics {
     total: number;
     byRoute: Record<string, number>;
   };
+  /**
+   * The Retrospectiva's per-person counters (`services/user-stats.ts`), as
+   * seen by THIS process. The sampler runs where the cold jobs run, the music
+   * flush where the sockets are, so read both machines. `blindTicks` above 0
+   * on the process running the jobs means it cannot see any seat.
+   */
+  userStats: UserStatsMetrics;
   /**
    * `read-cache.ts`'s counters, cumulative since boot: `coalesce` calls that
    * found a fresh entry (`hits`), that had to run the loader (`misses`),
@@ -1240,6 +1256,7 @@ type CachedMetrics = Omit<
   | "communityHomeCaptions"
   | "stories"
   | "streamAlerts"
+  | "livePreview"
   | "nudge"
   | "channelLayout"
 >;
@@ -1734,6 +1751,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     dbTx: { byPath: dbTxByPath() },
     dbQueries: { total: dbQueryTotal(), byRoute: dbQueriesByRoute() },
     readCache: readCacheMetrics(),
+    userStats: userStats.metrics(),
     presence: getPresenceFanoutStats(),
     voice: {
       activeRooms: voice.activeRooms,
@@ -2056,6 +2074,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     communityHomeCaptions,
     stories,
     streamAlerts: streamAlertMetrics(),
+    livePreview: livePreviewMetrics(),
     nudge: nudgeMetrics(),
     channelLayout,
   };

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { FORUM_MAX_TAGS, putForumTagsSchema, type ForumTag } from "@pqp/shared";
+import { FORUM_MAX_TAGS, forumTagIconEmoji, putForumTagsSchema, type ForumTag } from "@pqp/shared";
 import {
-  acceptTagEmoji,
   addStarterTags,
   addTag,
   clampTagName,
@@ -17,10 +16,19 @@ import {
   updateTag,
 } from "./forum-tag-draft";
 
-const tag = (id: string, name: string, position: number, postCount = 0): ForumTag => ({
+const tag = (
+  id: string,
+  name: string,
+  position: number,
+  postCount = 0,
+  extra: Partial<ForumTag> = {},
+): ForumTag => ({
   id,
   name,
   emoji: null,
+  icon: null,
+  preset: null,
+  ...extra,
   moderated: false,
   position,
   postCount,
@@ -78,20 +86,6 @@ describe("tag names", () => {
     expect(clampTagName("a".repeat(30))).toHaveLength(20);
     expect(Array.from(clampTagName(`${"a".repeat(19)}🎮🎮`))).toHaveLength(20);
   });
-
-  it("takes a unicode emoji and nothing else", () => {
-    expect(acceptTagEmoji("🐛")).toBe("🐛");
-    expect(acceptTagEmoji("🛠️")).toBe("🛠️");
-    expect(acceptTagEmoji("1️⃣")).toBe("1️⃣");
-    expect(acceptTagEmoji("🇧🇷")).toBe("🇧🇷");
-    expect(acceptTagEmoji(":pepe:")).toBeNull();
-    expect(acceptTagEmoji("abc")).toBeNull();
-    expect(acceptTagEmoji("?!")).toBeNull();
-    expect(acceptTagEmoji("a🐛")).toBeNull();
-    expect(acceptTagEmoji("🐛 bug")).toBeNull();
-    expect(acceptTagEmoji("👨‍💻")).toBe("👨‍💻");
-    expect(acceptTagEmoji("")).toBeNull();
-  });
 });
 
 describe("unsavedChangeCount", () => {
@@ -144,16 +138,17 @@ describe("draftProblems", () => {
 describe("toPutBody", () => {
   it("is the whole list in order, ids kept for edits and absent for new tags", () => {
     const base = draftFromServer(server, false);
-    const added = addTag(base, { name: "  Games  ", emoji: "🎮", moderated: true });
+    const added = addTag(base, { name: "  Games  ", icon: "game", moderated: true });
     if (!added.ok) {
       throw new Error(added.error);
     }
     const body = toPutBody(added.draft);
     expect(body).toEqual({
       tags: [
-        { id: ID.bug, name: "Bug", emoji: null, moderated: false },
-        { id: ID.duvida, name: "Dúvida", emoji: null, moderated: false },
-        { name: "Games", emoji: "🎮", moderated: true },
+        { id: ID.bug, name: "Bug", emoji: null, icon: null, preset: null, moderated: false },
+        { id: ID.duvida, name: "Dúvida", emoji: null, icon: null, preset: null, moderated: false },
+        // The icon's own emoji rides along for phone builds that predate icons.
+        { name: "Games", emoji: "🎮", icon: "game", preset: null, moderated: true },
       ],
     });
     // And the shared contract accepts it as is.
@@ -161,30 +156,122 @@ describe("toPutBody", () => {
   });
 });
 
+describe("icons and presets", () => {
+  const withPreset = [
+    tag(ID.bug, "Bug", 0, 4, { icon: "bug", emoji: "🐛", preset: "bug" }),
+    tag(ID.duvida, "Question", 1, 9, { icon: "question", emoji: "❓", preset: "question" }),
+  ];
+  // What a Brazilian reader sees for a preset stored in English.
+  const labelOf = (row: { name: string; preset: string | null }) =>
+    row.preset === "question" ? "Dúvida" : row.name;
+
+  it("carries icon and preset from the server, and tolerates an older server's tag", () => {
+    const draft = draftFromServer(withPreset, false);
+    expect(draft.rows.map((row) => [row.icon, row.preset])).toEqual([
+      ["bug", "bug"],
+      ["question", "question"],
+    ]);
+    const old = draftFromServer(
+      [{ id: ID.games, name: "Games", emoji: "🎮", moderated: false, position: 0, postCount: 0 }],
+      false,
+    );
+    expect(old.rows[0]).toMatchObject({ icon: null, preset: null, emoji: "🎮" });
+  });
+
+  it("picking an icon writes its emoji beside it; clearing it clears both", () => {
+    const base = draftFromServer(server, false);
+    const picked = updateTag(base, ID.bug, { icon: "idea" });
+    expect(picked.rows.find((row) => row.key === ID.bug)).toMatchObject({
+      icon: "idea",
+      emoji: forumTagIconEmoji("idea"),
+    });
+    expect(unsavedChangeCount(base, picked)).toBe(1);
+    const cleared = updateTag(picked, ID.bug, { icon: null });
+    expect(cleared.rows.find((row) => row.key === ID.bug)).toMatchObject({
+      icon: null,
+      emoji: null,
+    });
+    expect(unsavedChangeCount(base, cleared)).toBe(0);
+  });
+
+  it("renaming a starter ends the localization, and only a rename does", () => {
+    const base = draftFromServer(withPreset, false);
+    expect(updateTag(base, ID.duvida, { moderated: true }).rows[1]!.preset).toBe("question");
+    expect(updateTag(base, ID.duvida, { icon: "help" }).rows[1]!.preset).toBe("question");
+    const renamed = updateTag(base, ID.duvida, { name: "Pergunta" });
+    expect(renamed.rows[1]).toMatchObject({ name: "Pergunta", preset: null });
+    expect(unsavedChangeCount(base, renamed)).toBe(1);
+    // The stored name typed over the translated one is a change too, though
+    // the name is the same: everybody reads that wording from then on.
+    const sameName = updateTag(base, ID.duvida, { name: "Question" });
+    expect(sameName.rows[1]).toMatchObject({ name: "Question", preset: null });
+    expect(unsavedChangeCount(base, sameName)).toBe(1);
+    expect(toPutBody(sameName).tags[1]).toMatchObject({ name: "Question", preset: null });
+  });
+
+  it("sends the preset on, so a new starter is created localizable", () => {
+    const body = toPutBody(draftFromServer(withPreset, false));
+    expect(body.tags[1]).toMatchObject({ name: "Question", preset: "question", icon: "question" });
+    expect(putForumTagsSchema.safeParse(body).success).toBe(true);
+  });
+
+  it("twin names are judged by what a reader sees as well as what is stored", () => {
+    const base = draftFromServer(withPreset, false);
+    // "Dúvida" is what the starter shows; typing it as a new tag is a twin.
+    expect(addTag(base, { name: "duvida" }, labelOf)).toEqual({
+      ok: false,
+      error: "forum.settings.nameTaken",
+    });
+    // And the stored name still counts, or the server would refuse the save.
+    expect(addTag(base, { name: "Question" }, labelOf)).toEqual({
+      ok: false,
+      error: "forum.settings.nameTaken",
+    });
+    const renamedToTwin = updateTag(base, ID.bug, { name: "Dúvida" });
+    expect(draftProblems(renamedToTwin, labelOf).get(ID.duvida)).toBe("forum.settings.nameTaken");
+    expect(draftProblems(base, labelOf).size).toBe(0);
+  });
+});
+
 describe("starter tags", () => {
   it("gives a help desk the support kit and anything else the showcase kit", () => {
     expect(starterTagsFor("ajuda").map((one) => one.nameKey)).toEqual([
-      "forum.starter.question",
-      "forum.starter.bug",
-      "forum.starter.suggestion",
-      "forum.starter.tutorial",
+      "forum.tags.preset.question",
+      "forum.tags.preset.bug",
+      "forum.tags.preset.suggestion",
+      "forum.tags.preset.tutorial",
     ]);
-    expect(starterTagsFor("Dúvidas-gerais")[1]!.nameKey).toBe("forum.starter.bug");
+    expect(starterTagsFor("Dúvidas-gerais")[1]!.nameKey).toBe("forum.tags.preset.bug");
     expect(starterTagsFor("showcase").map((one) => one.nameKey)).toEqual([
-      "forum.starter.release",
-      "forum.starter.wip",
-      "forum.starter.discussion",
-      "forum.starter.question",
+      "forum.tags.preset.release",
+      "forum.tags.preset.wip",
+      "forum.tags.preset.discussion",
+      "forum.tags.preset.question",
     ]);
   });
 
-  it("adds the four in one go and skips a name already there", () => {
+  it("every starter names a preset and an icon, and the kits repeat neither", () => {
+    for (const channel of ["ajuda", "showcase"]) {
+      const kit = starterTagsFor(channel);
+      expect(new Set(kit.map((one) => one.preset)).size).toBe(kit.length);
+      for (const one of kit) {
+        expect(one.nameKey).toBe(`forum.tags.preset.${one.preset}`);
+        expect(one.icon).toBeTruthy();
+      }
+    }
+  });
+
+  it("adds the kit in one go with preset and icon, skipping a name already there", () => {
     const base = draftFromServer([tag(ID.bug, "Bug", 0)], false);
     const next = addStarterTags(base, [
-      { name: "Dúvida", emoji: "❓" },
-      { name: "bug", emoji: "🐛" },
-      { name: "Sugestão", emoji: "💡" },
+      { name: "Dúvida", preset: "question", icon: "question" },
+      { name: "bug", preset: "bug", icon: "bug" },
+      { name: "Sugestão", preset: "suggestion", icon: "idea" },
     ]);
-    expect(next.rows.map((row) => row.name)).toEqual(["Bug", "Dúvida", "Sugestão"]);
+    expect(next.rows.map((row) => [row.name, row.preset, row.icon])).toEqual([
+      ["Bug", null, null],
+      ["Dúvida", "question", "question"],
+      ["Sugestão", "suggestion", "idea"],
+    ]);
   });
 });

@@ -10,10 +10,14 @@
  *
  * Runbook: `docs/TESTFLIGHT.md`.
  */
-const PUBLIC_TESTFLIGHT_URL = "https://testflight.apple.com/join/envnP5vV";
+export const PUBLIC_TESTFLIGHT_URL = "https://testflight.apple.com/join/envnP5vV";
 
-export function testflightUrl(): string | null {
-  const raw = import.meta.env.VITE_TESTFLIGHT_URL;
+/** The beta link for a given `VITE_TESTFLIGHT_URL`. The edge config reads it too. */
+export function testflightUrlFrom(raw: unknown): string {
   const override = typeof raw === "string" ? raw.trim() : "";
   return override || PUBLIC_TESTFLIGHT_URL;
+}
+
+export function testflightUrl(): string | null {
+  return testflightUrlFrom(import.meta.env.VITE_TESTFLIGHT_URL);
 }

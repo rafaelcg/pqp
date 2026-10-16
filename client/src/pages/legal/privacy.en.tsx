@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "8 October 2026",
+  updated: "12 October 2026",
   sections: [
     {
       id: "intro",
@@ -319,6 +319,16 @@ export const privacyEn: LegalDocument = {
             back, and how far new accounts get. The reports the operator reads
             hold counts, not names. Both records are deleted with your
             account. The data export does not include them yet.
+          </p>
+          <p>
+            <strong>Year in review.</strong> For each account and each day, in
+            São Paulo time, we also count how long you spent in calls with at
+            least one other person, how long you shared your screen, and how
+            many tracks you added to a call&apos;s music queue. We also keep a
+            list of the watch parties you watched. We do not record who was in
+            a call with you. We use these counts only to build your own year in
+            review. They are deleted with your account. The data export does
+            not include them yet.
           </p>
           <p>
             <strong>Technical.</strong> Application logs of errors and
@@ -710,8 +720,9 @@ export const privacyEn: LegalDocument = {
               <strong>Running pqp itself.</strong> Creating your account,
               delivering your messages, keeping your history so it is there when
               you reload, connecting your voice calls, recording watch parties
-              so they can be watched back, and remembering your settings. This
-              is the basic service you signed up for.{" "}
+              so they can be watched back, remembering your settings, and
+              keeping the counts behind your own year in review. This is the
+              basic service you signed up for.{" "}
               <em>(This rests on our contract with you: art. 7, V.)</em>
             </li>
             <li>
@@ -1077,6 +1088,10 @@ export const privacyEn: LegalDocument = {
               account is deleted.
             </li>
             <li>
+              <strong>Year in review counts and watched parties</strong>: until
+              your account is deleted.
+            </li>
+            <li>
               <strong>AutoMod alert cards</strong>: as long as any other
               message in that channel. A server&apos;s message retention window,
               if it has one, deletes them like any other message.
@@ -1240,7 +1255,8 @@ export const privacyEn: LegalDocument = {
               actions you took. It does not yet include your public{" "}
               <code>@handle</code>, your banner, depoimentos, the campaign
               parameters from your sign-up, your stored country, your activity days
-              and first-step times, your push
+              and first-step times, your year in review counts and the watch
+              parties you watched, your push
               registrations, your watch party waitlist answers, watch party recordings, your
               reactions, your friends list, feedback you sent, or call ratings. For those, email us. Very large accounts are capped, and the file
               says so when it has been cut short. (Server <em>owners</em> can

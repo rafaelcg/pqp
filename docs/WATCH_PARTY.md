@@ -3515,6 +3515,221 @@ makes it a download. The headerless door
 (`tryWatchPartyDownloadCapabilityDoor`) is therefore the one that answers the
 product's own link, with the Bearer route for everything else.
 
+## Watching without an account
+
+A streamer's link used to send a signed-out visitor straight to sign-up, and
+many stopped there: Clerk's sign-up stalls inside Instagram and TikTok in-app
+browsers, and in one party 78 of 86 newcomers never found the stream. The live
+preview ("prévia ao vivo") lets that visitor watch first. Behind the per-server
+runtime flag `live_preview` (`LIVE_PREVIEW`), default off, and then only for a
+party whose host turned "Prévia pública" on.
+
+### What the visitor sees
+
+1. On `pqp.gg/c/<slug>`, or on the signed-out invite gate for a community
+   invite, while a party whose host turned "Prévia pública" on is live, a big
+   live card: the community's banner (never the stream), the
+   live badge, the account count, a play button, "Acontecendo agora em
+   #canal", the party's title, "Assistir agora" and "Prévia de N minutos, sem
+   criar conta". On the community page it takes the banner's place at the top.
+   It shows only while the flag is on for that community and a watch party is
+   live.
+2. "Assistir agora" opens the live page over the site and asks for a date of
+   birth in a sheet, with the account gate's own fields and threshold
+   (`MINIMUM_AGE_YEARS`). The check runs on the device with the shared
+   `isAtLeastYearsOld`. The date is never sent and never stored; only the
+   verdict is remembered (for the tab when adult, for a day on the device
+   when not).
+3. Under the threshold: no media request at all, a line that watching on pqp
+   needs an account, which is also 18+, and no sign-up anywhere on the page.
+4. Adult: the live page. The player (muted until tapped, full screen, a
+   countdown bar that turns to the warning colour in the last 30 s), the
+   party's title, the community with "Entrar na comunidade" and Share, an
+   about card, the next sessions with "Me avisa", and a locked chat. On a
+   phone the last three are tabs, and a sticky bar holds the countdown and
+   "Criar conta e continuar assistindo".
+5. When the window ends, "Sua prévia acabou" in a sheet with Clerk's own
+   sign-up form inline. After sign-up the account joins the community (the
+   `?join=<slug>` intent, or the invite path) and opens the channel it was
+   watching (`stashLiveChannelIntent`, read by `refreshAfterJoin` through
+   `pickArrivalPartyChannel`).
+
+Every way to an account is pqp's Clerk sign-up, never a form of ours: the
+inline `<SignUp>` in the end sheet and in the chat card, and the modal the
+home page opens for every other button. All of them carry the same redirect
+for sign-up and sign-in. The stashes run before the modal opens, and on the
+first touch of the inline form. An inline sign-up that leaves the page (a
+provider, an email link) comes back on `#/sso-callback` or another `#/...`
+step, and `ClerkSignUpReturn` reopens the form in a sheet to finish it.
+
+### What the listing tells the page
+
+`GET /api/public/live-preview/communities/:slug` (and `.../invites/:code`)
+answers, only while the flag is on for that community:
+
+- per live channel, the party's **title** (`channel_sessions.title`, null
+  without a party row) and the **account count** the app's live card shows:
+  accounts on the playlist that hold no seat, plus accounts holding one. A
+  count, never who. Preview visitors are never in it. Bounded at 500 ms, and
+  absent when it could not be read in time;
+- **upcoming**: at most three scheduled sessions, soonest first, only on
+  public watch party channels @everyone can VIEW and only parties whose host
+  turned "Prévia pública" on, with the title, the start and the channel name. No host, creator, description, cover or reminder
+  count.
+
+The community's tagline, category and member count come from
+`GET /api/public/communities/:slug`, which already publishes them.
+
+Umami events: `live_preview_view`, `live_preview_age_declined`,
+`live_preview_play`, `live_preview_ended`, `live_preview_signup`. The account is
+tagged `medium: live_preview` in its first-touch acquisition, unless a real
+campaign link found the visitor first (first explicit touch wins).
+
+### Who may be shown what
+
+All of these, checked by the server every time, or nothing:
+
+- `COMMUNITIES_ENABLED` is on, and `live_preview` is on for the server.
+- The server is a community (`is_community`) and not suspended. Never a private
+  server, never a DM.
+- The channel is a server channel of type `watch_party`, not private, and the
+  server's @everyone role can VIEW it after the channel's @everyone overwrite
+  (the shared `computePermissions`). A visitor gets at most what a fresh member
+  gets.
+- The live party's host opted it in: "Prévia pública" in the party's options
+  (`options.publicPreview` on its `channel_sessions` row), default off. The
+  flag says a community may offer previews; the switch says this party does.
+  A party with the switch off is not listed, `/start` refuses it with reason
+  `not-public`, and its scheduled sessions stay out of `upcoming` too.
+- A live HLS session is open on it. A screen share in an ordinary voice channel
+  has no HLS transcode (the room gate above), so there is nothing to preview
+  there without starting an egress for a stranger. That is deliberately not
+  done.
+
+### The host's switch
+
+"Prévia pública" sits in the party's options: the setup card's Ajustes step
+and the live "Opções" dialog. The hint gives the real window length
+(`LIVE_PREVIEW_SECONDS`).
+
+- It is drawn only where it can work. `GET /api/live-hls/config?serverId=`
+  carries `livePreview: { seconds }` only while the flag is on for that server,
+  and only then does the client ask `GET /api/channels/:id/live-preview`,
+  which answers whether this channel passes every other rule (a community not
+  suspended, a public watch party channel @everyone can view). With the flag
+  off the config is unchanged and nothing more is asked.
+- It is written through the party's ordinary options PATCH, so the same role
+  table decides who may flip it: the host, a co-host, or MANAGE_CHANNELS
+  (`edit` in `watch-party-session.ts`). A member with START_WATCH_PARTY who is
+  not running this party cannot. The server validates the role, never the
+  client.
+- It can be flipped while the party is live. Off refuses new windows from the
+  next `/start` (a fresh read), and the master playlist refuses new players
+  within the 15 s fact cache. A player already running keeps its picture
+  until its window ends, the same rule as the flag going off.
+- Stored in the options JSONB, like every other per-party option, so there
+  is no new column and no boot DDL. A row stored before the option existed
+  reads as off.
+
+### The window, enforced by the server
+
+`POST /api/public/live-preview/start { channelId, ageConfirmed: true, ticket? }`
+answers with the film's playlist URL and a ticket. The ticket is HMACed by the
+API (a key derived from `CLERK_SECRET_KEY` for this purpose alone) and names a
+random visitor id, the channel and the instant the window started. The playlist
+URL carries a viewer token of purpose `preview` whose expiry IS the end of the
+window. So:
+
+- A reload, a second tab, the presenter restarting, and either API machine all
+  continue the same window: the start time is in the ticket, not in memory.
+- Nothing renews past the end. A ticket past its window is refused with
+  `preview_ended` for `LIVE_PREVIEW_RESET_HOURS` (default 24).
+- `LIVE_PREVIEW_SECONDS` (default 300) sets the window per visitor per channel.
+- The window is NOT keyed on the address. Brazilian phones share carrier
+  addresses, so "five minutes per IP" would give one visitor's window to a
+  whole carrier. Clearing site data or a private window gets a new ticket.
+  New tickets come from an address-keyed bucket (20, then one every 5 s), under
+  the anon backstop, which bounds how fast that can repeat. The preview is a
+  nudge towards a free account; the hard limits are the ones in the list above.
+
+### What the token can open
+
+The preview token shares the viewer token's key so the edge Worker
+(`tools/hls-edge/`) plays it with no new secret, and enforces its expiry on
+every request it answers. The Worker does need one deploy before the flag goes
+on anywhere: it refuses a preview token on the camera rung (below). On this origin it opens one
+door: the playlist proxy's header-less capability door, which asks for it by
+name. On the session URL (the master playlist, fetched once per player) it then
+re-checks the flag, the community and @everyone's VIEW (facts cached 15 s per
+channel, the flag read live) and takes an address bucket. On a rendition it
+does not: the edge coalesces every viewer's rendition poll into one origin
+fetch carrying whichever token missed the cache, and shares the answer, so a
+preview-only refusal there would reach the members polling the same rung. A
+rendition names nobody, so a valid, unexpired preview token is enough for it.
+**So switching the flag off, or a channel going private, stops new previews and
+new players at once, and running players within the window**
+(`LIVE_PREVIEW_SECONDS`), not within a playlist poll. Every other reader of a viewer
+token (`verifyHlsViewerToken`, `decodeHlsViewerToken`, the replay proxy, the
+downloads, the telemetry routes) refuses purpose `preview` unless it opts in.
+A preview viewer also gets:
+
+- **No party pass.** `stampPreviewStream` never adds `?pp=`, and the master
+  playlist leaves it off for a preview token. The edge falls back to `?pp=`
+  once `?t=` expires, so a pass would turn five minutes into six hours.
+- **No camera, no presenter id, no seat, no socket, no chat.** The stream is
+  `{ hlsUrl, startedAt, mode, partTargetMs }` and nothing else. The page never
+  draws the presenter's camera, and the token cannot fetch it either. The
+  token names the channel and the session, not a rung, so the rung is checked
+  on its own. The origin answers a preview token only on the film's ladder
+  (`livePreviewRungAllowed`, refusal `not-film`). The edge Worker refuses a
+  preview token on the camera rung before its shared cache and its coalesced
+  fetch (`previewRungRefused`), so the origin's refusal never rides a fetch a
+  member shares. Deploy the Worker before turning the flag on: until then the
+  edge can still answer the camera from its cache.
+- **A valid Bearer always wins** (pitfall 16): a signed-in page that still holds
+  a preview token is served on its own account.
+
+**Viewer count: preview viewers are not counted.** The number is distinct
+accounts on the playlist (`noteHlsViewer`), and a visitor id is free to rotate,
+so counting them would let anybody inflate it. They are counted apart, as
+`livePreview.playlistServed` on `GET /api/admin/metrics`.
+
+The rare refusals are logged once per channel per reason per 30 s
+(`livePreview.refused`, with `where` start or playlist), never with the ticket,
+the token or the address.
+
+### Trying it locally
+
+The dev auth bypass signs every browser in, so the signed-out page is never
+drawn. Two dev-only affordances, both inert in a production build:
+
+1. Set `localStorage["pqp:dev-signed-out"] = "1"` in the browser and reload
+   `/c/sandbox`. Under the bypass (and only in `vite dev`), the community page
+   draws its signed-out half, preview included, and the sign-up button goes to
+   `/app?join=sandbox`. Set `pqp:dev-user-suffix` too, so that button signs in
+   as a fresh dev account and you see the arrival.
+2. `node tools/live-preview-dev/fake-live.mjs` fakes a live watch party on the
+   Sandbox (`#cinema`) with ffmpeg and a tiny local S3, no LiveKit. Start the
+   API with the `LIVE_HLS_S3_*` lines it prints.
+
+The invite gate is only drawn without the bypass, so trying the invite entry
+point needs a client with a Clerk publishable key. Steps are in the PR that
+added this.
+
+### Code
+
+- Server: `server/src/services/live-preview.ts` (eligibility, ticket, start,
+  metrics), `server/src/api/live-preview-routes.ts` (the three public routes),
+  the preview branch of `tryHlsCapabilityDoor` in `server/src/api/index.ts`,
+  `mintHlsPreviewToken` and `stampPreviewStream` in
+  `server/src/voice/hls-viewer-token.ts`.
+- Client: `client/src/lib/live-preview.ts`,
+  `client/src/components/live-preview/`, the shared date fields in
+  `client/src/components/user/birth-date-fields.tsx`.
+- Tests: `server/src/api/live-preview.test.ts` (flag off and on, per-server,
+  private, suspended, expiry, dead Bearer), `server/src/voice/hls-preview-token.test.ts`,
+  `client/src/lib/live-preview.test.ts`.
+
 ## How many people watched
 
 Per broadcast (channel plus `startedAt`, the key the history dialog uses) the

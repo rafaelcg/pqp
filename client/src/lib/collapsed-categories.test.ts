@@ -1,8 +1,43 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  foldSection,
   loadCollapsedCategories,
+  sectionCollapseKey,
   toggleCollapsedCategory,
 } from "./collapsed-categories";
+
+describe("foldSection", () => {
+  const rows = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const none = () => false;
+
+  it("shows every row while open", () => {
+    const out = foldSection(rows, {
+      collapsed: false,
+      selectedChannelId: null,
+      activeVoiceChannelId: null,
+      isUnread: none,
+    });
+    expect(out.shown).toEqual(rows);
+    expect(out.hasUnread).toBe(false);
+  });
+
+  it("keeps only the open channel and the call while folded", () => {
+    const out = foldSection(rows, {
+      collapsed: true,
+      selectedChannelId: "a",
+      activeVoiceChannelId: "c",
+      isUnread: none,
+    });
+    expect(out.shown.map((r) => r.id)).toEqual(["a", "c"]);
+  });
+
+  it("does not count the open channel as unread", () => {
+    const only = (id: string) => (c: { id: string }) => c.id === id;
+    const base = { collapsed: true, selectedChannelId: "a", activeVoiceChannelId: null };
+    expect(foldSection(rows, { ...base, isUnread: only("a") }).hasUnread).toBe(false);
+    expect(foldSection(rows, { ...base, isUnread: only("b") }).hasUnread).toBe(true);
+  });
+});
 
 /**
  * The suite runs under vitest's `node` environment (chosen so the rest of the
@@ -57,6 +92,13 @@ describe("collapsed categories", () => {
   it("treats corrupt storage as nothing collapsed rather than throwing", () => {
     localStorage.setItem("pqp:collapsed-categories", "{not json");
     expect(loadCollapsedCategories()).toEqual(new Set());
+  });
+
+  it("namespaces the Texto and Voz section keys per server", () => {
+    expect(sectionCollapseKey("s1", "text")).toBe("text:s1");
+    expect(sectionCollapseKey("s1", "voice")).toBe("voice:s1");
+    toggleCollapsedCategory(sectionCollapseKey("s1", "text"));
+    expect(loadCollapsedCategories().has(sectionCollapseKey("s2", "text"))).toBe(false);
   });
 
   it("ignores a stored value that is not an array of strings", () => {

@@ -22,12 +22,19 @@ import { isEnabled } from "./flags.js";
  * `mediaQuality.audioHealth` on a call rating: a client that never heard
  * `true` from here never sends the field.
  *
+ * `soundboard`: whether this server's calls offer the soundboard and its
+ * settings tab. Runtime flag `soundboard`, per server, default off,
+ * `SOUNDBOARD` as its environment default. The call's button and the settings
+ * tab read it here, and the play gate reads it on every click, so a flip
+ * either way needs no rejoin. The seat's `canUseSoundboard` is the bit alone.
+ *
  * `serverId` absent (a DM call) or not a uuid is read as absent: the answer is
  * then the global value, and a DM call has no audience mode anyway.
  */
 export interface VoiceConfig {
   audienceMode: boolean;
   audioSelfHeal: boolean;
+  soundboard: boolean;
 }
 
 const serverIdSchema = z.string().uuid();
@@ -38,5 +45,6 @@ export function voiceConfigForServer(rawServerId: string | null): VoiceConfig {
   return {
     audienceMode: isEnabled("audience_mode", { serverId }),
     audioSelfHeal: isEnabled("voice_audio_self_heal"),
+    soundboard: isEnabled("soundboard", { serverId }),
   };
 }

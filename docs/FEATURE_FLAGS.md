@@ -104,7 +104,11 @@ Converted (global unless noted): `WATCH_PARTY_WAITLIST` (per server),
 moderation asks only the box a room lives on, with a per-region budget and
 circuit for rooms whose box is unknown; off is the old ask-every-box-and-wait,
 see `docs/plans/SFU_REGIONS.md` §"The control plane"),
-`TURN_PREFER_STATIC`, `READ_CACHE`, `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
+`TURN_PREFER_STATIC`, `READ_CACHE`,
+`USER_STATS` (`user_stats`, default **on**: the per-person counts the
+Retrospectiva is built from; off stops every new write, nothing is deleted;
+see `server/src/services/user-stats.ts`),
+`COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
 `PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below),
 `COMMUNITY_HOME_TRANSLATION` (`community_home_translation`, **per server**,
 default off; automatic translation of Baú posts, which also needs
@@ -116,6 +120,21 @@ a push when a Baú post goes live, to members who have not muted the server;
 never the author, members-only posts only to people who can open them. Server
 only, no client reads it. Counted under `product.pushSkipped.bau.*`; rules in
 `docs/COMMUNITY_HOME.md` §"Push on a new post".
+`BAU_FOLLOW` (`bau_follow`, **per server, read for the SOURCE**, default off, born
+as a flag): Seguir, following a Baú so its new free posts are delivered as forward
+cards into a channel of another server. Off for a source: no Seguir button
+(`GET /api/servers/:id/home/follow` answers `enabled: false`), creating a follow is
+a 404, nothing is delivered (a delivery already queued waits and goes out if the
+flag returns within six hours), and removing a follow always works. Turn it on
+for the QG with its override first. See `docs/COMMUNITY_HOME.md` §"Seguir".
+`BAU_PUBLIC_POSTS` (`bau_public_posts`, **per server**, default off, born as a
+flag): a free published Baú post of a community with a public address gets a page
+anybody can open, `pqp.gg/c/<slug>/p/<postId>`, with an edge-written unfurl card
+and a Compartilhar button. Needs `COMMUNITIES_ENABLED` and the Baú on; with any of
+them off the public read answers the same 404 as an unknown post. The clients
+learn it as `publicUrl` on each post of `GET /api/servers/:id/home/posts`, which is
+null unless the post qualifies. Rules in `docs/COMMUNITY_HOME.md` §"A public page
+per post".
 `PARTY_FAST_START` (per server, client-only; see `docs/WATCH_PARTY.md` §"Fast first frame").
 Born as a flag (no old reader): `COMMUNITY_HOME_VIDEO_CAPTIONS`
 (`community_home_video_captions`, **per server**, default off), automatic
@@ -129,6 +148,14 @@ The translated track also needs `community_home_translation` on for the server.
 Producing anything needs `VOICE_STT_PROVIDER`, its key and ffmpeg on the worker;
 it shares `VOICE_STT_DAILY_SECONDS` with voice notes. See
 `docs/COMMUNITY_HOME.md` §"Video subtitles".
+`DISCORD_BRING_CREW` (`discord_bring_crew`, **per server**, default off, born
+as a flag): "Traz tua galera" after a Discord import. The import's last screen
+becomes a ready announcement for the old Discord, and whoever manages the
+server sees how many people arrived for a week, with one reminder a day later
+if fewer than three did. Served as `bringCrew` on `POST /api/import/discord/apply`
+(read for the server just made, so the global value decides the last screen)
+and `enabled` on `GET /api/servers/:id/import-arrivals`. Web only. See
+`docs/DISCORD_IMPORT.md` §"Bring your people".
 `WATCH_PARTY_SERVER_AUDIENCE` (`watch_party_server_audience`, **per server**, default
 off, born as a flag): the in-app watch party count is the server's, distinct
 accounts on the playlist from every API machine, instead of the sockets one
@@ -227,17 +254,23 @@ on `GET /api/fun/config`; a client reads anything but `false` as on. Off, the
 look falls back to the default on the next config refresh.
 
 `CLIENT_FORCE_UPDATE` (`client_force_update`, default off, global), born as a flag:
-every web or desktop client that is not on the latest build puts up the blocking
-"atualização necessária" screen, served by `GET /api/client-update/config`
-(`forceUpdate`). The client only asks when it already knows it is stale. Leave it on
-only while the good build is the one deployed. Its sibling `CLIENT_MIN_BUILT_AT`
-(ISO date or epoch ms) forces bundles built before a moment and is environment-only.
-See `docs/PWA.md` §"Nobody stays on an old bundle".
+"announce this build now". A web or desktop client that is not on the latest build
+normally hears about a new build once a day, at 09:00 UTC, through a small indicator;
+with this on it hears at once and the indicator is drawn with emphasis. **It does not
+block anybody's screen** (until 2026-10-13 it put up the blocking "atualização
+necessária" screen, on every deploy for everybody, and a user wrote that it came "de
+10 em 10 segundos") and it never reloads anyone in a call. Served by
+`GET /api/client-update/config` (`forceUpdate`); the client only asks when it already
+knows it is stale. Turn it off once the rollout is done. Its sibling
+`CLIENT_MIN_BUILT_AT` (ISO date or epoch ms) does the same for bundles built before a
+moment and is environment-only. See `docs/PWA.md` §"Nobody stays on an old bundle".
 
 `CLIENT_FORCE_UPDATE_IN_CALL` (`client_force_update_in_call`, default off, global),
-born as a flag: with a force on (the flag above or `CLIENT_MIN_BUILT_AT`), the
-forced bundles reload even in a call, which ends the call. For a critical fix only.
-Served as `interruptCalls` by the same endpoint. Its environment-only sibling
+born as a flag: makes the update CRITICAL. With a force on (the flag above or
+`CLIENT_MIN_BUILT_AT`), the forced bundles reload by themselves even in a call, which
+ends the call, and a small blocking "atualização necessária" dialog is up. It is the
+only thing that blocks a screen or reloads a call. For a critical fix only. Served as
+`interruptCalls` by the same endpoint. Its environment-only sibling
 `CLIENT_CRITICAL_MIN_BUILT_AT` (same format as `CLIENT_MIN_BUILT_AT`) does the same
 for bundles built before a moment, served as `criticalMinBuiltAt`.
 
@@ -387,6 +420,16 @@ enabled: true }` or from controles → interruptores. The rules beside it (byte
 budget per second, a note travels alone with no text) are in
 `server/src/services/voice-notes.ts`.
 
+Born as a flag (no old reader): `SOUNDBOARD` (`soundboard`, default off,
+**per server**), the call soundboard. The migration grants `USE_SOUNDBOARD`
+to `@everyone` on every server, so the bit alone would turn it on
+everywhere; the flag is what goes on one server at a time. Read at the play
+gate on every click (a flip mid-call silences the room, or opens it with no
+rejoin), by the client for the call's button and the settings tab, and by
+the upload, claim and rename routes
+(403 when off; list and delete stay open). Served as `soundboard` on
+`GET /api/voice/config?serverId=`. See `docs/SOUNDBOARD.md`.
+
 Born as a flag (no old reader): `VOICE_NOTE_TRANSCRIPTION`
 (`voice_note_transcription`, default off, **per server**), the text under a
 voice note. It sends audio out of Brazil (Cloudflare Workers AI), so it goes
@@ -498,6 +541,44 @@ server's override) or `PUT /api/admin/flag-overrides
 token. For MoonKase's server, `serverId` is the id of the server whose community
 slug or name is `moonkisticos`. `enabled: null` returns to the default. A tab
 that is already open follows within the 10 minute config refresh or on focus.
+
+## `live_preview` (per server, default off)
+
+The signed-out live preview, born as a flag (`LIVE_PREVIEW`, only `true` turns
+it on). A visitor with no account who opens a community's page or one of its
+invites while a watch party is live can watch the film for a few minutes, then
+is asked to sign up. Design, limits and the local test recipe:
+`docs/WATCH_PARTY.md` §"Watching without an account".
+
+- **Every reader knows the server.** The public community and invite reads
+  resolve the server first; the start route reads the channel row; the playlist
+  proxy re-checks the channel it serves on every fetch. So a per-server
+  override is exact.
+- **Off is byte for byte the old behaviour.** `GET /api/public/communities/:slug`
+  and `GET /api/public/invites/:code` carry `livePreview: true` only while the
+  flag is on for that server, and the three new public routes are not even
+  matched while the flag is off everywhere (they answer the same 401 an unknown
+  path does).
+- **Also needs `COMMUNITIES_ENABLED`.** The flag never widens past communities.
+- **And the host's opt-in, per party.** The flag only lets a community offer
+  previews. Each party is previewable only once its host (or a co-host, or
+  MANAGE_CHANNELS) turns "Prévia pública" on in its options, off by default.
+  With the flag off, `GET /api/live-hls/config?serverId=` carries no
+  `livePreview` and the switch is never drawn.
+- **The numbers stay in the environment:** `LIVE_PREVIEW_SECONDS` (default 300,
+  clamped to 30 to 3600) and `LIVE_PREVIEW_RESET_HOURS` (default 24).
+- **Switching it off stops new previews at once, and running ones within the
+  window.** The start route and the master playlist (fetched once per player)
+  refuse straight away. A rendition poll is not re-checked, because the edge
+  Worker shares one origin fetch per rung between preview viewers and members,
+  so a preview-only refusal there would reach members. The bound for a player
+  already running is its token's expiry: at most `LIVE_PREVIEW_SECONDS`.
+
+Turn it on for one community: `PUT /api/admin/flag-overrides
+{ key: "live_preview", serverId, enabled: true }`, or controles → interruptores.
+`GET /api/admin/metrics` → `livePreview` counts windows started and resumed,
+visitors sent to sign up, refusals by reason, and playlist answers served to a
+preview token.
 
 ## `community_listing_nudge` (global, default on)
 

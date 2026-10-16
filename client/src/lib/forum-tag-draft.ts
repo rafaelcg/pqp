@@ -1,9 +1,12 @@
 import {
   FORUM_MAX_TAGS,
-  FORUM_TAG_EMOJI_MAX,
   FORUM_TAG_NAME_MAX,
+  FORUM_TAG_PRESET_ICON,
+  forumTagIconEmoji,
   forumTagNameKey,
   type ForumTag,
+  type ForumTagIconKey,
+  type ForumTagPreset,
   type PutForumTagsRequest,
 } from "@pqp/shared";
 import type { MessageKey } from "@/lib/i18n";
@@ -29,8 +32,20 @@ export interface TagDraftRow {
   key: string;
   /** Absent for a tag the PUT will create. */
   id?: string;
+  /**
+   * The name as STORED. A row with a `preset` is drawn in the viewer's
+   * language instead (see `labelOf`), and keeps this until it is renamed.
+   */
   name: string;
+  /**
+   * Legacy glyph. Never edited by hand any more: picking an icon writes the
+   * icon's own emoji here so a phone build that predates icons still shows
+   * something close, and clearing the icon clears it.
+   */
   emoji: string | null;
+  icon: ForumTagIconKey | null;
+  /** Set while a starter tag has not been renamed; a rename clears it. */
+  preset: ForumTagPreset | null;
   moderated: boolean;
   /** Posts carrying it; 0 for a new row. */
   postCount: number;
@@ -53,6 +68,8 @@ export function draftFromServer(
         id: tag.id,
         name: tag.name,
         emoji: tag.emoji,
+        icon: tag.icon ?? null,
+        preset: tag.preset ?? null,
         moderated: tag.moderated,
         postCount: tag.postCount,
       })),
@@ -71,25 +88,6 @@ export function clampTagName(value: string): string {
   return Array.from(value.replace(/[\r\n\t]+/g, " "))
     .slice(0, FORUM_TAG_NAME_MAX)
     .join("");
-}
-
-/**
- * Only a unicode emoji fits a tag. The picker can also hand back a server's
- * custom emoji (`:name:`), which a tag cannot store, and anything past the
- * stored length is not one emoji.
- */
-export function acceptTagEmoji(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > FORUM_TAG_EMOJI_MAX) {
-    return null;
-  }
-  // A pictograph, a flag (regional indicators) or a keycap ("1️⃣"), and
-  // nothing typed around it: no letters, no spaces, no punctuation, so
-  // neither `:name:` nor "a🐛" nor "?!" gets in.
-  const isEmoji =
-    /\p{Extended_Pictographic}|\p{Regional_Indicator}|⃣/u.test(trimmed) &&
-    !/[\p{L}\p{P}\s]/u.test(trimmed);
-  return isEmoji ? trimmed : null;
 }
 
 let localKeySeq = 0;
@@ -113,7 +111,14 @@ export type AddTagResult =
 /** Add one row at the end, or say why not. */
 export function addTag(
   draft: TagDraft,
-  input: { name: string; emoji?: string | null; moderated?: boolean },
+  input: {
+    name: string;
+    icon?: ForumTagIconKey | null;
+    preset?: ForumTagPreset | null;
+    moderated?: boolean;
+  },
+  /** What each row is called on screen, so the check sees what a reader sees. */
+  labelOf: (row: TagDraftRow) => string = (row) => row.name,
 ): AddTagResult {
   const name = clampTagName(input.name.replace(/\s+/g, " ").trim()).trim();
   if (!name) {
@@ -123,7 +128,9 @@ export function addTag(
     return { ok: false, error: "forum.settings.full" };
   }
   const key = tagNameKey(name);
-  if (draft.rows.some((row) => tagNameKey(row.name) === key)) {
+  if (
+    draft.rows.some((row) => tagNameKey(row.name) === key || tagNameKey(labelOf(row)) === key)
+  ) {
     return { ok: false, error: "forum.settings.nameTaken" };
   }
   return {
@@ -135,7 +142,9 @@ export function addTag(
         {
           key: localKey(),
           name: clampTagName(name),
-          emoji: input.emoji ?? null,
+          emoji: input.icon ? forumTagIconEmoji(input.icon) : null,
+          icon: input.icon ?? null,
+          preset: input.preset ?? null,
           moderated: input.moderated ?? false,
           postCount: 0,
         },
@@ -147,19 +156,26 @@ export function addTag(
 export function updateTag(
   draft: TagDraft,
   key: string,
-  patch: Partial<Pick<TagDraftRow, "name" | "emoji" | "moderated">>,
+  patch: Partial<Pick<TagDraftRow, "name" | "icon" | "moderated">>,
 ): TagDraft {
   return {
     ...draft,
-    rows: draft.rows.map((row) =>
-      row.key === key
-        ? {
-            ...row,
-            ...patch,
-            ...(patch.name !== undefined ? { name: clampTagName(patch.name) } : {}),
-          }
-        : row,
-    ),
+    rows: draft.rows.map((row) => {
+      if (row.key !== key) {
+        return row;
+      }
+      const next = { ...row, ...patch };
+      if (patch.name !== undefined) {
+        next.name = clampTagName(patch.name);
+        // The staff's own words from here on, in every language.
+        next.preset = null;
+      }
+      if (patch.icon !== undefined) {
+        // The emoji follows the icon (see `TagDraftRow.emoji`).
+        next.emoji = patch.icon ? forumTagIconEmoji(patch.icon) : null;
+      }
+      return next;
+    }),
   };
 }
 
@@ -198,7 +214,10 @@ export function unsavedChangeCount(baseline: TagDraft, draft: TagDraft): number 
       count += 1;
     } else if (
       old.name.trim() !== row.name.trim() ||
-      old.emoji !== row.emoji ||
+      old.icon !== row.icon ||
+      // Typing the stored name over a translated starter changes nothing
+      // else, and is still a change: everybody now reads that wording.
+      old.preset !== row.preset ||
       old.moderated !== row.moderated
     ) {
       count += 1;
@@ -227,6 +246,8 @@ export function tagsChanged(baseline: TagDraft, draft: TagDraft): boolean {
 /** The first problem that would make the server refuse the PUT, by row. */
 export function draftProblems(
   draft: TagDraft,
+  /** What each row is called on screen; a starter shows in the viewer's language. */
+  labelOf: (row: TagDraftRow) => string = (row) => row.name,
 ): Map<string, Extract<MessageKey, "forum.settings.nameTaken" | "forum.settings.nameRequired">> {
   const problems = new Map<
     string,
@@ -234,13 +255,17 @@ export function draftProblems(
   >();
   const seen = new Set<string>();
   for (const row of draft.rows) {
-    const key = tagNameKey(row.name);
-    if (!key) {
+    // Both the stored name (what the server's uniqueness rule reads) and the
+    // one drawn on screen (what a reader would take for a twin).
+    const keys = new Set([tagNameKey(row.name), tagNameKey(labelOf(row))]);
+    if (!tagNameKey(row.name)) {
       problems.set(row.key, "forum.settings.nameRequired");
-    } else if (seen.has(key)) {
+    } else if ([...keys].some((key) => seen.has(key))) {
       problems.set(row.key, "forum.settings.nameTaken");
     }
-    seen.add(key);
+    for (const key of keys) {
+      seen.add(key);
+    }
   }
   return problems;
 }
@@ -251,6 +276,8 @@ export function toPutBody(draft: TagDraft): PutForumTagsRequest {
       ...(row.id ? { id: row.id } : {}),
       name: row.name.replace(/\s+/g, " ").trim(),
       emoji: row.emoji,
+      icon: row.icon,
+      preset: row.preset,
       moderated: row.moderated,
     })),
   };
@@ -259,31 +286,39 @@ export function toPutBody(draft: TagDraft): PutForumTagsRequest {
 // --------------------------------------------------------------- starters
 
 export interface StarterTag {
-  emoji: string;
+  preset: ForumTagPreset;
+  icon: ForumTagIconKey;
   nameKey: Extract<
     MessageKey,
-    | "forum.starter.question"
-    | "forum.starter.bug"
-    | "forum.starter.suggestion"
-    | "forum.starter.tutorial"
-    | "forum.starter.release"
-    | "forum.starter.wip"
-    | "forum.starter.discussion"
+    | "forum.tags.preset.question"
+    | "forum.tags.preset.bug"
+    | "forum.tags.preset.suggestion"
+    | "forum.tags.preset.tutorial"
+    | "forum.tags.preset.release"
+    | "forum.tags.preset.wip"
+    | "forum.tags.preset.discussion"
   >;
 }
 
+function starter(
+  preset: ForumTagPreset,
+  nameKey: StarterTag["nameKey"],
+): StarterTag {
+  return { preset, icon: FORUM_TAG_PRESET_ICON[preset], nameKey };
+}
+
 const SUPPORT_KIT: StarterTag[] = [
-  { emoji: "❓", nameKey: "forum.starter.question" },
-  { emoji: "🐛", nameKey: "forum.starter.bug" },
-  { emoji: "💡", nameKey: "forum.starter.suggestion" },
-  { emoji: "📚", nameKey: "forum.starter.tutorial" },
+  starter("question", "forum.tags.preset.question"),
+  starter("bug", "forum.tags.preset.bug"),
+  starter("suggestion", "forum.tags.preset.suggestion"),
+  starter("tutorial", "forum.tags.preset.tutorial"),
 ];
 
 const SHOWCASE_KIT: StarterTag[] = [
-  { emoji: "🚀", nameKey: "forum.starter.release" },
-  { emoji: "🛠️", nameKey: "forum.starter.wip" },
-  { emoji: "💬", nameKey: "forum.starter.discussion" },
-  { emoji: "❓", nameKey: "forum.starter.question" },
+  starter("release", "forum.tags.preset.release"),
+  starter("wip", "forum.tags.preset.wip"),
+  starter("discussion", "forum.tags.preset.discussion"),
+  starter("question", "forum.tags.preset.question"),
 ];
 
 /** Channel names that read as a help desk, accents and case folded. */
@@ -312,14 +347,23 @@ export function starterTagsFor(channelName: string): StarterTag[] {
   return words.some((word) => SUPPORT_NAMES.includes(word)) ? SUPPORT_KIT : SHOWCASE_KIT;
 }
 
-/** Put the starter tags in the draft (skipping any name already there). */
+/**
+ * Put the starter tags in the draft (skipping any name already there). The
+ * name is stored in the language the staff member has right now and the
+ * `preset` is what lets every other reader see their own language's word.
+ */
 export function addStarterTags(
   draft: TagDraft,
-  starters: readonly { name: string; emoji: string }[],
+  starters: readonly { name: string; preset: ForumTagPreset; icon: ForumTagIconKey }[],
+  labelOf?: (row: TagDraftRow) => string,
 ): TagDraft {
   let next = draft;
-  for (const starter of starters) {
-    const result = addTag(next, { name: starter.name, emoji: starter.emoji });
+  for (const one of starters) {
+    const result = addTag(
+      next,
+      { name: one.name, icon: one.icon, preset: one.preset },
+      labelOf,
+    );
     if (result.ok) {
       next = result.draft;
     }

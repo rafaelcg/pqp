@@ -14,12 +14,15 @@ import {
 import { createPortal } from "react-dom";
 import { Volume1, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { useFullscreenPortalHost } from "@/components/ui/tooltip";
+import { SoundboardMutedMark } from "@/components/voice/soundboard-float";
 import {
   placeAnchoredPanel,
   type AnchoredPanelPlacement,
 } from "@/lib/anchored-panel";
-import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { useTranslation } from "@/lib/i18n";
+import { useSoundboardUserMuted } from "@/lib/soundboard";
 import { cn } from "@/lib/utils";
 
 /**
@@ -163,9 +166,7 @@ function VolumeRow({
           className="h-7 w-7 shrink-0"
           aria-pressed={silenced}
           aria-label={silenced ? unmuteLabel : muteLabel}
-          onClick={() =>
-            track.onSetVolume(silenced ? restoreRef.current : 0)
-          }
+          onClick={() => track.onSetVolume(silenced ? restoreRef.current : 0)}
         >
           <VolumeGlyph volume={track.volume} />
         </Button>
@@ -181,6 +182,37 @@ function VolumeRow({
           })}
           onChange={(event) => track.onSetVolume(Number(event.target.value))}
           className="h-1 min-w-0 flex-1 cursor-pointer accent-signal"
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * This person's soundboard clips, on or off, for this listener only. A
+ * toggle rather than a slider: what people ask for is to stop hearing the one
+ * person who will not stop, not to set them at 40%.
+ *
+ * A switch, because the control and the state are one thing: on means their
+ * clips play, off means they are muted. The row's heading is the visible text
+ * and the switch's name carries the same word plus the person, so what a
+ * screen reader says is what the row shows.
+ */
+function SoundboardRow({ userId, name }: { userId: string; name: string }) {
+  const { t } = useTranslation();
+  const [muted, setMuted] = useSoundboardUserMuted(userId);
+  return (
+    <div data-testid="peer-audio-soundboard" className="px-1 pb-1.5 pt-1">
+      <div className="flex items-center justify-between gap-2 px-1">
+        <span className="truncate text-[11px] uppercase tracking-wide text-paper-muted">
+          {t("voice.audio.soundboard")}
+        </span>
+        <Switch
+          checked={!muted}
+          onCheckedChange={(on) => setMuted(!on)}
+          label={t("voice.audio.soundboardFor", { name })}
+          hideLabel
+          className="w-auto shrink-0 px-1 py-1"
         />
       </div>
     </div>
@@ -206,6 +238,7 @@ export function PeerAudioMenu({
   open,
   voice,
   share,
+  soundboardUserId,
   failed = false,
   onRetry,
   side = "top",
@@ -221,6 +254,11 @@ export function PeerAudioMenu({
   voice?: PeerAudioTrack;
   /** Present only while this person is sharing a screen that carries sound. */
   share?: PeerAudioTrack;
+  /**
+   * Whose soundboard clips the panel can mute. Only where the person is
+   * somebody else in the call: never for ourselves.
+   */
+  soundboardUserId?: string;
   failed?: boolean;
   onRetry?: () => void;
   side?: PeerAudioMenuSide;
@@ -244,16 +282,19 @@ export function PeerAudioMenu({
   if (!open) {
     return null;
   }
-  const hasAnything = voice || share || (failed && onRetry);
+  const hasAnything = voice || share || soundboardUserId || (failed && onRetry);
   if (!hasAnything) {
     return null;
   }
   const label = t("voice.audio.title", { name });
   const body = (
     <>
-      <p className="truncate px-2 pb-0.5 pt-1 text-[13px] font-semibold text-paper">
-        {name}
-      </p>
+      <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1">
+        <p className="truncate text-[13px] font-semibold text-paper">{name}</p>
+        {soundboardUserId && (
+          <SoundboardMutedMark userId={soundboardUserId} name={name} />
+        )}
+      </div>
       {voice && (
         <VolumeRow
           testId="peer-audio-voice"
@@ -274,6 +315,7 @@ export function PeerAudioMenu({
           track={share}
         />
       )}
+      {soundboardUserId && <SoundboardRow userId={soundboardUserId} name={name} />}
       {failed && onRetry && (
         <div className="px-1 pb-1 pt-0.5">
           <Button
@@ -360,16 +402,18 @@ function samePlacement(
  * It takes focus when it appears and gives it back to the anchor when it goes,
  * so the keyboard still reaches a panel that now sits at the end of the page.
  */
-function AnchoredPanel({
+export function AnchoredPanel({
   label,
   anchorRef,
   panelRef,
   onClose,
   side,
   className,
+  testId = "peer-audio-menu",
   children,
 }: {
   label: string;
+  testId?: string;
   anchorRef: RefObject<HTMLElement | null>;
   panelRef?: RefObject<HTMLDivElement | null>;
   onClose?: () => void;
@@ -476,7 +520,7 @@ function AnchoredPanel({
     <div
       ref={setRefs}
       role="dialog"
-      data-testid="peer-audio-menu"
+      data-testid={testId}
       aria-label={label}
       tabIndex={-1}
       onKeyDown={onKeyDown}
@@ -501,50 +545,107 @@ function AnchoredPanel({
 }
 
 /**
- * The round trigger the picture surfaces use: a camera tile's overlay and a
- * share tile's overlay, beside fullscreen and pin. The chip surfaces have no
- * button, because there the person IS the button.
+ * A picture's own sound, on the picture: the mute button and the slider side
+ * by side, always drawn, the way a video player's bar draws them. The watch
+ * party's player has the same pair (`hls-watch-player.tsx`).
+ *
+ * ONE SOUND PER PICTURE. A share sets the share's audio, which is what the
+ * person watching it is listening to; a share that carries none, and a
+ * camera, set the person's voice. The panel with both rows stays where a
+ * person is a chip rather than a picture: the sidebar row, the people strip,
+ * the faces in the composer. A slider behind a click on the picture was one
+ * more step for the one control people reach for mid-share.
  */
-export function PeerAudioMenuButton({
+export function PictureVolume({
   name,
-  open,
-  onToggle,
-  muted = false,
+  track,
+  kind,
   className,
+  ignoreChange,
 }: {
   name: string;
-  open: boolean;
-  onToggle: () => void;
-  /** Drawn lit-danger when this person is silenced, the way the old tile did. */
-  muted?: boolean;
+  track: PeerAudioTrack;
+  kind: "voice" | "share";
   className?: string;
+  /**
+   * True while the press in progress only wakes faded controls. A range
+   * input moves on the press itself, so that first touch must not change
+   * anybody's volume.
+   */
+  ignoreChange?: () => boolean;
 }) {
   const { t } = useTranslation();
-  const label: MessageKey = "voice.audio.title";
+  const silenced = track.volume === 0;
+  // Unmute goes back to where it was, not to 100%.
+  const restoreRef = useRef(1);
+  useEffect(() => {
+    if (track.volume > 0) {
+      restoreRef.current = track.volume;
+    }
+  }, [track.volume]);
+  const muteLabel =
+    kind === "share"
+      ? t("voice.audio.muteShare", { name })
+      : t("voice.tile.mutePeer", { name });
+  const unmuteLabel =
+    kind === "share"
+      ? t("voice.audio.unmuteShare", { name })
+      : t("voice.tile.unmutePeer", { name });
   return (
-    <button
-      type="button"
-      data-testid="peer-audio-open"
-      aria-haspopup="dialog"
-      aria-expanded={open}
-      aria-label={t(label, { name })}
-      title={t(label, { name })}
+    <div
+      data-testid="picture-volume"
+      data-picture-volume={kind}
       className={cn(
-        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
-        muted && "text-danger",
-        open && "bg-ink-4",
+        "flex h-7 shrink-0 items-center gap-1 rounded-full bg-ink/70 pl-0.5 pr-0.5 text-paper @min-[20rem]/picture:pr-2.5",
         className,
       )}
-      onClick={(event) => {
-        event.stopPropagation();
-        onToggle();
-      }}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
     >
-      {muted ? (
-        <VolumeX className="h-3.5 w-3.5" />
-      ) : (
-        <Volume2 className="h-3.5 w-3.5" />
-      )}
-    </button>
+      <button
+        type="button"
+        // The label says the action, mute or unmute. A pressed state on top
+        // of it was announced as a second, contradicting one.
+        aria-label={silenced ? unmuteLabel : muteLabel}
+        className={cn(
+          "flex h-6 w-6 items-center justify-center rounded-full hover:bg-ink-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal",
+          silenced && "text-danger",
+        )}
+        onClick={() => track.onSetVolume(silenced ? restoreRef.current : 0)}
+      >
+        {silenced ? (
+          <VolumeX className="h-3.5 w-3.5" />
+        ) : track.volume < 0.5 ? (
+          <Volume1 className="h-3.5 w-3.5" />
+        ) : (
+          <Volume2 className="h-3.5 w-3.5" />
+        )}
+      </button>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        value={track.volume}
+        aria-label={
+          kind === "share"
+            ? t("voice.audio.shareVolumeFor", { name })
+            : t("voice.tile.volumeFor", { name })
+        }
+        aria-valuetext={t("voice.tile.volumePercent", {
+          percent: Math.round(track.volume * 100),
+        })}
+        onChange={(event) => {
+          if (ignoreChange?.()) {
+            return;
+          }
+          track.onSetVolume(Number(event.target.value));
+        }}
+        // Hidden on a narrow picture (its row under 20rem), where it squeezed
+        // the name to three letters. The mute button stays, and the sidebar
+        // still has the full panel.
+        className="hidden h-1 w-20 cursor-pointer accent-signal @min-[20rem]/picture:block"
+      />
+    </div>
   );
 }

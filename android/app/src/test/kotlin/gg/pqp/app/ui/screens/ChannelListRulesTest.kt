@@ -139,6 +139,27 @@ class ChannelListRulesTest {
     }
 
     @Test
+    fun `a folded category adds up the mentions inside and a mute hides them`() {
+        val channels = listOf(ch("a", "text"), ch("b", "text"), ch("f", "forum"))
+        val unread = mapOf(
+            "a" to ChannelUnread("a", 4, 2),
+            "b" to ChannelUnread("b", 1, 1),
+            // A forum can carry a mention with no count.
+            "f" to ChannelUnread("f", 0, 1),
+        )
+        assertEquals(FoldedSummary(3, true, 4), foldedSummary(channels, unread, muted = emptySet()))
+        assertEquals(FoldedSummary(3, true, 1), foldedSummary(channels, unread, muted = setOf("a", "f")))
+        assertEquals(FoldedSummary(3, false, 0), foldedSummary(channels, unread, muted = setOf("a", "b", "f")))
+    }
+
+    @Test
+    fun `a mention with no unread count still says there is news`() {
+        val channels = listOf(ch("f", "forum"))
+        val unread = mapOf("f" to ChannelUnread("f", 0, 1))
+        assertEquals(FoldedSummary(1, true, 1), foldedSummary(channels, unread, muted = emptySet()))
+    }
+
+    @Test
     fun `up to three people get a line each`() {
         val three = occupantSummary(listOf(person("1"), person("2"), person("3")))
         assertEquals(3, three.listed.size)

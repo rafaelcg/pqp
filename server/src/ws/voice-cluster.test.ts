@@ -148,6 +148,7 @@ type SocketsModule = typeof import("./sockets.js");
 type RegistryModule = typeof import("../voice/registry.js");
 type DbModule = typeof import("../db.js");
 type AdminModule = typeof import("../voice/admin.js");
+type UserStatsModule = typeof import("../services/user-stats.js");
 
 interface Instance {
   bus: BusModule;
@@ -157,6 +158,8 @@ interface Instance {
   db: DbModule;
   /** The (mocked) SFU half, per graph: which instance ran it is the point. */
   admin: AdminModule;
+  /** The Retrospectiva's counters, per graph: where a track is counted. */
+  stats: UserStatsModule;
 }
 
 interface Frame {
@@ -182,10 +185,11 @@ async function bootInstance(connected = true): Promise<Instance> {
   const sockets = (await import("./sockets.js")) as SocketsModule;
   const registry = (await import("../voice/registry.js")) as RegistryModule;
   const admin = (await import("../voice/admin.js")) as AdminModule;
+  const stats = (await import("../services/user-stats.js")) as UserStatsModule;
   if (connected) {
     bus.setBusTransport(bus.createMemoryTransport(hub));
   }
-  const instance = { bus, voice, sockets, registry, db, admin };
+  const instance = { bus, voice, sockets, registry, db, admin, stats };
   booted.push(instance);
   return instance;
 }
@@ -1098,6 +1102,46 @@ describeDb("voice across two instances", () => {
           (f) => (f.state as { rev: number } | null)?.rev === 3,
         ),
       ).toBe(false);
+      // And nobody is credited with its track: the Retrospectiva counts a
+      // track the room kept, on the machine that kept it.
+      expect(a.stats.userStats.metrics().musicNoted).toBe(2);
+      expect(b.stats.userStats.metrics().musicNoted).toBe(0);
+    });
+
+    it("counts a losing write's track when the row's winner kept it", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const userA = randomUUID();
+      const dj = await join(a, userA, channel);
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(1, dj.peerId, musicTrack("ccccccccccc", userA)),
+        },
+      );
+      expect(a.stats.userStats.metrics().musicNoted).toBe(1);
+
+      // A later write on this machine, built on top of the next one, reaches
+      // the row first. That winner already holds the next write's track, so
+      // it would not count it; the loser has to.
+      const added = musicTrack("fffffffffff", userA);
+      await a.registry.persistMusic(
+        channel,
+        queue(5, dj.peerId, musicTrack("ccccccccccc", userA), { queue: [added] }),
+        null,
+      );
+      await a.voice.handleVoiceMessage(
+        { socket: dj.socket, user: asUser(userA) },
+        {
+          type: "set-music",
+          state: queue(3, dj.peerId, musicTrack("ccccccccccc", userA), {
+            queue: [added],
+          }),
+        },
+      );
+      expect(frames(dj, "music").at(-1)?.state).toMatchObject({ rev: 5 });
+      expect(a.stats.userStats.metrics().musicNoted).toBe(2);
     });
   });
 

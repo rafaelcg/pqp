@@ -357,10 +357,28 @@ page (crawl paths need internal links, and the footer already links
   the pt-BR head (crawlers send no `Accept-Language`; `preferredLocale`
   defaults pt-BR) with `?lang=` alternates. Correct for a Brazilian-first
   product; revisit only per roadmap #5.
-- **The SPA body is still JS-only.** Edge injection fixes the *head*; the
-  page copy itself is rendered client-side, so non-Google engines index title
-  + description + JSON-LD only. Full SSR/prerender of marketing routes is the
-  next step up in cost; not worth it before the content in §3 exists.
+- **The SPA body is JS-only, except on the pages that carry a no-JS body.**
+  Edge injection fixes the *head*. The home page ships a prerendered first
+  screen (`prerender-hero.ts`). `/streamers`, `/contact`, `/tela`,
+  `/vs-discord` and `/download` get their copy, headings and internal links
+  written into `#root` by the middleware (`marketing-prerender.ts`, PQP-17).
+  Each block sits between a plain copy of the site's nav and footer, so a
+  crawler reaches every page the live chrome links. The footer's three
+  run-time links follow the live rules: Communities when the API's public
+  communities config says so, the support page when the build had a sponsor
+  URL or Pix key, and the Google Play label when the build kept the listing
+  (the last two come from `/edge-config.json`). Each is left out when the edge
+  cannot tell. The `/vs-discord` iOS beta link is the build's `testflightUrl()`,
+  also from `/edge-config.json`. That block is hidden by CSS in any browser that runs the head
+  script, and React replaces it, so people never see it.
+  `marketing-prerender.test.ts` fails when one of those pages loses its block,
+  when its strings drift from the catalogues, or when the React page renders a
+  string the block lacks. `marketing-prerender-chrome.test.tsx` renders the
+  real nav and footer in every language and switch state and fails when the
+  static copy differs by one link, label or word.
+  After changing a catalogue key those pages use, run
+  `pnpm --filter @pqp/client prerender:copy`. Every other route still serves
+  an empty body to a reader that runs no script.
 - **`/app` is noindexed by robots** and must stay that way. **Superseded
   2026-09-17: it is noindexed by an edge `X-Robots-Tag` header now, not by
   `robots.txt`, because a `Disallow` a crawler never fetches could not

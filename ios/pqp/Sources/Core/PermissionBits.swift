@@ -10,7 +10,7 @@ import Foundation
  bits instead of rank. `PermissionBit` names follow that package's own
  comment: "Never do this math in JS `number`... always `bigint`". Swift has
  no arbitrary-precision integer either, so this uses `UInt64`, which is
- large enough for every bit defined today (`permissions.ts` runs 0-24) and
+ large enough for every bit defined today (`permissions.ts` runs 0-28) and
  fails closed rather than wrapping if that ever changes -- see
  `PermissionsSnapshot`'s own doc.
 
@@ -29,8 +29,17 @@ enum PermissionBit {
     /// the staff-only tags (`forumPerms` on the server).
     static let manageChannels: UInt64 = 1 << 4
 
+    /// `Permission.MANAGE_WEBHOOKS` = `1n << 20n`. With MANAGE_CHANNELS, what
+    /// lets somebody set up a Seguir follow into a channel (`mayManageFollow`
+    /// on the server).
+    static let manageWebhooks: UInt64 = 1 << 20
+
     /// `Permission.MANAGE_MESSAGES` = `1n << 8n`.
     static let manageMessages: UInt64 = 1 << 8
+
+    /// `Permission.SEND_MESSAGES` = `1n << 7n`: what the forward picker asks
+    /// of each channel before offering it (the server asks again per target).
+    static let sendMessages: UInt64 = 1 << 7
 
     /// `Permission.START_WATCH_PARTY` = `1n << 23n` in
     /// `packages/shared/src/permissions.ts`: start the stream in a
@@ -65,7 +74,7 @@ enum PermissionBit {
  concern there); `UInt64(_:)` returns `nil` for a string that does not fit
  or is not a plain decimal, and that reads as holding NOTHING rather than
  crashing the decode or, worse, wrapping into some other bit pattern. The
- highest bit defined today is 24, so this should never actually trigger --
+ highest bit defined today is 28, so this should never actually trigger --
  it is the same margin `WatchPartyHostGate.swift`'s `.unknown` case keeps
  for "this has not resolved cleanly, so refuse rather than guess".
  */

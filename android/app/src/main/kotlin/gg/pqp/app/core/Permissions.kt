@@ -24,7 +24,7 @@ import kotlinx.serialization.Serializable
  * BITFIELDS ARE DECIMAL STRINGS ON THE WIRE, because the server holds them as
  * Postgres `BIGINT` and computes them as a JS `bigint` (`permissions.ts`'s own
  * doc: "Never do this math in JS number"). The highest bit defined today is
- * 24 (`MANAGE_MUSIC`), so a signed 64-bit [Long] carries every bit in use
+ * 28 (`MANAGE_EMOJI`), so a signed 64-bit [Long] carries every bit in use
  * with headroom to spare -- no need for `java.math.BigInteger` unless the bit
  * count ever approaches 63.
  *
@@ -72,6 +72,13 @@ object Permission {
     const val SEND_MESSAGES: Long = 1L shl 7
 
     const val MANAGE_MESSAGES: Long = 1L shl 8
+
+    /**
+     * Outgoing channel webhooks. With [MANAGE_CHANNELS] it is what lets
+     * somebody point a followed Baú at a channel (Seguir), which is what the
+     * server checks (`FOLLOW_MANAGE_BITS`).
+     */
+    const val MANAGE_WEBHOOKS: Long = 1L shl 20
 
     /**
      * Start the stream in a `watch_party` channel. Everyone else there is

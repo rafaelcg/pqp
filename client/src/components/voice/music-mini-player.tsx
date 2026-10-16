@@ -19,6 +19,7 @@ import {
 import { MusicFila } from "@/components/voice/music-fila";
 import {
   setMusicLocalNeedsTap,
+  setMusicLocalPlaybackFailed,
   setMusicLocalPlayer,
   setMusicLocalVolume,
   tapMusicLocalToPlay,
@@ -148,6 +149,7 @@ export function MusicMiniPlayer({
       muted={local.muted}
       playerRef={playerRef}
       onNeedsTap={setMusicLocalNeedsTap}
+      onPlaybackFailed={setMusicLocalPlaybackFailed}
       duckEnabled={prefs.ducking}
       speakingPeerCount={voiceState.speakingPeerIds.length}
       transmitting={voiceState.isTransmitting}
@@ -188,6 +190,7 @@ export function MusicMiniPlayer({
       canSetSwitches={canSetSwitches}
       playing={playing}
       needsTap={local.needsTap}
+      playbackFailed={local.playbackFailed}
       listening={music.listening}
       volume={local.volume}
       muted={local.muted}

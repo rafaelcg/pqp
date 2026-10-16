@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   FORUM_ERRORS,
   FORUM_MAX_TAGS_PER_POST,
+  FORUM_TAG_PRESET_NAMES,
   FORUM_TITLE_MAX,
   FORUM_WEBHOOK_POST_BURST,
   FORUM_WEBHOOK_POST_REFILL_MS,
@@ -9,6 +10,7 @@ import {
   WEBHOOK_FORUM_THREAD_NAME_CODE,
   type ExecuteWebhookBody,
   type ForumPostSummary,
+  type ForumTagPreset,
   type WebhookForumSettings,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
@@ -179,6 +181,8 @@ export interface ForumTagChoice {
   id: string;
   name: string;
   moderated: boolean;
+  /** A starter tag shows in the viewer's language, so it answers to each one. */
+  preset?: ForumTagPreset | null;
 }
 
 /**
@@ -196,6 +200,23 @@ export function resolveWebhookTags(
 ): { tagIds: string[]; ignored: string[] } {
   const byId = new Map(forumTags.map((tag) => [tag.id.toLowerCase(), tag]));
   const byName = new Map(forumTags.map((tag) => [foldTagName(tag.name), tag]));
+  // A starter tag that has not been renamed is called "Question", "Dúvida" and
+  // "Duda" on different screens, so a feed that says any of them means it. The
+  // stored names went in first and win: a forum with a real "Duda" tag and an
+  // untouched "Question" preset still sends "Duda" to the real one.
+  for (const tag of forumTags) {
+    if (!tag.preset) {
+      continue;
+    }
+    // The column is free text: a key a newer build wrote, which this one has
+    // no names for, is skipped and the stored name still matches.
+    for (const name of FORUM_TAG_PRESET_NAMES[tag.preset] ?? []) {
+      const key = foldTagName(name);
+      if (!byName.has(key)) {
+        byName.set(key, tag);
+      }
+    }
+  }
   const allowedIds = settings.allowedTagIds ? new Set(settings.allowedTagIds) : null;
   const allowed = (tag: ForumTagChoice) =>
     allowedIds ? allowedIds.has(tag.id) : !tag.moderated;
@@ -227,7 +248,7 @@ export function resolveWebhookTags(
 
 async function readForumTagChoices(forumId: string): Promise<ForumTagChoice[]> {
   const result = await getPool().query<ForumTagChoice>(
-    `SELECT id, name, moderated FROM forum_tags
+    `SELECT id, name, moderated, preset FROM forum_tags
       WHERE forum_id = $1
       ORDER BY position, created_at, id`,
     [forumId],

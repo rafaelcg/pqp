@@ -15,6 +15,7 @@ import {
   renderPrerenderHero,
 } from "./src/lib/prerender-hero";
 import { NAVIGATE_DENYLIST, swBuildScript } from "./src/lib/sw-build-script";
+import { edgeConfigFrom } from "./src/lib/edge-config";
 
 /**
  * Build-time source-map upload to Grafana Faro, so a production stack trace is
@@ -75,16 +76,27 @@ const faroSourcemapPlugin = faroSourceMaps();
  * Empty when `VITE_API_URL` is unset (a self-host serving the SPA from the API's
  * own origin, or a local build). The middleware treats that as "no unfurl" and
  * serves the page unchanged, which is what it did before this existed.
+ *
+ * It also carries the two build switches the marketing footer reads, so the
+ * no-JS footer the edge writes shows the same links (`edge-config.ts`).
  */
 function edgeConfig(): Plugin {
+  // The env the bundle itself is built with (`.env` files included), so the
+  // footer switches agree with `import.meta.env`.
+  let bundleEnv: Record<string, string> = {};
   return {
     name: "pqp-edge-config",
     apply: "build",
+    configResolved(config) {
+      bundleEnv = config.env as Record<string, string>;
+    },
     generateBundle() {
       this.emitFile({
         type: "asset",
         fileName: "edge-config.json",
-        source: JSON.stringify({ apiUrl: process.env.VITE_API_URL ?? "" }),
+        source: JSON.stringify(
+          edgeConfigFrom({ ...bundleEnv, VITE_API_URL: process.env.VITE_API_URL }),
+        ),
       });
     },
   };

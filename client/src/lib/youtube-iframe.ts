@@ -30,6 +30,14 @@ export interface YTPlayer {
    * `reportableDurationMs` is what holds when it is missing.
    */
   getVideoData(): { video_id?: string; isLive?: boolean };
+  /**
+   * The captions module. Undocumented, like `isLive`, and what YouTube's
+   * own CC menu drives; optional so a player without it simply has no
+   * captions control. See `lib/music-captions.ts`.
+   */
+  loadModule?(name: string): void;
+  getOption?(module: string, option: string): unknown;
+  setOption?(module: string, option: string, value: unknown): void;
   destroy(): void;
 }
 

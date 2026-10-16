@@ -128,8 +128,28 @@ interface ViewerClaims {
    * fails verification. A caller that does not care (the live proxy, which
    * has never needed this) omits it and nothing about its behaviour changes.
    */
-  p?: "live" | "replay";
+  p?: HlsViewerTokenPurpose;
 }
+
+/**
+ * What a viewer token is for. `"preview"` is the signed-out live preview
+ * (`services/live-preview.ts`): `u` is a random visitor id rather than an
+ * account, and `e` is the end of that visitor's window rather than an hour.
+ *
+ * WHY THE SAME KEY. The edge Worker (`tools/hls-edge/`) verifies `?t=` with
+ * the viewer key and ignores `p` on the live route, so a preview token plays
+ * through the edge with no new Worker secret and no Worker deploy, and the
+ * Worker enforces its expiry on every request it answers without asking us.
+ *
+ * WHY IT IS OPT-IN HERE. On this origin a preview token must open exactly one
+ * door, the live playlist proxy's preview branch, and nothing else. So every
+ * reader below refuses `"preview"` unless its caller asks for it by name
+ * (`allowPreview`). An existing caller that passes nothing keeps accepting
+ * live and replay tokens exactly as before, and can never be handed an
+ * anonymous visitor by accident: no telemetry batch, no replay, no download,
+ * no party pass, no viewer count.
+ */
+export type HlsViewerTokenPurpose = "live" | "replay" | "preview";
 
 function viewerSecret(): string | null {
   const raw = process.env.CLERK_SECRET_KEY
@@ -164,6 +184,55 @@ export function mintHlsViewerToken(input: {
   /** See `ViewerClaims.p`. Omitted (and stamped `"live"`) for every existing caller. */
   purpose?: "live" | "replay";
 }): string | null {
+  return mintToken({ ...input, purpose: input.purpose ?? "live" });
+}
+
+/**
+ * The signed-out live preview's capability: the viewer token's shape and key,
+ * purpose `"preview"`, a random visitor id where an account id would be, and
+ * an expiry at the end of that visitor's window instead of an hour from now.
+ * See `HlsViewerTokenPurpose` for why the key is shared and why every origin
+ * reader refuses it unless asked. Null when no key is configured or the window
+ * is already over.
+ */
+export function mintHlsPreviewToken(input: {
+  visitorId: string;
+  channelId: string;
+  startedAt: number;
+  /** Epoch ms. The end of the visitor's window; the token dies with it. */
+  expiresAt: number;
+  now?: number;
+}): string | null {
+  const now = input.now ?? Date.now();
+  if (input.expiresAt <= now) {
+    return null;
+  }
+  return mintToken({
+    userId: previewViewerId(input.visitorId),
+    channelId: input.channelId,
+    startedAt: input.startedAt,
+    now,
+    purpose: "preview",
+    expiresAt: input.expiresAt,
+  });
+}
+
+/**
+ * The `u` a preview token carries. Prefixed so it can never equal an account
+ * id (those are UUIDs) and so a log line or a rate-limit key says what it is.
+ */
+export function previewViewerId(visitorId: string): string {
+  return `preview:${visitorId}`;
+}
+
+function mintToken(input: {
+  userId: string;
+  channelId: string;
+  startedAt: number;
+  now?: number;
+  purpose: HlsViewerTokenPurpose;
+  expiresAt?: number;
+}): string | null {
   const secret = viewerSecret();
   if (!secret) {
     return null;
@@ -174,9 +243,9 @@ export function mintHlsViewerToken(input: {
     u: input.userId,
     c: input.channelId,
     s: input.startedAt,
-    e: issuedAt + hlsViewerTokenTtlMs(),
+    e: input.expiresAt ?? issuedAt + hlsViewerTokenTtlMs(),
     i: issuedAt,
-    p: input.purpose ?? "live",
+    p: input.purpose,
   };
   const payload = Buffer.from(JSON.stringify(claims), "utf8").toString(
     "base64url",
@@ -190,7 +259,7 @@ export interface HlsViewerTokenClaims {
   channelId: string;
   startedAt: number;
   issuedAt: number;
-  purpose: "live" | "replay";
+  purpose: HlsViewerTokenPurpose;
 }
 
 /**
@@ -207,6 +276,8 @@ export interface HlsViewerTokenClaims {
 export function decodeHlsViewerToken(
   token: string | null | undefined,
   now = Date.now(),
+  /** See `HlsViewerTokenPurpose`: a preview token is null unless asked for. */
+  options: { allowPreview?: boolean } = {},
 ): HlsViewerTokenClaims | null {
   if (!token) {
     return null;
@@ -244,6 +315,10 @@ export function decodeHlsViewerToken(
   ) {
     return null;
   }
+  const purpose = claims.p ?? "live";
+  if (purpose === "preview" && options.allowPreview !== true) {
+    return null;
+  }
   return {
     userId: claims.u,
     channelId: claims.c,
@@ -252,7 +327,7 @@ export function decodeHlsViewerToken(
       typeof claims.i === "number"
         ? claims.i
         : claims.e - HLS_VIEWER_TOKEN_TTL_MS,
-    purpose: claims.p ?? "live",
+    purpose,
   };
 }
 
@@ -270,13 +345,17 @@ export function verifyHlsViewerToken(
   expected: {
     channelId: string;
     startedAt: number;
-    /** See `ViewerClaims.p`. Omitted accepts a token of any purpose,
+    /** See `ViewerClaims.p`. Omitted accepts a live or replay token,
      * matching every caller before this claim existed. */
-    purpose?: "live" | "replay";
+    purpose?: HlsViewerTokenPurpose;
+    /** Also accept a `"preview"` token. Only the live playlist proxy asks. */
+    allowPreview?: boolean;
   },
   now = Date.now(),
-): { userId: string; issuedAt: number } | null {
-  const claims = decodeHlsViewerToken(token, now);
+): { userId: string; issuedAt: number; preview?: true } | null {
+  const claims = decodeHlsViewerToken(token, now, {
+    allowPreview: expected.allowPreview === true || expected.purpose === "preview",
+  });
   if (
     !claims ||
     claims.channelId !== expected.channelId ||
@@ -285,7 +364,11 @@ export function verifyHlsViewerToken(
   ) {
     return null;
   }
-  return { userId: claims.userId, issuedAt: claims.issuedAt };
+  // `preview` only on a preview token, so the answer for every other token is
+  // exactly the shape it always was.
+  return claims.purpose === "preview"
+    ? { userId: claims.userId, issuedAt: claims.issuedAt, preview: true }
+    : { userId: claims.userId, issuedAt: claims.issuedAt };
 }
 
 /**
@@ -639,6 +722,57 @@ export function stampViewerStream(
     ...(stream.cameraHlsUrl && stream.cameraHlsUrl.startsWith("/")
       ? { cameraHlsUrl: withEdgeBase(withParams(stream.cameraHlsUrl)) }
       : {}),
+  };
+}
+
+/**
+ * The stream as a signed-out preview visitor is handed it: the film's
+ * API-relative proxy path with the visitor's preview token, then the edge host
+ * when one is configured. The same order as `stampViewerStream`, with three
+ * things deliberately left out:
+ *
+ *  - NO PARTY PASS. The edge Worker falls back to `?pp=` once `?t=` has
+ *    expired, so a pass here would turn a five minute window into six hours.
+ *  - NO CAMERA. The presenter's face is not part of what a stranger previews.
+ *  - NO PRESENTER. `presenterPeerId` names a seat; a visitor gets none.
+ *
+ * Null when the stream is not one of ours (`LIVE_HLS_SIGNED_URLS=false` hands
+ * out a raw bucket URL, which no token can expire) or no key is configured:
+ * a preview that cannot be cut off at the end of its window is not offered.
+ */
+export function stampPreviewStream(
+  stream: Pick<LiveHlsStream, "hlsUrl" | "startedAt" | "mode" | "partTargetMs">,
+  visitorId: string,
+  expiresAt: number,
+  now = Date.now(),
+): {
+  hlsUrl: string;
+  startedAt: number;
+  mode?: "conventional" | "ll";
+  partTargetMs?: number;
+} | null {
+  if (!stream.hlsUrl.startsWith("/")) {
+    return null;
+  }
+  const channelId = extractChannelId(stream.hlsUrl);
+  if (!channelId) {
+    return null;
+  }
+  const token = mintHlsPreviewToken({
+    visitorId,
+    channelId,
+    startedAt: stream.startedAt,
+    expiresAt,
+    now,
+  });
+  if (!token) {
+    return null;
+  }
+  return {
+    hlsUrl: withEdgeBase(appendToken(stream.hlsUrl, token)),
+    startedAt: stream.startedAt,
+    ...(stream.mode ? { mode: stream.mode } : {}),
+    ...(stream.partTargetMs ? { partTargetMs: stream.partTargetMs } : {}),
   };
 }
 

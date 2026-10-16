@@ -72,6 +72,10 @@ export function isUnknownSpaPath(pathname: string): boolean {
   // right answer for any slug, so one segment after `/c/` is a route.
   if (/^\/c\/[^/]+$/.test(path)) return false;
 
+  // `/c/<slug>/p/<postId>`: one Baú post of a community. Same reasoning; the
+  // API says whether the post is public and the page draws its own 404.
+  if (/^\/c\/[^/]+\/p\/[^/]+$/.test(path)) return false;
+
   // `/@handle`: a person. Same reasoning.
   if (/^\/@[^/]+$/.test(path)) return false;
 

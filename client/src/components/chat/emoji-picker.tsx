@@ -1,5 +1,7 @@
+import type { ServerEmoji } from "@pqp/shared";
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { ContainedChunkBoundary } from "@/components/error-boundary";
 import {
   EMOJI_PICKER_SIZE,
   placeAnchoredPanel,
@@ -20,12 +22,19 @@ interface EmojiPickerPanelProps {
   onSelect: (emoji: string) => void;
   onClose?: () => void;
   className?: string;
+  /**
+   * The server's own emoji, shown as their own category. A pick arrives as the
+   * `:name:` text the composer expands on send. Omit where only Unicode can be
+   * stored (reactions, forum tags, Baú).
+   */
+  customEmoji?: readonly ServerEmoji[] | null;
 }
 
 export function EmojiPickerPanel({
   onSelect,
   onClose,
   className,
+  customEmoji,
 }: EmojiPickerPanelProps) {
   const slotRef = useRef<HTMLSpanElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -106,9 +115,13 @@ export function EmojiPickerPanel({
         className,
       )}
     >
-      <Suspense fallback={<div className="h-full w-full animate-pulse bg-ink-2" />}>
-        <LazyPanel onSelect={onSelect} />
-      </Suspense>
+      {/* A stale chunk costs this panel and nothing else: the root boundary
+          would take the whole app, a call's screens included. */}
+      <ContainedChunkBoundary>
+        <Suspense fallback={<div className="h-full w-full animate-pulse bg-ink-2" />}>
+          <LazyPanel onSelect={onSelect} customEmoji={customEmoji} />
+        </Suspense>
+      </ContainedChunkBoundary>
     </div>
   );
 

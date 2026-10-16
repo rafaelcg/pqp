@@ -595,11 +595,13 @@ private fun FilterStrip(
             add(
                 Chip("tag-${tag.id}", on) {
                     ForumFilterChip(
-                        label = tag.name,
+                        label = tag.displayName(),
                         selected = on,
                         onClick = { onTag(tag.id) },
-                        leading = tag.emoji?.takeIf { it.isNotBlank() }?.let { emoji ->
-                            { Text(emoji, style = MaterialTheme.typography.labelLarge) }
+                        leading = if (tag.hasGlyph()) {
+                            { ForumTagGlyph(tag, size = 16.dp) }
+                        } else {
+                            null
                         },
                         testTag = "forum.filter.tag.${tag.id}",
                     )

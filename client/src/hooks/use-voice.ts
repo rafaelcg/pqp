@@ -29,6 +29,15 @@ import { publishLiveReactions } from "@/lib/live-reactions";
 import { notifyIncomingCall } from "@/lib/notifications";
 import { receiveMusic, setMusicSession } from "@/lib/music-store";
 import {
+  isSoundboardUserMuted,
+  noteOwnSoundboardEcho,
+  playSoundboardClip,
+  registerSoundboardSender,
+  showSoundboardMark,
+  silenceSoundboardClips,
+  stopSoundboardClips,
+} from "@/lib/soundboard";
+import {
   audibleScreenPeerIds,
   isCameraAtCap,
   isScreenShareAtCap,
@@ -72,6 +81,7 @@ import {
   systemAudioStrippedNoticeKey,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
+import { lostSoundToFailure, retryShareWithoutSound } from "@/lib/share-silent-fallback";
 import {
   armOrFallBackToChromiumAudio,
   attachNativeShareAudio,
@@ -216,6 +226,15 @@ export type VoiceStatus = "idle" | "joining" | "connected";
 
 /** Aligned with the server orphan TTL (`VOICE_RESUME_TTL_MS`). */
 const VOICE_RESUME_GRACE_MS = 90_000;
+
+/**
+ * How long after a reconnect the occupancy this client already held may stand
+ * in for the new socket's catch-up before a room it never mentions is dropped.
+ * The catch-up is a handful of queries (and, after a deploy, a queue of them),
+ * so it is generous; the cost of too short is a badge that blinks, and of too
+ * long is a ghost that lasts this much longer.
+ */
+const OCCUPANCY_RESYNC_GRACE_MS = 15_000;
 
 /** WebSocket handshake to `welcome`. Signalling only, so 12s is generous. */
 const JOIN_TIMEOUT_MS = 12_000;
@@ -395,6 +414,10 @@ export interface VoiceState {
   canStream: boolean;
   /** `Permission.MANAGE_MUSIC` in this room, from `welcome`. Older servers: true. */
   canManageMusic: boolean;
+  /** `Permission.USE_SOUNDBOARD`. False until welcome, and false in a DM. */
+  canUseSoundboard: boolean;
+  /** `Permission.MANAGE_SOUNDBOARD`. False until welcome says otherwise. */
+  canManageSoundboard: boolean;
   inputMode: VoiceInputMode;
   /**
    * Whether audio is actually leaving this machine right now — the one thing
@@ -407,11 +430,14 @@ export interface VoiceState {
   isTransmitting: boolean;
   error: string | null;
   /**
-   * Set when `error` is about the microphone: the stage then offers a way
-   * into voice settings next to the message, since picking another device
-   * is the fix for every one of those.
+   * What `error` is about, when the stage can do something with that.
+   * `mic`: the stage offers a way into voice settings next to the message,
+   * since picking another device is the fix for every one of those.
+   * `share`: a screen share that did not start. The next share that does
+   * start clears it, because the strip would otherwise sit over a working
+   * share saying it failed.
    */
-  errorKind: "mic" | "connection" | null;
+  errorKind: "mic" | "connection" | "share" | null;
   /**
    * Good news worth a line: the saved microphone could not start and the
    * call went ahead on another one. Says which, so nobody wonders why the
@@ -641,6 +667,13 @@ export interface VoiceState {
    */
   dismissedSharePeerIds: string[];
   /**
+   * Cameras this viewer hid from their own stage, by peer id. The same deal
+   * as `dismissedSharePeerIds`: the tile stays and says so, nothing about the
+   * call changes for anybody else, and it lasts only as long as that camera
+   * is on.
+   */
+  dismissedCameraPeerIds: string[];
+  /**
    * Whose screen audio to play. Derived from the sharing set + focus, not
    * from whether the stage is on screen — navigating to a text channel must
    * not mute a live share.
@@ -702,6 +735,19 @@ export interface VoiceState {
    * its own does not.
    */
   screenShareAudioFailed: boolean;
+  /**
+   * The message of the last screen share that failed to start, the same
+   * string as `error`. The docked call bar shows the share error only while
+   * `error` still equals this, so another error or a cleared one hides it.
+   */
+  screenShareError: string | null;
+  /**
+   * Our own watch party share is live without the film's sound because the
+   * computer's sound failed to open (PQP-31). The host's warning stays up for
+   * as long as this is true instead of auto-hiding like `notice`: the whole
+   * audience is affected and the host is the only one who can fix it.
+   */
+  watchPartyShareSilent: boolean;
   /**
    * We are the SFU presenter of a watch party and our OWN screen-share
    * publication is not currently live — a reconnect dropped it and the client
@@ -1708,6 +1754,56 @@ export function createVoiceController(transport: RealtimeTransport) {
    * `voiceRosterDeltaMessageSchema` in `@pqp/shared` for the whole rule.
    */
   const rosterSeq = new Map<string, number>();
+  /**
+   * Rooms whose occupancy this client held when its socket came back, and has
+   * not been told about since. A new socket's catch-up
+   * (`sendAllVoiceRosters`) names every OCCUPIED room it may see and says
+   * nothing at all about an empty one, so a room that emptied while the
+   * socket was down (or whose `left` never arrived for any other reason)
+   * would keep its last occupants in the sidebar for as long as the tab
+   * lives: an empty room never changes again, so no later frame repairs it.
+   * `notifyReconnected` fills this; any roster that names the room clears
+   * its entry; whatever is left after `OCCUPANCY_RESYNC_GRACE_MS` was not in
+   * the catch-up and is dropped. The grace is what keeps the badges from
+   * blinking on every reconnect.
+   */
+  const occupancyAwaitingResync = new Set<string>();
+  let occupancyResyncTimer: ReturnType<typeof setTimeout> | null = null;
+  function dropOccupancyNotResynced() {
+    occupancyResyncTimer = null;
+    let changed = false;
+    for (const channelId of occupancyAwaitingResync) {
+      // The room this client is in is rebuilt by its own `welcome`, and a
+      // roster for it may legitimately never come while the seat is held.
+      if (channelId === state.voiceChannelId || !(channelId in state.occupancy)) {
+        continue;
+      }
+      const next = { ...state.occupancy };
+      delete next[channelId];
+      state.occupancy = next;
+      rosterSeq.delete(channelId);
+      changed = true;
+    }
+    occupancyAwaitingResync.clear();
+    if (changed) {
+      emit();
+    }
+  }
+  function markOccupancyForResync() {
+    for (const channelId of Object.keys(state.occupancy)) {
+      occupancyAwaitingResync.add(channelId);
+    }
+    if (occupancyAwaitingResync.size === 0) {
+      return;
+    }
+    if (occupancyResyncTimer !== null) {
+      clearTimeout(occupancyResyncTimer);
+    }
+    occupancyResyncTimer = setTimeout(
+      dropOccupancyNotResynced,
+      OCCUPANCY_RESYNC_GRACE_MS,
+    );
+  }
   let joinGeneration = 0;
   // The room the user means to be in. Kept across a WS drop so we can auto-
   // rejoin on reconnect instead of ejecting them from the call.
@@ -1893,6 +1989,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     canSpeak: true,
     canStream: true,
     canManageMusic: true,
+    canUseSoundboard: false,
+    canManageSoundboard: false,
     isAudienceSeat: false,
     inputMode: "voice-activity",
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
@@ -1931,6 +2029,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     uplinkBps: null,
     focusedScreenPeerId: null,
     dismissedSharePeerIds: [],
+    dismissedCameraPeerIds: [],
     audibleScreenPeerIds: [],
     localScreenStream: null,
     isSharingScreenAudio: false,
@@ -1938,6 +2037,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     isShareCursorVisible: false,
     shareCaptureHint: null,
     screenShareAudioFailed: false,
+    screenShareError: null,
+    watchPartyShareSilent: false,
     sharePublishRecovering: false,
     incomingCalls: [],
     isCameraOn: false,
@@ -2208,6 +2309,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.handRaisedAt = null;
     state.transportFailure = failure;
     state.error = translateMessage(TRANSPORT_FAILURE_KEY[failure.reason]);
+    state.errorKind = null;
     emit();
   }
 
@@ -2293,8 +2395,26 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  // The room the soundboard's clips belong to. Leaving it, or moving to
+  // another, cuts whatever is still sounding from it.
+  let soundboardRoom: string | null = null;
+  let soundboardDeafened = false;
+
   function emit() {
     pushAudioDelivery();
+    // Deafening cuts the clips already sounding: the check at the start of a
+    // play only stops the next one. Muting is not deafening, so a muted
+    // listener still hears the board, as on Discord.
+    if (state.isDeafened && !soundboardDeafened) {
+      silenceSoundboardClips();
+    }
+    soundboardDeafened = state.isDeafened;
+    if (state.voiceChannelId !== soundboardRoom) {
+      if (soundboardRoom !== null) {
+        stopSoundboardClips();
+      }
+      soundboardRoom = state.voiceChannelId;
+    }
     // THE PIN FOLLOWS THE SHARE, NOT ONLY THE FRAME. A share that goes up
     // after the stream frame (a reloaded presenter, a re-share on the same
     // page) or an SFU that comes up after it changes what `refreshHlsSource`
@@ -2413,6 +2533,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     } catch (err) {
       if (attempt >= 5) {
         state.error = err instanceof Error ? err.message : String(err);
+        state.errorKind = null;
         emit();
         return;
       }
@@ -2978,6 +3099,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       state.error = err instanceof Error ? err.message : failureMessage;
+      state.errorKind = null;
       if (screenMix && state.isSharingMic && pipeline) {
         screenMix.setMic(micForScreenMix());
       }
@@ -3449,6 +3571,29 @@ export function createVoiceController(transport: RealtimeTransport) {
       sendListening: (listening) =>
         transport.sendVoice({ type: "set-music-listening", listening }),
       canManage: () => state.canManageMusic,
+    });
+  }
+
+  let unregisterSoundboard: (() => void) | null = null;
+  function bindSoundboardSender() {
+    unregisterSoundboard?.();
+    unregisterSoundboard = registerSoundboardSender((soundId) => {
+      if (
+        !state.voiceChannelId ||
+        state.status === "idle" ||
+        !state.canUseSoundboard ||
+        !state.canSpeak ||
+        state.isDeafened ||
+        state.self?.serverMuted === true
+      ) {
+        return false;
+      }
+      transport.sendVoice({
+        type: "soundboard-play",
+        channelId: state.voiceChannelId,
+        soundId,
+      });
+      return true;
     });
   }
 
@@ -4102,6 +4247,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.isSharingScreenAudio = false;
     state.isSharingSystemAudio = false;
     state.isShareCursorVisible = false;
+    state.watchPartyShareSilent = false;
     // The capture is gone, so the publish watchdog has nothing to watch: stop
     // it and drop any recovering flag rather than leave a timer firing against
     // a share that ended.
@@ -4325,6 +4471,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.cameraPeerIds = participants
       .filter((participant) => participant.cameraStreamId)
       .map((participant) => participant.peerId);
+    // A hidden camera only stays hidden while it is on.
+    state.dismissedCameraPeerIds = state.dismissedCameraPeerIds.filter((id) =>
+      state.cameraPeerIds.includes(id),
+    );
   }
 
   /**
@@ -4610,6 +4760,7 @@ export function createVoiceController(transport: RealtimeTransport) {
             return;
           }
           state.error = msg;
+          state.errorKind = null;
           emit();
         },
         // A republished share is a new sid on the SFU. Re-declaring it lets
@@ -4707,6 +4858,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           }
           console.warn("[pqp] share could not be republished on the SFU; stopping it", err);
           state.error = screenShareErrorMessage(err);
+          state.errorKind = "share";
           await stopScreenShareInternal().catch(() => {});
         }
       }
@@ -4727,6 +4879,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           }
           console.warn("[pqp] camera could not be republished on the SFU; turning it off", err);
           state.error = translateMessage("voice.error.cameraFailed");
+          state.errorKind = null;
           await stopCameraInternal().catch(() => {});
         }
       }
@@ -5101,6 +5254,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     // last one closed it: "the rest of the call" ends here.
     activeMicFallback = null;
     dismissedMicFallbackKey = null;
+    unregisterSoundboard?.();
+    unregisterSoundboard = null;
     state = {
       status: "idle",
       peerId: null,
@@ -5110,6 +5265,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       canSpeak: true,
       canStream: true,
       canManageMusic: true,
+      canUseSoundboard: false,
+      canManageSoundboard: false,
       isAudienceSeat: false,
       inputMode: state.inputMode,
       isTransmitting: false,
@@ -5152,6 +5309,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     uplinkBps: null,
       focusedScreenPeerId: null,
       dismissedSharePeerIds: [],
+      dismissedCameraPeerIds: [],
       audibleScreenPeerIds: [],
       localScreenStream: null,
       isSharingScreenAudio: false,
@@ -5159,6 +5317,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       isShareCursorVisible: false,
       shareCaptureHint: null,
       screenShareAudioFailed: false,
+      screenShareError: null,
+      watchPartyShareSilent: false,
       sharePublishRecovering: false,
       incomingCalls: state.incomingCalls,
       isCameraOn: false,
@@ -5205,6 +5365,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     authoritative: boolean,
   ) {
     applyPreservedSelfVoice();
+    occupancyAwaitingResync.delete(voiceChannelId);
     state.occupancy = {
       ...state.occupancy,
       [voiceChannelId]: participants.map(overlayLocalSelfVoice),
@@ -5419,6 +5580,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           meshShareLimit(),
           canPromoteTransport(),
         );
+        state.errorKind = "share";
         emit();
         break;
       case "camera-denied":
@@ -5430,6 +5592,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           meshCameraLimit(),
           canPromoteTransport(),
         );
+        state.errorKind = null;
         emit();
         break;
       case "voice-room-full": {
@@ -5438,6 +5601,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.error = translateMessage("voice.error.channelFull", {
           limit,
         });
+        state.errorKind = null;
         emit();
         break;
       }
@@ -5476,8 +5640,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.peerId = peerId;
           state.voiceChannelId = channelId;
           state.canManageMusic = message.canManageMusic ?? true;
+          state.canUseSoundboard = message.canUseSoundboard ?? false;
+          state.canManageSoundboard = message.canManageSoundboard ?? false;
           state.roomTransport = roomTransport;
           registerMusicSession(peerId, channelId, message.self);
+          bindSoundboardSender();
           state.status = "connected";
           state.audience = message.audience ?? null;
           applyPublishRules(
@@ -5552,12 +5719,15 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.peerId = message.peerId;
         state.voiceChannelId = message.voiceChannelId;
         state.canManageMusic = message.canManageMusic ?? true;
+        state.canUseSoundboard = message.canUseSoundboard ?? false;
+        state.canManageSoundboard = message.canManageSoundboard ?? false;
         state.transportFailure = null;
         registerMusicSession(
           message.peerId,
           message.voiceChannelId,
           message.self,
         );
+        bindSoundboardSender();
         // A fresh seat, so there is no "before" to have grown from. This is
         // what keeps the capacity card off the screen of somebody who walks
         // into a room that was already promoted.
@@ -5788,6 +5958,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (message.canManageMusic !== undefined) {
           state.canManageMusic = message.canManageMusic;
         }
+        if (message.canUseSoundboard !== undefined) {
+          state.canUseSoundboard = message.canUseSoundboard;
+        }
+        if (message.canManageSoundboard !== undefined) {
+          state.canManageSoundboard = message.canManageSoundboard;
+        }
         emit();
         break;
       case "voice-audience":
@@ -5830,6 +6006,20 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         break;
       }
+      case "voice-moderation":
+        // The moderator's own word on this person's mute, sent to every one
+        // of their sockets. The roster says the same, but a delta can be
+        // refused while this client's view of the room is out of step (a
+        // seat of ours still held for its resume window), and the mic and
+        // the soundboard lock must not wait for the next full roster.
+        if (
+          message.voiceChannelId === state.voiceChannelId &&
+          (message.action === "muted" || message.action === "unmuted")
+        ) {
+          applySelfServerMute(message.action === "muted");
+          emit();
+        }
+        break;
       case "peer-updated": {
         // A rename or a new picture, not an arrival: no join cue, no new
         // connection, and the tile keeps whatever media it already has.
@@ -5998,6 +6188,36 @@ export function createVoiceController(transport: RealtimeTransport) {
         // track, so a 720p share caps every viewer at 720p.
         void refreshHlsSource();
         emit();
+        break;
+      case "soundboard-play":
+        // A late echo from the room this seat left counts nowhere: the move
+        // already dropped its pending sends, and the new room never saw it.
+        if (
+          message.userId === state.self?.userId &&
+          state.status !== "idle" &&
+          message.channelId === state.voiceChannelId
+        ) {
+          noteOwnSoundboardEcho(message.soundId);
+        }
+        if (
+          state.status === "idle" ||
+          message.channelId !== state.voiceChannelId ||
+          // Muted by this listener: neither heard nor marked.
+          isSoundboardUserMuted(message.userId)
+        ) {
+          break;
+        }
+        showSoundboardMark({
+          userId: message.userId,
+          displayName: message.displayName,
+          emoji: message.emoji,
+          soundId: message.soundId,
+        });
+        void playSoundboardClip(
+          message.soundId,
+          () => !state.isDeafened && state.voiceChannelId === message.channelId,
+          message.userId,
+        );
         break;
       case "channel-live":
         // Every channel this socket may view, in or out of the room. Same
@@ -6274,6 +6494,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.screenSharePeerIds = [];
       state.liveStream = null;
       state.cameraPeerIds = [];
+      state.dismissedCameraPeerIds = [];
       state.focusedScreenPeerId = null;
       state.audibleScreenPeerIds = [];
       // A queue belongs to a room. Walking into another one is not a place
@@ -6548,6 +6769,9 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     /** WS reconnected: resume the same peer id, or rejoin if we have no token. */
     async notifyReconnected() {
+      // What this client believes about every room was learned on a socket
+      // that is gone; the catch-up on this one says which of it still holds.
+      markOccupancyForResync();
       // The server counts watchers per socket, and this is a new socket.
       if (watchingChannelId) {
         transport.sendVoice({
@@ -6880,6 +7104,8 @@ export function createVoiceController(transport: RealtimeTransport) {
           meshShareLimit(),
           canPromoteTransport(),
         );
+        state.errorKind = "share";
+        state.screenShareError = state.error;
         emit();
         return;
       }
@@ -6889,13 +7115,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       // programmatic call, not a user tapping a button we should not have shown.
       if (!supportsScreenShare()) {
         state.error = screenShareUnsupportedMessage();
+        state.errorKind = "share";
+        state.screenShareError = state.error;
         emit();
         return;
       }
 
       // A share that succeeds supersedes the last one that failed, and the
       // offer to retry without sound has to go with it.
-      const retryingAfterAudioFailure = state.screenShareAudioFailed;
       state.screenShareAudioFailed = false;
 
       // The standing "leave my mouse out of it" preference, read from its own
@@ -6942,6 +7169,9 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
 
       let stream: MediaStream;
+      // PQP-31: the sound failed and the shell gave the same surface back
+      // without it. Said once the share is up.
+      let sharedWithoutSoundAfterFailure = false;
       // A stream the caller already opened (the watch party preview) is
       // published as it is. The picker has already run, the host has already
       // looked at the result, and asking again here would broadcast a
@@ -6952,40 +7182,58 @@ export function createVoiceController(transport: RealtimeTransport) {
       try {
         stream = await navigator.mediaDevices.getDisplayMedia(options);
       } catch (err) {
-        // A browser that refuses the *shape* of the request rather than the
-        // request itself would otherwise cost the user their screen share
-        // entirely, so ask again the old way. Only for the two names that mean
-        // "I do not understand this request", because only those are thrown
-        // before the picker opens. Everything else (the person cancelling,
-        // the OS refusing the capture, the chosen surface failing to start)
-        // happens *after* they already chose something, and asking again there
-        // would put a second picker on screen with nothing to explain it.
-        const shapeRefused =
-          err instanceof Error &&
-          (err.name === "TypeError" || err.name === "NotSupportedError");
-        if (!shapeRefused) {
-          state.error = screenShareErrorMessage(err);
-          // Everything audio can do to a capture, it does to the whole capture:
-          // the video was fine and the person still got nothing. Offer the same
-          // share without sound rather than leaving them to work out that the
-          // toggle on the other bar is what took their screen away. Cancelling
-          // the picker lands here too and is not a failure to recover from.
-          state.screenShareAudioFailed =
-            askedForAudio &&
+        const silent = await retryShareWithoutSound({
+          err,
+          options,
+          env: captureEnv,
+          desktop: getDesktop(),
+          getDisplayMedia: (retry) => navigator.mediaDevices.getDisplayMedia(retry),
+        });
+        if (silent) {
+          stream = silent;
+          sharedWithoutSoundAfterFailure = true;
+        } else {
+          // A browser that refuses the *shape* of the request rather than the
+          // request itself would otherwise cost the user their screen share
+          // entirely, so ask again the old way. Only for the two names that mean
+          // "I do not understand this request", because only those are thrown
+          // before the picker opens. Everything else (the person cancelling,
+          // the OS refusing the capture, the chosen surface failing to start)
+          // happens *after* they already chose something, and asking again there
+          // would put a second picker on screen with nothing to explain it.
+          const shapeRefused =
             err instanceof Error &&
-            err.name !== "NotAllowedError";
-          // The audio graph the arm built is for a share that did not happen.
-          discardPrimedNativeShareAudio();
-          emit();
-          return;
-        }
-        try {
-          stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        } catch {
-          state.error = screenShareErrorMessage(err);
-          discardPrimedNativeShareAudio();
-          emit();
-          return;
+            (err.name === "TypeError" || err.name === "NotSupportedError");
+          if (!shapeRefused) {
+            state.error = screenShareErrorMessage(err);
+            state.screenShareError = state.error;
+            state.errorKind = "share";
+            // Everything audio can do to a capture, it does to the whole capture:
+            // the video was fine and the person still got nothing. Offer the same
+            // share without sound rather than leaving them to work out that the
+            // toggle on the other bar is what took their screen away. Cancelling
+            // the picker lands here too and is not a failure to recover from.
+            // A shell with `silentRetry` already did this above; this is the
+            // browser and every older shell.
+            state.screenShareAudioFailed =
+              askedForAudio &&
+              err instanceof Error &&
+              err.name !== "NotAllowedError";
+            // The audio graph the arm built is for a share that did not happen.
+            discardPrimedNativeShareAudio();
+            emit();
+            return;
+          }
+          try {
+            stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+          } catch {
+            state.error = screenShareErrorMessage(err);
+            state.screenShareError = state.error;
+            state.errorKind = "share";
+            discardPrimedNativeShareAudio();
+            emit();
+            return;
+          }
         }
       }
       }
@@ -6993,6 +7241,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!track) {
         for (const t of stream.getTracks()) t.stop();
         state.error = translateMessage("voice.error.noVideoTrack");
+        state.errorKind = "share";
+        state.screenShareError = state.error;
         discardPrimedNativeShareAudio();
         emit();
         return;
@@ -7018,6 +7268,13 @@ export function createVoiceController(transport: RealtimeTransport) {
             desktopAppAvailable: false,
           }),
         );
+      }
+      // The watch party preview opened its capture itself, so a silent
+      // fallback there is read off the stream it handed over.
+      const lostSound =
+        sharedWithoutSoundAfterFailure || lostSoundToFailure(intent.stream);
+      if (lostSound && intent.watchParty !== true) {
+        state.notice = translateMessage("voice.notice.shareAudioFallback");
       }
       // The shell's capture joins the stream here, after the strip (it is
       // not the mixer, so there is nothing in it to strip) and before
@@ -7152,14 +7409,18 @@ export function createVoiceController(transport: RealtimeTransport) {
       watchScreenCapture(stream);
       screenCaptureStream = stream;
       // The red strip is ours and it is now answering a question that has been
-      // resolved. Only the share failure is cleared: an unrelated error is not
-      // this attempt's to dismiss.
-      if (retryingAfterAudioFailure) {
+      // resolved. Only a share failure is cleared: an unrelated error is not
+      // this attempt's to dismiss. Cancelling the picker and then sharing is
+      // the common way here, and it used to leave "bloqueado ou cancelado"
+      // over the share that was running.
+      if (state.errorKind === "share") {
         state.error = null;
+        state.errorKind = null;
       }
       state.isSharingScreen = true;
       state.localScreenStream = stream;
       state.isSharingScreenAudio = hasAudio;
+      state.watchPartyShareSilent = lostSound && intent.watchParty === true;
       // A new share answers whatever the last one's dead-picture card said.
       state.shareCaptureHint = null;
       shareStartedAt = Date.now();
@@ -7233,6 +7494,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         void publishMicArchiveIfRecording();
       } catch (err) {
         state.error = screenShareErrorMessage(err);
+        state.errorKind = "share";
+        state.screenShareError = state.error;
         await stopScreenShareInternal();
         emit();
       }
@@ -7337,6 +7600,26 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
     },
 
+    /** Hide one person's camera on this screen only. */
+    dismissCamera(peerId: string) {
+      if (state.dismissedCameraPeerIds.includes(peerId)) {
+        return;
+      }
+      state.dismissedCameraPeerIds = [...state.dismissedCameraPeerIds, peerId];
+      emit();
+    },
+
+    /** Undo that. */
+    watchCamera(peerId: string) {
+      if (!state.dismissedCameraPeerIds.includes(peerId)) {
+        return;
+      }
+      state.dismissedCameraPeerIds = state.dismissedCameraPeerIds.filter(
+        (id) => id !== peerId,
+      );
+      emit();
+    },
+
     /** Undo that. */
     watchShare(peerId: string) {
       if (!state.dismissedSharePeerIds.includes(peerId)) {
@@ -7433,6 +7716,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           meshCameraLimit(),
           canPromoteTransport(),
         );
+        state.errorKind = null;
         emit();
         return;
       }
@@ -7451,6 +7735,8 @@ export function createVoiceController(transport: RealtimeTransport) {
           cameraDeviceId || undefined,
         );
       } catch (err) {
+        // A camera error, so a share that starts later does not clear it.
+        state.errorKind = null;
         state.error =
           err instanceof Error && err.name === "NotAllowedError"
             ? translateMessage("voice.error.cameraBlocked", desktopContext())
@@ -7466,6 +7752,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           t.stop();
         }
         state.error = translateMessage("voice.error.cameraFailed");
+        state.errorKind = null;
         emit();
         return;
       }
@@ -7502,6 +7789,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           await sfu.publishCamera(stream);
         }
       } catch (err) {
+        state.errorKind = null;
         state.error =
           err instanceof Error && err.message
             ? err.message
@@ -7582,6 +7870,8 @@ export function createVoiceController(transport: RealtimeTransport) {
           cameraDeviceId || undefined,
         );
       } catch (err) {
+        // A camera error, so a share that starts later does not clear it.
+        state.errorKind = null;
         state.error =
           err instanceof Error && err.name === "NotAllowedError"
             ? translateMessage("voice.error.cameraBlocked", desktopContext())
@@ -7597,6 +7887,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           t.stop();
         }
         state.error = translateMessage("voice.error.cameraFailed");
+        state.errorKind = null;
         emit();
         return;
       }
@@ -7626,6 +7917,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           await sfu.publishCamera(current);
         }
       } catch (err) {
+        state.errorKind = null;
         state.error =
           err instanceof Error && err.message
             ? err.message
@@ -7767,6 +8059,21 @@ export function createVoiceController(transport: RealtimeTransport) {
      * saved device changing, or a new substitute) still gets its own notice.
      * `leaveCall` forgets the closed key, so a new call can show it again.
      */
+    /**
+     * The close (x) on the stage's red strip. Every error there is a
+     * statement about something that already happened, and the person has
+     * read it; nothing else clears it before they leave the room.
+     */
+    dismissError() {
+      if (!state.error) {
+        return;
+      }
+      state.error = null;
+      state.errorKind = null;
+      state.screenShareAudioFailed = false;
+      emit();
+    },
+
     dismissMicFallbackNotice() {
       if (!state.micFallback) {
         return;

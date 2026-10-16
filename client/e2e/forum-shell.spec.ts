@@ -189,6 +189,8 @@ interface MockForum {
     id: string;
     name: string;
     emoji: string | null;
+    icon?: string | null;
+    preset?: string | null;
     moderated: boolean;
     position: number;
     postCount: number;
@@ -208,7 +210,14 @@ async function mockForumApi(page: Page, forum: MockForum): Promise<void> {
   await page.route(/\/api\/channels\/[^/]+\/forum-tags$/, async (route: Route) => {
     if (route.request().method() === "PUT") {
       const body = route.request().postDataJSON() as {
-        tags: Array<{ id?: string; name: string; emoji?: string | null; moderated: boolean }>;
+        tags: Array<{
+          id?: string;
+          name: string;
+          emoji?: string | null;
+          icon?: string | null;
+          preset?: string | null;
+          moderated: boolean;
+        }>;
       };
       forum.puts.push(body);
       const byId = new Map(forum.tags.map((tag) => [tag.id, tag]));
@@ -216,6 +225,8 @@ async function mockForumApi(page: Page, forum: MockForum): Promise<void> {
         id: tag.id ?? uuid((seq += 1)),
         name: tag.name,
         emoji: tag.emoji ?? null,
+        icon: tag.icon ?? null,
+        preset: tag.preset ?? null,
         moderated: tag.moderated,
         position,
         postCount: tag.id ? (byId.get(tag.id)?.postCount ?? 0) : 0,
@@ -457,25 +468,40 @@ test.describe("forum shell", () => {
     await owner.page.keyboard.press("ArrowDown");
     await expect(rows.nth(1).getByRole("textbox")).toHaveValue(firstName);
 
-    // The emoji square opens the app's picker over the sheet, and Escape
-    // closes the picker without throwing the whole sheet away.
-    await rows.nth(4).getByRole("button", { expanded: false }).last().click();
-    await expect(owner.page.locator(".emoji-mart-shell")).toBeVisible();
-    await shot(owner.page, "05b-emoji-picker");
+    // The icon square opens a grid of named icons over the sheet, and Escape
+    // closes the grid without throwing the whole sheet away.
+    const iconButton = rows.nth(4).locator("[data-forum-tag-icon-button]");
+    const picker = owner.page.locator("[data-forum-tag-icon-picker]");
+    await iconButton.click();
+    await expect(picker).toBeVisible();
+    await shot(owner.page, "05b-icon-picker");
     await owner.page.keyboard.press("Escape");
-    await expect(owner.page.locator(".emoji-mart-shell")).toHaveCount(0);
+    await expect(picker).toHaveCount(0);
     await expect(settings.locator("[data-forum-tag-row]")).toHaveCount(5);
     // And a pick lands on that row.
-    await rows.nth(4).getByRole("button", { expanded: false }).last().click();
-    await owner.page.locator(".emoji-mart-shell").getByRole("button", { name: "👍" }).first().click();
-    await expect(owner.page.locator(".emoji-mart-shell")).toHaveCount(0);
-    await expect(rows.nth(4)).toContainText("👍");
+    await iconButton.click();
+    await picker.locator('[data-forum-tag-icon-option="game"]').click();
+    await expect(picker).toHaveCount(0);
+    await expect(rows.nth(4).locator('[data-forum-tag-icon="game"]')).toBeVisible();
 
     await owner.page.getByRole("button", { name: COPY.save, exact: true }).click();
     await expect.poll(() => forum.puts.length).toBe(1);
-    const saved = (forum.puts[0] as { tags: Array<{ name: string }> }).tags;
+    const saved = (
+      forum.puts[0] as {
+        tags: Array<{ name: string; icon?: string | null; preset?: string | null }>;
+      }
+    ).tags;
     expect(saved).toHaveLength(5);
     expect(saved[1]!.name).toBe(firstName);
+    // The four starters travel with their preset and icon, so every reader
+    // sees their own language's word; the tag typed by hand has no preset and
+    // only the icon just picked.
+    expect(saved.filter((tag) => tag.preset).length).toBe(4);
+    expect(saved.every((tag) => tag.icon)).toBe(true);
+    expect(saved.find((tag) => tag.name === "Games")).toMatchObject({
+      icon: "game",
+      preset: null,
+    });
     await expect(owner.page.locator("[data-forum-tags-unsaved]")).toHaveCount(0);
 
     // The switch is its own PATCH; nothing else is resent.

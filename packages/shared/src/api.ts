@@ -11,7 +11,9 @@ import { webhookEmbedSchema } from "./webhooks.js";
 import { chanceResultSchema } from "./chance.js";
 import { voiceRoomTransportSchema } from "./signaling.js";
 import { pollSchema } from "./polls.js";
+import { customEmojiTokensAsText } from "./server-emoji.js";
 import { messageSystemKindSchema } from "./nudge.js";
+import { messageForwardFieldSchema } from "./forward.js";
 
 /**
  * `watch_party` is a voice room with one stage: only holders of
@@ -86,9 +88,14 @@ export type ThemePreference = z.infer<typeof themePreferenceSchema>;
  * Named token skins, independent of light/dark/system. `signal` is the
  * default pqp look. `harmony` and `hearth` take the mood of other chat apps
  * without using those apps' names or brand colours. `night` is a near-black
- * skin for dark, not a clone of another product's AMOLED theme. `retro` is
- * Modo 2005, the hidden look a person finds with `/2005`; it is accepted here
- * before any client can pick it, so the API that stores it ships first.
+ * skin for dark, not a clone of another product's AMOLED theme. `ocean`,
+ * `catppuccin` and `everforest` are the deliberate exception: credited ports
+ * of MIT palettes (see DECISIONS.md). `retro` is Modo 2005, the hidden look a
+ * person finds with `/2005`; it is accepted here before any client can pick
+ * it, so the API that stores it ships first.
+ * `halloween` and `christmas` are dark-only seasonal looks: the client only
+ * offers them in their season, but a stored pick keeps working all year, so
+ * these values are permanent once shipped.
  *
  * `guild` and `accord` were earlier ids for harmony. Accept them on read so
  * a stored pick does not silently fall back to signal.
@@ -107,7 +114,12 @@ export const APPEARANCE_PREFERENCES = [
   "harmony",
   "hearth",
   "night",
+  "ocean",
+  "catppuccin",
+  "everforest",
   "retro",
+  "halloween",
+  "christmas",
 ] as const;
 export const appearancePreferenceSchema = z.preprocess(
   (value) => (value === "guild" || value === "accord" ? "harmony" : value),
@@ -885,7 +897,7 @@ export type MessageReplyRef = z.infer<typeof messageReplyRefSchema>;
  * header is a hint rather than a rendering.
  */
 export function buildReplyExcerpt(body: string): string {
-  const flat = body.replace(/\s+/g, " ").trim();
+  const flat = customEmojiTokensAsText(body).replace(/\s+/g, " ").trim();
   if (flat.length <= REPLY_EXCERPT_MAX_LENGTH) {
     return flat;
   }
@@ -991,6 +1003,14 @@ export const messageSchema = z.object({
    * Absent on the wire for every other message: read it as `storyId ?? null`.
    */
   storyId: z.string().uuid().nullable().optional(),
+  /**
+   * Set when this message is a forward (`POST /api/forwards`): a snapshot of a
+   * Baú post or of another message, drawn as a card under `body` (the
+   * forwarder's own comment, or a plain fallback line when there is none).
+   * Absent on every ordinary message: read it as `forward ?? null`. See
+   * `forward.ts`.
+   */
+  forward: messageForwardFieldSchema,
 });
 
 export const MESSAGE_MAX_LENGTH = 4000;
@@ -1130,6 +1150,13 @@ export const publicInvitePreviewSchema = z.object({
   serverName: z.string(),
   iconUrl: z.string().nullable(),
   memberCount: z.number().int().nonnegative(),
+  /**
+   * The invite opens a community whose signed-out live preview is on
+   * (`live_preview`). Only ever `true`, absent otherwise, so the body is
+   * unchanged for every server with the flag off. The gate then asks
+   * `GET /api/public/live-preview/invites/:code` what is live.
+   */
+  livePreview: z.literal(true).optional(),
 });
 
 export type PublicInvitePreview = z.infer<typeof publicInvitePreviewSchema>;

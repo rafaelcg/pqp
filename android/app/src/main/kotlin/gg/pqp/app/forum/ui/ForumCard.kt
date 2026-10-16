@@ -44,12 +44,17 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import gg.pqp.app.R
 import gg.pqp.app.forum.ForumPostSummary
@@ -181,6 +186,15 @@ fun ForumPostCard(
                                 pluralStringResource(R.plurals.forum_preview_files, post.attachmentCount, post.attachmentCount)
                             else -> null
                         }
+                        // "Image" or "Video" is said with a picture before it, never
+                        // an emoji in the copy: an inline icon on the text's own line.
+                        val previewIcon = when {
+                            post.openingDeleted || post.openingKind == "voice" -> null
+                            !post.preview.isNullOrBlank() -> null
+                            post.attachmentCount == 1 && post.thumbnailUrl != null -> PqpIcons.Image
+                            post.attachmentCount == 1 && post.thumbnailVideoUrl != null -> ForumTagIcons.vector("video")
+                            else -> null
+                        }
                         Spacer(Modifier.height(Spacing.xs))
                         Text(
                             text = buildAnnotatedString {
@@ -189,8 +203,23 @@ fun ForumPostCard(
                                 }
                                 if (preview != null) {
                                     append(": ")
+                                    if (previewIcon != null) {
+                                        appendInlineContent(PREVIEW_ICON_ID, "[icon]")
+                                        append(" ")
+                                    }
                                     append(preview)
                                 }
+                            },
+                            inlineContent = if (previewIcon != null) {
+                                mapOf(
+                                    PREVIEW_ICON_ID to InlineTextContent(
+                                        Placeholder(14.sp, 14.sp, PlaceholderVerticalAlign.TextCenter),
+                                    ) {
+                                        Icon(imageVector = previewIcon, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    },
+                                )
+                            } else {
+                                emptyMap()
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = colors.onSurfaceVariant.copy(alpha = 0.82f),
@@ -355,6 +384,9 @@ private fun CardFooter(
 }
 
 private const val MAX_CARD_TAGS = 2
+
+/** The inline-content id of the icon before an "Image" or "Video" preview line. */
+private const val PREVIEW_ICON_ID = "forum-preview-icon"
 
 @Composable
 fun repliesText(count: Int): String =

@@ -28,6 +28,13 @@
  * `HIDDEN_GRACE_MS`, so a glance at another window does not stop every
  * picture. Resuming is immediate in both cases.
  *
+ * PICTURE-IN-PICTURE IS THE EXCEPTION TO THE HIDDEN TAB. A viewer who pops a
+ * share out into PiP and switches tabs is still looking at it; that is the
+ * whole reason PiP exists. So a publication with an element in PiP is not
+ * paused by the hidden-tab grace. livekit-client's own adaptive pause already
+ * counts a PiP element as visible in the background, so this keeps the two
+ * rules saying the same thing.
+ *
  * HOW IT MEETS THE LIBRARY'S OWN ADAPTIVE PAUSE. With `adaptiveStream` on,
  * livekit-client already reports an attached element that scrolls out of
  * view as invisible and pauses the tab's video after five seconds in the
@@ -61,6 +68,10 @@ export interface RemoteVideoDelivery {
   attached(publication: DeliveryPublication): void;
   /** A `<video>` element bound to this publication went away. */
   detached(publication: DeliveryPublication): void;
+  /** An element bound to this publication entered Picture-in-Picture. */
+  enteredPictureInPicture(publication: DeliveryPublication): void;
+  /** That element left Picture-in-Picture, or went away while in it. */
+  leftPictureInPicture(publication: DeliveryPublication): void;
   /** `document.visibilityState` changed. */
   setTabHidden(hidden: boolean): void;
   /** Whether the rule currently has this publication paused. */
@@ -74,6 +85,8 @@ export const HIDDEN_GRACE_MS = 10_000;
 
 interface Entry {
   elements: number;
+  /** How many of `elements` are in Picture-in-Picture right now. */
+  pip: number;
   paused: boolean;
   timer: ReturnType<typeof setTimeout> | null;
 }
@@ -94,7 +107,7 @@ export function createRemoteVideoDelivery(
   let hiddenTimer: ReturnType<typeof setTimeout> | null = null;
 
   function wanted(entry: Entry) {
-    return entry.elements > 0 && !tabPaused;
+    return entry.elements > 0 && (!tabPaused || entry.pip > 0);
   }
 
   function pause(publication: DeliveryPublication, entry: Entry) {
@@ -162,7 +175,7 @@ export function createRemoteVideoDelivery(
       if (entries.has(publication)) {
         return;
       }
-      const entry: Entry = { elements: 0, paused: false, timer: null };
+      const entry: Entry = { elements: 0, pip: 0, paused: false, timer: null };
       entries.set(publication, entry);
       // A tile usually binds within a frame of the track arriving; the grace
       // covers that. A track nothing ever binds pauses when it runs out.
@@ -193,6 +206,24 @@ export function createRemoteVideoDelivery(
         return;
       }
       entry.elements = Math.max(0, entry.elements - 1);
+      reconcile(publication, entry);
+    },
+
+    enteredPictureInPicture(publication) {
+      const entry = entries.get(publication);
+      if (!entry) {
+        return;
+      }
+      entry.pip += 1;
+      reconcile(publication, entry);
+    },
+
+    leftPictureInPicture(publication) {
+      const entry = entries.get(publication);
+      if (!entry) {
+        return;
+      }
+      entry.pip = Math.max(0, entry.pip - 1);
       reconcile(publication, entry);
     },
 

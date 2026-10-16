@@ -15,6 +15,7 @@ import {
   Lightbulb,
   ShieldAlert,
   ShieldCheck,
+  Tag,
 } from "lucide-react";
 import {
   useCallback,
@@ -33,6 +34,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ForumTagIcon } from "@/components/forum/forum-tag-icon";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import { clearDraft } from "@/lib/composer-drafts";
 import {
@@ -41,12 +43,14 @@ import {
   readForumPublishError,
   type ForumPublishError,
 } from "@/lib/forum-api";
+import type { ForumTagsStatus } from "@/lib/forum-api";
 import { foldForSearch } from "@/lib/forum-list";
 import {
   clearComposerDraft,
   readComposerDraft,
   writeComposerDraft,
 } from "@/lib/forum-prefs";
+import { useForumTagLabel } from "@/lib/forum-tag-icons";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import type { DroppedItems } from "@/lib/file-drop";
@@ -96,6 +100,15 @@ interface ForumComposerDialogProps {
   forumName: string;
   serverId: string | null;
   tags: readonly ForumTag[];
+  /**
+   * Whether `tags` is an answered read. A read that failed is not "no tags":
+   * the composer says so and offers another try. Omitted, it is ready.
+   */
+  tagsStatus?: ForumTagsStatus;
+  onRetryTags?: () => void;
+  /** MANAGE_CHANNELS: the empty-tags notice links to the Tags settings. */
+  canManageTags?: boolean;
+  onOpenTagSettings?: () => void;
   requireTag: boolean;
   /** Staff see and may apply the moderated ("Só staff") tags. */
   isStaff: boolean;
@@ -191,6 +204,10 @@ export function ForumComposerDialog({
   forumName,
   serverId,
   tags,
+  tagsStatus = "ready",
+  onRetryTags,
+  canManageTags = false,
+  onOpenTagSettings,
   requireTag,
   isStaff,
   initialTitle = null,
@@ -203,6 +220,7 @@ export function ForumComposerDialog({
   onRefused,
 }: ForumComposerDialogProps) {
   const { t } = useTranslation();
+  const tagLabel = useForumTagLabel();
   const titleId = useId();
   const titleErrorId = useId();
   const tagsLabelId = useId();
@@ -380,7 +398,18 @@ export function ForumComposerDialog({
   const visibleTags = tags.filter((tag) => isStaff || !tag.moderated);
   const trimmedTitle = title.replace(/\s+/g, " ").trim();
   const titleMissing = trimmedTitle.length === 0;
-  const tagMissing = requireTag && tagIds.length === 0;
+  // A rule nobody can meet is not a rule: with no tag this person could pick
+  // (none exist, or only staff-only ones, or the read failed) Publicar stays
+  // open and the server, which applies the same rule, decides.
+  const tagMissing = requireTag && visibleTags.length > 0 && tagIds.length === 0;
+  const tagsNotice =
+    visibleTags.length > 0
+      ? null
+      : tagsStatus === "error"
+        ? ("error" as const)
+        : requireTag && tagsStatus === "ready"
+          ? ("none" as const)
+          : null;
   const bodyMissing =
     bodyState.body.length === 0 && bodyState.attachments.length === 0;
   const blocked =
@@ -429,7 +458,12 @@ export function ForumComposerDialog({
     } catch (error) {
       const reason = readForumPublishError(error);
       setPublishError(reason);
-      if (reason.kind === "paused" || reason.kind === "tag-required") {
+      if (
+        reason.kind === "paused" ||
+        reason.kind === "tag-required" ||
+        reason.kind === "tag-unknown" ||
+        reason.kind === "tag-moderated"
+      ) {
         onRefused?.(reason.kind);
       }
       if (reason.kind === "slow-mode" && reason.retryAfterMs > 0) {
@@ -605,6 +639,18 @@ export function ForumComposerDialog({
         };
       case "tag-required":
         return null;
+      case "tag-moderated":
+        return {
+          icon: <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden />,
+          text: t("forum.composer.tagModerated"),
+          tone: "danger" as const,
+        };
+      case "tag-unknown":
+        return {
+          icon: <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />,
+          text: t("forum.composer.tagUnknown"),
+          tone: "danger" as const,
+        };
       case "paused":
         return {
           icon: <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />,
@@ -905,7 +951,11 @@ export function ForumComposerDialog({
                   <span
                     className={cn(
                       "ml-2 font-semibold",
-                      tagRequiredShown ? "text-danger" : "text-warning",
+                      tagRequiredShown
+                        ? "text-danger"
+                        : tagIds.length > 0
+                          ? "text-text-tertiary"
+                          : "text-warning",
                     )}
                   >
                     {t("forum.composer.tagsRequired")}
@@ -965,8 +1015,8 @@ export function ForumComposerDialog({
                       disabled && "cursor-not-allowed opacity-40",
                     )}
                   >
-                    {tag.emoji && <span aria-hidden>{tag.emoji}</span>}
-                    {tag.name}
+                    <ForumTagIcon tag={tag} className="h-3.5 w-3.5" />
+                    {tagLabel(tag)}
                     {tag.moderated && (
                       <ShieldCheck className="h-3.5 w-3.5 opacity-70" aria-label={t("forum.tags.moderatedHint")} />
                     )}
@@ -982,6 +1032,31 @@ export function ForumComposerDialog({
               <p className="mt-1.5 text-xs text-text-tertiary">
                 {t("forum.composer.tagsMax", { max: FORUM_MAX_TAGS_PER_POST })}
               </p>
+            )}
+          </div>
+        )}
+
+        {tagsNotice && (
+          <div
+            data-forum-tags-notice={tagsNotice}
+            role={tagsNotice === "error" ? "alert" : "status"}
+            className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-[var(--radius-card)] bg-surface-2 px-3 py-2.5 text-sm text-text-secondary"
+          >
+            <Tag className="h-4 w-4 shrink-0 text-text-tertiary" aria-hidden />
+            <span className="min-w-0 flex-1">
+              {tagsNotice === "error"
+                ? t("forum.composer.tagsLoadError")
+                : t("forum.composer.tagsNoneToPick")}
+            </span>
+            {tagsNotice === "error" && onRetryTags && (
+              <Button size="sm" variant="ghost" onClick={onRetryTags}>
+                {t("forum.retry")}
+              </Button>
+            )}
+            {tagsNotice === "none" && canManageTags && onOpenTagSettings && (
+              <Button size="sm" variant="ghost" onClick={onOpenTagSettings}>
+                {t("forum.empty.setupTags")}
+              </Button>
             )}
           </div>
         )}

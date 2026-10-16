@@ -14,12 +14,21 @@ import {
   FORUM_MAX_TAGS,
   FORUM_MAX_TAGS_PER_POST,
   FORUM_SETTINGS_DEFAULTS,
+  FORUM_TAG_EMOJI_ALIASES,
+  FORUM_TAG_ICONS,
+  FORUM_TAG_PRESET_ICON,
+  FORUM_TAG_PRESET_NAMES,
+  FORUM_TAG_PRESETS,
   FORUM_TITLE_MAX,
   forumPostDetailResponseSchema,
   forumPostListResponseSchema,
   forumPostSummarySchema,
   forumSettingsSchema,
+  forumTagIconEmoji,
+  forumTagIconForEmoji,
   forumTagNameKey,
+  forumTagSchema,
+  isForumTagPresetName,
   listForumPostsQuerySchema,
   putForumTagsSchema,
   updateForumPostSchema,
@@ -288,5 +297,90 @@ describe("webhook execute stays as lenient as it was", () => {
         true,
       );
     }
+  });
+});
+
+describe("forum tag icons and presets", () => {
+  const tag = {
+    id: TAG_A,
+    name: "Dúvida",
+    emoji: "❓",
+    moderated: false,
+    position: 0,
+    postCount: 0,
+  };
+
+  it("icon keys are unique, lower-case words, and a sensible size for a picker", () => {
+    const keys = FORUM_TAG_ICONS.map((icon) => icon.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys.length).toBeGreaterThanOrEqual(24);
+    expect(keys.length).toBeLessThanOrEqual(40);
+    for (const key of keys) {
+      expect(key).toMatch(/^[a-z]+$/);
+    }
+    expect(new Set(FORUM_TAG_ICONS.map((icon) => icon.emoji)).size).toBe(keys.length);
+  });
+
+  it("an older server's tag (no icon, no preset) and a null one both parse", () => {
+    expect(forumTagSchema.parse(tag)).toMatchObject({ name: "Dúvida" });
+    expect(forumTagSchema.parse({ ...tag, icon: null, preset: null })).toMatchObject({
+      icon: null,
+      preset: null,
+    });
+    expect(forumTagSchema.parse({ ...tag, icon: "question", preset: "question" })).toMatchObject({
+      icon: "question",
+      preset: "question",
+    });
+  });
+
+  it("a key from a newer server degrades to no icon instead of failing the response", () => {
+    const parsed = forumTagSchema.parse({ ...tag, icon: "hologram", preset: "brand-new" });
+    expect(parsed.icon).toBeNull();
+    expect(parsed.preset).toBeNull();
+    expect(parsed.emoji).toBe("❓");
+  });
+
+  it("the PUT takes known keys only, and an older client's body (no icon) still parses", () => {
+    expect(
+      putForumTagsSchema.safeParse({ tags: [{ name: "A", moderated: false, icon: "bug" }] })
+        .success,
+    ).toBe(true);
+    expect(
+      putForumTagsSchema.safeParse({ tags: [{ name: "A", moderated: false, icon: "nope" }] })
+        .success,
+    ).toBe(false);
+    expect(
+      putForumTagsSchema.safeParse({ tags: [{ name: "A", moderated: false, preset: "nope" }] })
+        .success,
+    ).toBe(false);
+    expect(
+      putForumTagsSchema.safeParse({ tags: [{ name: "A", emoji: "🐛", moderated: false }] })
+        .success,
+    ).toBe(true);
+  });
+
+  it("every icon's emoji maps back to it, and every alias lands on a real key", () => {
+    const keys = new Set<string>(FORUM_TAG_ICONS.map((icon) => icon.key));
+    for (const icon of FORUM_TAG_ICONS) {
+      expect(forumTagIconForEmoji(icon.emoji)).toBe(icon.key);
+      expect(forumTagIconEmoji(icon.key)).toBe(icon.emoji);
+    }
+    for (const [emoji, key] of Object.entries(FORUM_TAG_EMOJI_ALIASES)) {
+      expect(keys.has(key), emoji).toBe(true);
+      expect(forumTagIconForEmoji(emoji)).toBe(key);
+    }
+    expect(forumTagIconForEmoji("🦄")).toBeNull();
+    expect(forumTagIconForEmoji(null)).toBeNull();
+  });
+
+  it("every preset has an icon, and names in en, pt-BR and es", () => {
+    for (const preset of FORUM_TAG_PRESETS) {
+      expect(FORUM_TAG_PRESET_ICON[preset]).toBeTruthy();
+      expect(FORUM_TAG_PRESET_NAMES[preset].length).toBeGreaterThan(0);
+    }
+    expect(isForumTagPresetName("question", "dúvida")).toBe(true);
+    expect(isForumTagPresetName("question", "DUDA")).toBe(true);
+    expect(isForumTagPresetName("question", "Bug")).toBe(false);
+    expect(isForumTagPresetName("tutorial", "Guide")).toBe(true);
   });
 });

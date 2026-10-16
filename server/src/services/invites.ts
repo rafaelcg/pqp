@@ -3,6 +3,8 @@ import type { PoolClient } from "pg";
 import { getPool, type DbInvite } from "../db.js";
 import { invalidateServerAudience } from "./servers.js";
 import { recordActivationStep } from "./activation.js";
+import { isCommunitiesEnabled } from "./communities.js";
+import { isEnabled } from "../lib/flags.js";
 import type { PublicInvitePreview } from "@pqp/shared";
 
 export type Queryable = Pick<PoolClient, "query">;
@@ -200,11 +202,13 @@ export async function getPublicInvitePreview(
   code: string,
 ): Promise<PublicInvitePreview | null> {
   const result = await getPool().query<{
+    id: string;
     name: string;
     icon_url: string | null;
     member_count: number;
+    is_community: boolean;
   }>(
-    `SELECT s.name, s.icon_url, s.member_count
+    `SELECT s.id, s.name, s.icon_url, s.member_count, s.is_community
        FROM server_invites i
        JOIN servers s ON s.id = i.server_id
       WHERE i.code = $1
@@ -221,5 +225,13 @@ export async function getPublicInvitePreview(
     serverName: row.name,
     iconUrl: row.icon_url,
     memberCount: Math.max(0, row.member_count),
+    // The signed-out live preview's door: a community invite, with
+    // `live_preview` on for it. Absent otherwise, so the body is unchanged for
+    // every other invite. The id is read to ask the flag and goes no further.
+    ...(row.is_community &&
+    isCommunitiesEnabled() &&
+    isEnabled("live_preview", { serverId: row.id })
+      ? { livePreview: true as const }
+      : {}),
   };
 }

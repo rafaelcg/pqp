@@ -401,6 +401,8 @@ describe("the options", () => {
       slowModeSeconds: 0,
       reactionsEnabled: true,
       lowLatency: false,
+      // Signed-out visitors never see a party its host did not opt in.
+      publicPreview: false,
     });
   });
 

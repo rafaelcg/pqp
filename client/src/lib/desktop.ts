@@ -37,6 +37,12 @@ export interface PqpDesktop {
   /** The next share's picker offers the sound box; call before `getDisplayMedia`. */
   nativeShareAudioArm?(): Promise<boolean>;
   /**
+   * The share just requested failed. True when it carried loopback sound and
+   * the next `getDisplayMedia({ audio: false })` reuses its surface without
+   * a picker. See `capabilities.silentRetry`.
+   */
+  shareSilentRetryArm?(): Promise<boolean>;
+  /**
    * After `getDisplayMedia`: did the share start a capture? If so its PCM
    * port has been posted to this window as a `message` event first.
    */
@@ -272,6 +278,12 @@ export interface DesktopShareCapabilities {
   flatpak?: boolean;
   /** The shell answers `fullscreenAppState()` (Windows). Absent before it. */
   fullscreenAppState?: boolean;
+  /**
+   * The shell answers `shareSilentRetryArm()` (PQP-31): a share that failed
+   * because its loopback sound would not open can be asked again without
+   * sound on the same surface, with no second picker. Absent before it.
+   */
+  silentRetry?: boolean;
   /** The shell's version, for diagnostics. Null when it could not be read. */
   version: string | null;
 }

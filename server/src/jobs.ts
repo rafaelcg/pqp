@@ -32,6 +32,8 @@ import {
 } from "./services/attachments.js";
 import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
 import { sweepQuarantinedCommunityHomeMedia } from "./services/community-home-scan.js";
+import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
+import { runBauFollowTick } from "./services/bau-follow-delivery.js";
 import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
 import { sweepCommunityHomeCaptions } from "./services/community-home-captions.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
@@ -42,6 +44,7 @@ import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { sweepForumPostShells } from "./services/forums.js";
+import { sweepSoundboardUploads } from "./services/soundboard.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import {
@@ -55,6 +58,11 @@ import {
   recordVoiceOccupancySample,
   rollUpAndPruneVoiceOccupancy,
 } from "./services/voice-occupancy.js";
+import {
+  USER_STATS_SAMPLE_INTERVAL_MS,
+  USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS,
+  userStats,
+} from "./services/user-stats.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 import {
   sweepStaleWatchPartyDrafts,
@@ -145,6 +153,13 @@ export const DAILY_MS = 24 * 60 * 60_000;
 export const FORUM_SHELL_SWEEP_INTERVAL_MS = 5 * 60_000;
 
 /**
+ * Soundboard uploads signed and never claimed, and files a delete handed to
+ * the ledger. A minute: an abandoned upload holds one of a server's six
+ * slots until this runs.
+ */
+export const SOUNDBOARD_UPLOAD_SWEEP_INTERVAL_MS = 60_000;
+
+/**
  * Five minutes rather than daily, and unlike every other sweep in this file
  * it is not about disk: each pending row is an account whose owner has been
  * told their data is gone and whose sign-in already is. A day of that is a
@@ -154,6 +169,17 @@ export const PENDING_DELETION_SWEEP_INTERVAL_MS = 5 * 60_000;
 
 /** Same cadence the Community Home schedule sweep has always had. */
 export const COMMUNITY_HOME_MEDIA_SWEEP_INTERVAL_MS = 30_000;
+
+/**
+ * Seguir: delivers followed Baú posts as cards (and updates and retracts the
+ * ones already delivered). Every ten seconds: a post that goes live is also
+ * KICKED by the publish route, so this timer is the catch-up for a scheduled
+ * post arriving, a retry coming due, and a process that restarted. Runs where
+ * the cold jobs run (the worker when there is one), because a delivery needs a
+ * database and, for the fan-out, the cluster bus rather than a socket of its
+ * own. With nothing followed it is one indexed read.
+ */
+export const BAU_FOLLOW_INTERVAL_MS = 10_000;
 
 /**
  * Outgoing webhook outbox. First attempt is also kicked from enqueue, in
@@ -366,6 +392,7 @@ export function startColdJobs(): ColdJobs {
     // interval. Rows, not disk pages, is the point.
     every(DAILY_MS, "slow-mode", sweepSlowModeClocks),
     every(FORUM_SHELL_SWEEP_INTERVAL_MS, "forum-shells", sweepForumPostShells),
+    every(SOUNDBOARD_UPLOAD_SWEEP_INTERVAL_MS, "soundboard-uploads", sweepSoundboardUploads),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),
     // Refilled cluster rate-limit buckets carry no information. Rows, not
     // disk pages: the table is bounded by "subjects who rang somebody in the
@@ -383,6 +410,9 @@ export function startColdJobs(): ColdJobs {
       "community-home",
       sweepCommunityHomeMedia,
     ),
+    every(BAU_FOLLOW_INTERVAL_MS, "bau-follow", () => runBauFollowTick()),
+    // Never touches an illegal-content row at any age.
+    every(ATTACHMENT_SWEEP_INTERVAL_MS, "server-emoji-quarantine", sweepQuarantinedServerEmoji),
     every(
       COMMUNITY_HOME_TRANSLATION_SWEEP_INTERVAL_MS,
       "community-home-translation",
@@ -443,6 +473,16 @@ export function startColdJobs(): ColdJobs {
       recordVoiceOccupancySample,
     ),
     every(DAILY_MS, "voice-occupancy", rollUpAndPruneVoiceOccupancy),
+    // Per-person counts for the Retrospectiva: call and share time from live
+    // seats (same sources as occupancy, same refusal to invent zeros in a
+    // blind worker), and the parties each person watched, copied before the
+    // viewer table's 24h prune. See services/user-stats.ts.
+    every(USER_STATS_SAMPLE_INTERVAL_MS, "user-stats", () => userStats.sample()),
+    every(
+      USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS,
+      "user-stats-parties",
+      () => userStats.copyWatchParties(),
+    ),
     // A live watch party whose host has been gone longer than the grace
     // window ends here. Same minute tick as the reminders on purpose: a party
     // that has lost its host is a scheduling fact, not a media one, and the

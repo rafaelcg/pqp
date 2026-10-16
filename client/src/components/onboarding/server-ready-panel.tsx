@@ -23,7 +23,8 @@ import { cn } from "@/lib/utils";
  * answers three ways at once: the icon turns into a check, a ring of the
  * accent swells off the box, and a line underneath says what to do next. The
  * pastes ("Traz a galera") sit under it for the people who want the sentence
- * as well as the link.
+ * as well as the link. The Discord import hides them (`showPastes`) and
+ * shows its own message for the old server instead.
  *
  * THE LINK DISPLAYED IS NOT QUITE THE LINK COPIED. The box shows
  * `pqp.gg/app/invite/<code>`, which fits a phone; the clipboard gets the full
@@ -45,6 +46,12 @@ export interface ServerReadyPanelProps {
   onCopyFailed?: () => void;
   /** Show how long the link lasts. The wizard does; a custom invite would not. */
   showNote?: boolean;
+  /**
+   * The short and long pastes under the link. The Discord import turns them
+   * off: it offers one message written for the old server instead, and three
+   * pastes of the same link on one screen was more than anybody reads.
+   */
+  showPastes?: boolean;
 }
 
 /** `https://pqp.gg/app/invite/abc?ref=x` → `pqp.gg/app/invite/abc`. */
@@ -60,6 +67,7 @@ export function ServerReadyPanel({
   onCopied,
   onCopyFailed,
   showNote = true,
+  showPastes = true,
 }: ServerReadyPanelProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -193,13 +201,15 @@ export function ServerReadyPanel({
         </p>
       </div>
 
-      <InvitePaste
-        code={invite.code}
-        inviteRef={inviteRef}
-        className="animate-pop-in [animation-delay:80ms]"
-        onCopied={(kind) => onCopied?.(kind)}
-        onCopyFailed={onCopyFailed}
-      />
+      {showPastes && (
+        <InvitePaste
+          code={invite.code}
+          inviteRef={inviteRef}
+          className="animate-pop-in [animation-delay:80ms]"
+          onCopied={(kind) => onCopied?.(kind)}
+          onCopyFailed={onCopyFailed}
+        />
+      )}
     </div>
   );
 }

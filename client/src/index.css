@@ -146,6 +146,16 @@
   --color-flag-es-red: #aa151b;
   --color-flag-es-yellow: #f1bf00;
 
+  /*
+   * Text and icons drawn ON a video: the watch party player's bar, its live
+   * chip and its viewer count. A film is dark whatever the app's theme, so
+   * these do not retint. Light on the black stage in every theme, the way
+   * any video player draws its controls; in the light theme the player's
+   * controls used to inherit near-black text and vanish into the picture.
+   */
+  --color-on-media: oklch(0.97 0.005 95);
+  --color-on-media-muted: oklch(0.8 0.008 95);
+
   /* The `* Fallback` names are metric-adjusted local fonts declared in
      fonts.css, so the swap to the real face barely moves the text. */
   --font-sans:
@@ -457,6 +467,26 @@
   --swatch-night-list: oklch(0.11 0.006 250);
   --swatch-night-surface: oklch(0.17 0.008 250);
   --swatch-night-accent: oklch(0.88 0.19 125);
+  --swatch-ocean-rail: oklch(0.2426 0.0241 250.57);
+  --swatch-ocean-list: oklch(0.2904 0.032 247.27);
+  --swatch-ocean-surface: oklch(0.2426 0.0241 250.57);
+  --swatch-ocean-accent: oklch(0.7589 0.1058 241.55);
+  --swatch-catppuccin-rail: oklch(0.1828 0.0204 284.2);
+  --swatch-catppuccin-list: oklch(0.2429 0.0304 283.91);
+  --swatch-catppuccin-surface: oklch(0.2155 0.0254 284.06);
+  --swatch-catppuccin-accent: oklch(0.7871 0.1187 304.77);
+  --swatch-everforest-rail: oklch(0.2799 0.0123 232.92);
+  --swatch-everforest-list: oklch(0.3597 0.0169 227.06);
+  --swatch-everforest-surface: oklch(0.3239 0.0153 240.42);
+  --swatch-everforest-accent: oklch(0.7732 0.0906 125.78);
+  --swatch-halloween-rail: oklch(0.13 0.045 305);
+  --swatch-halloween-list: oklch(0.18 0.05 305);
+  --swatch-halloween-surface: oklch(0.22 0.055 305);
+  --swatch-halloween-accent: oklch(0.76 0.17 55);
+  --swatch-christmas-rail: oklch(0.24 0.09 20);
+  --swatch-christmas-list: oklch(0.18 0.03 165);
+  --swatch-christmas-surface: oklch(0.22 0.035 165);
+  --swatch-christmas-accent: oklch(0.85 0.14 90);
   /* Modo 2005's tile is drawn, not swatched: a title bar and three gems. */
   --swatch-retro-bar: oklch(0.75 0.09 250);
   --swatch-retro-body: oklch(0.96 0.02 245);
@@ -585,6 +615,23 @@
   --rgb-picker-color: 40, 44, 52;
   --rgb-picker-accent: 90, 130, 40;
   --picker-border: oklch(0.86 0.01 95);
+}
+
+/*
+ * Text drawn on the call stage's dark pills (the top overlay's labels over a
+ * share or a camera). The pill is black whatever the theme, so the text roles
+ * take the on-media colours, and in a light theme the accent and the warning
+ * step back to their dark-theme values, which are the ones that read on black.
+ * Put it on the overlay that holds the pills, not on the controls that keep
+ * their own themed background.
+ */
+.on-media-scope {
+  --color-paper: var(--color-on-media);
+  --color-paper-muted: var(--color-on-media-muted);
+}
+:root[data-theme="light"] .on-media-scope {
+  --color-signal: oklch(0.88 0.19 125);
+  --color-warning: oklch(0.8 0.14 85);
 }
 
 /*
@@ -839,6 +886,338 @@
 }
 
 /*
+ * Ocean is T3 Code's Ocean palette (MIT, github.com/pingdotgg/t3code), mapped
+ * onto our roles: their canvas is surface-0 and the rail, their sidebar is
+ * surface-1, their row hover/active ladder is surface-2/3. The rail is the
+ * canvas colour, as in T3 Code. Roles they do not have (text-secondary,
+ * accent-hover, the soft danger hover) are filled in on the same hue. Ocean
+ * has no success color, so the success roles stay Signal's.
+ * Moved for contrast: light text-tertiary (darker; T3's value is 4.48:1 on
+ * the panel).
+ */
+:root[data-appearance="ocean"] {
+  --color-surface-0: oklch(0.2426 0.0241 250.57);
+  --color-surface-1: oklch(0.2904 0.032 247.27);
+  --color-surface-2: oklch(0.3587 0.0431 244.91);
+  --color-surface-3: oklch(0.3939 0.0488 244.18);
+  --color-rail: oklch(0.2426 0.0241 250.57);
+
+  --color-border: oklch(0.4387 0.0395 245.44);
+  --color-border-strong: oklch(0.5009 0.0436 244.78);
+
+  --color-text: oklch(0.9903 0.0084 325.64);
+  --color-text-secondary: oklch(0.86 0.012 290);
+  --color-text-tertiary: oklch(0.7216 0.0102 281.27);
+
+  --color-accent: oklch(0.7589 0.1058 241.55);
+  --color-accent-hover: oklch(0.68 0.1 241.55);
+  --color-on-accent: oklch(0.222 0.0348 328.98);
+  --color-accent-soft: oklch(0.4133 0.0519 243.86);
+  --color-on-accent-soft: oklch(0.8408 0.0692 240.15);
+
+  --color-danger: oklch(0.6551 0.2211 23.47);
+  --color-danger-soft: oklch(0.2989 0.0364 350.09);
+  --color-on-danger-soft: oklch(0.7022 0.1892 22.23);
+  --color-danger-soft-hover: oklch(0.31 0.04 350.09);
+  --color-warning: oklch(0.7724 0.1728 65.37);
+  --color-warning-soft: oklch(0.3294 0.0287 84.5);
+  --color-on-warning-soft: oklch(0.829 0.1712 81.04);
+
+  --color-code-bg: oklch(0.2966 0.0219 251.97);
+  --color-code-text: oklch(0.7589 0.1058 241.55);
+
+  --color-focus-ring: oklch(0.7589 0.1058 241.55 / 0.6);
+  --color-selection: oklch(0.7589 0.1058 241.55 / 0.35);
+  --color-indicator: oklch(0.9903 0.0084 325.64);
+
+  --shadow-speaking: 0 0 10px oklch(0.7589 0.1058 241.55 / 0.45);
+  --glow-accent: oklch(0.45 0.09 241.55 / 0.28);
+  --glow-accent-soft: oklch(0.7589 0.1058 241.55 / 0.08);
+
+  --gradient-app-1: oklch(0.3 0.05 241.55 / 0.3);
+  --gradient-app-2: oklch(0.26 0.03 250.57 / 0.35);
+
+  --rgb-picker-background: 30, 45, 59;
+  --rgb-picker-input: 23, 33, 43;
+  --rgb-picker-color: 255, 250, 255;
+  --rgb-picker-accent: 112, 185, 238;
+  --picker-border: oklch(0.4387 0.0395 245.44);
+}
+
+:root[data-appearance="ocean"][data-theme="light"] {
+  --color-surface-0: oklch(0.9742 0.0029 241.6);
+  --color-surface-1: oklch(0.9393 0.0119 241.73);
+  --color-surface-2: oklch(0.8908 0.0247 241.93);
+  --color-surface-3: oklch(0.8584 0.0333 242.09);
+  --color-rail: oklch(0.9742 0.0029 241.6);
+
+  --color-border: oklch(0.8676 0.0135 252.36);
+  --color-border-strong: oklch(0.72 0.02 252.6);
+
+  --color-text: oklch(0.222 0.0348 328.98);
+  --color-text-secondary: oklch(0.36 0.03 325);
+  --color-text-tertiary: oklch(0.45 0.02 323.53);
+
+  --color-accent: oklch(0.5367 0.1202 247.01);
+  --color-accent-hover: oklch(0.47 0.11 247.01);
+  --color-on-accent: oklch(0.9903 0.0084 325.64);
+  --color-accent-soft: oklch(0.913 0.0188 241.84);
+  --color-on-accent-soft: oklch(0.3975 0.085 246.52);
+
+  --color-danger: oklch(0.5095 0.2086 28.51);
+  --color-danger-soft: oklch(0.9387 0.0164 7.19);
+  --color-on-danger-soft: oklch(0.5095 0.2086 28.51);
+  --color-danger-soft-hover: oklch(0.9 0.03 7.19);
+  --color-warning: oklch(0.5469 0.1556 45.36);
+  --color-warning-soft: oklch(0.9548 0.016 81.73);
+  --color-on-warning-soft: oklch(0.5469 0.1556 45.36);
+
+  --color-code-bg: oklch(0.9577 0.0029 253.68);
+  --color-code-text: oklch(0.45 0.11 247.01);
+
+  --color-focus-ring: oklch(0.5367 0.1202 247.01 / 0.6);
+  --color-selection: oklch(0.5367 0.1202 247.01 / 0.25);
+  --color-indicator: oklch(0.222 0.0348 328.98);
+
+  --shadow-speaking: 0 0 0 3px oklch(0.5367 0.1202 247.01 / 0.4);
+  --glow-accent: oklch(0.6 0.1 247.01 / 0.16);
+  --glow-accent-soft: oklch(0.5367 0.1202 247.01 / 0.06);
+
+  --gradient-app-1: oklch(0.9 0.04 241.6 / 0.22);
+  --gradient-app-2: oklch(0.92 0.02 252.36 / 0.28);
+
+  --rgb-picker-background: 245, 247, 248;
+  --rgb-picker-input: 228, 236, 242;
+  --rgb-picker-color: 36, 21, 35;
+  --rgb-picker-accent: 38, 114, 175;
+  --picker-border: oklch(0.8676 0.0135 252.36);
+}
+
+/*
+ * Ported community palettes, all MIT. Each block names its source. The hex
+ * values are the projects' own; pqp roles a palette does not name (a rail
+ * below the page, soft status fills, accent hover) are mixed from its colours.
+ * A few values are darkened or lightened to clear the contrast bench; the
+ * block comment says which.
+ */
+/* Catppuccin: Mocha (dark) and Latte (light), from catppuccin/palette (MIT). */
+:root[data-appearance="catppuccin"] {
+  --color-surface-0: oklch(0.2155 0.0254 284.06);
+  --color-surface-1: oklch(0.2429 0.0304 283.91);
+  --color-surface-2: oklch(0.324 0.0319 281.98);
+  --color-surface-3: oklch(0.4037 0.032 280.15);
+  --color-rail: oklch(0.1828 0.0204 284.2);
+
+  --color-border: oklch(0.4037 0.032 280.15);
+  --color-border-strong: oklch(0.4765 0.034 278.64);
+
+  --color-text: oklch(0.8787 0.0426 272.28);
+  --color-text-secondary: oklch(0.8168 0.0403 272.86);
+  --color-text-tertiary: oklch(0.751 0.0396 273.93);
+
+  --color-accent: oklch(0.7871 0.1187 304.77);
+  --color-accent-hover: oklch(0.7071 0.1187 304.77);
+  --color-on-accent: oklch(0.1828 0.0204 284.2);
+  --color-accent-soft: oklch(0.3527 0.047 296.42);
+  --color-on-accent-soft: oklch(0.7871 0.1187 304.77);
+
+  --color-danger: oklch(0.7556 0.1297 2.76);
+  --color-on-danger: oklch(0.1828 0.0204 284.2);
+  --color-danger-soft: oklch(0.3235 0.036 329.09);
+  --color-on-danger-soft: oklch(0.7556 0.1297 2.76);
+  --color-danger-soft-hover: oklch(0.3559 0.0417 336.52);
+  --color-warning: oklch(0.9193 0.0704 86.53);
+  --color-warning-soft: oklch(0.3563 0.0081 315.64);
+  --color-on-warning-soft: oklch(0.9193 0.0704 86.53);
+  --color-success: oklch(0.8577 0.1092 142.72);
+  --color-success-soft: oklch(0.344 0.014 207.55);
+  --color-on-success-soft: oklch(0.8577 0.1092 142.72);
+
+  --color-code-bg: oklch(0.1828 0.0204 284.2);
+  --color-code-text: oklch(0.7871 0.1187 304.77);
+
+  --color-focus-ring: oklch(0.7871 0.1187 304.77 / 0.6);
+  --color-selection: oklch(0.7871 0.1187 304.77 / 0.35);
+  --color-indicator: oklch(0.8787 0.0426 272.28);
+
+  --shadow-speaking: 0 0 10px oklch(0.7871 0.1187 304.77 / 0.45);
+  --glow-accent: oklch(0.5013 0.0714 301.16 / 0.28);
+  --glow-accent-soft: oklch(0.7871 0.1187 304.77 / 0.08);
+
+  --gradient-app-1: oklch(0.3013 0.0388 293.41 / 0.3);
+  --gradient-app-2: oklch(0.2429 0.0304 283.91 / 0.35);
+
+  --rgb-picker-background: 30, 30, 46;
+  --rgb-picker-input: 24, 24, 37;
+  --rgb-picker-color: 205, 214, 244;
+  --rgb-picker-accent: 203, 166, 247;
+  --picker-border: oklch(0.4037 0.032 280.15);
+}
+
+:root[data-appearance="catppuccin"][data-theme="light"] {
+  /* Moved for contrast: warning, success, text-tertiary, code-text, on-accent-soft, on-danger-soft, on-warning-soft, on-success-soft. */
+  --color-surface-0: oklch(0.9578 0.0058 264.53);
+  --color-surface-1: oklch(0.9335 0.0087 264.52);
+  --color-surface-2: oklch(0.906 0.0117 264.51);
+  --color-surface-3: oklch(0.8575 0.0145 268.48);
+  --color-rail: oklch(0.906 0.0117 264.51);
+
+  --color-border: oklch(0.8083 0.0174 271.2);
+  --color-border-strong: oklch(0.7077 0.0237 274.6);
+
+  --color-text: oklch(0.4355 0.043 279.33);
+  --color-text-secondary: oklch(0.492 0.0385 279.3);
+  --color-text-tertiary: oklch(0.5171 0.0343 279.08);
+
+  --color-accent: oklch(0.5547 0.2503 297.02);
+  --color-accent-hover: oklch(0.4947 0.2503 297.02);
+  --color-on-accent: oklch(0.9578 0.0058 264.53);
+  --color-accent-soft: oklch(0.9013 0.0393 293.13);
+  --color-on-accent-soft: oklch(0.5197 0.2503 297.02);
+
+  --color-danger: oklch(0.5505 0.2155 19.81);
+  --color-on-danger: oklch(0.99 0 0);
+  --color-danger-soft: oklch(0.9089 0.0241 8.85);
+  --color-on-danger-soft: oklch(0.4805 0.2155 19.81);
+  --color-danger-soft-hover: oklch(0.8763 0.0413 14.02);
+  --color-warning: oklch(0.619 0.1494 67.78);
+  --color-warning-soft: oklch(0.9103 0.0162 62.72);
+  --color-on-warning-soft: oklch(0.504 0.1494 67.78);
+  --color-success: oklch(0.595 0.1772 140.44);
+  --color-success-soft: oklch(0.907 0.0224 151.01);
+  --color-on-success-soft: oklch(0.48 0.1772 140.44);
+
+  --color-code-bg: oklch(0.9335 0.0087 264.52);
+  --color-code-text: oklch(0.5447 0.2503 297.02);
+
+  --color-focus-ring: oklch(0.5547 0.2503 297.02 / 0.6);
+  --color-selection: oklch(0.5547 0.2503 297.02 / 0.25);
+  --color-indicator: oklch(0.4355 0.043 279.33);
+
+  --shadow-speaking: 0 0 0 3px oklch(0.5547 0.2503 297.02 / 0.4);
+  --glow-accent: oklch(0.7562 0.1276 296.32 / 0.16);
+  --glow-accent-soft: oklch(0.5547 0.2503 297.02 / 0.06);
+
+  --gradient-app-1: oklch(0.8973 0.0418 293.4 / 0.22);
+  --gradient-app-2: oklch(0.9335 0.0087 264.52 / 0.28);
+
+  --rgb-picker-background: 230, 233, 239;
+  --rgb-picker-input: 220, 224, 232;
+  --rgb-picker-color: 76, 79, 105;
+  --rgb-picker-accent: 136, 57, 239;
+  --picker-border: oklch(0.8083 0.0174 271.2);
+}
+
+/* Everforest: dark and light, medium contrast, from sainnhe/everforest (MIT). */
+:root[data-appearance="everforest"] {
+  /* Moved for contrast: text-tertiary, on-accent-soft, on-danger-soft, on-success-soft. */
+  --color-surface-0: oklch(0.3239 0.0153 240.42);
+  --color-surface-1: oklch(0.3597 0.0169 227.06);
+  --color-surface-2: oklch(0.3938 0.0166 226.98);
+  --color-surface-3: oklch(0.4312 0.0172 231.6);
+  --color-rail: oklch(0.2799 0.0123 232.92);
+
+  --color-border: oklch(0.4546 0.015 236.93);
+  --color-border-strong: oklch(0.4873 0.0172 175.11);
+
+  --color-text: oklch(0.8299 0.0405 86.05);
+  --color-text-secondary: oklch(0.7762 0.0253 105.89);
+  --color-text-tertiary: oklch(0.7326 0.0186 153.43);
+
+  --color-accent: oklch(0.7732 0.0906 125.78);
+  --color-accent-hover: oklch(0.6932 0.0906 125.78);
+  --color-on-accent: oklch(0.2799 0.0123 232.92);
+  --color-accent-soft: oklch(0.4161 0.0231 157.06);
+  --color-on-accent-soft: oklch(0.7982 0.0906 125.78);
+
+  --color-danger: oklch(0.7086 0.1285 19.62);
+  --color-on-danger: oklch(0.2799 0.0123 232.92);
+  --color-danger-soft: oklch(0.3913 0.0248 358.79);
+  --color-on-danger-soft: oklch(0.8386 0.1285 19.62);
+  --color-danger-soft-hover: oklch(0.423 0.0346 6.37);
+  --color-warning: oklch(0.8081 0.0863 83.7);
+  --color-warning-soft: oklch(0.4146 0.0146 101.82);
+  --color-on-warning-soft: oklch(0.8081 0.0863 83.7);
+  --color-success: oklch(0.7536 0.0912 151.45);
+  --color-success-soft: oklch(0.4161 0.0231 157.06);
+  --color-on-success-soft: oklch(0.7936 0.0912 151.45);
+
+  --color-code-bg: oklch(0.2799 0.0123 232.92);
+  --color-code-text: oklch(0.7536 0.0912 151.45);
+
+  --color-focus-ring: oklch(0.7732 0.0906 125.78 / 0.6);
+  --color-selection: oklch(0.7732 0.0906 125.78 / 0.35);
+  --color-indicator: oklch(0.8299 0.0405 86.05);
+
+  --shadow-speaking: 0 0 10px oklch(0.7732 0.0906 125.78 / 0.45);
+  --glow-accent: oklch(0.5485 0.0427 135.14 / 0.28);
+  --glow-accent-soft: oklch(0.7732 0.0906 125.78 / 0.08);
+
+  --gradient-app-1: oklch(0.3913 0.0144 181.07 / 0.3);
+  --gradient-app-2: oklch(0.3597 0.0169 227.06 / 0.35);
+
+  --rgb-picker-background: 52, 63, 68;
+  --rgb-picker-input: 45, 53, 59;
+  --rgb-picker-color: 211, 198, 170;
+  --rgb-picker-accent: 167, 192, 128;
+  --picker-border: oklch(0.4546 0.015 236.93);
+}
+
+:root[data-appearance="everforest"][data-theme="light"] {
+  /* Moved for contrast: accent, on-accent, danger, warning, success, text-tertiary, code-text, on-accent-soft, on-danger-soft, on-warning-soft, on-success-soft. */
+  --color-surface-0: oklch(0.9735 0.0261 90.1);
+  --color-surface-1: oklch(0.9522 0.0306 98.86);
+  --color-surface-2: oklch(0.9371 0.0307 98.87);
+  --color-surface-3: oklch(0.9101 0.0296 98.5);
+  --color-rail: oklch(0.9371 0.0307 98.87);
+
+  --color-border: oklch(0.8069 0.0283 120.63);
+  --color-border-strong: oklch(0.6888 0.0243 141.21);
+
+  --color-text: oklch(0.5154 0.0212 232.87);
+  --color-text-secondary: oklch(0.5252 0.0174 190.64);
+  --color-text-tertiary: oklch(0.5248 0.0292 143.51);
+
+  --color-accent: oklch(0.5497 0.156 118.23);
+  --color-accent-hover: oklch(0.4897 0.156 118.23);
+  --color-on-accent: oklch(1 0.0261 90.1);
+  --color-accent-soft: oklch(0.9493 0.0407 108.66);
+  --color-on-accent-soft: oklch(0.5197 0.156 118.23);
+
+  --color-danger: oklch(0.6507 0.1996 25.2);
+  --color-on-danger: oklch(0.99 0 0);
+  --color-danger-soft: oklch(0.9346 0.0312 40.08);
+  --color-on-danger-soft: oklch(0.5157 0.1996 25.2);
+  --color-danger-soft-hover: oklch(0.9062 0.0477 33.91);
+  --color-warning: oklch(0.6266 0.1545 80.27);
+  --color-warning-soft: oklch(0.9482 0.0441 88.53);
+  --color-on-warning-soft: oklch(0.5266 0.1545 80.27);
+  --color-success: oklch(0.6085 0.1208 163.88);
+  --color-success-soft: oklch(0.9493 0.0407 108.66);
+  --color-on-success-soft: oklch(0.5085 0.1208 163.88);
+
+  --color-code-bg: oklch(0.9522 0.0306 98.86);
+  --color-code-text: oklch(0.5085 0.1208 163.88);
+
+  --color-focus-ring: oklch(0.5497 0.156 118.23 / 0.6);
+  --color-selection: oklch(0.5497 0.156 118.23 / 0.25);
+  --color-indicator: oklch(0.5154 0.0212 232.87);
+
+  --shadow-speaking: 0 0 0 3px oklch(0.5497 0.156 118.23 / 0.4);
+  --glow-accent: oklch(0.7616 0.0897 114.3 / 0.16);
+  --glow-accent-soft: oklch(0.5497 0.156 118.23 / 0.06);
+
+  --gradient-app-1: oklch(0.91 0.0442 104.56 / 0.22);
+  --gradient-app-2: oklch(0.9522 0.0306 98.86 / 0.28);
+
+  --rgb-picker-background: 244, 240, 217;
+  --rgb-picker-input: 239, 235, 212;
+  --rgb-picker-color: 92, 106, 114;
+  --rgb-picker-accent: 106, 124, 0;
+  --picker-border: oklch(0.8069 0.0283 120.63);
+}
+
+/*
  * MODO 2005, the hidden look (`lib/appearance.ts`, `Look`). Dark is
  * Madrugada, the navy of a 2 a.m. chat; light is the sky-blue glossy
  * chat window of the mid-2000s. Our own palette, not a colour-picked copy of
@@ -1027,6 +1406,98 @@
   --retro-nudge-ink: oklch(0.52 0.19 30);
   --retro-shadow: 0 8px 24px oklch(0.3 0.06 255 / 0.3);
   --retro-frame-shadow: 0 1px 2px oklch(0.31 0.06 255 / 0.25);
+}
+
+/*
+ * Seasonal looks. Offered in the picker and by a corner card only in their
+ * season (`lib/seasonal-looks.ts`), but a stored pick keeps working all year,
+ * so these blocks stay.
+ *
+ * Both are dark only, like Night. Halloween: aubergine surfaces, a near-black
+ * rail, pumpkin accent. Christmas: pine surfaces, a cranberry rail and a gold
+ * accent, never red, because a red primary button would read as the danger
+ * colour.
+ */
+:root[data-appearance="halloween"] {
+  --color-surface-0: oklch(0.18 0.05 305);
+  --color-surface-1: oklch(0.22 0.055 305);
+  --color-surface-2: oklch(0.27 0.06 305);
+  --color-surface-3: oklch(0.33 0.065 305);
+  --color-rail: oklch(0.13 0.045 305);
+
+  --color-border: oklch(0.36 0.06 305);
+  --color-border-strong: oklch(0.48 0.065 305);
+
+  --color-text: oklch(0.94 0.02 80);
+  --color-text-secondary: oklch(0.84 0.025 70);
+  --color-text-tertiary: oklch(0.75 0.03 60);
+
+  --color-accent: oklch(0.76 0.17 55);
+  --color-accent-hover: oklch(0.68 0.16 50);
+  --color-on-accent: oklch(0.18 0.05 305);
+  --color-accent-soft: oklch(0.33 0.08 50);
+  --color-on-accent-soft: oklch(0.86 0.12 60);
+
+  --color-code-bg: oklch(0.15 0.045 305);
+  --color-code-text: oklch(0.8 0.15 60);
+
+  --color-focus-ring: oklch(0.76 0.17 55 / 0.6);
+  --color-selection: oklch(0.76 0.17 55 / 0.32);
+  --color-indicator: oklch(0.94 0.02 80);
+
+  --shadow-speaking: 0 0 10px oklch(0.76 0.17 55 / 0.45);
+  --glow-accent: oklch(0.45 0.14 50 / 0.22);
+  --glow-accent-soft: oklch(0.76 0.17 55 / 0.07);
+
+  --gradient-app-1: oklch(0.32 0.1 50 / 0.3);
+  --gradient-app-2: oklch(0.26 0.09 305 / 0.42);
+
+  --rgb-picker-background: 40, 28, 48;
+  --rgb-picker-input: 30, 20, 38;
+  --rgb-picker-color: 240, 232, 218;
+  --rgb-picker-accent: 240, 140, 50;
+  --picker-border: oklch(0.36 0.06 305);
+}
+
+:root[data-appearance="christmas"] {
+  --color-surface-0: oklch(0.18 0.03 165);
+  --color-surface-1: oklch(0.22 0.035 165);
+  --color-surface-2: oklch(0.27 0.04 165);
+  --color-surface-3: oklch(0.33 0.045 165);
+  --color-rail: oklch(0.24 0.09 20);
+
+  --color-border: oklch(0.35 0.04 165);
+  --color-border-strong: oklch(0.47 0.045 165);
+
+  --color-text: oklch(0.95 0.012 95);
+  --color-text-secondary: oklch(0.85 0.015 110);
+  --color-text-tertiary: oklch(0.76 0.02 130);
+
+  --color-accent: oklch(0.85 0.14 90);
+  --color-accent-hover: oklch(0.76 0.13 85);
+  --color-on-accent: oklch(0.2 0.03 165);
+  --color-accent-soft: oklch(0.34 0.06 90);
+  --color-on-accent-soft: oklch(0.9 0.11 92);
+
+  --color-code-bg: oklch(0.15 0.025 165);
+  --color-code-text: oklch(0.85 0.14 90);
+
+  --color-focus-ring: oklch(0.85 0.14 90 / 0.6);
+  --color-selection: oklch(0.85 0.14 90 / 0.3);
+  --color-indicator: oklch(0.95 0.012 95);
+
+  --shadow-speaking: 0 0 10px oklch(0.85 0.14 90 / 0.42);
+  --glow-accent: oklch(0.45 0.1 90 / 0.2);
+  --glow-accent-soft: oklch(0.85 0.14 90 / 0.06);
+
+  --gradient-app-1: oklch(0.3 0.1 20 / 0.28);
+  --gradient-app-2: oklch(0.26 0.06 165 / 0.4);
+
+  --rgb-picker-background: 26, 44, 36;
+  --rgb-picker-input: 18, 34, 27;
+  --rgb-picker-color: 240, 238, 228;
+  --rgb-picker-accent: 232, 196, 80;
+  --picker-border: oklch(0.35 0.04 165);
 }
 
 /*
@@ -2001,6 +2472,26 @@ html[data-pre] #main > section:first-of-type .animate-rise {
   animation: badge-pop 0.32s var(--ease-emphasized) both;
 }
 
+/* A soundboard tile that just played: the icon kicks once from full size. */
+@keyframes sound-pulse {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.22) rotate(-6deg);
+  }
+  70% {
+    transform: scale(0.96) rotate(3deg);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-sound-pulse {
+  animation: sound-pulse 0.42s var(--ease-emphasized) both;
+}
+
 /*
  * CHAMAR A ATENÇÃO (the nudge). Transform and opacity only, so none of it
  * relayouts the chat it sits on.
@@ -2637,6 +3128,7 @@ html[data-pre] #main > section:first-of-type .animate-rise {
   .animate-toast-in,
   .animate-toast-out,
   .animate-badge-pop,
+  .animate-sound-pulse,
   .animate-pop-in,
   .animate-pop-out,
   .animate-step-in,
@@ -3096,6 +3588,10 @@ html[data-immersive-stage] [data-immersive-hide] {
     oklch(0 0 0 / 0) 68%,
     oklch(0 0 0 / 0.6) 100%
   );
+  /* The viewer's header and reply row are drawn over the picture: each sits on
+     its own soft gradient so white type reads on a bright photo. */
+  --story-head-scrim: linear-gradient(180deg, oklch(0 0 0 / 0.42) 0%, oklch(0 0 0 / 0) 100%);
+  --story-foot-scrim: linear-gradient(0deg, oklch(0 0 0 / 0.5) 0%, oklch(0 0 0 / 0) 100%);
   --story-dim: oklch(0 0 0 / 0.4);
   --story-tray: oklch(0.19 0.014 250 / 0.985);
   --story-sticker: oklch(0.17 0.03 132 / 0.95);
@@ -3127,6 +3623,22 @@ html[data-immersive-stage] [data-immersive-hide] {
     linear-gradient(170deg, oklch(0.42 0.08 65) 0%, oklch(0.22 0.04 55) 100%);
   --story-bg-ink: radial-gradient(70% 50% at 50% 0%, oklch(0.4 0.02 250 / 0.5) 0%, oklch(0.4 0.02 250 / 0) 70%),
     linear-gradient(180deg, oklch(0.2 0.012 250) 0%, oklch(0.11 0.01 250) 100%);
+
+  /* The solid family: one flat color each. Every one, and the lighter stop of each gradient below,
+     holds 4.5:1 with white text (the rule the first family was chosen by). */
+  --story-bg-cobalt: oklch(0.5 0.2 262);
+  --story-bg-crimson: oklch(0.5 0.2 25);
+  --story-bg-pine: oklch(0.44 0.1 160);
+  --story-bg-plum: oklch(0.46 0.17 330);
+  --story-bg-teal: oklch(0.5 0.1 195);
+  --story-bg-onyx: oklch(0.16 0.005 260);
+  /* The gradient family: two stops on a diagonal, no glow. */
+  --story-bg-sunset: linear-gradient(160deg, oklch(0.58 0.2 45) 0%, oklch(0.44 0.2 350) 100%);
+  --story-bg-ocean: linear-gradient(160deg, oklch(0.54 0.11 215) 0%, oklch(0.38 0.14 258) 100%);
+  --story-bg-aurora: linear-gradient(160deg, oklch(0.5 0.13 165) 0%, oklch(0.4 0.16 290) 100%);
+  --story-bg-dusk: linear-gradient(160deg, oklch(0.4 0.17 275) 0%, oklch(0.56 0.2 350) 100%);
+  --story-bg-berry: linear-gradient(160deg, oklch(0.52 0.21 350) 0%, oklch(0.36 0.16 305) 100%);
+  --story-bg-lagoon: linear-gradient(160deg, oklch(0.54 0.1 190) 0%, oklch(0.44 0.13 150) 100%);
 }
 
 /* A ring: a gradient layer and a seen layer, crossfaded (never animate the
@@ -3173,6 +3685,12 @@ html[data-immersive-stage] [data-immersive-hide] {
 .story-ring[data-ring="none"] > [data-ring-layer="gap"] {
   transform: none;
 }
+/* Focus handed back by script after a mouse or touch (the viewer closing)
+   is not keyboard focus: no ring, so nothing looks selected. */
+[data-pointer-focus]:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
 .story-ring-label {
   transition: color var(--duration-slow) var(--ease-standard);
 }
@@ -3210,6 +3728,10 @@ html[data-immersive-stage] [data-immersive-hide] {
   animation: story-upload-spin 1.4s linear infinite;
   transform-origin: center;
 }
+/* The arc follows the real upload progress; the small linear ease just joins the steps. */
+.story-upload-arc {
+  transition: stroke-dashoffset var(--duration-base) linear;
+}
 
 /* The viewer. */
 .story-text-card[data-bg="lime"] {
@@ -3229,6 +3751,45 @@ html[data-immersive-stage] [data-immersive-hide] {
 }
 .story-text-card[data-bg="ink"] {
   background: var(--story-bg-ink);
+}
+/* The solid and gradient families (`STORY_BACKGROUNDS_SOLID` / `_GRADIENT` in @pqp/shared). The
+   composer's swatches, the viewer, the deck, the DM quote card and every thumbnail read the same
+   rule, so a key looks the same in all of them. */
+.story-text-card[data-bg="cobalt"] {
+  background: var(--story-bg-cobalt);
+}
+.story-text-card[data-bg="crimson"] {
+  background: var(--story-bg-crimson);
+}
+.story-text-card[data-bg="pine"] {
+  background: var(--story-bg-pine);
+}
+.story-text-card[data-bg="plum"] {
+  background: var(--story-bg-plum);
+}
+.story-text-card[data-bg="teal"] {
+  background: var(--story-bg-teal);
+}
+.story-text-card[data-bg="onyx"] {
+  background: var(--story-bg-onyx);
+}
+.story-text-card[data-bg="sunset"] {
+  background: var(--story-bg-sunset);
+}
+.story-text-card[data-bg="ocean"] {
+  background: var(--story-bg-ocean);
+}
+.story-text-card[data-bg="aurora"] {
+  background: var(--story-bg-aurora);
+}
+.story-text-card[data-bg="dusk"] {
+  background: var(--story-bg-dusk);
+}
+.story-text-card[data-bg="berry"] {
+  background: var(--story-bg-berry);
+}
+.story-text-card[data-bg="lagoon"] {
+  background: var(--story-bg-lagoon);
 }
 
 /* Hold to pause: the chrome leaves after 250 ms in 200 ms, returns in 150. */
@@ -3326,10 +3887,45 @@ html[data-immersive-stage] [data-immersive-hide] {
 }
 .story-sheet {
   transform: translateY(100%);
-  transition: transform var(--duration-slow) var(--ease-emphasized);
+  /* Closed means gone: hidden once it has slid away, so no sliver of it can show under the owner bar. */
+  visibility: hidden;
+  transition:
+    transform var(--duration-slow) var(--ease-emphasized),
+    visibility 0s linear var(--duration-slow);
 }
 [data-story-sheet="open"] .story-sheet {
   transform: none;
+  visibility: visible;
+  transition:
+    transform var(--duration-slow) var(--ease-emphasized),
+    visibility 0s;
+}
+/* The owner bar ("Visto por N") gives way to the sheet that carries the same title. */
+[data-story-sheet="open"] [data-story-owner-bar] {
+  opacity: 0;
+  pointer-events: none;
+}
+[data-story-owner-bar] {
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* The blurred copy of the base behind the author's canvas. A base shown whole always has it; a
+   base that fills the canvas only needs it when the card is taller or wider than 9:16. */
+.story-backdrop {
+  display: none;
+}
+.story-backdrop[data-always] {
+  display: block;
+}
+@container (min-aspect-ratio: 0.568) {
+  .story-backdrop {
+    display: block;
+  }
+}
+@container (max-aspect-ratio: 0.557) {
+  .story-backdrop {
+    display: block;
+  }
 }
 
 /*
@@ -3346,7 +3942,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   .story-react-fly {
     animation: none;
   }
-  .story-ring > [data-ring-layer="gap"] {
+  .story-ring > [data-ring-layer="gap"],
+  .story-upload-arc {
     transition: none;
   }
   .story-tray-up,
@@ -3372,5 +3969,454 @@ html[data-immersive-stage] [data-immersive-hide] {
   }
   [data-story-sheet="open"] .story-sheet {
     opacity: 1;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Story composer v2: a phone-shaped column on every screen. The canvas is
+   always exactly 9:16 (layers are positioned in its own units), so on a tall
+   phone the chrome sits above and below it, and on a desktop the same column
+   is centred on the backdrop. Its width is whatever fits: the window height
+   minus the two chrome rows, times 9/16, never wider than the window.
+   ------------------------------------------------------------------ */
+.story-cmp {
+  --story-cmp-top: 56px;
+  --story-cmp-bottom: 176px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(100vw, calc((100dvh - var(--story-cmp-top) - var(--story-cmp-bottom)) * 9 / 16));
+  max-height: 100dvh;
+}
+@media (max-width: 640px) {
+  .story-cmp {
+    --story-cmp-top: 52px;
+    --story-cmp-bottom: 168px;
+  }
+}
+/* A soft keyboard rising over the text being edited lifts the whole stage, the layer's own
+   position untouched, and it settles back after. Instant under reduced motion. */
+.story-cmp-lift {
+  transform: translateY(calc(var(--story-lift, 0px) * -1));
+  transition: transform var(--duration-base) var(--ease-emphasized);
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-cmp-lift {
+    transition: none;
+  }
+}
+.story-cmp-head {
+  display: flex;
+  height: var(--story-cmp-top);
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding-inline: 8px;
+}
+/* Seven round buttons fit a narrow column (a short desktop window) by shrinking, never by spilling over the canvas. */
+.story-cmp-head .story-cbtn {
+  flex: 0 1 40px;
+  min-width: 30px;
+}
+.story-cmp-canvas {
+  position: relative;
+  aspect-ratio: 9 / 16;
+  width: 100%;
+  flex: none;
+  overflow: hidden;
+  border-radius: 18px;
+  background: var(--story-card);
+  container-type: size;
+  box-shadow: 0 0 0 1px var(--story-hairline);
+}
+@media (max-width: 640px) {
+  .story-cmp-canvas {
+    border-radius: 14px;
+  }
+}
+.story-cmp-foot {
+  display: flex;
+  min-height: var(--story-cmp-bottom);
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 4px 14px;
+}
+.story-field::placeholder {
+  color: var(--story-on-media-2);
+}
+
+/* A round button on the dark chrome or over the picture. */
+.story-cbtn {
+  display: inline-flex;
+  height: 40px;
+  min-width: 40px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 9999px;
+  padding-inline: 10px;
+  background: var(--story-dim);
+  color: var(--story-on-media);
+  font-size: 13px;
+  font-weight: 700;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+.story-cbtn:hover:not(:disabled) {
+  background: var(--story-field-fill);
+}
+.story-cbtn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.story-cbtn:disabled {
+  opacity: 0.4;
+}
+.story-cbtn[aria-pressed="true"] {
+  background: var(--story-on-media);
+  color: var(--story-card);
+}
+/* "Describe the photo" once the author has written one: the button says it is done. */
+.story-cbtn[data-active="true"]:not(:disabled) {
+  background: var(--story-accent);
+  color: var(--story-on-accent);
+}
+.story-cmp button:focus-visible,
+.story-cmp [role="radio"]:focus-visible,
+.story-cmp [data-story-layer]:focus-visible {
+  outline: 2px solid var(--story-accent);
+  outline-offset: 2px;
+}
+
+/* The shutter: a ring around a disc. Press scales the disc; a hold turns it
+   into a stop square and the ring into the progress of the 30 s. */
+.story-shutter {
+  position: relative;
+  display: flex;
+  height: 76px;
+  width: 76px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.story-shutter-ring {
+  position: absolute;
+  inset: 0;
+  transition: transform var(--duration-base) var(--ease-emphasized);
+}
+.story-shutter[data-recording="true"] .story-shutter-ring {
+  transform: scale(1.12);
+}
+.story-shutter-disc {
+  height: 58px;
+  width: 58px;
+  border-radius: 9999px;
+  background: var(--story-on-media);
+  transition:
+    transform var(--duration-fast) var(--ease-emphasized),
+    border-radius var(--duration-base) var(--ease-emphasized),
+    background var(--duration-base) var(--ease-standard);
+}
+.story-shutter:active .story-shutter-disc {
+  transform: scale(0.9);
+}
+.story-shutter[data-recording="true"] .story-shutter-disc {
+  height: 30px;
+  width: 30px;
+  border-radius: 8px;
+  background: var(--color-danger);
+}
+.story-rec-dot {
+  height: 8px;
+  width: 8px;
+  border-radius: 9999px;
+  background: var(--color-danger);
+  animation: story-rec-blink 1.1s var(--ease-standard) infinite;
+}
+@keyframes story-rec-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+.story-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--story-on-media);
+  animation: story-flash 220ms var(--ease-standard) both;
+}
+@keyframes story-flash {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.story-cmp-sheet {
+  animation: story-sheet-up var(--duration-slow) var(--ease-emphasized) both;
+}
+@keyframes story-sheet-up {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-rec-dot {
+    animation: none;
+  }
+  .story-flash {
+    animation: none;
+    opacity: 0;
+  }
+  .story-shutter-ring,
+  .story-shutter-disc,
+  .story-cbtn {
+    transition: none;
+  }
+  .story-shutter[data-recording="true"] .story-shutter-ring {
+    transform: none;
+  }
+  .story-shutter:active .story-shutter-disc,
+  .story-cbtn:active:not(:disabled) {
+    transform: none;
+  }
+  .story-cmp-sheet {
+    animation: story-fade-in var(--duration-fast) linear both;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Story layers: the palette a text layer and a drawing take their color
+   from (a token on the wire, never free hex), and how a text layer is set.
+   A layer is laid out in units of the canvas WIDTH (cqw), so it is the same
+   story on a 390 px phone and a 1440 px window. The sizes are the contract
+   in `lib/stories/layers.ts`: 8cqw x size for type, 84cqw at most wide.
+   ------------------------------------------------------------------ */
+:root {
+  /* One table for web, iOS and Android: STORY_TEXT_COLOR_HEX in @pqp/shared (a test keeps them equal).
+     The -on color is what a solid pill holds: black on all but black. */
+  --story-c-white: #FFFFFF;
+  --story-c-white-on: #000000;
+  --story-c-black: #000000;
+  --story-c-black-on: #FFFFFF;
+  --story-c-lime: #BBEC4C;
+  --story-c-lime-on: #000000;
+  --story-c-yellow: #FFD60A;
+  --story-c-yellow-on: #000000;
+  --story-c-orange: #FF9500;
+  --story-c-orange-on: #000000;
+  --story-c-red: #FF3B30;
+  --story-c-red-on: #000000;
+  --story-c-pink: #FF5FA2;
+  --story-c-pink-on: #000000;
+  --story-c-purple: #AF52DE;
+  --story-c-purple-on: #000000;
+  --story-c-blue: #0A84FF;
+  --story-c-blue-on: #000000;
+  --story-c-cyan: #64D2FF;
+  --story-c-cyan-on: #000000;
+  --story-c-green: #30D158;
+  --story-c-green-on: #000000;
+  --story-c-gray: #8E8E93;
+  --story-c-gray-on: #000000;
+  --story-text-soft: oklch(0 0 0 / 0.5);
+  --story-layer-shadow: 0 4px 18px oklch(0 0 0 / 0.35);
+  --story-text-shadow: 0 1px 10px oklch(0 0 0 / 0.28);
+  /* The call card's own surface, opaque: the ring a face wears so it reads on the card. */
+  --story-sticker-solid: oklch(0.17 0.03 132);
+}
+.story-tl {
+  --tl-fg: var(--story-c-white);
+  --tl-on: var(--story-c-white-on);
+  width: max-content;
+  max-width: 84cqw;
+  font-size: calc(var(--tl-size, 1) * 8cqw);
+  line-height: 1.14;
+  color: var(--tl-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: var(--tl-align, center);
+  font-family: "Instrument Sans", system-ui, sans-serif;
+  font-weight: 700;
+  text-shadow: var(--story-text-shadow);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.story-tl[data-color="white"] { --tl-fg: var(--story-c-white); --tl-on: var(--story-c-white-on); }
+.story-tl[data-color="black"] { --tl-fg: var(--story-c-black); --tl-on: var(--story-c-black-on); }
+.story-tl[data-color="lime"] { --tl-fg: var(--story-c-lime); --tl-on: var(--story-c-lime-on); }
+.story-tl[data-color="yellow"] { --tl-fg: var(--story-c-yellow); --tl-on: var(--story-c-yellow-on); }
+.story-tl[data-color="orange"] { --tl-fg: var(--story-c-orange); --tl-on: var(--story-c-orange-on); }
+.story-tl[data-color="red"] { --tl-fg: var(--story-c-red); --tl-on: var(--story-c-red-on); }
+.story-tl[data-color="pink"] { --tl-fg: var(--story-c-pink); --tl-on: var(--story-c-pink-on); }
+.story-tl[data-color="purple"] { --tl-fg: var(--story-c-purple); --tl-on: var(--story-c-purple-on); }
+.story-tl[data-color="blue"] { --tl-fg: var(--story-c-blue); --tl-on: var(--story-c-blue-on); }
+.story-tl[data-color="cyan"] { --tl-fg: var(--story-c-cyan); --tl-on: var(--story-c-cyan-on); }
+.story-tl[data-color="green"] { --tl-fg: var(--story-c-green); --tl-on: var(--story-c-green-on); }
+.story-tl[data-color="gray"] { --tl-fg: var(--story-c-gray); --tl-on: var(--story-c-gray-on); }
+.story-tl[data-font="bold"] {
+  font-family: "Gabarito", "Instrument Sans", system-ui, sans-serif;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  line-height: 1.04;
+}
+.story-tl[data-font="typewriter"] {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.story-tl[data-font="serif"] {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  font-style: italic;
+}
+.story-tl[data-font="neon"] {
+  font-family: "Gabarito", "Instrument Sans", system-ui, sans-serif;
+  font-weight: 800;
+  text-shadow:
+    0 0 0.1em var(--tl-fg),
+    0 0 0.4em var(--tl-fg),
+    0 0 0.9em var(--tl-fg);
+}
+.story-tl[data-bg="solid"] {
+  background: var(--tl-fg);
+  color: var(--tl-on);
+  text-shadow: none;
+  padding: 0.14em 0.36em;
+  border-radius: 0.3em;
+}
+.story-tl[data-bg="soft"] {
+  background: var(--story-text-soft);
+  padding: 0.14em 0.36em;
+  border-radius: 0.3em;
+}
+.story-tl[data-font="neon"][data-bg="solid"] {
+  text-shadow: none;
+}
+
+/* The editor's selection frame, drawn at a constant size however much the
+   layer is scaled (--inv is 1 / scale). */
+.story-layer {
+  touch-action: none;
+  cursor: grab;
+  outline: none;
+}
+.story-layer:active {
+  cursor: grabbing;
+}
+.story-layer-frame {
+  pointer-events: none;
+  position: absolute;
+  inset: -6px;
+  border: calc(1.5px * var(--inv, 1)) solid var(--story-on-media);
+  border-radius: calc(6px * var(--inv, 1));
+  box-shadow: 0 0 0 calc(1px * var(--inv, 1)) var(--story-dim);
+}
+.story-layer:focus-visible .story-layer-frame {
+  border-color: var(--story-accent);
+}
+.story-layer-handle {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  height: 22px;
+  width: 22px;
+  transform: translate(50%, 50%) scale(var(--inv, 1));
+  border-radius: 9999px;
+  border: 2px solid var(--story-card);
+  background: var(--story-on-media);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.story-guide {
+  pointer-events: none;
+  z-index: 4;
+  position: absolute;
+  background: var(--story-accent);
+  opacity: 0.9;
+}
+/* The safe area guide: what a viewer's own bars can cover lies outside this rectangle. Faint while a
+   layer is near its edge, bright once the layer reaches past it. Opacity only. */
+.story-safe {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: 12px;
+  border: 1px dashed color-mix(in oklab, var(--story-on-media) 40%, transparent);
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+.story-safe[data-story-safe="outside"] {
+  border-color: var(--story-accent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--story-card) 30%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-safe {
+    transition: none;
+  }
+}
+.story-trash {
+  pointer-events: none;
+  z-index: 4;
+  position: absolute;
+  left: 50%;
+  bottom: 4%;
+  display: flex;
+  height: 14cqw;
+  width: 14cqw;
+  transform: translateX(-50%);
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: var(--story-dim);
+  color: var(--story-on-media);
+  transition:
+    transform var(--duration-fast) var(--ease-emphasized),
+    background var(--duration-fast) var(--ease-standard);
+}
+.story-trash[data-hot="true"] {
+  transform: translateX(-50%) scale(1.22);
+  background: var(--color-danger);
+}
+/* The live dot on a call card: a ring that breathes out while people are in. */
+.story-live-dot {
+  animation: story-live-pulse 1.8s var(--ease-standard) infinite;
+}
+@keyframes story-live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--story-accent) 55%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 1.6cqw color-mix(in oklch, var(--story-accent) 0%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-live-dot {
+    animation: none;
+  }
+  .story-trash {
+    transition: none;
+  }
+  .story-trash[data-hot="true"] {
+    transform: translateX(-50%);
   }
 }

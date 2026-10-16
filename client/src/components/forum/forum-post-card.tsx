@@ -5,12 +5,14 @@ import {
 } from "@pqp/shared";
 import {
   CheckCircle2,
+  ImageIcon,
   Lock,
   MessageSquare,
   Pin,
   Play,
   Rss,
   ShieldCheck,
+  Video,
 } from "lucide-react";
 import {
   memo,
@@ -21,7 +23,9 @@ import {
   type MouseEvent,
 } from "react";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { ForumTagIcon } from "@/components/forum/forum-tag-icon";
 import type { ForumUnreadState } from "@/lib/forum-list";
+import { useForumTagLabel } from "@/lib/forum-tag-icons";
 import { useTranslation, type Translator } from "@/lib/i18n";
 import { cn, formatRelativeShort } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -81,6 +85,7 @@ const MAX_TAGS_COMPACT = 2;
 const TINY_AVATAR_FALLBACK = "bg-surface-3 text-[9px] leading-none text-text-secondary";
 
 function TagChip({ tag }: { tag: ForumTag }) {
+  const tagLabel = useForumTagLabel();
   return (
     <span
       className={cn(
@@ -88,8 +93,8 @@ function TagChip({ tag }: { tag: ForumTag }) {
         tag.moderated && "ring-1 ring-inset ring-border-strong",
       )}
     >
-      {tag.emoji && <span aria-hidden>{tag.emoji}</span>}
-      <span className="truncate">{tag.name}</span>
+      <ForumTagIcon tag={tag} />
+      <span className="truncate">{tagLabel(tag)}</span>
     </span>
   );
 }
@@ -103,6 +108,7 @@ export function ForumTagList({
   tagsById: ReadonlyMap<string, ForumTag>;
   max: number;
 }) {
+  const tagLabel = useForumTagLabel();
   const tags = tagIds
     .map((tagId) => tagsById.get(tagId))
     .filter((tag): tag is ForumTag => Boolean(tag));
@@ -121,7 +127,7 @@ export function ForumTagList({
           className="inline-flex h-5 shrink-0 items-center rounded-full bg-surface-2 px-2 text-[11px] tabular-nums text-text-tertiary"
           title={tags
             .slice(max)
-            .map((tag) => tag.name)
+            .map((tag) => tagLabel(tag))
             .join(", ")}
         >
           +{hidden}
@@ -160,6 +166,24 @@ export function forumPreviewText(
     return t("forum.preview.files", { count: post.attachmentCount });
   }
   return "";
+}
+
+/**
+ * The picture before the preview line when the opening message is one image or
+ * one clip and has no words: the line says "Image" or "Video", and this is the
+ * icon beside it (never an emoji in the copy).
+ */
+export function forumPreviewKind(post: ForumPostSummary): "image" | "video" | null {
+  if (post.openingDeleted || (post.preview && post.preview.trim())) {
+    return null;
+  }
+  if (post.openingKind === "voice" || post.attachmentCount !== 1) {
+    return null;
+  }
+  if (post.thumbnailUrl) {
+    return "image";
+  }
+  return post.thumbnailVideoUrl ? "video" : null;
 }
 
 export function forumAuthorName(
@@ -295,6 +319,7 @@ export const ForumPostCard = memo(function ForumPostCard({
   const { t, locale } = useTranslation();
   const author = forumAuthorName(t, post);
   const preview = forumPreviewText(t, post);
+  const previewKind = forumPreviewKind(post);
   const isUnread = unread.kind !== "read";
   const replies = t("forum.replies", { count: post.replyCount });
   const time = formatRelativeShort(post.lastActivityAt, locale);
@@ -546,6 +571,20 @@ export const ForumPostCard = memo(function ForumPostCard({
             )}
             <span className="font-semibold text-text-secondary">{author}:</span>{" "}
             <span className={cn(post.openingDeleted && "italic")}>
+              {previewKind === "image" && (
+                <ImageIcon
+                  aria-hidden="true"
+                  data-forum-preview-icon="image"
+                  className="mr-1 inline h-3.5 w-3.5 align-[-2px]"
+                />
+              )}
+              {previewKind === "video" && (
+                <Video
+                  aria-hidden="true"
+                  data-forum-preview-icon="video"
+                  className="mr-1 inline h-3.5 w-3.5 align-[-2px]"
+                />
+              )}
               {preview}
             </span>
           </p>

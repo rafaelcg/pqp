@@ -4,6 +4,10 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import type { Channel, Server, VoiceParticipant } from "@pqp/shared";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  resetSoundboardMarksForTests,
+  showSoundboardMark,
+} from "@/lib/soundboard";
 import { ChannelList } from "./channel-list";
 
 const server: Server = {
@@ -131,6 +135,39 @@ describe("ChannelList voice occupants", () => {
     expect(html).toContain("ring-accent");
     expect(html).toContain('data-channel-type="voice"');
     expect(html).toContain('data-channel-type="text"');
+  });
+
+  it("shows the clip next to the person who played it, and swaps on the next one", () => {
+    showSoundboardMark({
+      userId: rafa.userId,
+      displayName: rafa.displayName,
+      emoji: "🎺",
+      soundId: "builtin:buzina",
+    });
+    const first = renderList(
+      <ChannelList {...baseProps} currentUserId={andre.userId} />,
+    );
+    const rafaRow = first.slice(first.indexOf(`data-voice-occupant="${rafa.userId}"`));
+    const andreRow = first.slice(
+      first.indexOf(`data-voice-occupant="${andre.userId}"`),
+      first.indexOf(`data-voice-occupant="${rafa.userId}"`),
+    );
+    expect(rafaRow).toContain('data-soundboard-mark="builtin:buzina"');
+    expect(rafaRow).toContain("Rafa, in voice, playing Airhorn");
+    expect(andreRow).not.toContain("data-soundboard-mark");
+
+    showSoundboardMark({
+      userId: rafa.userId,
+      displayName: rafa.displayName,
+      emoji: "👏",
+      soundId: "builtin:palmas",
+    });
+    const second = renderList(
+      <ChannelList {...baseProps} currentUserId={andre.userId} />,
+    );
+    expect(second).toContain('data-soundboard-mark="builtin:palmas"');
+    expect(second).not.toContain('data-soundboard-mark="builtin:buzina"');
+    resetSoundboardMarksForTests();
   });
 
   it("does not light the speaking ring on a muted seat", () => {

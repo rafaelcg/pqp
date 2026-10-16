@@ -1,6 +1,7 @@
 const { app, dialog } = require("electron");
 const { t } = require("./i18n");
 const { isFlatpak } = require("./flatpak");
+const { RETRY_WHILE_BUSY_MS, decideUpdatePrompt } = require("./update-prompt-policy");
 
 /**
  * Shell auto-update, over electron-updater / GitHub Releases.
@@ -39,8 +40,10 @@ function log(...args) {
  * whenever the feed is unusable.
  *
  * @param {() => import("electron").BrowserWindow | null} getWindow
+ * @param {() => boolean} [isBusy] whether the person is in a call right now; the
+ *   box never goes over one (`update-prompt-policy.js`)
  */
-function initAutoUpdate(getWindow) {
+function initAutoUpdate(getWindow, isBusy = () => false) {
   // Development runs from source with no `app-update.yml`, and every check
   // would log a failure on each `pnpm electron:dev`.
   if (!app.isPackaged) {
@@ -86,15 +89,44 @@ function initAutoUpdate(getWindow) {
     log(`update available: ${info?.version}`);
   });
 
-  autoUpdater.on("update-downloaded", async (info) => {
+  autoUpdater.on("update-downloaded", (info) => {
     log(`update downloaded: ${info?.version}`);
-    if (promptOpen) {
+    void offer(info);
+  });
+
+  /** The one version the person said "Later" to in this run of the app. */
+  let declinedVersion = null;
+  let retryTimer = null;
+
+  /**
+   * Whether to show the box now (`update-prompt-policy.js`): not twice for the
+   * same version, not over another box, and not over a call, where it waits
+   * and asks again instead of being dropped.
+   */
+  async function offer(info) {
+    const version = info?.version ?? "";
+    const decision = decideUpdatePrompt({
+      version,
+      declinedVersion,
+      promptOpen,
+      inCall: isBusy(),
+    });
+    if (decision === "wait") {
+      if (!retryTimer) {
+        retryTimer = setTimeout(() => {
+          retryTimer = null;
+          void offer(info);
+        }, RETRY_WHILE_BUSY_MS);
+        retryTimer.unref?.();
+      }
+      return;
+    }
+    if (decision === "skip") {
       return;
     }
     promptOpen = true;
 
     const window = getWindow();
-    const version = info?.version ?? "";
     const options = {
       type: "info",
       buttons: [t("updater.restart"), t("updater.later")],
@@ -112,13 +144,18 @@ function initAutoUpdate(getWindow) {
       if (result.response === 0) {
         // isSilent = true, isForceRunAfter = true.
         autoUpdater.quitAndInstall(true, true);
+      } else {
+        // "Later" is an answer: the six-hourly check reports this same staged
+        // update again, and asking again each time is how a box came back all
+        // day. It installs on the next ordinary quit with no box.
+        declinedVersion = version;
       }
     } catch (err) {
       log("prompt failed:", err?.message ?? err);
     } finally {
       promptOpen = false;
     }
-  });
+  }
 
   const check = () => {
     autoUpdater.checkForUpdates().catch((err) => {

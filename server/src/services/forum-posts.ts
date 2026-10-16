@@ -29,6 +29,7 @@ import {
   listForumTagRefs,
   publishForumPost,
   readForumPostViewers,
+  tagRequirementBinds,
 } from "./forums.js";
 import { computeMemberPermissions } from "./permissions.js";
 import type { ChannelRow } from "./servers.js";
@@ -115,7 +116,7 @@ export async function createForumPost(
     getForumSettings(forum.id),
   ]);
   checkTagChange(forumTags, tagIds, [], isStaff);
-  if (settings.requireTag && tagIds.length === 0) {
+  if (tagIds.length === 0 && tagRequirementBinds(settings.requireTag, forumTags, isStaff)) {
     throw new ForumError(422, FORUM_ERRORS.tagRequired);
   }
 

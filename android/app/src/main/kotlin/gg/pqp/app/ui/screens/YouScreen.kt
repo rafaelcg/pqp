@@ -40,6 +40,7 @@ import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.ConnectionDoctorDialog
 import gg.pqp.app.ui.components.SectionLabel
 import gg.pqp.app.ui.components.SettingsRow
+import gg.pqp.app.ui.components.StatusRow
 import gg.pqp.app.ui.components.pqpTopBarColors
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
@@ -165,6 +166,8 @@ fun YouScreen(
                 value = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             )
 
+            StatusRow(session)
+
             Spacer(Modifier.height(Spacing.lg))
             PushSettingsSection(
                 Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
@@ -174,6 +177,9 @@ fun YouScreen(
                 session = session,
                 modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
             )
+
+            // The two transcription switches, only where transcription exists.
+            gg.pqp.app.voicenotes.ui.VoiceNotesSettings(session)
 
             // Voice. One row for now: the check that tells "fica conectando"
             // apart from a refused session, a blocked socket and a network

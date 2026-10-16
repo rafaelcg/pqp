@@ -1,24 +1,28 @@
 import {
-  useEffect,
   useRef,
   useState,
   type DragEvent,
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
-import { GripVertical, Plus, Smile, Trash2 } from "lucide-react";
-import { FORUM_MAX_TAGS, FORUM_TAG_NAME_MAX } from "@pqp/shared";
+import { GripVertical, Plus, Trash2 } from "lucide-react";
+import {
+  FORUM_MAX_TAGS,
+  FORUM_TAG_NAME_MAX,
+  type ForumTagIconKey,
+} from "@pqp/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
-import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
+import { ForumTagIcon } from "@/components/forum/forum-tag-icon";
+import { ForumTagIconPicker } from "@/components/forum/forum-tag-icon-picker";
 import { SettingsGroup, SettingsSwitchRow } from "@/components/settings/kit";
 import { useTranslation } from "@/lib/i18n";
+import { forumTagLabel } from "@/lib/forum-tag-icons";
 import {
-  acceptTagEmoji,
   addStarterTags,
   addTag,
   clampTagName,
@@ -42,8 +46,10 @@ import { cn } from "@/lib/utils";
  * draft (duplicates, the 20 cap, what counts as a change) is in
  * `lib/forum-tag-draft.ts`; this file only draws it.
  *
- * Rows: drag handle (or its arrow keys), emoji, the name as a field that
- * looks like text until it is touched, the post count, "Só staff", delete.
+ * Rows: drag handle (or its arrow keys), icon (a picker over a curated set),
+ * the name as a field that looks like text until it is touched, the post
+ * count, "Só staff", delete. A starter tag is drawn in the viewer's language
+ * until it is renamed (`forumTagLabel`); typing in it is the rename.
  * Deleting a saved tag asks first and says how many posts it comes off.
  */
 export function ForumTagsSection({
@@ -61,31 +67,33 @@ export function ForumTagsSection({
 }) {
   const { t } = useTranslation();
   const [newName, setNewName] = useState("");
-  const [newEmoji, setNewEmoji] = useState<string | null>(null);
+  const [newIcon, setNewIcon] = useState<ForumTagIconKey | null>(null);
   const [addError, setAddError] = useState<string | null>(null);
-  const [emojiFor, setEmojiFor] = useState<string | null>(null);
+  const [iconFor, setIconFor] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<TagDraftRow | null>(null);
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const newNameRef = useRef<HTMLInputElement>(null);
   const handleRefs = useRef(new Map<string, HTMLButtonElement>());
 
-  const problems = draftProblems(draft);
+  const labelOf = (row: TagDraftRow) => forumTagLabel(row, t);
+  const problems = draftProblems(draft, labelOf);
   const full = draft.rows.length >= FORUM_MAX_TAGS;
   const starters = starterTagsFor(channelName).map((starter) => ({
-    emoji: starter.emoji,
+    preset: starter.preset,
+    icon: starter.icon,
     name: t(starter.nameKey),
   }));
 
   function submitNew() {
-    const result = addTag(draft, { name: newName, emoji: newEmoji });
+    const result = addTag(draft, { name: newName, icon: newIcon }, labelOf);
     if (!result.ok) {
       setAddError(t(result.error, { max: FORUM_MAX_TAGS }));
       return;
     }
     onDraftChange(result.draft);
     setNewName("");
-    setNewEmoji(null);
+    setNewIcon(null);
     setAddError(null);
     newNameRef.current?.focus();
   }
@@ -179,17 +187,13 @@ export function ForumTagsSection({
     setPendingDelete(row);
   }
 
-  function pickEmoji(target: string, value: string) {
-    const emoji = acceptTagEmoji(value);
-    if (!emoji) {
-      return;
-    }
+  function pickIcon(target: string, icon: ForumTagIconKey | null) {
     if (target === NEW_ROW) {
-      setNewEmoji(emoji);
+      setNewIcon(icon);
     } else {
-      onDraftChange(updateTag(draft, target, { emoji }));
+      onDraftChange(updateTag(draft, target, { icon }));
     }
-    setEmojiFor(null);
+    setIconFor(null);
   }
 
   return (
@@ -251,7 +255,7 @@ export function ForumTagsSection({
                 key={starter.name}
                 className="inline-flex h-7 items-center gap-1 rounded-full border border-dashed border-border px-2.5 text-xs text-text-secondary"
               >
-                <span aria-hidden="true">{starter.emoji}</span>
+                <ForumTagIcon tag={{ icon: starter.icon, emoji: null }} className="h-3.5 w-3.5" />
                 {starter.name}
               </span>
             ))}
@@ -259,7 +263,7 @@ export function ForumTagsSection({
               size="sm"
               variant="secondary"
               className="ml-auto"
-              onClick={() => onDraftChange(addStarterTags(draft, starters))}
+              onClick={() => onDraftChange(addStarterTags(draft, starters, labelOf))}
             >
               {t("forum.empty.starterUse")}
             </Button>
@@ -286,7 +290,8 @@ export function ForumTagsSection({
           <ul ref={listRef} role="list" onDragLeave={() => setDropIndex(null)}>
             {draft.rows.map((row, index) => {
               const problem = problems.get(row.key);
-              const length = Array.from(row.name).length;
+              const label = labelOf(row);
+              const length = Array.from(label).length;
               return (
                 <li
                   key={row.key}
@@ -306,7 +311,7 @@ export function ForumTagsSection({
                   )}
                 >
                   <div className="flex items-center gap-2">
-                    <Tooltip label={t("forum.settings.moveTag", { name: row.name })}>
+                    <Tooltip label={t("forum.settings.moveTag", { name: label })}>
                       <button
                         type="button"
                         ref={(node) => {
@@ -319,7 +324,7 @@ export function ForumTagsSection({
                         draggable
                         onDragStart={(event) => {
                           event.dataTransfer.effectAllowed = "move";
-                          event.dataTransfer.setData("text/plain", row.name);
+                          event.dataTransfer.setData("text/plain", label);
                           setDragKey(row.key);
                         }}
                         onDragEnd={() => {
@@ -340,25 +345,30 @@ export function ForumTagsSection({
                       </button>
                     </Tooltip>
 
-                    <EmojiButton
-                      emoji={row.emoji}
-                      label={t("forum.settings.emoji", { name: row.name })}
-                      open={emojiFor === row.key}
-                      onToggle={() => setEmojiFor(emojiFor === row.key ? null : row.key)}
-                      onClear={() => onDraftChange(updateTag(draft, row.key, { emoji: null }))}
-                      onPick={(value) => pickEmoji(row.key, value)}
-                      onClose={() => setEmojiFor(null)}
+                    <ForumTagIconPicker
+                      tag={row}
+                      label={t("forum.settings.icon", { name: label })}
+                      open={iconFor === row.key}
+                      onToggle={() => setIconFor(iconFor === row.key ? null : row.key)}
+                      onPick={(icon) => pickIcon(row.key, icon)}
+                      onClose={() => setIconFor(null)}
                     />
 
                     <label className="group/name relative flex min-w-0 flex-1 items-center gap-2">
                       <span className="sr-only">{t("forum.settings.tagName")}</span>
                       <input
-                        value={row.name}
+                        value={label}
                         maxLength={FORUM_TAG_NAME_MAX * 2}
                         aria-invalid={problem ? true : undefined}
-                        onChange={(event) =>
-                          onDraftChange(updateTag(draft, row.key, { name: event.target.value }))
-                        }
+                        onChange={(event) => {
+                          // A starter shows its localized word; typing is the
+                          // rename, and an unchanged value is not one.
+                          if (event.target.value !== label) {
+                            onDraftChange(
+                              updateTag(draft, row.key, { name: event.target.value }),
+                            );
+                          }
+                        }}
                         className={cn(
                           "peer h-11 min-w-0 flex-1 rounded-[var(--radius-control)] border border-transparent bg-transparent px-2 text-base font-medium sm:h-9 sm:text-sm text-text outline-none transition-colors duration-[var(--duration-fast)]",
                           "hover:border-border focus:border-accent focus:bg-surface-0 focus:pr-14",
@@ -388,12 +398,12 @@ export function ForumTagsSection({
                         onCheckedChange={(moderated) =>
                           onDraftChange(updateTag(draft, row.key, { moderated }))
                         }
-                        label={t("forum.settings.staffOnly", { name: row.name })}
+                        label={t("forum.settings.staffOnly", { name: label })}
                         hideLabel
                       />
                     </div>
 
-                    <Tooltip label={t("forum.settings.deleteTag", { name: row.name })}>
+                    <Tooltip label={t("forum.settings.deleteTag", { name: label })}>
                       <button
                         type="button"
                         onClick={() => requestDelete(row)}
@@ -421,14 +431,13 @@ export function ForumTagsSection({
             }}
           >
             <span className="w-6 shrink-0" aria-hidden="true" />
-            <EmojiButton
-              emoji={newEmoji}
-              label={t("forum.settings.newEmoji")}
-              open={emojiFor === NEW_ROW}
-              onToggle={() => setEmojiFor(emojiFor === NEW_ROW ? null : NEW_ROW)}
-              onClear={() => setNewEmoji(null)}
-              onPick={(value) => pickEmoji(NEW_ROW, value)}
-              onClose={() => setEmojiFor(null)}
+            <ForumTagIconPicker
+              tag={{ icon: newIcon, emoji: null }}
+              label={t("forum.settings.newIcon")}
+              open={iconFor === NEW_ROW}
+              onToggle={() => setIconFor(iconFor === NEW_ROW ? null : NEW_ROW)}
+              onPick={(icon) => pickIcon(NEW_ROW, icon)}
+              onClose={() => setIconFor(null)}
               disabled={full}
             />
             <input
@@ -471,7 +480,9 @@ export function ForumTagsSection({
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title={t("forum.settings.delete.title", { name: pendingDelete?.name ?? "" })}
+        title={t("forum.settings.delete.title", {
+          name: pendingDelete ? labelOf(pendingDelete) : "",
+        })}
         description={t("forum.settings.delete.body", {
           count: pendingDelete?.postCount ?? 0,
         })}
@@ -489,76 +500,3 @@ export function ForumTagsSection({
 }
 
 const NEW_ROW = "__new__";
-
-/**
- * The emoji square at the start of a row. Opens the app's emoji picker;
- * Delete or Backspace on it takes the emoji off.
- */
-function EmojiButton({
-  emoji,
-  label,
-  open,
-  onToggle,
-  onClear,
-  onPick,
-  onClose,
-  disabled = false,
-}: {
-  emoji: string | null;
-  label: string;
-  open: boolean;
-  onToggle: () => void;
-  onClear: () => void;
-  onPick: (value: string) => void;
-  onClose: () => void;
-  disabled?: boolean;
-}) {
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  // The picker is portalled out of the settings sheet, so the sheet's own
-  // Escape (which asks "leave without saving?") would win. While the picker
-  // is open, Escape belongs to it: caught first, at the window, and the
-  // keyboard goes back to the square that opened it.
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    function onKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key !== "Escape") {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-      buttonRef.current?.focus();
-    }
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [open, onClose]);
-  return (
-    <span className="relative shrink-0">
-      <Tooltip label={label}>
-        <button
-          ref={buttonRef}
-          type="button"
-          disabled={disabled}
-          aria-expanded={open}
-          onClick={onToggle}
-          onKeyDown={(event) => {
-            if (emoji && (event.key === "Backspace" || event.key === "Delete")) {
-              event.preventDefault();
-              onClear();
-            }
-          }}
-          className="flex h-10 w-10 items-center sm:h-8 sm:w-8 justify-center rounded-[var(--radius-control)] border border-border bg-surface-0 text-base hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-40"
-        >
-          {emoji ? (
-            <span aria-hidden="true">{emoji}</span>
-          ) : (
-            <Smile className="h-4 w-4 text-text-tertiary" aria-hidden="true" />
-          )}
-        </button>
-      </Tooltip>
-      {open && <EmojiPickerPanel onSelect={onPick} onClose={onClose} />}
-    </span>
-  );
-}

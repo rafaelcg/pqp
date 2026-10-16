@@ -38,6 +38,7 @@ import {
   SIDEBAR_THREADS_PER_CHANNEL,
   withProfileUpdate,
   applyLayoutToChannels,
+  applyServerOrder,
   layoutToPayload,
   CHANNEL_LAYOUT_OFF,
   CHANNEL_LAYOUT_STALE,
@@ -54,6 +55,7 @@ import type {
   ChannelKind,
   ChannelSession,
   ChannelType,
+  CommunityHomePost,
   CommunityListingNudge,
   DmSummary,
   MemberRole,
@@ -64,6 +66,7 @@ import type {
   User,
   VoiceRoomTransport,
 } from "@pqp/shared";
+import { ComposerReadOnlyNotice } from "@/components/chat/composer-read-only-notice";
 import { MessageComposer } from "@/components/chat/message-composer";
 import { VoiceNoteMiniPlayer } from "@/components/chat/voice-note-mini-player";
 import {
@@ -81,6 +84,18 @@ import { adoptVoiceTranscription } from "@/lib/voice-transcription-prefs";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
 import { BulkPurgeDialog } from "@/components/chat/bulk-purge-dialog";
 import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
+import {
+  ForwardPicker,
+  type ForwardedSummary,
+} from "@/components/forward/forward-picker";
+import { ForwardedToast } from "@/components/forward/forwarded-toast";
+import { NotInServerToast } from "@/components/forward/not-in-server-toast";
+import {
+  setForwardMemberServers,
+  startForwardConfig,
+  useForwardEnabled,
+  type ForwardSourceRequest,
+} from "@/lib/forward";
 import { ThreadPanel } from "@/components/chat/thread-panel";
 import {
   ReportDialog,
@@ -129,6 +144,10 @@ import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
+import {
+  SeasonalLookHint,
+  seasonalLookToOffer,
+} from "@/components/layout/seasonal-look-hint";
 import { NotifyOfferHint } from "@/components/layout/notify-offer-hint";
 import { BringFriendsServerProvider } from "@/components/layout/bring-friends-hint";
 import { FeatureHintProvider } from "@/components/layout/feature-hint";
@@ -171,12 +190,8 @@ import {
   moveMembersBit,
   moveOccupantSeat,
 } from "@/lib/voice-occupant-dnd";
-import {
-  requestUpdatePrompt,
-  useUpdatePromptShowing,
-  useUpdateWaiting,
-} from "@/lib/update-prompt-state";
 import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
+import { setSoundboardCatalogServer } from "@/lib/soundboard";
 import { isNotifyOfferSeen } from "@/lib/notify-offer-hint";
 import { startNotifyDefaultsConfig } from "@/lib/notify-defaults-config";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
@@ -367,6 +382,7 @@ import {
   listTimeouts,
   fetchMessages,
   fetchServers,
+  saveServerOrder,
   fetchUnread,
   fetchVoiceBackend,
   hideConversation,
@@ -423,6 +439,8 @@ import {
   takeInviteRef,
   takeJoinIntent,
   peekJoinIntent,
+  peekLiveChannelIntent,
+  takeLiveChannelIntent,
   takeWaitlistIntent,
   takeWaitlistIntentWithSource,
   WAITLIST_SOURCE_PARAM,
@@ -448,10 +466,17 @@ import {
 } from "@/components/watch-party/waitlist/watch-party-approved-toasts";
 import { sendFriendRequest } from "@/components/friends/friends-api";
 import { onboardingPath, shouldRunOnboarding } from "@/lib/onboarding";
-import { copyInvitePaste, setInviteCacheAccount } from "@/lib/invite-paste-copy";
+import {
+  copyInvitePaste,
+  inviteCodeFor,
+  setInviteCacheAccount,
+} from "@/lib/invite-paste-copy";
+import { bringCrewStrip } from "@/lib/bring-crew";
+import { useBringCrew } from "@/lib/use-bring-crew";
 import { track, trackFirstAction } from "@/lib/track";
 import { firstRunDismissedPatch } from "@/lib/first-run";
 import {
+  favoritesCollapseKey,
   favoritesForServer,
   writeFavoritesForServer,
 } from "@/lib/channel-favorites";
@@ -482,6 +507,7 @@ import { acknowledgeAcquisition, peekAcquisition } from "@/lib/acquisition";
 import { noteSignupCta, noteSignupReturn } from "@/lib/signup-assist";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
+import { BringCrewStrip } from "@/components/onboarding/bring-crew-strip";
 import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
 import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
 import { NudgeButton, useNudgeTrigger } from "@/components/dm/nudge-button";
@@ -570,8 +596,9 @@ import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-au
 import {
   channelListRetryDelayMs,
   createChannelListTickets,
-  vanishedChannelFallback,
+  vanishedChannelDecision,
 } from "@/lib/channel-list-refresh";
+import { useCollapsedCategories } from "@/lib/collapsed-categories";
 import {
   onConnectionCheckRequest,
   onSettingsRequest,
@@ -593,7 +620,14 @@ import {
   withServerBauNewest,
   withServerBauUnread,
 } from "@/lib/community-home";
-import { pickLivePartyChannel } from "@/lib/live-party-landing";
+import { pickArrivalPartyChannel } from "@/lib/live-party-landing";
+import { LivePreviewPanel } from "@/components/live-preview/live-preview-panel";
+import {
+  ClerkLivePreviewAuth,
+  ClerkSignUpReturn,
+} from "@/components/live-preview/live-preview-auth";
+import { heroHue } from "@/lib/hero-tint";
+import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
 import { CommunityHomePostHint } from "@/components/community-home/community-home-post-hint";
 import {
@@ -615,9 +649,16 @@ import {
   notifyStreamStarted,
   rememberActivityChannel,
   rememberServers,
+  resolveNotificationLevel,
   setNotificationBlockedAuthors,
   unreadByServer,
 } from "@/lib/notifications";
+import {
+  hydrateInBatches,
+  reconnectNeedsUnreadRefresh,
+  serversToHydrate,
+  visibleNeedsUnreadRefresh,
+} from "@/lib/unread-hydration";
 import {
   applyPttHeldChange,
   resetPttHeld,
@@ -639,8 +680,14 @@ import { useUserStatus } from "@/hooks/use-status";
 import { useAttentionReport } from "@/hooks/use-attention";
 import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
+import { newRailOrigin } from "@/lib/server-rail-reorder";
+import {
+  createServerOrderSaver,
+  type ServerOrderSaver,
+} from "@/lib/server-order-saver";
 import { adoptAccentHuePreference } from "@/lib/accent";
-import { adoptAppearancePreference, getAppearance } from "@/lib/appearance";
+import { getAppearance } from "@/lib/appearance";
+import { adoptLook } from "@/lib/choose-look";
 import { useRetroLook } from "@/hooks/use-appearance";
 import { useKonamiRetro } from "@/hooks/use-konami-retro";
 import { adoptRetroFound, startRetroLookFlag } from "@/lib/retro-look";
@@ -658,7 +705,9 @@ import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall, setWatchingParty } from "@/lib/in-call-state";
+import { useUpdateOffered } from "@/lib/update-prompt-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
+import { useChannelLivePreview } from "@/hooks/use-channel-live-preview";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
 import { useWatchNow, useWatchNowFlag } from "@/hooks/use-watch-now";
 import { useStreamAlertSettings } from "@/hooks/use-stream-alert-settings";
@@ -869,6 +918,10 @@ function ClerkAppGate() {
   const invitePreview = useSignedOutInvitePreview(
     isLoaded && !isSignedIn ? location.pathname : null,
   );
+  // The code again, for the live preview's listing (`invitePreview` carries
+  // no code, on purpose: it is the public body).
+  const inviteRoute = parseAppRoute(location.pathname);
+  const inviteCode = inviteRoute?.kind === "invite" ? inviteRoute.code : null;
   const desktop = getDesktop();
   const canDesktopAuth = typeof desktop?.startDesktopAuth === "function";
   const [waiting, setWaiting] = useState(false);
@@ -1198,6 +1251,41 @@ function ClerkAppGate() {
                   <p className="mt-4 max-w-sm text-pretty text-paper-muted">
                     {t("signedOut.invite.body")}
                   </p>
+                  {/* "Ao vivo agora · Assistir" when the invite opens a
+                      community whose live preview is on (the server only
+                      marks it then) and a watch party is live. Its sign-up
+                      keeps this invite path as the redirect, so the join
+                      happens exactly as it would from the button below. */}
+                  {invitePreview.livePreview && inviteCode && !canDesktopAuth ? (
+                    <div className="mt-6 w-full">
+                      <ClerkSignUpReturn redirectUrl={redirectUrl} />
+                      <ClerkLivePreviewAuth redirectUrl={redirectUrl}>
+                        {(auth) => (
+                          <LivePreviewPanel
+                            source={{ kind: "invite", code: inviteCode }}
+                            landing="/app"
+                            surface="invite"
+                            // The invite's public preview is all this page
+                            // has: name, icon and member count. No address,
+                            // tagline or category, so those parts stay out.
+                            community={{
+                              name: invitePreview.serverName,
+                              slug: null,
+                              tagline: null,
+                              category: null,
+                              memberCount:
+                                invitePreview.memberCount > 0 ? invitePreview.memberCount : null,
+                              iconUrl: resolveUploadedImageUrl(invitePreview.iconUrl),
+                              bannerUrl: null,
+                              hue: heroHue(inviteCode),
+                            }}
+                            auth={auth}
+                            onSignUpIntent={() => noteSignupCta("gate", "")}
+                          />
+                        )}
+                      </ClerkLivePreviewAuth>
+                    </div>
+                  ) : null}
                 </>
               ) : (
                 <>
@@ -1347,6 +1435,9 @@ function MainAppContent({
     setDraftsAccount(user?.id ?? null);
   }, [user?.id]);
   const [servers, setServers] = useState<Server[]>([]);
+  // The first list has arrived: an empty one is then a real answer (an account
+  // in no server), not "not loaded yet".
+  const [serversLoaded, setServersLoaded] = useState(false);
   const [channels, setChannels] = useState<Channel[]>([]);
   /**
    * Starts on the conversation view rather than on a server, because at this
@@ -1645,6 +1736,10 @@ function MainAppContent({
   const [wantsCargosHint, setWantsCargosHint] = useState(
     () => !isAutomatedBrowser() && !isCargosHintSeen(),
   );
+  // The seasonal look invite (Halloween, Christmas): which look it is for, or
+  // null out of season, once seen this season, or once dismissed this load.
+  const [seasonalLookOffer, setSeasonalLookOffer] = useState(seasonalLookToOffer);
+  const dismissSeasonalLook = useCallback(() => setSeasonalLookOffer(null), []);
   // The one-time "Ativar notificações" card. Like the cargos card it decides
   // for itself whether it was seen, and the queue has to know too: a card that
   // wants the corner and never draws would hold every tip behind it.
@@ -1738,6 +1833,8 @@ function MainAppContent({
   const [splitState, setSplitState] = useState<CallSplitState>({
     active: false,
     canSideBySide: false,
+    chatHidden: false,
+    stageHidden: false,
   });
   /**
    * THE WATCH PARTY'S ONE BAR (pass 2 of `docs/plans/WATCH_PARTY_UI.md`).
@@ -1763,7 +1860,9 @@ function MainAppContent({
   const handleSplitState = useCallback((next: CallSplitState) => {
     setSplitState((previous) =>
       previous.active === next.active &&
-      previous.canSideBySide === next.canSideBySide
+      previous.canSideBySide === next.canSideBySide &&
+      previous.chatHidden === next.chatHidden &&
+      previous.stageHidden === next.stageHidden
         ? previous
         : next,
     );
@@ -1809,6 +1908,7 @@ function MainAppContent({
     useState(false);
   const [channelSidebar, setChannelSidebar] =
     useState<ChannelSidebarPreference>("auto");
+  const collapsedCategories = useCollapsedCategories();
   useEffect(() => {
     setChannelSidebar(loadChannelSidebarPreference());
   }, []);
@@ -1894,7 +1994,9 @@ function MainAppContent({
     },
     [],
   );
-  const refreshChannelListRef = useRef<(serverId: string) => void>(() => {});
+  const refreshChannelListRef = useRef<
+    (serverId: string, confirmingVanishedId?: string | null) => void
+  >(() => {});
   /**
    * Servers a navigation is loading the channel list for, with how many. While
    * one is in flight `selectedChannelIdRef` may still name the channel of the
@@ -2250,6 +2352,14 @@ function MainAppContent({
   const [serverMembers, setServerMembers] = useState<ServerMember[]>([]);
   const [serverRoles, setServerRoles] = useState<ServerRole[]>([]);
   const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
+  // Encaminhar (`forward_messages`): what is being forwarded, and the toast
+  // that follows. Off, `requestForward` below keeps the old quote-into-the-
+  // composer behaviour, so a self-host or a flag that is off loses nothing.
+  const forwardEnabled = useForwardEnabled();
+  const [forwardSource, setForwardSource] = useState<ForwardSourceRequest | null>(null);
+  const [forwardedToast, setForwardedToast] = useState<
+    (ForwardedSummary & { key: number }) | null
+  >(null);
   const unreadHoldRef = useRef(new Set<string>());
   const [unreadHeldIds, setUnreadHeldIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -2637,6 +2747,55 @@ function MainAppContent({
   );
   const serversRef = useRef(servers);
   serversRef.current = servers;
+  // The server rail's order (`PUT /api/servers/order`). `railOriginRef` is this
+  // tab's own id, sent with a save and echoed on the frame the account's OTHER
+  // tabs get, so this one can skip its own echo. The saver sends one request at
+  // a time, coalesces a burst of moves and rolls back to the last order the
+  // server confirmed: see `lib/server-order-saver.ts` for why.
+  const railOriginRef = useRef<string>("");
+  if (railOriginRef.current === "") {
+    railOriginRef.current = newRailOrigin();
+  }
+  const railMovesRef = useRef(0);
+  const railSaverRef = useRef<ServerOrderSaver | null>(null);
+  if (railSaverRef.current === null) {
+    railSaverRef.current = createServerOrderSaver({
+      save: async (ids) => (await saveServerOrder(ids, railOriginRef.current)).serverIds,
+      current: () => serversRef.current.map((row) => row.id),
+      onConfirmed: (stored, latest) => {
+        if (latest) {
+          setServers((rows) => applyServerOrder(rows, stored));
+        }
+      },
+      onFailed: (confirmed) => {
+        setServers((rows) => applyServerOrder(rows, confirmed));
+        setAppNotice(null);
+        setAppError(translateMessage("chrome.railReorderFailed"));
+      },
+      onResync: () => {
+        // A read that started before the person moved something again is older
+        // than that move: `railMovesRef` says whether they did, and if so the
+        // read is dropped (the new move has its own save, and its own resync
+        // if another tab spoke meanwhile).
+        const moves = railMovesRef.current;
+        fetchServers()
+          .then(({ servers: list }) => {
+            if (railMovesRef.current !== moves) {
+              return;
+            }
+            setServers((rows) =>
+              applyServerOrder(
+                rows,
+                list.map((row) => row.id),
+              ),
+            );
+          })
+          .catch(() => {
+            // The next load reads it anyway.
+          });
+      },
+    });
+  }
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
   /**
@@ -2711,6 +2870,15 @@ function MainAppContent({
   // sheet is neither fetched nor shown there. Null is "not answered yet",
   // which asks the old way rather than skipping a disclosure by accident.
   const liveHlsConfig = useLiveHlsConfig(selectedServerId);
+  // "Prévia pública" in the open watch party's options: drawn only where the
+  // signed-out live preview could actually show this party.
+  const publicPreviewSeconds = useChannelLivePreview(
+    selection.kind === "server" &&
+      channels.find((channel) => channel.id === selectedChannelId)?.type === "watch_party"
+      ? selectedChannelId
+      : null,
+    liveHlsConfig,
+  );
   // `party_fast_start` (runtime flag, per server): the selected server's
   // answer is what the watch player reads, and the player chunk is fetched
   // as soon as it is on, not when the first playlist URL arrives.
@@ -2903,6 +3071,17 @@ function MainAppContent({
   const permsRef = useRef(perms);
   permsRef.current = perms;
   /**
+   * "Traz tua galera" (flag `discord_bring_crew`): who came over since the
+   * open server was copied from Discord, for whoever may manage it. Asks
+   * again as the member list changes length, which is what makes the count
+   * live. Drawn by `renderArrivalBanner`, in the arrival strip's slot.
+   */
+  const bringCrew = useBringCrew(
+    selectedServerId,
+    perms.can(Permission.MANAGE_SERVER),
+    serverMembers.length,
+  );
+  /**
    * Every `watch_party` channel on the open server this viewer may see the
    * history of, that actually has a broadcast to show -- see the long
    * comment on `watchPartyHistoryCandidates`. Computed here, ahead of every
@@ -2944,6 +3123,33 @@ function MainAppContent({
   const watchPartyHistoryChannels = watchPartyHistoryChannelsRef.current;
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
+  // The soundboard's catalog follows the call, not the panel: custom clips
+  // other people play must keep sounding while this person reads a text
+  // channel and the call stage (with the panel) is not mounted. The ref is
+  // set before the join resolves, so it is read only when the seat actually
+  // moves: a hop still in flight (or one that failed) must not point the
+  // catalog at a server this person is not in. A DM call has no library.
+  const soundboardSeatChannelId = voiceState.voiceChannelId ?? null;
+  const soundboardSeatServerRef = useRef<{
+    channelId: string | null;
+    serverId: string | null;
+  }>({ channelId: null, serverId: null });
+  useEffect(() => {
+    if (soundboardSeatServerRef.current.channelId !== soundboardSeatChannelId) {
+      soundboardSeatServerRef.current = {
+        channelId: soundboardSeatChannelId,
+        serverId: voiceServerIdRef.current,
+      };
+    }
+    const dm =
+      soundboardSeatChannelId !== null &&
+      conversations.some((one) => one.channelId === soundboardSeatChannelId);
+    setSoundboardCatalogServer(
+      soundboardSeatChannelId && !dm
+        ? soundboardSeatServerRef.current.serverId
+        : null,
+    );
+  }, [soundboardSeatChannelId, conversations]);
   // Windows desktop share sound: look up the call's per-server flag (and the
   // shell's self-test, when the flag is on) as soon as they are in the call,
   // so "share screen" never waits on the API. The ref is set before the join
@@ -3496,7 +3702,24 @@ function MainAppContent({
   // Conversas: the Ctrl/Cmd+K "ir pra" switcher.
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
+  /**
+   * When each channel's unread was last changed by something newer than any
+   * fetch in flight: a live frame, or the reader clearing it. A `loadUnread`
+   * response was computed before those, so it must not overwrite them.
+   */
+  const unreadTouchRef = useRef({
+    seq: 0,
+    at: new Map<string, number>(),
+    fetchByServer: new Map<string, number>(),
+  });
+  const touchUnread = useCallback((channelId: string) => {
+    const touch = unreadTouchRef.current;
+    touch.seq += 1;
+    touch.at.set(channelId, touch.seq);
+  }, []);
+
   const clearUnread = useCallback(async (channelId: string): Promise<string | null> => {
+    touchUnread(channelId);
     unreadHoldRef.current.delete(channelId);
     setUnreadHeldIds(new Set(unreadHoldRef.current));
     setUnread((prev) => {
@@ -3513,16 +3736,45 @@ function MainAppContent({
       const result = await readCursorQueue.run(channelId, () =>
         markChannelRead(channelId),
       );
+      // Touched again now that the server has the read: an unread read that
+      // began while this was in flight may have seen the old cursor.
+      touchUnread(channelId);
       return result.previousLastReadAt ?? null;
     } catch {
       // A missed read receipt only means a stale badge; not worth surfacing.
       return null;
     }
-  }, [readCursorQueue]);
+  }, [readCursorQueue, touchUnread]);
 
-  const loadUnread = useCallback(async (serverId: string) => {
+  const loadUnread = useCallback(async (serverId: string): Promise<boolean> => {
+    const touch = unreadTouchRef.current;
+    touch.seq += 1;
+    const startedAt = touch.seq;
     try {
-      const { unread: rows } = await fetchUnread(serverId);
+      const { unread: allRows } = await fetchUnread(serverId);
+      // Answers are applied in the order the reads STARTED: a read that
+      // finishes after a newer one has already been applied is stale, but an
+      // older answer that arrives first stands (it is the fallback if the
+      // newer read fails).
+      if ((touch.fetchByServer.get(serverId) ?? 0) > startedAt) {
+        return true;
+      }
+      touch.fetchByServer.set(serverId, startedAt);
+      // Rows whose channel changed after this read began (a live frame, or the
+      // reader clearing it) are newer than what the server answered.
+      const rows = allRows.filter(
+        (row) => (touch.at.get(row.channelId) ?? 0) <= startedAt,
+      );
+      // Say which server each row belongs to. The directory only knows the
+      // SELECTED server's channel list, so for any other server this is what
+      // lets the rail place the row on that server's icon (a channel the
+      // directory cannot place is skipped, by design). Never overwrites a
+      // named entry, so the open server's real list still wins.
+      for (const row of rows) {
+        if (row.count > 0 || row.mentions > 0) {
+          rememberActivityChannel(row.channelId, serverId, "server");
+        }
+      }
       setUnread((prev) => {
         const next = { ...prev };
         for (const row of rows) {
@@ -3543,9 +3795,57 @@ function MainAppContent({
         }
         return next;
       });
+      return true;
     } catch {
-      // Badges are cosmetic — never block the app on them.
+      // Badges are cosmetic — never block the app on them. The caller is told,
+      // so a hydration pass can try that server once more.
+      return false;
     }
+  }, []);
+
+  /**
+   * Fill the unread map for the servers that are not on screen (and, with
+   * `includeSelected`, the one that is). See `lib/unread-hydration.ts` for why
+   * the live frame alone cannot be trusted with the rail. One pass at a time:
+   * a newer pass makes the older one stop at its next batch.
+   */
+  const unreadPassRef = useRef(0);
+  const hydrateAllUnread = useCallback(
+    async ({ includeSelected }: { includeSelected: boolean }) => {
+      const pass = (unreadPassRef.current += 1);
+      const ids = serversToHydrate(serversRef.current, {
+        skipServerId: includeSelected ? null : selectedServerIdRef.current,
+        isMuted: (serverId) =>
+          resolveNotificationLevel(getNotificationState(), serverId, null) ===
+          "none",
+      });
+      await hydrateInBatches(ids, loadUnread, {
+        shouldStop: () => unreadPassRef.current !== pass,
+      });
+    },
+    [loadUnread],
+  );
+  const hydrateAllUnreadRef = useRef(hydrateAllUnread);
+  hydrateAllUnreadRef.current = hydrateAllUnread;
+
+  // A tab that sat hidden for a while (a laptop that slept, a backgrounded
+  // phone browser) may have lost its socket without being told, and the
+  // frames it missed are not replayed. Re-read the badges when it returns.
+  useEffect(() => {
+    let hiddenAt: number | null =
+      document.visibilityState === "hidden" ? Date.now() : null;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now();
+        return;
+      }
+      if (visibleNeedsUnreadRefresh(hiddenAt, Date.now())) {
+        void hydrateAllUnreadRef.current({ includeSelected: true });
+      }
+      hiddenAt = null;
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
 
   /**
@@ -4532,6 +4832,7 @@ function MainAppContent({
       }
       const channelId = message.channelId;
       const lastReadAt = new Date(created - 1).toISOString();
+      touchUnread(channelId);
       unreadHoldRef.current.add(channelId);
       unreadCursorByChannelRef.current[channelId] = lastReadAt;
       setUnreadHeldIds(new Set(unreadHoldRef.current));
@@ -4560,7 +4861,7 @@ function MainAppContent({
           // Badge is best-effort.
         });
     },
-    [loadUnread, readCursorQueue, selectedServerId],
+    [loadUnread, readCursorQueue, selectedServerId, touchUnread],
   );
 
   const handleMarkRead = useCallback(() => {
@@ -4618,6 +4919,30 @@ function MainAppContent({
     // second reconnect replaces the pending re-read instead of stacking one.
     let communityHomeReconnectTimer: ReturnType<typeof setTimeout> | null =
       null;
+
+    // The rail's unread for every server (`lib/unread-hydration.ts`): asked
+    // once after the first load, and again when a socket that was down long
+    // enough to have missed frames comes back. One slot, like the Baú re-read.
+    let unreadRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let unreadSocketClosedAt: number | null = null;
+    const scheduleUnreadRefresh = (includeSelected: boolean) => {
+      if (unreadRefreshTimer !== null) {
+        clearTimeout(unreadRefreshTimer);
+      }
+      // Jittered for the same reason the message refetch is: a deploy
+      // reconnects every open tab in the same few seconds. The boot call has a
+      // second job, which is to run after React has rendered the server list
+      // the bootstrap just set (the hydration reads it through a ref).
+      unreadRefreshTimer = setTimeout(
+        () => {
+          unreadRefreshTimer = null;
+          if (!cancelled) {
+            void hydrateAllUnreadRef.current({ includeSelected });
+          }
+        },
+        uniformJitterMs(300, RECONNECT_MESSAGES_JITTER_MAX_MS),
+      );
+    };
 
     function getReconnectMessagesRefetchState(channelId: string) {
       let state = reconnectMessagesRefetchState.get(channelId);
@@ -4764,7 +5089,7 @@ function MainAppContent({
         bindPreferenceSyncAccount(me.id);
         // Always called: with no stored look it still hands a Modo 2005
         // found before the look synced up to the account (`appearance.ts`).
-        adoptAppearancePreference(me.preferences?.appearance, readGeneration);
+        adoptLook(me.preferences?.appearance, readGeneration);
         adoptRetroFound(me.preferences?.easterEggs?.retro, readGeneration);
         const nextTheme = themeToAdopt(
           me.preferences?.theme,
@@ -4835,6 +5160,7 @@ function MainAppContent({
         communityHomeConfigRef.current = homeConfig;
         setCommunityHomeConfig(homeConfig);
         setServers(serverList);
+        setServersLoaded(true);
 
         // Conversations and blocks are loaded whatever the first view is: the
         // Home badge counts across the whole account, and the block list drives
@@ -4892,6 +5218,8 @@ function MainAppContent({
         }
 
         setBootstrapReady(true);
+        // The selected server was read above; every other one is read now.
+        scheduleUnreadRefresh(false);
 
         transport.onMessage((message) => {
           if (message.type === "watch-party-waitlist-approved") {
@@ -5038,6 +5366,7 @@ function MainAppContent({
             if (activity.channelId === selectedChannelIdRef.current) {
               return;
             }
+            touchUnread(activity.channelId);
             setUnread((prev) => {
               const current = prev[activity.channelId] ?? {
                 count: 0,
@@ -5224,6 +5553,22 @@ function MainAppContent({
             return;
           }
 
+          // Another tab or device of this account dragged its server rail. This
+          // tab follows, unless the frame is the echo of its own save (same
+          // `origin`) or a save of its own is still in the air: that answer is
+          // the truth, and applying an older frame first would flick the rail
+          // back for a moment, mid-drag.
+          if (message.type === "server-order-update") {
+            if (message.origin && message.origin === railOriginRef.current) {
+              return;
+            }
+            if (railSaverRef.current?.noteRemote()) {
+              return;
+            }
+            setServers((rows) => applyServerOrder(rows, message.serverIds));
+            return;
+          }
+
           // Another tab or device of this account changed its status. Without
           // this the user panel here read the old choice until a reload.
           if (message.type === "own-status") {
@@ -5263,7 +5608,19 @@ function MainAppContent({
                   fetched,
                   listTicket,
                 );
-                if (listIsCurrent) {
+                // The open channel missing from this list is not proof it is
+                // gone, so the list is not written (it would drop that row
+                // from the sidebar) and the `channels-update` path decides,
+                // with its own second list a second later.
+                const vanished =
+                  listIsCurrent &&
+                  !channelLoadsRef.current.has(message.serverId) &&
+                  vanishedChannelDecision(
+                    list,
+                    selectedChannelIdRef.current,
+                    null,
+                  ).action === "confirm";
+                if (listIsCurrent && !vanished) {
                   channelListTickets.wrote(listTicket);
                   setChannels(list);
                 }
@@ -5286,19 +5643,17 @@ function MainAppContent({
                     ),
                   );
                 }
-                const current = selectedChannelIdRef.current;
-                if (
-                  listIsCurrent &&
-                  !channelLoadsRef.current.has(message.serverId) &&
-                  current &&
-                  !list.some((channel) => channel.id === current)
-                ) {
-                  const next =
-                    list.find((channel) => channel.type === "text") ?? list[0];
-                  if (next) {
-                    setSelectedChannelId(next.id);
-                    selectedChannelIdRef.current = next.id;
-                  }
+                // One fallback path, which moves the URL with the selection:
+                // a fresh `channels-update` refetch, which confirms on its own
+                // timer before anybody is sent elsewhere.
+                if (vanished) {
+                  console.warn("[pqp] channel.vanished", {
+                    serverId: message.serverId,
+                    channelId: selectedChannelIdRef.current,
+                    step: "suspected",
+                    via: "permissions-update",
+                  });
+                  refreshChannelListRef.current(message.serverId);
                 }
               })
               .catch(() => {
@@ -5653,6 +6008,7 @@ function MainAppContent({
           // Keep media. A Fly restart closes /ws with 1001; ICE and LiveKit do
           // not need that socket once they are up. Resume reattaches the peer.
           voice.notifyDisconnected();
+          unreadSocketClosedAt = Date.now();
         });
 
         transport.onAuthUnavailable(() => {
@@ -5715,6 +6071,12 @@ function MainAppContent({
               }
             }, uniformJitterMs(0, RECONNECT_MESSAGES_JITTER_MAX_MS));
           }
+          // Unread badges are fed by live frames, which are not replayed: what
+          // arrived while the socket was down is only in the server's count.
+          if (reconnectNeedsUnreadRefresh(unreadSocketClosedAt, Date.now())) {
+            scheduleUnreadRefresh(true);
+          }
+          unreadSocketClosedAt = null;
           // --- forums --- the forum list refetches its first page: frames
           // sent while the socket was down are not replayed.
           dispatchForumReconnected();
@@ -5801,6 +6163,9 @@ function MainAppContent({
       }
       if (communityHomeReconnectTimer !== null) {
         clearTimeout(communityHomeReconnectTimer);
+      }
+      if (unreadRefreshTimer !== null) {
+        clearTimeout(unreadRefreshTimer);
       }
       voice.leave();
       transport.disconnect();
@@ -5993,7 +6358,11 @@ function MainAppContent({
    * retry: either would stop the open server's own refresh, and nothing
    * would start it again.
    */
-  function refreshChannelList(serverId: string, failedTries = 0) {
+  function refreshChannelList(
+    serverId: string,
+    failedTries = 0,
+    confirmingVanishedId: string | null = null,
+  ) {
     if (selectedServerIdRef.current !== serverId) {
       return;
     }
@@ -6011,26 +6380,67 @@ function MainAppContent({
         if (!current()) {
           return;
         }
-        channelListTickets.wrote(ticket);
         // Started before a channel this reader just created: keep it, or
         // the fallback below would take them off the channel they made.
         const list = channelListTickets.withCreated(serverId, fetched, ticket);
+        // Deleted under the person reading it: open another channel the same
+        // way a click would, so the transcript and the composer follow, not
+        // just the highlighted row. Only once a second list agrees
+        // (`vanishedChannelDecision`).
+        // Not while a navigation is loading this server: the selection is
+        // then still the previous server's channel (or a DM), which this
+        // list never had. That load picks the landing itself.
+        const decision = channelLoadsRef.current.has(serverId)
+          ? { action: "stay" as const }
+          : vanishedChannelDecision(
+              list,
+              selectedChannelIdRef.current,
+              confirmingVanishedId,
+            );
+        if (decision.action === "confirm") {
+          // Not written: a list that may be missing a channel by mistake
+          // would drop its row from the sidebar until the next fetch.
+          console.warn("[pqp] channel.vanished", {
+            serverId,
+            channelId: decision.channelId,
+            step: "confirming",
+            via: "channels-update",
+          });
+          // A second apart, so one bad moment on the server cannot answer
+          // twice. A newer refetch cancels this one and confirms afresh, and
+          // it cannot outlive a newer list: every refetch clears this timer
+          // as it starts, and every other fetch of the list takes a newer
+          // ticket, which makes `current()` below false.
+          const confirmId = decision.channelId;
+          channelListRetryTimerRef.current = setTimeout(() => {
+            channelListRetryTimerRef.current = null;
+            if (current()) {
+              refreshChannelList(serverId, 0, confirmId);
+            }
+          }, 1000);
+          return;
+        }
+        channelListTickets.wrote(ticket);
         if (channelListStaleRef.current === serverId) {
           channelListStaleRef.current = null;
         }
         setChannels(list);
-        // Deleted under the person reading it: open another channel the same
-        // way a click would, so the transcript and the composer follow, not
-        // just the highlighted row.
-        // Not while a navigation is loading this server: the selection is
-        // then still the previous server's channel (or a DM), which this
-        // list never had. That load picks the landing itself.
-        const fallback = channelLoadsRef.current.has(serverId)
-          ? { vanished: false as const }
-          : vanishedChannelFallback(list, selectedChannelIdRef.current);
-        if (fallback.vanished) {
-          if (fallback.nextId) {
-            void selectChannelRef.current(fallback.nextId, serverId);
+        if (confirmingVanishedId && decision.action === "stay") {
+          console.warn("[pqp] channel.vanished", {
+            serverId,
+            channelId: confirmingVanishedId,
+            step: "back-in-list",
+          });
+        }
+        if (decision.action === "leave") {
+          console.warn("[pqp] channel.vanished", {
+            serverId,
+            channelId: decision.channelId,
+            step: "leaving",
+            nextId: decision.nextId,
+          });
+          if (decision.nextId) {
+            void selectChannelRef.current(decision.nextId, serverId);
           } else {
             setSelectedChannelId(null);
             selectedChannelIdRef.current = null;
@@ -6049,13 +6459,14 @@ function MainAppContent({
         channelListRetryTimerRef.current = setTimeout(() => {
           channelListRetryTimerRef.current = null;
           if (current()) {
-            refreshChannelList(serverId, failedTries + 1);
+            refreshChannelList(serverId, failedTries + 1, confirmingVanishedId);
           }
         }, delay);
       },
     );
   }
-  refreshChannelListRef.current = (serverId) => refreshChannelList(serverId);
+  refreshChannelListRef.current = (serverId, confirmingVanishedId) =>
+    refreshChannelList(serverId, 0, confirmingVanishedId ?? null);
 
   /** Open one conversation, switching the sidebar to the home view with it. */
   /**
@@ -6227,6 +6638,59 @@ function MainAppContent({
     [forwardMessage, selectChannel, selectConversation, selectedServerId, t],
   );
 
+  /**
+   * "Encaminhar" on a chat message. A message in a server channel opens the
+   * picker (the server refuses a conversation message as a source, so those,
+   * and everything while the flag is off, keep the quote-into-the-composer
+   * behaviour they always had).
+   */
+  const requestForward = useCallback(
+    (message: ChatMessage) => {
+      const inConversation = conversationsRef.current.some(
+        (one) => one.channelId === message.channelId,
+      );
+      if (!forwardEnabled || inConversation || !selectedServerId) {
+        setForwardMessage(message);
+        return;
+      }
+      const channel = channels.find((one) => one.id === message.channelId);
+      setForwardSource({
+        kind: "message",
+        id: message.id,
+        // A restricted card names the one server it may travel inside; a plain
+        // message is forwarded from the server it is in.
+        serverId:
+          (message.forward?.restricted === true
+            ? message.forward.restrictedToServerId
+            : undefined) ?? selectedServerId,
+        title:
+          message.forward?.title ||
+          buildReplyExcerpt(message.forward?.excerpt || message.body) ||
+          t("forward.messageFrom", { name: message.authorName }),
+        // Private, or a channel this list does not hold (a thread or a forum
+        // post, whose own flag may not carry its parent's privacy): restricted
+        // to this server, the safe reading. The server enforces it anyway.
+        restricted:
+          !channel || channel.isPrivate === true || message.forward?.restricted === true,
+      });
+    },
+    [channels, forwardEnabled, selectedServerId, t],
+  );
+
+  /** "Encaminhar" on a Baú post: the picker, restricted when members-only. */
+  const requestForwardPost = useCallback(
+    (post: CommunityHomePost) => {
+      setForwardSource({
+        kind: "bau_post",
+        id: post.id,
+        serverId: post.serverId,
+        title: post.title?.trim() || post.teaser?.trim() || t("forward.postFallback"),
+        restricted: post.visibility === "members",
+      });
+    },
+    [t],
+  );
+
   /** Leave the conversation view open with nothing selected in it. */
   const selectHome = useCallback(() => {
     setSelection(HOME_SELECTION);
@@ -6245,6 +6709,12 @@ function MainAppContent({
        * fetched, so a join during a show opens the show.
        */
       liveParties?: readonly WatchParty[],
+      /**
+       * The channel a signed-out live preview was showing this person
+       * (`peekLiveChannelIntent`). Wins over the party order when it is in
+       * this server's list, and the stash is spent only then.
+       */
+      preferredChannelId: string | null = null,
     ) => {
       setChannelsLoading(true);
       beginChannelLoad(serverId);
@@ -6270,8 +6740,11 @@ function MainAppContent({
         void loadUnread(serverId);
         const server = serversRef.current.find((row) => row.id === serverId);
         const liveParty = liveParties
-          ? pickLivePartyChannel(liveParties, list)
+          ? pickArrivalPartyChannel(liveParties, list, preferredChannelId)
           : null;
+        if (liveParty !== null && liveParty === preferredChannelId) {
+          takeLiveChannelIntent(browserStorage());
+        }
         const land = liveParty
           ? { id: liveParty }
           : pickServerLandingTarget(
@@ -6565,6 +7038,18 @@ function MainAppContent({
         error instanceof Error ? error.message : "Failed to move channel",
       );
     }
+  }
+
+  /**
+   * The rail was reordered (drag, Alt+arrows, or the menu). Optimistic: the
+   * list moves now and the newest wanted order is saved by the saver, one
+   * request at a time. If a save fails the list goes back to the last order
+   * the server confirmed, with a line saying so.
+   */
+  function handleReorderServers(ids: string[]) {
+    railMovesRef.current += 1;
+    railSaverRef.current?.request(ids);
+    setServers((rows) => applyServerOrder(rows, ids));
   }
 
   function handleFavoriteChannelIdsChange(ids: string[]) {
@@ -8073,7 +8558,13 @@ function MainAppContent({
       ]);
       setServers(serverList);
       setSelection({ kind: "server", serverId });
-      await loadChannels(serverId, liveParties);
+      // A join that came out of the signed-out live preview lands back on the
+      // film the person was watching (`lib/live-preview.ts`).
+      await loadChannels(
+        serverId,
+        liveParties,
+        peekLiveChannelIntent(browserStorage()),
+      );
     },
     [loadChannels],
   );
@@ -9409,6 +9900,21 @@ function MainAppContent({
     voiceState.voiceChannelId,
   ]);
 
+  /** "Ver" on the toast: the first place the forward went. */
+  const viewForwarded = useCallback(
+    (summary: ForwardedSummary) => {
+      const target = summary.first;
+      if (target.kind === "conversation") {
+        void selectConversation(target.id);
+        return;
+      }
+      if (target.serverId) {
+        void applyChannelRoute(target.serverId, target.id);
+      }
+    },
+    [applyChannelRoute, selectConversation],
+  );
+
   /**
    * Everything the notification path needs to name a channel, conversations
    * included. Built here rather than in a sidebar because a sidebar unmounts
@@ -9538,6 +10044,18 @@ function MainAppContent({
     () => (funConfigUserId ? startFunConfig() : undefined),
     [funConfigUserId],
   );
+  // Encaminhar: which servers this account is in, so tapping a card from one it
+  // is not in says so instead of doing nothing. Unknown until the list loads.
+  useEffect(() => {
+    setForwardMemberServers(serversLoaded ? servers.map((one) => one.id) : null);
+    return () => setForwardMemberServers(null);
+  }, [servers, serversLoaded]);
+  // Encaminhar: whether the action exists (`forward_messages`), same refresh
+  // pass and the same gate as the config above.
+  useEffect(
+    () => (funConfigUserId ? startForwardConfig() : undefined),
+    [funConfigUserId],
+  );
   const nudgeShake = useNudgeShake(
     selection.kind === "dm" ? selectedChannelId : null,
   );
@@ -9632,13 +10150,10 @@ function MainAppContent({
     return ids;
   }, [conversations, voiceState.occupancy]);
 
-  const updatePromptShowing = useUpdatePromptShowing();
-  // The durable half: a build is precached and has not been taken. The rail
-  // keeps a way back to the notice for as long as this is true, so a snooze,
-  // a stray Escape or a three-hour call cannot strand somebody on an old
-  // bundle with no button to press.
-  const updateWaiting = useUpdateWaiting();
-  // Let the update card (mounted outside App) know when a reload would end a call.
+  // A new build to take: the quiet indicator (rail, phone tabs) draws itself;
+  // this only lets the narrow-window menu button wear a dot for it.
+  const updateOffered = useUpdateOffered();
+  // Let the update machinery (mounted outside App) know when a reload would end a call.
   useEffect(() => {
     setInCall(voiceState.status !== "idle");
     return () => setInCall(false);
@@ -10069,6 +10584,7 @@ function MainAppContent({
     ? {
         serverId: selectedServer.id,
         serverName: selectedServer.name,
+        serverIconUrl: resolveUploadedImageUrl(selectedServer.iconUrl),
         rooms: channels
           .filter((channel) => channel.type === "voice")
           .map((channel) => ({
@@ -10154,6 +10670,31 @@ function MainAppContent({
     // party surface makes (see `ArrivalSurface`). The Baú home keeps its own.
     if (surface !== "home" && watchNowStreams.length > 0) {
       return null;
+    }
+    // A server copied from Discord in the last week, for its owner: the
+    // counter of who came over replaces the arrival strip (whose owner
+    // variant says the same thing with less). Not over a live party.
+    const crew = bringCrewStrip(bringCrew.arrivals, bringCrew.dismissed);
+    if (
+      crew &&
+      surface !== "party" &&
+      selection.kind === "server" &&
+      !activeConversation &&
+      selectedServer
+    ) {
+      const serverId = selectedServer.id;
+      const importInvite = bringCrew.arrivals?.inviteCode ?? null;
+      return (
+        <BringCrewStrip
+          kind={crew.kind}
+          count={crew.count}
+          serverName={selectedServer.name}
+          resolveInviteCode={() =>
+            importInvite ? Promise.resolve(importInvite) : inviteCodeFor(serverId)
+          }
+          onDismiss={bringCrew.dismiss}
+        />
+      );
     }
     // A newcomer alone in a public community: the one thing that changes that
     // is bringing somebody, so this strip takes the arrival strip's place.
@@ -10347,6 +10888,8 @@ function MainAppContent({
     (perms.can(Permission.START_WATCH_PARTY, selectedChannel.id) ||
       perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id));
   const canManageServer = perms.can(Permission.MANAGE_SERVER);
+  const canManageSoundboard = perms.can(Permission.MANAGE_SOUNDBOARD);
+  const canManageEmoji = perms.can(Permission.MANAGE_EMOJI);
   const canManageWebhooks = perms.can(Permission.MANAGE_WEBHOOKS);
   const canManageMessages = perms.can(Permission.MANAGE_MESSAGES);
   const canManageNicknames = perms.can(Permission.MANAGE_NICKNAMES);
@@ -10491,7 +11034,6 @@ function MainAppContent({
   const campaignsYield =
     Boolean(selectedPartyLive) || watchNowStreams.length > 0;
   const cornerHint = winningCornerHint({
-    update: updatePromptShowing,
     communityHomePost: Boolean(
       communityHomePostToast &&
         communityHomePostToast.serverId === selectedServerId,
@@ -10519,6 +11061,8 @@ function MainAppContent({
       campaignsYield,
     }),
     voiceClean: wantsVoiceCleanHint,
+    seasonalLook:
+      seasonalLookOffer !== null && qgHintReady && !campaignsYield,
     mobileBeta: wantsMobileBeta && !campaignsYield,
     whatsNew: wantsWhatsNew && !campaignsYield,
     cargos:
@@ -10719,8 +11263,8 @@ function MainAppContent({
             liveAttachedHint === "bringFriends" && !viewingThisCall
           }
           onLeave={() => voice.leave()}
+          hideLeave={compact && callDockOnScreen}
           compact={compact}
-          hideActions={callDockOnScreen}
         />
       )}
       {/* Anchored above the user bar, never inside the icons-only rail:
@@ -10784,6 +11328,156 @@ function MainAppContent({
     </>
   );
 
+  /**
+   * THE CALL STAGE TAKES THE PAGE HEADER'S ROW in a server voice call when
+   * everything the header says is already on screen: the channel list is
+   * expanded beside the stage, so it names the room and lists its people,
+   * and the chat pane's own header (under the stage) carries the channel's
+   * tools instead. Anything else keeps the header: a phone (its nav button
+   * lives there), a folded list, the call docked in the composer, the chat
+   * put away, or not being in this channel's call at all.
+   */
+  // The room's row is really on screen: the list is expanded AND the room is
+  // not folded away inside a collapsed category. Both the stage (which then
+  // drops the room's name and the row of people) and the header read this
+  // one flag, so they cannot disagree about where the room is named.
+  // A favorited room is listed only under Favoritos, not in its category,
+  // so that section's fold is the one that hides it.
+  const roomIsFavorite = Boolean(
+    selectedChannel &&
+      selectedServerId &&
+      favoritesForServer(
+        user?.preferences?.favoriteChannels,
+        selectedServerId,
+      ).includes(selectedChannel.id),
+  );
+  // A watch party channel is never a row in the list (it has its own
+  // surface), so the list never names one.
+  const roomListedAsRow = !(
+    selectedChannel &&
+    isWatchPartyChannelsEnabled() &&
+    isWatchPartyChannelType(selectedChannel.type)
+  );
+  const voiceRoomRowVisible =
+    columnLayout &&
+    !sidebarIconsOnly &&
+    roomListedAsRow &&
+    (roomIsFavorite
+      ? !collapsedCategories.has(favoritesCollapseKey(selectedServerId!))
+      : !(
+          selectedChannel?.parentId &&
+          collapsedCategories.has(selectedChannel.parentId)
+        ));
+  const voiceStageOwnsHeader = Boolean(
+    selectedChannel &&
+      selectedChannel.kind === "server" &&
+      isVoiceRoomChannelType(selectedChannel.type) &&
+      !partyOwnsHeader &&
+      voiceState.voiceChannelId === selectedChannel.id &&
+      voiceState.status !== "idle" &&
+      voiceRoomRowVisible &&
+      stageShape === "expanded" &&
+      !splitState.chatHidden,
+  );
+
+  const channelHeaderTools = selectedChannel ? (
+    <>
+          {isChannelSessionScheduleEnabled() &&
+            canManageChannels &&
+            selectedChannel.kind === "server" &&
+            selectedChannel.type === "voice" && (
+            <Tooltip label={t("watchPartySchedule.header.schedule")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                data-schedule-session-button
+                aria-label={t("watchPartySchedule.header.schedule")}
+                onClick={() => setScheduleSheetOpen(true)}
+              >
+                <CalendarClock className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+          <Tooltip label={t("chrome.pins")}>
+            <button
+              type="button"
+              className={HEADER_ACTION_TILE}
+              onClick={() => setPinsOpen(true)}
+            >
+              <Pin className="h-4 w-4" />
+            </button>
+          </Tooltip>
+          {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
+            <Tooltip label={t("chrome.watchPartyHistory")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                data-channel-header-watch-party-history=""
+                aria-label={t("chrome.watchPartyHistory")}
+                onClick={() =>
+                  setWatchPartyHistoryChannelId(selectedChannel.id)
+                }
+              >
+                <History className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+          {(canManageChannels || canManageRoles) &&
+            selectedChannel.kind === "server" && (
+            <Tooltip label={t("chrome.channelSettings")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                data-channel-header-settings=""
+                aria-label={t("chrome.channelSettings")}
+                onClick={() =>
+                  setChannelSettings({
+                    channelId: selectedChannel.id,
+                    section: canManageChannels ? "overview" : "permissions",
+                    forceAdvanced: false,
+                  })
+                }
+              >
+                <Settings className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+          {/* The roster toggle, last in the row — the same position and the
+              same icon Discord puts it in, because that is where the muscle
+              memory of everybody arriving from Discord already points. Shown at
+              every width: below the column breakpoint it opens the list as a
+              drawer rather than not at all. */}
+          {memberSidebarAvailable && (
+            <Tooltip label={t("memberList.toggle")}>
+              <button
+                type="button"
+                aria-pressed={memberSidebar.open && !openThread}
+                data-member-sidebar-toggle=""
+                className={cn(
+                  HEADER_ACTION_TILE,
+                  memberSidebar.open && !openThread && "text-paper",
+                )}
+                onClick={() => {
+                  // A thread occupies the same right column as the roster. The
+                  // button still means "show me the people": close the thread
+                  // first, and open the list if it was already hidden.
+                  if (openThread) {
+                    closeThreadPanel();
+                    if (!memberSidebar.open) {
+                      memberSidebar.toggle();
+                    }
+                    return;
+                  }
+                  memberSidebar.toggle();
+                }}
+              >
+                <Users className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+    </>
+  ) : null;
+
   const chatPane = selectedChannel ? (
     <FileDropZone
       {...nudgeShake}
@@ -10820,16 +11514,26 @@ function MainAppContent({
           />
         </Suspense>
       )}
-      {!partyOwnsHeader && !retroWindow && (
+      {!partyOwnsHeader && !voiceStageOwnsHeader && !retroWindow && (
       <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4">
         <button
           type="button"
-          className="mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
+          className="relative mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
           aria-label={phoneShell ? t("phoneTabs.back") : t("chrome.openNav")}
           data-phone-back={phoneShell ? "" : undefined}
           onClick={() => setMobileNavOpen(true)}
         >
           {phoneShell ? <ChevronLeft className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          {/* On a narrow window without the phone tabs the rail (and the
+              update indicator at its foot) is behind this button: a dot says
+              there is something in there. */}
+          {!phoneShell && updateOffered && (
+            <span
+              aria-hidden="true"
+              data-update-menu-dot=""
+              className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+            />
+          )}
         </button>
         {/* The channel list's own fold control lives in ITS header now,
             beside settings, members and invite (see `channelSidebarToggle`
@@ -10971,100 +11675,9 @@ function MainAppContent({
             })()}
           {/* The side-by-side / stacked switch moved into the chat pane's
               own header (2026-09-13), beside the hide controls it belongs
-              with. */}
-          {isChannelSessionScheduleEnabled() &&
-            canManageChannels &&
-            selectedChannel.kind === "server" &&
-            selectedChannel.type === "voice" && (
-            <Tooltip label={t("watchPartySchedule.header.schedule")}>
-              <button
-                type="button"
-                className={HEADER_ACTION_TILE}
-                data-schedule-session-button
-                aria-label={t("watchPartySchedule.header.schedule")}
-                onClick={() => setScheduleSheetOpen(true)}
-              >
-                <CalendarClock className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
-          <Tooltip label={t("chrome.pins")}>
-            <button
-              type="button"
-              className={HEADER_ACTION_TILE}
-              onClick={() => setPinsOpen(true)}
-            >
-              <Pin className="h-4 w-4" />
-            </button>
-          </Tooltip>
-          {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
-            <Tooltip label={t("chrome.watchPartyHistory")}>
-              <button
-                type="button"
-                className={HEADER_ACTION_TILE}
-                data-channel-header-watch-party-history=""
-                aria-label={t("chrome.watchPartyHistory")}
-                onClick={() =>
-                  setWatchPartyHistoryChannelId(selectedChannel.id)
-                }
-              >
-                <History className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
-          {(canManageChannels || canManageRoles) &&
-            selectedChannel.kind === "server" && (
-            <Tooltip label={t("chrome.channelSettings")}>
-              <button
-                type="button"
-                className={HEADER_ACTION_TILE}
-                data-channel-header-settings=""
-                aria-label={t("chrome.channelSettings")}
-                onClick={() =>
-                  setChannelSettings({
-                    channelId: selectedChannel.id,
-                    section: canManageChannels ? "overview" : "permissions",
-                    forceAdvanced: false,
-                  })
-                }
-              >
-                <Settings className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
-          {/* The roster toggle, last in the row — the same position and the
-              same icon Discord puts it in, because that is where the muscle
-              memory of everybody arriving from Discord already points. Shown at
-              every width: below the column breakpoint it opens the list as a
-              drawer rather than not at all. */}
-          {memberSidebarAvailable && (
-            <Tooltip label={t("memberList.toggle")}>
-              <button
-                type="button"
-                aria-pressed={memberSidebar.open && !openThread}
-                data-member-sidebar-toggle=""
-                className={cn(
-                  HEADER_ACTION_TILE,
-                  memberSidebar.open && !openThread && "text-paper",
-                )}
-                onClick={() => {
-                  // A thread occupies the same right column as the roster. The
-                  // button still means "show me the people": close the thread
-                  // first, and open the list if it was already hidden.
-                  if (openThread) {
-                    closeThreadPanel();
-                    if (!memberSidebar.open) {
-                      memberSidebar.toggle();
-                    }
-                    return;
-                  }
-                  memberSidebar.toggle();
-                }}
-              >
-                <Users className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
+              with. The channel's own tools are `channelHeaderTools`, shared
+              with that header for when this one stands down. */}
+          {channelHeaderTools}
         </div>
       </header>
       )}
@@ -11155,6 +11768,10 @@ function MainAppContent({
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.sharePublishRecovering
             }
+            shareSilent={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.watchPartyShareSilent
+            }
             someoneIsSharing={(
               voiceState.occupancy[selectedChannel.id] ?? []
             ).some((peer) => peer.sharingScreen)}
@@ -11223,6 +11840,7 @@ function MainAppContent({
             lowLatencyAvailable={
               liveHlsConfig ? liveHlsConfig.lowLatency?.available === true : null
             }
+            publicPreviewSeconds={publicPreviewSeconds}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -11394,11 +12012,13 @@ function MainAppContent({
         preference={callSplit}
         onPreferenceChange={handleCallSplitChange}
         onSplitStateChange={handleSplitState}
-        // No header while the call is docked in the composer: the header
-        // exists to sit between a stage and the transcript, and there is
-        // no stage above the transcript then.
-        chatHeader={callDockOnScreen ? undefined : {
+        // No header while the stage is folded into the composer's strip:
+        // the header exists to sit between a stage and the transcript, and
+        // there is no stage above the transcript then. A stage showing
+        // pictures keeps it even though its controls are docked.
+        chatHeader={stageShape === "compact" ? undefined : {
           title: t("chat.paneTitle"),
+          actions: voiceStageOwnsHeader ? channelHeaderTools : undefined,
           tabs: partyOwnsHeader
             ? {
                 items: [
@@ -11496,6 +12116,10 @@ function MainAppContent({
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.sharePublishRecovering
             }
+            shareSilent={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.watchPartyShareSilent
+            }
             someoneIsSharing={(
               voiceState.occupancy[selectedChannel.id] ?? []
             ).some((peer) => peer.sharingScreen)}
@@ -11564,6 +12188,7 @@ function MainAppContent({
             lowLatencyAvailable={
               liveHlsConfig ? liveHlsConfig.lowLatency?.available === true : null
             }
+            publicPreviewSeconds={publicPreviewSeconds}
             onMicGainChange={(value) => voice.setStreamMicGain(value)}
             onDisplayGainChange={(value) => voice.setStreamDisplayGain(value)}
             micLevelDb={voice.micLevelDb}
@@ -11660,6 +12285,7 @@ function MainAppContent({
               </div>
             )}
             channelId={selectedChannel.id}
+            serverId={selectedServer?.id ?? null}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}
             serverIconUrl={selectedServer?.iconUrl ?? null}
@@ -11674,6 +12300,13 @@ function MainAppContent({
             onLeave={() => voice.leave()}
             onToggleMute={() => voice.toggleMute()}
             onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
+            onDismissError={() => voice.dismissError()}
+            // The expanded channel list already lists this room's people.
+            roomListOnScreen={voiceRoomRowVisible}
+            // The chat pane is put away, and the composer the controls dock into
+            // with it.
+            composerHidden={splitState.chatHidden}
+            stageHidden={splitState.stageHidden}
             onRepairAudio={() => void voice.repairAudio()}
             onDismissAudioHealthPrompt={() => voice.dismissAudioHealthPrompt()}
             onToggleCamera={() => void voice.toggleCamera()}
@@ -11701,6 +12334,8 @@ function MainAppContent({
             }
             onDismissShare={(peerId) => voice.dismissShare(peerId)}
             onWatchShare={(peerId) => voice.watchShare(peerId)}
+            onDismissCamera={(peerId) => voice.dismissCamera(peerId)}
+            onWatchCamera={(peerId) => voice.watchCamera(peerId)}
             onRetryPeer={(peerId) => {
               void voice.retryPeer(peerId);
             }}
@@ -11733,6 +12368,11 @@ function MainAppContent({
           onLeave={() => voice.leave()}
           onToggleMute={() => voice.toggleMute()}
           onDismissMicFallbackNotice={() => voice.dismissMicFallbackNotice()}
+          composerHidden={splitState.chatHidden}
+          stageHidden={splitState.stageHidden}
+          onDismissError={() => voice.dismissError()}
+          onSetPeerVolume={stableOnSetPeerVolume}
+          onSetScreenVolume={stableOnSetScreenVolume}
           onRepairAudio={() => void voice.repairAudio()}
           onDismissAudioHealthPrompt={() => voice.dismissAudioHealthPrompt()}
           onToggleCamera={() => void voice.toggleCamera()}
@@ -11871,7 +12511,7 @@ function MainAppContent({
         unreadSince={unreadSince}
         editMessageId={editMessageId}
         onEditMessageHandled={clearEditMessageId}
-        onForward={setForwardMessage}
+        onForward={requestForward}
         onMarkUnread={handleMarkUnread}
         onMarkRead={handleMarkRead}
         onLiveEndChange={handleMessageListLiveEnd}
@@ -11907,6 +12547,20 @@ function MainAppContent({
           onDismiss={() => setSanctionNotice(null)}
         />
       )}
+      {!canSendHere && (
+        // SEND_MESSAGES denied here: no box to type into (the message used to
+        // appear, then fail with "You don't have permission to send here").
+        // The call dock and music bar still live in this well, so they are
+        // drawn here while the composer, which normally holds them, is hidden.
+        <div>
+          {musicInComposer ? <MusicComposer voiceState={voiceState} /> : null}
+          <CallDockOutlet channelId={selectedChannel.id} />
+          <ComposerReadOnlyNotice />
+        </div>
+      )}
+      {/* Hidden, never unmounted, while the permission is gone: the draft and
+          attachments are the composer's own state and come back with it. */}
+      <div hidden={!canSendHere}>
       <MessageComposer
         variant={isWatchPartySplit ? "stream" : "default"}
         // Remount per channel: the draft is component state, so without this a
@@ -11980,16 +12634,17 @@ function MainAppContent({
             }
           },
         }}
-        disabled={!selectedChannelId || messagesLoading}
+        disabled={!selectedChannelId || messagesLoading || !canSendHere}
         slowModeUntil={chat.getSlowModeHeldUntil() || null}
         placeholder={t("composer.placeholder", { name: selectedChannel.name })}
         // The voice-only call bar, when this channel is the one we are in.
         // Keyed by channel so the composer of any other channel stays plain.
-        dock={<CallDockOutlet channelId={selectedChannel.id} />}
+        dock={canSendHere ? <CallDockOutlet channelId={selectedChannel.id} /> : undefined}
         music={
-          musicInComposer ? <MusicComposer voiceState={voiceState} /> : undefined
+          musicInComposer && canSendHere ? <MusicComposer voiceState={voiceState} /> : undefined
         }
       />
+      </div>
       </CallSplit>
       </CallDockProvider>
     </FileDropZone>
@@ -12291,8 +12946,6 @@ function MainAppContent({
         whatsNewSelected={whatsNewOpen}
         whatsNewUnread={whatsNewUnread}
         onOpenWhatsNew={handleOpenWhatsNew}
-        updateWaiting={updateWaiting}
-        onOpenUpdate={() => requestUpdatePrompt()}
         pinnedConversations={pinnedConversations}
         pinnedUnread={unread}
         conversationsHome={conversationsHome}
@@ -12319,6 +12972,7 @@ function MainAppContent({
           void loadChannels(id);
           setMobileNavOpen(true);
         }}
+        onReorderServers={handleReorderServers}
         onCreateServer={() => setShowCreateServer(true)}
         onJoinServer={() => setInviteMode("join")}
         onInvite={openInviteForServer}
@@ -12493,6 +13147,9 @@ function MainAppContent({
           canManage={canManageChannels}
           canManageRoles={canManageRoles}
           canManageMessages={canManageMessages}
+          canManageSoundboard={canManageSoundboard && voiceConfig.soundboard === true}
+          canManageEmoji={canManageEmoji}
+          canManageServer={canManageServer}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
           channelLive={voiceState.channelLive}
@@ -12868,6 +13525,7 @@ function MainAppContent({
             refreshSignal={communityHomeUpdateNudge}
             channels={channels}
             onOpenChannel={(channelId) => void openChannel(channelId)}
+            onForwardPost={forwardEnabled ? requestForwardPost : undefined}
             canSendInChannel={(channelId) =>
               perms.serverBits === 0n ||
               perms.can(Permission.SEND_MESSAGES, channelId)
@@ -13022,7 +13680,7 @@ function MainAppContent({
                   subjectName: message.authorName,
                 })
               }
-              onForward={setForwardMessage}
+              onForward={requestForward}
               droppedFiles={forumDroppedFiles}
               onDroppedFilesTaken={() => setForumDroppedFiles(null)}
             />
@@ -13098,7 +13756,7 @@ function MainAppContent({
           roles={serverRoles}
           unreadHeld={unreadHeldIds.has(openThread.thread.channelId)}
           unreadSince={threadUnreadSince}
-          onForward={setForwardMessage}
+          onForward={requestForward}
           onMarkUnread={handleMarkUnread}
           onMarkRead={() => clearUnread(openThread.thread.channelId)}
           onSent={() => {
@@ -13227,6 +13885,8 @@ function MainAppContent({
         currentUserId={user?.id ?? null}
         canManageRoles={canManageRoles}
         canManageServer={canManageServer}
+        canManageSoundboard={canManageSoundboard && voiceConfig.soundboard === true}
+        canManageEmoji={canManageEmoji}
         canManageWebhooks={canManageWebhooks}
         canModerateQueue={
           moderationBits.kick ||
@@ -13384,6 +14044,10 @@ function MainAppContent({
         me={storiesSelf}
         bauEnabled={communityHomeEnabled}
         voiceRooms={storiesVoiceRooms}
+        serverBrand={(serverId) => {
+          const server = servers.find((one) => one.id === serverId);
+          return server ? { name: server.name, iconUrl: resolveUploadedImageUrl(server.iconUrl) } : null;
+        }}
         onJoinCall={handleStoryJoinCall}
         onOpenRoles={(serverId) => {
           if (serverId !== selectedServerIdRef.current) {
@@ -13392,6 +14056,25 @@ function MainAppContent({
           setServerSettingsSection("roles");
           setServerSettingsOpen(true);
         }}
+      />
+
+      <ForwardPicker
+        open={forwardSource !== null}
+        source={forwardSource}
+        servers={servers}
+        conversations={conversations}
+        currentServerId={selectedServerId}
+        userId={user?.id ?? null}
+        onClose={() => setForwardSource(null)}
+        onForwarded={(summary) =>
+          setForwardedToast({ ...summary, key: Date.now() })
+        }
+      />
+      <NotInServerToast />
+      <ForwardedToast
+        summary={forwardedToast}
+        onView={viewForwarded}
+        onDismiss={() => setForwardedToast(null)}
       />
 
       <ForwardDialog
@@ -13630,6 +14313,11 @@ function MainAppContent({
       <NotifyOfferHint
         enabled={effectiveCornerHint === "notifyOffer"}
         onDismiss={() => setWantsNotifyOfferCard(false)}
+      />
+      <SeasonalLookHint
+        look={seasonalLookOffer}
+        enabled={effectiveCornerHint === "seasonalLook"}
+        onDismiss={dismissSeasonalLook}
       />
       <CargosHint
         enabled={effectiveCornerHint === "cargos"}

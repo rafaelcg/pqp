@@ -159,6 +159,20 @@ data class BauPost(
     val commentTeaser: List<BauComment> = emptyList(),
     val publishedAt: String? = null,
     val createdAt: String,
+    /**
+     * The post's public page (`https://pqp.gg/c/<slug>/p/<id>`), sent ONLY
+     * while it qualifies: published, free, in a community with a public
+     * address, with the instance and the `bau_public_posts` flag on. Null from
+     * an older API. Compartilhar shows only while this is set, and the phone
+     * never builds the address itself ([BauPublicShare]).
+     */
+    val publicUrl: String? = null,
+    /**
+     * Automatic subtitles of an uploaded video, or null: none made yet, the
+     * `community_home_video_captions` flag is off for the server, not a video,
+     * or an older API. The words are fetched when the video is played.
+     */
+    val captions: BauPostCaptions? = null,
 ) {
     val isMembersOnly: Boolean get() = visibility == "members"
 

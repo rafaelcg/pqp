@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { DiscordImportPreview } from "@/components/layout/discord-import-preview";
+import { BringCrewAnnouncement } from "@/components/onboarding/bring-crew-announcement";
+import { showsCrewAnnouncement } from "@/lib/bring-crew";
 import { ServerReadyPanel } from "@/components/onboarding/server-ready-panel";
 import { shareInviteUrl, type InviteRef } from "@/lib/share-invite";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -163,6 +165,11 @@ export function CreateServerDialog({
     serverId: string;
     invite: Invite | null;
     fromImport: boolean;
+    /**
+     * The import's last screen is "Traz tua galera" (flag
+     * `discord_bring_crew`, answered by the apply for the new server).
+     */
+    bringCrew: boolean;
   } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const copyTimer = useRef<number | null>(null);
@@ -249,6 +256,7 @@ export function CreateServerDialog({
         serverId: created.server.id,
         invite,
         fromImport: false,
+        bringCrew: false,
       });
       setStep("done");
     } catch (err) {
@@ -329,6 +337,7 @@ export function CreateServerDialog({
         serverId: created.server.id,
         invite: created.invite,
         fromImport: true,
+        bringCrew: created.bringCrew === true,
       });
       setStep("done");
     } catch (err) {
@@ -355,13 +364,20 @@ export function CreateServerDialog({
     });
   }, [locale, plan?.templateUpdatedAt]);
 
+  // The announcement is drawn only once the invite exists; the title and body
+  // follow it, so a failed invite mint (the panel shows its retry) does not
+  // say "paste the announcement" over nothing.
+  const crewAnnouncement = done ? showsCrewAnnouncement(done) : false;
+
   const title =
     step === "paste"
       ? t("importDiscord.title")
       : step === "preview"
         ? t("importDiscord.preview.title")
         : step === "done"
-          ? t("importDiscord.done.title")
+          ? crewAnnouncement
+            ? t("importDiscord.done.crewTitle")
+            : t("importDiscord.done.title")
           : t("communities.create.title");
 
   const description =
@@ -370,9 +386,11 @@ export function CreateServerDialog({
       : step === "preview"
         ? t("importDiscord.preview.subtitle", { name: plan?.serverName ?? "" })
         : step === "done"
-          ? done?.fromImport
-            ? t("importDiscord.done.body")
-            : t("invite.done.body")
+          ? crewAnnouncement
+            ? t("importDiscord.done.crewBody")
+            : done?.fromImport
+              ? t("importDiscord.done.body")
+              : t("invite.done.body")
           : t("communities.create.body");
 
   const size = step === "preview" || step === "done" ? "lg" : "md";
@@ -542,14 +560,24 @@ export function CreateServerDialog({
 
         {step === "done" && done && (
           <div className="space-y-4">
+            {/* "Traz tua galera": the announcement is the thing to copy, so
+                it comes first; the bare link stays under it for a DM. */}
+            {crewAnnouncement && done.invite && (
+              <BringCrewAnnouncement
+                serverName={done.serverName}
+                inviteCode={done.invite.code}
+                onCopyFailed={() => setError(t("importDiscord.error.copyFailed"))}
+              />
+            )}
             <ServerReadyPanel
               invite={done.invite}
               inviteRef={done.fromImport ? "discord" : inviteRef}
+              showPastes={!done.fromImport}
               retrying={busy}
               onRetry={() => void retryInvite()}
               onCopyFailed={() => setError(t("importDiscord.error.copyFailed"))}
             />
-            {done.fromImport && (
+            {done.fromImport && !done.bringCrew && (
             <label className="block text-sm text-paper">
               {t("importDiscord.done.pasteLabel")}
               <textarea

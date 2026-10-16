@@ -11,6 +11,7 @@ import {
 import type { ReactNode } from "react";
 import { formatBadgeCount, type UnreadState } from "@/components/layout/channel-list";
 import { ServerIcon } from "@/components/layout/server-identity";
+import { UpdateIndicator } from "@/components/layout/update-indicator";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -64,6 +65,7 @@ export function PhoneServersScreen({
         title={t("phoneTabs.servidores")}
         actions={
           <>
+            <UpdateIndicator variant="row" className="mr-1" />
             {onOpenCommunities && (
               <button
                 type="button"
@@ -167,7 +169,10 @@ export function PhoneYouScreen({
   const { t } = useTranslation();
   return (
     <section data-phone-screen="tu" aria-label={t("phoneTabs.tu")} className={SCREEN}>
-      <ScreenHeader title={t("phoneTabs.tu")} />
+      <ScreenHeader
+        title={t("phoneTabs.tu")}
+        actions={<UpdateIndicator variant="row" onOpenWhatsNew={onOpenWhatsNew} className="mr-1" />}
+      />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
         <button
           type="button"

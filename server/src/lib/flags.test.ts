@@ -65,10 +65,14 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   turn_prefer_static: (raw) => raw === "true",
   read_cache: offWords,
   // New with the flag, so there was no old reader: this is its definition.
+  user_stats: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
   voice_audio_self_heal: offWords,
   // New with the flag, so there was no old reader: this is its definition.
   ws_auth_admission: offWords,
   community_home: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  forward_messages: (raw) => raw === "true",
   community_home_vip: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   community_home_translation: (raw) => raw === "true",
@@ -78,6 +82,9 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   bau_custom_cover: offWords,
   community_home_video_captions: (raw) => raw === "true",
   bau_post_push: (raw) => raw === "true",
+  bau_follow: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  bau_public_posts: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   bau_latest_preview: offWords,
   // New with the flag, so there was no old reader: this is its definition.
@@ -104,9 +111,12 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   watch_now_banner: (raw) => raw === "true",
   stream_start_notifications: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
+  live_preview: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
   desktop_notify_default_on: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   voice_notes: (raw) => raw === "true",
+  soundboard: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   voice_note_transcription: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
@@ -130,8 +140,11 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   stories: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   stories_friends: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition. A kill switch: on unless off.
+  stories_eager_uploads: offWords,
   // New with the flag, so there was no old reader: this is its definition.
   mixed_channel_list: (raw) => raw === "true",
+  discord_bring_crew: (raw) => raw === "true",
 };
 
 const SAMPLES = [

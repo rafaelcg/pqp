@@ -64,7 +64,7 @@ export function WatchPartyBarSlot({
             ? // THE STATUS LINE OVER THE TOP EDGE OF THE PICTURE (pass 3): the
               // host's transmission readout, a dot and one sentence, where a
               // strip above the split used to be.
-              `pointer-events-none absolute inset-x-0 top-0 ${STAGE_LAYER.chrome} flex items-start px-3 pt-2 empty:hidden [&>*]:pointer-events-auto`
+              `pointer-events-none absolute inset-x-0 top-0 ${STAGE_LAYER.chrome} flex flex-col items-start gap-1.5 px-3 pt-2 empty:hidden [&>*]:pointer-events-auto`
             : "flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden",
         "has-[[data-watch-party-on-air-strip]]:bg-danger-soft/90 has-[[data-watch-party-on-air-strip]]:bg-none",
         className,

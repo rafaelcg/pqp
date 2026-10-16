@@ -417,8 +417,8 @@ export async function decideReply(message, runtime) {
  *
  * There is no fallback sentence anywhere below, and that is the single most
  * important line in this function. `fallbackAnswer` exists because somebody who
- * typed `@manual_bot` is owed an answer, and "essa eu não sei responder,
- * @rafa consegue te dizer" is one. Nobody typed anything here. A bot that walks
+ * typed `@manual_bot` is owed an answer, and "essa eu não sei responder. já
+ * chamei a equipe (@rafa)" is one. Nobody typed anything here. A bot that walks
  * into a quiet channel to announce that it cannot help has added a message and
  * no information, which is precisely the noise this feature is one bad decision
  * away from becoming. It also means no escalation ping: the questions that
@@ -942,11 +942,13 @@ async function main() {
         question,
       )
         ? "NAO_SEI"
-        : /iphone|celular/i.test(question)
+        : /iphone/i.test(question)
           ? "no app do iphone dá pra assistir. transmitir a tela do iphone existe no código, mas ainda não foi testado num aparelho de verdade. no safari do iphone só dá pra assistir."
-          : /tela|qualidade|resolu|som|[áa]udio|voz|desktop|c[óo]digo|aberto/i.test(question)
-            ? "a captura é 1080p30 e não tem ajuste manual de qualidade. quanto menos gente assistindo, mais nítido fica."
-            : "NAO_SEI",
+          : /android|celular/i.test(question)
+            ? "o app de android tá na google play, em pqp.gg/android. dá pra assistir e compartilhar a tela. o som do celular junto deve funcionar no android 10 ou mais novo, mas ainda não foi confirmado num aparelho. câmera ainda não. no iphone tem o beta em pqp.gg/beta."
+            : /tela|qualidade|resolu|som|[áa]udio|voz|desktop|c[óo]digo|aberto/i.test(question)
+              ? "tem ajuste, sim: Configurações, Voz e vídeo, Qualidade do vídeo enviado, de 360p a 1080p. é um teto: se a conexão não aguenta, a imagem diminui pra não travar."
+              : "NAO_SEI",
   };
   /**
    * The same fixture, in the shape the unprompted parser expects.

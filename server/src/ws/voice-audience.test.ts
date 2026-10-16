@@ -827,3 +827,32 @@ describe("a mesh room", () => {
     });
   });
 });
+
+describe("the soundboard follows the microphone", () => {
+  it("turning audience mode on mid-call stops the audience playing clips", async () => {
+    process.env.SOUNDBOARD = "true";
+    try {
+      const host = await join("host", MESH_ROOM);
+      const member = await join("member", MESH_ROOM);
+      const play = () =>
+        handleVoiceMessage(
+          { socket: member.socket, user: asUser("member") },
+          { type: "soundboard-play", channelId: MESH_ROOM, soundId: "builtin:palmas" },
+        );
+
+      await play();
+      expect(framesOf(host, "soundboard-play")).toHaveLength(1);
+
+      await setVoiceAudienceMode(MESH_ROOM, true, "host");
+      expect(last(member, "voice-speak-changed")).toMatchObject({ canSpeak: false });
+      await play();
+      expect(framesOf(host, "soundboard-play")).toHaveLength(1);
+
+      await setVoiceAudienceMode(MESH_ROOM, false, "host");
+      await play();
+      expect(framesOf(host, "soundboard-play")).toHaveLength(2);
+    } finally {
+      delete process.env.SOUNDBOARD;
+    }
+  });
+});

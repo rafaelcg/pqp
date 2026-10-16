@@ -84,6 +84,11 @@ interface VoiceStatusBarProps {
   onToggleScreenShare?: () => void;
   onOpen: () => void;
   onLeave: () => void;
+  /**
+   * Drop the hang-up button. The 72px rail uses it when the composer dock is
+   * on screen and already carries Leave; the full sidebar card always keeps it.
+   */
+  hideLeave?: boolean;
   /** One-shot share / Watch party coachmark when the stage is not on screen. */
   shareHintEnabled?: boolean;
   /** One-shot bring-friends coachmark when the stage is not on screen. */
@@ -94,11 +99,7 @@ interface VoiceStatusBarProps {
    * are on the stage, which is what the collapsed sidebar made room for.
    */
   compact?: boolean;
-  /**
-   * The call's own bar is on screen (docked in the composer, see
-   * `call-dock.tsx`), with these same camera and share buttons on it. This
-   * strip then keeps the sentence and the way out and drops the second copy.
-   */
+  /** Drop the camera and share row. Nothing in the app sets this today. */
   hideActions?: boolean;
 }
 
@@ -131,6 +132,7 @@ export function VoiceStatusBar({
   onToggleScreenShare,
   onOpen,
   onLeave,
+  hideLeave = false,
   shareHintEnabled = false,
   bringFriendsHintEnabled = false,
   compact = false,
@@ -215,6 +217,7 @@ export function VoiceStatusBar({
             </Button>
           </Tooltip>
         )}
+        {!hideLeave && (
         <Tooltip label={t("voice.bar.leave")} side="right">
           <Button
             variant="ghost"
@@ -225,12 +228,13 @@ export function VoiceStatusBar({
             <PhoneOff className="h-4 w-4 text-danger" />
           </Button>
         </Tooltip>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="border-t border-ink-4/60 bg-ink px-2 py-2">
+    <div data-voice-status-bar="" className="border-t border-ink-4/60 bg-ink px-2 py-2">
       {/* Above the strip, out of the flow: in it the card lifted the whole
           bar (and the user row under it) by its own height. */}
       {(shareHintEnabled || bringFriendsHintEnabled) && (
@@ -286,19 +290,19 @@ export function VoiceStatusBar({
         {connected && (
           <VoiceQualityMeter quality={quality} compact className="shrink-0" />
         )}
-        {/* This widget is pinned to the bottom-left corner, so every bubble in
-            it points up and away from the window edge rather than off it. */}
+        {!hideLeave && (
         <Tooltip label={t("voice.bar.leave")}>
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 shrink-0"
+            className="h-7 w-7 shrink-0 text-paper-muted hover:text-danger"
             aria-label={t("voice.bar.leave")}
             onClick={onLeave}
           >
-            <PhoneOff className="h-4 w-4 text-danger" />
+            <PhoneOff className="h-4 w-4" />
           </Button>
         </Tooltip>
+        )}
       </div>
 
       {connected && (

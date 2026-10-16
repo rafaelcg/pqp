@@ -89,6 +89,8 @@ const presence = vi.hoisted(() => ({
 }));
 
 vi.mock("../voice/hls-viewer-counts.js", () => ({
+  // user-stats.ts reads this at import, through voice.ts.
+  HLS_VIEWER_ROW_RETENTION_HOURS: 24,
   presentHlsViewers: async (
     _channelId: string,
     _startedAt: number,

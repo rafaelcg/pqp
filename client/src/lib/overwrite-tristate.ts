@@ -25,6 +25,7 @@ export const CHANNEL_OVERWRITE_BITS_VOICE = [
   "CONNECT",
   "SPEAK",
   "STREAM",
+  "USE_SOUNDBOARD",
 ] as const satisfies readonly PermissionFlagKey[];
 
 /**
@@ -37,6 +38,7 @@ export const CHANNEL_OVERWRITE_BITS_WATCH_PARTY = [
   "CONNECT",
   "SPEAK",
   "START_WATCH_PARTY",
+  "USE_SOUNDBOARD",
 ] as const satisfies readonly PermissionFlagKey[];
 
 export type OverwriteState = "allow" | "inherit" | "deny";

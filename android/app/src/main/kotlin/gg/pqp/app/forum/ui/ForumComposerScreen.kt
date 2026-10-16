@@ -495,7 +495,7 @@ private fun TagPicker(state: ForumComposerState, onToggle: (String) -> Unit) {
             val on = tag.id in state.tagIds
             val full = !on && state.tagIds.size >= ForumLimits.MAX_TAGS_PER_POST
             ForumFilterChip(
-                label = tag.name,
+                label = tag.displayName(),
                 selected = on,
                 showClose = false,
                 trailingIcon = when {
@@ -503,7 +503,11 @@ private fun TagPicker(state: ForumComposerState, onToggle: (String) -> Unit) {
                     tag.moderated -> PqpIcons.StaffOnly
                     else -> null
                 },
-                leading = tag.emoji?.takeIf { it.isNotBlank() }?.let { emoji -> { Text(emoji) } },
+                leading = if (tag.hasGlyph()) {
+                    { ForumTagGlyph(tag, size = 16.dp) }
+                } else {
+                    null
+                },
                 onClick = { onToggle(tag.id) },
                 modifier = Modifier.alpha(if (full) 0.45f else 1f),
                 testTag = "forum.composer.tag.${tag.id}",
@@ -519,8 +523,18 @@ private fun TagPicker(state: ForumComposerState, onToggle: (String) -> Unit) {
             )
         }
     }
+    // The server's refusal first: it knows a tag binds even when this screen
+    // has none to show (a failed read), and the re-read it triggers brings the
+    // picker back.
     if (state.error == ForumComposerError.TagRequired) {
         FieldError(stringResource(R.string.forum_composer_tags_required_error))
+    } else if (state.tagsNoneToPick) {
+        Text(
+            stringResource(R.string.forum_composer_tags_none_to_pick),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp).testTag("forum.composer.tagsNone"),
+        )
     } else if (state.tagIds.size >= ForumLimits.MAX_TAGS_PER_POST) {
         Text(
             stringResource(R.string.forum_composer_tags_max, ForumLimits.MAX_TAGS_PER_POST),

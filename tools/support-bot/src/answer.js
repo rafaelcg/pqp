@@ -78,9 +78,9 @@ export const UNKNOWN_SENTINEL = "NAO_SEI";
  */
 export function fallbackAnswer(ownerHandle, { canEscalate = true } = {}) {
   if (canEscalate && ownerHandle) {
-    return `essa eu não sei responder. @${String(ownerHandle).replace(/^@/, "")} consegue te dizer.`;
+    return `essa eu não sei responder. já chamei a equipe (@${String(ownerHandle).replace(/^@/, "")}), é só esperar um pouco.`;
   }
-  return "essa eu não sei responder. o Rafael responde por aqui, é só esperar um pouco.";
+  return "essa eu não sei responder. a equipe te responde por aqui, é só esperar um pouco.";
 }
 
 /**

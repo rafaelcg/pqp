@@ -68,6 +68,13 @@ export const AUDIT_ACTIONS = [
    */
   "server.icon_update",
   "server.banner_update",
+  /**
+   * A custom emoji added, renamed or removed. Target is the emoji; `changes`
+   * carries the name (old and new on a rename), never the storage key.
+   */
+  "emoji.create",
+  "emoji.update",
+  "emoji.delete",
   "server.sso_domain_update",
   "member.sso_join",
   /**
@@ -201,6 +208,32 @@ export const AUDIT_ACTIONS = [
   "forum.settings_update",
   /** A forum webhook's tag allowlist, default tags or dedupe window (P1b). */
   "webhook.forum_settings",
+  /**
+   * A soundboard clip added, renamed or re-levelled, or deleted. Audio is
+   * not scanned, so "who put this clip on the server" has to have an answer.
+   * The row targets the clip and carries its name in `changes`, because a
+   * deleted clip's id points at nothing.
+   */
+  "soundboard.create",
+  "soundboard.update",
+  "soundboard.delete",
+  /**
+   * Seguir (following a Baú into a channel). Written in the DESTINATION server
+   * for a follow set up or removed there, and for one that paused itself
+   * (`actorId` null: the system). Target is the follow; `changes` names the
+   * source server and the channel, because either may be gone later.
+   */
+  "bau_follow.create",
+  "bau_follow.delete",
+  "bau_follow.pause",
+  "bau_follow.resume",
+  /** Written in the SOURCE server: a follower removed, a server blocked or unblocked. */
+  "bau_follow.remove_follower",
+  "bau_follow.block",
+  "bau_follow.unblock",
+  /** Written in the SOURCE server: the owner's "Permitir seguir" switch moved. */
+  "bau_follow.allow",
+  "bau_follow.disallow",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

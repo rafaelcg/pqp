@@ -38,6 +38,9 @@ vi.mock("./services/slow-mode.js", () => ({
 vi.mock("./services/forums.js", () => ({
   sweepForumPostShells: vi.fn(async () => 0),
 }));
+vi.mock("./services/soundboard.js", () => ({
+  sweepSoundboardUploads: vi.fn(async () => undefined),
+}));
 vi.mock("./services/connections.js", () => ({
   sweepExpiredConnectionStates: vi.fn(async () => 0),
 }));
@@ -72,6 +75,14 @@ vi.mock("./services/voice-occupancy.js", () => ({
     minutesPruned: 0,
   })),
 }));
+vi.mock("./services/user-stats.js", () => ({
+  USER_STATS_SAMPLE_INTERVAL_MS: 60_000,
+  USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS: 15 * 60_000,
+  userStats: {
+    sample: vi.fn(async () => ({ source: "local" as const, written: 0 })),
+    copyWatchParties: vi.fn(async () => 0),
+  },
+}));
 vi.mock("./services/watch-parties.js", () => ({
   sweepWatchPartyHosts: vi.fn(async () => ({ ended: [] })),
 }));
@@ -91,6 +102,17 @@ vi.mock("./services/story-media.js", () => ({
   })),
   processStoryVideos: vi.fn(async () => ({ storyId: null, outcome: "idle" as const })),
 }));
+// Seguir: `bau-follow.test.ts` pins what the delivery tick does.
+vi.mock("./services/bau-follow-delivery.js", () => ({
+  runBauFollowTick: vi.fn(async () => ({
+    retracted: 0,
+    updated: 0,
+    enqueued: 0,
+    delivered: 0,
+    failed: 0,
+    paused: 0,
+  })),
+}));
 vi.mock("./services/stories.js", () => ({
   storyAudienceTargets: vi.fn(async () => ({ serverIds: [], friends: false })),
 }));
@@ -106,6 +128,10 @@ vi.mock("./services/channel-layout.js", () => ({
   listSidebarChannelIds: vi.fn(async () => []),
 }));
 vi.mock("./ws/chat.js", () => ({ notifyChannelsUpdate: vi.fn(async () => {}) }));
+// `server-emoji.test.ts` pins what the emoji quarantine sweep does.
+vi.mock("./services/server-emoji-scan.js", () => ({
+  sweepQuarantinedServerEmoji: vi.fn(async () => 0),
+}));
 
 import {
   sweepOrphanedAttachments,
@@ -120,6 +146,7 @@ import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.j
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { sweepForumPostShells } from "./services/forums.js";
+import { sweepSoundboardUploads } from "./services/soundboard.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
 import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
 import { startSpeechJobPoller } from "./services/speech-worker.js";
@@ -127,11 +154,17 @@ import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 import { sweepWatchPartyHosts } from "./services/watch-parties.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { processStoryVideos, sweepStories } from "./services/story-media.js";
+import { runBauFollowTick } from "./services/bau-follow-delivery.js";
 import { runChannelLayoutMigrations } from "./services/channel-layout.js";
+import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
 } from "./services/voice-occupancy.js";
+import {
+  USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS,
+  userStats,
+} from "./services/user-stats.js";
 import {
   ATTACHMENT_SWEEP_INTERVAL_MS,
   CHANNEL_SESSION_REMINDER_INTERVAL_MS,
@@ -212,11 +245,16 @@ describe("cold jobs", () => {
     // the Baú video subtitles sweep (a minute, asserted below); 22 with the
     // forum shell sweep (five minutes, asserted below); 24 with the stories
     // sweep (a minute) and the stories video job (5 s), both asserted below;
-    // 25 with the channel layout migration job (a minute, asserted below).
+    // 25 with the channel layout migration job (a minute, asserted below);
+    // 26 with the soundboard upload sweep (a minute, asserted below);
+    // 27 with the custom emoji quarantine sweep (hourly, asserted below); 29
+    // with the Retrospectiva's seat sampler (a minute) and watched-party copy
+    // (15 minutes), both asserted below; 30 with the Seguir delivery tick (10 s,
+    // asserted below).
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(25);
+    expect(jobs.count).toBe(30);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -238,6 +276,10 @@ describe("cold jobs", () => {
     expect(sweepCommunityHomeTranslations).toHaveBeenCalledTimes(4);
     // And four of the video subtitles sweep, on the same minute.
     expect(sweepCommunityHomeCaptions).toHaveBeenCalledTimes(4);
+    // The Retrospectiva's seat sampler: a minute, none at boot, like occupancy.
+    expect(userStats.sample).toHaveBeenCalledTimes(4);
+    // The watched-party copy runs every 15 minutes, so not yet at four.
+    expect(userStats.copyWatchParties).not.toHaveBeenCalled();
     // The stories expiry sweep: a minute, so four. It has no boot run: a
     // minute is the whole grace the 24 h promise allows anyway.
     expect(sweepStories).toHaveBeenCalledTimes(4);
@@ -246,6 +288,11 @@ describe("cold jobs", () => {
     expect(runChannelLayoutMigrations).toHaveBeenCalledTimes(4);
     // The stories video job: every 5 s, idle here, so once per tick.
     expect(processStoryVideos).toHaveBeenCalledTimes(48);
+    // The Seguir delivery tick: every 10 s, none at boot (the publish routes
+    // kick it, and the first tick is ten seconds away).
+    expect(runBauFollowTick).toHaveBeenCalledTimes(24);
+    // The soundboard upload sweep: a minute, so four, and none at boot.
+    expect(sweepSoundboardUploads).toHaveBeenCalledTimes(4);
 
     await vi.advanceTimersByTimeAsync(PENDING_DELETION_SWEEP_INTERVAL_MS);
     expect(sweepPendingAccountDeletions).toHaveBeenCalledTimes(1);
@@ -256,6 +303,8 @@ describe("cold jobs", () => {
     await vi.advanceTimersByTimeAsync(ATTACHMENT_SWEEP_INTERVAL_MS);
     // Boot sweep plus the first hourly tick.
     expect(sweepOrphanedAttachments).toHaveBeenCalledTimes(2);
+    // The emoji quarantine sweep: hourly, no boot run.
+    expect(sweepQuarantinedServerEmoji).toHaveBeenCalledTimes(1);
     expect(pruneAuditLog).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(DAILY_MS);
@@ -274,6 +323,11 @@ describe("cold jobs", () => {
     // not by anything on the media path. Same cadence as the reminders on
     // purpose: losing a host is a scheduling fact, not a stream one.
     expect(sweepWatchPartyHosts).toHaveBeenCalled();
+    // A day and more has passed: the copy has ticked every 15 minutes, which
+    // is well inside the viewer table's 24h prune.
+    expect(
+      vi.mocked(userStats.copyWatchParties).mock.calls.length,
+    ).toBeGreaterThanOrEqual(DAILY_MS / USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS);
   });
 
   it("a failing sweep is logged and the timer survives", async () => {

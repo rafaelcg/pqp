@@ -143,10 +143,16 @@ final class ForumTests: XCTestCase {
                 thumbnailUrl: image, thumbnailVideoUrl: video
             )
         }
-        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1, image: "https://x/a.png")), "📷 Image")
-        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1, video: "https://x/a.mp4")), "🎬 Video")
+        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1, image: "https://x/a.png")), "Image")
+        XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1, video: "https://x/a.mp4")), "Video")
         XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 3, video: "https://x/a.mp4")), "3 attachments")
         XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1)), "1 attachment")
+        // The picture before the words is an SF Symbol, never an emoji in the copy.
+        XCTAssertEqual(ForumPostCard.previewSymbol(for: summary(count: 1, image: "https://x/a.png")), "photo")
+        XCTAssertEqual(ForumPostCard.previewSymbol(for: summary(count: 1, video: "https://x/a.mp4")), "video")
+        XCTAssertNil(ForumPostCard.previewSymbol(for: summary(count: 3, video: "https://x/a.mp4")))
+        XCTAssertNil(ForumPostCard.previewSymbol(for: summary(count: 1, video: "https://x/a.mp4", words: "olha")))
+        XCTAssertNil(ForumPostCard.previewSymbol(for: summary(count: 1)))
         // Words always win over the file label.
         XCTAssertEqual(ForumPostCard.previewText(for: summary(count: 1, video: "https://x/a.mp4", words: "olha")), "olha")
     }
