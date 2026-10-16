@@ -729,7 +729,7 @@ final class HomeModel {
         // nicety and must never hold the hub back.
         // A pass cancelled half way must not leave its replacement waiting out
         // the throttle with the other servers never read.
-        if unreadPassRunning { unreadPassAt = nil }
+        if unreadPassRunningId != nil { unreadPassAt = nil }
         unreadTask?.cancel()
         unreadTask = Task { await self.hydrateServerUnread() }
     }
@@ -818,7 +818,9 @@ final class HomeModel {
     @ObservationIgnored private var unreadTask: Task<Void, Never>?
     @ObservationIgnored private var unreadPassAt: Date?
     @ObservationIgnored private var unreadPass = 0
-    @ObservationIgnored private var unreadPassRunning = false
+    /// The pass that is running, by identity: an older pass unwinding after a newer
+    /// one started must not mark the newer one as finished.
+    @ObservationIgnored private var unreadPassRunningId: Int?
     /// When a live frame last touched each server, in the order frames came,
     /// so a read that began earlier cannot overwrite what a frame just said.
     @ObservationIgnored private var activitySeq = 0
@@ -833,10 +835,10 @@ final class HomeModel {
               ServerUnread.needsPass(last: unreadPassAt, now: Date(), force: force)
         else { return }
         unreadPassAt = Date()
-        unreadPassRunning = true
-        defer { unreadPassRunning = false }
         unreadPass += 1
         let pass = unreadPass
+        unreadPassRunningId = pass
+        defer { if unreadPassRunningId == pass { unreadPassRunningId = nil } }
         let preferences = session.preferences
         let ids = ServerUnread.serversToHydrate(servers, skipping: session.openedServerId) {
             ServerUnread.isServerMuted($0.id, preferences: preferences)
