@@ -156,6 +156,15 @@ if fewer than three did. Served as `bringCrew` on `POST /api/import/discord/appl
 (read for the server just made, so the global value decides the last screen)
 and `enabled` on `GET /api/servers/:id/import-arrivals`. Web only. See
 `docs/DISCORD_IMPORT.md` §"Bring your people".
+`DISCORD_IMPORT_EXISTING` (`discord_import_existing`, **per server**, default off,
+born as a flag): importing a Discord layout INTO a community that already exists.
+Strictly additive (new categories, channels and, if ticked, new cargos; nothing
+existing is deleted, renamed, moved or re-permissioned). Read per request for the
+server being imported into: off, `GET /api/servers/:id/discord-import/config`
+answers `enabled: false` and the preview and apply routes are a 404. Served to the
+settings row as `enabled` on that config route; the dashboard override for one
+server is the way to turn it on first. Web only. See `docs/DISCORD_IMPORT.md`
+§"Into a server that already exists".
 `WATCH_PARTY_SERVER_AUDIENCE` (`watch_party_server_audience`, **per server**, default
 off, born as a flag): the in-app watch party count is the server's, distinct
 accounts on the playlist from every API machine, instead of the sockets one

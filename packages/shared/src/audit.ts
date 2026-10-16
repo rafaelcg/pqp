@@ -102,6 +102,14 @@ export const AUDIT_ACTIONS = [
    * room started as a Discord copy.
    */
   "server.discord_import",
+  /**
+   * A Discord layout added to a community that already existed (flag
+   * `discord_import_existing`). Counts and the template code, never the
+   * snapshot. Separate from `server.discord_import` on purpose: that one marks
+   * a room that STARTED as a copy and feeds the "Traz tua galera" window and
+   * the import metrics, none of which a merge into an old server should touch.
+   */
+  "server.discord_import_merge",
   "invite.create",
   "invite.delete",
   "webhook.create",
