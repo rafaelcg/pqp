@@ -1681,6 +1681,16 @@
         }
       }
     },
+    "Anyone who can hear them can read the text. The audio goes through a transcription service. It applies to the next messages you send; the ones already sent stay as they are." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem pode ouvir também lê o texto. O áudio passa por um serviço de transcrição. Vale pros próximos áudios que tu mandar; os que já foram ficam como estão."
+          }
+        }
+      }
+    },
     "Anyone who opens your profile will read it, with %@'s name on it. You can take it down later." : {
       "localizations" : {
         "pt-BR" : {
@@ -2821,6 +2831,16 @@
         }
       }
     },
+    "Could not transcribe this message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra transcrever esse áudio"
+          }
+        }
+      }
+    },
     "Couldn't load everyone." : {
       "localizations" : {
         "pt-BR" : {
@@ -3497,6 +3517,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Calma! Espera uns segundinhos pra chamar a atenção de novo."
+          }
+        }
+      }
+    },
+    "Easy, try again in a moment" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calma, tenta de novo daqui a pouco"
           }
         }
       }
@@ -5551,6 +5581,16 @@
         }
       }
     },
+    "No speech in this message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não tem fala nesse áudio"
+          }
+        }
+      }
+    },
     "No threads here" : {
       "localizations" : {
         "pt-BR" : {
@@ -7201,6 +7241,16 @@
         }
       }
     },
+    "Shows the text under the voice messages you receive. Off, you see no transcripts at all." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostra o texto embaixo dos áudios que tu recebe. Desligado, tu não vê nenhuma transcrição."
+          }
+        }
+      }
+    },
     "Similar questions" : {
       "localizations" : {
         "pt-BR" : {
@@ -7627,6 +7677,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar menos"
+          }
+        }
+      }
+    },
+    "Show less" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver menos"
           }
         }
       }
@@ -8117,6 +8177,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Valeu. Isso ajuda."
+          }
+        }
+      }
+    },
+    "That did not work. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isso não funcionou. Tenta de novo."
           }
         }
       }
@@ -8781,6 +8851,36 @@
         }
       }
     },
+    "Transcribe" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcrever"
+          }
+        }
+      }
+    },
+    "Transcribe my voice messages" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcrever meus áudios"
+          }
+        }
+      }
+    },
+    "Transcribing…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcrevendo…"
+          }
+        }
+      }
+    },
     "Transfer" : {
       "localizations" : {
         "pt-BR" : {
@@ -9207,6 +9307,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mensagem de voz · %@"
+          }
+        }
+      }
+    },
+    "Voice messages" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mensagens de voz"
           }
         }
       }
@@ -10437,6 +10547,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar a transmissão"
+          }
+        }
+      }
+    },
+    "Show transcripts" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar transcrições"
           }
         }
       }
@@ -12587,6 +12707,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "O texto está grande demais pra um post."
+          }
+        }
+      }
+    },
+    "The text shows up under the audio, for people who would rather read." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O texto aparece embaixo do áudio, pra quem prefere ler."
           }
         }
       }

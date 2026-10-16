@@ -26,23 +26,29 @@ struct VoiceNote: Codable, Hashable, Sendable {
     /// An AAC copy the worker makes for an Opus note (Chrome and Firefox record
     /// WebM, which AVPlayer cannot play). Presigned like the original.
     var playbackUrl: String?
+    /// What the note says, when the server read it with a transcript block (the
+    /// flag is on where the note lives and its sender allowed it). Settles later
+    /// on a `voice-note-transcript` frame.
+    var transcript: VoiceNoteTranscript?
 
     init(
         durationMs: Int,
         waveform: String = "",
         listenedByMe: Bool? = nil,
         listenedBy: [VoiceListener]? = nil,
-        playbackUrl: String? = nil
+        playbackUrl: String? = nil,
+        transcript: VoiceNoteTranscript? = nil
     ) {
         self.durationMs = durationMs
         self.waveform = waveform
         self.listenedByMe = listenedByMe
         self.listenedBy = listenedBy
         self.playbackUrl = playbackUrl
+        self.transcript = transcript
     }
 
     private enum CodingKeys: String, CodingKey {
-        case durationMs, waveform, listenedByMe, listenedBy, playbackUrl
+        case durationMs, waveform, listenedByMe, listenedBy, playbackUrl, transcript
     }
 
     init(from decoder: Decoder) throws {
@@ -55,6 +61,9 @@ struct VoiceNote: Codable, Hashable, Sendable {
         // An empty string is not a URL; treat it as absent so "pending" holds.
         let playback = (try? c.decodeIfPresent(String.self, forKey: .playbackUrl)) ?? nil
         playbackUrl = (playback?.isEmpty == false) ? playback : nil
+        // Lenient like every field past the duration: a block this build cannot
+        // read costs the transcript line, never the note.
+        transcript = (try? c.decodeIfPresent(VoiceNoteTranscript.self, forKey: .transcript)) ?? nil
     }
 
     /// Whether this person has NOT heard the note yet. Unknown reads as heard,
