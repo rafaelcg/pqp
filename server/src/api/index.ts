@@ -1636,6 +1636,21 @@ async function requireServerChannel(channelId: string) {
 }
 
 /**
+ * `requireServerChannel` for a route that reads or writes something a
+ * channel's members see (a webhook's name and URL, a delivery target). A
+ * manager whose view of the channel is denied gets the same 404 a channel they
+ * cannot see gets everywhere else, so a deny overwrite is not undone by
+ * MANAGE_CHANNELS, and the answer does not say the channel exists.
+ */
+async function requireVisibleServerChannel(channelId: string, userId: string) {
+  const channel = await requireServerChannel(channelId);
+  if (!(await canAccessChannel(channel.id, userId))) {
+    throw new NotFound("Channel not found");
+  }
+  return channel;
+}
+
+/**
  * --- forums --- The generic channel routes rename and delete chat threads,
  * and must not do either to a forum post: the post routes
  * (`/api/forum-posts/:postId`) run AutoMod on a new title, write the forum
@@ -9152,10 +9167,20 @@ function mapWebhook(w: DbWebhook, forumSettings?: WebhookForumSettings) {
   };
 }
 
+/** A webhook on a channel the caller cannot view does not exist for them. */
+async function requireWebhookChannelVisible(
+  webhook: { channel_id: string },
+  userId: string,
+) {
+  if (!(await canAccessChannel(webhook.channel_id, userId))) {
+    throw new NotFound("Webhook not found");
+  }
+}
+
 router.get(
   "/api/channels/:channelId/webhooks",
   async ({ user }, { channelId }) => {
-    const channel = await requireServerChannel(channelId!);
+    const channel = await requireVisibleServerChannel(channelId!, user.id);
     await requirePermission(
       channel.server_id,
       user.id,
@@ -9182,7 +9207,7 @@ router.get(
 router.post(
   "/api/channels/:channelId/webhooks",
   async ({ req, user }, { channelId }) => {
-    const channel = await requireServerChannel(channelId!);
+    const channel = await requireVisibleServerChannel(channelId!, user.id);
     await requirePermission(
       channel.server_id,
       user.id,
@@ -9236,6 +9261,7 @@ router.put(
     if (!webhook) {
       throw new NotFound("Webhook not found");
     }
+    await requireWebhookChannelVisible(webhook, user.id);
     await requirePermission(
       webhook.server_id,
       user.id,
@@ -9281,6 +9307,7 @@ router.delete("/api/webhooks/:webhookId", async ({ user }, { webhookId }) => {
   if (!webhook) {
     throw new NotFound("Webhook not found");
   }
+  await requireWebhookChannelVisible(webhook, user.id);
   await requirePermission(
     webhook.server_id,
     user.id,

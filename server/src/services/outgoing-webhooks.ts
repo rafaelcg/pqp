@@ -356,11 +356,11 @@ function describeChannelProblem(problem: OutgoingWebhookChannelProblem): string 
  */
 async function validateTextChannelIds(
   serverId: string,
+  actorId: string,
   channelIds: string[],
   db: Sql = getPool(),
   share = false,
   alreadySelected: ReadonlySet<string> = new Set(),
-  actorId?: string,
 ): Promise<string[]> {
   const seen = new Set<string>();
   const unique: string[] = [];
@@ -400,26 +400,24 @@ async function validateTextChannelIds(
   // Channels this save newly adds, checked in one statement with the same
   // predicate the channel list uses (owner, Administrator, overwrites).
   let viewable: Set<string> | null = null;
-  if (actorId) {
-    const forumsOn = forumChannelsEnabled(serverId);
-    const added = result.rows
-      .filter(
-        (row) =>
-          row.kind === "server" &&
-          (row.type === "text" || (row.type === "forum" && forumsOn)) &&
-          !alreadySelected.has(row.id.toLowerCase()),
-      )
-      .map((row) => row.id);
-    if (added.length > 0) {
-      const visible = await db.query<{ id: string }>(
-        `SELECT c.id FROM channels c
-           LEFT JOIN server_members sm
-             ON sm.server_id = c.server_id AND sm.user_id = $2
-          WHERE c.id = ANY($1::uuid[]) AND ${channelVisibleSql("$2")}`,
-        [added, actorId],
-      );
-      viewable = new Set(visible.rows.map((row) => row.id.toLowerCase()));
-    }
+  const forumsOn = forumChannelsEnabled(serverId);
+  const added = result.rows
+    .filter(
+      (row) =>
+        row.kind === "server" &&
+        (row.type === "text" || (row.type === "forum" && forumsOn)) &&
+        !alreadySelected.has(row.id.toLowerCase()),
+    )
+    .map((row) => row.id);
+  if (added.length > 0) {
+    const visible = await db.query<{ id: string }>(
+      `SELECT c.id FROM channels c
+         LEFT JOIN server_members sm
+           ON sm.server_id = c.server_id AND sm.user_id = $2
+        WHERE c.id = ANY($1::uuid[]) AND ${channelVisibleSql("$2")}`,
+      [added, actorId],
+    );
+    viewable = new Set(visible.rows.map((row) => row.id.toLowerCase()));
   }
   const kept: string[] = [];
   const problems: OutgoingWebhookChannelProblem[] = [];
@@ -703,11 +701,10 @@ export async function createOutgoingWebhook(
     // and the insert, then fail to see the new row in its cleanup.
     const channelIds = await validateTextChannelIds(
       serverId,
+      createdBy,
       body.channelIds,
       client,
       true,
-      new Set(),
-      createdBy,
     );
     const result = await client.query<OutgoingWebhookRow>(
       `INSERT INTO outgoing_webhooks (
@@ -744,7 +741,7 @@ export async function createOutgoingWebhook(
 export async function updateOutgoingWebhook(
   id: string,
   body: UpdateOutgoingWebhookBody,
-  actorId?: string,
+  actorId: string,
 ): Promise<OutgoingWebhook | null> {
   if (body.url !== undefined) {
     await assertOutgoingWebhookUrl(body.url.trim());
@@ -773,11 +770,11 @@ export async function updateOutgoingWebhook(
       body.channelIds !== undefined || body.status === "active"
         ? await validateTextChannelIds(
             existing.server_id,
+            actorId,
             body.channelIds ?? existing.channel_ids,
             client,
             false,
             new Set(existing.channel_ids.map((channelId) => channelId.toLowerCase())),
-            actorId,
           )
         : existing.channel_ids;
     const skipUserIds =
