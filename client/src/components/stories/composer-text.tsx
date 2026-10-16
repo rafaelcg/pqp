@@ -10,6 +10,7 @@ import {
   STORY_TEXT_MAX,
 } from "@pqp/shared";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { useWheelScrollX } from "@/lib/use-wheel-scroll-x";
 import { maxScaleToFit } from "@/lib/stories/layer-gestures";
 import { layerStyle, type TextLayerFields } from "@/lib/stories/layers";
 
@@ -65,8 +66,11 @@ export function ColorSwatches({
   label: string;
 }) {
   const { t } = useTranslation();
+  // Twelve swatches do not fit in the column: a mouse wheel scrolls the row, or the last two are out of reach.
+  const row = useRef<HTMLDivElement>(null);
+  useWheelScrollX(row);
   return (
-    <div role="radiogroup" aria-label={label} className="flex items-center gap-2 overflow-x-auto px-3 py-2 [scrollbar-width:none]">
+    <div ref={row} role="radiogroup" aria-label={label} className="flex items-center gap-2 overflow-x-auto px-3 py-2 [scrollbar-width:none]">
       {STORY_LAYER_COLORS.map((color) => {
         const selected = value === color;
         return (
