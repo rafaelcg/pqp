@@ -43,30 +43,30 @@ export function useMemberRosterRefresh(
   refreshNudge: number,
   onMembers: (members: ServerMember[]) => void,
   rosterSize = 0,
-): () => Promise<boolean> {
+): () => Promise<ReadonlySet<string> | null> {
   const rosterSizeRef = useRef(rosterSize);
   rosterSizeRef.current = rosterSize;
   const onMembersRef = useRef(onMembers);
   onMembersRef.current = onMembers;
   const lastLoadAt = useRef(0);
 
-  /** True when a fresh roster was read and handed on. */
+  /** The members of a fresh roster that was read and handed on, else null. */
   const load = useCallback(
-    async (signal: { cancelled: boolean }): Promise<boolean> => {
+    async (signal: { cancelled: boolean }): Promise<ServerMember[] | null> => {
       if (!serverId) {
-        return false;
+        return null;
       }
       lastLoadAt.current = Date.now();
       try {
         const res = await fetchMembers(serverId);
         if (signal.cancelled) {
-          return false;
+          return null;
         }
         onMembersRef.current(res.members);
-        return true;
+        return res.members;
       } catch {
         // A failed refresh leaves the last known roster: stale, not wrong.
-        return false;
+        return null;
       }
     },
     [serverId],
@@ -78,17 +78,19 @@ export function useMemberRosterRefresh(
   /**
    * One read now, outside the poll and the nudge floor. For a caller that needs
    * to know the roster is no older than this call (somebody posted who is not
-   * in it: either they just joined or they are gone). Resolves false when the
-   * read failed or the server changed meanwhile.
+   * in it: either they just joined or they are gone). Resolves with the ids of
+   * the members that read returned, so the caller can tell who it still lacks,
+   * or null when the read failed or the server changed meanwhile.
    */
-  const refreshNow = useCallback(async (): Promise<boolean> => {
+  const refreshNow = useCallback(async (): Promise<ReadonlySet<string> | null> => {
     const asked = serverId;
     const signal = {
       get cancelled() {
         return serverIdRef.current !== asked;
       },
     };
-    return load(signal);
+    const members = await load(signal);
+    return members ? new Set(members.map((member) => member.id)) : null;
   }, [serverId, load]);
 
   useEffect(() => {

@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { messageSchema } from "@pqp/shared";
 import type { ChatMessage } from "@/hooks/use-chat";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { AuthorGoneCheck } from "@/hooks/use-confirmed-gone-authors";
+import {
+  useConfirmedGoneAuthors,
+  type AuthorGoneCheck,
+  type MissingAuthor,
+} from "@/hooks/use-confirmed-gone-authors";
 import { MessageList, type MessageAuthorInfo } from "./message-list";
 
 /**
@@ -51,6 +55,7 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
+  vi.useRealTimers();
 });
 
 function mount(
@@ -104,16 +109,121 @@ describe("an author who left", () => {
   });
 
   it("is not tagged before the confirming read, and is reported for one", () => {
-    const reported: string[][] = [];
+    const reported: MissingAuthor[][] = [];
     const check: AuthorGoneCheck = {
       confirmed: new Set(),
-      report: (ids) => reported.push([...ids]),
+      report: (missing) => reported.push([...missing]),
     };
     expect(goneTags(mount(true, check))).toEqual([]);
-    expect(reported).toEqual([[GONE]]);
+    expect(reported).toEqual([[{ authorId: GONE, messageId: MESSAGES[1]!.id }]]);
   });
 
   it("is never tagged without a check to confirm it", () => {
     expect(goneTags(mount(true, null))).toEqual([]);
+  });
+});
+
+/**
+ * The same list with the real check behind it: what the member roster read
+ * says is what decides the tag.
+ */
+describe("an author who left, checked by a roster read", () => {
+  type Refresh = () => Promise<ReadonlySet<string> | null>;
+
+  function Live({
+    refresh,
+    messages,
+  }: {
+    refresh: Refresh;
+    messages: ChatMessage[];
+  }) {
+    const check = useConfirmedGoneAuthors("s1", refresh, ROSTER);
+    return (
+      <TooltipProvider>
+        <MessageList
+          messages={messages}
+          currentUserId={ME}
+          channelId={CHANNEL}
+          onToggleReaction={() => {}}
+          authors={ROSTER}
+          authorsComplete
+          authorGoneCheck={check}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  function mountLive(refresh: Refresh, messages: ChatMessage[] = MESSAGES) {
+    // jsdom has no element scrollTo, which a list that grows calls.
+    Element.prototype.scrollTo = () => {};
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root!.render(<Live refresh={refresh} messages={messages} />));
+    return host;
+  }
+
+  function deferredRead() {
+    let resolve!: (members: ReadonlySet<string> | null) => void;
+    const promise = new Promise<ReadonlySet<string> | null>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it("is tagged after a failed read once the retry reads the roster", async () => {
+    vi.useFakeTimers();
+    const results: Array<ReadonlySet<string> | null> = [null, new Set([ME])];
+    let calls = 0;
+    const container = mountLive(async () => results[calls++]!);
+    await advance(0);
+    expect(calls).toBe(1);
+    expect(goneTags(container)).toEqual([]);
+    await advance(5_000);
+    expect(calls).toBe(2);
+    const tags = goneTags(container);
+    expect(tags).toHaveLength(1);
+    expect(tags[0]).toContain("Bia");
+  });
+
+  it("is not tagged when the read holds them, even before the roster on screen does", async () => {
+    let calls = 0;
+    const container = mountLive(async () => (calls++, new Set([ME, GONE])));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(calls).toBe(1);
+    expect(goneTags(container)).toEqual([]);
+  });
+
+  it("loses the tag while a new message from them is checked", async () => {
+    const reads = [deferredRead(), deferredRead()];
+    let calls = 0;
+    const container = mountLive(() => reads[calls++]!.promise);
+    await act(async () => {
+      reads[0]!.resolve(new Set([ME]));
+    });
+    expect(goneTags(container)).toHaveLength(1);
+
+    // They rejoined and wrote before the roster on screen caught up.
+    act(() =>
+      root!.render(
+        <Live
+          refresh={() => reads[calls++]!.promise}
+          messages={[...MESSAGES, message(4, GONE, "Bia")]}
+        />,
+      ),
+    );
+    expect(calls).toBe(2);
+    expect(goneTags(container)).toEqual([]);
+    await act(async () => {
+      reads[1]!.resolve(new Set([ME]));
+    });
+    // Both of their messages carry it again.
+    expect(goneTags(container)).toHaveLength(2);
   });
 });

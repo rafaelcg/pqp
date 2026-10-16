@@ -3987,10 +3987,6 @@ function MainAppContent({
     applyRosterPayload,
     serverMembers.length,
   );
-  const authorGoneCheck = useConfirmedGoneAuthors(
-    conversationParticipants ? null : selectedServerId,
-    refreshMemberRoster,
-  );
 
   /**
    * Read straight off the live roster rather than a copy of the first fetch.
@@ -4078,6 +4074,12 @@ function MainAppContent({
     }
     return map;
   }, [conversationParticipants, serverMembers]);
+
+  const authorGoneCheck = useConfirmedGoneAuthors(
+    conversationParticipants ? null : selectedServerId,
+    refreshMemberRoster,
+    messageAuthors,
+  );
 
   const forwardTargets = useMemo((): ForwardTarget[] => {
     const currentId = selectedChannelId;

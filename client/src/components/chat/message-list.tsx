@@ -134,7 +134,10 @@ import {
 } from "@/lib/utils";
 import { MessageListSkeleton } from "@/components/ui/skeleton";
 import { NudgeLine, NudgeNotice } from "@/components/chat/nudge-line";
-import type { AuthorGoneCheck } from "@/hooks/use-confirmed-gone-authors";
+import type {
+  AuthorGoneCheck,
+  MissingAuthor,
+} from "@/hooks/use-confirmed-gone-authors";
 
 /** Consecutive messages from one author within this window render as one block. */
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
@@ -654,24 +657,31 @@ export const MessageList = memo(function MessageList({
   const reportMissingAuthors = authorGoneCheck?.report;
   // Authors the loaded roster does not hold, for a re-read before any of them
   // reads "saiu" (a person who just joined is missing until the roster
-  // catches up). Webhooks and AutoMod were never members.
+  // catches up). Each comes with their newest message here, so one who posts
+  // again is read again. Webhooks and AutoMod were never members.
   // TODO(PR 1188): a custom bot author is not a server member either; exclude
   // it here and in the row's `authorGone` when that lands.
   const missingAuthorKey = useMemo(() => {
     if (!authorsComplete || !reportMissingAuthors) {
       return "";
     }
-    const ids = new Set<string>();
+    const newest = new Map<string, string>();
     for (const m of messages) {
       if (!authors.has(m.authorId) && !m.isWebhook && !m.isAutomod) {
-        ids.add(m.authorId);
+        newest.set(m.authorId, m.id);
       }
     }
-    return [...ids].sort().join(",");
+    if (newest.size === 0) {
+      return "";
+    }
+    const missing: MissingAuthor[] = [...newest]
+      .map(([authorId, messageId]) => ({ authorId, messageId }))
+      .sort((a, b) => (a.authorId < b.authorId ? -1 : 1));
+    return JSON.stringify(missing);
   }, [authorsComplete, reportMissingAuthors, messages, authors]);
   useEffect(() => {
     if (missingAuthorKey && reportMissingAuthors) {
-      reportMissingAuthors(missingAuthorKey.split(","));
+      reportMissingAuthors(JSON.parse(missingAuthorKey) as MissingAuthor[]);
     }
   }, [missingAuthorKey, reportMissingAuthors]);
   const scrollRef = useRef<HTMLDivElement>(null);

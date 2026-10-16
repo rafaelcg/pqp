@@ -15,7 +15,7 @@ const { useMemberRosterRefresh, nudgeFloorMs } = await import(
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
 
-let refreshNow: () => Promise<boolean>;
+let refreshNow: () => Promise<ReadonlySet<string> | null>;
 let applied: unknown[][] = [];
 
 function Probe(props: { nudge: number; size: number }) {
@@ -94,22 +94,22 @@ describe("useMemberRosterRefresh", () => {
     expect(fetchMembersMock).not.toHaveBeenCalled();
   });
 
-  it("refreshNow reads at once, past the nudge floor, and says whether it landed", async () => {
+  it("refreshNow reads at once, past the nudge floor, and says who the read held", async () => {
     render(0, 5);
-    fetchMembersMock.mockResolvedValueOnce({ members: [{ id: "u1" }] });
-    let ok = false;
+    fetchMembersMock.mockResolvedValueOnce({ members: [{ id: "u1" }, { id: "u2" }] });
+    let held: ReadonlySet<string> | null = null;
     await act(async () => {
-      ok = await refreshNow();
+      held = await refreshNow();
     });
-    expect(ok).toBe(true);
+    expect(held).toEqual(new Set(["u1", "u2"]));
     expect(fetchMembersMock).toHaveBeenCalledTimes(1);
-    expect(applied).toEqual([[{ id: "u1" }]]);
+    expect(applied).toEqual([[{ id: "u1" }, { id: "u2" }]]);
 
     fetchMembersMock.mockRejectedValueOnce(new Error("offline"));
     await act(async () => {
-      ok = await refreshNow();
+      held = await refreshNow();
     });
-    expect(ok).toBe(false);
+    expect(held).toBeNull();
     expect(applied).toHaveLength(1);
   });
 });
