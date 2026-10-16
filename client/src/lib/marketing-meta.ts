@@ -1345,6 +1345,18 @@ const PRODUCT_CARD_ALT: LocalizedText = {
 };
 
 /**
+ * The pages that answer for themselves, in registry order: every marketing path
+ * whose canonical is itself. The aliases (`/claim`, `/watchparty`, `/criadores`,
+ * `/contato`) canonicalise elsewhere and are left out. A page added to
+ * `PAGE_COPY` appears here, and in the sitemap, with nothing else to touch.
+ */
+export function canonicalMarketingPages(): MarketingPage[] {
+  return (Object.keys(PAGE_COPY) as MarketingPage[]).filter(
+    (page) => PAGE_COPY[page].canonicalPath === page,
+  );
+}
+
+/**
  * The canonical URL and the hreflang set for one page in one language.
  *
  * SELF-REFERENCING PER LOCALE. Portuguese is the site's default and lives at
