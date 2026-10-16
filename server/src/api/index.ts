@@ -411,6 +411,7 @@ import {
   isUserBannerUploadConfigured,
   readAvatarObject,
   readUserBannerObject,
+  readUserBannerUrl,
   setUserBanner,
   userBannerUrlForKey,
   verifyAvatarObject,
@@ -1954,11 +1955,38 @@ router.delete("/api/me/avatar", async ({ user }) => {
 
 // ------------------------------------------------------------- user banners
 //
-// The strip across the top of `pqp.gg/@rafa`. Structurally the avatar routes
-// above with three differences and no fourth: a bigger cap, a different pair of
-// columns, and NO `announceProfile` — nothing in the app draws somebody else's
-// banner, so broadcasting one to every open socket on the instance would be a
-// frame no client has a use for.
+// The strip across the top of `pqp.gg/@rafa` and of the profile card. Structurally
+// the avatar routes above with three differences and no fourth: a bigger cap, a
+// different pair of columns, and NO `announceProfile` — the one in-app surface
+// that draws somebody else's banner is the card, which reads it when it opens
+// (`GET /api/users/:userId/banner-url`), so broadcasting one to every open
+// socket on the instance would be a frame no client has a use for.
+
+/**
+ * Somebody's banner, for the profile card that opens on their name.
+ *
+ * Read when the card opens rather than carried on the member list, the message
+ * author or the voice roster, for the reason the card's depoimentos and medals
+ * are: it is a fact about somebody else that is only wanted while their card is
+ * up, and a field on the member list is paid on every member-list read by every
+ * viewer. Reading it here also means a new banner shows the next time anybody
+ * opens the card, with no socket frame and no cache to invalidate.
+ *
+ * Not a widening of `publicUserSchema`. The bytes are already served to anybody
+ * holding the id (`/api/users/:userId/banner`, unauthenticated), and the
+ * address is on the public profile. This only says whether there is one, so the
+ * card does not ask for an image that 404s for most accounts.
+ *
+ * `null` for "no banner" and "no such user" alike, so this cannot tell anybody
+ * which ids exist. Not `/banner`: that path is the image, matched before the
+ * router runs.
+ */
+router.get("/api/users/:userId/banner-url", async (_ctx, { userId }) => {
+  if (!isUuid(userId!)) {
+    throw new NotFound("User not found");
+  }
+  return { bannerUrl: await readUserBannerUrl(userId!) };
+});
 
 /**
  * Mirrors `GET /api/avatars/config`, limits in both states so the picker can
