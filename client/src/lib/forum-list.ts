@@ -390,8 +390,23 @@ export function applyForumUpsert(
     : state.queued;
 
   // ---------------------------------------------------------------- pinned
-  // Pins sit above every filter and only vanish under a search.
+  // Pins sit above the list but answer to the same filters (tag, status, My
+  // posts), exactly as the server reads them; under a search they are just
+  // posts and fall through to the list rules below.
   const wasPinned = state.pinned.some((one) => one.id === post.id);
+  if (post.pinnedAt !== null && !filters.q && !passesForumFilters(post, filters, ctx.viewerId)) {
+    // Pinned, but not what the reader asked for: nowhere on screen.
+    return {
+      ...state,
+      pinned: withoutId(state.pinned, post.id),
+      posts: withoutId(state.posts, post.id),
+      queued: withoutId(state.queued, post.id),
+      viewer: viewerNext,
+      counts,
+      known,
+      newest,
+    };
+  }
   if (post.pinnedAt !== null && !filters.q) {
     const pinned = wasPinned
       ? replaceIn(state.pinned, post)

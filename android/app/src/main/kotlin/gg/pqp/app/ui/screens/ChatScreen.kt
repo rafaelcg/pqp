@@ -108,6 +108,7 @@ import gg.pqp.app.core.Message
 import gg.pqp.app.core.Reaction
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.core.runSuspendCatching
 import gg.pqp.app.push.VisibleChannel
 import gg.pqp.app.reports.ReportTarget
 import gg.pqp.app.reports.ui.ReportSheet
@@ -117,6 +118,12 @@ import gg.pqp.app.ui.chat.DayLabel
 import gg.pqp.app.ui.chat.DayLabels
 import gg.pqp.app.ui.chat.MentionAutocomplete
 import gg.pqp.app.ui.chat.MentionCandidate
+import gg.pqp.app.forward.ForwardInputs
+import gg.pqp.app.forward.ForwardInput
+import gg.pqp.app.forward.forwarderComment
+import gg.pqp.app.forward.ui.ForwardCard
+import gg.pqp.app.forward.ui.LocalStartForward
+import gg.pqp.app.forward.ui.rememberForwardEnabled
 import gg.pqp.app.ui.chat.MessageBody
 import gg.pqp.app.ui.chat.WebhookEmbedCard
 import gg.pqp.app.ui.chat.BauCardState
@@ -159,7 +166,12 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+
+/** How long a message a jump link landed on stays marked, and how slowly the mark fades. */
+private const val FLASH_MILLIS = 1_800L
+private const val FLASH_FADE_MILLIS = 700
 
 /** The list key of [ChatExtras.transcriptTop], so the title can tell when it scrolls off. */
 private const val TRANSCRIPT_TOP_KEY = "transcript-top"
@@ -192,6 +204,12 @@ fun ChatScreen(
      * from a notification tap, which carries ids and no membership.
      */
     serverId: String? = null,
+    /**
+     * Land on this message instead of the newest one (a forward card's jump
+     * link): the page around it is loaded, the list scrolls to it and the row
+     * is marked for a moment. A message that is gone leaves the plain chat.
+     */
+    focusMessageId: String? = null,
     /**
      * Actions for the app bar's trailing edge. A conversation puts the call
      * button here; a server channel has nothing to add. A slot rather than a
@@ -242,12 +260,17 @@ fun ChatScreen(
             // the whole life of this screen.
             callActive = { app?.callActive?.value == true },
             primaryChannelId = extras?.primaryChannelId,
+            aroundMessageId = focusMessageId,
         ),
     )
     val voiceNotes = rememberVoiceNotes()
     val state by model.state.collectAsStateWithLifecycle()
     val phase by session.phase.collectAsStateWithLifecycle()
     val me = (phase as? SessionPhase.Ready)?.me
+    // Encaminhar is offered while the runtime flag is on (read per use, kept a
+    // minute) and never in a conversation: the server refuses a DM as a source.
+    val forwardEnabled = rememberForwardEnabled(session.api)
+    val startForward = LocalStartForward.current
 
     // What stops a push firing about the conversation already on screen.
     //
@@ -396,6 +419,48 @@ fun ChatScreen(
         if (back > 0) listState.scrollBy(-back)
     }
 
+    // A jump link lands on its message: scrolled to once the page around it has
+    // loaded, then marked for a moment so the eye finds it. Until then the
+    // follow-the-tail effect below stands down, or it would drag the list to the
+    // newest message the instant the page arrives.
+    var focusPending by remember(channelId, focusMessageId) { mutableStateOf(focusMessageId != null) }
+    var flashId by remember(channelId, focusMessageId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(channelId, focusMessageId, state.loading, state.messages.size) {
+        val target = focusMessageId ?: return@LaunchedEffect
+        if (!focusPending || state.loading) return@LaunchedEffect
+        val index = state.messages.asReversed().indexOfFirst { it.id == target }
+        if (index < 0) {
+            focusPending = false
+            return@LaunchedEffect
+        }
+        // One frame for the list to lay the page out before scrolling.
+        androidx.compose.runtime.withFrameNanos { }
+        // Looked up again after the frame: the index is only meaningful against the
+        // list the screen is actually showing.
+        val shown = model.state.value.messages.asReversed().indexOfFirst { it.id == target }
+        if (shown >= 0) bringNearTop(shown)
+        flashId = target
+        // Only now may anything else (the next page, following the tail) move the list.
+        focusPending = false
+        delay(FLASH_MILLIS)
+        flashId = null
+    }
+    // The newer pages a jump left unloaded are fetched when the READER scrolls, never
+    // on their own. A target near the bottom of the screen leaves the end of the list
+    // (and its loading row) in view right after the jump lands, and fetching then
+    // appended a page under the list's anchor and carried the view away from the very
+    // message the jump was for.
+    var readerScrolled by remember(channelId, focusMessageId) { mutableStateOf(focusMessageId == null) }
+    LaunchedEffect(channelId, focusMessageId, focusPending) {
+        if (focusPending || readerScrolled) return@LaunchedEffect
+        androidx.compose.runtime.snapshotFlow { listState.isScrollInProgress }.first { it }
+        readerScrolled = true
+    }
+    // "Ir pra mais recentes" brings the list to the end once the newest page is in.
+    LaunchedEffect(state.latestToken) {
+        if (state.latestToken > 0) listState.scrollToItem(0)
+    }
+
     LaunchedEffect(channelId, landingAsk?.ready, state.loading) {
         val ask = landingAsk ?: return@LaunchedEffect
         if (landed || !ask.ready || state.loading) return@LaunchedEffect
@@ -449,7 +514,9 @@ fun ChatScreen(
     }
 
     LaunchedEffect(state.messages.size) {
-        if (landed && atBottom && state.messages.isNotEmpty()) listState.animateScrollToItem(0)
+        if (landed && atBottom && !focusPending && !state.hasNewer && state.messages.isNotEmpty()) {
+            listState.animateScrollToItem(0)
+        }
     }
 
     // The first reply this reader had not seen, for the "Novas" divider and
@@ -689,6 +756,27 @@ fun ChatScreen(
                                 .fillMaxSize()
                                 .alpha(landingAlpha),
                         ) {
+                            // Newest first: this is the BOTTOM of the screen. A jump
+                            // left newer messages unloaded, so reaching the bottom
+                            // fetches them (`hasNewer` is false in every ordinary chat).
+                            if (state.hasNewer) {
+                                item(key = "newer") {
+                                    // Keyed on `landed` (and the jump settling) only: a page
+                                    // arriving changes the message count, and re-running on that
+                                    // would chain page after page for as long as the sentinel
+                                    // stays in view. Scrolling away and back recomposes it, which
+                                    // is the next explicit reach. Not while a jump is still
+                                    // scrolling to its message, and not before the reader has
+                                    // scrolled: see `readerScrolled`.
+                                    LaunchedEffect(landed, focusPending, readerScrolled) {
+                                        if (landed && !focusPending && readerScrolled) model.loadNewer()
+                                    }
+                                    Box(
+                                        Modifier.fillMaxWidth().padding(Spacing.gutter),
+                                        contentAlignment = Alignment.Center,
+                                    ) { CircularProgressIndicator(Modifier.width(24.dp)) }
+                                }
+                            }
                             items(rows.size, key = { rows[it].id }) { index ->
                                 val message = rows[index]
                                 // The list is reversed, so the *previous* message in
@@ -749,6 +837,7 @@ fun ChatScreen(
                                         api = session.api,
                                         badge = extras?.authorBadge?.invoke(message),
                                         highlighted = message.id == extras?.highlightedMessageId,
+                                        flash = message.id == flashId,
                                     )
                                     if (message.id == extras?.belowMessageId) {
                                         extras.belowMessage?.invoke()
@@ -789,6 +878,16 @@ fun ChatScreen(
                                 .align(Alignment.BottomCenter)
                                 .padding(bottom = Spacing.lg),
                         )
+                        // Opened in the middle of history by a jump link: the way back to now.
+                        JumpToNewPill(
+                            visible = state.hasNewer,
+                            count = 0,
+                            label = stringResource(R.string.chat_jump_latest),
+                            onClick = model::jumpToLatest,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = Spacing.lg),
+                        )
                     }
                 }
             }
@@ -815,6 +914,12 @@ fun ChatScreen(
         // every question a message can ask (`canManageMessages` in
         // `packages/shared/src/moderation.ts` is a flat manager check).
         val role = if (state.canManage) "admin" else null
+        val forwardExcerpt = ForwardInputs.messageExcerpt(message)
+        val forwardPreviewText = if (forwardExcerpt.isEmpty()) {
+            stringResource(R.string.forward_message_preview_bare, message.authorName)
+        } else {
+            stringResource(R.string.forward_message_preview, message.authorName, forwardExcerpt)
+        }
         MessageActionsSheet(
             message = message,
             canEdit = MessagePermissions.canEdit(message, me?.id),
@@ -862,6 +967,31 @@ fun ChatScreen(
                         open(message.authorId)
                     }
                 },
+            onForward = if (
+                forwardEnabled && state.isServerChannel &&
+                MessagePermissions.canForward(message, isServerChannel = true)
+            ) {
+                {
+                    acting = null
+                    // A private channel's message cannot leave its server, so the
+                    // picker is told before it opens rather than after a refusal.
+                    scope.launch {
+                        val channels = serverId?.let {
+                            runSuspendCatching { session.api.channels(it) }.getOrNull()
+                        }
+                        startForward(
+                            ForwardInputs.forMessage(
+                                message = message,
+                                previewText = forwardPreviewText,
+                                privateChannelServerId = ForwardInputs.privateBoundary(serverId, channelId, channels),
+                                knownChannels = if (serverId != null && channels != null) serverId to channels else null,
+                            ),
+                        )
+                    }
+                }
+            } else {
+                null
+            },
             onDismiss = { acting = null },
             extraActions = extras?.messageActions?.invoke(message).orEmpty().map { action ->
                 action.copy(onClick = {
@@ -1041,7 +1171,14 @@ private fun NewMessagesDivider() {
 
 /** The floating "↓ 5 novas" that takes the reader back to the divider. */
 @Composable
-private fun JumpToNewPill(visible: Boolean, count: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun JumpToNewPill(
+    visible: Boolean,
+    count: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Words instead of the "N novas" count, for the jump back to the newest message. */
+    label: String? = null,
+) {
     AnimatedVisibility(
         visible = visible,
         enter = androidx.compose.animation.fadeIn(tween(Motion.QUICK_MILLIS)) +
@@ -1050,13 +1187,13 @@ private fun JumpToNewPill(visible: Boolean, count: Int, onClick: () -> Unit, mod
             androidx.compose.animation.slideOutVertically { it / 2 },
         modifier = modifier,
     ) {
-        JumpPillBody(count, onClick)
+        JumpPillBody(count, onClick, label)
     }
 }
 
 @Composable
-private fun JumpPillBody(count: Int, onClick: () -> Unit) {
-    val label = androidx.compose.ui.res.pluralStringResource(R.plurals.chat_jump_new, count, count)
+private fun JumpPillBody(count: Int, onClick: () -> Unit, words: String? = null) {
+    val label = words ?: androidx.compose.ui.res.pluralStringResource(R.plurals.chat_jump_new, count, count)
     Surface(
         onClick = onClick,
         shape = androidx.compose.foundation.shape.CircleShape,
@@ -1109,8 +1246,19 @@ private fun MessageRow(
     badge: String? = null,
     /** The success edge: the reply a forum post marked as its answer. */
     highlighted: Boolean = false,
+    /** A jump link just landed here: a wash of the signal colour that fades out. */
+    flash: Boolean = false,
 ) {
     if (message.blocked) return
+    val flashWash by androidx.compose.animation.animateColorAsState(
+        targetValue = if (flash) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+        } else {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0f)
+        },
+        animationSpec = tween(if (flash) Motion.QUICK_MILLIS else FLASH_FADE_MILLIS),
+        label = "message-flash",
+    )
 
     // `onLongClickLabel` is what puts the gesture in TalkBack's actions menu,
     // which is the only place it is discoverable without a visible affordance.
@@ -1119,6 +1267,7 @@ private fun MessageRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .background(flashWash)
             .then(
                 if (highlighted) {
                     Modifier
@@ -1253,7 +1402,7 @@ private fun MessageRow(
                     )
                     Spacer(Modifier.width(Spacing.sm))
                     Text(
-                        text = "${reply.authorName.orEmpty()} ${reply.excerpt}".trim(),
+                        text = "${reply.authorName.orEmpty()} ${gg.pqp.app.core.CustomEmoji.asText(reply.excerpt)}".trim(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -1269,7 +1418,23 @@ private fun MessageRow(
             // `GifLinks` for the allowlist and why there is one.
             val gifBody = remember(message.body) { GifLinks.mediaBody(message.body) }
 
-            if (gifBody != null) {
+            val forward = message.forward
+            if (forward != null) {
+                // Encaminhar: the forwarder's own words (never the server's
+                // fallback line, which only exists for clients with no card)
+                // and the card under them. Nothing in the snapshot is
+                // re-resolved, so no mention in it pings or links.
+                val comment = remember(message.body, forward) { forwarderComment(message.body, forward) }
+                if (comment.isNotEmpty() || message.editedAt != null) {
+                    MessageBody(
+                        body = comment,
+                        editedMark = message.editedAt?.let { stringResource(R.string.chat_edited) },
+                        selfUsername = selfUsername,
+                    )
+                }
+                Spacer(Modifier.height(Spacing.xs))
+                ForwardCard(forward)
+            } else if (gifBody != null) {
                 Spacer(Modifier.height(Spacing.xs))
                 InlineGif(gifBody)
             } else if (message.chance != null) {
@@ -1437,6 +1602,8 @@ private fun MessageActionsSheet(
     onReport: () -> Unit,
     onDismiss: () -> Unit,
     onMessageAuthor: (() -> Unit)? = null,
+    /** Encaminhar. Null hides the row: a conversation, the flag off, nothing to show. */
+    onForward: (() -> Unit)? = null,
     /** What the surface adds ([ChatExtras.messageActions]), right after Reply. */
     extraActions: List<ChatMessageAction> = emptyList(),
 ) {
@@ -1492,6 +1659,14 @@ private fun MessageActionsSheet(
                     testTag = "message.reply-action",
                     onClick = onReply,
                 )
+                if (onForward != null) {
+                    SheetAction(
+                        icon = PqpIcons.ForwardMessage,
+                        label = stringResource(R.string.forward_action),
+                        testTag = "message.forward",
+                        onClick = onForward,
+                    )
+                }
                 extraActions.forEach { action ->
                     SheetAction(
                         icon = action.icon,
@@ -2020,7 +2195,7 @@ private fun AttachmentChip(
 
 /** One labelled row in the message sheet. The label is the affordance. */
 @Composable
-private fun SheetAction(
+internal fun SheetAction(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     testTag: String,
@@ -2222,7 +2397,17 @@ private fun PinnedSheet(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
-                                MessageBody(body = message.body, selfUsername = selfUsername)
+                                val forward = message.forward
+                                if (forward != null) {
+                                    val comment = forwarderComment(message.body, forward)
+                                    if (comment.isNotEmpty()) {
+                                        MessageBody(body = comment, selfUsername = selfUsername)
+                                    }
+                                    Spacer(Modifier.height(Spacing.xs))
+                                    ForwardCard(forward)
+                                } else {
+                                    MessageBody(body = message.body, selfUsername = selfUsername)
+                                }
                             }
                             if (canUnpin) {
                                 IconButton(onClick = { onUnpin(message.id) }) {

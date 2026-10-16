@@ -30,7 +30,18 @@ data class AttachmentConfig(
      * which read as "no microphone button".
      */
     val voiceNotes: Boolean = false,
-)
+    /**
+     * The `voice_note_transcription` runtime flag for the same `?serverId=`. A transcript only exists
+     * for a note, so reading it needs [voiceNotes] too (`loadVoiceNoteFlags` on the web).
+     */
+    val voiceTranscription: Boolean = false,
+) {
+    val transcriptionOn: Boolean get() = enabled && voiceNotes && voiceTranscription
+}
+
+/** `voiceNoteTranscriptResponseSchema`. */
+@Serializable
+data class NoteTranscriptResponse(val transcript: gg.pqp.app.core.NoteTranscript)
 
 /** Body of `POST /api/channels/:channelId/attachments`. */
 @Serializable
@@ -107,6 +118,21 @@ class AttachmentApi(private val api: ApiClient) {
                 .post("{}".toRequestBody(ApiClient.JSON_MEDIA_TYPE)),
         ).close()
     }
+
+    /**
+     * `POST /api/attachments/:id/transcript`: ask for a note's transcript. 202 with `pending` while the
+     * job is queued or running, 200 once it has a settled answer. Idempotent on the server, so asking
+     * again is how a lost frame is recovered. 403 and 404 are the server's "no" and are thrown as
+     * [gg.pqp.app.core.ApiException]; the caller reads the status.
+     */
+    suspend fun requestTranscript(attachmentId: String): gg.pqp.app.core.NoteTranscript =
+        api.decode<NoteTranscriptResponse>(
+            api.execute(
+                Request.Builder()
+                    .url(api.url("/api/attachments/$attachmentId/transcript"))
+                    .post("{}".toRequestBody(ApiClient.JSON_MEDIA_TYPE)),
+            ),
+        ).transcript
 
     suspend fun mint(
         channelId: String,

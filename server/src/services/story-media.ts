@@ -2,7 +2,11 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { STORY_MAX_BYTES, STORY_MAX_PROBED_VIDEO_MS } from "@pqp/shared";
+import {
+  STORY_MAX_BYTES,
+  STORY_MAX_PROBED_VIDEO_MS,
+  STORY_UPLOAD_UNCLAIMED_HOURS,
+} from "@pqp/shared";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
 import {
@@ -14,6 +18,7 @@ import {
 } from "../lib/s3.js";
 import { isFfmpegAvailable } from "../speech/transcode.js";
 import {
+  combineScans,
   isContentScanConfigured,
   scanImage,
   SCAN_URL_TTL_SECONDS,
@@ -86,6 +91,9 @@ export interface StorySweepResult {
   mediaDeleted: number;
   mediaFailed: number;
   rowsDeleted: number;
+  /** Eager uploads nobody claimed (or already claimed) that were removed this tick. */
+  uploadsSwept: number;
+  uploadsFailed: number;
 }
 
 export async function sweepStories(): Promise<StorySweepResult> {
@@ -117,15 +125,18 @@ export async function sweepStories(): Promise<StorySweepResult> {
     const claimed = await pool.query<{
       id: string;
       kind: string;
-      media_storage_key: string;
+      media_storage_key: string | null;
       poster_storage_key: string | null;
+      /** Composer v2: the objects behind image and drawing layers. */
+      layer_keys: string[];
       /** The lease token as text: a JS Date would drop Postgres's microseconds. */
       claim: string;
     }>(
       `UPDATE stories s SET media_delete_claimed_at = now()
         WHERE s.id IN (
           SELECT s.id FROM stories s
-           WHERE s.media_deleted_at IS NULL AND s.media_storage_key IS NOT NULL
+           WHERE s.media_deleted_at IS NULL
+             AND (s.media_storage_key IS NOT NULL OR cardinality(s.layer_keys) > 0)
              AND s.status IN ('expired', 'deleted')
              AND (s.media_delete_claimed_at IS NULL
                   OR s.media_delete_claimed_at < now() - interval '${DELETE_LEASE}')
@@ -134,16 +145,24 @@ export async function sweepStories(): Promise<StorySweepResult> {
            LIMIT ${SWEEP_BATCH}
            FOR UPDATE SKIP LOCKED
         )
-        RETURNING s.id, s.kind, s.media_storage_key, s.poster_storage_key,
+        RETURNING s.id, s.kind, s.media_storage_key, s.poster_storage_key, s.layer_keys,
                   s.media_delete_claimed_at::text AS claim`,
     );
     for (const row of claimed.rows) {
       try {
-        await deleteObject(row.media_storage_key);
+        if (row.media_storage_key) {
+          await deleteObject(row.media_storage_key);
+        }
         if (row.poster_storage_key) {
           await deleteObject(row.poster_storage_key);
         }
-        if (row.kind === "video") {
+        // Layer objects (composer v2): a photo placed on the story, or the
+        // drawing. Each is deleted whatever the story's kind, and a text card
+        // may hold nothing else.
+        // At most a handful per story, so all at once; the row is marked done
+        // only after every one has gone.
+        await Promise.all(row.layer_keys.map((key) => deleteObject(key)));
+        if (row.kind === "video" && row.media_storage_key) {
           // The video job's sampled frames live only long enough to be
           // scanned and are deleted right after; a delete that failed then
           // is retried here, so none outlives its story.
@@ -175,10 +194,13 @@ export async function sweepStories(): Promise<StorySweepResult> {
     bumpStoryStat("mediaDeleteFailures", mediaFailed);
   }
 
+  const uploads = isStorageConfigured() ? await sweepStoryUploads() : { swept: 0, failed: 0 };
+
   const rows = await pool.query(
     `DELETE FROM stories s
       WHERE s.status IN ('expired', 'deleted')
-        AND (s.media_storage_key IS NULL OR s.media_deleted_at IS NOT NULL)
+        AND ((s.media_storage_key IS NULL AND cardinality(s.layer_keys) = 0)
+             OR s.media_deleted_at IS NOT NULL)
         -- An account that is gone has no "who viewed" question left to answer.
         AND (s.author_id IS NULL
              OR COALESCE(s.deleted_at, s.expires_at, s.created_at)
@@ -202,7 +224,88 @@ export async function sweepStories(): Promise<StorySweepResult> {
     mediaDeleted,
     mediaFailed,
     rowsDeleted: rows.rowCount ?? 0,
+    uploadsSwept: uploads.swept,
+    uploadsFailed: uploads.failed,
   };
+}
+
+/**
+ * Eager uploads (`story_uploads`) nothing needs any more: UNCLAIMED ones past
+ * `STORY_UPLOAD_UNCLAIMED_HOURS` (the author closed the tab, lost the network,
+ * or the client's DELETE never arrived) or whose account is gone, and CLAIMED
+ * ones an hour after the claim, unless their story is still pending (the story
+ * holds its own copy; the source is normally deleted at the claim, and this is
+ * the retry when that failed). Every copy an attempt meant to make
+ * (`copy_keys`, recorded before the copy) goes too, but never the one the story kept.
+ * Claimed with a lease like the story sweep, so two processes sweeping at the
+ * same moment delete each object once; the row goes only after its object.
+ */
+async function sweepStoryUploads(): Promise<{ swept: number; failed: number }> {
+  const pool = getPool();
+  const claimed = await pool.query<{
+    id: string;
+    storage_key: string;
+    claim: string;
+    leftover_keys: string[];
+  }>(
+    `UPDATE story_uploads SET delete_claimed_at = now()
+      WHERE id IN (
+        SELECT id FROM story_uploads
+         WHERE (delete_claimed_at IS NULL
+                OR delete_claimed_at < now() - interval '${DELETE_LEASE}')
+           AND (
+             (claimed_story_id IS NULL
+              AND (user_id IS NULL
+                   OR created_at < now() - make_interval(hours => $1)
+                   -- Thrown away by the author: the object went at the DELETE, and
+                   -- once the 15 minute PUT URL is surely dead (and any PUT it began
+                   -- has had two hours to finish) it goes again.
+                   OR (discarded_at IS NOT NULL
+                       AND discarded_at < now() - interval '2 hours')))
+             OR (claimed_story_id IS NOT NULL AND claimed_at < now() - interval '1 hour'
+                 -- A story still waiting for a file keeps its record: replaying its
+                 -- create must keep knowing which of its files came from an upload.
+                 AND NOT EXISTS (SELECT 1 FROM stories s
+                                  WHERE s.id = story_uploads.claimed_story_id
+                                    AND s.status = 'pending'))
+           )
+         ORDER BY created_at ASC
+         LIMIT ${SWEEP_BATCH}
+         FOR UPDATE SKIP LOCKED
+      )
+      RETURNING id, storage_key, delete_claimed_at::text AS claim,
+                -- What to delete besides the upload's own object: every copy an
+                -- attempt meant to make, except the one a story kept.
+                ARRAY(SELECT k FROM unnest(copy_keys) AS k
+                       WHERE k IS DISTINCT FROM claimed_key) AS leftover_keys`,
+    [STORY_UPLOAD_UNCLAIMED_HOURS],
+  );
+  let swept = 0;
+  let failed = 0;
+  for (const row of claimed.rows) {
+    try {
+      await deleteObject(row.storage_key);
+      await Promise.all(row.leftover_keys.map((key) => deleteObject(key)));
+      await pool.query(
+        `DELETE FROM story_uploads WHERE id = $1 AND delete_claimed_at = $2::timestamptz`,
+        [row.id, row.claim],
+      );
+      swept += 1;
+    } catch (error) {
+      failed += 1;
+      console.error(
+        `[stories] could not delete upload ${row.id}:`,
+        error instanceof Error ? error.message : error,
+      );
+      await pool.query(
+        `UPDATE story_uploads SET delete_claimed_at = NULL
+          WHERE id = $1 AND delete_claimed_at = $2::timestamptz`,
+        [row.id, row.claim],
+      );
+    }
+  }
+  bumpStoryStat("uploadsSwept", swept);
+  return { swept, failed };
 }
 
 // ------------------------------------------------------------------ ffmpeg seam
@@ -265,6 +368,31 @@ function run(command: string, args: string[]): Promise<string> {
   });
 }
 
+/** The end of the last video packet, in seconds, read off the packet timestamps. NaN when there are none. */
+async function packetSeconds(path: string): Promise<number> {
+  const out = await run(FFPROBE(), [
+    ...LOCAL_MP4_INPUT,
+    "-v",
+    "error",
+    "-select_streams",
+    "v:0",
+    "-show_entries",
+    "packet=pts_time,duration_time",
+    "-of",
+    "csv=p=0",
+    path,
+  ]);
+  let end = Number.NaN;
+  for (const line of out.split("\n")) {
+    const [pts, duration] = line.split(",").map((value) => Number(value));
+    if (pts !== undefined && Number.isFinite(pts)) {
+      const last = pts + (Number.isFinite(duration) ? (duration as number) : 0);
+      end = Number.isNaN(end) ? last : Math.max(end, last);
+    }
+  }
+  return end;
+}
+
 export const realStoryVideoTools: StoryVideoTools = {
   async probe(path) {
     const out = await run(FFPROBE(), [
@@ -279,10 +407,26 @@ export const realStoryVideoTools: StoryVideoTools = {
     ]);
     const parsed = JSON.parse(out) as {
       format?: { duration?: string };
-      streams?: Array<{ codec_type?: string; codec_name?: string; width?: number; height?: number }>;
+      streams?: Array<{
+        codec_type?: string;
+        codec_name?: string;
+        width?: number;
+        height?: number;
+        duration?: string;
+      }>;
     };
     const video = parsed.streams?.find((stream) => stream.codec_type === "video");
-    const seconds = Number(parsed.format?.duration);
+    let seconds = Number(parsed.format?.duration);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      // A fragmented MP4 straight off a browser's MediaRecorder (Chrome 126+
+      // records `video/mp4`) can carry no duration in its header. The video
+      // stream's own, then the packets' timestamps, both bounded by the 25 MB
+      // the file may be; the story's length limit is judged on this number.
+      seconds = Number(video?.duration);
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        seconds = await packetSeconds(path);
+      }
+    }
     return {
       durationMs: Number.isFinite(seconds) ? Math.round(seconds * 1000) : Number.NaN,
       videoCodec: video?.codec_name ?? null,
@@ -376,37 +520,8 @@ async function claimVideo(): Promise<ClaimedVideo | null> {
   return result.rows[0] ?? null;
 }
 
-/** Worst verdict first: rejected, error, flagged, then the passes. */
-const SEVERITY: Record<ScanResult["status"], number> = {
-  rejected: 5,
-  error: 4,
-  flagged: 3,
-  pass: 2,
-  skipped: 1,
-  unscanned: 0,
-};
-
-export function combineScans(results: ScanResult[]): ScanResult {
-  let worst: ScanResult = {
-    status: "unscanned",
-    provider: null,
-    score: null,
-    labels: [],
-    illegal: false,
-  };
-  const labels = new Set<string>();
-  let score: number | null = null;
-  let illegal = false;
-  for (const result of results) {
-    for (const label of result.labels) labels.add(label);
-    if (result.score !== null) score = Math.max(score ?? 0, result.score);
-    illegal ||= result.illegal;
-    if (SEVERITY[result.status] > SEVERITY[worst.status]) {
-      worst = result;
-    }
-  }
-  return { ...worst, labels: [...labels], score, illegal };
-}
+// `combineScans` moved to content-scan.ts (stories.ts needs it for layer images too).
+export { combineScans };
 
 export type StoryVideoOutcome = "live" | "refused" | "retry" | "idle";
 

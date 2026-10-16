@@ -110,6 +110,40 @@ async function call<T = Record<string, unknown>>(
   };
 }
 
+/**
+ * `TRUNCATE ... CASCADE` between tests, retried when Postgres picks it as a
+ * deadlock victim.
+ *
+ * The routes answer first and finish some work after: a `channels-update` or
+ * `permissions-update` ping reads channels, members and roles on its own
+ * connection (`pingChannels` / `pingPermissions` in `api/index.ts`, fire and
+ * forget on purpose, the write has already committed). One still running when
+ * the next test's `beforeEach` truncates holds AccessShare locks in the order
+ * its joined SELECT planned them, while TRUNCATE takes AccessExclusive in the
+ * order listed here and then through the cascade. Opposite orders, so
+ * Postgres reports `deadlock detected` (40P01) and aborts the TRUNCATE, which
+ * failed an unrelated test's hook on CI ("refuses to nest a category ...").
+ *
+ * A deadlock victim is rolled back whole and the other side is a read that
+ * finishes in milliseconds, so running it again is what Postgres documents as
+ * the remedy, not a hope: the statement either hits 40P01 again (a ping still
+ * mid-read, bounded below) or succeeds against a quiet database.
+ */
+async function truncateRetryingDeadlocks(statement: string): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await getPool().query(statement);
+      return;
+    } catch (error) {
+      const deadlock = (error as { code?: string }).code === "40P01";
+      if (!deadlock || attempt >= 5) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+    }
+  }
+}
+
 describeDb("API authorization", () => {
   let owner: { id: string; clerk_id: string };
   let admin: { id: string; clerk_id: string };
@@ -136,7 +170,7 @@ describeDb("API authorization", () => {
     resetChatRateLimits();
     resetVoiceRateLimits();
     // servers/messages cascade; users are the only root we must clear.
-    await getPool().query(
+    await truncateRetryingDeadlocks(
       `TRUNCATE users, user_preferences, servers, channels, messages,
                 server_members, channel_members, server_invites, server_bans,
                 channel_reads, message_mentions, message_reactions,

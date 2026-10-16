@@ -1,5 +1,6 @@
 import type { Gif } from "@pqp/shared";
 import { lazy, Suspense } from "react";
+import { ContainedChunkBoundary } from "@/components/error-boundary";
 import { cn } from "@/lib/utils";
 
 /**
@@ -22,17 +23,20 @@ interface GifPickerPanelProps {
 
 export function GifPickerPanel(props: GifPickerPanelProps) {
   return (
-    <Suspense
-      fallback={
-        <div
-          className={cn(
-            "elevation-3 z-50 h-[22rem] w-[21rem] animate-pulse rounded-[var(--radius-card)]",
-            props.className,
-          )}
-        />
-      }
-    >
-      <LazyPanel {...props} />
-    </Suspense>
+    // A stale chunk costs this panel and nothing else (`ContainedChunkBoundary`).
+    <ContainedChunkBoundary>
+      <Suspense
+        fallback={
+          <div
+            className={cn(
+              "elevation-3 z-50 h-[22rem] w-[21rem] animate-pulse rounded-[var(--radius-card)]",
+              props.className,
+            )}
+          />
+        }
+      >
+        <LazyPanel {...props} />
+      </Suspense>
+    </ContainedChunkBoundary>
   );
 }

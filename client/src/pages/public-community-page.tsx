@@ -193,7 +193,7 @@ export function PublicCommunityPage({ slug }: { slug: string }) {
   return <CommunityPoster community={state.community} />;
 }
 
-function CommunityShell({
+export function CommunityShell({
   children,
   narrow = false,
 }: {

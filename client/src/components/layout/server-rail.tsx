@@ -1,4 +1,6 @@
 import {
+  ArrowDown,
+  ArrowUp,
   Compass,
   Eye,
   EyeOff,
@@ -7,13 +9,13 @@ import {
   PinOff,
   Radio,
   Plus,
-  RefreshCw,
   Settings,
   Sparkles,
   UserPlus,
   Users,
 } from "lucide-react";
 import type { DmSummary, PublicUser, Server } from "@pqp/shared";
+import { useId, useMemo } from "react";
 import {
   formatBadgeCount,
   type UnreadState,
@@ -44,6 +46,9 @@ import {
 import { conversationsWithUnread } from "@/lib/conversation-list";
 import { conversationTitle } from "@/lib/conversations";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { useServerRailReorder } from "@/hooks/use-server-rail-reorder";
+import { UpdateIndicator } from "@/components/layout/update-indicator";
+import { useUpdateOffered } from "@/lib/update-prompt-state";
 import { cn } from "@/lib/utils";
 
 interface ServerRailProps {
@@ -99,19 +104,6 @@ interface ServerRailProps {
   whatsNewUnread?: boolean;
   onOpenWhatsNew?: () => void;
   /**
-   * A new build is precached and has not been taken yet.
-   *
-   * THE WAY BACK TO THE UPDATE NOTICE. The corner card can be snoozed, and it
-   * hushes itself during a call so a reload never ends somebody's screen
-   * share; both are correct and both used to end with a person on an old
-   * bundle and no button anywhere in the product. This icon is that button. It
-   * stays for exactly as long as the build is waiting and goes the moment it
-   * is taken, so it is never decoration.
-   */
-  updateWaiting?: boolean;
-  /** Brings the update notice back, snooze and call notwithstanding. */
-  onOpenUpdate?: () => void;
-  /**
    * Conversations this person pinned to the rail, already filtered to ones
    * still in the list, in pin order. Empty means the Home bubble is the only
    * DM door, which is the usual case.
@@ -137,6 +129,14 @@ interface ServerRailProps {
   mobileNavOpen?: boolean;
   onSelectHome: () => void;
   onSelectServer: (serverId: string) => void;
+  /**
+   * Save a new order for the servers on this rail (drag, Alt+arrows, or the
+   * menu). Absent means the rail is not reorderable (a build or a test that
+   * does not own the list). The caller applies it optimistically and rolls
+   * back on failure; `servers` is what the rail draws, so the new order must
+   * come back through that prop.
+   */
+  onReorderServers?: (serverIds: string[]) => void;
   onCreateServer: () => void;
   onJoinServer: () => void;
   onInvite: (serverId: string) => void;
@@ -186,8 +186,6 @@ export function ServerRail({
   whatsNewSelected = false,
   whatsNewUnread = false,
   onOpenWhatsNew,
-  updateWaiting = false,
-  onOpenUpdate,
   pinnedConversations = [],
   pinnedUnread = {},
   selectedPinnedId = null,
@@ -195,6 +193,7 @@ export function ServerRail({
   onUnpinConversation,
   onSelectHome,
   onSelectServer,
+  onReorderServers,
   onCreateServer,
   onJoinServer,
   onInvite,
@@ -211,6 +210,9 @@ export function ServerRail({
   openConversationId = null,
 }: ServerRailProps) {
   const { t } = useTranslation();
+  // A new build to take: the quiet indicator at the foot of the rail. It draws
+  // itself; the rail only needs to know whether it is there, for the rule above.
+  const updateOffered = useUpdateOffered();
   // Subscribed once for the whole rail: hook rules forbid reading the store
   // inside the map below, and every icon needs the same snapshot anyway.
   const notifications = useNotificationState();
@@ -231,12 +233,32 @@ export function ServerRail({
   const foldedFaces = waitingFaces.length - shownFaces.length;
   const doorCount = conversationsHome ? waiting.length : homeUnread.count;
 
+  // Dragging a server, Alt+arrows and the menu all end in the same call. Chats
+  // (the door above), the divider and the add / discover buttons below are not
+  // in this list, so none of them can be moved or displaced.
+  const serverIds = useMemo(() => servers.map((server) => server.id), [servers]);
+  const reorderHintId = useId();
+  const reorder = useServerRailReorder({
+    ids: serverIds,
+    enabled: !!onReorderServers,
+    onReorder: (next) => onReorderServers?.(next),
+    announce: (id, position, total) =>
+      t("chrome.railMoved", {
+        name: servers.find((server) => server.id === id)?.name ?? "",
+        n: position,
+        total,
+      }),
+  });
+
   return (
     <nav
+      ref={reorder.navRef}
+      data-rail-dragging={reorder.drag ? "" : undefined}
       data-immersive-hide=""
       data-rail-phone-hidden={phoneHidden ? "" : undefined}
       className={cn(
-        "flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3",
+        "relative flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3",
+        reorder.drag && "cursor-grabbing",
         phoneHidden &&
           (mobileNavOpen
             ? "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:h-auto"
@@ -377,8 +399,17 @@ export function ServerRail({
         className="h-px w-8 shrink-0 rounded-full bg-ink-4/70"
       />
 
-      {servers.map((server) => {
+      {/* The reorderable part: only servers live in here. While one is dragged
+          the others slide apart to open the gap where it will land; there is no
+          line, because the gap is the indicator. */}
+      <div
+        ref={reorder.listRef}
+        data-rail-list=""
+        className="relative flex shrink-0 flex-col items-center gap-2"
+      >
+      {servers.map((server, index) => {
         const selected = selectedServerId === server.id;
+        const lifted = reorder.drag?.id === server.id ? reorder.drag : null;
         const totals = serverUnread[server.id] ?? null;
         const levels = serverNotificationControls(server.id, notifications);
         const muted = levels.level === "none";
@@ -440,6 +471,27 @@ export function ServerRail({
             onSelect: () => setServerStreamAlerts(server.id, !alertsOn),
           });
         }
+        if (onReorderServers && servers.length > 1) {
+          // The same move as Alt+arrows, for the mouse, the phone and anybody
+          // who would not find a keyboard chord.
+          items.push(
+            { id: "sep-order", label: "", separator: true },
+            {
+              id: "move-up",
+              label: t("chrome.moveUp"),
+              icon: ArrowUp,
+              disabled: index === 0,
+              onSelect: () => reorder.moveTo(server.id, index - 1),
+            },
+            {
+              id: "move-down",
+              label: t("chrome.moveDown"),
+              icon: ArrowDown,
+              disabled: index === servers.length - 1,
+              onSelect: () => reorder.moveTo(server.id, index + 1),
+            },
+          );
+        }
         if (server.role !== "owner") {
           items.push(
             { id: "sep", label: "", separator: true },
@@ -458,7 +510,21 @@ export function ServerRail({
           // button. Both primitives want `asChild` on the same node, and
           // neither forwards through the other.
           <Tooltip key={server.id} label={server.name} side="right" tone="rail">
-            <span className="relative inline-flex">
+            <span
+              ref={reorder.itemRef(server.id)}
+              data-rail-item={server.id}
+              data-rail-reorderable={
+                onReorderServers && servers.length > 1 ? "" : undefined
+              }
+              data-rail-lifted={lifted ? "" : undefined}
+              {...(onReorderServers ? reorder.itemProps(server.id) : {})}
+              // Its transform is set by the hook, frame by frame, outside React.
+              style={lifted ? { zIndex: 20 } : undefined}
+              className={cn(
+                "relative inline-flex select-none [-webkit-touch-callout:none]",
+                lifted && "rounded-xl shadow-xl shadow-black/30",
+              )}
+            >
           <ContextMenu
             items={items}
             onOpenChange={
@@ -475,6 +541,10 @@ export function ServerRail({
               type="button"
               onClick={() => onSelectServer(server.id)}
               aria-label={server.name}
+              aria-describedby={onReorderServers ? reorderHintId : undefined}
+              aria-keyshortcuts={
+                onReorderServers ? "Alt+ArrowUp Alt+ArrowDown" : undefined
+              }
               className={cn(
                 "group relative flex h-12 w-12 items-center justify-center rounded-xl font-display text-sm font-bold transition-colors",
                 selected
@@ -545,6 +615,17 @@ export function ServerRail({
           </Tooltip>
         );
       })}
+      </div>
+      {onReorderServers && (
+        <>
+          <span id={reorderHintId} className="sr-only">
+            {t("chrome.railReorderHint")}
+          </span>
+          <span role="status" aria-live="polite" className="sr-only">
+            {reorder.message}
+          </span>
+        </>
+      )}
       <Tooltip label={t("empty.createServer")} side="right" tone="rail">
         <Button
           variant="secondary"
@@ -573,42 +654,16 @@ export function ServerRail({
           allowed here (unlike the compass) because a new post is something
           waiting; a count is not, because this is not a mention.
 
-          The update icon goes FIRST in this block and only exists while a
-          build is waiting. It is the one piece of rail chrome that is not a
-          standing door: it is the way back to a notice the person may have
-          snoozed, or that hushed itself because they are in a call. See
-          `lib/update-prompt-state.ts`. */}
-      {updateWaiting && onOpenUpdate && (
+          The update indicator goes LAST, below everything else, and only
+          exists while there is a build to take. It is not a door: a small round
+          button, smaller than the tiles above it, with a dot, and a popover when
+          it is clicked. See `components/layout/update-indicator.tsx`. */}
+      {onOpenWhatsNew && (
         <>
           <span
             aria-hidden="true"
             className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"
           />
-          <Tooltip label={t("update.rail")} side="right" tone="rail">
-            <button
-              type="button"
-              data-update-rail
-              onClick={onOpenUpdate}
-              aria-label={t("update.rail")}
-              className="group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-ink-3 text-paper transition-all duration-200 hover:rounded-xl hover:bg-signal hover:text-ink"
-            >
-              <RefreshCw className="h-5 w-5" />
-              <span
-                aria-hidden="true"
-                className="absolute right-[-2px] top-[-2px] h-2.5 w-2.5 rounded-full bg-signal ring-[3px] ring-rail"
-              />
-            </button>
-          </Tooltip>
-        </>
-      )}
-      {onOpenWhatsNew && (
-        <>
-          {!(updateWaiting && onOpenUpdate) && (
-            <span
-              aria-hidden="true"
-              className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"
-            />
-          )}
           <Tooltip
             label={
               whatsNewUnread ? t("whatsNew.rail.unread") : t("whatsNew.rail")
@@ -646,7 +701,7 @@ export function ServerRail({
       )}
       {onOpenCommunities && (
         <>
-          {!onOpenWhatsNew && !(updateWaiting && onOpenUpdate) && (
+          {!onOpenWhatsNew && (
             <span
               aria-hidden="true"
               className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"
@@ -670,6 +725,16 @@ export function ServerRail({
             </button>
           </Tooltip>
         </>
+      )}
+      {updateOffered && (
+        <div
+          className={cn(
+            "flex shrink-0 justify-center pt-0.5",
+            !onOpenWhatsNew && !onOpenCommunities && "mt-auto",
+          )}
+        >
+          <UpdateIndicator variant="rail" onOpenWhatsNew={onOpenWhatsNew} />
+        </div>
       )}
     </nav>
   );

@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { sniffStoryMediaType } from "@pqp/shared";
 import { describe, expect, it } from "vitest";
 import { combineScans, realStoryVideoTools } from "./story-media.js";
 
@@ -83,6 +84,96 @@ describe.skipIf(!hasFfmpeg)("the real ffmpeg seam", () => {
       await realStoryVideoTools.frame(video, 1, frame);
       const bytes = await readFile(frame);
       expect([...bytes.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the length of a fragmented MP4 written the way a browser's MediaRecorder writes one", async () => {
+    // Chrome 126+ records `video/mp4` as a stream of fragments with an empty
+    // moov up front and no index at the end. Written to a pipe (not seekable)
+    // so ffmpeg cannot go back and fill a duration in, like the browser.
+    const dir = await mkdtemp(join(tmpdir(), "pqp-story-test-"));
+    try {
+      const made = spawnSync(
+        "ffmpeg",
+        [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "testsrc=size=320x240:rate=15",
+          "-t",
+          "3",
+          "-c:v",
+          "libx264",
+          "-pix_fmt",
+          "yuv420p",
+          "-f",
+          "mp4",
+          "-movflags",
+          "frag_keyframe+empty_moov+default_base_moof",
+          "pipe:1",
+        ],
+        { maxBuffer: 50 * 1024 * 1024 },
+      );
+      expect(made.status).toBe(0);
+      const path = join(dir, "recorded.mp4");
+      await writeFile(path, made.stdout);
+      // The server's own sniffer must accept it as an MP4.
+      expect(sniffStoryMediaType(new Uint8Array(made.stdout.subarray(0, 12)))).toBe("video/mp4");
+      const probed = await realStoryVideoTools.probe(path);
+      expect(probed.videoCodec).toBe("h264");
+      expect(probed.durationMs).toBeGreaterThan(2500);
+      expect(probed.durationMs).toBeLessThan(3500);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a QuickTime movie with H.264 and AAC, the way an iPhone's camera roll hands one over", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pqp-story-test-"));
+    try {
+      const path = join(dir, "clip.mov");
+      const made = spawnSync("ffmpeg", [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=320x240:rate=10",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440",
+        "-t",
+        "2",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-f",
+        "mov",
+        "-y",
+        path,
+      ]);
+      expect(made.status).toBe(0);
+      const head = new Uint8Array((await readFile(path)).subarray(0, 12));
+      // ffmpeg's `mov` writer brands it "qt  ": the server's sniffer takes it as video.
+      expect(String.fromCharCode(...head.subarray(8, 12))).toBe("qt  ");
+      expect(sniffStoryMediaType(head)).toBe("video/mp4");
+      const probed = await realStoryVideoTools.probe(path);
+      expect(probed.videoCodec).toBe("h264");
+      expect(probed.durationMs).toBeGreaterThan(1500);
+      expect([probed.width, probed.height]).toEqual([320, 240]);
+      const frame = join(dir, "frame.jpg");
+      await realStoryVideoTools.frame(path, 1, frame);
+      expect([...(await readFile(frame)).subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

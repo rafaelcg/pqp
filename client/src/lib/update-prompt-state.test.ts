@@ -1,96 +1,78 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  isUpdatePromptShowing,
+  FRESH_BUILD,
+  getBuildStaleness,
+  isUpdateOffered,
   isUpdateWaiting,
-  requestUpdatePrompt,
   resetUpdateState,
-  setUpdatePromptShowing,
+  setBuildStaleness,
   setUpdateWaiting,
-  shouldShowUpdateCard,
-  updateRequestedAt,
+  type BuildStaleness,
 } from "./update-prompt-state";
 
 /**
- * The rule this file exists for: a person with a new build waiting must always
- * have a way to take it. Every branch below is a way the corner card can leave
- * the screen, and each one has to leave `waiting` true so the rail keeps
- * drawing the way back.
+ * The rule this file exists for: a person with a new build to take must always
+ * be able to find the button, and a build that has not been announced yet must
+ * not draw one (the daily cadence, `lib/client-version.ts`).
  */
 
-const base = {
-  waiting: true,
-  snoozedAt: null as number | null,
-  requestedAt: null as number | null,
-  inCall: false,
+const STALE: BuildStaleness = {
+  stale: true,
+  forced: false,
+  latestBuild: "b2",
+  since: 1_000,
 };
 
-describe("shouldShowUpdateCard", () => {
-  it("says nothing when no build is waiting", () => {
-    expect(shouldShowUpdateCard({ ...base, waiting: false })).toBe(false);
-    // Not even when asked for: there is nothing to offer.
+beforeEach(() => resetUpdateState());
+
+describe("isUpdateOffered", () => {
+  it("offers nothing when the page is current and no worker is waiting", () => {
+    expect(isUpdateOffered({ build: FRESH_BUILD, waiting: false }, 5)).toBe(false);
+  });
+
+  it("offers a stale build that is announced, or was never held back", () => {
+    expect(isUpdateOffered({ build: STALE, waiting: false }, 5)).toBe(true);
     expect(
-      shouldShowUpdateCard({ ...base, waiting: false, requestedAt: 5 }),
-    ).toBe(false);
-  });
-
-  it("shows a waiting build that has not been snoozed", () => {
-    expect(shouldShowUpdateCard(base)).toBe(true);
-  });
-
-  it("stays quiet while snoozed", () => {
-    expect(shouldShowUpdateCard({ ...base, snoozedAt: 1000 })).toBe(false);
-  });
-
-  it("stays quiet during a call, because a reload ends the call", () => {
-    expect(shouldShowUpdateCard({ ...base, inCall: true })).toBe(false);
-  });
-
-  it("comes back when asked for, even mid-call", () => {
-    // The rail button is the only thing that sets `requestedAt`, and somebody
-    // pressed it. A card you went looking for is not an interruption.
-    expect(
-      shouldShowUpdateCard({ ...base, inCall: true, requestedAt: 10 }),
+      isUpdateOffered({ build: { ...STALE, announceAt: 100 }, waiting: false }, 100),
     ).toBe(true);
   });
 
-  it("comes back when asked for after a snooze", () => {
+  it("offers nothing while the build is held back for the daily announcement", () => {
     expect(
-      shouldShowUpdateCard({ ...base, snoozedAt: 1000, requestedAt: 2000 }),
-    ).toBe(true);
+      isUpdateOffered({ build: { ...STALE, announceAt: 100 }, waiting: false }, 99),
+    ).toBe(false);
   });
 
-  it("does not come back from a request that predates the snooze", () => {
-    // Ask, read it, hit Later. The old request must not immediately re-open
-    // the card the person just put away.
+  it("does not let a waiting worker undo the hold: it would only be the same notice a minute earlier", () => {
     expect(
-      shouldShowUpdateCard({ ...base, requestedAt: 1000, snoozedAt: 2000 }),
+      isUpdateOffered({ build: { ...STALE, announceAt: 100 }, waiting: true }, 99),
     ).toBe(false);
+  });
+
+  it("offers a waiting worker for a page the version poll has not spoken about", () => {
+    expect(isUpdateOffered({ build: FRESH_BUILD, waiting: true }, 5)).toBe(true);
   });
 });
 
-describe("the update store", () => {
-  beforeEach(() => resetUpdateState());
-
-  it("starts with nothing waiting and nothing showing", () => {
-    expect(isUpdateWaiting()).toBe(false);
-    expect(isUpdatePromptShowing()).toBe(false);
-    expect(updateRequestedAt()).toBeNull();
-  });
-
-  it("keeps `waiting` true while the card is not showing", () => {
-    // This is the whole point of splitting the two. The card can hide for any
-    // reason; the rail must still know a build is there.
+describe("the store", () => {
+  it("remembers a waiting worker and forgets it", () => {
     setUpdateWaiting(true);
-    setUpdatePromptShowing(false);
     expect(isUpdateWaiting()).toBe(true);
-    expect(isUpdatePromptShowing()).toBe(false);
+    setUpdateWaiting(false);
+    expect(isUpdateWaiting()).toBe(false);
   });
 
-  it("forgets a pending request once the build is taken", () => {
-    setUpdateWaiting(true);
-    requestUpdatePrompt(1000);
-    expect(updateRequestedAt()).toBe(1000);
-    setUpdateWaiting(false);
-    expect(updateRequestedAt()).toBeNull();
+  it("publishes a new object only when something moved", () => {
+    setBuildStaleness(STALE);
+    const first = getBuildStaleness();
+    setBuildStaleness({ ...STALE });
+    expect(getBuildStaleness()).toBe(first);
+    // `critical` and `announceAt` count: a force that arrives later, or a
+    // different morning, must reach whoever is drawing the indicator.
+    setBuildStaleness({ ...STALE, critical: true });
+    expect(getBuildStaleness()).not.toBe(first);
+    const second = getBuildStaleness();
+    setBuildStaleness({ ...STALE, critical: true, announceAt: 500 });
+    expect(getBuildStaleness()).not.toBe(second);
   });
 });

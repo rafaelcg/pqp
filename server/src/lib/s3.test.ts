@@ -6,6 +6,7 @@ import {
   getObjectPrefix,
   headObject,
   isStorageConfigured,
+  openObject,
   presignGet,
   presignPut,
   signRequest,
@@ -380,6 +381,86 @@ describe("getObjectPrefix", () => {
       StorageError,
     );
     expect(state.cancelled).toBe(true);
+  });
+});
+
+describe("openObject", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** The signal the code under test handed to `fetch`. */
+  function signalOf(fetchMock: ReturnType<typeof vi.fn>): AbortSignal {
+    return (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].signal!;
+  }
+
+  it("asks for the range it was given and returns the response untouched", async () => {
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([9, 9]), { status: 206 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await openObject("k/a.png", { start: 10, end: 11 });
+    expect(response?.status).toBe(206);
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect((init.headers as Record<string, string>).Range).toBe("bytes=10-11");
+    expect(Array.from(new Uint8Array(await response!.arrayBuffer()))).toEqual([9, 9]);
+  });
+
+  it("is null for a missing object and throws a StorageError for any other failure", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<Error/>", { status: 404 })));
+    expect(await openObject("k/a.png")).toBeNull();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<Error/>", { status: 503 })));
+    await expect(openObject("k/a.png")).rejects.toBeInstanceOf(StorageError);
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("boom"); }));
+    await expect(openObject("k/a.png")).rejects.toBeInstanceOf(StorageError);
+  });
+
+  it("puts a deadline on getting a response, and none on delivering the body", async () => {
+    vi.useFakeTimers();
+    // Never answers: the deadline is what ends it.
+    const hung = vi.fn((_url: string, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal!.addEventListener("abort", () => reject(new Error("aborted")));
+      }),
+    );
+    vi.stubGlobal("fetch", hung);
+    const pending = openObject("k/a.png");
+    const settled = expect(pending).rejects.toBeInstanceOf(StorageError);
+    await vi.advanceTimersByTimeAsync(10_001);
+    await settled;
+    expect(signalOf(hung).aborted).toBe(true);
+
+    // Answers at once: the clock must not keep running over the body, or a
+    // viewer on a slow link loses the end of a valid image.
+    const fine = vi.fn(async () => new Response(new Uint8Array(8), { status: 200 }));
+    vi.stubGlobal("fetch", fine);
+    const response = await openObject("k/b.png");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(signalOf(fine).aborted).toBe(false);
+    await response!.body!.cancel();
+  });
+});
+
+describe("headObject and getObjectPrefix cancellation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("stop their request when the caller's signal fires", async () => {
+    for (const call of [
+      (signal: AbortSignal) => headObject("k/a.png", signal),
+      (signal: AbortSignal) => getObjectPrefix("k/a.png", 16, signal),
+    ]) {
+      const fetchMock = vi.fn((_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal!.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const controller = new AbortController();
+      const result = expect(call(controller.signal)).rejects.toBeInstanceOf(StorageError);
+      controller.abort();
+      await result;
+    }
   });
 });
 

@@ -41,8 +41,10 @@ import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { useMediaQuery } from "@/components/ui/use-media-query";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { useProfilePopover } from "@/components/user/user-profile-popover";
 import { ApiError } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { useInertBackground } from "@/lib/use-inert-background";
 import {
   deleteStory,
   fetchStories,
@@ -59,21 +61,26 @@ import {
   STORY_REACTION_ORDER,
   formatStoryAge,
 } from "@/lib/stories/format";
+import { assetsOfStory, rememberStories, rememberedStory, storyPreloader, warmStoryFonts } from "@/lib/stories/preload";
 import { commitSeenStories, noteStoriesSeen } from "@/lib/stories/seen-store";
 import { flushStoryViews, queueStoryViews } from "@/lib/stories/views-queue";
+import { useStoryCardSize } from "@/lib/stories/viewer-size";
 import { ringAudienceKey, showStoriesNotice, type ViewerRequest } from "@/lib/stories/ui-store";
 import {
   createViewerState,
   currentPerson,
   currentStoryId,
   idsToPreload,
+  idsToWarm,
   isPaused,
   progressFraction,
   storyDisplayMs,
   viewerReducer,
 } from "@/lib/stories/viewer-state";
 import { cn } from "@/lib/utils";
+import type { CallCardServer } from "./story-call-card";
 import { StoryContent, type StoryDisplay } from "./story-content";
+import { displayLayerFrom, type MentionTarget } from "./story-layers";
 import { StoryReportDialog } from "./story-report-dialog";
 import type { StoryViewerSelf } from "./story-strip";
 import { StoryViewersSheet } from "./story-viewers-sheet";
@@ -93,7 +100,22 @@ import { StoryViewersSheet } from "./story-viewers-sheet";
  * there; this file is the DOM around them.
  */
 
-export function storyToDisplay(story: Story): StoryDisplay {
+export function storyToDisplay(
+  story: Story,
+  brand?: (serverId: string) => CallCardServer | null,
+): StoryDisplay {
+  const call = story.call;
+  // The card names the server: the app's own record of it (with its icon), else the
+  // name the story came with.
+  const callServer = call
+    ? (brand?.(call.serverId) ??
+      story.audiences.flatMap((audience) =>
+        audience.kind === "server" && audience.serverId === call.serverId
+          ? [{ name: audience.serverName, iconUrl: null }]
+          : [],
+      )[0] ??
+      null)
+    : null;
   return {
     id: story.id,
     kind: story.kind,
@@ -102,7 +124,12 @@ export function storyToDisplay(story: Story): StoryDisplay {
     caption: story.caption,
     mediaUrl: story.media?.url ?? null,
     posterUrl: story.media?.posterUrl ?? null,
+    mediaWidth: story.media?.width ?? null,
+    mediaHeight: story.media?.height ?? null,
     call: story.call,
+    layers: (story.layers ?? []).map(displayLayerFrom),
+    altText: story.altText ?? null,
+    callServer,
   };
 }
 
@@ -136,6 +163,8 @@ interface StoryViewerProps {
   onClosed: () => void;
   onJoinCall: (call: StoryCallLive) => void;
   onOpenRoles: (serverId: string) => void;
+  /** A server's name and icon, for the call card. */
+  serverBrand?: (serverId: string) => CallCardServer | null;
 }
 
 type Fx =
@@ -149,13 +178,25 @@ export function StoryViewer({
   onClosed,
   onJoinCall,
   onOpenRoles,
+  serverBrand,
 }: StoryViewerProps) {
   const { t } = useTranslation();
+  const openProfile = useProfilePopover();
   const wide = useMediaQuery("(min-width: 640px)", true);
+  const cardSize = useStoryCardSize();
   const [state, dispatch] = useReducer(viewerReducer, request, (req) =>
     createViewerState(req.people, { personIndex: req.startIndex }),
   );
-  const [stories, setStories] = useState<ReadonlyMap<string, Story>>(new Map());
+  // Starts with whatever the strip warmed a moment ago, so the first story needs no request at all.
+  const [stories, setStories] = useState<ReadonlyMap<string, Story>>(
+    () =>
+      new Map(
+        idsToPreload(state).flatMap((id) => {
+          const known = rememberedStory(id);
+          return known ? [[id, known] as const] : [];
+        }),
+      ),
+  );
   const [missing, setMissing] = useState<ReadonlySet<string>>(new Set());
   // Fetches that failed (offline, a 5xx): retried after a pause, and shown as
   // a failure with a retry meanwhile, never an endless spinner.
@@ -178,6 +219,8 @@ export function StoryViewer({
   const [deck, setDeck] = useState<{ display: StoryDisplay; dir: "forward" | "back"; key: number } | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
+  // The page behind is unreachable while this is open; handed back just before focus returns to the ring.
+  const releaseBackground = useInertBackground(rootRef);
   const cardRef = useRef<HTMLDivElement>(null);
   const deckRef = useRef<HTMLDivElement>(null);
   const replyRef = useRef<HTMLInputElement>(null);
@@ -205,10 +248,32 @@ export function StoryViewer({
   const dialogOpen = Boolean(report || confirmDelete || modRemove);
 
   // ---------------------------------------------------------------- data
+  // Stories the strip (or an earlier look) read a moment ago are used as they are, without asking
+  // again: their presigned picture and clip URLs are the very ones that were warmed.
+  useEffect(() => {
+    const known = idsToPreload(state).flatMap((id) => {
+      const story = stories.has(id) ? null : rememberedStory(id);
+      return story ? [story] : [];
+    });
+    if (known.length === 0) {
+      return;
+    }
+    setStories((current) => {
+      const next = new Map(current);
+      for (const story of known) {
+        next.set(story.id, story);
+      }
+      return next;
+    });
+    // `state` is read through idsToPreload; the indices are what move it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.personIndex, state.storyIndex, state.people, stories]);
+
   useEffect(() => {
     const pending = inflight.current;
     const wanted = idsToPreload(state).filter(
-      (id) => !stories.has(id) && !missing.has(id) && !failed.has(id) && !pending.has(id),
+      (id) =>
+        !stories.has(id) && !missing.has(id) && !failed.has(id) && !pending.has(id) && !rememberedStory(id),
     );
     if (wanted.length === 0) {
       return;
@@ -235,14 +300,8 @@ export function StoryViewer({
           setMissing((current) => new Set([...current, ...gone]));
           dispatch({ type: "remove", storyIds: gone });
         }
-        // Warm the next pictures so a tap never waits on a download.
-        for (const item of found) {
-          if (item.kind === "image" && item.media?.url) {
-            const image = new Image();
-            image.decoding = "async";
-            image.src = item.media.url;
-          }
-        }
+        // Kept, so looking again within minutes (and the preloader's warmed files) match these URLs.
+        rememberStories(found);
       })
       .catch(() => {
         if (cancelled) {
@@ -305,6 +364,23 @@ export function StoryViewer({
   isOwnRef.current = isOwn;
   const currentPersonIdsRef = useRef<string[]>([]);
   currentPersonIdsRef.current = person?.storyIds ?? [];
+
+  // Warm what comes next (the next two of the queue across authors, and the next author's first), so
+  // going on shows its first frame with no wait: pictures decoded, a clip buffered, layer photos and
+  // the author's face loaded. Leaving the window cancels what is still downloading; closing cancels all.
+  useEffect(() => {
+    const assets = idsToWarm(state).flatMap((id) => {
+      const next = stories.get(id);
+      return next ? assetsOfStory(next, { video: true }) : [];
+    });
+    storyPreloader.setSource("viewer", 0, assets);
+    // `state` is read through idsToWarm; the indices and the queue are what move it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.personIndex, state.storyIndex, state.people, stories]);
+  useEffect(() => {
+    warmStoryFonts();
+    return () => storyPreloader.clearSource("viewer");
+  }, []);
 
   // Clock for ages and local expiry.
   useEffect(() => {
@@ -387,6 +463,28 @@ export function StoryViewer({
     return () => document.removeEventListener("visibilitychange", sync);
   }, []);
 
+  // A picture or clip is not "on" until it shows its first frame: its time does not start before that,
+  // so a slow connection gives a story its full time instead of spending it on a blank card (and a
+  // story whose clock ran out while it was still downloading was skipped unseen). One that does not
+  // load says so on its card, with a retry; the person can also tap on to the next.
+  const [readyId, setReadyId] = useState<string | null>(null);
+  const waitingForMedia = Boolean(
+    story &&
+      story.kind !== "text" &&
+      story.media?.url &&
+      story.own?.status !== "processing" &&
+      readyId !== story.id,
+  );
+  useEffect(() => {
+    dispatch({ type: waitingForMedia ? "pause" : "resume", reason: "load" });
+  }, [waitingForMedia]);
+  // The story on screen comes first: while it is still loading, nothing is warmed (what was going is
+  // cancelled), so the stories ahead cannot starve it. Warming resumes the moment it is revealed.
+  useEffect(() => {
+    storyPreloader.setPaused(waitingForMedia);
+    return () => storyPreloader.setPaused(false);
+  }, [waitingForMedia]);
+
   // Reset per story: the reply line, the sheet stays only on our own.
   useEffect(() => {
     setReplyState("idle");
@@ -465,11 +563,23 @@ export function StoryViewer({
     onClosed();
     // The ring turns grey only once the card is back in it (design §4).
     window.setTimeout(commitSeenStories, 120);
+    // An inert ring cannot take the focus back.
+    releaseBackground();
     const ring = ringFor(person?.authorId ?? null) ?? restoreFocus.current;
     if (ring instanceof HTMLElement) {
+      // Focus goes back so a keyboard user keeps their place, but after a
+      // mouse or a touch it must not paint a ring: the script focus would
+      // match :focus-visible (Esc counts as a key) and leave the strip
+      // looking selected until the next click elsewhere.
+      if (!request.originByKeyboard) {
+        ring.setAttribute("data-pointer-focus", "");
+        ring.addEventListener("blur", () => ring.removeAttribute("data-pointer-focus"), {
+          once: true,
+        });
+      }
       ring.focus({ preventScroll: true });
     }
-  }, [flushViews, onClosed, ringFor, person?.authorId]);
+  }, [flushViews, onClosed, releaseBackground, ringFor, person?.authorId, request.originByKeyboard]);
 
   const close = useCallback(() => {
     if (closingRef.current) {
@@ -538,8 +648,33 @@ export function StoryViewer({
     }
   }, [state.closed, close]);
 
+  // A tap on a mention opens that person's card over the story, and holds the story while it is read.
+  const mentionResume = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (mentionResume.current !== null) {
+        window.clearTimeout(mentionResume.current);
+      }
+    },
+    [],
+  );
+  function openMention(person: MentionTarget, anchor: HTMLElement) {
+    openProfile(
+      { id: person.userId, displayName: person.name, tag: null, avatarUrl: person.avatarUrl },
+      anchor,
+    );
+    dispatch({ type: "pause", reason: "dialog" });
+    if (mentionResume.current !== null) {
+      window.clearTimeout(mentionResume.current);
+    }
+    mentionResume.current = window.setTimeout(() => {
+      mentionResume.current = null;
+      dispatch({ type: "resume", reason: "dialog" });
+    }, 12_000);
+  }
+
   // ---------------------------------------------------------------- deck
-  const display = story ? storyToDisplay(story) : null;
+  const display = story ? storyToDisplay(story, serverBrand) : null;
   useLayoutEffect(() => {
     if (state.generation === lastGeneration.current) {
       return;
@@ -729,6 +864,16 @@ export function StoryViewer({
         return;
       }
       const typing = document.activeElement === replyRef.current;
+      // Escape closes only the topmost thing: a profile card opened from a mention is above the
+      // viewer, so it takes the key (it closes itself) and the viewer stays.
+      if (event.key === "Escape" && document.querySelector("[data-profile-card]")) {
+        return;
+      }
+      // The same for the "More options" menu: this listener is on the window in the capture phase, so it
+      // runs before the menu's own, and the key is the menu's (it closes itself, the viewer stays).
+      if (event.key === "Escape" && document.querySelector("[role='menu']")) {
+        return;
+      }
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -825,7 +970,10 @@ export function StoryViewer({
         return current;
       }
       const next = new Map(current);
-      next.set(id, patch(existing));
+      const patched = patch(existing);
+      next.set(id, patched);
+      // The remembered copy follows, so reopening soon does not show a reaction that was just undone.
+      rememberStories([patched]);
       return next;
     });
   }
@@ -1095,19 +1243,25 @@ export function StoryViewer({
       data-story-held={held ? "true" : "false"}
       className={cn(
         "relative flex flex-col overflow-hidden",
-        wide
-          ? "h-[min(650px,calc(100dvh-96px))] aspect-[366/650] rounded-[14px] shadow-[var(--story-shadow)]"
-          : "h-full w-full",
+        wide ? "rounded-[14px] shadow-[var(--story-shadow)]" : "h-full w-full",
       )}
-      style={{ background: "var(--story-card)", touchAction: "none" }}
+      style={{
+        background: "var(--story-card)",
+        touchAction: "none",
+        ...(wide ? { width: cardSize.width, height: cardSize.height } : null),
+      }}
     >
-      <div className="relative min-h-0 flex-1">
+      <div
+        className="relative min-h-0 flex-1"
+        // A caption sits above the reply row, which is drawn over the picture.
+        style={{ "--story-caption-lift": "40px" } as CSSProperties}
+      >
         {deck && (
           <div
             ref={deckRef}
             key={deck.key}
             aria-hidden
-            className="pointer-events-none absolute inset-0 z-0 overflow-hidden rounded-b-[14px]"
+            className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
           >
             <StoryContent story={deck.display} still />
           </div>
@@ -1117,7 +1271,7 @@ export function StoryViewer({
           className="absolute inset-0 z-[1]"
         >
           <div
-            className="story-stage absolute inset-0 overflow-hidden rounded-b-[14px]"
+            className="story-stage absolute inset-0 overflow-hidden"
             onPointerDown={onStagePointerDown}
             onPointerMove={onStagePointerMove}
             onPointerUp={onStagePointerUp}
@@ -1136,9 +1290,13 @@ export function StoryViewer({
                   onJoinCall(call);
                   dispatch({ type: "close" });
                 }}
+                onOpenMention={openMention}
+                reserveBottom={64}
                 onVideoDuration={(ms) => dispatch({ type: "duration", durationMs: ms })}
                 onVideoTime={(ms) => dispatch({ type: "progress", elapsedMs: ms })}
                 onVideoEnded={() => dispatch({ type: "next" })}
+                onReady={() => setReadyId(display.id)}
+                gate
               />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center">
@@ -1183,12 +1341,19 @@ export function StoryViewer({
           </div>
 
           {/* Chrome: bars and header. */}
-          <div className="story-chrome pointer-events-none absolute inset-x-0 top-0 z-10 px-3 pt-3">
+          {/* The chrome is one fixed, compact size at every card size: the
+              card grows, the bars, the type and the icons do not. */}
+          <div className="story-chrome pointer-events-none absolute inset-x-0 top-0 z-10 px-3 pt-2.5">
+            <div
+              aria-hidden
+              className="absolute inset-x-0 top-0 -z-10 h-24"
+              style={{ background: "var(--story-head-scrim)" }}
+            />
             <div className="flex gap-1" aria-hidden>
               {(person?.storyIds ?? []).map((id, index) => (
                 <span
                   key={id}
-                  className="relative h-[2.5px] flex-1 overflow-hidden rounded-full"
+                  className="relative h-0.5 flex-1 overflow-hidden rounded-full"
                   style={{ background: "var(--story-track)" }}
                 >
                   <span
@@ -1208,29 +1373,37 @@ export function StoryViewer({
                 </span>
               ))}
             </div>
-            <div className="mt-2.5 flex items-center gap-2.5">
+            <div className="mt-2 flex items-center gap-2">
               {author && (
                 <UserAvatar
                   name={author.displayName}
                   avatarUrl={author.avatarUrl}
                   rounded="full"
-                  className="h-8 w-8"
+                  className="h-8 w-8 shrink-0"
                   fallbackClassName="bg-surface-3 text-xs text-text"
                 />
               )}
-              <div className="min-w-0 flex-1" style={{ color: "var(--story-on-media)" }}>
-                <p className="truncate text-sm font-bold leading-tight">
+              {/* One line: who, how long ago, and who it went to, small and
+                  tucked after them. */}
+              <p
+                className="flex min-w-0 flex-1 items-baseline gap-1.5 whitespace-nowrap text-sm leading-tight"
+                style={{ color: "var(--story-on-media)" }}
+              >
+                <span className="min-w-0 shrink truncate font-semibold">
                   {isOwn ? t("stories.strip.yours") : author?.displayName}
-                  <span className="ml-1.5 font-medium" style={{ color: "var(--story-on-media-2)" }}>
-                    {formatStoryAge(story?.publishedAt ?? null, now)}
-                  </span>
-                </p>
-                <p className="mt-0.5 flex items-center gap-1 truncate text-[11.5px] font-semibold" style={{ color: "var(--story-on-media-2)" }}>
+                </span>
+                <span className="shrink-0" style={{ color: "var(--story-on-media-2)" }}>
+                  {formatStoryAge(story?.publishedAt ?? null, now)}
+                </span>
+                <span
+                  className="flex min-w-0 shrink-[2] items-center gap-1 self-center text-xs"
+                  style={{ color: "var(--story-on-media-2)" }}
+                >
                   <Users className="h-3 w-3 shrink-0" aria-hidden />
                   <span className="truncate">{audienceLine}</span>
-                </p>
-              </div>
-              <div className="pointer-events-auto flex items-center">
+                </span>
+              </p>
+              <div className="pointer-events-auto flex shrink-0 items-center">
                 {story?.kind === "video" && !processing && (
                   <ChromeButton
                     label={muted ? t("stories.viewer.unmute") : t("stories.viewer.mute")}
@@ -1259,16 +1432,20 @@ export function StoryViewer({
                       type="button"
                       aria-label={t("stories.viewer.more")}
                       data-story-more=""
-                      className="flex h-9 w-9 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                      className={CHROME_BUTTON}
                       style={{ color: "var(--story-on-media)" }}
                     >
                       <MoreHorizontal className="h-5 w-5" />
                     </button>
                   </Menu>
                 )}
-                <ChromeButton label={t("stories.viewer.close")} onClick={() => dispatch({ type: "close" })}>
-                  <X className="h-5 w-5" />
-                </ChromeButton>
+                {/* On a desktop window the close sits at the window's corner,
+                    outside the card; the phone card is the whole screen. */}
+                {!wide && (
+                  <ChromeButton label={t("stories.viewer.close")} onClick={() => dispatch({ type: "close" })}>
+                    <X className="h-5 w-5" />
+                  </ChromeButton>
+                )}
               </div>
             </div>
           </div>
@@ -1278,7 +1455,7 @@ export function StoryViewer({
               key={fx.key}
               aria-hidden
               className={cn(
-                "story-react-fly absolute bottom-6 left-8 z-30 text-3xl",
+                "story-react-fly absolute bottom-[72px] left-5 z-30 text-3xl",
                 fx.glyph === "GG" && "rounded-[10px] bg-accent px-2 py-1 font-display text-lg font-black text-on-accent",
               )}
             >
@@ -1289,7 +1466,7 @@ export function StoryViewer({
             <span
               key={fx.key}
               role="status"
-              className="story-pill absolute bottom-6 left-1/2 z-30 -translate-x-1/2 rounded-full px-3 py-1.5 text-xs font-semibold"
+              className="story-pill absolute bottom-[72px] left-1/2 z-30 -translate-x-1/2 rounded-full px-3 py-1.5 text-xs font-semibold"
               style={{ background: "var(--story-tray)", color: "var(--story-on-media)" }}
             >
               {fx.text}
@@ -1299,7 +1476,7 @@ export function StoryViewer({
             <span
               key={toast.key}
               role="status"
-              className="story-pill absolute left-1/2 top-20 z-30 -translate-x-1/2 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold"
+              className="story-pill absolute left-1/2 top-16 z-30 -translate-x-1/2 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold"
               style={{ background: "var(--story-tray)", color: "var(--story-on-media)" }}
             >
               {toast.text}
@@ -1308,7 +1485,7 @@ export function StoryViewer({
 
           {showTray && (
             <div
-              className="story-tray-up absolute inset-x-3 bottom-3 z-20 flex h-14 items-center justify-around rounded-full border px-2 shadow-[var(--story-shadow)]"
+              className="story-tray-up absolute inset-x-3 bottom-[68px] z-20 flex h-12 items-center justify-around rounded-full border px-2 shadow-[var(--story-shadow)]"
               style={{ background: "var(--story-tray)", borderColor: "var(--story-hairline)" }}
               onPointerDown={(event) => event.preventDefault()}
             >
@@ -1321,7 +1498,7 @@ export function StoryViewer({
                   data-story-react={reaction}
                   onClick={() => react(reaction)}
                   className={cn(
-                    "story-react-pop flex h-11 min-w-11 items-center justify-center rounded-full transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+                    "story-react-pop flex h-10 min-w-10 items-center justify-center rounded-full transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
                     story?.viewer.reaction === reaction && "ring-2 ring-accent",
                   )}
                   style={{ "--i": index } as CSSProperties}
@@ -1349,17 +1526,22 @@ export function StoryViewer({
               onClose={() => setSheetOpen(false)}
             />
           )}
-        </div>
-      </div>
 
-      {/* Footer. */}
-      <div className="story-chrome relative z-10 flex min-h-16 shrink-0 items-center gap-2 px-3 pb-[env(safe-area-inset-bottom)]">
+          {/* The reply row, over the foot of the picture on a gradient (the
+              caption is lifted above it): one compact size at every card size. */}
+          <div className="story-chrome pointer-events-none absolute inset-x-0 bottom-0 z-[15] px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-10">
+            <div
+              aria-hidden
+              className="absolute inset-x-0 bottom-0 -z-10 h-28"
+              style={{ background: "var(--story-foot-scrim)" }}
+            />
+            <div className="pointer-events-auto flex items-center gap-1.5" data-story-owner-bar={story && isOwn ? "" : undefined}>
         {story && isOwn ? (
           <button
             type="button"
             data-story-views=""
             onClick={() => setSheetOpen((open) => !open)}
-            className="flex h-10 items-center gap-2 rounded-full px-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="flex h-9 items-center gap-2 rounded-full px-3 text-[13px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
             style={{ color: "var(--story-on-media)", background: "var(--story-field-fill)" }}
           >
             <Eye className="h-4 w-4" aria-hidden />
@@ -1401,7 +1583,7 @@ export function StoryViewer({
                   replyState === "sent" ? "" : t("stories.viewer.replyTo", { name: author?.displayName ?? "" })
                 }
                 className={cn(
-                  "h-11 w-full rounded-full border-[1.5px] bg-transparent px-4 text-[15px] outline-none transition-colors duration-[var(--duration-fast)] placeholder:text-[var(--story-on-media-2)]",
+                  "h-11 w-full rounded-full border bg-transparent px-4 text-sm outline-none transition-colors duration-[var(--duration-fast)] placeholder:text-[var(--story-on-media-2)]",
                   replyState === "error" && "border-danger",
                 )}
                 style={{
@@ -1418,7 +1600,7 @@ export function StoryViewer({
               {replyState === "sent" && (
                 <span
                   role="status"
-                  className="story-media-in pointer-events-none absolute inset-0 flex items-center gap-1.5 px-4 text-[15px] font-semibold"
+                  className="story-media-in pointer-events-none absolute inset-0 flex items-center gap-1.5 px-4 text-sm font-semibold"
                   style={{ color: "var(--story-accent)" }}
                 >
                   {t("stories.viewer.sent")}
@@ -1434,17 +1616,17 @@ export function StoryViewer({
                 aria-pressed={story.viewer.reaction === "gg"}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => react("gg")}
-                className={cn(
-                  "flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-[1.5px] font-display text-[15px] font-extrabold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
-                  story.viewer.reaction === "gg" && "border-accent bg-accent text-on-accent",
-                )}
-                style={
-                  story.viewer.reaction === "gg"
-                    ? undefined
-                    : { color: "var(--story-on-media)", borderColor: "var(--story-field-edge)" }
-                }
+                className="group flex h-11 w-11 shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring sm:h-9 sm:w-9"
+                style={story.viewer.reaction === "gg" ? undefined : { color: "var(--story-on-media)" }}
               >
-                GG
+                <span
+                  className={cn(
+                    "flex h-8 w-8 items-center justify-center rounded-full font-display text-[13px] font-extrabold tracking-[0.02em]",
+                    story.viewer.reaction === "gg" && "bg-accent text-on-accent",
+                  )}
+                >
+                  GG
+                </span>
               </button>
             ) : null}
             <button
@@ -1452,16 +1634,23 @@ export function StoryViewer({
               aria-label={t("stories.viewer.send")}
               disabled={!replyText.trim() || replyState === "sending"}
               onMouseDown={(event) => event.preventDefault()}
-              className={cn(
-                "flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60",
-                replyText.trim() && "bg-accent text-on-accent",
-              )}
-              style={replyText.trim() ? undefined : { color: "var(--story-on-media)" }}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60 sm:h-9 sm:w-9"
+              style={{ color: "var(--story-on-media)" }}
             >
-              <Send className="h-5 w-5" aria-hidden />
+              <span
+                className={cn(
+                  "flex h-8 w-8 items-center justify-center rounded-full transition-colors",
+                  replyText.trim() && "bg-accent text-on-accent",
+                )}
+              >
+                <Send className="h-[22px] w-[22px]" aria-hidden />
+              </span>
             </button>
           </form>
         ) : null}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1517,19 +1706,24 @@ export function StoryViewer({
           type="button"
           aria-label={t("stories.viewer.close")}
           onClick={() => dispatch({ type: "close" })}
-          className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-surface-2 text-text hover:bg-surface-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          // z-10: the deck below is a positioned full-size box that comes later in the tree, so without it
+          // the X is painted under it and a click never reaches the button.
+          className="absolute right-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-full opacity-90 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          style={{ color: "var(--story-on-media)" }}
         >
-          <X className="h-4 w-4" />
+          <X className="h-6 w-6" />
         </button>
       )}
 
-      <div className="relative flex h-full w-full items-center justify-center gap-4">
-        {wide && (
-          <div className="hidden w-[140px] shrink-0 xl:block">
+      <div className="relative flex h-full w-full items-center justify-center gap-3">
+        {wide && cardSize.showNeighbours && (
+          <div className="shrink-0" style={{ width: cardSize.neighbourWidth }}>
             {previousPerson && (
               <Neighbour
                 author={request.authors[previousPerson.authorId] ?? null}
                 story={stories.get(previousPerson.storyIds[0] ?? "") ?? null}
+                width={cardSize.neighbourWidth}
+                height={cardSize.neighbourHeight}
                 onOpen={() => dispatch({ type: "goPerson", index: state.personIndex - 1 })}
               />
             )}
@@ -1546,12 +1740,14 @@ export function StoryViewer({
             <ChevronRight className="h-4 w-4" />
           </ArrowButton>
         )}
-        {wide && (
-          <div className="hidden w-[140px] shrink-0 xl:block">
+        {wide && cardSize.showNeighbours && (
+          <div className="shrink-0" style={{ width: cardSize.neighbourWidth }}>
             {nextPerson && (
               <Neighbour
                 author={request.authors[nextPerson.authorId] ?? null}
                 story={stories.get(nextPerson.storyIds[0] ?? "") ?? null}
+                width={cardSize.neighbourWidth}
+                height={cardSize.neighbourHeight}
                 onOpen={() => dispatch({ type: "goPerson", index: state.personIndex + 1 })}
               />
             )}
@@ -1626,13 +1822,23 @@ function ChromeButton({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="flex h-9 w-9 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+      className={CHROME_BUTTON}
       style={{ color: "var(--story-on-media)" }}
     >
       {children}
     </button>
   );
 }
+
+/**
+ * A header icon (mute, pause, more, close): 20 px drawn, the same 44 px hit box
+ * on a desktop window and on a phone (the negative margin keeps the header row
+ * as tall as the avatar, so the bigger touch target costs no space). The round look is the button's
+ * radius, which a pointer also respects, so a square pseudo-element makes the WHOLE 44 px box the
+ * target: a tap in its corner is the button's, never the stage's "next story".
+ */
+const CHROME_BUTTON =
+  "relative -my-1.5 flex h-11 w-11 items-center justify-center rounded-full before:absolute before:inset-0 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
 
 function ArrowButton({
   label,
@@ -1648,7 +1854,7 @@ function ArrowButton({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-text text-surface-0 opacity-90 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+      className="z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-text text-surface-0 opacity-90 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
     >
       {children}
     </button>
@@ -1663,14 +1869,21 @@ function Kbd({ children }: { children: ReactNode }) {
   );
 }
 
-/** A neighbour on either side, at 55%: click it to jump to that person. */
+/**
+ * A neighbour on either side: shorter than the card, dimmed, centred on it.
+ * Click it to jump to that person. Sized from the card (`viewer-size.ts`).
+ */
 function Neighbour({
   author,
   story,
+  width,
+  height,
   onOpen,
 }: {
   author: StoryAuthor | null;
   story: Story | null;
+  width: number;
+  height: number;
   onOpen: () => void;
 }) {
   const { t } = useTranslation();
@@ -1682,8 +1895,8 @@ function Neighbour({
       type="button"
       onClick={onOpen}
       aria-label={t("stories.viewer.openPerson", { name: author.displayName })}
-      className="relative block h-[250px] w-[140px] overflow-hidden rounded-[12px] opacity-55 transition-opacity hover:opacity-80 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-      style={{ background: "var(--story-card)" }}
+      className="relative block overflow-hidden rounded-[12px] opacity-55 transition-opacity hover:opacity-80 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+      style={{ background: "var(--story-card)", width, height }}
     >
       {story && (
         <span className="absolute inset-0 scale-110 blur-[10px]">
@@ -1695,10 +1908,10 @@ function Neighbour({
           name={author.displayName}
           avatarUrl={author.avatarUrl}
           rounded="full"
-          className="h-10 w-10"
-          fallbackClassName="bg-surface-3 text-sm text-text"
+          className="h-8 w-8"
+          fallbackClassName="bg-surface-3 text-xs text-text"
         />
-        <span className="max-w-[120px] truncate text-sm font-semibold">{author.displayName}</span>
+        <span className="max-w-[90%] truncate text-sm font-semibold">{author.displayName}</span>
       </span>
     </button>
   );

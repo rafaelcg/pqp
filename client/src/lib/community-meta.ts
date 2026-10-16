@@ -251,7 +251,7 @@ export function renderCommunityHead(
  * vocabulary, so the icons, the theme colour, the viewport, the pre-paint theme
  * script and the font preconnects all survive untouched.
  */
-const MANAGED_TAGS =
+export const MANAGED_TAGS =
   /[ \t]*(?:<title>[\s\S]*?<\/title>|<meta\s+(?:name|property)="(?:description|robots|og:[a-zA-Z:_]+|twitter:[a-zA-Z:_]+|profile:[a-zA-Z:]+)"[\s\S]*?\/>|<link\s+rel="canonical"[^>]*\/>|<link\s+rel="alternate"[^>]*\/>|<script type="application\/ld\+json">[\s\S]*?<\/script>)\n?/g;
 
 /**

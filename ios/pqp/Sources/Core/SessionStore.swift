@@ -78,6 +78,10 @@ final class SessionStore {
     /// room. Cleared by the view that shows it.
     var arrivalCelebration: ArrivalCelebration?
 
+    /// "Encaminhado, Ver": set by the forward picker when it closes on a
+    /// success, drawn at the app root so it outlives the sheet that made it.
+    var forwardToast: ForwardToast?
+
     /// Whether this launch walked the account through the age gate, which is
     /// what marks a brand-new account (see `Onboarding.shouldRun`).
     private var answeredAgeGateThisLaunch = false
@@ -127,6 +131,9 @@ final class SessionStore {
     /// Who is in every voice room this account can see, for the channel list.
     /// Fed from the socket for the whole session; see `VoiceOccupancyStore`.
     let voiceOccupancy = VoiceOccupancyStore()
+    /// Stories being posted in the background: the composer hands a story over
+    /// and closes, so the post has to outlive the screen that started it.
+    let storyPosts: StoryPostQueue
 
     init() {
         let mode = AppConfig.authMode
@@ -136,8 +143,10 @@ final class SessionStore {
         case .devBypass: DevTokenProvider()
         }
         tokenProvider = provider
-        api = APIClient(tokenProvider: provider)
+        let client = APIClient(tokenProvider: provider)
+        api = client
         realtime = RealtimeClient(tokenProvider: provider)
+        storyPosts = StoryPostQueue(backend: LiveStoryPostBackend(api: client))
     }
 
     /// Whether Clerk currently holds a session. Meaningless under the bypass,
@@ -275,6 +284,9 @@ final class SessionStore {
     /// proceeding to the app would produce a screen of errors.
     private func route(_ user: CurrentUser) async {
         currentUser = user
+        // A story the last run did not finish posting comes back with its
+        // retry and discard choices; another account's draft stays out.
+        storyPosts.restore(userId: user.id)
         switch user.ageGate {
         case "pending":
             // The gate is screen one of the wizard: it draws the same dots, so
@@ -685,6 +697,8 @@ final class SessionStore {
         eventHandlers.removeValue(forKey: Self.cacheHandlerKey)
         eventHandlers.removeValue(forKey: Self.occupancyHandlerKey)
         voiceOccupancy.clear()
+        storyPosts.clear()
+        StoryPreloader.shared.reset()
         // Cached pages are one account's private messages sitting in
         // Application Support. The next person to sign in on this device must
         // not find them, so the whole directory goes.

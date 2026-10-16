@@ -8,9 +8,11 @@ import {
   createViewerState,
   currentStoryId,
   idsToPreload,
+  idsToWarm,
   isPaused,
   progressFraction,
   storyDisplayMs,
+  upcomingStoryIds,
   viewerReducer,
   type ViewerAction,
   type ViewerState,
@@ -273,8 +275,35 @@ describe("pacing and preload", () => {
     ).toBe(12_345);
   });
 
-  it("preloads the rest of this person and the first story of each neighbour", () => {
-    expect(idsToPreload(createViewerState(people, { personIndex: 1 }))).toEqual(["c1", "f1", "b1"]);
-    expect(idsToPreload(createViewerState(people, { storyIndex: 1 }))).toEqual(["b2", "c1"]);
+  it("reads the rest of this person, the first story of each neighbour and the next two of the queue", () => {
+    expect(idsToPreload(createViewerState(people, { personIndex: 1 }))).toEqual(["c1", "f1", "b1", "f2"]);
+    expect(idsToPreload(createViewerState(people, { storyIndex: 1 }))).toEqual(["b2", "c1", "f1"]);
+  });
+
+  it("the next stories of the queue run across authors", () => {
+    expect(upcomingStoryIds(createViewerState(people), 2)).toEqual(["b2", "c1"]);
+    expect(upcomingStoryIds(createViewerState(people, { storyIndex: 1 }), 2)).toEqual(["c1", "f1"]);
+    expect(upcomingStoryIds(createViewerState(people, { personIndex: 2 }), 5)).toEqual(["f2", "f3"]);
+    expect(upcomingStoryIds(createViewerState(people, { personIndex: 2, storyIndex: 2 }), 2)).toEqual([]);
+  });
+
+  it("warms the next two and the first story of the next author, without repeats", () => {
+    // On b1: next two are b2 and c1, and c1 is also the next author's first.
+    expect(idsToWarm(createViewerState(people))).toEqual(["b2", "c1"]);
+    // On c1: next two are f1 and f2; the next author's first (f1) is already there.
+    expect(idsToWarm(createViewerState(people, { personIndex: 1 }))).toEqual(["f1", "f2"]);
+    // On b2 of a person with one story left: the next author's first comes along.
+    expect(idsToWarm(createViewerState([{ authorId: "a", storyIds: ["a1"] }, { authorId: "b", storyIds: ["b1", "b2", "b3"] }]))).toEqual(["b1", "b2"]);
+    expect(
+      idsToWarm(
+        createViewerState(
+          [
+            { authorId: "a", storyIds: ["a1", "a2", "a3"] },
+            { authorId: "b", storyIds: ["b1"] },
+          ],
+        ),
+      ),
+    ).toEqual(["a2", "a3", "b1"]);
+    expect(idsToWarm(createViewerState(people, { personIndex: 2, storyIndex: 2 }))).toEqual([]);
   });
 });

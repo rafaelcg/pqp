@@ -144,8 +144,11 @@ export async function sendFriendRequest(
    * every reason, so "is a character" and "has blocked me" are the same
    * response. The character is simply an account you cannot add.
    */
+  // A webhook-style identity (an incoming webhook, a followed Baú's deliveries)
+  // is refused the same way: nobody can accept it, and its id is public on every
+  // message it wrote.
   const character = await getPool().query<{ any_character: boolean }>(
-    `SELECT bool_or(COALESCE(is_character, FALSE)) AS any_character
+    `SELECT bool_or(COALESCE(is_character, FALSE) OR COALESCE(is_webhook, FALSE)) AS any_character
        FROM users WHERE id = ANY($1::uuid[])`,
     [[actorId, targetId]],
   );

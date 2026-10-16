@@ -128,33 +128,46 @@ sound. Reproduced with real builds and a real service worker (`client/e2e/stale-
 | Navigations are network-first | `src/lib/sw-build-script.ts` (imported by the worker as `sw-build-*.js`) | The worker answers a navigation from the network, and only falls back to the precached shell when offline or after 4 s. Before, every navigation was answered from the precache, which is the OLD build's until a newer worker has installed. A hard reload (Ctrl+Shift+R) bypasses the worker for ONE load, and the next navigation, the language picker's `location.replace` included, is the worker's again: reported on 2026-09-30 as "the old site came back after I changed the language". Reproduced with a second tab open (it keeps the old worker in control). The locale catalogues are hashed chunks of the same build, in the same precache, so they follow the build id like everything else, and an update reloads them with the page. |
 | The page asks | `src/lib/version-watch.ts` | `/version.json` (no-store, cache-busted) on start, on focus and visibility, on every realtime (re)connect, and every 8 to 12 minutes whether the tab is visible or hidden, at most once a minute. Also asks the browser to look for a new worker. A worker taking control triggers a look at once. `/version.json` and not the API's version, because the bundle and the API deploy apart. |
 | The worker asks too | `src/lib/sw-build-script.ts` | On a fetch from any page it controls, at most every 10 minutes (the time kept in Cache Storage, `pqp-sw-meta`), the worker calls `registration.update()`. This is what reaches a page whose own code never asks: see "Bundles from before any of this" below. |
-| The card | `update-prompt.tsx` | Visible whenever the page is stale or a worker is waiting, outside a call. "Later" snoozes for 20 minutes and it returns; the rail keeps a way back. |
-| In a call | `update-call-banner.tsx` | A lime strip at the top, "Nova versão disponível, recarrega", saying it reloads by itself at the hangup, with a button for whoever wants it now. |
-| Safe moment | `src/lib/update-policy.ts`, `build-watcher.tsx` | Reload with no question when the tab is hidden, right after a call ends (2 minutes), when nobody has touched the page for 3 minutes, or when it has been out of date past 12 hours (`VITE_UPDATE_MAX_STALE_HOURS`, `0` turns it off). Never in a call, never while typing on a visible tab (text in the focused field, or a key in the last 20 s), never while watching a live party, and never twice in a row for the same build (`sessionStorage` guard, 15 minutes). |
+| The daily announcement | `src/lib/client-version.ts` (`announceAtFor`), `version-watch.ts` | A build that is merely new is not told to an open page the minute it lands. It is announced at the next 09:00 UTC (06:00 in Brasília) after it has been live for an hour, so a page hears about at most one new build a day and a build replaced by a hotfix within the hour is never announced. The page still reads `/version.json` as often as before; it only holds the answer (`announceAt` in `update-prompt-state.ts`, plus a few minutes of per-page jitter so every window does not reload in the same second). Old bundles keep working meanwhile: the API stays backward compatible. `VITE_UPDATE_ANNOUNCE_HOUR_UTC` (0 to 23; `off` announces at once, for a self-host that wants the old behaviour). The operator skips the wait with `client_force_update` ("announce now") or a critical update. |
+| The indicator | `update-indicator.tsx`, `server-rail.tsx`, `phone-screens.tsx`, `standalone-update-indicator.tsx` | A small round button with a dot, at the foot of the server rail (a phone: the header of the Servidores and "tu" screens, and a dot on the "tu" tab; a narrow window: a dot on the menu button; the landing page: a corner button). Click for a popover: "Nova versão pronta", when it was published, what changed (below), and **Atualizar**. It never opens by itself, blocks or reloads. With `client_force_update` on it is drawn filled with a pulsing dot (not under reduced motion). It replaced a corner card and a lime strip across a call. |
+| In a call or a watch party | `update-indicator.tsx` | The popover says the update waits and installs on its own afterwards, and offers **Atualizar agora** behind a second question that names the cost (a reload ends the call and the screen share; a browser cannot restore a capture without the picker). |
+| What changed | `scripts/build-changes.mjs`, `scripts/changes-lib.mjs`, `src/lib/update-changes.ts`, `deploy-web.yml` ("Write what changed") | The deploy writes `/changes.json` beside the build: the merged work that touched the web client since the build that is live, added to what was already listed (two weeks, so a window open for a week is told everything since ITS build). A change becomes a line in the popover only when its author wrote one for the person, as a line in a commit message (squash merges keep them): `Update note (pt-BR): Agora dá para arrastar os servidores na barra.` (also `(en)` and `(es)`; any subset). It is shown in the person's language or not at all; the rest are counted ("e mais 7 melhorias pequenas"), and a pull request title, which is written for a reviewer in English, is never quoted. The step never fails the deploy. The popover reads the file only when it is opened. |
+| Safe moment | `src/lib/update-policy.ts`, `build-watcher.tsx` | Once a build is announced, reload with no question when the tab is hidden, right after a call ends (2 minutes), when nobody has touched the page for 3 minutes, or when it has been out of date past 12 hours counted from the announcement (`VITE_UPDATE_MAX_STALE_HOURS`, `0` turns it off). **Never in a call, never while sharing a screen (that is a call), never while watching a live party, never while typing on a visible tab (text in the focused field, or a key in the last 20 s), and ONE automatic reload per build, ever** (`sessionStorage`, no timer: it used to be one per 15 minutes). The call and watch-party check is asked again at the last moment, inside `applyUpdate`, after the worker has been brought up, because that takes up to 15 s and somebody may have joined a call in them; a reload refused there gives the build its one reload back. The stale-chunk recovery (`chunk-reload.ts`) asks the same question (call OR watch party). The only exception is a CRITICAL update, below. |
 | Applying it | `src/lib/apply-update.ts` | Updates the worker, waits for it, asks the active worker which build it is (`sw-build-*.js`), and reloads. A worker that is not the target build, or does not answer, or does not take over in 15 s, gets its caches deleted before the reload, so the page loads from the network. The worker is never unregistered: a push subscription dies with the registration and can only be re-created from a click. |
-| When applying fails | `src/lib/update-ladder.ts`, `src/hooks/use-apply-update.ts` | The card and the forced screen take the update through a ladder, because a resolved `applyUpdate` proves nothing (it can reject, hang, or end by asking for a reload a browser refuses): after each rung it waits to see the page actually leave (`pagehide`). Rung 0 is `applyUpdate`; rung 1 deletes every cache and navigates to the same URL with a `?_pqp=` cache-buster (removed from the address again in `main.tsx`); rung 2, the last resort, also unregisters the workers (which drops the push subscription, so only for somebody who has failed twice). One click walks the rungs with a 1 s and 3 s backoff; if all fail the button comes back with the reason ("sem internet" or "não deu para atualizar", pt-BR, en, es) and the NEXT click starts on a heavier rung than the last one ended on (remembered in `sessionStorage` for 15 minutes). Offline is answered at once and touches nothing. Nothing reloads by itself in this path, so it cannot loop; the automatic path keeps its own guard. A button can never stay disabled past 120 s. |
-| Forced update | `forced-update-screen.tsx`, `server/src/lib/client-update-config.ts` | See below. |
+| When applying fails | `src/lib/update-ladder.ts`, `src/hooks/use-apply-update.ts` | The indicator and the critical dialog take the update through a ladder, because a resolved `applyUpdate` proves nothing (it can reject, hang, or end by asking for a reload a browser refuses): after each rung it waits to see the page actually leave (`pagehide`). Rung 0 is `applyUpdate`; rung 1 deletes every cache and navigates to the same URL with a `?_pqp=` cache-buster (removed from the address again in `main.tsx`); rung 2, the last resort, also unregisters the workers (which drops the push subscription, so only for somebody who has failed twice). One click walks the rungs with a 1 s and 3 s backoff; if all fail the button comes back with the reason ("sem internet" or "não deu para atualizar", pt-BR, en, es) and the NEXT click starts on a heavier rung than the last one ended on (remembered in `sessionStorage` for 15 minutes). Offline is answered at once and touches nothing. Nothing reloads by itself in this path, so it cannot loop; the automatic path keeps its own guard. A button can never stay disabled past 120 s. |
+| Operator levers | `forced-update-screen.tsx`, `server/src/lib/client-update-config.ts` | See below. |
 | Electron | `electron/lib/web-cache.js` | Clears the HTTP cache and the worker once per shell version, and View > "Reload and clear cache" (Ctrl/Cmd+Shift+Alt+R) does it on demand. Sign-in and drafts are kept. |
 
-**Forcing an update.** For the day a bundle is bad. `GET /api/client-update/config`
-answers `{ forceUpdate, minBuiltAt }`, read per request, both off by default:
+**Pushing an update, and a critical one.** `GET /api/client-update/config`
+answers `{ forceUpdate, minBuiltAt, interruptCalls, criticalMinBuiltAt }`, read per
+request, all off by default. Since 2026-10-14 the first two only mean "announce now",
+and only the last two block a screen:
 
 - `forceUpdate`: the runtime flag `client_force_update` (dashboard, "interruptores",
   no deploy and no restart; `CLIENT_FORCE_UPDATE=true` is its environment default).
-  Every client that is not on the latest build puts up "Atualização necessária" (one
-  button, no Escape, no backdrop dismissal). Turn it off again once the rollout is
-  done, or the next ordinary deploy will put the blocking screen up as well.
+  **Announce now, with emphasis**: every client that is not on the latest build skips
+  the daily wait, draws its indicator filled, and then follows the ordinary rules
+  (reload at a safe moment, never over a call, a share or a watch party). It blocks
+  nobody. Until 2026-10-14 it put up a blocking "Atualização necessária" screen for
+  everybody on every deploy; it was ON from 2026-10-04 and a desktop user wrote, on
+  2026-10-13, "de 10 em 10 segundos tem atualização". Turn it off once the rollout is
+  done.
 - `minBuiltAt`: `CLIENT_MIN_BUILT_AT`, an ISO date or epoch milliseconds. Bundles
-  built before it are forced. Self-limiting (a later deploy is built after it), but
-  an environment variable, so it needs a recreate.
-- `interruptCalls`: the runtime flag `client_force_update_in_call`. With either lever
-  above forcing a bundle, that bundle reloads by itself even in a call (and the
-  blocking screen is up meanwhile). It ends calls: a critical fix only, off again
-  after.
+  built before it are treated the same way (announce now). Self-limiting (a later
+  deploy is built after it), but an environment variable, so it needs a recreate.
+- `interruptCalls`: the runtime flag `client_force_update_in_call`. **Critical.** With
+  either lever above forcing a bundle, that bundle reloads by itself even in a call
+  (once per build) and a small blocking "Atualização necessária" dialog is up (one
+  button, no Escape, no backdrop dismissal), which is what stays on screen if that
+  reload does not land. It ends calls and screen shares: a critical fix only, off
+  again after.
 - `criticalMinBuiltAt`: `CLIENT_CRITICAL_MIN_BUILT_AT`, same format as
-  `CLIENT_MIN_BUILT_AT`. Bundles built before it reload even in a call.
+  `CLIENT_MIN_BUILT_AT`. Bundles built before it are critical: reload even in a call,
+  and the dialog.
 
-The last two are read by bundles from 2026-10-10 on; an older bundle ignores them.
+The last two are read by bundles from 2026-10-10 on; an older bundle ignores them
+(and, until it updates once, still treats `forceUpdate` as the blocking screen it used
+to be).
 
 A force that was already known for a build is kept when a later lookup FAILS (offline, signed out, timeout); only an answer from the server, the operator turning it off included, changes it. A client asks only when it already knows it is stale, so an up-to-date client never
 makes this request. The screen waits while the person is in a call and appears when
@@ -164,7 +177,7 @@ set past the newest build traps nobody in a reload loop.
 **What a web deploy reaches.** The new logic ships in the bundle. A window that is
 still on a bundle from before this change has none of it: it gets the new worker
 (which activates on its own) on its next navigation or daily check, and the new
-bundle on its next reload or relaunch, or when the old card is pressed. From that
+bundle on its next reload or relaunch, or when the old card is pressed (a bundle from before 2026-10-14 still has the card, the blocking force screen and the 20-minute snooze until it updates once). From that
 load on, everything above applies.
 
 **Bundles from before any of this** (built up to 2026-09-29) cannot run any of
@@ -198,6 +211,44 @@ Configuration > Browser Cache TTL: "Respect Existing Headers" (or a Cache Rule t
 bypasses `/sw.js` and `/sw-notification-click.js`). Nothing in this repository can
 set it. The client does not depend on it: the version file is read past every
 cache, and an update whose worker turns out stale is delivered by purging.
+
+### "De 10 em 10 segundos tem atualização" (2026-10-13)
+
+A Windows desktop user (pt-BR, twelve days old) wrote, in capitals, that there was an
+update every ten seconds and that "the screens stop and only the voice remains".
+Three causes, one day (nineteen web deploys):
+
+1. **`client_force_update` had been ON since 2026-10-04.** It meant "every client not
+   on the latest build gets the blocking screen", so every deploy blocked every open
+   window (a call only delayed it to the hangup). It now means "announce now, with
+   emphasis" and blocks nobody; only a critical update blocks (above).
+2. **Every deploy was announced to every window.** Nothing in the client had a notion
+   of "not yet". A new build is now told once a day (`announceAtFor`), and an
+   automatic reload is ONE per build, never in a call, a share or a watch party, and
+   asked again at the last moment inside `applyUpdate`.
+3. **"Only the voice remains" was a stale chunk in a call, not a reload.** Every
+   deploy deletes the old hashed assets. A page that was open before it 404s on the
+   first lazy chunk it has not fetched (the emoji and GIF pickers are the ones a
+   person opens in a call chat). `recoverFromChunkLoadError` rightly refuses to
+   reload a call, so it defers, and the only boundary above the lazy panel was the
+   ROOT `ErrorBoundary`, whose "pqp updated, you are in a call" fallback replaces
+   the whole app. The voice session lives outside React, so the audio carries on under
+   a page with nothing on it. `error-boundary.test.tsx` reproduces it (the third
+   test) and a contained boundary now costs the picker only
+   (`ContainedChunkBoundary`). The recovery also treats a watch party like a call
+   now.
+
+   What was NOT found: an update reload or the blocking screen tearing down a share
+   while the audio survived. In a call the policy never reloaded or blocked (except a
+   CRITICAL update, which reloads a call by design: check that
+   `client_force_update_in_call` is off, because with both flags on every deploy would
+   have reloaded every call, and a web or desktop reload resumes the audio but cannot
+   restore a screen capture). The Faro session of the report was not in Loki (sampled
+   out); chunk errors do reach it (16 on 2026-10-09, Android Chrome).
+
+The desktop shell had a fourth, smaller one: its own native "restart to update" box
+came back every six hours for somebody who had said "Later", and could open over a
+call (`electron/lib/update-prompt-policy.js`, `docs/DESKTOP.md` §5).
 
 ### A precache entry that 404s
 
@@ -258,11 +309,11 @@ one above.
 
 What pqp already has, in order of weight:
 
-1. The update card and the automatic safe-moment reload (above).
+1. The update indicator and the automatic safe-moment reload (above).
 2. The update ladder (`client/src/lib/update-ladder.ts`): rung 1 deletes every
    cache and navigates with a cache-buster; rung 2 also unregisters the workers.
-3. The forced update (`client_force_update` on the dashboard), which puts every
-   out-of-date client through that ladder.
+3. The operator's levers (`client_force_update` on the dashboard announces at once;
+   a critical update reloads), which put every out-of-date client through that ladder.
 
 These run in the PAGE, so they need a page that loads. If the worker is so
 broken that no page loads at all, ship the no-op worker:

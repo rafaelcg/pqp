@@ -142,6 +142,9 @@ const {
   ROSTER_AUDIENCE_KEYFRAME_MS,
 } = await import("./voice.js");
 const { settleVoiceRegistryWrites } = await import("../voice/registry.js");
+const { closeBus, createMemoryHub, createMemoryTransport, setBusTransport } =
+  await import("../lib/bus.js");
+const { VOICE_ROOM_TOPIC } = await import("./voice.js");
 const {
   SOCKET_CAPS,
   setAuthenticatedSocket,
@@ -377,6 +380,7 @@ describeDb("voice roster deltas with the registry on", () => {
   });
 
   afterEach(async () => {
+    await closeBus();
     await settleVoiceRegistryWrites();
     resetVoicePeers();
     process.env.VOICE_REGISTRY = previousFlag;
@@ -562,6 +566,79 @@ describeDb("voice roster deltas with the registry on", () => {
     await join(c);
     expect(watcher.frameWithSeq(3)?.type).toBe("voice-roster-delta");
     await expectConverged(watcher, channel);
+  });
+
+  it("tells this machine's sockets the room is empty when the last person to leave was on the other machine", async () => {
+    // THE 2026-10-13 GHOST. One person on machine B hops Lobby, then
+    // call-aberta, each time the only occupant. Machine A holds the owner's
+    // browser, and the owner's sidebar kept showing that person in BOTH rooms:
+    // A's run is driven by a bus hint, which queues no event, and when the
+    // rows came back EMPTY it fell through to "the last roster I sent, with
+    // this window's events replayed", which was the last roster I sent. The
+    // diff against itself was empty, so no `left` went out, and nothing ever
+    // would (a keyframe rides a change, and an empty room never changes).
+    //
+    // Every earlier test here runs the leaver on THIS process, where the
+    // `left` event is in the queue and the replay gets it right. The other
+    // machine is simulated the way it exists in production: rows written by
+    // somebody else, and a `voice.room` frame from another origin.
+    const hub = createMemoryHub();
+    setBusTransport(createMemoryTransport(hub));
+    const otherMachine = createMemoryTransport(hub);
+    const hint = (channelId: string) =>
+      otherMachine.publish({
+        origin: randomUUID(),
+        topic: VOICE_ROOM_TOPIC,
+        data: { channelId, kind: "roster" },
+      });
+    const channel = randomUUID();
+    const watcher = client(channel);
+    const guest = {
+      peerId: randomUUID(),
+      userId: randomUUID(),
+      instanceId: randomUUID(),
+    };
+
+    // The guest sits down on the other machine: a room row and a seat row.
+    await getPool().query(
+      `INSERT INTO voice_rooms (channel_id, transport) VALUES ($1, 'livekit')`,
+      [channel],
+    );
+    await getPool().query(
+      `INSERT INTO voice_peers (peer_id, channel_id, user_id, instance_id, display_name)
+       VALUES ($1, $2, $3, $4, 'Guest')`,
+      [guest.peerId, channel, guest.userId, guest.instanceId],
+    );
+    hint(channel);
+    await waitFor(() => watcher.peerIds().length === 1, "the guest to appear");
+    expect(watcher.peerIds()).toEqual([guest.peerId]);
+
+    // ...and leaves: the seat and the room row go together, as
+    // `deleteVoicePeer` does for the last seat in the cluster.
+    await getPool().query(`DELETE FROM voice_peers WHERE peer_id = $1`, [
+      guest.peerId,
+    ]);
+    await getPool().query(`DELETE FROM voice_rooms WHERE channel_id = $1`, [
+      channel,
+    ]);
+    hint(channel);
+    await waitFor(
+      () => watcher.peerIds().length === 0,
+      "the watcher to be told the room is empty",
+    );
+    expect(watcher.gaps).toBe(0);
+    const emptied = watcher.rosterFrames().at(-1);
+    expect(emptied?.type).toBe("voice-roster-delta");
+    expect(emptied?.size).toBe(0);
+    expect(emptied?.left).toEqual([guest.peerId]);
+
+    // The memory is clean too: the next person in is a whole roster, not a
+    // diff against a guest who is long gone, and the watcher follows it.
+    const next = client(channel);
+    await join(next);
+    expect(watcher.peerIds()).toEqual(await serverRoom(channel));
+    expect(watcher.peerIds()).toHaveLength(1);
+    expect(watcher.gaps).toBe(0);
   });
 
   it("counts deltas and snapshots on the branch each socket was served from", async () => {

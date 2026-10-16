@@ -21,6 +21,7 @@ struct AccountSettingsView: View {
     @State private var exportFile: URL?
     /// Chamar a atenção is offered in Settings only while its flag is on.
     @State private var nudgeAvailable = false
+    @State private var transcriptionAvailable = false
 
     // Resolved through `String(localized:)` rather than left as bare literals:
     // `Text(someString)` is the *verbatim* initialiser, so a picker built from
@@ -99,6 +100,42 @@ struct AccountSettingsView: View {
                     }
                 }
 
+                // Where transcription exists at all (the flag, and storage for the
+                // notes): a deployment without it has no switches for a thing that
+                // does not happen.
+                if transcriptionAvailable {
+                    Section {
+                        Toggle(isOn: Binding(
+                            get: { preferences.transcribesMyNotes },
+                            set: { preferences = preferences.settingTranscription(mine: $0) }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Transcribe my voice messages")
+                                Text("Anyone who can hear them can read the text. The audio goes through a transcription service. It applies to the next messages you send; the ones already sent stay as they are.")
+                                    .font(Typography.caption)
+                                    .foregroundStyle(Palette.paperMuted)
+                            }
+                        }
+                        .accessibilityIdentifier("settings.transcribeMine")
+                        Toggle(isOn: Binding(
+                            get: { preferences.showsTranscripts },
+                            set: { preferences = preferences.settingTranscription(show: $0) }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Show transcripts")
+                                Text("Shows the text under the voice messages you receive. Off, you see no transcripts at all.")
+                                    .font(Typography.caption)
+                                    .foregroundStyle(Palette.paperMuted)
+                            }
+                        }
+                        .accessibilityIdentifier("settings.showTranscripts")
+                    } header: {
+                        Text("Voice messages")
+                    } footer: {
+                        Text("The text shows up under the audio, for people who would rather read.")
+                    }
+                }
+
                 VideoQualitySection()
 
                 Section("Blocked") {
@@ -138,6 +175,18 @@ struct AccountSettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .task { nudgeAvailable = await session.api.funConfig().nudge }
+            .task {
+                // The global value, which is what a conversation reads; the
+                // switches are about the account, not one server.
+                // A read that FAILED keeps the switches: hiding the opt-out
+                // because the network blinked is the wrong way to be wrong.
+                // Only an answer that says "not offered" removes them.
+                if let config = try? await session.api.attachmentConfig(serverId: nil) {
+                    transcriptionAvailable = config.offersTranscription
+                } else {
+                    transcriptionAvailable = true
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }.tint(Palette.paperMuted)

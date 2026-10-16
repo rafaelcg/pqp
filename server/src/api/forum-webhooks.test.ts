@@ -307,6 +307,52 @@ describeDb("webhooks into a forum", () => {
     expect(answer.body.ignored_tags).toBeUndefined();
   });
 
+  it("an embed-only post's card previews the embed, in the answer and in the list", async () => {
+    const webhook = await makeWebhook();
+    const alert = await execute(webhook.url, {
+      thread_name: "CPU alta em web-2",
+      embeds: [
+        {
+          title: "CPU alta em web-2",
+          description: "Acima de 90% há 5 minutos.",
+          fields: [{ name: "Host", value: "web-2" }],
+        },
+      ],
+    });
+    expect(alert.status, JSON.stringify(alert.body)).toBe(200);
+    // The embed's title is the post's own title: not said twice.
+    expect(alert.body.post!.preview).toBe("Acima de 90% há 5 minutos. · Host: web-2");
+    expect(alert.body.post!.openingKind).toBe("text");
+    const fields = await execute(webhook.url, {
+      thread_name: "Só campos",
+      embeds: [{ fields: [{ name: "Valor", value: "93%" }] }],
+    });
+    expect(fields.body.post!.preview).toBe("Valor: 93%");
+    // A title that adds something is the first words.
+    const titled = await execute(webhook.url, {
+      thread_name: "Aviso",
+      embeds: [{ title: "Manutenção hoje", url: "https://exemplo.com/a" }],
+    });
+    expect(titled.body.post!.preview).toBe("Manutenção hoje");
+    // Nothing to say stays empty, and the text, when there is any, wins.
+    const bare = await execute(webhook.url, {
+      thread_name: "Igual",
+      embeds: [{ title: "Igual", url: "https://exemplo.com/b" }],
+    });
+    expect(bare.body.post!.preview).toBeNull();
+    const withText = await execute(webhook.url, {
+      thread_name: "Com texto",
+      content: "Corpo do aviso",
+      embeds: [{ description: "Não aparece" }],
+    });
+    expect(withText.body.post!.preview).toBe("Corpo do aviso");
+
+    const list = await call<{ posts: ForumPostSummary[] }>(bob, "GET", `/api/channels/${forumId}/posts`);
+    const byId = new Map(list.body.posts.map((row) => [row.id, row.preview]));
+    expect(byId.get(alert.body.post!.id)).toBe("Acima de 90% há 5 minutos. · Host: web-2");
+    expect(byId.get(bare.body.post!.id)).toBeNull();
+  });
+
   it("n8n-http-request: titled from the first line with the link stripped; the row shows the override", async () => {
     const webhook = await makeWebhook();
     const answer = await execute(webhook.url, fixture("n8n-http-request"));

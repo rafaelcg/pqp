@@ -1,9 +1,9 @@
 package gg.pqp.app.stories.ui
 
-import android.widget.Toast
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -21,6 +22,10 @@ import gg.pqp.app.R
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.stories.StoriesStore
+import gg.pqp.app.stories.StoryOutbox
+import gg.pqp.app.stories.StoryOutboxRules
+import gg.pqp.app.stories.StoryPreloadRules
+import gg.pqp.app.stories.StoryPreloader
 import gg.pqp.app.ui.theme.Spacing
 
 /**
@@ -48,11 +53,21 @@ fun StoriesSection(
     val phase by session.phase.collectAsStateWithLifecycle()
     val me = (phase as? SessionPhase.Ready)?.me
     val context = LocalContext.current
-    val posted = stringResource(R.string.stories_upload_posted)
+    val outbox = remember(session) { StoryOutbox.of(context, session, store) }
+    val outboxEntries by outbox.entries.collectAsStateWithLifecycle()
+    val bubble = StoryOutboxRules.bubble(outboxEntries)
+    // The failed draft the person tapped: "Tentar de novo" or "Descartar".
+    var askingAbout by remember { mutableStateOf<String?>(null) }
+    // The post on its way the person tapped: keep going, or throw it away.
+    var stopping by remember { mutableStateOf<String?>(null) }
+    // The post that is waiting for a connection the person tapped: try now, or throw it away.
+    var waitingFor by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(key) { store.refreshConfig() }
     LifecycleResumeEffect(key) {
         store.refresh(key)
+        // Back in front: a post that was waiting for a connection goes on if there is one now.
+        outbox.onForeground()
         onPauseOrDispose { }
     }
 
@@ -60,15 +75,39 @@ fun StoriesSection(
     var composing by remember { mutableStateOf(false) }
 
     val strip = strips[key]
+    // The tray is showing: the first unseen story of its first rings is fetched ahead of the tap.
+    val preloader = remember(session) { StoryPreloader.of(context, session) }
+    val trayRings = if (strip?.enabled == true) StoryPreloadRules.trayRings(strip.items) else emptyList()
+    val trayKey = trayRings.map { it.author.id to it.storyIds }
+    // Also when there is nothing to preload any more: that is how the old wishes are dropped.
+    LaunchedEffect(trayKey) { preloader.onTray(trayRings) }
     if (strip != null && strip.enabled) {
         val nothingLive = strip.items.isEmpty() && strip.own == null
         Column(modifier) {
             when {
+                // A story on its way (or one that did not make it) is always shown, whatever else the strip would do.
+                bubble != StoryOutboxRules.Bubble.Idle && strip.canPost -> StoryStripRow(
+                    strip = strip,
+                    me = me,
+                    bubble = bubble,
+                    onOpenAuthor = { index ->
+                        viewing = strip.items.map { StoryDeck(it.author, it.storyIds) } to index
+                    },
+                    onOpenOwn = {
+                        strip.own?.let { own -> viewing = listOf(StoryDeck(own.author, own.storyIds)) to 0 }
+                    },
+                    onCompose = { composing = true },
+                    onFailedTap = { askingAbout = it },
+                    onPostingTap = { stopping = it },
+                    onWaitingTap = { waitingFor = it },
+                    modifier = Modifier.padding(vertical = Spacing.sm),
+                )
                 nothingLive && strip.firstRunHint && strip.canPost ->
                     StoryFirstRunRow(me = me, onPost = { composing = true }, modifier = Modifier.padding(vertical = Spacing.sm))
-                // The server strip only appears with a story on it; an empty
-                // bubble would cost the top of every server screen forever.
-                nothingLive && serverId != null -> Unit
+                // The server strip only appears with a story on it: an empty bubble would cost the
+                // top of every server screen forever. Somebody who may post still gets one quiet
+                // line to start from once the first-run row is gone, so the way in never disappears.
+                nothingLive && serverId != null -> if (strip.canPost) StoryComposeLink(onPost = { composing = true }) else Unit
                 nothingLive && !strip.canPost -> Unit
                 else -> StoryStripRow(
                     strip = strip,
@@ -84,6 +123,80 @@ fun StoriesSection(
                 )
             }
         }
+    }
+
+    waitingFor?.let { id ->
+        AlertDialog(
+            onDismissRequest = { waitingFor = null },
+            title = { Text(stringResource(R.string.stories_outbox_waiting_label)) },
+            text = { Text(stringResource(R.string.stories_outbox_waiting_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        waitingFor = null
+                        outbox.retry(id)
+                    },
+                    modifier = Modifier.testTag("stories.outbox.tryNow"),
+                ) { Text(stringResource(R.string.stories_outbox_try_now)) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        waitingFor = null
+                        outbox.discard(id)
+                    },
+                    modifier = Modifier.testTag("stories.outbox.cancelWaiting"),
+                ) { Text(stringResource(R.string.stories_outbox_discard), color = MaterialTheme.colorScheme.error) }
+            },
+        )
+    }
+
+    stopping?.let { id ->
+        AlertDialog(
+            onDismissRequest = { stopping = null },
+            title = { Text(stringResource(R.string.stories_outbox_posting_title)) },
+            text = { Text(stringResource(R.string.stories_outbox_posting_body)) },
+            confirmButton = {
+                TextButton(onClick = { stopping = null }, modifier = Modifier.testTag("stories.outbox.keep")) {
+                    Text(stringResource(R.string.stories_outbox_keep))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        stopping = null
+                        outbox.discard(id)
+                    },
+                    modifier = Modifier.testTag("stories.outbox.cancel"),
+                ) { Text(stringResource(R.string.stories_outbox_discard), color = MaterialTheme.colorScheme.error) }
+            },
+        )
+    }
+
+    askingAbout?.let { id ->
+        AlertDialog(
+            onDismissRequest = { askingAbout = null },
+            title = { Text(stringResource(R.string.stories_outbox_failed_title)) },
+            text = { Text(stringResource(R.string.stories_outbox_failed_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        askingAbout = null
+                        outbox.retry(id)
+                    },
+                    modifier = Modifier.testTag("stories.outbox.retry"),
+                ) { Text(stringResource(R.string.stories_outbox_retry)) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        askingAbout = null
+                        outbox.discard(id)
+                    },
+                    modifier = Modifier.testTag("stories.outbox.discard"),
+                ) { Text(stringResource(R.string.stories_outbox_discard), color = MaterialTheme.colorScheme.error) }
+            },
+        )
     }
 
     viewing?.let { (decks, start) ->
@@ -106,8 +219,8 @@ fun StoriesSection(
             contextServerId = serverId,
             onDismiss = { composing = false },
             onPosted = {
+                gg.pqp.app.stories.StoryPerf.since("post", "post_to_composer_closed", clear = false)
                 composing = false
-                Toast.makeText(context, posted, Toast.LENGTH_SHORT).show()
             },
         )
     }

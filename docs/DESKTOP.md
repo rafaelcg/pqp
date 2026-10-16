@@ -1257,7 +1257,11 @@ Implementation: [`electron/lib/updater.js`](../electron/lib/updater.js).
   The shell applies the same rule — a native dialog with **Restart now** /
   **Later**. "Later" is a real answer: `autoInstallOnAppQuit` is on, so the
   staged update applies on the next ordinary quit with no second download and
-  no further prompting.
+  no further prompting. That last part is enforced (`lib/update-prompt-policy.js`):
+  the six-hourly check reports the same staged update again, so the box used to
+  come back every six hours for somebody who had said "Later". It is now shown
+  once per version per run of the app, and never over a call (the shell knows
+  from the page's `voiceState`): it waits two minutes and asks again.
 - First check 10s after launch, then every 6 hours.
 
 ### macOS: signing and auto-update are one piece of work

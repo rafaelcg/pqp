@@ -2,26 +2,31 @@ import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { useApplyUpdate } from "@/hooks/use-apply-update";
-import { useInCall } from "@/lib/in-call-state";
 import { useTranslation } from "@/lib/i18n";
 import { isBlockingUpdate } from "@/lib/update-policy";
 import { useBuildStaleness } from "@/lib/update-prompt-state";
 
 /**
- * "Atualização necessária": the screen an operator can put in front of every
- * client that is not on the latest build (`client_force_update`, or
- * `CLIENT_MIN_BUILT_AT`; see `server/src/lib/client-update-config.ts`).
+ * "Atualização necessária": the one blocking screen, for a CRITICAL update and
+ * nothing else (a bundle built before `CLIENT_CRITICAL_MIN_BUILT_AT`, or the
+ * operator's `client_force_update_in_call` on a forced build; see
+ * `isCriticalBuild` in `lib/client-version.ts` and
+ * `server/src/lib/client-update-config.ts`).
  *
- * It exists for the day a bundle is BAD. The ordinary path (the card, the idle
- * reload, the twelve-hour reload) is gentle and takes however long it takes;
- * this is the one that does not wait. It has no close button, no Escape and no
- * backdrop dismissal (`dismissible={false}`), because a prompt that can be
- * waved away is the same prompt that stranded people on an old bundle before.
+ * It used to be what `client_force_update` showed, to everybody not on the
+ * latest build, on every deploy. On 2026-10-13 that was nineteen blocking
+ * screens in a day and a user writing in capitals that it came "de 10 em 10
+ * segundos". That switch now only announces an update at once and draws the
+ * indicator with emphasis (`components/layout/update-indicator.tsx`); this is
+ * for the day a bundle is genuinely bad, which is rare and which the person
+ * should be told in so many words.
  *
- * The one thing that holds it back is a call. A reload ends a screen share
- * (nobody can restore a capture without the picker) and drops the seat, so while
- * `inCall` this renders nothing and the quiet card carries on; the moment the
- * person hangs up, it appears. The update is late, never lost.
+ * It is small on purpose: a calm dialog of the same size as every other, one
+ * sentence and one button, not a page. It has no close button, no Escape and no
+ * backdrop dismissal (`dismissible={false}`), because a prompt that can be waved
+ * away is the same prompt that stranded people on an old bundle before. A
+ * critical build also reloads on its own (`BuildWatcher`, once); this is what is
+ * on screen if that reload does not land, and the button is then the person's.
  */
 export function ForcedUpdateScreen({
   apply,
@@ -31,17 +36,16 @@ export function ForcedUpdateScreen({
 } = {}) {
   const { t } = useTranslation();
   const build = useBuildStaleness();
-  const inCall = useInCall();
   const { state, start } = useApplyUpdate(apply);
 
-  const open = isBlockingUpdate(build, inCall);
+  const open = isBlockingUpdate(build);
 
   return (
     <Dialog
       open={open}
       title={
-        <span className="flex items-center gap-3">
-          <RefreshCw className="h-6 w-6 shrink-0 text-accent" aria-hidden="true" />
+        <span className="flex items-center gap-2">
+          <RefreshCw className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
           {t("update.forced.title")}
         </span>
       }
