@@ -155,8 +155,13 @@ final class ForwardPickerModel {
                 return ServerTargets(targets: destinations.targets(in: server), permissionsKnown: true)
             } catch APIError.notFound {
                 routeMissingUntil.withLock { $0 = Date().addingTimeInterval(routeRecheck) }
-            } catch {
+            } catch is CancellationError {
                 return nil
+            } catch APIError.unauthorized {
+                return nil
+            } catch {
+                // A blip on the new route (transport, 5xx, a rate limit) must not
+                // hide the server: the two older reads still answer, without threads.
             }
         }
         return await legacyTargets(in: server, api: api)
