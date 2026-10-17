@@ -11,11 +11,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
+import { ImageCropDialog } from "@/components/user/image-crop-dialog";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ApiError, fetchAvatarConfig } from "@/lib/api";
 import { uploadAvatar } from "@/lib/avatar-upload";
 import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation } from "@/lib/i18n";
+import type { CropRegion } from "@/lib/image-crop";
 import { cn } from "@/lib/utils";
 
 /**
@@ -140,6 +142,8 @@ export function AvatarPicker({
   const uploading = upload.state.kind === "saving";
   // A dropped folder is refused on the spot, before any upload starts.
   const [dropError, setDropError] = useState<string | null>(null);
+  // The picked file while the person frames it; the upload starts on Save.
+  const [cropping, setCropping] = useState<File | null>(null);
 
   // Keyed on whether uploads are offered, not on the callback: callers pass a
   // fresh arrow each render, and while the config read is failing (it is
@@ -166,13 +170,19 @@ export function AvatarPicker({
     (uploadRef.current ?? linkButtonRef.current)?.focus();
   }, [value]);
 
+  /** A picked or dropped file opens the crop step; nothing uploads yet. */
   function handleFile(file: File) {
     if (uploading) return;
     setDropError(null);
+    setCropping(file);
+  }
+
+  function uploadCropped(file: File, region: CropRegion, picture: ImageBitmap) {
+    setCropping(null);
     void upload.run(async () => {
       let user: User;
       try {
-        user = await uploadAvatar(file);
+        user = await uploadAvatar(file, region, picture);
       } catch (error) {
         throw localizedUploadFailure(error, labels.uploadFailed);
       }
@@ -394,6 +404,16 @@ export function AvatarPicker({
 
       <SettingsInlineStatus
         state={dropError ? { kind: "error", message: dropError } : upload.state}
+      />
+
+      <ImageCropDialog
+        file={cropping}
+        shape="avatar"
+        onCancel={() => setCropping(null)}
+        onConfirm={(region, picture) => {
+          if (cropping) uploadCropped(cropping, region, picture);
+          else picture.close();
+        }}
       />
     </FileDropZone>
   );
