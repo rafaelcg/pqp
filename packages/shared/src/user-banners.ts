@@ -99,6 +99,17 @@ export const userBannerConfigSchema = z.object({
 export type UserBannerConfig = z.infer<typeof userBannerConfigSchema>;
 
 /**
+ * `GET /api/users/:userId/banner-url`: somebody's banner, for their profile
+ * card. Null for "no banner" and for an id nobody holds, so the answer cannot
+ * be used to probe which accounts exist.
+ */
+export const userBannerUrlResponseSchema = z.object({
+  bannerUrl: z.string().nullable(),
+});
+
+export type UserBannerUrlResponse = z.infer<typeof userBannerUrlResponseSchema>;
+
+/**
  * Where an uploaded banner is served from, relative to the API's origin.
  *
  * Root-relative for the reason `avatarPath` is: the SPA and the API are

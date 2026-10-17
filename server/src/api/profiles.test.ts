@@ -661,6 +661,60 @@ describeDb("public handles and profiles", () => {
     expect(JSON.stringify(after.body)).not.toContain("banners/x/y.jpg");
   });
 
+  // ----------------------------------------------------- the card's banner
+
+  it("hands the profile card somebody else's banner, and null when they have none", async () => {
+    const before = await call<{ bannerUrl: string | null }>(
+      bob,
+      "GET",
+      `/api/users/${alice.id}/banner-url`,
+    );
+    expect(before.status).toBe(200);
+    expect(before.body).toEqual({ bannerUrl: null });
+
+    await getPool().query(
+      `UPDATE users SET banner_url = $2, banner_key = $3 WHERE id = $1`,
+      [alice.id, `/api/users/${alice.id}/banner?v=abcd1234`, "banners/x/y.jpg"],
+    );
+    const after = await call<{ bannerUrl: string | null }>(
+      bob,
+      "GET",
+      `/api/users/${alice.id}/banner-url`,
+    );
+    expect(after.status).toBe(200);
+    // The body is exactly this one field. The storage key names an object in
+    // the bucket and must never travel; nor should anything else about Alice.
+    expect(after.body).toEqual({
+      bannerUrl: `/api/users/${alice.id}/banner?v=abcd1234`,
+    });
+    expect(JSON.stringify(after.body)).not.toContain("banners/x/y.jpg");
+  });
+
+  it("answers an unknown account exactly like one with no banner", async () => {
+    // A 404 here would tell anybody which ids exist; the image route refuses
+    // to for the same reason.
+    const unknown = await call<{ bannerUrl: string | null }>(
+      bob,
+      "GET",
+      "/api/users/99999999-9999-4999-8999-999999999999/banner-url",
+    );
+    expect(unknown.status).toBe(200);
+    expect(unknown.body).toEqual({ bannerUrl: null });
+  });
+
+  it("is refused by the router for an id that is not a uuid", async () => {
+    const response = await call(bob, "GET", "/api/users/not-a-uuid/banner-url");
+    // 404 and not 500: the column is a uuid, and an unchecked param would be a
+    // Postgres type error dressed as a server fault. `createRouter` refuses any
+    // `*Id` param that is not a uuid before the handler runs.
+    expect(response.status).toBe(404);
+  });
+
+  it("is not the image route, and needs a session", async () => {
+    const response = await anonymous(`/api/users/${alice.id}/banner-url`);
+    expect(response.status).toBe(401);
+  });
+
   it("is rate limited even though it takes no token", async () => {
     await call(alice, "PATCH", "/api/me", { handle: "rafa" });
     let sawLimit = false;

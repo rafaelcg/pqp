@@ -425,7 +425,9 @@ export async function discardBannerObject(key: string): Promise<void> {
  * It is also not a profile change in the sense `updateProfile` means. Nothing
  * about a banner is announced over the socket: no member list, message row,
  * roster or conversation draws one, so `announceProfile` would be a broadcast
- * to every client on the instance carrying a field none of them render.
+ * to every client on the instance carrying a field none of them render. The
+ * profile card does draw it, and reads it fresh each time it opens
+ * (`readUserBannerUrl`), so it never needs the frame either.
  */
 export async function setUserBanner(
   userId: string,
@@ -460,6 +462,22 @@ export async function setUserBanner(
   } finally {
     client.release();
   }
+}
+
+/**
+ * The banner URL the profile card draws, or null for "no banner" and "no such
+ * user" alike.
+ *
+ * The stored root-relative `/api/users/:id/banner?v=…`, exactly what the public
+ * profile carries, so a new upload changes the address and no cache can show
+ * the old picture. Never the key: that names an object in the bucket.
+ */
+export async function readUserBannerUrl(userId: string): Promise<string | null> {
+  const result = await getPool().query<{ banner_url: string | null }>(
+    `SELECT banner_url FROM users WHERE id = $1`,
+    [userId],
+  );
+  return result.rows[0]?.banner_url ?? null;
 }
 
 /**
