@@ -171,6 +171,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -283,20 +284,34 @@ fun ChatScreen(
             value = null
             return@produceState
         }
-        val cached = PermissionsCache.fresh(me?.id, id, System.currentTimeMillis())
-        value = cached
-        if (cached != null) return@produceState
-        // Not runCatching: a read cancelled by the next server must end this
-        // producer, not write a null over the one that replaced it.
-        val read = try {
-            session.api.serverPermissions(id)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            null
+        var initial = true
+        // Also read again whenever the cache is invalidated (a permissions-update or
+        // server-removed frame, a reconnect, a sign-out): this chat holds its snapshot
+        // for as long as it is open, and the 30 s TTL only ever applies to the next
+        // screen that opens. The collector emits once on subscribe, which is the
+        // initial load; a later emission keeps the bits on screen until the new read
+        // lands instead of blanking them. collectLatest cancels a read the frame
+        // outdated, and the stamp drops one that was already past cancelling.
+        PermissionsCache.changes.collectLatest {
+            val cached = PermissionsCache.fresh(me?.id, id, System.currentTimeMillis())
+            if (initial || cached != null) value = cached
+            initial = false
+            if (cached != null) return@collectLatest
+            val stamp = PermissionsCache.stamp(id)
+            // Not runCatching: a read cancelled by the next server must end this
+            // producer, not write a null over the one that replaced it.
+            val read = try {
+                session.api.serverPermissions(id)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            // A refused put means a frame landed while the read was in flight: its bits are
+            // already out of date, and the emission that frame caused is reading again.
+            if (read != null && !PermissionsCache.put(me?.id, id, read, System.currentTimeMillis(), stamp)) return@collectLatest
+            value = read
         }
-        if (read != null) PermissionsCache.put(me?.id, id, read, System.currentTimeMillis())
-        value = read
     }
     val canSendHere = SendGate.canSend(sendSnapshot, extras?.primaryChannelId ?: channelId)
     // Encaminhar is offered while the runtime flag is on (read per use, kept a
