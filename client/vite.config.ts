@@ -16,7 +16,14 @@ import {
 } from "./src/lib/prerender-hero";
 import { NAVIGATE_DENYLIST, swBuildScript } from "./src/lib/sw-build-script";
 import { edgeConfigFrom } from "./src/lib/edge-config";
-import { assertMarketingBodies, buildBlogStaticFiles } from "./src/lib/static-pages";
+import {
+  assertMarketingBodies,
+  buildBlogStaticFiles,
+  renderMarkdownToHtml,
+} from "./src/lib/static-pages";
+import { FEEDS, releaseNoteFeed, renderSitemap } from "./src/lib/seo-files";
+import { sitemapPages } from "./src/lib/sitemap-pages";
+import { marketingLastmod, realProbe } from "./src/lib/source-dates";
 
 /**
  * Build-time source-map upload to Grafana Faro, so a production stack trace is
@@ -253,6 +260,7 @@ function prerenderHero(): Plugin {
  *
  * It THROWS when a registered page has no prose or renders to an empty body:
  * the empty `#root` this exists to remove looks exactly like a successful build.
+ * It also writes `sitemap.xml` and the release-note Atom feeds.
  */
 function staticPages(): Plugin {
   const read = (file: string): string | null => {
@@ -277,6 +285,26 @@ function staticPages(): Plugin {
       });
       for (const file of files) {
         this.emitFile({ type: "asset", fileName: file.path, source: file.content });
+      }
+      // The sitemap and the release-note feeds come from the same registry and
+      // the same prose (`src/lib/seo-files.ts`), so they are written here, in
+      // the one place that has both. `public/sitemap.xml` no longer exists.
+      const probe = realProbe(__dirname);
+      this.emitFile({
+        type: "asset",
+        fileName: "sitemap.xml",
+        source: renderSitemap(sitemapPages((page) => marketingLastmod(probe, page))),
+      });
+      for (const locale of ["pt-BR", "en"] as const) {
+        this.emitFile({
+          type: "asset",
+          fileName: FEEDS[locale].path.slice(1),
+          source: releaseNoteFeed(
+            locale,
+            (slug, l) => read(`src/content/blog/${slug}.${l}.md`),
+            renderMarkdownToHtml,
+          ),
+        });
       }
     },
   };

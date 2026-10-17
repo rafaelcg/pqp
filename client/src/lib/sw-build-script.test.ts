@@ -217,6 +217,8 @@ describe("what it leaves alone", () => {
       "/blog/servidores-de-voz-miami-e-londres.es.md",
       "/robots.txt",
       "/sitemap.xml",
+      "/feed.xml",
+      "/feed.en.xml",
     ]) {
       expect(await t.navigate(`https://pqp.gg${path}`)).toBeUndefined();
     }

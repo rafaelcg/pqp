@@ -27,7 +27,8 @@
  *
  * ADDING A POST. Write the two markdown files under `content/blog/`, add the
  * entry at the TOP of `POSTS`, add both importers to `BODIES` in `bodies.ts`,
- * add the URL to `client/public/sitemap.xml`. Screenshots are optional: if you
+ * and that is all the sitemap and the feeds need (they are generated from this
+ * list at build, `seo-files.ts`). Screenshots are optional: if you
  * have them, they live in `client/public/blog/<slug>/` and are referenced as
  * `/blog/<slug>/file.png` (the markdown is raw text, so a relative import next
  * to the `.md` would 404). Dates are the day the work reached people, not the
