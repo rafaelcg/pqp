@@ -1494,4 +1494,14 @@
     <string name="community_save_failed">Could not save.</string>
     <string name="community_no_access">Only people who manage this server can see this.</string>
     <string name="community_unavailable">Public communities are not available here.</string>
+    <string name="soundboard_open">Soundboard</string>
+    <string name="soundboard_title">Soundboard</string>
+    <string name="soundboard_hint">Everyone in the call hears it.</string>
+    <string name="soundboard_slow">Slow down, try again in a moment</string>
+    <string name="soundboard_builtin_palmas">Applause</string>
+    <string name="soundboard_builtin_risada">Laugh</string>
+    <string name="soundboard_builtin_buzina">Horn</string>
+    <string name="soundboard_builtin_grilo">Crickets</string>
+    <string name="soundboard_builtin_badumtss">Rimshot</string>
+    <string name="soundboard_builtin_trombone">Sad trombone</string>
 </resources>

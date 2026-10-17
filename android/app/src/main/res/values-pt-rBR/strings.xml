@@ -1487,4 +1487,14 @@
     <string name="community_save_failed">Não deu pra salvar.</string>
     <string name="community_no_access">Só quem gerencia a comunidade vê isso.</string>
     <string name="community_unavailable">Comunidades públicas não estão disponíveis aqui.</string>
+    <string name="soundboard_open">Soundboard</string>
+    <string name="soundboard_title">Soundboard</string>
+    <string name="soundboard_hint">Todo mundo na call escuta.</string>
+    <string name="soundboard_slow">Calma, tenta de novo daqui a pouco</string>
+    <string name="soundboard_builtin_palmas">Palmas</string>
+    <string name="soundboard_builtin_risada">Risada</string>
+    <string name="soundboard_builtin_buzina">Buzina</string>
+    <string name="soundboard_builtin_grilo">Grilo</string>
+    <string name="soundboard_builtin_badumtss">Ba-dum-tss</string>
+    <string name="soundboard_builtin_trombone">Trombone</string>
 </resources>
