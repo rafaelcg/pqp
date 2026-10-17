@@ -79,6 +79,20 @@ class LocalizationTest {
         )
     }
 
+    /**
+     * Rafael's rule for pt-BR copy: "tu" and colloquial verbs, never "você" and
+     * its possessive "seu/sua". The plural "vocês" has no "tu" and stays. No em
+     * dash in either language.
+     */
+    @Test
+    fun `pt-BR speaks to tu, never voce, and neither language has an em dash`() {
+        val voce = Regex("""(?<!\p{L})([Vv]ocê|[Ss]eus?|[Ss]uas?)(?!\p{L})""")
+        val offenders = strings(portuguese).filter { (_, text) -> voce.containsMatchIn(text) }.keys
+        assertEquals("pt-BR strings that still say você/seu/sua", emptySet<String>(), offenders)
+        assertTrue("em dash in pt-BR", !portuguese.readText().contains('—'))
+        assertTrue("em dash in English", !english.readText().contains('—'))
+    }
+
     private fun plurals(file: File): Set<String> =
         Regex("""<plurals\s+name="([^"]+)"""").findAll(file.readText()).map { it.groupValues[1] }.toSet()
 
