@@ -280,16 +280,14 @@ final class ForumHomeModel {
             let ctx = ForumUpsertContext(
                 filters: filters, viewerId: viewerId, hold: !isAtTop, openPostId: openPostId
             )
-            // A filter hides pinned posts, so the forum-wide count is read
-            // again when a pin may have moved (a remote moderator's pin or
-            // unpin); the cap check re-reads it anyway.
-            let pinMayHaveMoved = filters.isNarrowing && (post.isPinned || state.post(id: post.id)?.isPinned == true)
             state = ForumList.upsert(state, post: post, ctx: ctx)
-            if pinMayHaveMoved { Task { await refreshPinnedTotal(quiet: true) } }
+            // The frame carries the post's pin state, so the forum-wide set
+            // (which a filter hides part of) follows it with no read, and an
+            // upsert that changes nothing costs nothing.
+            if filters.isNarrowing { pinnedTracker.observe(postId: post.id, isPinned: post.isPinned) }
         case .forumPostRemoved(let forumId, let postId) where forumId == forum.id:
-            let wasPinned = filters.isNarrowing && state.post(id: postId)?.isPinned == true
             state = ForumList.remove(state, postId: postId)
-            if wasPinned { Task { await refreshPinnedTotal(quiet: true) } }
+            if filters.isNarrowing { pinnedTracker.forget(postId: postId) }
         case .forumConfigUpdate(let forumId, let newTags, let newSettings) where forumId == forum.id:
             // Staff saved tags or settings: an open composer follows now, not
             // when this screen is next opened.
@@ -353,12 +351,12 @@ final class ForumHomeModel {
         state = ForumList.remove(state, postId: postId)
     }
 
-    /// Pinned posts in the whole forum, read for a post's menu while a filter
-    /// is on: the list's own pinned row follows the filters (a Bug filter hides
-    /// the rules post), so counting it said "0 de 3" with one pinned.
-    private(set) var unfilteredPinned: Int?
-    /// Bumped by every read; an answer for an older number is dropped.
-    @ObservationIgnored private var pinnedReadGeneration = 0
+    /// The forum-wide pinned set while a filter is on (see
+    /// `ForumPinnedTracker`): the list's own pinned row follows the filters, so
+    /// counting it said "0 de 3" with one pinned.
+    private(set) var pinnedTracker = ForumPinnedTracker()
+
+    var unfilteredPinned: Int? { pinnedTracker.count }
 
     /// Where the pinned count stands, for "2 de 3" in a post's menu. Under a
     /// filter it is the forum-wide count, and nil until that has been read (a
@@ -367,27 +365,29 @@ final class ForumHomeModel {
         ForumPinnedCount.resolve(narrowing: filters.isNarrowing, shown: state.pinned.count, unfiltered: unfilteredPinned)
     }
 
-    /// Reads the forum's pinned count without the filters and returns it (nil:
-    /// not narrowing, no session, or the read failed). Only meaningful while a
-    /// filter is on; without one the list already holds the answer.
-    ///
-    /// `quiet` keeps the number on screen while the read is in flight (a
-    /// background refresh); otherwise it goes unknown first. Either way an
-    /// answer for a superseded read never lands, but the caller still gets the
-    /// value it asked for, which is what a cap check must use.
+    /// Reads the forum's pinned posts without the filters. Only meaningful
+    /// while a filter is on. Returns the reading only if it is still the latest
+    /// when it lands: a superseded or failed read is nil, never an authority.
+    /// `quiet` keeps the known number on screen while it is in flight.
     @discardableResult
-    func refreshPinnedTotal(quiet: Bool = false) async -> Int? {
+    func refreshPinnedTotal(quiet: Bool = false) async -> ForumPinnedTracker.Reading? {
         guard filters.isNarrowing, let session else { return nil }
-        pinnedReadGeneration += 1
-        let generation = pinnedReadGeneration
-        if !quiet { unfilteredPinned = nil }
+        let generation = pinnedTracker.beginRead(quiet: quiet)
         let plain = ForumFilters(sort: filters.sort)
         let page = try? await session.api.forumPosts(forumId: forum.id, filters: plain, limit: 1)
-        let count = page?.pinned.count
-        guard generation == pinnedReadGeneration else { return count }
-        unfilteredPinned = count
-        return count
+        return pinnedTracker.finishRead(page?.pinned.map(\.id), generation: generation)
     }
+
+    /// A count to authorise a pin with: read now, and read again when a newer
+    /// read or a frame superseded it, a few times before giving up (nil).
+    func readPinnedTotalForCap() async -> ForumPinnedTracker.Reading? {
+        for _ in 0..<3 {
+            if let reading = await refreshPinnedTotal() { return reading }
+        }
+        return nil
+    }
+
+    func isCurrent(_ reading: ForumPinnedTracker.Reading) -> Bool { pinnedTracker.isCurrent(reading) }
 }
 
 /// Which pinned count a post's menu shows: the list's own when nothing narrows

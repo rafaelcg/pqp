@@ -361,34 +361,45 @@ final class ForumPostModel {
         )
     }
 
-    /// How many posts are pinned in the whole forum, read now: what the cap
-    /// check needs. The list's own count is enough when nothing filters it;
-    /// otherwise (and for a post opened from a link, with no list) it is asked
-    /// of the server, never guessed from what a filter shows.
-    private func forumPinnedTotalNow() async -> Int? {
-        if let home {
-            return home.filters.isNarrowing ? await home.refreshPinnedTotal() : home.pinnedCount
+    /// Whether one more post may be pinned. The cap needs the forum-wide
+    /// count, read now and never guessed from a filtered list: under a filter
+    /// it comes with the generation it was read under, and the pin is only
+    /// authorised if that still holds when the write starts (a frame or a newer
+    /// read in between means asking again). A post opened from a link has no
+    /// list, so the server is asked directly.
+    private func mayPin() async -> Bool {
+        var decision: ForumPinnedCount.Gate = .unknown
+        for _ in 0..<3 {
+            if let home {
+                if home.filters.isNarrowing {
+                    guard let reading = await home.readPinnedTotalForCap() else { break }
+                    decision = ForumPinnedCount.gate(count: reading.count, max: ForumLimits.maxPinned)
+                    // No suspension between this check and the write that follows.
+                    if decision == .allow, !home.isCurrent(reading) { decision = .unknown; continue }
+                } else {
+                    decision = ForumPinnedCount.gate(count: home.pinnedCount, max: ForumLimits.maxPinned)
+                }
+            } else if let session {
+                let page = try? await session.api.forumPosts(forumId: forumId, filters: ForumFilters(), limit: 1)
+                decision = ForumPinnedCount.gate(count: page?.pinned.count, max: ForumLimits.maxPinned)
+            }
+            break
         }
-        guard let session else { return nil }
-        let page = try? await session.api.forumPosts(forumId: forumId, filters: ForumFilters(), limit: 1)
-        return page?.pinned.count
+        switch decision {
+        case .allow:
+            return true
+        case .full:
+            notice = String(localized: "\(ForumLimits.maxPinned) posts are already pinned. Unpin one first.")
+        case .unknown:
+            // The server would refuse a pin over the cap, but not knowing is a
+            // reason to ask again, not to try.
+            notice = String(localized: "Couldn't check how many posts are pinned. Try again.")
+        }
+        return false
     }
 
     func setPinned(_ pinned: Bool) async {
-        if pinned {
-            switch ForumPinnedCount.gate(count: await forumPinnedTotalNow(), max: ForumLimits.maxPinned) {
-            case .allow:
-                break
-            case .full:
-                notice = String(localized: "\(ForumLimits.maxPinned) posts are already pinned. Unpin one first.")
-                return
-            case .unknown:
-                // The server would refuse a pin over the cap, but not knowing
-                // is a reason to ask again, not to try.
-                notice = String(localized: "Couldn't check how many posts are pinned. Try again.")
-                return
-            }
-        }
+        if pinned, !(await mayPin()) { return }
         await save(optimistic: { $0.pinnedAt = pinned ? Date() : nil }, patch: .init(pinned: pinned))
         await home?.refreshPinnedTotal()
     }
