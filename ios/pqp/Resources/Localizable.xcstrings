@@ -311,6 +311,16 @@
         }
       }
     },
+    "Couldn't check how many posts are pinned. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra conferir quantos posts estão fixados. Tenta de novo."
+          }
+        }
+      }
+    },
     "Couldn't keep your story to post it. Check your free space." : {
       "localizations" : {
         "pt-BR" : {

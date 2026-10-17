@@ -361,10 +361,33 @@ final class ForumPostModel {
         )
     }
 
+    /// How many posts are pinned in the whole forum, read now: what the cap
+    /// check needs. The list's own count is enough when nothing filters it;
+    /// otherwise (and for a post opened from a link, with no list) it is asked
+    /// of the server, never guessed from what a filter shows.
+    private func forumPinnedTotalNow() async -> Int? {
+        if let home {
+            return home.filters.isNarrowing ? await home.refreshPinnedTotal() : home.pinnedCount
+        }
+        guard let session else { return nil }
+        let page = try? await session.api.forumPosts(forumId: forumId, filters: ForumFilters(), limit: 1)
+        return page?.pinned.count
+    }
+
     func setPinned(_ pinned: Bool) async {
-        if pinned, let count = pinnedCount, count >= ForumLimits.maxPinned {
-            notice = String(localized: "\(ForumLimits.maxPinned) posts are already pinned. Unpin one first.")
-            return
+        if pinned {
+            switch ForumPinnedCount.gate(count: await forumPinnedTotalNow(), max: ForumLimits.maxPinned) {
+            case .allow:
+                break
+            case .full:
+                notice = String(localized: "\(ForumLimits.maxPinned) posts are already pinned. Unpin one first.")
+                return
+            case .unknown:
+                // The server would refuse a pin over the cap, but not knowing
+                // is a reason to ask again, not to try.
+                notice = String(localized: "Couldn't check how many posts are pinned. Try again.")
+                return
+            }
         }
         await save(optimistic: { $0.pinnedAt = pinned ? Date() : nil }, patch: .init(pinned: pinned))
         await home?.refreshPinnedTotal()

@@ -21,6 +21,14 @@ final class ForumSmallItemsTests: XCTestCase {
         XCTAssertNil(ForumPinnedCount.resolve(narrowing: true, shown: 0, unfiltered: nil))
     }
 
+    func testThePinCapRefusesWhenFullAndWhenTheCountIsUnknown() {
+        XCTAssertEqual(ForumPinnedCount.gate(count: 2, max: 3), .allow)
+        XCTAssertEqual(ForumPinnedCount.gate(count: 3, max: 3), .full)
+        XCTAssertEqual(ForumPinnedCount.gate(count: 4, max: 3), .full)
+        // A failed or missing read is never read as "room left".
+        XCTAssertEqual(ForumPinnedCount.gate(count: nil, max: 3), .unknown)
+    }
+
     func testOneNewReplyIsSingular() {
         XCTAssertEqual(ForumCopy.newReplies(1), String(localized: "1 new reply"))
         XCTAssertNotEqual(ForumCopy.newReplies(1), ForumCopy.newReplies(2))

@@ -280,9 +280,16 @@ final class ForumHomeModel {
             let ctx = ForumUpsertContext(
                 filters: filters, viewerId: viewerId, hold: !isAtTop, openPostId: openPostId
             )
+            // A filter hides pinned posts, so the forum-wide count is read
+            // again when a pin may have moved (a remote moderator's pin or
+            // unpin); the cap check re-reads it anyway.
+            let pinMayHaveMoved = filters.isNarrowing && (post.isPinned || state.post(id: post.id)?.isPinned == true)
             state = ForumList.upsert(state, post: post, ctx: ctx)
+            if pinMayHaveMoved { Task { await refreshPinnedTotal(quiet: true) } }
         case .forumPostRemoved(let forumId, let postId) where forumId == forum.id:
+            let wasPinned = filters.isNarrowing && state.post(id: postId)?.isPinned == true
             state = ForumList.remove(state, postId: postId)
+            if wasPinned { Task { await refreshPinnedTotal(quiet: true) } }
         case .forumConfigUpdate(let forumId, let newTags, let newSettings) where forumId == forum.id:
             // Staff saved tags or settings: an open composer follows now, not
             // when this screen is next opened.
@@ -292,6 +299,7 @@ final class ForumHomeModel {
             // The socket came back after a gap; whatever moved meanwhile was
             // never delivered. The client re-asserts the join by itself.
             Task { await refreshFirstPage() }
+            if filters.isNarrowing { Task { await refreshPinnedTotal(quiet: true) } }
         case .permissionsUpdate(let serverId, _) where serverId == server.id:
             Task {
                 if let fresh = try? await session?.api.fetchMemberPermissions(serverId: server.id) {
@@ -359,19 +367,26 @@ final class ForumHomeModel {
         ForumPinnedCount.resolve(narrowing: filters.isNarrowing, shown: state.pinned.count, unfiltered: unfilteredPinned)
     }
 
-    /// Reads the forum's pinned count without the filters. Only asked while a
-    /// filter is on; without one the list already holds the answer. A failed
-    /// read leaves the count unknown, and the server still refuses a pin over
-    /// the cap.
-    func refreshPinnedTotal() async {
-        guard filters.isNarrowing, let session else { return }
+    /// Reads the forum's pinned count without the filters and returns it (nil:
+    /// not narrowing, no session, or the read failed). Only meaningful while a
+    /// filter is on; without one the list already holds the answer.
+    ///
+    /// `quiet` keeps the number on screen while the read is in flight (a
+    /// background refresh); otherwise it goes unknown first. Either way an
+    /// answer for a superseded read never lands, but the caller still gets the
+    /// value it asked for, which is what a cap check must use.
+    @discardableResult
+    func refreshPinnedTotal(quiet: Bool = false) async -> Int? {
+        guard filters.isNarrowing, let session else { return nil }
         pinnedReadGeneration += 1
         let generation = pinnedReadGeneration
-        unfilteredPinned = nil
+        if !quiet { unfilteredPinned = nil }
         let plain = ForumFilters(sort: filters.sort)
         let page = try? await session.api.forumPosts(forumId: forum.id, filters: plain, limit: 1)
-        guard generation == pinnedReadGeneration else { return }
-        unfilteredPinned = page?.pinned.count
+        let count = page?.pinned.count
+        guard generation == pinnedReadGeneration else { return count }
+        unfilteredPinned = count
+        return count
     }
 }
 
@@ -381,5 +396,19 @@ enum ForumPinnedCount {
     /// Nil: a filter hides pinned posts and the forum-wide count is not known.
     static func resolve(narrowing: Bool, shown: Int, unfiltered: Int?) -> Int? {
         narrowing ? unfiltered : shown
+    }
+
+    enum Gate: Equatable {
+        case allow
+        /// The forum is at its cap.
+        case full
+        /// The count could not be read: refuse rather than guess.
+        case unknown
+    }
+
+    /// Whether one more post may be pinned, given a count read just now.
+    static func gate(count: Int?, max: Int) -> Gate {
+        guard let count else { return .unknown }
+        return count >= max ? .full : .allow
     }
 }
