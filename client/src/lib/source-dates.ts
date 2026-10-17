@@ -3,7 +3,9 @@
  *
  * A blog page is dated by its content (`page-registry.ts`). A marketing page has
  * no date of its own, so the build asks the repository: the day of the last
- * commit that touched the page's own source file. The three legal documents are
+ * commit that touched the page's own source file or its copy in the locale
+ * catalogues (the lines under the page's i18n key prefixes, see
+ * `COPY_KEY_PREFIXES`). The three legal documents are
  * the exception, because they state their own date ("Last updated: 12 October
  * 2026") and that is the truth a reader sees; it is read from the English source
  * (the Portuguese one is held to the same sections by `documents.test.ts`).
@@ -123,13 +125,71 @@ export function realProbe(clientDir: string): Probe {
   };
 }
 
-/** The day of the last commit that touched any of `files`, or null. */
-export function gitLastModified(probe: Probe, files: readonly string[]): string | null {
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The newest of two days, either of which may be absent. */
+function newest(a: string | null, b: string | null): string | null {
+  return a === null ? b : b === null ? a : a >= b ? a : b;
+}
+
+/**
+ * The i18n key prefixes a page's visible copy lives under, in the three
+ * catalogues. The catalogues are one big file per language that every page
+ * shares, so a file-level date would move every page whenever any page's words
+ * change; the date of the last commit that touched a LINE with one of these
+ * prefixes (`git log -G`) moves only the page whose copy was edited.
+ */
+export const COPY_KEY_PREFIXES: Record<string, readonly string[]> = {
+  "/": ["landing"],
+  "/vs-discord": ["vsDiscord"],
+  "/vem": ["vem"],
+  "/tela": ["tela"],
+  "/watch-party": ["watchPartyPage"],
+  "/streamers": ["streamersPage"],
+  "/beta": ["betaPage"],
+  "/android": ["androidPage"],
+  "/download": ["downloadPage"],
+  "/garanta": ["claim"],
+  "/apoie": ["apoie"],
+  "/contact": ["contactPage"],
+  "/status": ["status"],
+  "/compare": ["compare"],
+  "/compare/stoat": ["compare"],
+  "/compare/teamspeak": ["compare"],
+  "/compare/slack": ["compare"],
+};
+
+/** The three catalogues, relative to `client/`. */
+export const CATALOGUES = [
+  "src/locales/pt-BR/translation.json",
+  "src/locales/en/translation.json",
+  "src/locales/es/translation.json",
+] as const;
+
+/**
+ * The day of the last commit that touched any of `files`, or, when `prefixes`
+ * are given, any catalogue line under one of those i18n key prefixes. The newest
+ * of the two. Null when history cannot say.
+ */
+export function gitLastModified(
+  probe: Probe,
+  files: readonly string[],
+  prefixes: readonly string[] = [],
+): string | null {
   if (probe.git(["rev-parse", "--is-shallow-repository"]) !== "false") {
     return null;
   }
-  const day = probe.git(["log", "-1", "--format=%cs", "--", ...files]);
-  return day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null;
+  const valid = (day: string | null) => (day && DAY_RE.test(day) ? day : null);
+  const fromFiles = valid(probe.git(["log", "-1", "--format=%cs", "--", ...files]));
+  if (prefixes.length === 0) {
+    return fromFiles;
+  }
+  // A line such as `  "vsDiscord.hero.title": "...",` added or removed.
+  const pattern = `^\\s*"(${prefixes.join("|")})\\.`;
+  const fromCopy = valid(
+    probe.git(["log", "-1", "--format=%cs", `-G${pattern}`, "--", ...CATALOGUES]),
+  );
+  return newest(fromFiles, fromCopy);
 }
 
 /** A marketing page's `lastmod`, or null when it cannot be known. */
@@ -143,5 +203,5 @@ export function marketingLastmod(probe: Probe, pathname: string): string | null 
     }
   }
   const files = MARKETING_SOURCES[pathname] ?? (legal ? [legal] : null);
-  return files ? gitLastModified(probe, files) : null;
+  return files ? gitLastModified(probe, files, COPY_KEY_PREFIXES[pathname] ?? []) : null;
 }

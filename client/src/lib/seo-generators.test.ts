@@ -26,6 +26,7 @@ import {
   gitLastModified,
   legalUpdatedDay,
   marketingLastmod,
+  realProbe,
   type Probe,
 } from "./source-dates";
 import { renderMarkdownToHtml } from "./static-pages";
@@ -88,6 +89,46 @@ describe("the dates a marketing page gets", () => {
     };
     expect(marketingLastmod(probe, "/privacy")).toBe("2026-10-12");
     expect(marketingLastmod(probe, "/tela")).toBe("2026-10-01");
+  });
+
+  it("moves a page's date when its copy changes in a catalogue, and no other page's", () => {
+    const calls: (readonly string[])[] = [];
+    const probe: Probe = {
+      git(args) {
+        if (args[0] === "rev-parse") return "false";
+        calls.push(args);
+        // The page file last changed on the 1st; a `vsDiscord.` catalogue line on the 9th.
+        return args.some((a) => a.startsWith("-G")) ? "2026-10-09" : "2026-10-01";
+      },
+      read: () => null,
+    };
+    expect(marketingLastmod(probe, "/vs-discord")).toBe("2026-10-09");
+    const copyCall = calls.find((c) => c.some((a) => a.startsWith("-G")))!;
+    const pattern = copyCall.find((a) => a.startsWith("-G"))!.slice(2);
+    // The regex matches that page's lines in a catalogue and nobody else's.
+    expect(new RegExp(pattern).test(`  "vsDiscord.hero.title": "x",`)).toBe(true);
+    expect(new RegExp(pattern).test(`  "tela.hero.title": "x",`)).toBe(false);
+    expect(new RegExp(pattern).test(`  "vsDiscordish.x": "x",`)).toBe(false);
+    expect(copyCall.slice(copyCall.indexOf("--") + 1)).toEqual([
+      "src/locales/pt-BR/translation.json",
+      "src/locales/en/translation.json",
+      "src/locales/es/translation.json",
+    ]);
+    // The file's own newer date still wins over an older copy edit.
+    const newerFile: Probe = {
+      git: (args) =>
+        args[0] === "rev-parse" ? "false" : args.some((a) => a.startsWith("-G")) ? "2026-09-01" : "2026-10-05",
+      read: () => null,
+    };
+    expect(marketingLastmod(newerFile, "/vs-discord")).toBe("2026-10-05");
+  });
+
+  it("finds the real last catalogue edit of a page in this repository's history", () => {
+    // Skipped where the clone is shallow (the generator itself then says nothing).
+    const probe = realProbe(client);
+    if (probe.git(["rev-parse", "--is-shallow-repository"]) !== "false") return;
+    const copy = gitLastModified(probe, [], ["vsDiscord"]);
+    expect(copy).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   it("says nothing rather than guess: a shallow clone, no git, or an unknown page", () => {
