@@ -184,7 +184,7 @@ class SoundboardController(
 
 
     /** When each channel's catalog was last read, and the read in flight: per channel, never shared across calls. */
-    private val catalogAt = HashMap<String, Long>()
+    private val catalogAt = Freshness(now, CATALOG_REFRESH_MS, FRESHNESS_CAP)
     private val catalogReads = HashMap<String, Deferred<List<CustomSound>?>>()
 
     /** Which refresh is the current one: an older one that finishes late writes nothing. */
@@ -241,8 +241,14 @@ class SoundboardController(
             val running = catalogReads[channelId]
             when {
                 running != null && running.isActive -> running
-                now() - (catalogAt[channelId] ?: Long.MIN_VALUE / 2) < CATALOG_REFRESH_MS -> return null
-                else -> scope.async { readCatalog(channelId) }.also { catalogReads[channelId] = it }
+                catalogAt.isFresh(channelId) -> return null
+                else -> scope.async { readCatalog(channelId) }.also { flight ->
+                    catalogReads[channelId] = flight
+                    // Callers hold their own reference; the map keeps a read only while it runs.
+                    flight.invokeOnCompletion {
+                        synchronized(catalogAt) { if (catalogReads[channelId] === flight) catalogReads.remove(channelId) }
+                    }
+                }
             }
         }
         val sounds = read.await() ?: return null
@@ -253,7 +259,7 @@ class SoundboardController(
     private suspend fun readCatalog(channelId: String): List<CustomSound>? {
         val serverId = (serverOf(channelId) as? ChannelOwners.Lookup.Found)?.serverId ?: return null
         val page = runSuspendCatching { session.api.soundboard(serverId) }.getOrNull() ?: return null
-        synchronized(catalogAt) { catalogAt[channelId] = now() }
+        synchronized(catalogAt) { catalogAt.mark(channelId) }
         if (channelId == seatedChannelId()) _available.value = Availability.On(channelId, serverId, page.sounds)
         return page.sounds
     }
@@ -313,7 +319,7 @@ class SoundboardController(
     private suspend fun clipFile(channelId: String, sound: CustomSound): File? {
         val url = Backend.absolute(sound.url)
         if (url == null) {
-            synchronized(catalogAt) { catalogAt.remove(channelId) }
+            synchronized(catalogAt) { catalogAt.forget(channelId) }
             return null
         }
         val dir = File(context.cacheDir, "soundboard").apply { mkdirs() }
@@ -323,7 +329,7 @@ class SoundboardController(
         val got = downloads.run(file.name) {
             withContext(Dispatchers.IO) { download(url, dir, file) }
         }
-        if (!got) synchronized(catalogAt) { catalogAt.remove(channelId) }
+        if (!got) synchronized(catalogAt) { catalogAt.forget(channelId) }
         return file.takeIf { got }
     }
 
@@ -407,7 +413,7 @@ class SoundboardController(
         val config = runSuspendCatching { session.api.voiceConfig(serverId) }.getOrNull() ?: return null
         if (!config.soundboard) return Availability.Off
         val page = runSuspendCatching { session.api.soundboard(serverId) }.getOrNull() ?: return null
-        synchronized(catalogAt) { catalogAt[channelId] = now() }
+        synchronized(catalogAt) { catalogAt.mark(channelId) }
         return Availability.On(channelId, serverId, page.sounds)
     }
 
@@ -427,6 +433,9 @@ class SoundboardController(
         const val LISTENER_VOLUME = 0.6
         const val MAX_LIVE = 8
         const val CATALOG_REFRESH_MS = 15_000L
+
+        /** Most channels whose catalog age is remembered; the oldest go first. */
+        const val FRESHNESS_CAP = 16
 
         /** A failed read of the board is asked again after 3 s, 6 s, 12 s, 24 s, then left. */
         const val RETRY_BASE_MS = 3_000L
@@ -505,5 +514,38 @@ class SingleFlight<K, V>(private val scope: CoroutineScope) {
             }.also { running[key] = it }
         }
         return flight.await()
+    }
+}
+
+/**
+ * When each key was last marked, trusted for [windowMs], and bounded: entries past the window are dropped as new
+ * ones arrive, and past [cap] the oldest go, so visiting many channels over a long session does not accumulate.
+ */
+class Freshness(
+    private val now: () -> Long,
+    private val windowMs: Long,
+    private val cap: Int,
+) {
+    private val at = LinkedHashMap<String, Long>()
+
+    val size: Int get() = synchronized(at) { at.size }
+
+    fun isFresh(key: String): Boolean = synchronized(at) { at[key]?.let { now() - it < windowMs } == true }
+
+    fun mark(key: String) {
+        synchronized(at) {
+            val t = now()
+            at.remove(key)
+            at[key] = t
+            val iterator = at.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (t - entry.value >= windowMs || at.size > cap) iterator.remove() else break
+            }
+        }
+    }
+
+    fun forget(key: String) {
+        synchronized(at) { at.remove(key) }
     }
 }

@@ -167,6 +167,37 @@ class SoundboardTest {
         assertEquals(2, reads)
     }
 
+    @Test
+    fun `freshness is trusted for its window, and forgotten on request`() {
+        var clock = 0L
+        val fresh = Freshness({ clock }, windowMs = 1_000, cap = 16)
+        assertFalse(fresh.isFresh("a"))
+        fresh.mark("a")
+        clock = 999
+        assertTrue(fresh.isFresh("a"))
+        clock = 1_000
+        assertFalse(fresh.isFresh("a"))
+        fresh.mark("a")
+        fresh.forget("a")
+        assertFalse(fresh.isFresh("a"))
+    }
+
+    @Test
+    fun `visiting many channels does not accumulate, stale entries go and the oldest past the cap`() {
+        var clock = 0L
+        val fresh = Freshness({ clock }, windowMs = 1_000, cap = 4)
+        // Past the cap inside the window: the oldest go first.
+        listOf("a", "b", "c", "d", "e", "f").forEach { fresh.mark(it); clock += 10 }
+        assertEquals(4, fresh.size)
+        assertFalse(fresh.isFresh("a"))
+        assertFalse(fresh.isFresh("b"))
+        assertTrue(fresh.isFresh("f"))
+        // Past the window: the next mark drops everything stale.
+        clock += 5_000
+        fresh.mark("z")
+        assertEquals(1, fresh.size)
+    }
+
     // --- one download per clip ---
 
     @Test
