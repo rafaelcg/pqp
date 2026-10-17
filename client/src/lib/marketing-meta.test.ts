@@ -16,6 +16,7 @@ import {
   SOFTWARE_OPERATING_SYSTEMS,
   STREAMERS_FAQ,
   TELA_FAQ,
+  COMPARE_FAQ,
   VEM_FAQ,
   VS_DISCORD_FAQ,
   type MarketingPage,
@@ -39,6 +40,10 @@ describe("marketingPageFromMetaPath", () => {
     const pages: MarketingPage[] = [
       "/",
       "/vs-discord",
+      "/compare",
+      "/compare/stoat",
+      "/compare/teamspeak",
+      "/compare/slack",
       "/tela",
       "/vem",
       "/beta",
@@ -105,6 +110,7 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
   const PINNED: ReadonlyArray<{ path: MarketingPage; prefix: string }> = [
     { path: "/", prefix: "landing" },
     { path: "/vs-discord", prefix: "vsDiscord" },
+    { path: "/compare", prefix: "compare" },
     { path: "/tela", prefix: "tela" },
     { path: "/vem", prefix: "vem" },
     { path: "/beta", prefix: "betaPage" },
@@ -338,7 +344,8 @@ describe("the /vs-discord and /tela copy stays about features", () => {
   // the catalogues and the edge heads.
   const BANNED =
     /anpd|suspen|\bvpn\b|banid|banned|\bban\b|17 de agosto|17 august|17 ago|funciona no br|works in brazil|sem data para voltar/i;
-  const ours = (key: string) => key.startsWith("vsDiscord.") || key.startsWith("tela.");
+  const ours = (key: string) =>
+    key.startsWith("vsDiscord.") || key.startsWith("tela.") || key.startsWith("compare.");
 
   it("has no word about suspensions, bans, a regulator or a VPN, in any language", () => {
     for (const [label, catalogue] of [["en", en], ["pt-BR", ptBR], ["es", es]] as const) {
@@ -347,7 +354,14 @@ describe("the /vs-discord and /tela copy stays about features", () => {
         expect(value, `${label} ${key}`).not.toMatch(BANNED);
       }
     }
-    for (const path of ["/vs-discord", "/tela"] as const) {
+    for (const path of [
+      "/vs-discord",
+      "/tela",
+      "/compare",
+      "/compare/stoat",
+      "/compare/teamspeak",
+      "/compare/slack",
+    ] as const) {
       for (const locale of ["pt-BR", "en", "es"] as const) {
         expect(renderMarketingHead(path, locale), `${path} ${locale}`).not.toMatch(BANNED);
       }
@@ -368,6 +382,98 @@ describe("the /vs-discord and /tela copy stays about features", () => {
         if (!ours(key)) continue;
         expect(value, `${label} ${key}`).not.toContain("\u2014");
       }
+    }
+  });
+});
+
+describe("the /compare pages", () => {
+  const catalogues = { "pt-BR": ptBR, en, es } as const;
+  const products = [
+    ["/compare/stoat", "Stoat"],
+    ["/compare/teamspeak", "TeamSpeak 6"],
+    ["/compare/slack", "Slack huddles"],
+  ] as const;
+
+  it("every /compare FAQ pair matches its compare.faq.* twin, in all three languages", () => {
+    const ids = ["best", "sound", "import", "self"] as const;
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const c = catalogues[locale] as Record<string, string>;
+      expect(COMPARE_FAQ[locale], locale).toHaveLength(ids.length);
+      ids.forEach((id, index) => {
+        expect(COMPARE_FAQ[locale][index], `${locale} ${id}`).toEqual({
+          question: c[`compare.faq.${id}.q`],
+          answer: c[`compare.faq.${id}.a`],
+        });
+      });
+    }
+  });
+
+  it("the hub head matches the catalogue in es, and each product head matches its template", () => {
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const c = catalogues[locale] as Record<string, string>;
+      expect(renderMarketingHead("/compare", locale)).toContain(
+        `<title>${c["compare.seo.title"]}</title>`,
+      );
+      for (const [page, name] of products) {
+        const head = renderMarketingHead(page, locale);
+        expect(head, `${page} ${locale}`).toContain(
+          `<title>${c["compare.product.seo.title"]!.replace("{name}", name)}</title>`,
+        );
+        expect(head, `${page} ${locale}`).toContain(
+          c["compare.product.seo.description"]!.replace("{name}", name),
+        );
+      }
+    }
+  });
+
+  it("is canonical to itself per language, with the hreflang set", () => {
+    for (const page of ["/compare", ...products.map(([p]) => p)] as const) {
+      const en = renderMarketingHead(page, "en");
+      expect(en).toContain(`<link rel="canonical" href="https://pqp.gg${page}?lang=en" />`);
+      expect(en).toContain(`hreflang="x-default" href="https://pqp.gg${page}"`);
+      expect(en).toContain(`hreflang="es" href="https://pqp.gg${page}?lang=es"`);
+      expect(renderMarketingHead(page, "pt-BR")).toContain(
+        `<link rel="canonical" href="https://pqp.gg${page}" />`,
+      );
+    }
+  });
+
+  it("carries valid JSON-LD: a WebPage with its Table, and FAQPage on the hub only", () => {
+    const graphOf = (page: MarketingPage, locale: "pt-BR" | "en" | "es") => {
+      const head = renderMarketingHead(page, locale);
+      const json = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(head)![1]!;
+      return (JSON.parse(json) as { "@graph": Record<string, unknown>[] })["@graph"];
+    };
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const hub = graphOf("/compare", locale);
+      const web = hub.find((n) => n["@type"] === "WebPage")!;
+      const table = hub.find((n) => n["@type"] === "Table")!;
+      expect(web.dateModified).toBe("2026-10-16");
+      expect(web.inLanguage).toBe(locale);
+      expect((web.hasPart as { "@id": string })["@id"]).toBe(table["@id"]);
+      expect((table.about as { name: string }[]).map((a) => a.name)).toEqual([
+        "pqp",
+        "Discord",
+        "Stoat",
+        "TeamSpeak 6",
+        "Slack huddles",
+      ]);
+      expect(hub.some((n) => n["@type"] === "FAQPage")).toBe(true);
+      for (const [page] of products) {
+        const g = graphOf(page, locale);
+        expect(g.some((n) => n["@type"] === "WebPage")).toBe(true);
+        expect(g.some((n) => n["@type"] === "Table")).toBe(true);
+        expect(g.some((n) => n["@type"] === "FAQPage")).toBe(false);
+      }
+    }
+  });
+
+  it("pins the table name to the catalogue caption", () => {
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const c = catalogues[locale] as Record<string, string>;
+      expect(renderMarketingHead("/compare", locale)).toContain(
+        JSON.stringify(c["compare.matrix.caption"]).slice(1, -1),
+      );
     }
   });
 });

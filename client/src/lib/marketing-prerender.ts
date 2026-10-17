@@ -29,10 +29,23 @@ import {
   FACTS_CHECKED,
   factFor,
   formatCheckedDate,
+  MATRIX_FEATURES,
   sourceLabel,
   TELA_SOURCES,
   VS_DISCORD_FEATURES,
+  type CompareFeature,
+  type CompareProduct,
 } from "../content/compare-facts";
+import {
+  comparePath,
+  COMPARE_FAQ_IDS,
+  COMPARE_PAGES,
+  DISCORD_WHAT,
+  MATRIX_PRODUCTS,
+  PRODUCT_NAMES,
+  WRITE_UPS,
+  type DetailProduct,
+} from "../content/compare-products";
 import {
   escapeHtml,
   STREAMERS_FAQ,
@@ -41,6 +54,7 @@ import {
 } from "./marketing-meta";
 import {
   CHROME_PRERENDER_COPY,
+  COMPARE_PRERENDER_COPY,
   DOWNLOAD_PRERENDER_COPY,
   TELA_PRERENDER_COPY,
   VS_DISCORD_PRERENDER_COPY,
@@ -492,7 +506,97 @@ function vsDiscordBlock(locale: MarketingLocale, chrome: MarketingChrome): strin
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.pqp.title"])}</h2><ul>${does}</ul></section>`,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.table.title"])}</h2><table class="mt-4 w-full text-left text-sm"><caption class="sr-only">${e(c["vsDiscord.table.caption"])}</caption><thead><tr><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.feature"])}</th><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.pqp"])}</th><th scope="col" class="py-2">${e(c["vsDiscord.table.col.discord"])}</th></tr></thead><tbody>${rows}</tbody></table><h3 class="mt-6 font-display text-base font-bold">${e(c["vsDiscord.ahead.title"])}</h3><p class="mt-1 text-text-secondary">${e(c["vsDiscord.ahead.body"])}</p></section>`,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.faq.title"])}</h2><dl>${faq}</dl></section>`,
-    `<section id="ios-beta" class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.closing.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["vsDiscord.closing.body"])}</p><p class="mt-6">${cta} <a href="${e(chrome.iosBetaUrl || IOS_BETA_PRERENDER_HREF)}" rel="noopener noreferrer" class="ml-3 underline">${e(c["vsDiscord.cta.beta"])}</a></p><p class="mt-6 text-sm text-text-secondary">${e(c["vsDiscord.closing.tela.lead"])} <a href="/tela" class="underline">${e(c["vsDiscord.closing.tela.link"])}</a></p></section>`,
+    `<section id="ios-beta" class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.closing.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["vsDiscord.closing.body"])}</p><p class="mt-6">${cta} <a href="${e(chrome.iosBetaUrl || IOS_BETA_PRERENDER_HREF)}" rel="noopener noreferrer" class="ml-3 underline">${e(c["vsDiscord.cta.beta"])}</a></p><p class="mt-6 text-sm text-text-secondary">${e(c["vsDiscord.closing.tela.lead"])} <a href="/tela" class="underline">${e(c["vsDiscord.closing.tela.link"])}</a></p><p class="mt-2 text-sm text-text-secondary">${e(c["vsDiscord.closing.compare.lead"])} <a href="/compare" class="underline">${e(c["vsDiscord.closing.compare.link"])}</a></p></section>`,
+    CLOSE_PAGE,
+  ].join("");
+}
+
+/** The matrix cell of one fact (or "not applicable"), as plain HTML. */
+function compareCell(
+  product: CompareProduct,
+  feature: CompareFeature,
+  locale: MarketingLocale,
+): string {
+  const v = VS_DISCORD_PRERENDER_COPY[locale];
+  const c = COMPARE_PRERENDER_COPY[locale];
+  const fact = factFor(product, feature);
+  if (!fact) {
+    return escapeHtml(c["compare.matrix.na"]);
+  }
+  const word = v[`vsDiscord.chip.${fact.status}`];
+  const body = fact.value[locale];
+  const prefix = body.toLowerCase().startsWith(word.toLowerCase())
+    ? ""
+    : `<span class="sr-only">${escapeHtml(word)}: </span>`;
+  return `${prefix}${escapeHtml(body)}${sourcesHtml(v["vsDiscord.table.source"], fact.sources)}`;
+}
+
+function compareBlock(locale: MarketingLocale): string {
+  const c = COMPARE_PRERENDER_COPY[locale];
+  const v = VS_DISCORD_PRERENDER_COPY[locale];
+  const e = escapeHtml;
+  const asOf = c["compare.hero.asOf"].replace("{date}", formatCheckedDate(FACTS_CHECKED, locale));
+  const head = MATRIX_PRODUCTS.map(
+    (p) => `<th scope="col" class="py-2 pr-4">${e(PRODUCT_NAMES[p])}</th>`,
+  ).join("");
+  const rows = MATRIX_FEATURES.map(
+    (feature) =>
+      `<tr><th scope="row" class="py-2 pr-4 align-top">${e(v[`vsDiscord.row.${feature as "price"}.label`])}</th>${MATRIX_PRODUCTS.map(
+        (p) => `<td class="py-2 pr-4 align-top">${compareCell(p, feature, locale)}</td>`,
+      ).join("")}</tr>`,
+  ).join("");
+  const honest = (["1", "2", "3", "4"] as const)
+    .map((n) => `<li class="mt-2">${e(c[`compare.honest.${n}`])}</li>`)
+    .join("");
+  const cards = [
+    `<li class="mt-4"><h3 class="font-display text-lg font-bold">Discord</h3><p class="mt-1 text-text-secondary">${e(DISCORD_WHAT[locale])}</p><p class="mt-1"><a href="${comparePath("discord")}" class="underline">${e(c["compare.vs.link"])}</a></p></li>`,
+    ...COMPARE_PAGES.map(
+      (p) =>
+        `<li class="mt-4"><h3 class="font-display text-lg font-bold">${e(PRODUCT_NAMES[p])}</h3><p class="mt-1 text-text-secondary">${e(WRITE_UPS[p].what[locale])}</p><p class="mt-1"><a href="${comparePath(p)}" class="underline">${e(c["compare.products.more"])}</a></p></li>`,
+    ),
+  ].join("");
+  const faq = COMPARE_FAQ_IDS.map(
+    (id) =>
+      `<div class="mt-4"><dt class="font-display font-bold">${e(c[`compare.faq.${id}.q`])}</dt><dd class="mt-1 text-text-secondary">${e(c[`compare.faq.${id}.a`])}</dd></div>`,
+  ).join("");
+  return [
+    OPEN_PAGE("max-w-5xl"),
+    `<h1 class="font-display text-4xl font-bold tracking-tight">${e(c["compare.hero.title"])}</h1>`,
+    `<p class="mt-5 text-lg text-text-secondary">${e(c["compare.hero.body"])}</p>`,
+    `<p class="mt-3 text-xs text-text-tertiary">${e(asOf)}</p>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.answer.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["compare.answer.body"])}</p></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.matrix.title"])}</h2><table class="mt-4 w-full text-left text-sm"><caption class="sr-only">${e(c["compare.matrix.caption"])}</caption><thead><tr><th scope="col" class="py-2 pr-4">${e(c["compare.matrix.col.feature"])}</th>${head}</tr></thead><tbody>${rows}</tbody></table></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.honest.title"])}</h2><ul>${honest}</ul></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.products.title"])}</h2><ul>${cards}</ul></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.method.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["compare.method.body"])}</p></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.faq.title"])}</h2><dl>${faq}</dl></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.cta.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["compare.cta.body"])}</p><p class="mt-6"><a href="${CREATE_ROOM_PRERENDER_HREF}" class="${BUTTON}">${e(c["compare.cta.create"])}</a></p></section>`,
+    CLOSE_PAGE,
+  ].join("");
+}
+
+function compareProductBlock(product: DetailProduct, locale: MarketingLocale): string {
+  const c = COMPARE_PRERENDER_COPY[locale];
+  const v = VS_DISCORD_PRERENDER_COPY[locale];
+  const e = escapeHtml;
+  const name = PRODUCT_NAMES[product];
+  const w = WRITE_UPS[product];
+  const asOf = c["compare.hero.asOf"].replace("{date}", formatCheckedDate(FACTS_CHECKED, locale));
+  const rows = MATRIX_FEATURES.map(
+    (feature) =>
+      `<tr><th scope="row" class="py-2 pr-4 align-top">${e(v[`vsDiscord.row.${feature as "price"}.label`])}</th><td class="py-2 pr-4 align-top">${compareCell("pqp", feature, locale)}</td><td class="py-2 align-top text-text-secondary">${compareCell(product, feature, locale)}</td></tr>`,
+  ).join("");
+  return [
+    OPEN_PAGE("max-w-3xl"),
+    `<p class="text-sm"><a href="/compare" class="underline">${e(c["compare.product.back"])}</a></p>`,
+    `<h1 class="mt-4 font-display text-4xl font-extrabold tracking-tight">pqp vs ${e(name)} <span class="mt-3 block text-xl font-bold">${e(c["compare.product.tagline"])}</span></h1>`,
+    `<p class="mt-3 text-xs text-text-tertiary">${e(asOf)}</p>`,
+    `<section class="mt-10"><h2 class="font-display text-xl font-bold">${e(c["compare.product.what.title"])}</h2><p class="mt-2 text-text-secondary">${e(w.what[locale])}</p></section>`,
+    `<section class="mt-8"><h2 class="font-display text-xl font-bold">${e(c["compare.product.ahead.title"].replace("{name}", name))}</h2><p class="mt-2 text-text-secondary">${e(w.ahead[locale])}</p></section>`,
+    `<section class="mt-8"><h2 class="font-display text-xl font-bold">${e(c["compare.product.different.title"])}</h2><p class="mt-2 text-text-secondary">${e(w.different[locale])}</p></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.product.table.title"])}</h2><table class="mt-4 w-full text-left text-sm"><caption class="sr-only">${e(c["compare.matrix.caption"])}</caption><thead><tr><th scope="col" class="py-2 pr-4">${e(c["compare.matrix.col.feature"])}</th><th scope="col" class="py-2 pr-4">pqp</th><th scope="col" class="py-2">${e(name)}</th></tr></thead><tbody>${rows}</tbody></table></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.product.pick.title"])}</h2><h3 class="mt-3 font-display font-bold">${e(c["compare.product.pickThem"].replace("{name}", name))}</h3><p class="mt-1 text-text-secondary">${e(w.pickThem[locale])}</p><h3 class="mt-3 font-display font-bold">${e(c["compare.product.pickPqp"])}</h3><p class="mt-1 text-text-secondary">${e(w.pickPqp[locale])}</p><p class="mt-6"><a href="${CREATE_ROOM_PRERENDER_HREF}" class="${BUTTON}">${e(c["compare.cta.create"])}</a></p></section>`,
+    `<section class="mt-12"><h2 class="font-display text-base font-bold">${e(c["compare.product.sources.title"])}</h2>${sourcesHtml(v["vsDiscord.table.source"], w.sources)}<p class="mt-4 text-sm text-text-secondary">${e(c["compare.method.body"])}</p></section>`,
     CLOSE_PAGE,
   ].join("");
 }
@@ -551,6 +655,10 @@ const BLOCKS: Partial<
   "/contato": contactBlock,
   "/tela": telaBlock,
   "/vs-discord": vsDiscordBlock,
+  "/compare": compareBlock,
+  "/compare/stoat": (locale) => compareProductBlock("stoat", locale),
+  "/compare/teamspeak": (locale) => compareProductBlock("teamspeak", locale),
+  "/compare/slack": (locale) => compareProductBlock("slack", locale),
   "/download": downloadBlock,
 };
 
@@ -620,6 +728,7 @@ function footerBlock(locale: MarketingLocale, chrome: MarketingChrome): string {
     chrome.communities ? link("/#communities", c["nav.communities"]) : "",
     link("/#hosting", c["nav.selfHost"], selfHostLang),
     link("/vs-discord", c["footer.vsDiscord"]),
+    link("/compare", c["footer.compare"]),
     link("/vem", c["footer.vem"]),
     link("/tela", c["footer.tela"]),
     link("/streamers", c["footer.streamers"]),

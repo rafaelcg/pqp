@@ -33,6 +33,8 @@ import {
 import {
   CHROME_PRERENDER_COPY,
   CHROME_PRERENDER_KEYS,
+  COMPARE_PRERENDER_COPY,
+  COMPARE_PRERENDER_KEYS,
   DOWNLOAD_PRERENDER_COPY,
   DOWNLOAD_PRERENDER_KEYS,
   TELA_PRERENDER_COPY,
@@ -266,10 +268,17 @@ describe("the /tela, /vs-discord and /download no-JS bodies", () => {
       "vsDiscord.cta.beta.hint",
       "downloadPage.seo.title",
       "downloadPage.seo.description",
+      "compare.seo.title",
+      "compare.seo.description",
+      "compare.product.seo.title",
+      "compare.product.seo.description",
     ]);
     const pages = [
       ["../pages/tela-page.tsx", ["tela."], TELA_PRERENDER_KEYS],
       ["../pages/vs-discord-page.tsx", ["vsDiscord."], VS_DISCORD_PRERENDER_KEYS],
+      ["../pages/compare-page.tsx", ["compare."], COMPARE_PRERENDER_KEYS],
+      ["../pages/compare-product-page.tsx", ["compare."], COMPARE_PRERENDER_KEYS],
+      ["../components/marketing/compare-cta.tsx", ["compare."], COMPARE_PRERENDER_KEYS],
       ["../pages/download-page.tsx", ["downloadPage."], DOWNLOAD_PRERENDER_KEYS],
       ["../components/downloads/code-signing-policy.tsx", ["codeSigning."], DOWNLOAD_PRERENDER_KEYS],
       ["../components/marketing/marketing-nav.tsx", ["nav.", "footer."], CHROME_PRERENDER_KEYS],
@@ -340,6 +349,50 @@ describe("the /tela, /vs-discord and /download no-JS bodies", () => {
       expect(root).toContain("support-apps.discord.com");
       expect(root).toContain("discord.com/nitro");
       expect(root).toContain(esc(formatCheckedDate(FACTS_CHECKED, locale)));
+    }
+  });
+
+  it("writes /compare's matrix with every product, its sources and the date", () => {
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const root = rootOf(served("/compare", locale));
+      const c = COMPARE_PRERENDER_COPY[locale];
+      expect(root).toContain(`lang="${locale}"`);
+      expect(root).toMatch(new RegExp(`<h1[^>]*>${escapeRe(esc(c["compare.hero.title"]))}</h1>`));
+      expect(root).toContain("<table");
+      // One row per matrix feature, a column per product.
+      expect(root.match(/<th scope="row"/g)).toHaveLength(9);
+      for (const name of ["pqp", "Discord", "Stoat", "TeamSpeak 6", "Slack huddles"]) {
+        expect(root, name).toContain(`>${name}</th>`);
+      }
+      // Sourced and dated, in the HTML a crawler without JavaScript reads.
+      expect(root).toContain("stoat.chat");
+      expect(root).toContain("support-apps.discord.com");
+      expect(root).toContain("slack.com");
+      expect(root).toContain(esc(formatCheckedDate(FACTS_CHECKED, locale)));
+      for (const id of ["best", "sound", "import", "self"] as const) {
+        expect(root).toContain(esc(c[`compare.faq.${id}.q`]));
+        expect(root).toContain(esc(c[`compare.faq.${id}.a`]));
+      }
+      for (const href of ["/vs-discord", "/compare/stoat", "/compare/teamspeak", "/compare/slack", "/app"]) {
+        expect(root, href).toContain(`href="${href}"`);
+      }
+    }
+  });
+
+  it("writes each /compare/<product> page's rows, picks and sources", () => {
+    for (const [page, name] of [
+      ["/compare/stoat", "Stoat"],
+      ["/compare/teamspeak", "TeamSpeak 6"],
+      ["/compare/slack", "Slack huddles"],
+    ] as const) {
+      for (const locale of ["pt-BR", "en", "es"] as const) {
+        const root = rootOf(served(page, locale));
+        expect(root, `${page} ${locale}`).toMatch(new RegExp(`<h1[^>]*>pqp vs ${escapeRe(name)} `));
+        expect(root.match(/<th scope="row"/g), `${page} ${locale}`).toHaveLength(9);
+        expect(root).toContain('href="/compare"');
+        expect(root).toContain("rel=\"noopener noreferrer\"");
+        expect(root).toContain(esc(formatCheckedDate(FACTS_CHECKED, locale)));
+      }
     }
   });
 
