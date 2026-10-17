@@ -63,4 +63,48 @@ class PermissionsTest {
         val snapshot = PermissionsSnapshot(server = allBits.toString())
         assertTrue(hasPermission(snapshot.channelBits("any-channel"), Permission.START_WATCH_PARTY))
     }
+
+    @Test
+    fun `an unknown snapshot still offers the composer, the server is the gate`() {
+        assertTrue(SendGate.canSend(null, "forum"))
+    }
+
+    @Test
+    fun `server bits answer when the channel has no entry`() {
+        assertTrue(SendGate.canSend(PermissionsSnapshot(server = Permission.SEND_MESSAGES.toString()), "forum"))
+        assertFalse(SendGate.canSend(PermissionsSnapshot(server = "0"), "forum"))
+    }
+
+    @Test
+    fun `a channel overwrite denying send wins over the server bits, only there`() {
+        val snapshot = PermissionsSnapshot(
+            server = Permission.SEND_MESSAGES.toString(),
+            channels = mapOf("forum" to "0"),
+        )
+        assertFalse(SendGate.canSend(snapshot, "forum"))
+        assertTrue(SendGate.canSend(snapshot, "general"))
+    }
+
+    @Test
+    fun `the cache hands a snapshot back within its time, never to another account or server`() {
+        val snapshot = PermissionsSnapshot(server = "0")
+        PermissionsCache.put("me", "srv", snapshot, now = 1_000L)
+        assertEquals(snapshot, PermissionsCache.fresh("me", "srv", now = 1_000L + PermissionsCache.TTL_MS - 1))
+        assertEquals(null, PermissionsCache.fresh("me", "srv", now = 1_000L + PermissionsCache.TTL_MS))
+        assertEquals(null, PermissionsCache.fresh("somebody-else", "srv", now = 1_500L))
+        assertEquals(null, PermissionsCache.fresh("me", "other-server", now = 1_500L))
+        // A clock that went backwards is not a hit.
+        assertEquals(null, PermissionsCache.fresh("me", "srv", now = 500L))
+        // A later write evicts what has expired, so the map does not keep every server ever opened.
+        val later = 1_000L + PermissionsCache.TTL_MS + 5
+        PermissionsCache.put("me", "second", snapshot, now = later)
+        assertEquals(null, PermissionsCache.fresh("me", "srv", now = later))
+        assertEquals(snapshot, PermissionsCache.fresh("me", "second", now = later))
+    }
+
+    @Test
+    fun `a channel overwrite granting send wins over the server bits`() {
+        val snapshot = PermissionsSnapshot(server = "0", channels = mapOf("forum" to Permission.SEND_MESSAGES.toString()))
+        assertTrue(SendGate.canSend(snapshot, "forum"))
+    }
 }

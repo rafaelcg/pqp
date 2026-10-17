@@ -67,6 +67,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.FocusRequester
@@ -105,9 +106,13 @@ import gg.pqp.app.attachments.formatAttachmentSize
 import gg.pqp.app.core.ApiClient
 import gg.pqp.app.core.Gif
 import gg.pqp.app.core.Message
+import gg.pqp.app.core.PermissionsCache
+import gg.pqp.app.core.PermissionsSnapshot
 import gg.pqp.app.core.Reaction
+import gg.pqp.app.core.SendGate
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.core.serverPermissions
 import gg.pqp.app.core.runSuspendCatching
 import gg.pqp.app.push.VisibleChannel
 import gg.pqp.app.reports.ReportTarget
@@ -267,6 +272,33 @@ fun ChatScreen(
     val state by model.state.collectAsStateWithLifecycle()
     val phase by session.phase.collectAsStateWithLifecycle()
     val me = (phase as? SessionPhase.Ready)?.me
+    // Whether the composer is offered at all. A server channel (and a forum
+    // post, which asks its forum's bit) reads the permission snapshot once per
+    // server; a conversation and a notification-tap open have no server and are
+    // never gated here. Unknown, including a failed read, is allowed: the
+    // server stays the gate and says so on send.
+    val sendSnapshot by produceState<PermissionsSnapshot?>(null, serverId, me?.id) {
+        val id = serverId
+        if (id == null) {
+            value = null
+            return@produceState
+        }
+        val cached = PermissionsCache.fresh(me?.id, id, System.currentTimeMillis())
+        value = cached
+        if (cached != null) return@produceState
+        // Not runCatching: a read cancelled by the next server must end this
+        // producer, not write a null over the one that replaced it.
+        val read = try {
+            session.api.serverPermissions(id)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        if (read != null) PermissionsCache.put(me?.id, id, read, System.currentTimeMillis())
+        value = read
+    }
+    val canSendHere = SendGate.canSend(sendSnapshot, extras?.primaryChannelId ?: channelId)
     // Encaminhar is offered while the runtime flag is on (read per use, kept a
     // minute) and never in a conversation: the server refuses a DM as a source.
     val forwardEnabled = rememberForwardEnabled(session.api)
@@ -631,6 +663,10 @@ fun ChatScreen(
                 val replacement = extras?.composerReplacement
                 if (replacement != null) {
                     replacement()
+                } else if (!canSendHere) {
+                    // No SEND_MESSAGES here: the reason, not a box that fails
+                    // after the fact with a red line.
+                    ComposerNoticeBar(text = stringResource(R.string.chat_read_only), tag = "composer.readOnly")
                 } else Column {
                 extras?.composerNote?.invoke()
                 MentionMenu(mentionMatches) { candidate ->

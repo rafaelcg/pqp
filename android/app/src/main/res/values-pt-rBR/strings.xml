@@ -74,7 +74,8 @@
     <string name="chat_reject_rate_limited">Você tá mandando rápido demais</string>
     <string name="chat_reject_rate_limited_wait">Você tá mandando rápido demais. Tenta de novo em %1$ds.</string>
     <string name="chat_reject_no_access">Você não pode mandar mensagem neste canal</string>
-    <string name="chat_reject_cannot_send">Você não tem permissão pra mandar aqui</string>
+    <string name="chat_reject_cannot_send">Tu não tem permissão pra mandar aqui</string>
+    <string name="chat_read_only">Tu pode ler aqui, mas não pode mandar mensagens.</string>
     <string name="chat_reject_undeliverable">Essa mensagem não foi entregue</string>
     <string name="chat_reject_slow_mode">Slow mode tá ligado.</string>
     <string name="chat_reject_automod">O AutoMod bloqueou essa mensagem.</string>
@@ -914,6 +915,7 @@
     <string name="forum_search_empty_post">Postar \"%1$s\"</string>
     <string name="forum_mine_empty">Nada em Meus posts ainda.</string>
     <string name="forum_paused">Novos posts estão pausados neste fórum.</string>
+    <string name="forum_read_only">Tu pode ler este fórum, mas não pode postar nele.</string>
     <string name="forum_post_back">Voltar pra lista</string>
     <string name="forum_post_menu">Mais opções do post</string>
     <string name="forum_post_copy_link">Copiar link</string>
