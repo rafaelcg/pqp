@@ -135,6 +135,7 @@ class SessionStore(
     }
 
     private fun onAccountFrame(frame: JsonObject) {
+        AccountFrames.staleServer(frame)?.let(PermissionsCache::invalidate)
         when ((frame["type"] as? JsonPrimitive)?.contentOrNull) {
             "server-removed" -> AccountFrames.serverRemoved(frame)?.let { removed ->
                 val lost = synchronized(orderLock) {
@@ -607,6 +608,7 @@ class SessionStore(
 
     fun signOutLocally() {
         realtime.disconnect()
+        PermissionsCache.clear()
         _servers.value = emptyList()
         _serversLoaded.value = false
         _linkError.value = null
@@ -640,6 +642,15 @@ class SessionStore(
     // may run at once, and everything it touches has to exist by then.
     init {
         scope.launch { realtime.frames.collect(::onAccountFrame) }
+        // A reconnect may have missed a permissions-update: nothing cached before it is trusted after it.
+        scope.launch {
+            var seenReady = false
+            realtime.state.collect { state ->
+                if (state != RealtimeState.Ready) return@collect
+                if (seenReady) PermissionsCache.clear()
+                seenReady = true
+            }
+        }
     }
 
     companion object {
