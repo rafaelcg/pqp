@@ -80,6 +80,9 @@ const CookiesPage = lazy(() =>
 const StatusPage = lazy(() =>
   import("./pages/status-page").then((m) => ({ default: m.StatusPage })),
 );
+const HomePreviewRoute = lazy(() =>
+  import("./pages/home-preview").then((m) => ({ default: m.HomePreviewRoute })),
+);
 const VsDiscordPage = lazy(() =>
   import("./pages/vs-discord-page").then((m) => ({ default: m.VsDiscordPage })),
 );
@@ -262,6 +265,10 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
           <Route path="/contato" element={<ContactPage />} />
           <Route path="/status" element={<StatusPage />} />
           <Route path="/vs-discord" element={<VsDiscordPage />} />
+          {/* The homepage redesign candidates, for review before one replaces
+              `/`. Two segments, so no handle can collide. Not indexed. */}
+          <Route path="/preview/home" element={<HomePreviewRoute />} />
+          <Route path="/preview/home/:variant" element={<HomePreviewRoute />} />
           {/* `/tela`: the pt-BR landing for "Discord sem tela no Brasil, o
               que usar". A static single segment, so, as the note on
               `PublicProfileRoute` below explains, the word joins

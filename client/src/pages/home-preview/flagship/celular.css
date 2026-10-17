@@ -1,0 +1,12 @@
+/*
+ * #celular. No colour literals: tokens and color-mix only. The light behind
+ * the phones is the kit's `Glow`.
+ */
+
+/* The row of phones scrolls sideways on a phone: no scrollbar to draw. */
+.cel-row {
+  scrollbar-width: none;
+}
+.cel-row::-webkit-scrollbar {
+  display: none;
+}

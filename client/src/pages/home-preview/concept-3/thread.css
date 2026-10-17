@@ -1,0 +1,45 @@
+/*
+ * Papo reto: the little bit of motion the thread needs. Role tokens only,
+ * no colour literals (the token bench fails on them).
+ */
+
+@keyframes c3-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes c3-caret {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.c3-dot {
+  animation: c3-dot 1.1s ease-in-out infinite;
+}
+
+.c3-caret {
+  animation: c3-caret 1.1s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .c3-dot,
+  .c3-caret {
+    animation: none;
+  }
+  .c3-dot {
+    opacity: 0.7;
+  }
+}

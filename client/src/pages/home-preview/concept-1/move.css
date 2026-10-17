@@ -1,0 +1,115 @@
+/*
+ * The hero's move: a sidebar on the left, the same sidebar on the right, and
+ * rows that cross from one to the other. Role tokens and color-mix only: a
+ * colour literal here fails the token bench.
+ *
+ * A row is drawn three times (the Discord side, the pqp side, and a "ghost"
+ * that carries it across). All three share one row height, so the ghost lands
+ * exactly on the pqp row and the two cross-fade.
+ */
+
+.mv {
+  --mv-gap: 20px;
+  --mv-pad: 6px;
+  --mv-row: 28px;
+}
+
+@media (min-width: 640px) {
+  .mv {
+    --mv-gap: 48px;
+    --mv-pad: 8px;
+    --mv-row: 32px;
+  }
+}
+
+.mv-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--mv-gap) minmax(0, 1fr);
+}
+
+.mv-panel {
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 14px;
+  padding: var(--mv-pad);
+}
+
+/* The pqp side: a row is hidden until its ghost lands, then fades in. */
+.mv-in {
+  opacity: 0;
+  transition: opacity 0.45s ease;
+}
+
+.mv-in[data-on="true"] {
+  opacity: 1;
+  transition: opacity 0.35s ease 0.62s;
+}
+
+/* The Discord side: a row dims for a moment while its copy leaves. */
+.mv-src[data-go="true"] {
+  animation: mv-src 1s ease both;
+}
+
+/* The ghost: the row's copy, in lime, crossing the gutter. */
+.mv-ghost {
+  opacity: 0;
+}
+
+.mv-ghost[data-go="true"] {
+  animation: mv-fly 1s cubic-bezier(0.45, 0, 0.2, 1) both;
+}
+
+@keyframes mv-src {
+  0% {
+    opacity: 1;
+  }
+  22% {
+    opacity: 0.35;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes mv-fly {
+  0% {
+    opacity: 0;
+    transform: translateX(0);
+  }
+  14% {
+    opacity: 1;
+  }
+  76% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(calc(100% + var(--mv-gap) + var(--mv-pad) * 2 + 2px));
+  }
+}
+
+/* The floor plan behind the hero: a dotted grid that fades out at the edges. */
+.mv-plan {
+  background-image: radial-gradient(
+    color-mix(in oklch, var(--color-text) 16%, transparent) 1px,
+    transparent 1.5px
+  );
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse 75% 70% at 72% 46%, black, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mv-in,
+  .mv-in[data-on="true"] {
+    opacity: 1;
+    transition: none;
+  }
+  .mv-src[data-go="true"] {
+    animation: none;
+  }
+  .mv-ghost,
+  .mv-ghost[data-go="true"] {
+    display: none;
+    animation: none;
+  }
+}
