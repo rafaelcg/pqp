@@ -134,9 +134,10 @@ object SendGate {
  * one bit of it as they open (the chat composer's SEND_MESSAGES): opening
  * channel after channel on one server reads it once, not once per channel.
  * Keyed by account as well as server, so a second account on the same phone
- * never reads the first one's bits. Short on purpose, a role change shows up
- * the next time the channel list resumes (which always re-reads) or within
- * [TTL_MS] of opening a chat.
+ * never reads the first one's bits. Fresh for [TTL_MS], and dropped at once by
+ * what says it is stale: a `permissions-update` or `server-removed` frame for
+ * the server ([AccountFrames.staleServer], wired in `SessionStore`), a socket
+ * that reconnected (frames were missed), and a sign-out.
  */
 object PermissionsCache {
     const val TTL_MS = 30_000L
@@ -149,6 +150,16 @@ object PermissionsCache {
 
     fun fresh(userId: String?, serverId: String, now: Long): PermissionsSnapshot? =
         entries[key(userId, serverId)]?.takeIf { now - it.at in 0 until TTL_MS }?.snapshot
+
+    /** The server's bits may have changed, or the account left it: the next read goes to the network. */
+    fun invalidate(serverId: String) {
+        entries.keys.removeIf { it.endsWith(":$serverId") }
+    }
+
+    /** Every entry, for a socket that reconnected (frames were missed) and for a sign-out. */
+    fun clear() {
+        entries.clear()
+    }
 
     fun put(userId: String?, serverId: String, snapshot: PermissionsSnapshot, now: Long) {
         // Expired entries go on every write, so the map holds at most the servers opened in the last [TTL_MS].

@@ -103,6 +103,24 @@ class PermissionsTest {
     }
 
     @Test
+    fun `invalidate drops one server for every account, clear drops all`() {
+        val snapshot = PermissionsSnapshot(server = "0")
+        PermissionsCache.put("me", "a", snapshot, now = 10L)
+        PermissionsCache.put("you", "a", snapshot, now = 10L)
+        PermissionsCache.put("me", "b", snapshot, now = 10L)
+        PermissionsCache.invalidate("a")
+        assertEquals(null, PermissionsCache.fresh("me", "a", now = 11L))
+        assertEquals(null, PermissionsCache.fresh("you", "a", now = 11L))
+        assertEquals(snapshot, PermissionsCache.fresh("me", "b", now = 11L))
+        // A server id that merely ends the same way is not the same server.
+        PermissionsCache.put("me", "xa", snapshot, now = 10L)
+        PermissionsCache.invalidate("a")
+        assertEquals(snapshot, PermissionsCache.fresh("me", "xa", now = 11L))
+        PermissionsCache.clear()
+        assertEquals(null, PermissionsCache.fresh("me", "b", now = 11L))
+    }
+
+    @Test
     fun `a channel overwrite granting send wins over the server bits`() {
         val snapshot = PermissionsSnapshot(server = "0", channels = mapOf("forum" to Permission.SEND_MESSAGES.toString()))
         assertTrue(SendGate.canSend(snapshot, "forum"))
