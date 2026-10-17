@@ -67,6 +67,19 @@ export interface ProductWriteUp {
   sources: readonly string[];
 }
 
+/**
+ * Where the sentences about pqp itself come from (the 1080p share, the watch
+ * party in early access, the more-than-a-hundred room, the layout import):
+ * our own docs and pages. Every write-up lists them beside the other
+ * product's pages, so no claim stands without a source a reader can open.
+ */
+const PQP_SOURCES: readonly string[] = [
+  "https://github.com/rafaelcg/pqp/blob/main/docs/WATCH_PARTY.md",
+  "https://github.com/rafaelcg/pqp/blob/main/docs/DISCORD_IMPORT.md",
+  "https://pqp.gg/blog/qualidade-de-video",
+  "https://pqp.gg/",
+];
+
 export const WRITE_UPS: Record<DetailProduct, ProductWriteUp> = {
   stoat: {
     what: {
@@ -100,6 +113,7 @@ export const WRITE_UPS: Record<DetailProduct, ProductWriteUp> = {
     sources: [
       "https://stoat.chat/release-notes/93eb1f4ec77444ca9fb13617e0e6c0b1",
       "https://en.wikipedia.org/wiki/Stoat_(software)",
+      ...PQP_SOURCES,
     ],
   },
   teamspeak: {
@@ -134,6 +148,7 @@ export const WRITE_UPS: Record<DetailProduct, ProductWriteUp> = {
     sources: [
       "https://teamspeak.com/en/",
       "https://alternativeto.net/news/2026/8/teamspeak-6-will-finally-introduce-direct-calls-4k-screen-sharing-and-picture-in-picture/",
+      ...PQP_SOURCES,
     ],
   },
   slack: {
@@ -164,6 +179,6 @@ export const WRITE_UPS: Record<DetailProduct, ProductWriteUp> = {
       en: "If you want a voice and screen community, free, with more than two people.",
       es: "Si quieres una comunidad de voz y pantalla, gratis, con más de dos personas.",
     },
-    sources: ["https://slack.com/help/articles/216771908"],
+    sources: ["https://slack.com/help/articles/216771908", ...PQP_SOURCES],
   },
 };

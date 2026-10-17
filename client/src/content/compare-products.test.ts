@@ -42,6 +42,15 @@ describe("the /compare product write-ups", () => {
     }
   });
 
+  it("sources the sentences about pqp as well as the ones about the other product", () => {
+    for (const product of COMPARE_PAGES) {
+      const own = WRITE_UPS[product].sources.filter(
+        (url) => url.startsWith("https://pqp.gg") || url.startsWith("https://github.com/rafaelcg/pqp"),
+      );
+      expect(own.length, `${product} has no source for what it says about pqp`).toBeGreaterThan(0);
+    }
+  });
+
   it("covers every matrix cell for every column of the hub", () => {
     for (const product of MATRIX_PRODUCTS) {
       for (const feature of MATRIX_FEATURES) {
