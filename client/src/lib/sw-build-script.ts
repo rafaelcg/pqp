@@ -76,6 +76,9 @@ export const NAVIGATE_DENYLIST: RegExp[] = [
   /^\/\.well-known\//,
   /^\/llms(-full)?\.txt$/,
   /^\/index\.md$/,
+  // The markdown twins of the blog pages (`/blog/<slug>.md`, `.en.md`, `.es.md`
+  // and `/blog.md`), written by the build: files, not routes.
+  /^\/blog(\/[^/]+)?\.(?:(?:pt-BR|en|es)\.)?md$/,
   /^\/robots\.txt$/,
   /^\/sitemap\.xml$/,
   // Standalone diagnostic pages in client/public (share-*.html).

@@ -390,8 +390,28 @@ page (crawl paths need internal links, and the footer already links
   real nav and footer in every language and switch state and fails when the
   static copy differs by one link, label or word.
   After changing a catalogue key those pages use, run
-  `pnpm --filter @pqp/client prerender:copy`. Every other route still serves
-  an empty body to a reader that runs no script.
+  `pnpm --filter @pqp/client prerender:copy`.
+- **The blog serves its words to a reader that runs no script (2026-10-16).**
+  `/blog`, every guide and every release note get a body in `#root` the same
+  way, plus a markdown twin. The prose is `.md`, which the middleware's esbuild
+  cannot import, so the BUILD renders it: `pqp-static-pages` in `vite.config.ts`
+  runs `src/lib/static-pages.ts` (the same `react-markdown` and `remark-gfm` as
+  the live page, no new dependency) and emits `prerender/blog/<slug>.<lang>.json`
+  (the page's `<main>`; `.json` because Pages 308s `.html`) and `/blog/<slug>.md`
+  (pt-BR), `.en.md`, `.es.md`, `/blog.md`. The middleware reads the fragment
+  through the asset binding and writes it between the plain nav and footer
+  (`injectPreBody`); with no fragment it serves the page as before. The head
+  carries `<link rel="alternate" type="text/markdown">` (no `hreflang`, so it is
+  not a language alternate), and `Accept: text/markdown` on any of those paths
+  answers the twin in the reader's language. Which pages exist, in which
+  languages, and what their fragment and twin are called is ONE list,
+  `src/lib/page-registry.ts`; a new kind of page (a `/compare`) gets an entry
+  there and a renderer in `static-pages.ts`. The build THROWS when a registered
+  page has no prose, or when a fragment (or a marketing page's no-JS body) has
+  under 200 visible characters, no `<h1>` or no internal link. No hydration is
+  involved (`main.tsx` is `createRoot`): the block is hidden before first paint
+  in any browser that runs the head script. Every other route still serves an
+  empty body to a reader that runs no script.
 - **`/app` is noindexed by robots** and must stay that way. **Superseded
   2026-09-17: it is noindexed by an edge `X-Robots-Tag` header now, not by
   `robots.txt`, because a `Disallow` a crawler never fetches could not

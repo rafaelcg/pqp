@@ -653,6 +653,47 @@ function footerBlock(locale: MarketingLocale, chrome: MarketingChrome): string {
 }
 
 /**
+ * `html` with `main` (a page's `<main>`, as HTML) written into `#root` between
+ * the site's plain nav and footer, in the language `locale`. Shared by the
+ * marketing pages below and the blog, whose `<main>` the build renders
+ * (`static-pages.ts`). Unchanged for a document with no `#root`, or a `#root`
+ * that already has something in it (a second run must not write a second copy).
+ * `contentLang` is the language of `main` when it differs from the chrome's
+ * (a guide with no Spanish body, read by a Spanish reader).
+ */
+export function injectPreBody(
+  html: string,
+  locale: MarketingLocale,
+  main: string,
+  chrome: MarketingChrome = NO_MARKETING_CHROME,
+  contentLang: MarketingLocale = locale,
+): string {
+  const at = html.indexOf(ROOT_OPEN);
+  if (at === -1 || html.includes('id="pre-page"')) {
+    return html;
+  }
+  const insertAt = at + ROOT_OPEN.length;
+  const body = [
+    `<div id="pre-page" lang="${contentLang}" class="min-h-full bg-surface-0 px-4 py-12 text-text">`,
+    navBlock(locale, chrome),
+    main,
+    footerBlock(locale, chrome),
+    `</div>`,
+  ].join("");
+  return html.slice(0, insertAt) + body + html.slice(insertAt);
+}
+
+/** A marketing page's `<main>`, or null for a page with no no-JS body. */
+export function marketingMain(
+  page: MarketingPage,
+  locale: MarketingLocale,
+  chrome: MarketingChrome = NO_MARKETING_CHROME,
+): string | null {
+  const block = BLOCKS[page];
+  return block ? block(locale, chrome) : null;
+}
+
+/**
  * `html` with the page's no-JS body written into `#root`, or `html` unchanged
  * for a page that has none, a document with no `#root`, or a `#root` that
  * already has something in it (a second run must not write a second copy).
@@ -665,21 +706,6 @@ export function injectMarketingBody(
   locale: MarketingLocale,
   chrome: MarketingChrome = NO_MARKETING_CHROME,
 ): string {
-  const block = BLOCKS[page];
-  if (!block) {
-    return html;
-  }
-  const at = html.indexOf(ROOT_OPEN);
-  if (at === -1 || html.includes('id="pre-page"')) {
-    return html;
-  }
-  const insertAt = at + ROOT_OPEN.length;
-  const body = [
-    `<div id="pre-page" lang="${locale}" class="min-h-full bg-surface-0 px-4 py-12 text-text">`,
-    navBlock(locale, chrome),
-    block(locale, chrome),
-    footerBlock(locale, chrome),
-    `</div>`,
-  ].join("");
-  return html.slice(0, insertAt) + body + html.slice(insertAt);
+  const main = marketingMain(page, locale, chrome);
+  return main === null ? html : injectPreBody(html, locale, main, chrome);
 }
