@@ -142,7 +142,7 @@ struct ChatView: View {
     /// The same snapshot, read for a server text channel so the composer can
     /// give way to a read-only notice where SEND_MESSAGES is denied. Nil for a
     /// conversation and for a forum post (the post model has the forum's).
-    @State private var sendPermissions: PermissionsSnapshot?
+    @State private var sendPermissions = SendPermissionSlot()
 
     // Forum post state; inert when `forumPost` is nil.
     /// Where the post opened, once its history reached the landing point.
@@ -199,7 +199,7 @@ struct ChatView: View {
     /// forum's bit); a conversation has no permissions to ask. Unknown is yes.
     private var canSendHere: Bool {
         if let forumPost { return forumPost.maySend }
-        return SendGate.canSend(sendPermissions, channelId: channelId)
+        return sendPermissions.canSend(channelId: channelId)
     }
 
     /// The host's card on the stage above the transcript: Create, the setup
@@ -549,15 +549,14 @@ struct ChatView: View {
             }
         }
         .task(id: sendGateServerId) {
-            // A snapshot belongs to the server it was read for: drop it when
-            // the destination changes, and accept an answer only while it is
-            // still the active one (a failed read must not leave the previous
-            // server's bits gating this channel).
-            sendPermissions = nil
+            // See `SendPermissionSlot`: the snapshot is dropped when the
+            // destination changes and a late answer for another server is
+            // refused.
+            sendPermissions.switchTo(sendGateServerId)
             guard let serverId = sendGateServerId else { return }
             let permissions = try? await session.api.fetchMemberPermissions(serverId: serverId)
-            guard !Task.isCancelled, serverId == sendGateServerId else { return }
-            sendPermissions = permissions
+            guard !Task.isCancelled else { return }
+            sendPermissions.accept(permissions, for: serverId)
         }
         .animation(Motion.standard, value: call.isCollapsed)
         .animation(Motion.standard, value: actionTarget?.id)

@@ -17,3 +17,33 @@ enum SendGate {
         return permissions.can(PermissionBit.sendMessages, channelId: channelId)
     }
 }
+
+/// The snapshot a transcript gates its composer with, tied to the server it was
+/// read for. A snapshot is only ever the bits of ONE server, so it is dropped
+/// the moment the screen's server changes (or stops applying, as for a
+/// conversation), and an answer is accepted only while it is still for the
+/// server on screen: a slow read for the server just left can neither gate
+/// the new channel nor overwrite the newer snapshot, and a failed read leaves
+/// the slot empty (unknown reads as allowed), never the previous server's bits.
+struct SendPermissionSlot {
+    private(set) var serverId: String?
+    private(set) var snapshot: PermissionsSnapshot?
+
+    /// The screen now answers to `serverId` (nil: no server applies).
+    mutating func switchTo(_ serverId: String?) {
+        if self.serverId != serverId { snapshot = nil }
+        self.serverId = serverId
+    }
+
+    /// Takes the answer of a read made for `serverId`; false when it is stale.
+    @discardableResult
+    mutating func accept(_ snapshot: PermissionsSnapshot?, for serverId: String) -> Bool {
+        guard self.serverId == serverId else { return false }
+        self.snapshot = snapshot
+        return true
+    }
+
+    func canSend(channelId: String) -> Bool {
+        SendGate.canSend(snapshot, channelId: channelId)
+    }
+}
