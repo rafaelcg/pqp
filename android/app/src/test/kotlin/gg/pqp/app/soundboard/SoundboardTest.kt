@@ -148,6 +148,25 @@ class SoundboardTest {
         assertEquals(ChannelOwners.Lookup.Found("s1"), owners.find("c-s1", listOf("s1", "s2"), up))
     }
 
+    @Test
+    fun `a server's channel list is trusted for a minute, not for ever`() = kotlinx.coroutines.test.runTest {
+        var clock = 0L
+        val owners = ChannelOwners(now = { clock })
+        var channels = listOf("old" to "s1")
+        var reads = 0
+        val fetch: suspend (String) -> List<Pair<String, String>>? = { reads += 1; channels }
+        assertEquals(ChannelOwners.Lookup.None, owners.find("new", listOf("s1"), fetch))
+        // A channel is added to the server; inside the window the old answer stands (no request storm)...
+        channels = listOf("old" to "s1", "new" to "s1")
+        clock = ChannelOwners.READ_TTL_MS - 1
+        assertEquals(ChannelOwners.Lookup.None, owners.find("new", listOf("s1"), fetch))
+        assertEquals(1, reads)
+        // ...and once it is stale the server is read again and the channel is found.
+        clock = ChannelOwners.READ_TTL_MS
+        assertEquals(ChannelOwners.Lookup.Found("s1"), owners.find("new", listOf("s1"), fetch))
+        assertEquals(2, reads)
+    }
+
     // --- one download per clip ---
 
     @Test

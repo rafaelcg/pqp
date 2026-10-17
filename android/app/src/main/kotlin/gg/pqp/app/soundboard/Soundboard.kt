@@ -182,8 +182,10 @@ class SoundboardController(
     /** Whether the board is on for the call this phone is in, and the clips to draw. */
     val available: StateFlow<Availability> = _available.asStateFlow()
 
-    private var catalogAt = 0L
-    private var catalogRead: Deferred<List<CustomSound>?>? = null
+
+    /** When each channel's catalog was last read, and the read in flight: per channel, never shared across calls. */
+    private val catalogAt = HashMap<String, Long>()
+    private val catalogReads = HashMap<String, Deferred<List<CustomSound>?>>()
 
     /** Which refresh is the current one: an older one that finishes late writes nothing. */
     private var refreshGeneration = 0
@@ -216,15 +218,15 @@ class SoundboardController(
         if (!stillAudible(played.channelId)) return
         val builtin = SoundboardBuiltins.byId(played.soundId)
         if (builtin != null) {
-            play(builtin.raw, null, LISTENER_VOLUME.toFloat())
+            play(builtin.raw, null, LISTENER_VOLUME.toFloat()) { stillAudible(played.channelId) }
             return
         }
         scope.launch {
             val sound = customSound(played.channelId, played.soundId) ?: return@launch
-            val file = clipFile(sound) ?: return@launch
+            val file = clipFile(played.channelId, sound) ?: return@launch
             // The lookup and the download took time: the call may have been left, or the phone deafened, since.
             if (!stillAudible(played.channelId)) return@launch
-            play(0, file, SoundboardFrames.gain(LISTENER_VOLUME, sound.volume))
+            play(0, file, SoundboardFrames.gain(LISTENER_VOLUME, sound.volume)) { stillAudible(played.channelId) }
         }
     }
 
@@ -235,11 +237,13 @@ class SoundboardController(
     private suspend fun customSound(channelId: String, soundId: String): CustomSound? {
         known(channelId, soundId)?.let { return it }
         // Not known: the catalog may be older than the clip. One read at a time; every waiting play resolves against it.
-        val running = catalogRead
-        val read = when {
-            running != null && running.isActive -> running
-            now() - catalogAt < CATALOG_REFRESH_MS -> return null
-            else -> scope.async { readCatalog(channelId) }.also { catalogRead = it }
+        val read = synchronized(catalogAt) {
+            val running = catalogReads[channelId]
+            when {
+                running != null && running.isActive -> running
+                now() - (catalogAt[channelId] ?: Long.MIN_VALUE / 2) < CATALOG_REFRESH_MS -> return null
+                else -> scope.async { readCatalog(channelId) }.also { catalogReads[channelId] = it }
+            }
         }
         val sounds = read.await() ?: return null
         return sounds.firstOrNull { it.id == soundId }
@@ -249,12 +253,16 @@ class SoundboardController(
     private suspend fun readCatalog(channelId: String): List<CustomSound>? {
         val serverId = (serverOf(channelId) as? ChannelOwners.Lookup.Found)?.serverId ?: return null
         val page = runSuspendCatching { session.api.soundboard(serverId) }.getOrNull() ?: return null
-        catalogAt = now()
+        synchronized(catalogAt) { catalogAt[channelId] = now() }
         if (channelId == seatedChannelId()) _available.value = Availability.On(channelId, serverId, page.sounds)
         return page.sounds
     }
 
-    private fun play(@RawRes raw: Int, file: File?, volume: Float) {
+    /**
+     * [audible] is asked again when the player is ready: it prepares asynchronously, and a call left or a phone
+     * deafened in that gap must stay silent, so it is released without starting.
+     */
+    private fun play(@RawRes raw: Int, file: File?, volume: Float, audible: () -> Boolean = { true }) {
         // Twelve at once is the room's own cap; a phone holds fewer players than that and the extra is dropped.
         if (live.size >= MAX_LIVE) return
         val player = MediaPlayer()
@@ -272,7 +280,7 @@ class SoundboardController(
                 context.resources.openRawResourceFd(raw).use { player.setDataSource(it.fileDescriptor, it.startOffset, it.length) }
             }
             player.setVolume(volume, volume)
-            player.setOnPreparedListener { it.start() }
+            player.setOnPreparedListener { if (audible()) it.start() else release(it) }
             player.setOnCompletionListener { release(it) }
             player.setOnErrorListener { it, _, _ ->
                 // A file that will not play is not kept: the next play downloads it again.
@@ -302,10 +310,10 @@ class SoundboardController(
      * A link that will not download (it expired, or storage had none) forgets the catalog, so the next play
      * reads a fresh one instead of reusing the dead link for the rest of the call.
      */
-    private suspend fun clipFile(sound: CustomSound): File? {
+    private suspend fun clipFile(channelId: String, sound: CustomSound): File? {
         val url = Backend.absolute(sound.url)
         if (url == null) {
-            catalogAt = 0
+            synchronized(catalogAt) { catalogAt.remove(channelId) }
             return null
         }
         val dir = File(context.cacheDir, "soundboard").apply { mkdirs() }
@@ -315,7 +323,7 @@ class SoundboardController(
         val got = downloads.run(file.name) {
             withContext(Dispatchers.IO) { download(url, dir, file) }
         }
-        if (!got) catalogAt = 0
+        if (!got) synchronized(catalogAt) { catalogAt.remove(channelId) }
         return file.takeIf { got }
     }
 
@@ -399,7 +407,7 @@ class SoundboardController(
         val config = runSuspendCatching { session.api.voiceConfig(serverId) }.getOrNull() ?: return null
         if (!config.soundboard) return Availability.Off
         val page = runSuspendCatching { session.api.soundboard(serverId) }.getOrNull() ?: return null
-        catalogAt = now()
+        synchronized(catalogAt) { catalogAt[channelId] = now() }
         return Availability.On(channelId, serverId, page.sounds)
     }
 
@@ -431,7 +439,11 @@ class SoundboardController(
  * first that holds it. Everything read is remembered (channel to server, and which servers were read), so a
  * second lookup for a channel in a server already read costs nothing and none is read twice.
  */
-class ChannelOwners {
+class ChannelOwners(
+    private val now: () -> Long = System::currentTimeMillis,
+    /** How long a server's channel list is trusted: a channel added since is found once it is older than this. */
+    private val ttlMs: Long = READ_TTL_MS,
+) {
     sealed interface Lookup {
         data class Found(val serverId: String) : Lookup
 
@@ -443,7 +455,7 @@ class ChannelOwners {
     }
 
     private val serverByChannel = HashMap<String, String>()
-    private val read = HashSet<String>()
+    private val readAt = HashMap<String, Long>()
 
     /** [fetch] answers a server's channels as (channel id, owning server id), or null when it could not be read. */
     suspend fun find(
@@ -454,20 +466,24 @@ class ChannelOwners {
         synchronized(this) { serverByChannel[channelId] }?.let { return Lookup.Found(it) }
         var failed = false
         for (serverId in servers) {
-            if (synchronized(this) { serverId in read }) continue
+            if (synchronized(this) { readAt[serverId]?.let { now() - it < ttlMs } == true }) continue
             val channels = fetch(serverId)
             if (channels == null) {
                 failed = true
                 continue
             }
             val owner = synchronized(this) {
-                read += serverId
+                readAt[serverId] = now()
                 channels.forEach { (id, owning) -> serverByChannel[id] = owning }
                 serverByChannel[channelId]
             }
             if (owner != null) return Lookup.Found(owner)
         }
         return if (failed) Lookup.Failed else Lookup.None
+    }
+
+    companion object {
+        const val READ_TTL_MS = 60_000L
     }
 }
 
