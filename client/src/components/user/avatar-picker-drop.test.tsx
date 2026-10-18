@@ -27,7 +27,10 @@ vi.mock("@/lib/avatar-upload", () => ({
   uploadAvatar: (file: File) => uploadSpy(file),
 }));
 
+import { frameAndSave, stubCropStepBrowser } from "@/test/crop-step";
 import { AvatarPicker } from "./avatar-picker";
+
+stubCropStepBrowser();
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -111,6 +114,9 @@ describe("AvatarPicker drop", () => {
     const zone = await mount();
     const png = new File([new Uint8Array([1])], "me.png", { type: "image/png" });
     drop(zone, { files: [png] });
+    // The same crop step opens first; nothing uploads until Save.
+    expect(uploadSpy).not.toHaveBeenCalled();
+    await frameAndSave();
     expect(uploadSpy).toHaveBeenCalledTimes(1);
     expect(uploadSpy).toHaveBeenCalledWith(png);
   });
@@ -120,6 +126,7 @@ describe("AvatarPicker drop", () => {
     const a = new File([new Uint8Array([1])], "a.png", { type: "image/png" });
     const b = new File([new Uint8Array([1])], "b.png", { type: "image/png" });
     drop(zone, { files: [a, b] });
+    await frameAndSave();
     expect(uploadSpy).toHaveBeenCalledTimes(1);
     expect(uploadSpy).toHaveBeenCalledWith(a);
   });

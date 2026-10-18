@@ -427,9 +427,11 @@ What differs from a message attachment, and why:
   another of the forger's own objects.
 - **5 MiB and `image/jpeg|png|webp` only** — narrower than attachments both ways. No GIF: an
   avatar is drawn at 40px in a hundred places at once, and an animated one is a hundred decoders
-  behind a member list. Both clients centre-crop and scale to 512 and re-encode as JPEG before
+  behind a member list. Both clients crop to a square, scale to 512 and re-encode as JPEG before
   uploading; the server never decodes an image, so the byte cap is what bounds a client that
-  skips that.
+  skips that. In web Settings the person frames the square (and the profile banner's 3:1) in a
+  crop step, `components/user/image-crop-dialog.tsx`; everywhere else it is the centre. An
+  animated GIF picked anyway is decoded to its first frame and saved as a still.
 - **Served through `GET /api/avatars/:userId`**, one of the three deliberately unauthenticated
   routes in `api/index.ts` (with the embed-image proxy and webhook execution) — a browser cannot
   put a Bearer token on an `<img src>`. It 302s to a presigned GET rather than proxying the

@@ -531,8 +531,8 @@ test.describe("dropping files", () => {
   }, testInfo) => {
     const dir = fixtureDir(testInfo);
     // Uploads on for this test and refused at the first request: what is under
-    // test is that a drop starts the PICKER's upload (the crop, then the mint),
-    // not that storage answers.
+    // test is that a drop starts the PICKER's upload (the crop step, then the
+    // mint), not that storage answers.
     await page.route("**/api/avatars/config", (route) =>
       route.fulfill({ json: { enabled: true, maxBytes: 524288, size: 512 } }),
     );
@@ -558,6 +558,12 @@ test.describe("dropping files", () => {
       await expect(overlay(page)).toContainText("Drop an image to use it");
       await shot(page, "avatar-picker-overlay");
     });
+    // The drop opens the crop step first; nothing uploads until Save. Save is
+    // enabled once the browser has decoded the picture.
+    const save = page.locator("[data-crop-save]");
+    await expect(save).toBeEnabled();
+    await expect(page.locator('[data-crop-frame="avatar"] canvas')).toBeVisible();
+    await save.click();
     // The same mint request a picked file makes, for the cropped JPEG.
     const body = (await mint).postDataJSON() as { contentType: string };
     expect(body.contentType).toBe("image/jpeg");
