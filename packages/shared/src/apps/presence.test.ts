@@ -5,6 +5,16 @@ import { formatAppPresence, resolveAppLocale, resolveAppPresence } from "./prese
 
 const TEMPLATE = "{name} tá na Locadora";
 
+// Written as code points: the characters themselves are invisible in a diff.
+const RLO = String.fromCharCode(0x202e);
+const PDF = String.fromCharCode(0x202c);
+const LRI = String.fromCharCode(0x2066);
+const RLI = String.fromCharCode(0x2067);
+const FSI = String.fromCharCode(0x2068);
+const PDI = String.fromCharCode(0x2069);
+const LS = String.fromCharCode(0x2028);
+const PS = String.fromCharCode(0x2029);
+
 describe("formatAppPresence", () => {
   it("puts the name in the placeholder", () => {
     expect(formatAppPresence(TEMPLATE, "Raf")).toBe("Raf tá na Locadora");
@@ -22,14 +32,18 @@ describe("formatAppPresence", () => {
   });
 
   it("strips bidi override and isolate characters", () => {
-    const rlo = "‮evil‬";
+    const rlo = `${RLO}evil${PDF}`;
     expect(formatAppPresence(TEMPLATE, rlo)).toBe("evil tá na Locadora");
-    expect(formatAppPresence(TEMPLATE, "⁦a⁧b⁨c⁩")).toBe("abc tá na Locadora");
+    expect(formatAppPresence(TEMPLATE, `${LRI}a${RLI}b${FSI}c${PDI}`)).toBe("abc tá na Locadora");
   });
 
   it("strips C0 and C1 control characters", () => {
     expect(formatAppPresence(TEMPLATE, "a\u0000b\u001Fc\u007Fd\u0085e\u009Ff")).toBe("abcdef tá na Locadora");
     expect(formatAppPresence(TEMPLATE, "a\nb\r\tc")).toBe("abc tá na Locadora");
+  });
+
+  it("strips the Unicode line and paragraph separators", () => {
+    expect(formatAppPresence(TEMPLATE, `a${LS}b${PS}c`)).toBe("abc tá na Locadora");
   });
 
   it("trims whitespace", () => {
@@ -60,7 +74,7 @@ describe("formatAppPresence", () => {
   });
 
   it("falls back for a name of only control characters", () => {
-    expect(formatAppPresence(TEMPLATE, "\u0000\u0007‮⁦")).toBe("? tá na Locadora");
+    expect(formatAppPresence(TEMPLATE, `\u0000\u0007${RLO}${LRI}`)).toBe("? tá na Locadora");
   });
 
   it("uses a caller supplied fallback name", () => {
@@ -137,6 +151,6 @@ describe("resolveAppPresence", () => {
   });
 
   it("cleans the name like formatAppPresence", () => {
-    expect(resolveAppPresence(manifest, "en", "‮evil$&").phrase).toBe("evil$& is at the Locadora");
+    expect(resolveAppPresence(manifest, "en", `${RLO}evil$&`).phrase).toBe("evil$& is at the Locadora");
   });
 });

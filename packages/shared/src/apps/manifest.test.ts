@@ -22,6 +22,8 @@ const EXPECTED: Record<string, Expected> = {
   "invalid-schema-unknown-property": { code: "schema-unknown-key", path: "extra" },
   "invalid-schema-bad-semver": { code: "schema-format", path: "version" },
   "invalid-schema-uppercase-id": { code: "schema-format", path: "id" },
+  "invalid-schema-semver-prerelease-leading-zero": { code: "schema-format", path: "version" },
+  "invalid-schema-semver-build-metadata": { code: "schema-format", path: "version" },
   "invalid-schema-bundle-path-dotdot": { code: "schema-format", path: "entry.path" },
   "invalid-schema-state-max-bytes": { code: "schema-range", path: "state.maxBytes" },
   "invalid-schema-events-max-bytes": { code: "schema-range", path: "events.maxBytes" },
@@ -176,6 +178,33 @@ describe("validateAppManifest", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.issues.map((issue) => issue.code)).toEqual(["local-files-unexpected", "local-files-unexpected"]);
+  });
+
+  it("accepts SemVer prereleases that are valid and refuses leading zeroes", () => {
+    const eco = JSON.parse(JSON.stringify(readFixture("valid-eco"))) as { version: string };
+    for (const version of ["0.0.1", "1.0.0-0", "1.0.0-alpha.1", "1.0.0-0a", "1.0.0-x-y.7", "10.20.30-rc.10"]) {
+      eco.version = version;
+      expect(validateAppManifest(eco).ok, version).toBe(true);
+    }
+    for (const version of ["01.0.0", "1.0.0-01", "1.0.0-alpha.01", "1.0.0-", "1.0", "v1.0.0", "1.0.0+b"]) {
+      eco.version = version;
+      expect(validateAppManifest(eco).ok, version).toBe(false);
+    }
+  });
+
+  it("does not throw on an i18n key that is also an Object.prototype property", () => {
+    const eco = JSON.parse(JSON.stringify(readFixture("valid-eco"))) as {
+      presence: { phrase: string; short: string };
+      name: string;
+    };
+    eco.presence.phrase = "constructor";
+    eco.presence.short = "toString";
+    eco.name = "hasOwnProperty";
+    const result = validateAppManifest(eco);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(new Set(result.issues.map((issue) => issue.code))).toEqual(new Set(["i18n-missing-key"]));
+    expect(result.issues).toHaveLength(9);
   });
 
   it("matches the pt-BR voce rule as a word, not inside another word", () => {

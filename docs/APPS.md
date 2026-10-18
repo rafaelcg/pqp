@@ -14,7 +14,7 @@ Fields, in the order they appear:
 |---|---|
 | `manifestVersion` | Version of the manifest format. Always `1` for now. |
 | `id` | Permanent, globally unique app id (lowercase letters, digits, hyphens, 3 to 32 characters). Never reused. Ids starting with `pqp-` belong to the first-party publisher. |
-| `version` | Semantic version of this build. Two builds with the same id and version must be byte-identical. |
+| `version` | Semantic version of this build, without `+build` metadata (two builds that differ only there would be one version to SemVer but two strings to the pin). Two builds with the same id and version must be byte-identical. |
 | `publisher` | The publisher that owns the id. `pqp` is first-party. |
 | `platformApi` | Version of the sandbox message API the app is written against. Only `1` exists. |
 | `name`, `description` | i18n keys for the display name and the one-line launcher description. |

@@ -52,8 +52,11 @@ export const APP_CATEGORIES = ["game", "tool", "emulator"] as const;
 export type AppCategory = (typeof APP_CATEGORIES)[number];
 
 const SLUG = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
+// SemVer 2.0.0 without build metadata: two builds that differ only in `+meta`
+// would be one version to SemVer but two strings to the (id, version) pin.
+// Numeric prerelease identifiers may not have leading zeroes.
 const SEMVER =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const I18N_KEY = /^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*){0,3}$/;
 const BUNDLE_PATH = /^(?!\/)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._/-]+$/;
@@ -290,6 +293,14 @@ const PT_BR_VOCE = /(?<![\p{L}\p{N}])voc[eê]s?(?![\p{L}\p{N}])/iu;
 
 type ManifestLike = AppManifest | AppManifestSource;
 
+/**
+ * Read one string of a locale. Own properties only: a key such as
+ * `constructor` is a legal i18n key and must not find `Object.prototype`.
+ */
+export function appString(strings: Readonly<Record<string, string>>, key: string): string | undefined {
+  return Object.hasOwn(strings, key) ? strings[key] : undefined;
+}
+
 /** Every i18n key the manifest references, with the path it is referenced from. */
 function referencedKeys(manifest: ManifestLike): Array<{ key: string; from: string }> {
   const refs: Array<{ key: string; from: string }> = [
@@ -319,7 +330,7 @@ function ruleIssues(manifest: ManifestLike): AppManifestIssue[] {
   // Translations: every referenced key in every required locale.
   for (const { key, from } of referencedKeys(manifest)) {
     for (const locale of APP_REQUIRED_LOCALES) {
-      if (manifest.i18n[locale][key] === undefined) {
+      if (appString(manifest.i18n[locale], key) === undefined) {
         add(
           `i18n.${locale}.${key}`,
           "i18n-missing-key",
@@ -331,7 +342,7 @@ function ruleIssues(manifest: ManifestLike): AppManifestIssue[] {
 
   // Presence placeholders.
   for (const locale of APP_REQUIRED_LOCALES) {
-    const phrase = manifest.i18n[locale][manifest.presence.phrase];
+    const phrase = appString(manifest.i18n[locale], manifest.presence.phrase);
     if (phrase !== undefined) {
       const parts = phrase.split("{name}");
       const rest = parts.join("");
@@ -343,7 +354,7 @@ function ruleIssues(manifest: ManifestLike): AppManifestIssue[] {
         );
       }
     }
-    const short = manifest.i18n[locale][manifest.presence.short];
+    const short = appString(manifest.i18n[locale], manifest.presence.short);
     if (short !== undefined && short.includes("{")) {
       add(
         `i18n.${locale}.${manifest.presence.short}`,

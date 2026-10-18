@@ -1,4 +1,4 @@
-import { APP_REQUIRED_LOCALES, type AppLocale, type AppManifest } from "./manifest.js";
+import { APP_REQUIRED_LOCALES, appString, type AppLocale, type AppManifest } from "./manifest.js";
 
 /**
  * The presence line of somebody who is in an app ("Raf tá na Locadora").
@@ -8,11 +8,12 @@ import { APP_REQUIRED_LOCALES, type AppLocale, type AppManifest } from "./manife
 
 export const APP_PRESENCE_MAX_NAME_LENGTH = 32;
 
-// C0 and DEL, C1, and the bidi override and isolate characters. A display name
-// is typed by a stranger and lands inside a sentence we wrote, so it must not
-// be able to reorder the text around it.
+// C0 and DEL, C1, the Unicode line and paragraph separators, and the bidi
+// override and isolate characters. A display name is typed by a stranger and
+// lands inside a sentence we wrote, so it must not be able to reorder the text
+// around it or split the line.
 // eslint-disable-next-line no-control-regex
-const UNSAFE_NAME_CHARS = /[\u0000-\u001F\u007F-\u009F‪-‮⁦-⁩]/g;
+const UNSAFE_NAME_CHARS = /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u202A-\u202E\u2066-\u2069]/g;
 
 const PLACEHOLDER = "{name}";
 
@@ -72,7 +73,8 @@ export function resolveAppPresence(
   displayName: string,
 ): { phrase: string; short: string } {
   const resolved = resolveAppLocale(locale);
-  const read = (key: string): string => manifest.i18n[resolved][key] ?? manifest.i18n.en[key] ?? "";
+  const read = (key: string): string =>
+    appString(manifest.i18n[resolved], key) ?? appString(manifest.i18n.en, key) ?? "";
   return {
     phrase: formatAppPresence(read(manifest.presence.phrase), displayName),
     short: read(manifest.presence.short),
