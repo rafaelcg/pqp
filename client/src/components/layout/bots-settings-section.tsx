@@ -12,7 +12,7 @@ import {
   type ServerBotModelChoice,
   type ServerBotOverview,
 } from "@pqp/shared";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { AtSign, ListChecks, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { BotFace } from "@/components/bots/bot-face";
 import { RadioChoices } from "@/components/bots/radio-choices";
@@ -121,6 +121,10 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
   const [channels, setChannels] = useState<Channel[]>([]);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
+  // One switch request at a time, so two quick flips cannot land out of order.
+  const [toggling, setToggling] = useState(false);
+  // The draft as it was sent: an edit made while the save is in flight is kept.
+  const sentDraft = useRef<Draft | null>(null);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<MessageKey | null>(null);
   const [missing, setMissing] = useState(0n);
@@ -189,6 +193,9 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
   const nameOk = draft.name.trim().length >= 2;
   const textChannels = channels.filter((channel) => channel.type === "text");
 
+  const draftNow = useRef(draft);
+  draftNow.current = draft;
+
   function edit(patch: Partial<Draft>) {
     setSaved(false);
     setDraft((d) => ({ ...d, ...patch }));
@@ -199,6 +206,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
     setSaving(true);
     setError(null);
     setSaved(false);
+    sentDraft.current = draft;
     try {
       const result = await updateServerBot(serverId, bot.id, {
         name: draft.name.trim(),
@@ -216,9 +224,12 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
         welcomeMessage: draft.welcomeMessage.trim() || null,
       });
       setBot(result.bot);
-      setDraft(draftOf(result.bot));
+      // Untouched since Save: take the server's copy. Edited meanwhile: keep
+      // the edit, which then reads as unsaved against the new bot.
+      const untouched = draftNow.current === sentDraft.current;
+      if (untouched) setDraft(draftOf(result.bot));
       setMissing(parsePermissions(result.missingPermissions ?? "0"));
-      setSaved(true);
+      setSaved(untouched);
     } catch (err) {
       setError(errorKey(err));
     } finally {
@@ -227,13 +238,16 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
   }
 
   async function setEnabled(enabled: boolean) {
-    if (!bot) return;
+    if (!bot || toggling) return;
     setError(null);
+    setToggling(true);
     try {
       const result = await updateServerBot(serverId, bot.id, { enabled });
       setBot(result.bot);
     } catch (err) {
       setError(errorKey(err));
+    } finally {
+      setToggling(false);
     }
   }
 
@@ -325,6 +339,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
           </div>
           <Switch
             checked={bot.enabled}
+            disabled={toggling}
             onCheckedChange={(on) => void setEnabled(on)}
             label={t("serverSettings.bots.enabled")}
             hideLabel

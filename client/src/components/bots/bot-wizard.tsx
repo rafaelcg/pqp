@@ -168,12 +168,18 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
   const shownName = name || t("bots.wizard.unnamed");
   // Two letters or digits, so an emoji or a pair of spaces is not a name.
   const nameOk = (name.match(/[\p{L}\p{N}]/gu) ?? []).length >= 2;
+  // Any answer that differs from where the wizard starts, so closing asks first.
   const touched =
     draft.name !== EMPTY_BOT_DRAFT.name ||
+    draft.color !== EMPTY_BOT_DRAFT.color ||
+    draft.face !== EMPTY_BOT_DRAFT.face ||
     draft.persona !== "" ||
     draft.knowledge !== "" ||
     draft.tagline !== "" ||
-    draft.channelIds.length > 0;
+    draft.channelIds.length > 0 ||
+    draft.answerToName !== EMPTY_BOT_DRAFT.answerToName ||
+    draft.tools.length !== EMPTY_BOT_DRAFT.tools.length ||
+    draft.tools.some((tool) => !EMPTY_BOT_DRAFT.tools.includes(tool));
 
   function update(patch: Partial<BotDraft>, bounce = false) {
     setDraft((d) => ({ ...d, ...patch }));
@@ -783,11 +789,15 @@ function IntroPreview({
   );
   const [editing, setEditing] = useState(false);
   const [state, setState] = useState<"idle" | "posting" | "posted" | "failed">("idle");
+  // One nonce per wording: a retry after a lost answer finds the first post
+  // instead of making a second one. A changed text is a new hello.
+  const [nonce, setNonce] = useState(() => crypto.randomUUID());
   if (!home) return null;
   async function postIt() {
     setState("posting");
+    setEditing(false);
     try {
-      await postBotIntro(serverId, bot.id, { channelId: home!.id, body: text });
+      await postBotIntro(serverId, bot.id, { channelId: home!.id, body: text, nonce });
       setState("posted");
     } catch {
       setState("failed");
@@ -811,7 +821,10 @@ function IntroPreview({
               className="mt-1"
               value={text}
               maxLength={1900}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value);
+                setNonce(crypto.randomUUID());
+              }}
             />
           ) : (
             <p className="mt-0.5 whitespace-pre-wrap text-sm text-text-secondary">{text}</p>
@@ -821,7 +834,13 @@ function IntroPreview({
               <p className="text-sm text-success">{t("bots.intro.posted", { channel: `#${home.name}` })}</p>
             ) : (
               <>
-                <Button type="button" size="sm" variant="secondary" onClick={() => setEditing((on) => !on)}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={state === "posting"}
+                  onClick={() => setEditing((on) => !on)}
+                >
                   {editing ? t("bots.intro.done") : t("bots.intro.edit")}
                 </Button>
                 <Button

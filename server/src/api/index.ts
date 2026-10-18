@@ -4109,7 +4109,12 @@ router.post("/api/servers/:serverId/bots/:botId/intro", async ({ req, user }, { 
   if (!author) {
     throw new NotFound("Bot not found");
   }
-  const posted = await postChannelMessage({ author, channelId: body.channelId, body: body.body.trim() });
+  const posted = await postChannelMessage({
+    author,
+    channelId: body.channelId,
+    body: body.body.trim(),
+    ...(body.nonce ? { nonce: body.nonce } : {}),
+  });
   if (!posted.ok) {
     throw new HttpError(409, posted.reason);
   }

@@ -571,6 +571,9 @@ fun ChatScreen(
     val firstUnreadId = remember(state.messages, unreadSince, me?.id) {
         gg.pqp.app.forum.ForumLanding.firstUnread(state.messages, unreadSince, me?.id)?.id
     }
+    // Who is still a member, for the "removido" mark on a bot's messages: one
+    // set per roster, so each message is a lookup and not a scan.
+    val memberIds = remember(state.members) { state.members.mapTo(HashSet()) { it.id } }
     val unreadCount = remember(state.messages, unreadSince, me?.id) {
         gg.pqp.app.forum.ForumLanding.unreadCount(state.messages, unreadSince, me?.id)
     }
@@ -896,7 +899,7 @@ fun ChatScreen(
                                         // roster, and would mark every bot gone.
                                         botGone = state.membersLoaded &&
                                             gg.pqp.app.bots.ServerBots.isServerBot(message) &&
-                                            state.members.none { it.id == message.authorId },
+                                            message.authorId !in memberIds,
                                         flash = message.id == flashId,
                                     )
                                     if (message.id == extras?.belowMessageId) {

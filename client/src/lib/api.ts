@@ -3076,7 +3076,7 @@ export const testServerBot = (serverId: string, body: BotTestRequest) =>
   post<BotTestResponse>(`/api/servers/${serverId}/bots/test`, body);
 
 /** The wizard's last step: post the bot's hello, as the bot, in one of its channels. */
-export const postBotIntro = (serverId: string, botId: string, body: { channelId: string; body: string }) =>
+export const postBotIntro = (serverId: string, botId: string, body: { channelId: string; body: string; nonce?: string }) =>
   post<{ messageId: string }>(`/api/servers/${serverId}/bots/${botId}/intro`, body);
 
 /** The bot settings page's first tab: today's numbers and recent activity. */

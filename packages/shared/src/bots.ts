@@ -255,6 +255,8 @@ export type BotActionCard = z.infer<typeof botActionCardSchema>;
 export const botIntroSchema = z.object({
   channelId: z.string().uuid(),
   body: safeText(1900).refine((value) => value.trim().length > 0, "Empty"),
+  /** The same value on a retry finds the first post instead of making another. */
+  nonce: z.string().uuid().optional(),
 });
 
 /** `POST /api/bots/plans/:planId/decision`: a plan card's buttons. */
