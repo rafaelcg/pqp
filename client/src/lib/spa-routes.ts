@@ -79,11 +79,6 @@ export function isUnknownSpaPath(pathname: string): boolean {
   // `/@handle`: a person. Same reasoning.
   if (/^\/@[^/]+$/.test(path)) return false;
 
-  // `/preview/home` and `/preview/home/<variant>`: the homepage redesign
-  // candidates. The page sets noindex itself, and an unknown variant shows
-  // the list, so any one segment is a route.
-  if (/^\/preview\/home(?:\/[^/]+)?$/.test(path)) return false;
-
   // Referral short links, redirected by `_redirects`.
   if (path.startsWith("/r/")) return false;
 
