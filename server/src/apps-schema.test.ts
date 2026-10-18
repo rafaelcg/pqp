@@ -191,6 +191,39 @@ describeDb("apps tables", () => {
     });
   });
 
+  describe("cascades", () => {
+    it("every foreign key onto users, servers, channels or messages has an index that starts with its column and covers every row", async () => {
+      // Deleting a server, channel, message or account looks its dependants up
+      // by the FK column. An index that only covers live or unfinished rows
+      // leaves that delete scanning every retained one.
+      const fks = await q<{ tbl: string; col: string; ref: string }>(
+        `SELECT c.conrelid::regclass::text AS tbl,
+                a.attname AS col,
+                c.confrelid::regclass::text AS ref
+           FROM pg_constraint c
+           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+          WHERE c.contype = 'f'
+            AND c.conrelid = ANY (SELECT ($1::text[])[i]::regclass FROM generate_subscripts($1::text[], 1) AS i)
+            AND c.confrelid::regclass::text IN ('users', 'servers', 'channels', 'messages')`,
+        [APP_TABLES],
+      );
+      expect(fks.rows.length).toBeGreaterThanOrEqual(12);
+      for (const fk of fks.rows) {
+        const found = await q<{ pred: string | null }>(
+          `SELECT pg_get_expr(i.indpred, i.indrelid) AS pred
+             FROM pg_index i
+             JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+            WHERE i.indrelid = $1::regclass AND a.attname = $2 AND i.indisvalid`,
+          [fk.tbl, fk.col],
+        );
+        const covering = found.rows.filter(
+          (row) => row.pred === null || /^\(?\w+ IS NOT NULL\)?$/.test(row.pred),
+        );
+        expect(covering.length, `${fk.tbl}.${fk.col} -> ${fk.ref}`).toBeGreaterThan(0);
+      }
+    });
+  });
+
   describe("apps and versions", () => {
     it("refuses an id that is not a lowercase slug", async () => {
       for (const bad of ["Eco", "e", "-eco", "eco-", "eco_app", "9eco"]) {

@@ -6627,6 +6627,8 @@ CREATE TABLE IF NOT EXISTS app_publishers (
   suspended_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_app_publishers_owner
+  ON app_publishers (owner_user_id) WHERE owner_user_id IS NOT NULL;
 
 -- One row per app id, forever. `status` is the operator's lifecycle switch and
 -- `global_enabled` the master switch on the dashboard; per server availability
@@ -6747,8 +6749,20 @@ CREATE TABLE IF NOT EXISTS app_sessions (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_sessions_one_live_per_channel
   ON app_sessions (channel_id) WHERE status = 'live';
-CREATE INDEX IF NOT EXISTS idx_app_sessions_live_by_server
-  ON app_sessions (server_id) WHERE status = 'live';
+-- The next three also serve the cascades: deleting a server or a channel finds
+-- its sessions (retained ended ones too, for 30 days) through these, and a
+-- partial index on live rows would leave that delete scanning the table.
+CREATE INDEX IF NOT EXISTS idx_app_sessions_server
+  ON app_sessions (server_id, status);
+CREATE INDEX IF NOT EXISTS idx_app_sessions_channel
+  ON app_sessions (channel_id, started_at DESC);
+-- Deleting an account sets these to NULL; the lookup is by the column.
+CREATE INDEX IF NOT EXISTS idx_app_sessions_started_by
+  ON app_sessions (started_by) WHERE started_by IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_app_sessions_host_user
+  ON app_sessions (host_user_id) WHERE host_user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_app_sessions_ended_by
+  ON app_sessions (ended_by) WHERE ended_by IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_app_sessions_live_by_app
   ON app_sessions (app_id) WHERE status = 'live';
 CREATE INDEX IF NOT EXISTS idx_app_sessions_ended_at
@@ -6782,9 +6796,10 @@ CREATE INDEX IF NOT EXISTS idx_app_participants_active
 CREATE INDEX IF NOT EXISTS idx_app_participants_orphaned
   ON app_session_participants (orphaned_at)
   WHERE orphaned_at IS NOT NULL AND left_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_app_participants_user_active
-  ON app_session_participants (user_id)
-  WHERE left_at IS NULL;
+-- Not partial: it is also how deleting an account finds every seat it held,
+-- the ones already left included.
+CREATE INDEX IF NOT EXISTS idx_app_participants_user
+  ON app_session_participants (user_id, left_at);
 -- The per-instance sweep reads the rows THIS process owns: its orphans past the
 -- hold and the ghosts its socket map no longer holds.
 CREATE INDEX IF NOT EXISTS idx_app_participants_instance_active
@@ -6827,6 +6842,11 @@ CREATE TABLE IF NOT EXISTS app_admin_audit (
   at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_app_admin_audit_app ON app_admin_audit (app_id, at DESC);
+-- Deleting a server or an account sets these to NULL; the lookup is by the column.
+CREATE INDEX IF NOT EXISTS idx_app_admin_audit_server
+  ON app_admin_audit (server_id) WHERE server_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_app_admin_audit_actor
+  ON app_admin_audit (actor_user_id) WHERE actor_user_id IS NOT NULL;
 
 -- The first-party publisher. Top-level DML, listed in BOOT_EVERY_TIME_SWEEPS:
 -- idempotent and cheap, and a test database that ran `TRUNCATE users CASCADE`
