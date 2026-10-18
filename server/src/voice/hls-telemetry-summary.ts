@@ -33,6 +33,26 @@ export interface HlsTelemetryBatchSummary {
   hiddenSamples: number;
   mutedSamples: number;
   fatal: string[];
+  /**
+   * Median of the latency the player said it was AIMING for
+   * (`targetLatencyMs`, LL only), over the samples that carry it. Beside
+   * `medianLatencyMs` it says whether a viewer sits where its governor
+   * (`client/src/lib/hls-ll-latency.ts`) put it (8 to 20 s on segments, by
+   * design) or has drifted off it. The field was accepted by the schema and
+   * then dropped here until 2026-10-18, so an LL batch at 8 to 21 s could
+   * not be told from a broken one. Undefined when no sample carries it.
+   */
+  medianTargetLatencyMs: number | undefined;
+  /** Median of (latency minus target), per sample carrying both. Near 0: holding the target. */
+  medianLatencyOverTargetMs: number | undefined;
+}
+
+function median(values: number[]): number | undefined {
+  if (values.length === 0) {
+    return undefined;
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
 }
 
 const FATAL_DETAIL = /^[A-Za-z0-9_-]{1,48}$/;
@@ -51,6 +71,8 @@ export function summarizeHlsTelemetryBatch(
   let rebuilds = 0;
   let hiddenSamples = 0;
   let mutedSamples = 0;
+  const targets: number[] = [];
+  const overTarget: number[] = [];
   const playerModes = new Set<string>();
   const fatal = new Set<string>();
   for (const sample of samples) {
@@ -62,6 +84,10 @@ export function summarizeHlsTelemetryBatch(
     }
     if (sample.muted) {
       mutedSamples += 1;
+    }
+    if (sample.targetLatencyMs !== undefined) {
+      targets.push(sample.targetLatencyMs);
+      overTarget.push(sample.latencyMs - sample.targetLatencyMs);
     }
     if (sample.playerMode) {
       playerModes.add(sample.playerMode);
@@ -98,5 +124,7 @@ export function summarizeHlsTelemetryBatch(
     hiddenSamples,
     mutedSamples,
     fatal: [...fatal],
+    medianTargetLatencyMs: median(targets),
+    medianLatencyOverTargetMs: median(overTarget),
   };
 }

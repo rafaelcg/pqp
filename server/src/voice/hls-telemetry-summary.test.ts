@@ -43,4 +43,23 @@ describe("summarizeHlsTelemetryBatch (telemetry v2)", () => {
     // Only plain identifiers reach a log line.
     expect(summary.fatal).toEqual(["fragLoadTimeOut"]);
   });
+
+  it("reports the player's own target beside the measured latency (LL batches)", () => {
+    const summary = summarizeHlsTelemetryBatch([
+      { rung: "ll", latencyMs: 20_900, targetLatencyMs: 20_000, playerMode: "ll-segments" },
+      { rung: "ll", latencyMs: 21_200, targetLatencyMs: 20_000, playerMode: "ll-segments" },
+      { rung: "ll", latencyMs: 20_400, targetLatencyMs: 20_000, playerMode: "ll-segments" },
+      // An old client: no target, left out of both medians.
+      { rung: "ll", latencyMs: 5_000 },
+    ]);
+    expect(summary.medianTargetLatencyMs).toBe(20_000);
+    // Holding its target to within a second: the 21 s is where it was told to sit.
+    expect(summary.medianLatencyOverTargetMs).toBe(900);
+  });
+
+  it("leaves the target fields undefined when no sample carries one", () => {
+    const summary = summarizeHlsTelemetryBatch([{ rung: "720p30", latencyMs: 12_000 }]);
+    expect(summary.medianTargetLatencyMs).toBeUndefined();
+    expect(summary.medianLatencyOverTargetMs).toBeUndefined();
+  });
 });
