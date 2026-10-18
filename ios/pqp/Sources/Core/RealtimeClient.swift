@@ -77,6 +77,21 @@ enum RealtimeEvent: Sendable {
     /// one may have just been switched on for this server). Content-free like
     /// `permissionsUpdate`, and only sent to people who can see what changed.
     case channelsUpdate(serverId: String)
+    /// This account is no longer in `serverId` (`kicked`, `banned`) or the server
+    /// is gone for everybody (`deleted`). Addressed per person, and it carries no
+    /// name: a client that does not hold the server has nothing to say. Before it
+    /// was handled, a removed server stayed on the list and its screens stayed
+    /// open until the app was relaunched.
+    case serverRemoved(serverId: String, reason: ServerRemovedReason)
+    /// The status this account's OTHER device just picked (`online`, `dnd` or
+    /// `invisible`; the raw choice, which only this account's own sockets see).
+    case ownStatus(String)
+    /// This account's OTHER tab or device dragged (or moved) its own server
+    /// list, and `serverIds` is the order as saved. Per person, sent on every
+    /// socket the account holds. `origin` is the random string the saving
+    /// client sent with its `PUT /api/servers/order`, so that client can skip
+    /// the echo of its own save (`ServerOrder.remoteAction`).
+    case serverOrderUpdate(serverIds: [String], origin: String?)
     /// Somebody played a voice note. Goes to the author's sockets (in a
     /// conversation, where receipts are shown) and to the listener's OWN other
     /// sockets, so the unplayed dot clears on every device. `userId` says which
@@ -393,6 +408,9 @@ actor RealtimeClient {
     private var statusHandler: (@Sendable (RealtimeStatus) -> Void)?
     private var reconnectAttempt = 0
     private var joinedChannelId: String?
+    /// Who holds the primary slot, so a screen's late `leave` cannot drop the
+    /// join of a newer screen for the same channel (`leave(channelId:owner:)`).
+    private var joinedOwner: String?
     /// The thread panel's slot, re-asserted on reconnect for the same reason
     /// the primary channel is: the server forgets both when the socket dies.
     private var joinedThreadChannelId: String?
@@ -683,9 +701,34 @@ actor RealtimeClient {
         }
     }
 
-    func join(channelId: String) async {
+    func join(channelId: String, owner: String? = nil) async {
         joinedChannelId = channelId
+        joinedOwner = owner
         await send(raw: ["type": "join-channel", "channelId": channelId])
+    }
+
+    /// Gives up the primary channel slot, but only if `channelId` is still the
+    /// one held: a screen is torn down AFTER the next one's model is built, and
+    /// by then the next one has joined its own channel, which a blind leave
+    /// would drop.
+    ///
+    /// WHY IT MATTERS. The server does not send `channel-activity` for the
+    /// channel a socket is joined to (it is already receiving the messages).
+    /// This client never left one, so after reading #geral and going back, every
+    /// new message in #geral was swallowed: no badge on the list, none on the
+    /// server's tile, until some other channel was opened. The live unread on
+    /// the server list found it.
+    ///
+    /// `owner` is the screen that joined. Closing and reopening the same chat
+    /// puts the old screen's leave (an unstructured task) behind the new
+    /// screen's join, and both name the same channel: only the owner's own
+    /// leave may take the slot back.
+    func leave(channelId: String, owner: String? = nil) async {
+        guard joinedChannelId == channelId else { return }
+        if let owner, let holder = joinedOwner, holder != owner { return }
+        joinedChannelId = nil
+        joinedOwner = nil
+        await send(raw: ["type": "leave-channel"])
     }
 
     /// Open a thread's live view *beside* the primary channel.
@@ -901,6 +944,11 @@ actor RealtimeClient {
         let added: Bool?
         let users: [PresenceUser]?
         let serverId: String?
+        /// `server-order-update`: the saved order of this account's servers.
+        let serverIds: [String]?
+        let origin: String?
+        /// `own-status`: the raw manual choice.
+        let status: String?
         let mention: Bool?
         /// `channel-activity` for a conversation: the redacted preview line
         /// and who wrote it. All three absent for a server channel, and for a
@@ -970,6 +1018,7 @@ actor RealtimeClient {
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
             case candidate, limit, transport, version, resumed, resumeToken
             case canSpeak, canStream
+            case serverIds, origin, status
             case seq, size, joined, updated, left
             case conversationId, kind, caller, reason, thread, retryAfterMs, automodMessage
             // `self` is a Swift keyword, so the wire key is remapped.
@@ -1340,6 +1389,16 @@ actor RealtimeClient {
         case "permissions-update":
             guard let serverId = envelope.serverId else { return }
             event = .permissionsUpdate(serverId: serverId, version: envelope.version)
+        case "server-removed":
+            guard let serverId = envelope.serverId, let raw = envelope.reason,
+                  let reason = ServerRemovedReason(rawValue: raw) else { return }
+            event = .serverRemoved(serverId: serverId, reason: reason)
+        case "own-status":
+            guard let status = envelope.status else { return }
+            event = .ownStatus(status)
+        case "server-order-update":
+            guard let ids = envelope.serverIds else { return }
+            event = .serverOrderUpdate(serverIds: ids, origin: envelope.origin)
         case "community-home-update":
             guard let serverId = envelope.serverId else { return }
             event = .communityHomeUpdate(serverId: serverId)
@@ -1523,4 +1582,9 @@ actor RealtimeClient {
         }
         continuation?.yield(event)
     }
+}
+
+/// `serverRemovedSchema.reason` in `packages/shared/src/moderation.ts`.
+enum ServerRemovedReason: String, Sendable, Equatable {
+    case kicked, banned, deleted
 }

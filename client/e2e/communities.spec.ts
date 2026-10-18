@@ -358,6 +358,11 @@ test.describe("Communities", () => {
         /\/api\/servers\/[^/]+\/community$/.test(response.url()),
     );
     await section.getByRole("button", { name: "Save", exact: true }).click();
+    // Opening the room asks first, once, for both doors at the same time.
+    await page
+      .getByRole("dialog", { name: /Make .* public and list it/ })
+      .getByRole("button", { name: "Make public and list it" })
+      .click();
     const body = (await (await saved).json()) as {
       community: { isCommunity: boolean; isListed: boolean };
     };
@@ -367,6 +372,66 @@ test.describe("Communities", () => {
     // switch stays where the owner put it.
     await expect(offer).toHaveCount(0);
     await expect(directory).toBeChecked();
+  });
+
+  test("opening the room asks first, saves nothing on Cancel, and a public room wears the mark", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await openServerSettings(page);
+    await page.getByRole("tab", { name: "Community" }).click();
+
+    const section = page.locator("[data-community-settings]");
+    const address = section.getByRole("checkbox", {
+      name: "Turn on the public address",
+    });
+    const save = section.getByRole("button", { name: "Save", exact: true });
+    await expect(section.locator("[data-community-state]")).toHaveAttribute(
+      "data-community-state",
+      "private",
+    );
+    await expect(page.locator("[data-public-badge]")).toHaveCount(0);
+
+    let patched = 0;
+    page.on("request", (request) => {
+      if (
+        request.method() === "PATCH" &&
+        /\/api\/servers\/[^/]+\/community$/.test(request.url())
+      ) {
+        patched += 1;
+      }
+    });
+
+    await address.check();
+    await save.click();
+    const ask = page.getByRole("dialog", { name: /public\?$/ });
+    await expect(ask).toContainText("every channel that is not restricted");
+    // Focus starts on Cancel, so a stray Enter cannot open the room.
+    await expect(ask.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(ask).toHaveCount(0);
+    expect(patched).toBe(0);
+    await expect(section.locator("[data-community-state]")).toHaveAttribute(
+      "data-community-state",
+      "private",
+    );
+
+    await save.click();
+    await ask.getByRole("button", { name: "Make public", exact: true }).click();
+    await expect(section.locator("[data-community-state]")).toHaveAttribute(
+      "data-community-state",
+      "public",
+    );
+    expect(patched).toBe(1);
+
+    // Turning it off again asks nothing.
+    await address.uncheck();
+    await save.click();
+    await expect(section.locator("[data-community-state]")).toHaveAttribute(
+      "data-community-state",
+      "private",
+    );
+    expect(patched).toBe(2);
   });
 
   test("the create call to action hands you the make-a-community form", async ({

@@ -37,6 +37,16 @@ class AccountFramesTest {
         assertEquals(RepoSources.stringConstant("packages/shared/src/status.ts", "DEFAULT_MANUAL_STATUS"), OwnStatus.DEFAULT)
     }
 
+    // --- permissions-update ---
+
+    @Test
+    fun `a permissions-update or server-removed frame names the server whose cached bits went stale`() {
+        assertEquals("s1", AccountFrames.staleServer(frame("""{"type":"permissions-update","serverId":"s1","version":4}""")))
+        assertEquals("s1", AccountFrames.staleServer(frame("""{"type":"server-removed","serverId":"s1","reason":"kicked"}""")))
+        assertNull(AccountFrames.staleServer(frame("""{"type":"permissions-update","version":4}""")))
+        assertNull(AccountFrames.staleServer(frame("""{"type":"channel-activity","serverId":"s1"}""")))
+    }
+
     // --- server-removed ---
 
     @Test

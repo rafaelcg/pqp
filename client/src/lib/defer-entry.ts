@@ -34,19 +34,37 @@ import { AFTER_FIRST_SCREEN_JS } from "./first-screen-gate";
 /** The single module entry tag Vite emits, as it emits it. */
 const ENTRY_TAG = /<script type="module" crossorigin src="([^"]+)"><\/script>/;
 
-export function deferEntryLoader(src: string): string {
+export function deferEntryLoader(src: string, appChunk?: string): string {
   const url = JSON.stringify(src).replace(/</g, "\\u003c");
-  return `<script>(function(){${AFTER_FIRST_SCREEN_JS}var src=${url};function load(){if(load.d)return;load.d=1;var s=document.createElement("script");s.type="module";s.crossOrigin="";s.src=src;document.head.appendChild(s)}if(document.documentElement.getAttribute("data-route")!=="home"){load();return}afterFirstScreen(load);["pointerdown","keydown","touchstart","wheel"].forEach(function(e){addEventListener(e,load,{once:true,passive:true,capture:true})})})();</script>`;
+  // On `/app` the shell is about to import the chat client (`App-*.js`, 2 MB with
+  // everything it imports). The entry only discovers that when it has downloaded
+  // and run, which on a first visit is one full round trip later than it could
+  // be: the preload starts the same download beside the entry instead. Nothing
+  // else changes (a returning visitor has it in the service worker's precache
+  // and the preload is answered from there).
+  const preload = appChunk
+    ? `var app=${JSON.stringify(appChunk).replace(/</g, "\\u003c")};if(/^\\/app(\\/|$)/.test(location.pathname)){var link=document.createElement("link");link.rel="modulepreload";link.crossOrigin="";link.href=app;document.head.appendChild(link)}`
+    : "";
+  return `<script>(function(){${AFTER_FIRST_SCREEN_JS}${preload}var src=${url};function load(){if(load.d)return;load.d=1;var s=document.createElement("script");s.type="module";s.crossOrigin="";s.src=src;document.head.appendChild(s)}if(document.documentElement.getAttribute("data-route")!=="home"){load();return}afterFirstScreen(load);["pointerdown","keydown","touchstart","wheel"].forEach(function(e){addEventListener(e,load,{once:true,passive:true,capture:true})})})();</script>`;
 }
 
 /**
  * Swap the entry tag for the loader. Returns the html unchanged when there is
  * no such tag (or more than one shape of it), which keeps a custom build alive.
+ *
+ * `appChunkFile` is the file name of the chat client chunk (`assets/App-x.js`),
+ * when the build has one: it is preloaded beside the entry on \`/app\` routes,
+ * from the same directory the entry is served from.
  */
-export function deferEntryScript(html: string): string {
+export function deferEntryScript(html: string, appChunkFile?: string): string {
   const match = ENTRY_TAG.exec(html);
   if (!match) {
     return html;
   }
-  return html.replace(match[0], () => deferEntryLoader(match[1]));
+  const entry = match[1];
+  const appChunk = appChunkFile
+    ? entry.slice(0, entry.lastIndexOf("/") + 1) +
+      appChunkFile.slice(appChunkFile.lastIndexOf("/") + 1)
+    : undefined;
+  return html.replace(match[0], () => deferEntryLoader(entry, appChunk));
 }

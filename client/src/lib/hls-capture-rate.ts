@@ -9,6 +9,13 @@
  * opposite is also true: capturing 60 into a 30 fps ladder costs uplink for
  * motion nobody encodes. Auto follows the ladder when HLS is on, and 60
  * otherwise so a regular share still matches the host's screen.
+ *
+ * "Auto follows the ladder" is a rule about a watch party's share, the only
+ * share an HLS egress ever transcodes. It is NOT a rule about every share in
+ * a server that happens to have watch parties switched on, which is how it was
+ * applied until `shareLadderMaxFrameRate`: with the production ladder at
+ * `720p30,480p30` every ordinary screen share in an HLS-enabled server was
+ * captured at 30 fps, and the 1080p60 the product promises was never asked for.
  */
 
 export interface HlsLadderRungFps {
@@ -40,6 +47,34 @@ export function hlsCaptureMaxFrameRate(
     return 30;
   }
   return ladder.some((rung) => (rung.framerate ?? 30) >= 50) ? 60 : 30;
+}
+
+/**
+ * The ladder's say on a share's frame rate, which is 60 (no say) unless this
+ * share actually feeds the HLS egress.
+ *
+ * WHY THIS EXISTS (2026-10-16, bug 123: "transmissao de tela ... apenas 30
+ * fps"). `screenCaptureMaxFrameRate` is handed `hlsLadderMax`, and App derived
+ * it from the open server's live-HLS config alone: enabled with a 30 fps ladder
+ * meant 30, for any share started anywhere in that server. The server only
+ * starts an egress in a `watch_party` channel (`hls-egress.ts`), so a share in
+ * an ordinary voice channel, or a DM call opened while that server was
+ * selected, never reaches a ladder and was being held to its rate for nothing.
+ * The cost of the cap is real: it is the difference between the 1080p60 the
+ * landing page promises and 1080p30.
+ *
+ * `feedsHls` is the question App can answer and this file cannot: is the call
+ * this share goes into a watch party. Not "is HLS on for the server".
+ */
+export function shareLadderMaxFrameRate(input: {
+  feedsHls: boolean;
+  hlsEnabled: boolean | null | undefined;
+  ladder: readonly HlsLadderRungFps[] | null | undefined;
+}): 30 | 60 {
+  if (!input.feedsHls || input.hlsEnabled !== true) {
+    return 60;
+  }
+  return hlsCaptureMaxFrameRate(input.ladder, true);
 }
 
 /**

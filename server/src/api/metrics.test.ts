@@ -451,6 +451,7 @@ describeDb("GET /api/admin/metrics", () => {
     expect(body.connections.ofUsers).toBe(body.users.total);
     expect(body.connections).toEqual({
       ofUsers: 2,
+      completeFailures: {},
       anyProvider: 2,
       anyProviderPublic: 1,
       providers: [

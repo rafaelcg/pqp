@@ -587,8 +587,13 @@ struct ForumHomeView: View {
 
     private var pausedLine: some View {
         HStack(spacing: 8) {
-            Image(systemName: "pause.circle")
-            Text("New posts are paused in this forum.")
+            if model.postBlock == .readOnly {
+                Image(systemName: "lock.fill")
+                Text("You can read this forum, but you can't post in it.")
+            } else {
+                Image(systemName: "pause.circle")
+                Text("New posts are paused in this forum.")
+            }
             Spacer(minLength: 0)
         }
         .font(Typography.callout)
@@ -641,7 +646,7 @@ struct ForumHomeView: View {
         EmptyState(
             icon: "bubble.left.and.bubble.right",
             title: "Nobody has posted here yet",
-            message: "Start the first post and get things going.",
+            message: model.canPost ? "Start the first post and get things going." : "Posts will show up here.",
             actionTitle: model.canPost ? "Create the first post" : nil,
             action: model.canPost ? {
                 composerSeedTitle = ""

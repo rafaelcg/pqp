@@ -61,6 +61,17 @@ object AccountFrames {
         return held.filterNot { it === gone } to ServerGone(gone.id, gone.name, removed.reason, quiet)
     }
 
+    /**
+     * The server whose cached permission snapshot this frame makes stale: a
+     * `permissions-update` (its bits may have changed) or a `server-removed`
+     * (the account is no longer a member). `null` for anything else.
+     */
+    fun staleServer(frame: JsonObject): String? {
+        val type = text(frame, "type")
+        if (type != "permissions-update" && type != "server-removed") return null
+        return text(frame, "serverId")?.takeIf { it.isNotBlank() }
+    }
+
     /** The manual status an `own-status` frame carries, or `null` for any other frame or a value this build does not know. */
     fun ownStatus(frame: JsonObject): String? {
         if (text(frame, "type") != "own-status") return null

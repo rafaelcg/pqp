@@ -35,16 +35,43 @@ enum ServerOrder {
     }
 }
 
+extension ServerOrder {
+    /// What to do with a `server-order-update` frame from another tab or device.
+    enum RemoteAction: Equatable {
+        /// The echo of this client's own save: it already shows that order, and
+        /// applying it could undo a second move made while the first save was in
+        /// the air.
+        case ignore
+        /// A save of ours is in the air: the frame cannot be ordered against it.
+        /// Note it, and read the list again when the saves have drained, so the
+        /// server's answer wins.
+        case resyncAfterSave
+        /// Follow it.
+        case apply
+    }
+
+    /// The web's rule (`App.tsx`, `server-order-saver.ts`): own origin is
+    /// ignored; a save in flight defers; otherwise the order is applied.
+    static func remoteAction(origin: String?, ownOrigin: String, saving: Bool) -> RemoteAction {
+        if let origin, !origin.isEmpty, origin == ownOrigin { return .ignore }
+        return saving ? .resyncAfterSave : .apply
+    }
+}
+
 extension APIClient {
     /// `PUT /api/servers/order`: save the order this person drew for their own
     /// list. Per person, nobody else's list moves. The server drops ids this
     /// account no longer holds rather than refusing, so a stale list is not an
     /// error. The answer (the order as stored) is not read: the caller already
     /// shows it.
-    func saveServerOrder(_ serverIds: [String]) async throws {
-        struct Body: Encodable { let serverIds: [String] }
+    ///
+    /// `origin` is this client's random id: the server echoes it on the
+    /// `server-order-update` frame it sends to the account's other sockets, so
+    /// this one can skip the frame about its own save.
+    func saveServerOrder(_ serverIds: [String], origin: String? = nil) async throws {
+        struct Body: Encodable { let serverIds: [String]; let origin: String? }
         let _: EmptyResponse = try await send(
-            path: "/api/servers/order", method: "PUT", body: Body(serverIds: serverIds)
+            path: "/api/servers/order", method: "PUT", body: Body(serverIds: serverIds, origin: origin)
         )
     }
 }

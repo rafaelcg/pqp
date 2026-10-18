@@ -55,10 +55,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -87,6 +83,7 @@ import gg.pqp.app.ui.screens.ChatExtras
 import gg.pqp.app.ui.screens.ChatLanding
 import gg.pqp.app.ui.screens.ChatMessageAction
 import gg.pqp.app.ui.screens.ChatScreen
+import gg.pqp.app.ui.screens.ComposerNoticeBar
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
@@ -535,31 +532,7 @@ private fun SolutionCard(
 /** Where the composer was: the reason, not a box that refuses (UX §2.4 #27). */
 @Composable
 private fun LockedBar() {
-    val outline = MaterialTheme.colorScheme.outline
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(horizontal = Spacing.gutter, vertical = Spacing.md)
-            .drawBehind {
-                drawRoundRect(
-                    color = outline,
-                    style = Stroke(width = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))),
-                    cornerRadius = CornerRadius(12.dp.toPx()),
-                )
-            }
-            .padding(horizontal = Spacing.lg, vertical = 14.dp)
-            .testTag("forum.locked"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(PqpIcons.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(Spacing.sm))
-        Text(
-            text = stringResource(R.string.forum_locked),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    ComposerNoticeBar(text = stringResource(R.string.forum_locked), tag = "forum.locked")
 }
 
 @Composable

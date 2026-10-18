@@ -56,6 +56,53 @@ used here.
 4. No extra scopes. Email is not requested. Identity comes from
    `GET /helix/users` with the user token.
 
+## When connecting fails
+
+Every failure on the complete path leaves one line in the API log, and the
+person never sees more than a generic sentence, so read the log first:
+
+```
+[pqp] connections.completeFailed provider=twitch userId=... step=token_exchange status=502 upstreamStatus=403 upstreamError=invalid client secret reason=Token endpoint returned 403
+```
+
+- `step` says which leg broke: `state_consume` (spent or expired state, the
+  person took more than 10 minutes or reloaded the callback), `token_exchange`,
+  `userinfo`, `upsert`, plus `provider_error`, `state_missing`, `code_missing`,
+  `not_configured` and the Steam steps.
+- `upstreamStatus` / `upstreamError` are what Twitch or Battle.net answered. The
+  code, tokens, client secret and PKCE verifier are never logged.
+- `status=502` means the problem is on our side or the provider's (rejected
+  client credentials, provider down); the client shows "the connection service
+  is having a problem on our side". `400` is something the person caused.
+- `connections.start provider=... userId=...` marks each attempt, so starts
+  with no matching `completeFailed` or success are people who left at the
+  provider.
+- `GET /api/admin/metrics` carries `connections.completeFailures`
+  (`<provider>.<step>`, since boot, per process).
+
+A rejected client secret also logs, at most once per provider per hour:
+`PROVIDER CREDENTIALS REJECTED: check TWITCH_CLIENT_SECRET`. That is the line
+to alert on. A callback that returns with no query at all (Clerk dropping it)
+is a client-side message, not a server line.
+
+**The Twitch app's secret is the first suspect.** It dies when someone
+regenerates it in the Twitch console, and nothing else tells us. Twitch
+connections use their own Twitch app, separate from Clerk's Twitch login
+app: the pair lives in `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET`, and
+`{PUBLIC_APP_URL}/app/connections/callback/twitch` must be registered as a
+redirect URL on THAT app. Test the pair from the box:
+
+```bash
+printf 'client_id=%s&client_secret=%s&grant_type=client_credentials' "$TWITCH_CLIENT_ID" "$TWITCH_CLIENT_SECRET" \
+  | curl -s -X POST https://id.twitch.tv/oauth2/token --data @-
+```
+
+The body goes in on stdin so the secret never appears in the process list.
+
+An `access_token` means the pair is good; `{"status":403,"message":"invalid client secret"}`
+means regenerate it in the console and update the secret. Battle.net is the
+same shape with `BATTLENET_CLIENT_SECRET`.
+
 ## Visibility
 
 | Value | Where it appears |

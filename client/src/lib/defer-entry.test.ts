@@ -29,6 +29,60 @@ describe("deferEntryScript", () => {
   });
 });
 
+describe("the chat client preload", () => {
+  const APP = "assets/App-xyz789.js";
+
+  it("names the App chunk in the loader, from the directory the entry is served from", () => {
+    const out = deferEntryScript(`<head>${ENTRY}</head>`, APP);
+    expect(out).toContain("/assets/App-xyz789.js");
+    // A build with no such chunk (a custom build, the dev server) gets no preload.
+    expect(deferEntryScript(`<head>${ENTRY}</head>`)).not.toContain("modulepreload");
+  });
+
+  it("cannot be closed early by a hostile chunk name", () => {
+    const out = deferEntryLoader("/assets/index-abc123.js", "/a</script><script>alert(1)//.js");
+    expect(out.match(/<\/script>/g)).toHaveLength(1);
+  });
+
+  const source = scriptBody(deferEntryLoader("/assets/index-abc123.js", "/assets/App-xyz789.js"));
+
+  it("preloads the chat client beside the entry on /app and every route under it", () => {
+    for (const path of ["/app", "/app/", "/app/server/abc/channel/def", "/app/invite/xyz", "/app/dm"]) {
+      const env = inlineEnv({ route: "other", path });
+      env.run(source);
+      expect(env.appended.map((node) => node.rel ?? node.type), path).toEqual([
+        "modulepreload",
+        "module",
+      ]);
+      expect(env.appended[0], path).toMatchObject({
+        href: "/assets/App-xyz789.js",
+        crossOrigin: "",
+      });
+      // The preload is in the document BEFORE the entry is requested.
+      expect(env.appended[1]?.src).toBe("/assets/index-abc123.js");
+    }
+  });
+
+  it("does not preload it anywhere else: the landing page and the marketing routes never need it", () => {
+    for (const [route, path] of [
+      ["home", "/"],
+      ["other", "/vem"],
+      ["other", "/c/valorant"],
+      ["other", "/@rafa"],
+      ["other", "/apple"],
+      ["other", "/application"],
+    ] as const) {
+      const env = inlineEnv({ route, path });
+      env.run(source);
+      env.fire("pointerdown");
+      expect(
+        env.appended.filter((node) => node.rel === "modulepreload"),
+        path,
+      ).toHaveLength(0);
+    }
+  });
+});
+
 describe("the loader, run as the browser would", () => {
   beforeEach(() => {
     vi.useFakeTimers();

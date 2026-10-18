@@ -33,6 +33,9 @@ struct StoryViewer: View {
     @State private var chromeHidden = false
     @State private var replyText = ""
     @FocusState private var replyFocused: Bool
+    /// The footer's top edge in the card, for fitting a text story above it.
+    @State private var footerTop: CGFloat = .infinity
+    @State private var headerBottom: CGFloat = 0
     @State private var drag: CGSize = .zero
     @State private var showingViewers = false
     @State private var showingMenu = false
@@ -249,6 +252,7 @@ struct StoryViewer: View {
             VStack(spacing: 0) {
                 header
                     .opacity(chromeHidden ? 0 : 1)
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("storyCard")).maxY } action: { headerBottom = $0 }
                 Spacer(minLength: 0)
                 // A server that predates layers has no call layer: the card
                 // keeps its old place at the bottom.
@@ -273,6 +277,9 @@ struct StoryViewer: View {
                 }
                 footer
                     .opacity(chromeHidden ? 0 : 1)
+                    // Measured in the card's coordinates: the words of a text
+                    // story fit above it while the keyboard is up.
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("storyCard")).minY } action: { footerTop = $0 }
             }
 
             if let flash {
@@ -289,6 +296,7 @@ struct StoryViewer: View {
                 StoryReactionFlight(glyph: flyingReaction)
             }
         }
+        .coordinateSpace(name: "storyCard")
         .animation(.easeOut(duration: 0.2), value: chromeHidden)
         .animation(.easeOut(duration: 0.2), value: flash)
     }
@@ -301,7 +309,9 @@ struct StoryViewer: View {
                 onFirstFrame: {
                     frameIds.insert(story.id)
                     maybeReveal(story)
-                }
+                },
+                headerBottom: replyFocused ? headerBottom : nil,
+                footerTop: replyFocused ? footerTop : nil
             )
                 .accessibilityElement(children: story.isVideo ? .contain : .ignore)
                 .accessibilityLabel(Text(verbatim: story.spokenDescription ?? (story.isText ? "" : String(localized: "Photo"))))

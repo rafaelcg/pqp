@@ -214,7 +214,8 @@ private fun OwnBubble(
         own != null -> onOpen
         else -> onCompose
     }
-    // The "+" is drawn small, but it is a 48 dp target: a tap in it makes a story, wherever the ring would have opened one.
+    // The "+" is drawn small, so its target is bigger, but never the ring itself once there is a story to play: with
+    // one, only a patch around the badge composes and the rest of the ring opens the story (StoryStripRules.inBadge).
     val showsBadge = canPost && posting == null && waiting == null && failed == null
     val newStory = stringResource(R.string.stories_compose_title)
     val density = LocalDensity.current
@@ -222,6 +223,7 @@ private fun OwnBubble(
     val latestPrimary by rememberUpdatedState(primary)
     val latestCompose by rememberUpdatedState(onCompose)
     val latestBadge by rememberUpdatedState(showsBadge)
+    val latestHasStory by rememberUpdatedState(own != null)
     val latestCanPost by rememberUpdatedState(canPost)
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -232,7 +234,7 @@ private fun OwnBubble(
                     onTap = { at ->
                         val x = at.x / density.density
                         val y = at.y / density.density
-                        if (latestBadge && StoryStripRules.inBadge(x, y)) latestCompose() else latestPrimary()
+                        if (latestBadge && StoryStripRules.inBadge(x, y, hasStory = latestHasStory)) latestCompose() else latestPrimary()
                     },
                     // Holding the ring is the other way to a new story, whatever the ring is showing.
                     onLongPress = {
@@ -518,13 +520,35 @@ fun StoryComposeLink(onPost: () -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-/** Where the own bubble is touched, in dp from its top-left corner (the bubble is 68 dp wide, its ring 64 dp tall). */
+/** Where the own bubble is touched, in dp from its top-left corner (the bubble is 68 dp wide, its ring 64 dp tall, centred at 34,32). */
 object StoryStripRules {
-    /** The "+" badge sits at the ring's bottom-right: its 48 dp target is the square around it, kept inside the bubble. */
+    /**
+     * The "+" badge sits at the ring's bottom-right. With no story the ring composes too, so its 48 dp target is the
+     * square around the badge, kept inside the bubble, and costs nothing.
+     */
     const val BADGE_LEFT = 20f
     const val BADGE_RIGHT = 68f
     const val BADGE_TOP = 31f
     const val BADGE_BOTTOM = 79f
 
-    fun inBadge(xDp: Float, yDp: Float): Boolean = xDp in BADGE_LEFT..BADGE_RIGHT && yDp in BADGE_TOP..BADGE_BOTTOM
+    /**
+     * With a story up, that square covered the ring's centre and most of its lower right, so a tap on the avatar
+     * opened the composer instead of the story (QA S2). Only a patch around the badge (drawn at 22 dp, centred at
+     * 57,55) adds then; the long press is the other way to a new story.
+     */
+    const val OWN_BADGE_LEFT = 41f
+    const val OWN_BADGE_RIGHT = 68f
+    const val OWN_BADGE_TOP = 41f
+    const val OWN_BADGE_BOTTOM = 71f
+
+    /** The ring's centre, which always plays the story. */
+    const val RING_CENTER_X = 34f
+    const val RING_CENTER_Y = 32f
+
+    fun inBadge(xDp: Float, yDp: Float, hasStory: Boolean = false): Boolean =
+        if (hasStory) {
+            xDp in OWN_BADGE_LEFT..OWN_BADGE_RIGHT && yDp in OWN_BADGE_TOP..OWN_BADGE_BOTTOM
+        } else {
+            xDp in BADGE_LEFT..BADGE_RIGHT && yDp in BADGE_TOP..BADGE_BOTTOM
+        }
 }

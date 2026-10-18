@@ -488,6 +488,11 @@ private object Lucide {
         "M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z",
         "M7 7.5a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0",
     )
+    val globe by lucide(
+        "M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0",
+        "M2 12h20",
+        "M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z",
+    )
     val image by lucide(
         "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
         "M7 9a2 2 0 1 0 4 0a2 2 0 1 0 -4 0",
@@ -524,6 +529,14 @@ private object Lucide {
         "M15 15h2",
         "M7 11h2",
         "M13 11h4",
+    )
+    val audioLines by lucide(
+        "M2 10v3",
+        "M6 6v11",
+        "M10 3v18",
+        "M14 8v7",
+        "M18 5v13",
+        "M22 10v3",
     )
     val type by lucide(
         "M12 4v16",
@@ -707,6 +720,7 @@ object PqpIcons {
     val Reopen get() = Lucide.rotateCcw
     val Tag get() = Lucide.tag
     val Image get() = Lucide.image
+    val Public get() = Lucide.globe
 
     // The story camera.
     val Camera get() = Lucide.camera
@@ -719,6 +733,7 @@ object PqpIcons {
     val AddText get() = Lucide.type
     val Describe get() = Lucide.messageSquareText
     val Captions get() = Lucide.captions
+    val Soundboard get() = Lucide.audioLines
     val AddPhoto get() = Lucide.imagePlus
     val Stickers get() = Lucide.sticker
     val Draw get() = Lucide.brush

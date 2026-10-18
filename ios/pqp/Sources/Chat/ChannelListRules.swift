@@ -43,16 +43,25 @@ struct ChannelSectionSummary: Equatable {
     let channelCount: Int
     /// Something unread and not muted inside: the white dot on a folded header.
     let hasUnread: Bool
+    /// How many times somebody named you in the channels inside (muted ones
+    /// left out, like their rows). A folded header shows the lime "@N" instead
+    /// of the white dot when this is above zero: the dot alone read as "some
+    /// chatter" and hid the one thing that was for you.
+    var mentions: Int = 0
 
     static func make(
         channels: [Channel],
         unread: [String: UnreadEntry],
         isMuted: (Channel) -> Bool
     ) -> ChannelSectionSummary {
-        let hasUnread = channels.contains { channel in
-            ChannelUnreadMark.resolve(unread: unread[channel.id], isMuted: isMuted(channel)).isUnread
+        var hasUnread = false
+        var mentions = 0
+        for channel in channels {
+            let mark = ChannelUnreadMark.resolve(unread: unread[channel.id], isMuted: isMuted(channel))
+            if mark.isUnread { hasUnread = true }
+            mentions += mark.mentions
         }
-        return ChannelSectionSummary(channelCount: channels.count, hasUnread: hasUnread)
+        return ChannelSectionSummary(channelCount: channels.count, hasUnread: hasUnread, mentions: mentions)
     }
 }
 

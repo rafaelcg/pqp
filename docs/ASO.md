@@ -52,18 +52,17 @@ Two mechanics worth knowing before writing either listing:
 
 Ranked roughly by expected search volume and intent match, drawn from the
 product's own vocabulary (`client/src/locales/pt-BR/translation.json`) and
-the terms a Brazilian Discord user would actually type:
+the terms a Brazilian user of a voice app would actually type:
 
 | Term | Why |
 |---|---|
-| discord alternativa / alternativa ao discord | Direct category search. The single highest-intent term in this market right now: Discord suspended screen sharing, video and Go Live in Brazil on 2026-08-17 by ANPD order (`client/src/locales/pt-BR/translation.json` `vsDiscord.*`, `/vs-discord` on the site), which is actively sending Brazilian users looking for something that still does it |
-| discord brasil | Same driver. High volume, unbranded enough to be fair game |
+| alternativa / alternativa a app de chat | Category search. Another product's name is not used in the iOS name, subtitle or keywords (Apple guideline 2.3.7), so this is carried by the Play description and the website pages, in context, not by the keyword field |
 | chat de voz | Category term, already in the current name |
 | comunidade | Product's own word for a server, already in the current name |
 | servidor | Discord's own vocabulary; users search in Discord's terms even when looking for an alternative |
 | watch party | The product's flagship differentiator. Already proven at scale: `landing.hero.body` in the translation file cites a real watch party with 100+ people on 2026-09-05 |
 | assistir junto | Natural-language phrasing of "watch party" a Portuguese speaker would type instead of the English loanword |
-| compartilhar tela / tela compartilhada | The exact capability Discord lost in Brazil. Second-highest-intent term after "discord alternativa" for the same reason |
+| compartilhar tela / tela compartilhada | The capability people most often search for in a voice app; it is the first thing the iOS and Play copy lead with |
 | chamada em grupo | Group voice call, generic category term |
 | amigos | Friends list, generic but high volume |
 | gamer / jogos | Category, high volume, matches `androidPage.perk.*` copy |
@@ -81,7 +80,7 @@ the terms a Brazilian Discord user would actually type:
 
 | Term | Why |
 |---|---|
-| discord alternative | Direct category search, the anchor term |
+| alternative / discord alternative | Category search. Competitor names stay out of the metadata (see `docs/STORE_LISTINGS.md`); the word "alternative" alone is not used either, a word that only matches next to a brand is wasted |
 | voice chat | Category term, in the current name |
 | community / communities | Product's own word, in the current name |
 | server / servers | Discord's vocabulary carried over, in the current subtitle |
@@ -120,82 +119,55 @@ does. Telegram and WhatsApp's bare-brand titles are not a model to copy here
 for the same reason Discord's tagline approach half-is: pqp needs to be found
 by category search before it can afford to rely on brand recognition alone.
 
-## Chosen App Store metadata
+## Chosen metadata
 
-### pt-BR
+Superseded on 2026-10-16: the strings, the per-locale counts and the rules
+they follow now live in [`docs/STORE_LISTINGS.md`](./STORE_LISTINGS.md), and
+`client/src/lib/store-metadata.test.ts` enforces them. What changed from the
+2026-09-17 choice, and why:
 
-| Field | Value | Length |
-|---|---|---|
-| Name | `pqp: chat de voz e comunidade` | 29 / 30 |
-| Subtitle | `Servidor, chamada, watch party` | 30 / 30 |
-| Keywords | `alternativa,discord,brasil,código,aberto,jogos,amigos,live,dm,gamer,twitch,grátis,grupo,mensagem` | 96 / 100 |
-| Promotional text | `Chat de voz e texto de código aberto: comunidade, servidor e watch party pra mais de 100 pessoas. Entra na call, compartilha a tela, manda DM. De graça, sem anúncio.` | 165 / 170 |
+- **No `discord` anywhere in a field a store indexes.** It was in both iOS
+  keyword files and in the Play short description. Apple guideline 2.3.7 bars
+  trademarked terms and popular app names in metadata, and Play's metadata
+  policy bars misleading references to other apps. The keyword was marginal
+  (an app that is not Discord rarely ranks for it) and a rejection costs days.
+- **The subtitle leads with the differentiator** ("Tela com som e watch party",
+  "Screen share & watch parties") instead of generic category words, and the
+  keyword field spends its 100 characters on words the name and subtitle do not
+  already carry (Apple indexes all three as one bag of words).
+- **es-MX (iOS) and es-419 (Play) exist.** Pending native review.
+- **The 2026-09-17 reasoning that tied keywords to the Brazil suspension is
+  withdrawn.** pqp does not market on that topic (see `docs/STORE_LISTINGS.md`
+  rules).
 
-The keywords field deliberately skips "chat", "voz", "comunidade" (in the
-name) and "servidor", "chamada", "watch", "party" (in the subtitle), and
-instead spends its 96 characters on: the Discord-suspended-in-Brazil angle
-("alternativa", "discord", "brasil"), the open source differentiator
-("código", "aberto"), and category/audience words not covered elsewhere
-("jogos", "amigos", "live", "dm", "gamer", "twitch", "grátis", "grupo",
-"mensagem").
-
-### en-US
-
-| Field | Value | Length |
-|---|---|---|
-| Name | `pqp: voice chat & community` | 27 / 30 |
-| Subtitle | `Servers, calls, watch parties` | 29 / 30 |
-| Keywords | `discord,alternative,open,source,gaming,friends,live,dm,twitch,free,screen,share,selfhosted,gamer` | 96 / 100 |
-| Promotional text | `Open source voice and text chat: communities, servers and watch parties for 100+ people. Join the call, share your screen, DM a friend. Free, no ads.` | 149 / 170 |
-
-Same structure: name and subtitle carry "voice chat", "community",
-"servers", "calls", "watch parties"; keywords fill in "discord",
-"alternative", "open source", "screen share", "self-hosted" and the
-remaining category/audience words.
-
-### Description structure (both locales)
+### Description structure
 
 The first two short paragraphs carry the whole pitch and as many
 high-value keyword words as read naturally, because only that much is
 visible before an App Store visitor has to tap "more". Everything after that
-is feature bullets under all-caps section headers (unchanged structure from
-before this pass, since it already worked), ending with the same honest iOS
-parity disclaimer the previous copy had: no group DMs, no raising your hand
-in a call, no starting your own watch party on iOS yet, all three confirmed
-still true against `docs/PARITY.md` as of this pass. The one addition is a
-verified, true social-proof line: the 100+-person watch party on
-2026-09-05 (`landing.hero.body`, `landing.proof.watchParty`), placed in the
-second paragraph rather than buried in a bullet.
+is feature sections under all-caps headers, ending with an honest parity note
+for the platform. The social-proof line is the 100+-person watch party in
+September 2026 (`landing.hero.body`, `landing.proof.watchParty`).
 
-## Chosen Play Store listing
+## Google Play listing
 
-### pt-BR
+Title, short description and the full-description rules are in
+`docs/STORE_LISTINGS.md`. Play indexes the full description, so the keywords
+that Apple's field carries (server, friends, group, call) appear in the Play
+text in ordinary sentences, never as a list.
 
-| Field | Value | Length |
-|---|---|---|
-| Title | `pqp: chat de voz e comunidade` | 29 / 30 |
-| Short description | `Alternativa livre ao Discord: voz, chat e mensagem direta em grupo. Sem anúncio.` | 80 / 80 |
-
-"Livre" doubles as the Brazilian free-software community's own word
-("software livre" is the standard Portuguese term for FOSS), so it reads
-naturally as both "free" and "open" without spending characters on both.
-
-### en-US
-
-| Field | Value | Length |
-|---|---|---|
-| Title | `pqp: voice chat & community` | 27 / 30 |
-| Short description | `Open source Discord alternative: voice chat, DMs and group chat. No ads.` | 72 / 80 |
 
 Full descriptions for both locales are in `android/play-listing/*/full_description.txt`.
 They are **not** the iOS description reused: Android's real capability set
 differs from iOS's in ways that matter for honest copy, per `docs/PARITY.md`:
 
-- Android has **group DMs up to 10 people**; iOS is 1:1 only. This is a real
-  Android advantage over iOS worth stating plainly, and both listings do.
-- Android has **no watch party support at all** (not even the audience-only
-  half iOS has). The Android copy never claims it, and says so plainly in
-  its closing beta note rather than omitting it silently.
+- Android has **group DMs up to 10 people**, and the Play text says so. iOS
+  gained group conversations too (a group tops out at nine people there), but
+  `docs/PARITY.md` still says 1:1 only, so the iOS text makes no group claim
+  until that row is re-verified.
+- Android **watches and can host a watch party** (stage and host shipped in
+  0.4.2, `docs/HANDOVER.md`), so the copy says both. Hosting needs the
+  channel's start-a-watch-party permission, which the text says too.
 - Android has **no camera send**, on either voice transport. Not claimed.
 - Android's **communities directory is missing** (joining by invite link
   works; browsing the public directory does not). Not claimed as browsable.

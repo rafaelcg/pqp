@@ -191,7 +191,7 @@ final class ChatModel {
         // (see `ForumHomeModel`). Everything else is the primary slot.
         async let joined: Void = joinsAsThread
             ? session.realtime.joinThread(channelId: channelId)
-            : session.realtime.join(channelId: channelId)
+            : session.realtime.join(channelId: channelId, owner: handlerKey)
         // Attachments are off entirely unless the deployment configured
         // storage, so the button is hidden rather than failing on tap.
         async let attachments = (try? await session.api.attachmentConfig())?.enabled ?? false
@@ -275,6 +275,12 @@ final class ChatModel {
         if joinedAsThread, let realtime = session?.realtime, let channelId {
             joinedAsThread = false
             Task { await realtime.leaveThread(channelId: channelId) }
+        } else if let realtime = session?.realtime, let channelId {
+            // The primary slot: left only if it is still this channel's (a
+            // forum post's own channel was never joined there, and the next
+            // screen may already hold its own).
+            let owner = handlerKey
+            Task { await realtime.leave(channelId: channelId, owner: owner) }
         }
         typingSweeper?.cancel()
         typingSweeper = nil
@@ -959,7 +965,7 @@ final class ChatModel {
         // transcript's: if this channel is one you have just lost, the server
         // has already evicted this socket from it, so nothing more arrives here
         // either way.
-        case .friendActivity, .permissionsUpdate, .communityHomeUpdate, .channelsUpdate,
+        case .friendActivity, .permissionsUpdate, .communityHomeUpdate, .channelsUpdate, .serverOrderUpdate, .serverRemoved, .ownStatus,
              .presence, .activity, .other, .storiesUpdate,
              .voiceWelcome, .voicePeerJoined, .voicePeerUpdated, .voicePeerLeft, .voiceRoster,
              .voiceSpeakChanged, .voiceRoomFull, .voiceTransportUnsupported,

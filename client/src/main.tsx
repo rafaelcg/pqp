@@ -100,6 +100,14 @@ const HomePreviewRoute = import.meta.env.DEV
 const VsDiscordPage = lazy(() =>
   import("./pages/vs-discord-page").then((m) => ({ default: m.VsDiscordPage })),
 );
+const ComparePage = lazy(() =>
+  import("./pages/compare-page").then((m) => ({ default: m.ComparePage })),
+);
+const CompareProductPage = lazy(() =>
+  import("./pages/compare-product-page").then((m) => ({
+    default: m.CompareProductPage,
+  })),
+);
 const BetaPage = lazy(() =>
   import("./pages/beta-page").then((m) => ({ default: m.BetaPage })),
 );
@@ -286,6 +294,24 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
           <Route path="/contato" element={<ContactPage />} />
           <Route path="/status" element={<StatusPage />} />
           <Route path="/vs-discord" element={<VsDiscordPage />} />
+          {/* `/compare`: the dated, sourced matrix of pqp and the alternatives,
+              with one short page per product (Discord's is `/vs-discord`).
+              One explicit route per product rather than a `:product`
+              parameter, so an unknown product is a real 404 at the edge
+              (`spa-routes.ts` knows exactly these paths). */}
+          <Route path="/compare" element={<ComparePage />} />
+          <Route
+            path="/compare/stoat"
+            element={<CompareProductPage product="stoat" />}
+          />
+          <Route
+            path="/compare/teamspeak"
+            element={<CompareProductPage product="teamspeak" />}
+          />
+          <Route
+            path="/compare/slack"
+            element={<CompareProductPage product="slack" />}
+          />
           {/* The homepage design previews, dev builds only (see
               `HomePreviewRoute` above). A production build has no route here,
               so these paths fall through to the catch-all like any unknown

@@ -77,6 +77,8 @@ import type {
   DmPrivacy,
   DmSummary,
   DiscordImportPlan,
+  DiscordMergePlan,
+  DiscordMergePreview,
   Gif,
   Invite,
   MemberTimeout,
@@ -137,6 +139,13 @@ import {
 import { getApiBaseUrl } from "./utils";
 import { takePublicPostEmbed } from "./community-home/public-post-embed";
 import { parseRetryAfterMs } from "./reconnect-jitter";
+import type { AppRouteTarget } from "./app-route";
+import {
+  channelsPrefetchKey,
+  messagesPrefetchKey,
+  putBootPrefetch,
+  takeOrFetch,
+} from "./boot-prefetch";
 
 const API_TIMEOUT_MS = 12_000;
 
@@ -272,7 +281,78 @@ async function resolveAuthToken(
   }
 }
 
-export async function apiFetch<T>(
+/**
+ * Reads that ask the server for a SWITCH, not for data that moves with what the
+ * person just did: the same answer for everybody who asks in the same moment.
+ *
+ * Several modules each ask for the same one at start-up (`/api/onboarding/config`
+ * from the Discord notice and from the invite moment, `/api/fun/config` from the
+ * nudge and from the retro look, `/api/push/config`, `/api/voice/config`, ...),
+ * so one page load sent seven of them twice at the very same millisecond, each
+ * with its own CORS preflight. Exact paths, no query, so a per-server variant
+ * (`/api/live-hls/config?serverId=...`) is a different read.
+ *
+ * NOT in here, on purpose: anything a mutation can change (unread counts, lists,
+ * messages, members). An in-flight read started before a mutation and shared with
+ * a caller that asked after it would hand that caller the old answer.
+ */
+const SHARED_IN_FLIGHT_READS: ReadonlySet<string> = new Set([
+  "/api/attachments/config",
+  "/api/live-hls/config",
+  "/api/share/config",
+  "/api/voice/config",
+  "/api/voice/backend",
+  "/api/push/config",
+  "/api/fun/config",
+  "/api/onboarding/config",
+  "/api/dms/config",
+  "/api/forwards/config",
+  "/api/forum/config",
+  "/api/gifs/config",
+  "/api/communities/config",
+  "/api/community-home/config",
+  "/api/connections/config",
+]);
+
+const inFlightReads = new Map<string, Promise<unknown>>();
+
+/** Tests only: forget the reads in flight. */
+export function resetInFlightReads(): void {
+  inFlightReads.clear();
+}
+
+/**
+ * Callers that ask for the same switch while one request for it is already out
+ * share that request, and each gets its own copy of the answer. Nothing is kept
+ * once it settles: the next ask is a real request, so a flag the operator flips
+ * is seen on the very next read, exactly as before.
+ */
+export function apiFetch<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  // Only the plain read: a GET with no other option at all. A caller that passes
+  // a signal can cancel (sharing its request would let it cancel somebody
+  // else's read), and headers, a cache mode or anything else would be silently
+  // dropped for every caller after the first.
+  const plainGet = Object.keys(options).every(
+    (key) =>
+      key === "method" && (options.method ?? "GET").toUpperCase() === "GET",
+  );
+  if (!plainGet || !SHARED_IN_FLIGHT_READS.has(path)) {
+    return apiFetchOnce<T>(path, options);
+  }
+  let shared = inFlightReads.get(path) as Promise<T> | undefined;
+  if (!shared) {
+    shared = apiFetchOnce<T>(path, options).finally(() => {
+      inFlightReads.delete(path);
+    });
+    inFlightReads.set(path, shared);
+  }
+  return shared.then((answer) => structuredClone(answer));
+}
+
+async function apiFetchOnce<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
@@ -1454,6 +1534,32 @@ export const applyDiscordImport = (source: string, idempotencyKey?: string) =>
     idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
   );
 
+/**
+ * Whether the "Importar do Discord" row is offered on this server: the runtime
+ * flag `discord_import_existing` for it, and Manage Server for the caller.
+ * Never an error for a member, only `enabled: false`.
+ */
+export const fetchDiscordImportConfig = (serverId: string) =>
+  apiFetch<{ enabled: boolean }>(`/api/servers/${serverId}/discord-import/config`);
+
+/** What a Discord layout would add to this existing server. No writes. */
+export const previewDiscordMerge = (serverId: string, source: string) =>
+  post<DiscordMergePreview>(`/api/servers/${serverId}/discord-import/preview`, {
+    source,
+  });
+
+/** Adds it, in one transaction. `createRoles` are template ids; default none. */
+export const applyDiscordMerge = (
+  serverId: string,
+  source: string,
+  createRoles: number[],
+) =>
+  post<{
+    plan: DiscordMergePlan;
+    channels: Channel[];
+    rolesCreated: string[];
+  }>(`/api/servers/${serverId}/discord-import/apply`, { source, createRoles });
+
 export const updateServer = (
   serverId: string,
   body: {
@@ -1668,8 +1774,17 @@ export const fetchUnread = (serverId: string) =>
 
 // ----------------------------------------------------------------- channels
 
-export const fetchChannels = (serverId: string) =>
+const fetchChannelsFromNetwork = (serverId: string) =>
   apiFetch<{ channels: Channel[] }>(`/api/servers/${serverId}/channels`);
+
+/**
+ * A server's channels. The first ask after `prefetchBootReads` started this very
+ * read is answered by it; every later ask goes to the network.
+ */
+export const fetchChannels = (serverId: string) =>
+  takeOrFetch(channelsPrefetchKey(serverId), () =>
+    fetchChannelsFromNetwork(serverId),
+  );
 
 /**
  * --- threads --- the active threads of a server, keyed by the channel they
@@ -1817,7 +1932,7 @@ export const markChannelRead = (
 
 // ----------------------------------------------------------------- messages
 
-export const fetchMessages = (
+const fetchMessagesFromNetwork = (
   channelId: string,
   options: { limit?: number; before?: string } = {},
 ) => {
@@ -1833,6 +1948,45 @@ export const fetchMessages = (
     `/api/channels/${channelId}/messages${query ? `?${query}` : ""}`,
   );
 };
+
+/**
+ * A channel's newest page. Only the plain call (no `limit`, no `before`, which is
+ * what opening a channel asks) may be answered by the read `prefetchBootReads`
+ * started; paging older history always goes to the network.
+ */
+export const fetchMessages = (
+  channelId: string,
+  options: { limit?: number; before?: string } = {},
+) =>
+  options.limit || options.before
+    ? fetchMessagesFromNetwork(channelId, options)
+    : takeOrFetch(messagesPrefetchKey(channelId), () =>
+        fetchMessagesFromNetwork(channelId, options),
+      );
+
+/**
+ * Start the reads the page address names, now, in parallel with `/api/me`
+ * (see `boot-prefetch.ts` for why this is safe and what bounds it). A route
+ * with a channel starts its channel list and its newest page; a route with only
+ * a server starts the channel list. Anything else starts nothing.
+ */
+export function prefetchBootReads(route: AppRouteTarget | null): void {
+  if (route?.kind !== "channel") {
+    return;
+  }
+  putBootPrefetch(
+    channelsPrefetchKey(route.serverId),
+    fetchChannelsFromNetwork(route.serverId),
+  );
+  // A link to one message (or a forum post) opens around that message, not at
+  // the newest page, so the newest page would go unused.
+  if (route.channelId && !route.messageId && !route.postId) {
+    putBootPrefetch(
+      messagesPrefetchKey(route.channelId),
+      fetchMessagesFromNetwork(route.channelId),
+    );
+  }
+}
 
 /**
  * Full-text search across every channel of one server the caller can see.
@@ -1973,7 +2127,28 @@ export function memberMatchesQuery(
 }
 
 export const fetchMembers = (serverId: string) =>
-  apiFetch<{ members: ServerMember[] }>(`/api/servers/${serverId}/members`);
+  apiFetch<{
+    members: ServerMember[];
+    /**
+     * Who is in the list, as one short token (`fetchMemberStatuses` answers with
+     * the same one). Absent from an API that predates it: no token, no shortcut.
+     */
+    roster?: string;
+  }>(`/api/servers/${serverId}/members`);
+
+/**
+ * The live half of the member list on its own: only the people who are NOT
+ * offline (everybody absent is offline), how many members there are, and the
+ * `roster` token to compare with the one `fetchMembers` returned. A few KB where
+ * the full list of a 6000-member community is 2.4 MB. Throws on an API that does
+ * not have it (404), which callers treat as "read the whole list".
+ */
+export const fetchMemberStatuses = (serverId: string) =>
+  apiFetch<{
+    roster: string;
+    count: number;
+    statuses: Record<string, UserStatus>;
+  }>(`/api/servers/${serverId}/members/status`);
 
 export const updateMemberRole = (
   serverId: string,
