@@ -17,9 +17,13 @@
  * The ceiling matters more than it looks. `load` waits for every subresource, so
  * one stalled request would otherwise hold the page on its static copy for as
  * long as the request hangs.
+ *
+ * This gate is not the whole wait. Once it opens, `main.tsx` also waits for the
+ * home page's own chunk, with no ceiling, because rendering without it would
+ * swap the static copy (plain links that already work) for the loading shell.
  */
 
-/** Longest the static copy is allowed to stand alone, in ms. */
+/** Longest this gate holds the first render, in ms. */
 export const HYDRATE_CEILING_MS = 4000;
 
 /** Longest wait, after `load`, for a quiet moment. */
