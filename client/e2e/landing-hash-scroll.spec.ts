@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * The marketing header and footer link to sections of the landing page
+ * The marketing header and footer link to sections of the home page
  * (`/#features`, `/#communities`, `/#hosting`) from every other public page.
  *
  * WHY A BROWSER. Those links are plain `<a href>`, so following one is a full
@@ -25,7 +25,8 @@ async function sectionTop(page: Page, id: string): Promise<number> {
 
 async function expectLandedOn(page: Page, id: string) {
   await expect(page).toHaveURL(new RegExp(`/#${id}$`));
-  // `scroll-mt-20` leaves 80px for the header; allow a little either side.
+  // The page keeps 5rem (80px) clear above a jump target for the header;
+  // allow a little either side.
   await expect
     .poll(() => sectionTop(page, id), { timeout: 10_000 })
     .toBeGreaterThan(40);
@@ -73,14 +74,26 @@ test.describe("landing section links", () => {
     await expectLandedOn(page, "hosting");
   });
 
-  test("a router link to a section on the landing scrolls to it", async ({
+  test("an old anchor lands on its section, and a header link moves on from there", async ({
     page,
   }) => {
-    await page.goto("/");
-    await page.locator('a[href="/#import"]').first().click();
+    // The home page has no `a[href="/#import"]` any more: `#import` is an
+    // alias on `#mudanca`, so an old link arrives there, and the page's own
+    // header links are bare `#id` anchors.
+    await page.goto("/#import");
     await expect(page).toHaveURL(/\/#import$/);
     await expect
-      .poll(() => sectionTop(page, "import"), { timeout: 10_000 })
+      .poll(() => sectionTop(page, "mudanca"), { timeout: 10_000 })
+      .toBeLessThan(200);
+    await page.locator('header nav a[href="#noite"]').click();
+    await expect(page).toHaveURL(/\/#noite$/);
+    await expect
+      .poll(() => sectionTop(page, "noite"), { timeout: 10_000 })
+      .toBeLessThan(200);
+    await page.locator('header nav a[href="#mudanca"]').click();
+    await expect(page).toHaveURL(/\/#mudanca$/);
+    await expect
+      .poll(() => sectionTop(page, "mudanca"), { timeout: 10_000 })
       .toBeLessThan(200);
   });
 

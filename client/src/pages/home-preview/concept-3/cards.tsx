@@ -487,7 +487,7 @@ export function ImportCard() {
           >
             {done ? (
               <div>
-                <p className="flex items-center gap-2 px-3 pt-3 font-display text-sm font-bold">Mesa do Rafa <Exemplo /></p>
+                <p className="flex items-center gap-2 px-3 pt-3 font-display text-sm font-bold">Mesa do Zeca <Exemplo /></p>
                 <div className="hp-pop" style={stagger(0)}>
                   <SectionLabel>Texto</SectionLabel>
                 </div>

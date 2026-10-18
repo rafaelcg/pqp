@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inlineEnv, scriptBody } from "@/test/inline-script-env";
+import { INTERACTIONS } from "./boot-gate";
 import { deferEntryLoader, deferEntryScript } from "./defer-entry";
 
 const ENTRY = '<script type="module" crossorigin src="/assets/index-abc123.js"></script>';
@@ -16,6 +17,10 @@ describe("deferEntryScript", () => {
   it("leaves a document with no entry tag alone", () => {
     const html = "<head><title>x</title></head>";
     expect(deferEntryScript(html)).toBe(html);
+  });
+
+  it("listens for the same first interactions as the boot gate", () => {
+    expect(deferEntryLoader("/a.js")).toContain(`${JSON.stringify(INTERACTIONS)}.forEach(`);
   });
 
   it("cannot be closed early by a hostile file name", () => {
@@ -74,8 +79,8 @@ describe("the loader, run as the browser would", () => {
     expect(env.appended).toHaveLength(1);
   });
 
-  it("starts on the first touch, click or key press", () => {
-    for (const name of ["pointerdown", "keydown", "touchstart"]) {
+  it("starts on the first touch, click, key press or wheel turn", () => {
+    for (const name of ["pointerdown", "keydown", "touchstart", "wheel"]) {
       const env = inlineEnv({ route: "home" });
       env.run(source);
       env.fire(name);

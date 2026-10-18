@@ -93,7 +93,7 @@ function ShareMock({ source, quality }: { source: (typeof SOURCES)[number]; qual
             />
             <span className="absolute left-2 top-2 inline-flex items-center gap-1.5 rounded-md bg-black/60 px-2 py-1 text-[11px] text-white">
               <MonitorUp className="h-3.5 w-3.5 text-signal" />
-              Rafa passa a tela
+              Zeca passa a tela
             </span>
             <span className="absolute right-2 top-2 rounded-md bg-black/60 px-2 py-1 font-mono text-[11px] text-white transition-opacity">
               {quality}

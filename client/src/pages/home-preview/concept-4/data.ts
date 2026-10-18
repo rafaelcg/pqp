@@ -62,7 +62,7 @@ export interface Msg {
 /** The sample chat each channel shows in the preview. Labelled "exemplo". */
 export const MESSAGES: Record<Exclude<ChannelId, "lobby">, Msg[]> = {
   geral: [
-    { who: CAST.rafa, time: "21:40", text: "Bora hoje à noite? Eu levo o macarrão." },
+    { who: CAST.zeca, time: "21:40", text: "Bora hoje à noite? Eu levo o macarrão." },
     { who: CAST.bia, time: "21:41", text: "Eu topo. Cai na call às nove." },
   ],
   memes: [
@@ -80,17 +80,17 @@ export const MESSAGES: Record<Exclude<ChannelId, "lobby">, Msg[]> = {
   ],
   filmes: [
     { who: CAST.lara, time: "21:30", text: "Sexta tem filme? Voto em terror." },
-    { who: CAST.rafa, time: "21:32", text: "Fechado. Quem escolhe a pipoca?" },
+    { who: CAST.zeca, time: "21:32", text: "Fechado. Quem escolhe a pipoca?" },
   ],
   fichas: [
     { who: CAST.gabi, time: "21:20", text: "Atualizei a ficha do paladino." },
-    { who: CAST.rafa, time: "21:22", text: "Mesa sábado às 20h. Traz dado." },
+    { who: CAST.zeca, time: "21:22", text: "Mesa sábado às 20h. Traz dado." },
   ],
   bastidores: [
-    { who: CAST.rafa, time: "21:10", text: "Aqui só entra quem eu liberar." },
+    { who: CAST.zeca, time: "21:10", text: "Aqui só entra quem eu liberar." },
     { who: CAST.bia, time: "21:11", text: "Perfeito. Já posso contar a surpresa?" },
   ],
 };
 
 /** Who is "in the Lobby" in the preview. */
-export const LOBBY_PEOPLE: readonly Person[] = [CAST.rafa, CAST.bia, CAST.caio];
+export const LOBBY_PEOPLE: readonly Person[] = [CAST.zeca, CAST.bia, CAST.caio];

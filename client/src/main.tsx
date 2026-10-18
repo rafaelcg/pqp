@@ -48,7 +48,13 @@ import {
 import { I18nProvider, loadLocale, useTranslation } from "./lib/i18n";
 import { detectLocale, type Locale } from "./lib/locale";
 import { forceTheme } from "./lib/theme";
-import { LandingPage } from "./pages/landing-page";
+import { HomeRoute } from "./pages/home/home-page";
+import {
+  HOME_CHUNK_CEILING_MS,
+  loadHome,
+  prefetchHomeWhenIdle,
+  withCeiling,
+} from "./pages/home/load";
 import { BuildWatcher } from "./components/layout/build-watcher";
 import { ForcedUpdateScreen } from "./components/layout/forced-update-screen";
 import { UpdatePrompt } from "./components/layout/update-prompt";
@@ -175,6 +181,13 @@ const publishableKey = isUsableClerkPublishableKey(
  */
 function DarkRoutes() {
   useLayoutEffect(() => forceTheme("dark"), []);
+  // The home page is a lazy chunk, and the other marketing pages link "/"
+  // through the router (the nav logo), so fetch it while the browser is idle
+  // and that click finds it instead of suspending on it. "/" started it at boot.
+  useEffect(() => {
+    if (window.location.pathname === "/") return;
+    return prefetchHomeWhenIdle();
+  }, []);
   return <Outlet />;
 }
 
@@ -253,7 +266,7 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
       <StandaloneUpdateIndicator />
       <Routes>
         <Route element={<DarkRoutes />}>
-          <Route path="/" element={<LandingPage />} />
+          <Route path="/" element={<HomeRoute />} />
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/cookies" element={<CookiesPage />} />
@@ -509,6 +522,15 @@ function DesktopShell({ children }: { children: ReactNode }) {
 // there is nothing on screen to protect and the render is immediate, as ever.
 const prerendered = hasPrerenderedHero();
 
+// The home page is its own chunk (pages/home/load.ts), so on "/" it starts
+// downloading now, beside everything else the boot waits for. The first render
+// below waits on it with a ceiling, and the route then renders the module it
+// already has instead of suspending on it.
+const onHome = window.location.pathname === "/";
+if (onHome) {
+  void loadHome().catch(() => {});
+}
+
 // An update that had to go round a stale cache navigated to this page with a
 // `?_pqp=` query (`lib/update-ladder.ts`). It has done its job; take it off the
 // address before the router reads the location, so it is never bookmarked.
@@ -657,7 +679,7 @@ if (prerendered) {
   document.documentElement.setAttribute("data-pre", "");
   whenReadyToRender(() => {
     initFaro();
-    // Three things before the first render, in parallel, none of them able to
+    // Four things before the first render, in parallel, none of them able to
     // hold it for long or to fail it:
     //  - the catalogue. A Portuguese or Spanish reader has the right words on
     //    screen already (the prerendered block), and rendering in English until
@@ -667,21 +689,40 @@ if (prerendered) {
     //    first frame and does not push the screenshot down when it settles.
     //  - the prerendered block's pictures painted, so the live page never
     //    replaces a picture that has not been drawn yet.
+    //  - the home page's chunk, so the route renders it at once instead of
+    //    the loading shell. A failed chunk renders now and takes the lazy
+    //    route; a slow one renders at the ceiling.
     const locale = detectLocale();
     const focused = rememberFocusInPrerender();
     void Promise.all([
       (locale === "en" ? Promise.resolve() : loadLocale(locale)).catch(() => {}),
       primeDownloadPlan(),
       whenPrerenderPainted(),
+      withCeiling(loadHome().catch(() => {}), HOME_CHUNK_CEILING_MS),
     ]).then(() => {
       renderApp();
       restoreFocus(focused);
     });
   });
-} else if (document.readyState === "loading") {
-  // The entry script is injected, and an injected module script is async: it
-  // can run before the parser has reached #root.
-  document.addEventListener("DOMContentLoaded", renderApp, { once: true });
 } else {
-  renderApp();
+  // "/" with no static first screen (the dev server, which runs no prerender)
+  // waits for the home chunk the same way, so it does not paint the loading
+  // shell for as long as the chunk takes. Every other route renders at once.
+  const homeReady = onHome
+    ? withCeiling(loadHome().catch(() => {}), HOME_CHUNK_CEILING_MS)
+    : null;
+  const start = () => {
+    if (homeReady) {
+      void homeReady.then(renderApp);
+    } else {
+      renderApp();
+    }
+  };
+  if (document.readyState === "loading") {
+    // The entry script is injected, and an injected module script is async: it
+    // can run before the parser has reached #root.
+    document.addEventListener("DOMContentLoaded", start, { once: true });
+  } else {
+    start();
+  }
 }

@@ -23,7 +23,14 @@ export const HOME_VARIANTS: HomeVariant[] = [
     name: "Principal",
     idea: "A versão completa: uma noite com a galera, contada pelo próprio app. A call do topo é de verdade, em HTML, e dá pra mexer.",
     kind: "flagship",
-    Page: lazy(() => import("./flagship")),
+    Page: lazy(() => import("../home")),
+  },
+  {
+    id: "flagship-breu",
+    name: "Principal + Breu",
+    idea: "A principal com o Breu, o mascote do pqp, aparecendo ao longo da página.",
+    kind: "flagship",
+    Page: lazy(() => import("./flagship-breu")),
   },
   {
     id: "c1",

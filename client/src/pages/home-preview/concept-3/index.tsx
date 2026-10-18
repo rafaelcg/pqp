@@ -104,12 +104,12 @@ export default function PapoReto() {
 
             <TypingRow>
               <span>
-                Rafa está digitando <span className="text-xs">(exemplo)</span>
+                Zeca está digitando <span className="text-xs">(exemplo)</span>
               </span>
             </TypingRow>
 
             {/* closer */}
-            <Msg person={CAST.rafa} time="20:41" example typingMs={900}>
+            <Msg person={CAST.zeca} time="20:41" example typingMs={900}>
               bora criar a sala da galera?
             </Msg>
             <Msg person={PQP} time="20:41" card={<CloserCard />}>

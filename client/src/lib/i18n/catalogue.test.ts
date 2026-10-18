@@ -22,7 +22,9 @@ describe("translateMessage", () => {
   });
 
   it("falls back to English when there is no overlay at all", () => {
-    expect(translateMessage("landing.hero.title")).toBe(en["landing.hero.title"]);
+    // `landing.seo.title` is one of the two landing keys that outlive the old
+    // page ("/" still takes its title and description from them).
+    expect(translateMessage("landing.seo.title")).toBe(en["landing.seo.title"]);
   });
 
   it("treats an empty translation as missing rather than as a blank string", () => {
