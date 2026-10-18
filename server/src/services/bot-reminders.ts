@@ -176,11 +176,12 @@ export async function deliverDueReminders(): Promise<number> {
 }
 
 /**
- * How late a one-off reminder may still go out. Past it, one that waited (the
- * flag was off for its server, or the jobs were down) is dropped: a reminder
- * for tonight that arrives tomorrow is noise.
+ * How late a reminder may still go out. Past it, one that waited (the flag was
+ * off, or the jobs were down) does not post: a one-off is dropped, and a
+ * repeating one moves on to its next slot. A reminder for tonight that
+ * arrives tomorrow is noise.
  */
-const ONE_OFF_GRACE_MS = 6 * 3_600_000;
+const LATE_GRACE_MS = 6 * 3_600_000;
 /** How long a reminder held while its server's flag is off waits before it is looked at again. */
 const HOLD_SECONDS = 300;
 
@@ -192,9 +193,8 @@ async function deliverOne(reminder: ReminderRow): Promise<void> {
     await holdReminder(reminder);
     return;
   }
-  if (!reminder.repeat && Date.now() - reminder.due_at.getTime() > ONE_OFF_GRACE_MS) {
-    await cancelReminder(reminder.server_id, reminder.id);
-    logEvent("bots.reminderDropped", { reminderId: reminder.id, reason: "late" });
+  if (Date.now() - reminder.due_at.getTime() > LATE_GRACE_MS) {
+    await holdReminder(reminder);
     return;
   }
   const context = await getPool().query<{
@@ -268,7 +268,7 @@ async function holdReminder(reminder: ReminderRow): Promise<void> {
     );
     return;
   }
-  if (Date.now() - reminder.due_at.getTime() > ONE_OFF_GRACE_MS) {
+  if (Date.now() - reminder.due_at.getTime() > LATE_GRACE_MS) {
     await cancelReminder(reminder.server_id, reminder.id);
     logEvent("bots.reminderDropped", { reminderId: reminder.id, reason: "late" });
     return;

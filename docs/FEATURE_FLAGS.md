@@ -806,9 +806,9 @@ Server bots: one AI bot per server that members talk to in chat
 Off everywhere (the default) costs nothing: a chat message never reaches the
 database for bots, and the run poller and the reminder job return before they
 query. Off is a rollout switch, not a verdict, so it **deletes nothing**: a
-repeating reminder skips the slots that fall due while its server is off, and
-a one-off reminder waits and goes out when the flag comes back, unless it is
-more than six hours late by then.
+reminder that falls due while its server is off waits and goes out when the
+flag comes back. More than six hours late, it does not post: a repeating one
+moves on to its next slot, and a one-off is dropped.
 
 Turn one server on with `PUT /api/admin/flag-overrides { key: "custom_bots",
 serverId, enabled: true }` or from controles → interruptores, then

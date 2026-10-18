@@ -245,6 +245,19 @@ describeDb("server bot reminders", () => {
     expect(await posts(channelId, bot.userId)).toHaveLength(1);
   });
 
+  it("moves a repeating reminder that is hours late to its next slot without posting", async () => {
+    const { owner, otherId, bot, tool } = await setup();
+    await tool(owner.id, "create_reminder", { at: inMinutes(60), text: "Jogatina", repeat: "weekly", channelId: otherId });
+    await getPool().query(`UPDATE server_bot_reminders SET due_at = NOW() - INTERVAL '7 hours'`);
+    await deliverDueReminders();
+    expect(await posts(otherId, bot.userId)).toEqual([]);
+    const row = await getPool().query<{ status: string; due_at: Date; sent_count: number }>(
+      `SELECT status, due_at, sent_count FROM server_bot_reminders`,
+    );
+    expect(row.rows[0]).toMatchObject({ status: "pending", sent_count: 0 });
+    expect(row.rows[0]!.due_at.getTime()).toBeGreaterThan(Date.now());
+  });
+
   it("drops a one-off reminder that is hours late instead of posting it", async () => {
     const { member, channelId, bot, tool } = await setup();
     await tool(member.id, "create_reminder", { at: inMinutes(30), text: "ontem à noite" });

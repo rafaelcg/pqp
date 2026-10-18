@@ -122,7 +122,8 @@ Staff can turn on a fixed welcome in the bot's settings: a channel and a text, w
 4. At least a minute ahead, at most 30 days. At most 5 open per member and 50 per server.
 5. Delivery claims with a lease and `SKIP LOCKED`, and posts with a stored nonce that is checked first, so a retry never posts twice. A repeat moves to its next slot on its own schedule and skips what it missed while the API was down.
 6. A reminder whose member left, lost access, is timed out, or whose bot is switched off is cancelled when it comes due.
-7. The flag is different: while `custom_bots` is off for its server, a repeating reminder skips its slot without posting and a one-off waits. Once the flag is back, the one-off goes out, unless it is more than six hours late. Any one-off that late is dropped rather than posted, whatever kept it.
+7. The flag is different: while `custom_bots` is off for its server, a reminder is not cancelled. A repeating one skips its slot without posting, and a one-off waits and goes out once the flag is back.
+8. A reminder more than six hours late never posts, whatever kept it: a repeating one moves on to its next slot, and a one-off is dropped.
 
 ## Images and voice notes
 
