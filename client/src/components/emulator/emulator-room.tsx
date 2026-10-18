@@ -68,6 +68,10 @@ function EmulatorRoomDialog({ onClose }: { onClose: () => void }) {
   const [playing, setPlaying] = useState(false);
   const [frameKey, setFrameKey] = useState(0);
   const [problem, setProblem] = useState<Problem | null>(null);
+  // Read when the frame asks, not captured by the listener: a language change
+  // while the frame is loading must not drop the pending file.
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -81,7 +85,7 @@ function EmulatorRoomDialog({ onClose }: { onClose: () => void }) {
           {
             type: "pqp-emulator-load",
             file: fileRef.current,
-            language: FRAME_LANGUAGE[locale],
+            language: FRAME_LANGUAGE[localeRef.current],
           },
           window.location.origin,
         );
@@ -98,7 +102,7 @@ function EmulatorRoomDialog({ onClose }: { onClose: () => void }) {
       window.removeEventListener("message", onMessage);
       fileRef.current = null;
     };
-  }, [locale]);
+  }, []);
 
   const pick = useCallback((file: File | undefined) => {
     if (!file) {

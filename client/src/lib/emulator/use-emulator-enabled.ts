@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchEmulatorConfig } from "@/lib/api";
 import { onConfigRefresh } from "@/lib/config-refresh";
 
@@ -17,15 +17,21 @@ export function useEmulatorEnabledFor(serverId: string | null): boolean {
     null,
   );
 
+  // Asks can overlap (the first read and a focus refresh): only the newest
+  // one's answer counts, so a slow stale `true` cannot undo a flip to off.
+  const asked = useRef(0);
+
   useEffect(() => {
     if (!serverId) {
       return;
     }
     let cancelled = false;
     const ask = () => {
+      asked.current += 1;
+      const mine = asked.current;
       void fetchEmulatorConfig(serverId)
         .then((config) => {
-          if (!cancelled) {
+          if (!cancelled && mine === asked.current) {
             setAnswer({ serverId, enabled: config.enabled === true });
           }
         })
