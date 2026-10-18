@@ -7,7 +7,7 @@ import {
   bridgeHostMessageSchema,
   bridgeResultSchemas,
 } from "./bridge.js";
-import { APP_END_REASONS } from "./common.js";
+import { APP_END_REASONS, jsonProblem } from "./common.js";
 import {
   APP_AVATAR_MAX_CHARS,
   APP_EVENT_MAX_BYTES,
@@ -187,6 +187,17 @@ describe("app to host requests", () => {
     }
   });
 
+  it("stops reading an oversize value as soon as it cannot fit", () => {
+    // an invalid element after the point where the budget runs out is never reached
+    const big = [...Array.from({ length: 5000 }, () => "xxxxxxxxxx"), undefined];
+    expect(jsonProblem(big, 0, { used: 0, max: APP_STATE_MAX_BYTES })).toMatch(/larger than/);
+    expect(jsonProblem(big)).toMatch(/not a JSON value|undefined/);
+    const huge = "x".repeat(5_000_000);
+    expect(bridgeAppMessageSchema.safeParse(req("state.patch", { patch: huge })).success).toBe(
+      false,
+    );
+  });
+
   it("rejects a cycle instead of looping", () => {
     const loop: Record<string, unknown> = {};
     loop.self = loop;
@@ -287,6 +298,37 @@ describe("host to app messages", () => {
   it.each(Object.keys(hostMessages))("accepts %s", (name) => {
     const result = bridgeHostMessageSchema.safeParse(hostMessages[name]);
     expect(result.success, JSON.stringify(result)).toBe(true);
+  });
+
+  it("accepts a successful answer to every request type", () => {
+    const results: Record<string, unknown> = {
+      "participants.get": { participants: [] },
+      "state.get": { rev: 1, value: null },
+      "state.patch": { rev: 2 },
+      "events.send": {},
+      "assets.get": { name: "core.wasm", bytes: new ArrayBuffer(1) },
+      "files.pickLocal": { bytes: new ArrayBuffer(1) },
+      "ui.resize": { height: 300 },
+      "ui.fullscreen": { on: true },
+      "share.request": { on: true },
+      "session.end": {},
+    };
+    expect(Object.keys(results).sort()).toEqual(Object.keys(requests).sort());
+    for (const [type, result] of Object.entries(results)) {
+      expect(bridgeResultSchemas[type as keyof typeof bridgeResultSchemas].safeParse(result).success, type).toBe(true);
+      expect(bridgeHostMessageSchema.safeParse({ id: "r", ok: true, result }).success, type).toBe(true);
+    }
+  });
+
+  it("does not take an object that merely claims to be an ArrayBuffer", () => {
+    const spoof = { [Symbol.toStringTag]: "ArrayBuffer" };
+    expect(
+      bridgeHostMessageSchema.safeParse({ id: "r", ok: true, result: { bytes: spoof } }).success,
+    ).toBe(false);
+    expect(
+      bridgeHostMessageSchema.safeParse({ id: "r", ok: true, result: { bytes: new Uint8Array(2) } })
+        .success,
+    ).toBe(false);
   });
 
   it("accepts every end reason of the data model and no other", () => {

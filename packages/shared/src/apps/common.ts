@@ -26,20 +26,38 @@ function isPlainObject(value: object): boolean {
   return proto === Object.prototype || proto === null;
 }
 
+/** A running lower bound of the serialized size, so an oversize value stops the walk early. */
+interface Budget {
+  /** Lower bound of serialized UTF-8 bytes seen so far (a UTF-16 unit is at least one byte). */
+  used: number;
+  max: number;
+}
+
 /**
  * Why a value is not plain JSON, or null when it is. Rejects undefined (also
  * inside arrays and holes), functions, symbols, bigints, NaN, Infinity,
  * class instances (Date, Map, typed arrays, ...) and nesting past
  * `APP_JSON_MAX_DEPTH`. A cycle is caught by the depth limit.
+ *
+ * With a `budget` the walk also stops as soon as the value cannot fit, so a
+ * huge value is refused after reading about `max` bytes of it, not all of it.
  */
-export function jsonProblem(value: unknown, depth = 0): string | null {
-  if (value === null) return null;
+export function jsonProblem(value: unknown, depth = 0, budget?: Budget): string | null {
+  const over = (bytes: number): string | null => {
+    if (!budget) return null;
+    budget.used += bytes;
+    return budget.used > budget.max
+      ? `serialized value is larger than ${budget.max} bytes`
+      : null;
+  };
+  if (value === null) return over(4);
   switch (typeof value) {
     case "boolean":
+      return over(4);
     case "string":
-      return null;
+      return over(value.length + 2);
     case "number":
-      return Number.isFinite(value) ? null : "numbers must be finite";
+      return Number.isFinite(value) ? over(1) : "numbers must be finite";
     case "object":
       break;
     default:
@@ -49,17 +67,23 @@ export function jsonProblem(value: unknown, depth = 0): string | null {
     return `nesting is deeper than ${APP_JSON_MAX_DEPTH}`;
   }
   if (Array.isArray(value)) {
+    const early = over(2);
+    if (early) return early;
     for (let i = 0; i < value.length; i += 1) {
       if (!(i in value)) return "arrays must not have holes";
-      const problem = jsonProblem(value[i], depth + 1);
+      const problem = jsonProblem(value[i], depth + 1, budget) ?? over(1);
       if (problem) return problem;
     }
     return null;
   }
   const object = value as object;
   if (!isPlainObject(object)) return "only plain objects are JSON values";
+  const early = over(2);
+  if (early) return early;
   for (const key of Object.keys(object)) {
-    const problem = jsonProblem((object as Record<string, unknown>)[key], depth + 1);
+    const keyProblem = over(key.length + 3);
+    if (keyProblem) return keyProblem;
+    const problem = jsonProblem((object as Record<string, unknown>)[key], depth + 1, budget);
     if (problem) return problem;
   }
   return null;
@@ -67,13 +91,16 @@ export function jsonProblem(value: unknown, depth = 0): string | null {
 
 /**
  * A JSON value, optionally capped at `maxBytes` of serialized UTF-8. The size
- * check runs inside the schema, so every consumer gets it for free.
+ * check runs inside the schema, so every consumer gets it for free. The walk
+ * keeps a running lower bound and stops early; the exact byte count is taken
+ * only for a value that passed it.
  */
 export function jsonValueSchema(
   maxBytes?: number,
 ): z.ZodType<JsonValue, z.ZodTypeDef, JsonValue> {
   return z.unknown().superRefine((value, ctx) => {
-    const problem = jsonProblem(value);
+    const budget = maxBytes === undefined ? undefined : { used: 0, max: maxBytes };
+    const problem = jsonProblem(value, 0, budget);
     if (problem) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
       return;

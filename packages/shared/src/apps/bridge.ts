@@ -182,10 +182,25 @@ export type BridgeErrorCode = z.infer<typeof bridgeErrorCodeSchema>;
 // Host to app: responses (carry the request id)
 
 /** Binary payloads are transferred, not copied; checked without `instanceof` (realms differ). */
-const arrayBufferSchema = z.custom<ArrayBuffer>(
-  (value) => Object.prototype.toString.call(value) === "[object ArrayBuffer]",
-  { message: "expected an ArrayBuffer" },
-);
+const arrayBufferByteLength = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  "byteLength",
+)?.get;
+
+/** The native getter is a brand check that works across realms and cannot be spoofed with a tag. */
+function isArrayBuffer(value: unknown): value is ArrayBuffer {
+  if (typeof value !== "object" || value === null || !arrayBufferByteLength) return false;
+  try {
+    arrayBufferByteLength.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const arrayBufferSchema = z.custom<ArrayBuffer>(isArrayBuffer, {
+  message: "expected an ArrayBuffer",
+});
 
 /** The `result` of a successful call, per request type. */
 export const bridgeResultSchemas = {
@@ -211,7 +226,9 @@ const bridgeResultSchema = z.union([
   bridgeResultSchemas["files.pickLocal"],
   bridgeResultSchemas["ui.resize"],
   bridgeResultSchemas["ui.fullscreen"],
+  bridgeResultSchemas["share.request"],
   bridgeResultSchemas["events.send"],
+  bridgeResultSchemas["session.end"],
 ]);
 
 export const bridgeResponseOkSchema = z
