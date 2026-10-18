@@ -1137,6 +1137,20 @@ export interface ForumConfig {
 export const fetchForumConfig = (serverId: string) =>
   apiFetch<ForumConfig>(`/api/forum/config?serverId=${encodeURIComponent(serverId)}`);
 
+/**
+ * `GET /api/emulator/config?serverId=`: the runtime flag `emulator_room` for
+ * this server (`emulatorConfigForServer` on the server). Optional like every
+ * config field: an older API answers 404 or omits it, and absent is off. This
+ * is the only call the emulator room makes to the API: the game file is never
+ * sent anywhere.
+ */
+export interface EmulatorConfig {
+  enabled?: boolean;
+}
+
+export const fetchEmulatorConfig = (serverId: string) =>
+  apiFetch<EmulatorConfig>(`/api/emulator/config?serverId=${encodeURIComponent(serverId)}`);
+
 // ------------------------------------------------------------------ forums
 //
 // The routes the shell needs (deep links and the forum's settings) from the

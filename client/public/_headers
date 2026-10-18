@@ -131,6 +131,12 @@
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
   Content-Type: text/markdown; charset=utf-8
 
+# The emulator room: its frame page, the frame's script, and the emulator and
+# cores the build copies from npm to `/emulator/ejs/` (no content hash in the
+# names, so revalidated, never immutable). Not precached by the worker.
+/emulator/*
+  Cache-Control: no-cache
+
 # Standalone diagnostic pages (`share-*.html`, served at the extensionless URL
 # too). Pages, not assets: revalidated, like every other page.
 /share-diagnostic*

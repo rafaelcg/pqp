@@ -131,6 +131,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   forum_channels: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
+  emulator_room: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
   nudge: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   // New with the flag, so there was no old reader: this is its definition.

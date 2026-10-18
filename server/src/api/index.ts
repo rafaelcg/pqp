@@ -305,6 +305,7 @@ import {
   forumChannelsEnabled,
   forumConfigForServer,
 } from "../lib/forum-config.js";
+import { emulatorConfigForServer } from "../lib/emulator-config.js";
 import {
   FORUM_POST_USE_POST_ROUTES,
   isForumPost,
@@ -3140,6 +3141,13 @@ router.get("/api/voice/config", async ({ url }) =>
 // server the client is in; see lib/forum-config.ts. Read per request.
 router.get("/api/forum/config", async ({ url }) =>
   forumConfigForServer(url.searchParams.get("serverId")),
+);
+
+// Emulator room (`emulator_room`, per server, default off). Local play only:
+// the emulator and the game file never touch the server. See
+// lib/emulator-config.ts and docs/EMULATOR_ROOM.md. Read per request.
+router.get("/api/emulator/config", async ({ url }) =>
+  emulatorConfigForServer(url.searchParams.get("serverId")),
 );
 
 // Whether the operator has forced every stale client to update

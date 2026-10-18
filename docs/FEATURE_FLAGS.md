@@ -782,6 +782,16 @@ Turn it on for one server with `PUT /api/admin/flag-overrides
 { key: "apps", serverId, enabled: true }` or from controles → interruptores,
 and only after the rest of the platform is in.
 
+## `emulator_room` (per server)
+
+The emulator room: a window in the server menu where a person opens a game
+**from their own disk** in an emulator that runs in their browser. Behind
+`EMULATOR_ROOM` (default off, **per server**, born as a flag). Served as `enabled`
+on `GET /api/emulator/config?serverId=` (`server/src/lib/emulator-config.ts`).
+That route is the whole server side: no route sees a game file. **Do not turn it
+on before the lawyer review in `docs/EMULATOR_ROOM.md` is done.** Off, the menu
+item is gone and nothing else changes.
+
 ## `stories` (per server) and `stories_friends` (global)
 
 Stories: a photo, a video of up to 30 s or a text card that lives for 24 h

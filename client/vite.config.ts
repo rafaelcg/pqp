@@ -16,6 +16,11 @@ import {
 } from "./src/lib/prerender-hero";
 import { NAVIGATE_DENYLIST, swBuildScript } from "./src/lib/sw-build-script";
 import { edgeConfigFrom } from "./src/lib/edge-config";
+import {
+  EMULATOR_ASSET_PREFIX,
+  emulatorAssetBytes,
+  emulatorAssets,
+} from "./src/lib/emulator-assets";
 import { assertMarketingBodies, buildBlogStaticFiles } from "./src/lib/static-pages";
 
 /**
@@ -283,6 +288,45 @@ function staticPages(): Plugin {
 }
 
 /**
+ * The emulator room's files, from npm to our own origin (`/emulator/ejs/`).
+ * The frontend and the two cores are installed packages, so nothing is fetched
+ * from a CDN. Served by a middleware in dev and emitted as assets in a build.
+ * What is shipped, and what is refused and why: `docs/EMULATOR_ROOM.md`.
+ */
+function emulatorRoom(): Plugin {
+  return {
+    name: "pqp-emulator-room",
+    configureServer(server) {
+      const assets = emulatorAssets();
+      server.middlewares.use((req, res, next) => {
+        const pathname = (req.url ?? "").split("?")[0] ?? "";
+        if (!pathname.startsWith(EMULATOR_ASSET_PREFIX)) {
+          next();
+          return;
+        }
+        const asset = assets.get(pathname.slice(EMULATOR_ASSET_PREFIX.length));
+        if (!asset) {
+          next();
+          return;
+        }
+        res.setHeader("Content-Type", asset.type);
+        res.setHeader("Cache-Control", "no-cache");
+        res.end(emulatorAssetBytes(asset));
+      });
+    },
+    generateBundle() {
+      for (const [key, asset] of emulatorAssets()) {
+        this.emitFile({
+          type: "asset",
+          fileName: `${EMULATOR_ASSET_PREFIX.slice(1)}${key}`,
+          source: emulatorAssetBytes(asset),
+        });
+      }
+    },
+  };
+}
+
+/**
  * Starts the app bundle after the first paint on the home page (and at once
  * everywhere else). Runs last, when Vite has already written the entry tag.
  * See `src/lib/defer-entry.ts`.
@@ -314,6 +358,7 @@ export default defineConfig(({ command }) => ({
     edgeConfig(),
     prerenderHero(),
     staticPages(),
+    emulatorRoom(),
     deferEntry(),
     versionManifest(),
     umami(),
@@ -400,6 +445,9 @@ export default defineConfig(({ command }) => ({
         // Cyrillic and Greek are fetched on demand like the RNNoise wasm, so the
         // install does not download files nobody on this site reads.
         globIgnores: [
+          // The emulator room's frontend and cores: megabytes, fetched on
+          // demand when somebody opens the room, never part of the shell.
+          "emulator/**",
           "**/workletProcessor-*.js",
           "**/sw-build-*.js",
           "**/*-vietnamese-*.woff2",

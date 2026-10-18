@@ -789,6 +789,8 @@ import { StoryStrip } from "@/components/stories/story-strip";
 import { emitStoriesRefresh, emitStoriesUpdate } from "@/lib/stories/events";
 import { openStoryComposer } from "@/lib/stories/ui-store";
 import { useStoriesEnabledFor } from "@/lib/stories/use-story-strip";
+import { EmulatorRoom } from "@/components/emulator/emulator-room";
+import { useEmulatorEnabledFor } from "@/lib/emulator/use-emulator-enabled";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -2762,6 +2764,14 @@ function MainAppContent({
   const storiesOnHere = useStoriesEnabledFor(
     selectedServerId ? { kind: "server", serverId: selectedServerId } : null,
   );
+  // The emulator room (`emulator_room`, per server, default off): its menu
+  // entry exists only when the flag answered yes for the open server.
+  const emulatorOnHere = useEmulatorEnabledFor(selectedServerId);
+  const [emulatorRoomOpen, setEmulatorRoomOpen] = useState(false);
+  useEffect(() => {
+    // The room belongs to the server it was opened from.
+    setEmulatorRoomOpen(false);
+  }, [selectedServerId]);
   const serversRef = useRef(servers);
   serversRef.current = servers;
   // The server rail's order (`PUT /api/servers/order`). `railOriginRef` is this
@@ -13453,6 +13463,11 @@ function MainAppContent({
               />
             ) : null
           }
+          onOpenEmulator={
+            selectedServer && emulatorOnHere
+              ? () => setEmulatorRoomOpen(true)
+              : undefined
+          }
           onPostStory={
             selectedServer && storiesOnHere && perms.can(Permission.POST_STORIES)
               ? () =>
@@ -14262,6 +14277,14 @@ function MainAppContent({
           setServerSettingsOpen(true);
         }}
       />
+
+      {selectedServerId && (
+        <EmulatorRoom
+          serverId={selectedServerId}
+          open={emulatorRoomOpen}
+          onClose={() => setEmulatorRoomOpen(false)}
+        />
+      )}
 
       <ForwardPicker
         open={forwardSource !== null}

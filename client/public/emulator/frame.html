@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <!--
+      THE EMULATOR RUNS INSIDE THIS POLICY, AND THE POLICY IS WHY A GAME FILE
+      CANNOT LEAVE THE BROWSER, not just a promise in our own code.
+
+      `connect-src 'self' blob: data:` is the whole network the page may use:
+      its own origin, where the emulator's own files are served from. `form-action
+      'none'` closes the other way out, and there is no `frame-src`, no `img-src`
+      to a remote host and no `script-src` to a CDN either. A script that tried
+      to post the picked file anywhere else would be refused by the browser.
+
+      `'wasm-unsafe-eval'` is for the cores (WebAssembly). The cores' glue code
+      builds functions at run time, which is why `'unsafe-eval'` is here too; it
+      is confined to this page, which loads nothing but our own files.
+
+      See docs/EMULATOR_ROOM.md and client/src/lib/emulator-frame.test.ts, which
+      reads this tag and fails if it is loosened.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' blob: 'wasm-unsafe-eval' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' blob: data:; worker-src 'self' blob:; form-action 'none'; base-uri 'none'"
+    />
+    <title>Emulator</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+      #game {
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <script src="/emulator/frame.js"></script>
+  </body>
+</html>

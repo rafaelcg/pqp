@@ -6380,5 +6380,19 @@
   "importDiscordMerge.error.forbidden": "You need the Manage server permission to import a layout here.",
   "importDiscordMerge.error.gone": "This community can't import a layout right now.",
   "serverSettings.audit.action.server.discord_import_merge": "added a Discord layout to the server",
-  "importDiscordMerge.error.openFailed": "Added, but could not open the new channels. Pick one from the list."
+  "importDiscordMerge.error.openFailed": "Added, but could not open the new channels. Pick one from the list.",
+  "emulator.menu": "Emulator room",
+  "emulator.title": "Emulator room",
+  "emulator.intro": "This is an emulator, nothing more. pqp does not provide games. Bring a game you own: pick the file from your computer and it plays right here.",
+  "emulator.privacy": "The file stays in your browser. It is never uploaded, never sent to pqp and never saved anywhere, and it is gone when you close this window.",
+  "emulator.rights": "Only open games you have the right to play, like one you own or a homebrew.",
+  "emulator.systems": "Works with NES, Game Boy, Game Boy Color and Game Boy Advance files (.nes, .gb, .gbc, .gba).",
+  "emulator.solo": "Just you for now: there are no shared rooms.",
+  "emulator.choose": "Choose a game file",
+  "emulator.chooseAnother": "Choose another file",
+  "emulator.close": "Close",
+  "emulator.frameTitle": "Emulator",
+  "emulator.problem.unsupported": "That file is not one we can open. Choose a .nes, .gb, .gbc or .gba file.",
+  "emulator.problem.tooBig": "That file is too big for these consoles.",
+  "emulator.problem.load": "The emulator could not start. Try again."
 }

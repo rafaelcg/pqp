@@ -54,6 +54,8 @@ const STATIC_PATHS: ReadonlySet<string> = new Set([
   "/share-diagnostic",
   "/share-diagnostic-game",
   "/share-audio-tone",
+  // The emulator room's frame page (`public/emulator/frame.html`).
+  "/emulator/frame",
 ]);
 
 export function isUnknownSpaPath(pathname: string): boolean {

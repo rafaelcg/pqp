@@ -6,6 +6,7 @@ import { FEATURE_FLAGS } from "./flags.js";
 import { shareConfigForServer } from "./share-config.js";
 import { voiceConfigForServer } from "./voice-config.js";
 import { forumConfigForServer } from "./forum-config.js";
+import { emulatorConfigForServer } from "./emulator-config.js";
 import { liveHlsConfig } from "../voice/hls-egress.js";
 
 /**
@@ -502,5 +503,51 @@ describe("the stories flags", () => {
     const service = readFileSync(path.join(serverSrc, "services/stories.ts"), "utf8");
     expect(service).toMatch(/isEnabled\("stories", \{ serverId \}\)/);
     expect(service).toMatch(/isEnabled\("stories_friends"\)/);
+  });
+});
+
+/**
+ * `emulator_room`: per server, off by default, one field. The server's half is
+ * only this answer; the pinned rule is that no route here ever sees a game file.
+ */
+describe("emulator_room against the emulator config the client reads", () => {
+  it("is per server, off by default, and served as `enabled`", () => {
+    const def = FEATURE_FLAGS.emulator_room;
+    expect(def.perServer).toBe(true);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/emulator/config?serverId= (enabled)");
+    expect(emulatorConfigForServer(null)).toEqual({ enabled: false });
+  });
+
+  it("the route is mounted, asked per server, and answers from the flag", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const route = /router\.get\("\/api\/emulator\/config"[\s\S]*?\);/.exec(api)?.[0];
+    expect(route, "GET /api/emulator/config is not mounted").toBeTruthy();
+    expect(route).toContain("emulatorConfigForServer(");
+    expect(route).toContain('searchParams.get("serverId")');
+    const lib = readFileSync(path.join(serverSrc, "lib/emulator-config.ts"), "utf8");
+    expect(lib).toMatch(/isEnabled\("emulator_room",\s*\{\s*serverId\s*\}\)/);
+  });
+
+  it("the server has no route that takes a game file", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    expect(api.match(/\/api\/emulator[^"`']*/g)).toEqual(["/api/emulator/config"]);
+  });
+
+  it("the client's EmulatorConfig names exactly the field the server sends, asked per server", () => {
+    const api = readFileSync(path.join(clientSrc, "lib/api.ts"), "utf8");
+    const body = /export interface EmulatorConfig \{([\s\S]*?)\n\}/.exec(api)?.[1];
+    expect(body, "client EmulatorConfig interface not found in lib/api.ts").toBeTruthy();
+    const declared = [...body!.matchAll(/^\s{2}([A-Za-z]\w*)\??:/gm)].map((match) => match[1]!);
+    expect(declared).toEqual(Object.keys(emulatorConfigForServer(null)));
+    expect(api).toMatch(/\/api\/emulator\/config\?serverId=/);
+  });
+
+  it("the dashboard has a note for it", () => {
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bemulator_room:\s*"/);
   });
 });
