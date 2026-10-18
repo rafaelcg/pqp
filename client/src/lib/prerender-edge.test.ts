@@ -53,7 +53,7 @@ describe("the prerendered hero at the edge", () => {
   });
 
   it("is replaced by the page's own no-JS body on the pages that have one", async () => {
-    for (const p of ["/tela", "/vs-discord", "/download", "/streamers", "/contact"]) {
+    for (const p of ["/tela", "/vs-discord", "/compare", "/compare/stoat", "/compare/teamspeak", "/compare/slack", "/download", "/streamers", "/contact"]) {
       const res = await onRequest(ctx(p));
       const body = await res.text();
       expect(body, p).not.toContain("pre-hero");

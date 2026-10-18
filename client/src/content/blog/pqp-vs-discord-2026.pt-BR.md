@@ -1,63 +1,62 @@
-pqp é uma alternativa de código aberto ao Discord: voz, texto, watch party e compartilhar tela com som, de graça. Ele não tem o catálogo de bots de terceiros do Discord ainda, mas resolve rápido o que mais gente procura numa alternativa: chamada que não cai, tela compartilhada com áudio de verdade, e um código que qualquer um pode ler.
+pqp é uma alternativa de código aberto ao Discord: voz, texto, watch party e compartilhar tela com som, de graça. Ele ainda não tem o ecossistema de bots de terceiros do Discord, mas cobre o que mais gente procura numa alternativa: tela compartilhada que leva o som, watch party e um código que qualquer um pode ler.
 
-Essa comparação é sobre o que roda hoje, não sobre uma promessa. Onde o pqp ainda não chega no Discord, está escrito aqui do mesmo jeito.
+Essa comparação é sobre o que roda hoje, não sobre uma promessa. Cada afirmação sobre o Discord abaixo tem um link de fonte e foi verificada em 16 de outubro de 2026. Onde o pqp fica atrás, está escrito do mesmo jeito. Se algo estiver desatualizado ou errado, escreve pra contato@pqp.gg e a gente corrige.
 
-## O que o pqp já faz melhor
+## O que o pqp faz
 
-**Tela compartilhada com som, sem plugin.** No Discord, compartilhar tela com áudio depende do sistema e às vezes falha silenciosamente. No pqp, compartilhando uma guia do Chrome ou Edge com a caixinha de áudio marcada, o som vai junto, e o app avisa antes de você entrar ao vivo se alguma coisa está errada (navegador sem suporte, mic mutado, câmera desligada). Veja o [guia de compartilhar tela com áudio](/blog/compartilhar-tela-com-audio) pra cada plataforma.
+**Tela compartilhada com som, no navegador.** No Chrome ou no Edge, compartilha uma aba e marca a opção de áudio da aba que o som vai junto; no Windows a tela inteira também leva o som. Tela inteira no Mac, Firefox e Safari não levam som: é limite do navegador. Veja o [guia de compartilhar tela com áudio](/blog/compartilhar-tela-com-audio) pra cada plataforma.
 
-**Watch party embutida.** Criar uma sessão pra assistir filme, jogo ou live junto com a galera é um botão dentro da call, não uma extensão de terceiros. Já rodou uma watch party de mais de 500 pessoas assistindo ao mesmo tempo no pqp, com mixer pra balancear microfone e áudio do filme, e qualidade que você escolhe (720p ou 1080p). Passo a passo em [como assistir um filme junto online](/blog/watch-party-assistir-filme-com-amigos).
+**Watch party.** Compartilha a tela e a galera assiste no navegador, no PC ou no celular, com o chat do lado. Está em acesso antecipado e é liberada servidor por servidor. Já rodou uma watch party com mais de cem pessoas no pqp. Passo a passo em [como assistir um filme junto online](/blog/watch-party-assistir-filme-com-amigos).
 
-**Código aberto de verdade.** pqp é licenciado sob AGPL-3.0. Isso não é um slogan: o código do cliente, do servidor e do app mobile está público, qualquer pessoa pode ler como uma feature funciona, reportar um bug direto no repositório, ou rodar a própria instância. O Discord é fechado.
+**Código aberto.** O pqp é licenciado sob AGPL-3.0 e o código é público. Dá pra ler como uma feature funciona, reportar um bug direto no repositório ou rodar a tua própria cópia. Rodar a própria cópia precisa hoje de Postgres e de uma conta Clerk tua; ainda não existe caminho sem Clerk.
 
-**Import de layout do Discord.** Se sua comunidade já existe no Discord, dá pra copiar a estrutura (categorias, canais, cargos) colando um link de Guild Template ao criar uma comunidade no pqp. Não copia mensagens nem membros, porque isso não está no template. Detalhes em [como migrar seu servidor do Discord pro pqp](/blog/migrar-servidor-discord-para-pqp).
+**Importar o layout do Discord.** Se a tua comunidade já existe no Discord, dá pra copiar a estrutura (categorias, canais, cargos e as permissões principais) colando um link de template discord.new ao criar uma comunidade no pqp. Não copia mensagens, membros nem emoji customizado. Detalhes em [como migrar teu servidor do Discord pro pqp](/blog/migrar-servidor-discord-para-pqp).
 
-## Onde o pqp e o Discord empatam
+## Recurso por recurso
+
+Verificado em 16 de outubro de 2026. Cada linha do Discord tem o link de onde veio; onde não deu pra verificar, a tabela diz.
 
 | Recurso | pqp | Discord |
 |---|---|---|
-| Voz e texto em servidores | Sim | Sim |
-| Cargos e permissões por canal | Sim | Sim |
-| DM e lista de amigos | Sim | Sim |
-| Compartilhar tela | Sim, com som | Sim, som às vezes falha |
-| Watch party embutida | Sim | Não (precisa de extensão) |
-| App mobile nativo | Android nativo, iPhone em beta | Sim, maduro |
-| App de desktop | Sim (Electron) | Sim |
-| Código aberto | Sim (AGPL-3.0) | Não |
-| Catálogo de bots de terceiros | Menor, mais novo | Enorme, maduro |
-| Diretório público de servidores | Comunidades com endereço próprio | Milhões de servidores |
+| Preço | De graça, sem plano pago | Grátis pra usar; streaming em HD faz parte do Nitro, que é pago ([discord.com/nitro](https://discord.com/nitro)) |
+| Código aberto | Sim, AGPL-3.0 | Não: os termos licenciam o software só pra acessar o serviço ([discord.com/terms](https://discord.com/terms)) |
+| Rodar na tua máquina | Sim, com Postgres e uma conta Clerk tua | Não encontramos versão auto-hospedada ([discord.com/terms](https://discord.com/terms)) |
+| Compartilhar tela | Sim, até 1080p; a taxa de quadros se adapta à conexão | Sim, tela inteira ou um aplicativo ([Wikipedia](https://en.wikipedia.org/wiki/Discord)); limites exatos do plano grátis não verificados |
+| Som na tela compartilhada | Som da aba no Chrome e no Edge; tela inteira no Windows | Não verificado (a central de ajuda do Discord não abriu pra gente) |
+| Watch party | Sim, em acesso antecipado, qualquer aba que dê pra compartilhar | Watch Together, uma Atividade pra vídeos do YouTube ([ajuda do Discord](https://support-apps.discord.com/hc/en-us/articles/26502500234519-Watch-Together)) |
+| Apps | Navegador, desktop, Android; iPhone em beta | Windows, macOS, Linux, iOS, Android, consoles e navegador ([discord.com/download](https://discord.com/download)) |
+| Bots e integrações | Pequeno: webhook de entrada compatível com o do Discord, webhook de saída, comandos nativos | App Directory público ([discord.com/application-directory](https://discord.com/application-directory)) |
 
-## O que o Discord ainda faz que o pqp não faz
+## Onde o Discord está na frente
 
-Um jeito honesto de olhar pra isso: o Discord tem mais de dez anos de vantagem em duas coisas específicas. A primeira é o **ecossistema de bots de terceiros**: moderação automática avançada, música, integrações com todo tipo de jogo, feitas por milhares de desenvolvedores fora da empresa. A segunda é o **tamanho do diretório público**: milhões de servidores catalogados e buscáveis.
+O Discord tem um diretório de apps e bots bem maior, apps em mais plataformas (consoles inclusive) e anos de estrada: está no ar desde maio de 2015 ([Wikipedia](https://en.wikipedia.org/wiki/Discord)). No pqp ainda não tem loja de bots, o app de iPhone está em beta e quem faz são dois irmãos.
 
-O pqp não finge que já alcançou isso. O que ele tem em troca é um produto mais novo, sem o peso de anos de decisões legadas, com quem responde rápido quando um bug aparece.
+O pqp não finge que já alcançou isso. O que ele tem em troca é um produto mais novo, com gente que responde quando um bug aparece.
 
-## Quando faz sentido trocar
+## Quando vale a pena trocar
 
-Trocar faz mais sentido se:
+Vale testar se:
 
-- Sua prioridade é **watch party e tela compartilhada com som** funcionando sem gambiarra.
-- Você quer um produto **de código aberto**, seja por princípio ou porque quer rodar a própria instância.
-- Sua comunidade é pequena ou média e não depende de um bot específico do Discord que não existe em outro lugar.
-- Você já testou o Discord e a voz trava, ou a tela some, ou você simplesmente quer testar outra coisa.
+- A tua prioridade é **tela compartilhada com som e watch party** no navegador.
+- Tu quer um produto **de código aberto**, por princípio ou pra rodar a tua própria cópia.
+- A tua comunidade é pequena ou média e não depende de um bot específico do Discord sem equivalente em outro lugar.
 
-Não faz tanto sentido ainda se sua comunidade depende de um bot muito específico do Discord sem equivalente, ou se o alcance de um diretório gigante de servidores é o ponto principal.
+Faz menos sentido hoje se a tua comunidade depende de um bot muito específico do Discord, ou se tu precisa de apps polidos em todas as plataformas. Dá pra ficar com os dois: nada do que tu faz no pqp mexe no teu Discord.
 
 ## Perguntas frequentes
 
-**pqp é de graça?**
-Sim. Voz, texto, watch party e criar servidor não custam nada, e o código é aberto (AGPL-3.0), dá pra ler, rodar e até hospedar você mesmo.
+**O pqp é de graça?**
+Sim. Voz, texto, watch party e criar servidor não custam nada, e o código é aberto (AGPL-3.0). Dá pra usar o serviço hospedado no pqp.gg ou rodar a tua cópia, que hoje precisa de Postgres e de uma conta Clerk tua.
 
 **O pqp é só um clone do Discord?**
-A base é parecida de propósito (servidores, canais, cargos), porque é isso que resolve o problema. O que muda é o que veio depois: watch party com mixer e qualidade ajustável embutidos, screen share com áudio sem plugin, código aberto, e um time que responde rápido.
+A base é parecida de propósito (servidores, canais, cargos), porque é isso que resolve o problema. O que muda é o que veio depois: watch party, tela compartilhada com som no navegador e código aberto.
 
 **Dá pra importar meu servidor do Discord?**
-Dá pra copiar o layout: categorias, canais e cargos de um Discord Guild Template, colando o link ao criar uma comunidade no pqp. Não copia membros, mensagens nem emoji customizado, porque isso não está no template.
+Dá pra copiar o layout: categorias, canais e as permissões principais de um link de template discord.new, colando ao criar uma comunidade no pqp. Não copia membros, mensagens nem emoji customizado.
 
 **O que o Discord ainda faz que o pqp não faz?**
-Um catálogo de bots de terceiros do tamanho do Discord, canais de fórum, e um diretório público de milhões de servidores. O pqp tem comunidades públicas e o próprio import de layout do Discord, mas o ecossistema de bots de terceiros ainda é menor, porque é mais novo.
+Um diretório de apps e bots bem maior, apps em mais plataformas e anos de estrada. O pqp tem webhooks e comandos nativos, mas ainda não tem loja de bots.
 
-## Testa você mesmo
+## Testa tu mesmo
 
-A troca não custa nada e não exige apagar o Discord. Cria uma comunidade no pqp, chama três ou quatro pessoas pra uma call, tenta compartilhar a tela com som e uma watch party rápida. Se funcionar melhor que o que você tem hoje, [crie sua comunidade](/garanta) e mande o link pra galera.
+Testar não custa nada e não exige apagar o Discord. Cria uma comunidade no pqp, chama três ou quatro pessoas pra uma call e tenta compartilhar a tela com som. Se funcionar melhor que o que tu tem hoje, [cria a tua comunidade](/garanta) e manda o link pra galera.

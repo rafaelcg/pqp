@@ -3,18 +3,18 @@
     <string name="app_name">pqp</string>
 
     <!-- Entrar -->
-    <string name="sign_in_title">Fale com a sua gente</string>
+    <string name="sign_in_title">Fala com a tua gente</string>
     <string name="sign_in_subtitle">Voz e texto que não atrapalham.</string>
     <string name="sign_in_dev_action">Continuar com uma conta local de desenvolvimento</string>
     <string name="sign_in_dev_note">Só em builds de debug. O servidor precisa estar rodando com DEV_AUTH_BYPASS ligado.</string>
     <string name="sign_in_unavailable_title">Este app não consegue fazer login</string>
-    <string name="sign_in_unavailable_body">Ele foi publicado sem a chave que precisa para falar com o serviço de login. Não tem nada que dê para fazer por aqui. Avise a gente que publicamos uma versão corrigida.</string>
+    <string name="sign_in_unavailable_body">Ele foi publicado sem a chave que precisa para falar com o serviço de login. Não tem nada que dê para fazer por aqui. Avisa a gente que publicamos uma versão corrigida.</string>
     <string name="sign_out">Sair</string>
 
     <!-- Verificação de idade -->
     <string name="age_gate_eyebrow">Uma vez só</string>
-    <string name="age_gate_title">Sua data de nascimento</string>
-    <string name="age_gate_body">O pqp é pra maiores de %1$d. A gente pergunta uma vez e acredita em você.</string>
+    <string name="age_gate_title">Tua data de nascimento</string>
+    <string name="age_gate_body">O pqp é pra maiores de %1$d. A gente pergunta uma vez e acredita em ti.</string>
     <string name="age_gate_day">Dia</string>
     <string name="age_gate_month">Mês</string>
     <string name="age_gate_year">Ano</string>
@@ -23,12 +23,12 @@
     <string name="age_gate_warning">Confere antes de continuar: essa resposta não muda depois, e uma data de menor de %1$d encerra a conta na hora.</string>
     <string name="age_gate_confirm">Continuar</string>
     <string name="age_gate_saving">Salvando…</string>
-    <string name="age_gate_error_bad_date">Não conseguimos ler esta data. Confira o dia, o mês e o ano.</string>
-    <string name="age_gate_error_save">Não foi possível salvar. Verifique a sua conexão e tente de novo.</string>
+    <string name="age_gate_error_bad_date">Não conseguimos ler esta data. Confere o dia, o mês e o ano.</string>
+    <string name="age_gate_error_save">Não foi possível salvar. Verifica a tua conexão e tenta de novo.</string>
 
     <!-- Servidores -->
     <string name="servers_title">Servidores</string>
-    <string name="servers_empty">Você ainda não está em nenhum servidor.</string>
+    <string name="servers_empty">Tu ainda não tá em nenhum servidor.</string>
     <string name="servers_create">Novo servidor</string>
     <string name="servers_create_name">Nome do servidor</string>
     <string name="servers_create_confirm">Criar</string>
@@ -37,12 +37,12 @@
     <string name="server_move_down">Mover pra baixo</string>
     <string name="server_leave">Sair da comunidade</string>
     <string name="server_leave_title">Sair de %1$s?</string>
-    <string name="server_leave_body">Você deixa de ver os canais e as mensagens de lá. Dá para voltar depois com um convite novo.</string>
+    <string name="server_leave_body">Tu deixa de ver os canais e as mensagens de lá. Dá pra voltar depois com um convite novo.</string>
     <string name="server_leave_confirm">Sair</string>
     <string name="server_delete">Excluir comunidade</string>
     <string name="server_delete_title">Excluir %1$s?</string>
     <string name="server_delete_body">Não tem como desfazer. Os canais, todas as mensagens neles e a participação de todo mundo vão junto.</string>
-    <string name="server_delete_confirm_prompt">Digite o nome da comunidade para confirmar</string>
+    <string name="server_delete_confirm_prompt">Digita o nome da comunidade para confirmar</string>
     <string name="server_delete_confirm">Excluir para sempre</string>
 
     <string name="role_owner">Dono</string>
@@ -55,7 +55,7 @@
     <!-- Conversa -->
     <string name="chat_composer_hint">Mensagem</string>
     <string name="chat_send">Enviar</string>
-    <string name="chat_empty">Nada aqui ainda. Diga alguma coisa.</string>
+    <string name="chat_empty">Nada aqui ainda. Diz alguma coisa.</string>
     <string name="chat_load_failed">Não foi possível carregar esta conversa. %1$s</string>
     <string name="chat_edited">editada</string>
     <string name="chat_typing_one">%1$s está digitando…</string>
@@ -71,14 +71,15 @@
     <string name="chat_attachment_unsupported">Este servidor não aceita esse tipo de arquivo.</string>
     <string name="chat_attachment_too_many">Uma mensagem leva no máximo %1$d arquivos.</string>
     <string name="chat_attachment_unreadable">Não foi possível ler esse arquivo.</string>
-    <string name="chat_reject_rate_limited">Você tá mandando rápido demais</string>
-    <string name="chat_reject_rate_limited_wait">Você tá mandando rápido demais. Tenta de novo em %1$ds.</string>
-    <string name="chat_reject_no_access">Você não pode mandar mensagem neste canal</string>
-    <string name="chat_reject_cannot_send">Você não tem permissão pra mandar aqui</string>
+    <string name="chat_reject_rate_limited">Tu tá mandando rápido demais</string>
+    <string name="chat_reject_rate_limited_wait">Tu tá mandando rápido demais. Tenta de novo em %1$ds.</string>
+    <string name="chat_reject_no_access">Tu não pode mandar mensagem neste canal</string>
+    <string name="chat_reject_cannot_send">Tu não tem permissão pra mandar aqui</string>
+    <string name="chat_read_only">Tu pode ler aqui, mas não pode mandar mensagens.</string>
     <string name="chat_reject_undeliverable">Essa mensagem não foi entregue</string>
     <string name="chat_reject_slow_mode">Slow mode tá ligado.</string>
     <string name="chat_reject_automod">O AutoMod bloqueou essa mensagem.</string>
-    <string name="chat_reject_database_unavailable">Serviço temporariamente indisponível. Tente de novo em instantes.</string>
+    <string name="chat_reject_database_unavailable">Serviço temporariamente indisponível. Tenta de novo em instantes.</string>
     <string name="chat_reject_locked">Esse post tá fechado. Só a staff responde aqui.</string>
     <string name="chat_reject_generic">Falha ao enviar</string>
     <string name="chat_slow_mode_wait">Slow mode. Espera %1$ds pra mandar de novo.</string>
@@ -223,11 +224,11 @@
     <string name="connection_doctor_check_api">Alcançar o servidor do pqp</string>
     <string name="connection_doctor_check_token">Pegar o token da sessão</string>
     <string name="connection_doctor_check_socket">Conexão em tempo real</string>
-    <string name="connection_doctor_check_stun">Descobrir seu endereço público (STUN)</string>
+    <string name="connection_doctor_check_stun">Descobrir teu endereço público (STUN)</string>
     <string name="connection_doctor_check_turn">Alcançar o relay das calls (TURN)</string>
     <string name="connection_doctor_advice_none">Tudo responde. Se uma call ainda não conecta, o problema pode estar do outro lado; pede pra pessoa rodar isso também.</string>
     <string name="connection_doctor_advice_api_unreachable">O servidor do pqp não é alcançado de jeito nenhum. Confere a internet, VPN ou firewall, e testa no 4G pra comparar. Se outros sites funcionam, um filtro de DNS pode estar bloqueando o pqp.gg.</string>
-    <string name="connection_doctor_advice_token_stuck">Seu login nunca responde. Algo neste aparelho ou nesta rede está bloqueando o serviço de login (bloqueador de anúncio, filtro de DNS ou VPN). Pausa ele pro pqp.gg, ou tenta outra rede.</string>
+    <string name="connection_doctor_advice_token_stuck">Teu login nunca responde. Algo neste aparelho ou nesta rede está bloqueando o serviço de login (bloqueador de anúncio, filtro de DNS ou VPN). Pausa ele pro pqp.gg, ou tenta outra rede.</string>
     <string name="connection_doctor_advice_sign_in_again">O servidor não aceita mais esta sessão. Sai e entra de novo; isso renova em todos os aparelhos.</string>
     <string name="connection_doctor_advice_socket_blocked">As páginas carregam, mas a conexão ao vivo está bloqueada. Redes de empresa, escola e algumas VPNs fazem isso. Tenta no 4G ou em outra rede.</string>
     <string name="connection_doctor_advice_relay_blocked">O chat funciona, mas esta rede não dá caminho pra call. Tenta outra rede, ou uma VPN se for rede de empresa.</string>
@@ -244,17 +245,17 @@
     <string name="voice_room_full">Este canal está cheio.</string>
     <string name="voice_mic_denied">O pqp precisa do microfone para entrar na chamada.</string>
     <string name="voice_notification_channel">Chamada em andamento</string>
-    <string name="voice_notification_channel_description">Aparece enquanto você está em um canal de voz, e é o que mantém a chamada viva com o app em segundo plano.</string>
+    <string name="voice_notification_channel_description">Aparece enquanto tu tá em um canal de voz, e é o que mantém a chamada viva com o app em segundo plano.</string>
     <string name="voice_notification_title">Na chamada</string>
     <string name="voice_notification_hang_up">Desligar</string>
     <string name="telecom_channel_calls">Chamadas recebidas</string>
     <string name="telecom_channel_calls_description">O cartão em tela cheia mostrado para uma chamada recebida enquanto o pqp está aberto.</string>
     <string name="voice_transport_unsupported">Esta chamada usa um transporte que este app ainda não sabe usar.</string>
-    <string name="voice_backend_unreachable">Não foi possível conectar ao servidor de voz desta chamada. Verifique sua conexão e tente de novo.</string>
-    <string name="voice_token_refused">O servidor recusou seu lugar nesta chamada de voz. Tente entrar de novo.</string>
-    <string name="voice_transport_mismatch">Esta chamada mudou de tipo de conexão. Saia e entre de novo.</string>
-    <string name="voice_backend_timeout">O servidor de voz demorou demais para responder. Tente entrar de novo.</string>
-    <string name="voice_join_refused">Você não pode entrar nesta call.</string>
+    <string name="voice_backend_unreachable">Não foi possível conectar ao servidor de voz desta chamada. Verifica tua conexão e tenta de novo.</string>
+    <string name="voice_token_refused">O servidor recusou teu lugar nesta chamada de voz. Tenta entrar de novo.</string>
+    <string name="voice_transport_mismatch">Esta chamada mudou de tipo de conexão. Sai e entra de novo.</string>
+    <string name="voice_backend_timeout">O servidor de voz demorou demais para responder. Tenta entrar de novo.</string>
+    <string name="voice_join_refused">Tu não pode entrar nesta call.</string>
     <string name="voice_join_timeout">Não deu para entrar na call. Tenta de novo.</string>
     <!--
       Uma watch party é uma transmissão, não uma chamada: as mesmas oito
@@ -262,16 +263,16 @@
       uma chamada falha. Ver o comentário de `voiceRefusalStringRes`.
     -->
     <string name="voice_transport_unsupported_watch_party">Esta transmissão usa um transporte que este app ainda não sabe usar.</string>
-    <string name="voice_backend_unreachable_watch_party">Não foi possível conectar à transmissão. Verifique sua conexão e tente de novo.</string>
-    <string name="voice_token_refused_watch_party">O servidor recusou seu lugar nesta transmissão. Tente de novo.</string>
-    <string name="voice_transport_mismatch_watch_party">Esta transmissão mudou de tipo de conexão. Saia e entre de novo.</string>
-    <string name="voice_backend_timeout_watch_party">A transmissão demorou demais para responder. Tente de novo.</string>
-    <string name="voice_join_refused_watch_party">Você não pode entrar nesta transmissão.</string>
+    <string name="voice_backend_unreachable_watch_party">Não foi possível conectar à transmissão. Verifica tua conexão e tenta de novo.</string>
+    <string name="voice_token_refused_watch_party">O servidor recusou teu lugar nesta transmissão. Tenta de novo.</string>
+    <string name="voice_transport_mismatch_watch_party">Esta transmissão mudou de tipo de conexão. Sai e entra de novo.</string>
+    <string name="voice_backend_timeout_watch_party">A transmissão demorou demais para responder. Tenta de novo.</string>
+    <string name="voice_join_refused_watch_party">Tu não pode entrar nesta transmissão.</string>
     <string name="voice_join_timeout_watch_party">Não deu para entrar na transmissão. Tenta de novo.</string>
     <string name="voice_screen_share_denied_watch_party">Esta transmissão já tem todas as telas que consegue carregar.</string>
     <string name="voice_participants">%1$d na chamada</string>
     <string name="voice_peer_unreachable">Não foi possível alcançar todo mundo na chamada</string>
-    <string name="voice_notification_sharing">Compartilhando sua tela</string>
+    <string name="voice_notification_sharing">Compartilhando tua tela</string>
     <string name="voice_share_screen">Compartilhar tela</string>
     <string name="voice_stop_sharing">Parar de compartilhar</string>
     <string name="voice_share_hint_audio">Com o som do jogo</string>
@@ -291,15 +292,15 @@
     <string name="voice_server_muted_you">Um moderador te mutou</string>
     <string name="voice_server_muted_peer">Um moderador mutou %1$s</string>
     <string name="voice_listen_only">Só ouvindo</string>
-    <string name="voice_listen_only_locked">Só ouvindo. Você não tem permissão para falar neste canal.</string>
-    <string name="voice_speak_granted">Agora você pode falar. Ligue o microfone quando quiser.</string>
+    <string name="voice_listen_only_locked">Só ouvindo. Tu não tem permissão pra falar neste canal.</string>
+    <string name="voice_speak_granted">Agora tu pode falar. Liga o microfone quando quiser.</string>
     <string name="voice_promoted_cameras">Essa call virou uma sala grande pra caber mais câmeras</string>
     <string name="voice_promoted_screens">Essa call virou uma sala grande pra caber mais telas</string>
     <string name="voice_promoted_room">Essa call virou uma sala grande pra caber mais gente</string>
 
     <!-- Notificações -->
     <string name="push_channel_messages">Menções e mensagens</string>
-    <string name="push_channel_messages_description">Quando alguém menciona você, responde você ou manda uma mensagem direta com o app fechado.</string>
+    <string name="push_channel_messages_description">Quando alguém te menciona, te responde ou te manda uma mensagem direta com o app fechado.</string>
     <string name="push_fallback_body">Nova atividade</string>
     <string name="push_settings_title">Notificações</string>
     <string name="push_settings_summary">Avisar sobre menções, respostas e mensagens diretas com o app fechado.</string>
@@ -309,13 +310,13 @@
     <string name="push_settings_working">Registrando…</string>
     <string name="push_settings_play_services">Este celular está sem o Google Play Services (ou ele está desativado), então as notificações não chegam.</string>
     <string name="push_settings_offline">Não deu para falar com o pqp para ativar as notificações. Tentando de novo.</string>
-    <string name="push_settings_rejected">O pqp recusou o registro deste celular. Desative e ative as notificações de novo.</string>
+    <string name="push_settings_rejected">O pqp recusou o registro deste celular. Desativa e ativa as notificações de novo.</string>
     <string name="push_prompt_title">Ativar notificações?</string>
-    <string name="push_prompt_body">Receba um aviso quando alguém mencionar você, responder ou mandar uma DM com o pqp fechado. Dá para mudar quando quiser na aba Você.</string>
+    <string name="push_prompt_body">Recebe um aviso quando alguém te mencionar, responder ou mandar uma DM com o pqp fechado. Dá pra mudar quando quiser na aba Tu.</string>
     <string name="push_prompt_confirm">Ativar</string>
     <string name="push_prompt_dismiss">Agora não</string>
 
-    <!-- Você -->
+    <!-- Tu -->
     <string name="you_title">Tu</string>
     <string name="you_backend">Servidor</string>
     <string name="you_version">Versão</string>
@@ -324,7 +325,7 @@
 
     <!-- Blocked users dialog -->
     <string name="blocked_users_title">Pessoas bloqueadas</string>
-    <string name="blocked_users_empty">Você não bloqueou ninguém.</string>
+    <string name="blocked_users_empty">Tu não bloqueou ninguém.</string>
     <string name="blocked_users_unblock">Desbloquear</string>
 
     <!-- Genéricos -->
@@ -336,7 +337,7 @@
 
     <!-- Convites -->
     <string name="invite_people">Convidar pessoas</string>
-    <string name="invite_sheet_body">Qualquer pessoa com o link entra em %1$s até ele expirar ou você revogar.</string>
+    <string name="invite_sheet_body">Qualquer pessoa com o link entra em %1$s até ele expirar ou tu revogar.</string>
     <string name="invite_create_action">Criar link de convite</string>
     <string name="invite_none">Nenhum convite ainda. Cria um pra compartilhar esta comunidade.</string>
     <string name="invite_copy">Copiar link</string>
@@ -364,7 +365,7 @@
 
     <!-- Conversas -->
     <string name="dms_title">Mensagens</string>
-    <string name="dms_empty">Nenhuma conversa ainda. Comece uma e ela aparece aqui.</string>
+    <string name="dms_empty">Nenhuma conversa ainda. Começa uma e ela aparece aqui.</string>
     <string name="dms_new">Nova mensagem</string>
     <string name="dms_no_messages">Sem mensagens ainda</string>
     <string name="dms_empty_conversation">Conversa vazia</string>
@@ -378,15 +379,15 @@
     </plurals>
     <string name="dms_close">Fechar</string>
     <string name="dms_close_prompt">Fechar %1$s?</string>
-    <string name="dms_close_explanation">Sai só da sua lista. Nada é apagado, e uma conversa entre duas pessoas volta com o histórico assim que qualquer um dos dois falar.</string>
+    <string name="dms_close_explanation">Sai só da tua lista. Nada é apagado, e uma conversa entre duas pessoas volta com o histórico assim que qualquer um dos dois falar.</string>
     <string name="dms_group_limit">Uma conversa em grupo vai até dez pessoas.</string>
-    <string name="dms_new_no_friends">Nenhum amigo ainda. Procure pelo identificador completo, como nome#1234, ou adicione alguém em Amigos primeiro.</string>
+    <string name="dms_new_no_friends">Nenhum amigo ainda. Procura pelo identificador completo, como nome#1234, ou adiciona alguém em Amigos primeiro.</string>
     <string name="dms_new_start_one">Enviar mensagem para %1$s</string>
     <string name="dms_new_start_group">Criar um grupo de %1$d</string>
 
     <!-- Encontrar pessoas -->
     <string name="people_search_hint">Buscar pelo identificador</string>
-    <string name="people_search_no_matches">Nada encontrado. Tente o identificador completo, como nome#1234.</string>
+    <string name="people_search_no_matches">Nada encontrado. Tenta o identificador completo, como nome#1234.</string>
     <string name="people_search_no_tag">Ninguém com essa tag.</string>
 
     <!-- Amigos -->
@@ -397,10 +398,10 @@
     <string name="friends_add">Adicionar amigo</string>
     <string name="friends_add_hint">Busque pelo identificador completo, como nome#1234.</string>
     <string name="friends_add_action">Adicionar</string>
-    <string name="friends_empty_online">Ninguém por aqui. Seus amigos aparecem aqui quando ficarem online.</string>
-    <string name="friends_empty_all">Nenhum amigo ainda. Adicione alguém pelo identificador completo, como nome#1234.</string>
-    <string name="friends_empty_pending">Nada pendente. Os pedidos esperando por você, e os que você enviou, chegam aqui.</string>
-    <string name="friends_section_incoming">Esperando por você</string>
+    <string name="friends_empty_online">Ninguém por aqui. Teus amigos aparecem aqui quando ficarem online.</string>
+    <string name="friends_empty_all">Nenhum amigo ainda. Adiciona alguém pelo identificador completo, como nome#1234.</string>
+    <string name="friends_empty_pending">Nada pendente. Os pedidos esperando por ti, e os que tu enviou, chegam aqui.</string>
+    <string name="friends_section_incoming">Esperando por ti</string>
     <string name="friends_section_outgoing">Enviados</string>
     <string name="friends_accept">Aceitar</string>
     <string name="friends_decline">Recusar</string>
@@ -434,38 +435,38 @@
     <string name="server_removed_banned">Tu foi banido de %1$s.</string>
     <string name="server_removed_deleted">A comunidade %1$s foi apagada e não existe mais pra ninguém.</string>
 
-    <!-- Seus dados. Os dois direitos que a política de privacidade promete, e o
+    <!-- Teus dados. Os dois direitos que a política de privacidade promete, e o
          segundo é exigido pela Play de qualquer app que deixa criar conta. -->
-    <string name="you_data_title">Seus dados</string>
+    <string name="you_data_title">Teus dados</string>
     <string name="you_data_export">Baixar meus dados</string>
     <string name="you_data_exporting">Preparando\u2026</string>
-    <string name="you_data_export_note">Inclui seu perfil, suas configurações, todas as mensagens que você escreveu, as comunidades das quais você faz parte e quem você bloqueou. Não inclui mensagens escritas por outras pessoas, nem o lado delas nas suas conversas diretas. São palavras delas, não dados seus, e você continua podendo lê-las aqui no app.</string>
+    <string name="you_data_export_note">Inclui teu perfil, tuas configurações, todas as mensagens que tu escreveu, as comunidades das quais tu faz parte e quem tu bloqueou. Não inclui mensagens escritas por outras pessoas, nem o lado delas nas tuas conversas diretas. São palavras delas, não dados teus, e tu continua podendo lê-las aqui no app.</string>
     <string name="you_data_export_saved">Salvo.</string>
-    <string name="you_data_export_failed">Não foi possível gerar sua exportação.</string>
+    <string name="you_data_export_failed">Não foi possível gerar tua exportação.</string>
     <string name="you_data_delete">Excluir minha conta</string>
     <string name="you_data_delete_note">Permanente. Não há como desfazer e não existe backup para restaurar.</string>
 
-    <string name="delete_title">Excluir sua conta</string>
-    <string name="delete_intro">Isso não pode ser desfeito. Não guardamos nenhum backup que possa restaurar você, e ninguém no pqp consegue trazer sua conta de volta.</string>
+    <string name="delete_title">Excluir tua conta</string>
+    <string name="delete_intro">Isso não pode ser desfeito. Não guardamos nenhum backup que possa te restaurar, e ninguém no pqp consegue trazer tua conta de volta.</string>
     <string name="delete_removed_title">O que é excluído</string>
-    <string name="delete_removed_profile">Seu perfil, seu identificador, sua foto e suas configurações.</string>
-    <string name="delete_removed_messages">Todas as mensagens que você escreveu, em qualquer lugar, inclusive nas conversas diretas. As outras pessoas vão ver lacunas onde estavam suas mensagens.</string>
-    <string name="delete_removed_files">Seus arquivos e imagens, e as reações que você deixou.</string>
-    <string name="delete_removed_memberships">Suas participações, suas conversas e a lista de pessoas que você bloqueou.</string>
-    <string name="delete_removed_signin">Seu acesso. Você não vai mais conseguir entrar.</string>
-    <string name="delete_removed_solo_servers">Qualquer comunidade que só você tenha, sem mais ninguém dentro.</string>
+    <string name="delete_removed_profile">Teu perfil, teu identificador, tua foto e tuas configurações.</string>
+    <string name="delete_removed_messages">Todas as mensagens que tu escreveu, em qualquer lugar, inclusive nas conversas diretas. As outras pessoas vão ver lacunas onde estavam tuas mensagens.</string>
+    <string name="delete_removed_files">Teus arquivos e imagens, e as reações que tu deixou.</string>
+    <string name="delete_removed_memberships">Tuas participações, tuas conversas e a lista de pessoas que tu bloqueou.</string>
+    <string name="delete_removed_signin">Teu acesso. Tu não vai mais conseguir entrar.</string>
+    <string name="delete_removed_solo_servers">Qualquer comunidade que só tu tenha, sem mais ninguém dentro.</string>
     <string name="delete_kept_title">O que fica, e por quê</string>
-    <string name="delete_kept_audit">Registros de moderação de ações que você tomou em comunidades de outras pessoas, sem o seu nome. Excluir uma conta não pode apagar o registro de como ela foi usada para moderar outra pessoa.</string>
-    <string name="delete_kept_bans">Banimentos que você aplicou. Removê-los deixaria todo mundo que você baniu voltar a comunidades com as quais você não tem mais nenhuma relação.</string>
-    <string name="delete_kept_reports">Denúncias que outras pessoas fizeram sobre você, sem o seu nome. Não podemos deixar que excluir a conta sirva para limpar o próprio histórico.</string>
+    <string name="delete_kept_audit">Registros de moderação de ações que tu tomou em comunidades de outras pessoas, sem o teu nome. Excluir uma conta não pode apagar o registro de como ela foi usada para moderar outra pessoa.</string>
+    <string name="delete_kept_bans">Banimentos que tu aplicou. Removê-los deixaria todo mundo que tu baniu voltar a comunidades com as quais tu não tem mais nenhuma relação.</string>
+    <string name="delete_kept_reports">Denúncias que outras pessoas fizeram sobre ti, sem o teu nome. Não podemos deixar que excluir a conta sirva para limpar o próprio histórico.</string>
     <string name="delete_kept_note">Tudo isso é descartado no ritmo de cada um. A política de privacidade explica em detalhe.</string>
-    <string name="delete_blocking_title">Faça uma destas primeiro, em cada comunidade sua</string>
-    <string name="delete_blocking_note">Ainda tem gente nessas comunidades, então não vamos excluí-las por baixo delas. Volte para a lista de servidores, abra o menu da comunidade e exclua por ali, ou passe a comunidade para outra pessoa pelo app da web ou do computador.</string>
+    <string name="delete_blocking_title">Faz uma destas primeiro, em cada comunidade tua</string>
+    <string name="delete_blocking_note">Ainda tem gente nessas comunidades, então não vamos excluí-las por baixo delas. Volta para a lista de servidores, abre o menu da comunidade e exclui por ali, ou passa a comunidade para outra pessoa pelo app da web ou do computador.</string>
     <plurals name="delete_blocking_members">
         <item quantity="one">mais %1$d pessoa</item>
         <item quantity="other">mais %1$d pessoas</item>
     </plurals>
-    <string name="delete_confirm_title">Digite seu identificador para confirmar</string>
+    <string name="delete_confirm_title">Digita teu identificador para confirmar</string>
     <string name="delete_keep">Manter minha conta</string>
     <string name="delete_confirm">Excluir para sempre</string>
     <string name="delete_working">Excluindo\u2026</string>
@@ -479,7 +480,7 @@
     <string name="report_subject_message">Denunciar uma mensagem de %1$s</string>
     <string name="report_subject_user">Denunciar %1$s</string>
     <string name="report_subject_community">Denunciar a comunidade %1$s</string>
-    <string name="report_body_message">Quem modera vai ver uma cópia desta mensagem, quem enviou e o que você escrever abaixo.</string>
+    <string name="report_body_message">Quem modera vai ver uma cópia desta mensagem, quem enviou e o que tu escrever abaixo.</string>
     <string name="report_body_user">Quem modera vai ver quem tu denunciou e o que tu escrever abaixo. Nenhuma mensagem vai junto.</string>
     <string name="report_body_community">Isso vai para quem cuida do pqp, não para o dono da comunidade. Conta o que tem de errado.</string>
     <string name="report_reason_prompt">O que aconteceu?</string>
@@ -496,7 +497,7 @@
     <string name="report_details_placeholder">Contexto, links, ou o que aconteceu antes disso.</string>
     <string name="report_send">Enviar denúncia</string>
     <string name="report_sending">Enviando\u2026</string>
-    <string name="report_failed">Não deu para enviar esta denúncia. Tente de novo daqui a pouco.</string>
+    <string name="report_failed">Não deu para enviar esta denúncia. Tenta de novo daqui a pouco.</string>
     <string name="report_sent_title">Denúncia enviada</string>
     <string name="report_sent_body">Quem modera vai olhar. Teu nome não aparece pra quem tu denunciou.</string>
     <string name="report_done">Pronto</string>
@@ -547,24 +548,24 @@
 
     <!-- Watch party hosting -->
     <string name="watch_party_host_create">Criar watch party</string>
-    <string name="watch_party_host_create_title">Dê um nome pra sua watch party</string>
+    <string name="watch_party_host_create_title">Dá um nome pra tua watch party</string>
     <string name="watch_party_host_create_name_placeholder">Sessão de sábado</string>
     <string name="watch_party_host_create_submit">Criar</string>
     <string name="watch_party_host_go_live">Ir ao vivo</string>
     <string name="watch_party_host_low_latency">Baixa latência (beta)</string>
-    <string name="watch_party_host_live_label">Você está ao vivo</string>
+    <string name="watch_party_host_live_label">Tu tá ao vivo</string>
     <string name="watch_party_host_end">Encerrar</string>
-    <string name="watch_party_host_retry_share">Compartilhar sua tela</string>
-    <string name="watch_party_host_go_live_failed">Não foi possível ir ao vivo. O servidor não confirmou — tente de novo.</string>
-    <string name="watch_party_host_join_failed_ended">Não foi possível iniciar a transmissão; a watch party foi encerrada. Tente de novo.</string>
-    <string name="watch_party_host_join_failed_not_ended">Não foi possível iniciar a transmissão, e também não foi possível encerrar a watch party. Ela pode continuar aparecendo como ao vivo — tente de novo daqui a pouco.</string>
-    <string name="watch_party_host_end_failed">Você saiu da call, mas o servidor não confirmou o fim da watch party. Ela pode continuar aparecendo como ao vivo.</string>
-    <string name="watch_party_host_generic_error">Algo deu errado. Tente de novo.</string>
+    <string name="watch_party_host_retry_share">Compartilhar tua tela</string>
+    <string name="watch_party_host_go_live_failed">Não foi possível ir ao vivo. O servidor não confirmou, tenta de novo.</string>
+    <string name="watch_party_host_join_failed_ended">Não foi possível iniciar a transmissão; a watch party foi encerrada. Tenta de novo.</string>
+    <string name="watch_party_host_join_failed_not_ended">Não foi possível iniciar a transmissão, e também não foi possível encerrar a watch party. Ela pode continuar aparecendo como ao vivo, tenta de novo daqui a pouco.</string>
+    <string name="watch_party_host_end_failed">Tu saiu da call, mas o servidor não confirmou o fim da watch party. Ela pode continuar aparecendo como ao vivo.</string>
+    <string name="watch_party_host_generic_error">Algo deu errado. Tenta de novo.</string>
     <string name="watch_party_host_ack_title">Antes de transmitir</string>
-    <string name="watch_party_host_ack_body">Você é responsável pelo que transmite. Nada de conteúdo pirata ou que viole direitos de outras pessoas.</string>
+    <string name="watch_party_host_ack_body">Tu é responsável pelo que transmite. Nada de conteúdo pirata ou que viole direitos de outras pessoas.</string>
     <string name="watch_party_host_ack_confirm">Entendi</string>
-    <string name="watch_party_host_mic_prompt_title">Ligar seu microfone?</string>
-    <string name="watch_party_host_mic_prompt_body">Sua tela está no ar. Seu microfone ainda está desligado, então a sala não consegue te ouvir comentando.</string>
+    <string name="watch_party_host_mic_prompt_title">Ligar teu microfone?</string>
+    <string name="watch_party_host_mic_prompt_body">Tua tela está no ar. Teu microfone ainda está desligado, então a sala não consegue te ouvir comentando.</string>
     <string name="watch_party_host_mic_prompt_confirm">Ligar microfone</string>
     <string name="watch_party_host_mic_prompt_dismiss">Continuar mudo</string>
 
@@ -580,24 +581,24 @@
     <string name="onboarding_you_eyebrow_invite">%1$s tá te esperando</string>
     <string name="onboarding_you_eyebrow_invite_failed">Convite não funcionou</string>
     <string name="onboarding_you_title">Como a galera vai te ver?</string>
-    <string name="onboarding_you_description">Um nome nas mensagens, um @ pra te acharem. Os dois mudam quando você quiser.</string>
+    <string name="onboarding_you_description">Um nome nas mensagens, um @ pra te acharem. Os dois mudam quando tu quiser.</string>
     <string name="onboarding_you_description_invite_failed">Entra assim mesmo e pede outro link pra quem te chamou.</string>
-    <string name="onboarding_you_joining">Guardando seu lugar…</string>
+    <string name="onboarding_you_joining">Guardando teu lugar…</string>
     <string name="onboarding_you_name">Nome</string>
     <string name="onboarding_you_name_placeholder">Como te chamam</string>
-    <string name="onboarding_you_name_hint">Veio da sua conta. Se não é como te chamam, troca.</string>
+    <string name="onboarding_you_name_hint">Veio da tua conta. Se não é como te chamam, troca.</string>
     <string name="onboarding_you_photo">Foto</string>
     <string name="onboarding_you_photo_preset">Usar o avatar %1$d</string>
     <string name="onboarding_you_photo_clear">Tirar</string>
-    <string name="onboarding_you_photo_current">Sua foto</string>
-    <string name="onboarding_you_handle">Seu @</string>
+    <string name="onboarding_you_photo_current">Tua foto</string>
+    <string name="onboarding_you_handle">Teu @</string>
     <string name="onboarding_you_handle_copy">Copiar @ %1$s</string>
     <string name="onboarding_you_handle_copied">Copiado</string>
     <string name="onboarding_you_handle_change">Trocar</string>
     <string name="onboarding_you_handle_keep">Manter</string>
     <string name="onboarding_you_username">Nome de usuário</string>
     <string name="onboarding_you_username_hint">Só minúscula, número e _. O número no fim vem de brinde.</string>
-    <string name="onboarding_you_reassigned">Esse já tinha dono. Você ficou com %1$s.</string>
+    <string name="onboarding_you_reassigned">Esse já tinha dono. Tu ficou com %1$s.</string>
     <string name="onboarding_you_error_taken">Esse nome lotou, não sobrou número nenhum. Escolhe outro.</string>
     <string name="onboarding_you_error_invalid">Só minúscula, número e _, de 2 a 32 caracteres.</string>
     <string name="onboarding_you_save_error">Não deu pra salvar. Tenta de novo.</string>
@@ -605,7 +606,7 @@
     <string name="onboarding_you_enter">Entrar em %1$s</string>
     <string name="onboarding_you_entering">Entrando…</string>
     <string name="onboarding_you_later">Depois eu arrumo</string>
-    <string name="onboarding_room_eyebrow">Sua sala</string>
+    <string name="onboarding_room_eyebrow">Tua sala</string>
     <string name="onboarding_room_title">Onde a galera vai ficar?</string>
     <string name="onboarding_room_description">Escolhe um caminho. Leva um minuto.</string>
     <string name="onboarding_room_create_title">Criar do zero</string>
@@ -668,13 +669,13 @@
     <string name="onboarding_feature_watch_title">Watch party</string>
     <string name="onboarding_feature_watch_body">Uma pessoa passa, a galera assiste junto.</string>
     <string name="signed_out_invite_eyebrow">Convite</string>
-    <string name="signed_out_invite_title">Você foi convidado pra %1$s</string>
+    <string name="signed_out_invite_title">Tu foi convidado pra %1$s</string>
     <string name="signed_out_invite_body">Cria a conta e já entra. Leva um minuto.</string>
-    <string name="arrival_title">Você entrou em %1$s</string>
-    <string name="arrival_body">Dá um oi no #%1$s. Ninguém sabe que você chegou até você falar.</string>
-    <string name="arrival_body_no_channel">Escolhe um canal e fala algo. Ninguém sabe que você chegou até você falar.</string>
+    <string name="arrival_title">Tu entrou em %1$s</string>
+    <string name="arrival_body">Dá um oi no #%1$s. Ninguém sabe que tu chegou até tu falar.</string>
+    <string name="arrival_body_no_channel">Escolhe um canal e fala algo. Ninguém sabe que tu chegou até tu falar.</string>
     <string name="arrival_voice_hint">Tem canal de voz também: toca no %1$s e é só chegar falando.</string>
-    <string name="arrival_owner_title">Sua sala tá pronta.</string>
+    <string name="arrival_owner_title">Tua sala tá pronta.</string>
     <string name="arrival_owner_body">Falta a galera. Cola o convite no grupo.</string>
     <string name="arrival_owner_copy">Copiar convite</string>
     <string name="arrival_owner_copied">Copiado</string>
@@ -685,11 +686,11 @@
         <item quantity="other">%1$d pessoas lá dentro</item>
     </plurals>
     <!-- Voice notes -->
-    <string name="voice_note_record">Segure para gravar uma mensagem de voz</string>
-    <string name="voice_note_hint">Segure o microfone para gravar. Solte para enviar.</string>
+    <string name="voice_note_record">Segura para gravar uma mensagem de voz</string>
+    <string name="voice_note_hint">Segura o microfone para gravar. Solta para enviar.</string>
     <string name="voice_note_slide_cancel">Deslize para cancelar</string>
     <string name="voice_note_lock_hint">Deslize para cima para travar</string>
-    <string name="voice_note_locked">Travado. Você pode soltar o dedo.</string>
+    <string name="voice_note_locked">Travado. Tu pode soltar o dedo.</string>
     <string name="voice_note_paused">Pausado</string>
     <string name="voice_note_discard">Descartar mensagem de voz</string>
     <string name="voice_note_pause">Pausar gravação</string>
@@ -698,16 +699,16 @@
     <string name="voice_note_discarded">Áudio descartado (%1$s)</string>
     <string name="voice_note_undo">Desfazer</string>
     <string name="voice_note_seconds_left">faltam %1$ds</string>
-    <string name="voice_note_limit">Limite de cinco minutos. Enviamos o que você gravou.</string>
-    <string name="voice_note_in_call">Você não pode gravar áudio durante uma chamada.</string>
-    <string name="voice_note_play_in_call">Você não pode ouvir áudios durante uma chamada.</string>
+    <string name="voice_note_limit">Limite de cinco minutos. Enviamos o que tu gravou.</string>
+    <string name="voice_note_in_call">Tu não pode gravar áudio durante uma chamada.</string>
+    <string name="voice_note_play_in_call">Tu não pode ouvir áudios durante uma chamada.</string>
     <string name="voice_note_mic_busy">Outro app está usando o microfone.</string>
     <string name="voice_note_play_failed">Não foi possível tocar esse áudio.</string>
     <string name="voice_note_permission_title">Acesso ao microfone</string>
-    <string name="voice_note_permission_body">O pqp precisa do microfone para gravar sua mensagem de voz. Ele só escuta enquanto você segura o botão ou deixa a gravação travada.</string>
+    <string name="voice_note_permission_body">O pqp precisa do microfone para gravar tua mensagem de voz. Ele só escuta enquanto tu segura o botão ou deixa a gravação travada.</string>
     <string name="voice_note_permission_allow">Continuar</string>
     <string name="voice_note_permission_cancel">Agora não</string>
-    <string name="voice_note_permission_denied">O acesso ao microfone está desligado. Ative nos Ajustes para gravar mensagens de voz.</string>
+    <string name="voice_note_permission_denied">O acesso ao microfone está desligado. Ativa nos Ajustes para gravar mensagens de voz.</string>
     <string name="voice_note_sending">Enviando áudio %1$s…</string>
     <string name="voice_note_failed">O áudio não subiu</string>
     <string name="voice_note_ready">Áudio %1$s</string>
@@ -914,6 +915,7 @@
     <string name="forum_search_empty_post">Postar \"%1$s\"</string>
     <string name="forum_mine_empty">Nada em Meus posts ainda.</string>
     <string name="forum_paused">Novos posts estão pausados neste fórum.</string>
+    <string name="forum_read_only">Tu pode ler este fórum, mas não pode postar nele.</string>
     <string name="forum_post_back">Voltar pra lista</string>
     <string name="forum_post_menu">Mais opções do post</string>
     <string name="forum_post_copy_link">Copiar link</string>
@@ -1487,4 +1489,14 @@
     <string name="community_save_failed">Não deu pra salvar.</string>
     <string name="community_no_access">Só quem gerencia a comunidade vê isso.</string>
     <string name="community_unavailable">Comunidades públicas não estão disponíveis aqui.</string>
+    <string name="soundboard_open">Soundboard</string>
+    <string name="soundboard_title">Soundboard</string>
+    <string name="soundboard_hint">Todo mundo na call escuta.</string>
+    <string name="soundboard_slow">Calma, tenta de novo daqui a pouco</string>
+    <string name="soundboard_builtin_palmas">Palmas</string>
+    <string name="soundboard_builtin_risada">Risada</string>
+    <string name="soundboard_builtin_buzina">Buzina</string>
+    <string name="soundboard_builtin_grilo">Grilo</string>
+    <string name="soundboard_builtin_badumtss">Ba-dum-tss</string>
+    <string name="soundboard_builtin_trombone">Trombone</string>
 </resources>

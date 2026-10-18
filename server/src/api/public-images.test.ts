@@ -222,7 +222,7 @@ describeDb("public pictures and the profile read: HEAD and Range", () => {
       expect(got.headers.get("location"), one.label).toBe(
         `https://storage.test/get/${one.keyFor}?sig=abc`,
       );
-      expect(got.headers.get("cache-control")).toBe("public, max-age=300");
+      expect(got.headers.get("cache-control")).toBe("public, max-age=3600");
 
       const head = await raw(one.path, "HEAD");
       expect(head.status, `${one.label} HEAD`).toBe(200);
@@ -230,7 +230,7 @@ describeDb("public pictures and the profile read: HEAD and Range", () => {
       expect(head.headers.get("content-length")).toBe(String(png.length));
       expect(head.headers.get("accept-ranges")).toBe("bytes");
       expect(head.headers.get("etag")).toMatch(/^"[0-9a-f]{32}"$/);
-      expect(head.headers.get("cache-control")).toBe("public, max-age=300");
+      expect(head.headers.get("cache-control")).toBe("public, max-age=3600");
       expect(head.headers.get("access-control-allow-origin")).toBe("*");
       expect(head.bytes.length).toBe(0);
     }

@@ -85,3 +85,45 @@ export function rememberHint(
     // Session-only hide lives in the component that called this.
   }
 }
+
+/**
+ * A remembered VALUE rather than a seen bit, for the one surface that has to
+ * know more than "was it shown": a card that may come back once after a wait
+ * (`lib/discord-import-notice.ts`). Same host rules as `isHintSeen`: a host
+ * that does not persist (localhost) has nothing stored, and storage that is
+ * missing or throws is `readable: false`, which the caller must treat as
+ * "already handled" so a card that cannot remember itself never nags.
+ */
+export function readHintValue(
+  key: string,
+  storage: Pick<Storage, "getItem"> | null = browserStorage(),
+  persist: boolean = shouldPersistHints(),
+): { readable: boolean; value: string | null } {
+  if (!persist) {
+    return { readable: true, value: null };
+  }
+  if (!storage) {
+    return { readable: false, value: null };
+  }
+  try {
+    return { readable: true, value: storage.getItem(key) };
+  } catch {
+    return { readable: false, value: null };
+  }
+}
+
+export function rememberHintValue(
+  key: string,
+  value: string,
+  storage: Pick<Storage, "setItem"> | null = browserStorage(),
+  persist: boolean = shouldPersistHints(),
+): void {
+  if (!persist) {
+    return;
+  }
+  try {
+    storage?.setItem(key, value);
+  } catch {
+    // Session-only hide lives in the component that called this.
+  }
+}

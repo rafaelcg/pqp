@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { BRING_CREW_REMIND_AFTER_MS } from "@pqp/shared";
 import {
   afterAll,
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -297,6 +298,50 @@ describeDb("Traz tua galera: import arrivals", () => {
       await client.query("ROLLBACK");
       client.release();
     }
+  });
+
+  describe("discord_import_notice asks whether a server came from an import", () => {
+    afterEach(() => {
+      process.env.DISCORD_IMPORT_NOTICE = "";
+    });
+
+    it("says imported: true for an import and false for one made by hand, even with the bring-crew flag off", async () => {
+      process.env.DISCORD_BRING_CREW = "";
+      process.env.DISCORD_IMPORT_NOTICE = "true";
+      const { serverId } = await importServer();
+      const imported = await call(owner, "GET", `/api/servers/${serverId}/import-arrivals`);
+      expect(imported.body).toEqual({
+        enabled: false,
+        importedAt: null,
+        phase: null,
+        arrived: 0,
+        viaLink: 0,
+        inviteCode: null,
+        imported: true,
+      });
+      const made = await call<{ server: { id: string } }>(owner, "POST", "/api/servers", {
+        name: "Feita à mão",
+      });
+      const byHand = await call(
+        owner,
+        "GET",
+        `/api/servers/${made.body.server.id}/import-arrivals`,
+      );
+      expect(byHand.body).toMatchObject({ enabled: false, imported: false });
+    });
+
+    it("keeps the counter fields whole when both flags are on", async () => {
+      process.env.DISCORD_IMPORT_NOTICE = "true";
+      const { serverId } = await importServer();
+      const res = await call(owner, "GET", `/api/servers/${serverId}/import-arrivals`);
+      expect(res.body).toMatchObject({ enabled: true, phase: "fresh", imported: true });
+    });
+
+    it("leaves the field out entirely while the notice flag is off", async () => {
+      const { serverId } = await importServer();
+      const res = await call(owner, "GET", `/api/servers/${serverId}/import-arrivals`);
+      expect(res.body).not.toHaveProperty("imported");
+    });
   });
 
   it("is silent with the flag off, on both routes", async () => {

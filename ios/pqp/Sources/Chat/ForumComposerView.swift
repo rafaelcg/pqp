@@ -101,7 +101,7 @@ struct ForumComposerRefusal: Equatable {
                     message: ChatModel.rejectionCopy(for: rejection.reason ?? "")
                 )
             }
-        case .refused(_, let token):
+        case .refused(let status, let token):
             switch token {
             case ForumErrorCode.tagRequired:
                 return ForumComposerRefusal(field: .tags, message: String(localized: "Pick at least one tag."))
@@ -110,6 +110,14 @@ struct ForumComposerRefusal: Equatable {
             case ForumErrorCode.off:
                 return ForumComposerRefusal(field: .general, message: String(localized: "New posts are paused in this forum."))
             default:
+                // 403 with no token of ours: SEND_MESSAGES was taken away (or
+                // never held). Retrying cannot work, so do not say "try again".
+                if status == 403 {
+                    return ForumComposerRefusal(
+                        field: .general,
+                        message: String(localized: "You don't have permission to post in this forum.")
+                    )
+                }
                 return ForumComposerRefusal(
                     field: .general,
                     message: String(localized: "Couldn't post. The draft is still here, try again.")
@@ -210,8 +218,14 @@ struct ForumComposerView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if !home.canPost {
+                    switch home.postBlock {
+                    case .readOnly:
+                        notice(String(localized: "You can read this forum, but you can't post in it."), icon: "lock.fill")
+                            .accessibilityIdentifier("forum.composer.readOnly")
+                    case .paused:
                         notice(String(localized: "New posts are paused in this forum."), icon: "pause.circle")
+                    case nil:
+                        EmptyView()
                     }
                     titleField
                     if !similar.isEmpty {
@@ -220,19 +234,30 @@ struct ForumComposerView: View {
                     }
                     tagsField
                     bodyField
-                    if let refusal, refusal.field == .general {
-                        notice(holdRemaining > 0 && refusal.retryUntil != nil
-                               ? liveHoldMessage(refusal)
-                               : refusal.message,
-                               icon: "exclamationmark.triangle.fill", tint: Palette.danger)
-                            .accessibilityIdentifier("forum.composer.error")
-                    }
                     footer
                 }
                 .padding(Metrics.hPadding)
                 .animation(.channelList(reduceMotion: reduceMotion), value: similar.map(\.id))
             }
             .scrollDismissesKeyboard(.interactively)
+            // The refusal sits in the bottom safe-area inset, not at the end
+            // of the form: with the keyboard up the end of the form is behind
+            // the keyboard, and Publicar then looked like it did nothing. The
+            // inset rides on top of the keyboard.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if let refusal, refusal.field == .general {
+                    notice(holdRemaining > 0 && refusal.retryUntil != nil
+                           ? liveHoldMessage(refusal)
+                           : refusal.message,
+                           icon: "exclamationmark.triangle.fill", tint: Palette.danger)
+                        .padding(.horizontal, Metrics.hPadding)
+                        .padding(.vertical, 8)
+                        .background(Palette.ink)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .accessibilityIdentifier("forum.composer.error")
+                }
+            }
+            .animation(reduceMotion ? nil : Motion.standard, value: refusal)
             .background(Palette.ink.ignoresSafeArea())
             .navigationTitle("New post")
             .navigationBarTitleDisplayMode(.inline)

@@ -139,6 +139,10 @@ struct ChatView: View {
     /// server, the same snapshot `ChannelListView` reads. See
     /// `canHostWatchParty`.
     @State private var watchPartyPermissions: PermissionsSnapshot?
+    /// The same snapshot, read for a server text channel so the composer can
+    /// give way to a read-only notice where SEND_MESSAGES is denied. Nil for a
+    /// conversation and for a forum post (the post model has the forum's).
+    @State private var sendPermissions = SendPermissionSlot()
 
     // Forum post state; inert when `forumPost` is nil.
     /// Where the post opened, once its history reached the landing point.
@@ -182,6 +186,20 @@ struct ChatView: View {
     private var canStartWatchPartyHere: Bool {
         guard let voiceChannel else { return false }
         return watchPartyPermissions?.can(PermissionBit.startWatchParty, channelId: voiceChannel.id) ?? false
+    }
+
+    /// The server this transcript's SEND_MESSAGES is read from: a server text
+    /// channel (or the text pane of a voice room), never a conversation.
+    private var sendGateServerId: String? {
+        guard conversation == nil, forumPost == nil else { return nil }
+        return server?.id ?? flagsServerId ?? voiceChannel?.serverId
+    }
+
+    /// Whether the composer is offered. A forum post asks its own model (the
+    /// forum's bit); a conversation has no permissions to ask. Unknown is yes.
+    private var canSendHere: Bool {
+        if let forumPost { return forumPost.maySend }
+        return sendPermissions.canSend(channelId: channelId)
     }
 
     /// The host's card on the stage above the transcript: Create, the setup
@@ -261,6 +279,9 @@ struct ChatView: View {
                 voiceNoteNotices
                 if let forumPost, !forumPost.canReply {
                     ForumLockedBar()
+                        .transition(.opacity)
+                } else if !canSendHere {
+                    ComposerReadOnlyBar()
                         .transition(.opacity)
                 } else {
                     if forumPost?.isLocked == true {
@@ -526,6 +547,16 @@ struct ChatView: View {
             if let permissions = try? await session.api.fetchMemberPermissions(serverId: serverId) {
                 watchPartyPermissions = permissions
             }
+        }
+        .task(id: sendGateServerId) {
+            // See `SendPermissionSlot`: the snapshot is dropped when the
+            // destination changes and a late answer for another server is
+            // refused.
+            sendPermissions.switchTo(sendGateServerId)
+            guard let serverId = sendGateServerId else { return }
+            let permissions = try? await session.api.fetchMemberPermissions(serverId: serverId)
+            guard !Task.isCancelled else { return }
+            sendPermissions.accept(permissions, for: serverId)
         }
         .animation(Motion.standard, value: call.isCollapsed)
         .animation(Motion.standard, value: actionTarget?.id)

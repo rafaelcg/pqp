@@ -71,6 +71,14 @@ export const discordImportArrivalsSchema = z.object({
    * pinned in the old Discord keeps working. Null if it was revoked.
    */
   inviteCode: z.string().nullable(),
+  /**
+   * Whether this server was made by a Discord import, answered only while
+   * `discord_import_notice` is on (absent otherwise, and from an API that
+   * predates it). It is independent of `enabled`: the notice that invites
+   * people to import must know a server already came from one even when the
+   * bring-your-crew strip is off. Read `=== false` to mean "not imported".
+   */
+  imported: z.boolean().optional(),
 });
 
 export type DiscordImportArrivals = z.infer<typeof discordImportArrivalsSchema>;

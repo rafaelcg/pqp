@@ -12,6 +12,11 @@ import { useUpdateOffered } from "@/lib/update-prompt-state";
  * popover opening upward. It is there only while there is a build to take.
  * `TooltipProvider` is its own because the one the app shell mounts does not
  * wrap these routes.
+ *
+ * Anything else fixed to the bottom of one of these pages must keep this
+ * corner free while `useUpdateOffered()` is true. The home page's sticky
+ * create bar (`pages/home/sticky-cta.tsx`) does, with left padding. Moving or
+ * resizing this button means checking that bar too.
  */
 export function StandaloneUpdateIndicator() {
   const { pathname } = useLocation();

@@ -1,0 +1,96 @@
+/*
+ * Breu, vendored from PR#1188 (`feat/custom-bots`) for the homepage's mascot:
+ * the `.bot-face` rules from its index.css, and its bot tokens mapped onto
+ * the page's own. In the dark default look (the live homepage is forced
+ * dark) the accent, surface-1 and rail tokens are exactly the bot's lime,
+ * body and mouth hole; the avatar body is mixed in oklab so its hue stays on
+ * the lime. Under a light or non-default look Breu follows the page accent.
+ * Only lime has tokens here. Once PR#1188 is on main, delete this file with
+ * the `bot-face*` files and import `BotFace` from `components/bots/bot-face`.
+ *
+ * The tokens sit on `.home-bot-face`, a class only this folder's `BotFace`
+ * sets, never on `.bot-face`: the home chunk's CSS stays in the document
+ * after an in-app navigation, and PR#1188 defines the same tokens on its own
+ * theme root, where a dark body must stay dark in every theme.
+ *
+ * Left out of the vendored copy on purpose: the hover tilt (every face on the
+ * page sits in a `pointer-events-none` wrapper, so it could never fire) and
+ * the `bot-pop` squash (the page bans overshoot; the perch fades in with
+ * `breu-pop` in perch.css instead). `bot-blink`, `bot-breathe` and
+ * `bot-float` share their names and their frames with PR#1188's, so the two
+ * copies agree when both are loaded.
+ */
+.home-bot-face {
+  --color-bot-lime: var(--color-accent);
+  --color-bot-body: var(--color-surface-1);
+  --color-bot-hole: var(--color-rail);
+  --color-bot-lime-body: color-mix(in oklab, var(--color-accent-soft) 75%, var(--color-surface-1));
+}
+
+.bot-face > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.bot-face .bf-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.bot-face .bf-body {
+  transform-box: view-box;
+  transform-origin: 50% 88%;
+}
+
+.bot-face .bf-hand {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes bot-blink {
+  0%,
+  91%,
+  100% {
+    transform: scaleY(1);
+  }
+  94% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes bot-breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  50% {
+    transform: translateY(-2.5%) scale(1.025, 0.975);
+  }
+}
+
+/* The hand's wave: the character waving, not a tilted card. */
+@keyframes bot-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0);
+  }
+  50% {
+    transform: translateY(-6%) rotate(-8deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bot-face-live .bf-eyes {
+    animation: bot-blink 4.6s var(--ease-standard) infinite;
+  }
+
+  .bot-face-live[data-variant="full"] .bf-body {
+    animation: bot-breathe 3.2s ease-in-out infinite;
+  }
+
+  .bot-face-live .bf-hand {
+    animation: bot-float 2.6s ease-in-out infinite;
+  }
+}

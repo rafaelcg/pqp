@@ -278,6 +278,7 @@ fun ForumScreen(
                         ForumEmpty(
                             mayCreate = state.mayCreate,
                             paused = !state.postingEnabled,
+                            readOnly = state.readOnly,
                             onCreate = { onCompose(null) },
                         )
                     }
@@ -350,8 +351,12 @@ fun ForumScreen(
                 )
             }
 
-            if (!state.postingEnabled && !state.forumEmpty && !state.loading) {
-                PausedLine(Modifier.align(Alignment.BottomCenter))
+            if ((!state.postingEnabled || state.readOnly) && !state.forumEmpty && !state.loading) {
+                NoPostLine(
+                    text = stringResource(if (state.postingEnabled) R.string.forum_read_only else R.string.forum_paused),
+                    tag = if (state.postingEnabled) "forum.readOnly" else "forum.paused",
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
             }
         }
     }
@@ -782,10 +787,16 @@ private fun ForumMessage(
 
 /** UX §2.8 #49: no search, no filters, one primary action. */
 @Composable
-private fun ForumEmpty(mayCreate: Boolean, paused: Boolean, onCreate: () -> Unit) {
+private fun ForumEmpty(mayCreate: Boolean, paused: Boolean, readOnly: Boolean, onCreate: () -> Unit) {
     ForumMessage(
         title = stringResource(R.string.forum_empty),
-        body = stringResource(if (paused) R.string.forum_paused else R.string.forum_empty_body),
+        body = stringResource(
+            when {
+                paused -> R.string.forum_paused
+                readOnly -> R.string.forum_read_only
+                else -> R.string.forum_empty_body
+            },
+        ),
         actionLabel = stringResource(R.string.forum_empty_cta).takeIf { mayCreate },
         onAction = onCreate.takeIf { mayCreate },
     )
@@ -816,9 +827,12 @@ private fun FilteredEmpty(state: ForumUiState, onClear: () -> Unit, onPost: () -
     }
 }
 
-/** The flag is off for this server: reading and replying go on, new posts wait (UX §2.8 #52). */
+/**
+ * No new posts from here: the flag is off for this server (reading and replying
+ * go on, new posts wait, UX §2.8 #52), or this account lacks SEND_MESSAGES.
+ */
 @Composable
-private fun PausedLine(modifier: Modifier = Modifier) {
+private fun NoPostLine(text: String, tag: String, modifier: Modifier = Modifier) {
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -826,10 +840,10 @@ private fun PausedLine(modifier: Modifier = Modifier) {
         modifier = modifier
             .padding(Spacing.gutter)
             .navigationBarsPadding()
-            .testTag("forum.paused"),
+            .testTag(tag),
     ) {
         Text(
-            text = stringResource(R.string.forum_paused),
+            text = text,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md),

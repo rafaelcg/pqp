@@ -1,0 +1,20 @@
+/*
+ * The bot tile in the bento (brinquedos.tsx): the work row's text breathes
+ * while the bot is at work. Opacity only, so it never repaints the panel.
+ * The app's own shimmer animates background-position; this page does not.
+ */
+@keyframes breu-thinking {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .breu-thinking {
+    animation: breu-thinking 1.4s ease-in-out infinite;
+  }
+}

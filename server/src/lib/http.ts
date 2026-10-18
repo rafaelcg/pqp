@@ -79,6 +79,23 @@ export function assertCorsConfig(): void {
   }
 }
 
+/**
+ * How long a browser may reuse the answer to a CORS preflight. Chrome caps it
+ * at 7200 (two hours), Firefox at 86400, Safari at 600, so 7200 is what a
+ * Chromium browser will honour in full; the others clamp it themselves.
+ *
+ * Every authenticated call from `pqp.gg` to `api.pqp.gg` carries `Authorization`
+ * and so is preflighted, once per distinct URL, and a preflight is a whole round
+ * trip before the request (180 ms on the capture that found this, about a
+ * third of all the time the page spent on API calls). The old ten minutes meant
+ * a returning visitor paid them again for every URL they had loaded before. The
+ * answer only describes which origin, methods and headers are allowed, and a
+ * browser re-checks that against the cached entry on each use: a request that
+ * needs a header the cached answer does not name simply preflights again, so a
+ * deploy that widens the list is not held back by the longer cache.
+ */
+export const PREFLIGHT_MAX_AGE_SECONDS = 7200;
+
 export function corsHeaders(req: IncomingMessage): Record<string, string> {
   const headers: Record<string, string> = {
     // Every one of these has to be allowed explicitly or the preflight
@@ -95,7 +112,7 @@ export function corsHeaders(req: IncomingMessage): Record<string, string> {
       "Content-Type, Authorization, If-None-Match, Idempotency-Key",
     "Access-Control-Expose-Headers": "ETag",
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    "Access-Control-Max-Age": "600",
+    "Access-Control-Max-Age": String(PREFLIGHT_MAX_AGE_SECONDS),
   };
 
   const origin = resolveCorsOrigin(req.headers.origin);

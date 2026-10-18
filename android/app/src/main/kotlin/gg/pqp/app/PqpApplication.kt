@@ -120,6 +120,10 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
     lateinit var transcripts: gg.pqp.app.voicenotes.NoteTranscripts
         private set
 
+    /** Application-scoped like the call it belongs to: a clip is heard whatever screen is open. */
+    lateinit var soundboard: gg.pqp.app.soundboard.SoundboardController
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -154,6 +158,14 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
             scope = appScope,
         )
         watchPartyHost = gg.pqp.app.watch.WatchPartyHostController(this, session, voice, appScope)
+
+        soundboard = gg.pqp.app.soundboard.SoundboardController(
+            context = this,
+            scope = appScope,
+            session = session,
+            seatedChannelId = { voice.state.value.channelId.takeIf { voice.state.value.isActive } },
+            deafened = { voice.state.value.deafened },
+        )
 
         callActive = voice.state
             .map { it.isActive }

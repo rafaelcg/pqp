@@ -30,6 +30,12 @@ the paste step:
   pre-fills the paste box. `?create=discord` (the spelling `/vem` shipped
   with) is read as the same intent, and `?create=new` opens the name field.
   One stash, one parser: `CreateIntent` in `client/src/lib/handle-intent.ts`.
+- A strip in the main channel of a small, new server the reader manages:
+  "Veio do Discord? Traz teu servidor pra cá" (flag `discord_import_notice`,
+  default off). It calls `openDiscordImport({ serverId })` where
+  `discord_import_existing` is on for the server (the merge dialog) and
+  `openDiscordImport()` otherwise (the create dialog), with wording to match. See `docs/FEATURE_FLAGS.md` for its
+  rules and `docs/ONBOARDING.md` for where it sits among the other surfaces.
 
 ## Counting it
 

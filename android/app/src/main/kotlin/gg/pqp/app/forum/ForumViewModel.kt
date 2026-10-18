@@ -104,6 +104,9 @@ data class ForumUiState(
 
     /** "Novo post" is offered: the flag is on and this account may write here. */
     val mayCreate: Boolean get() = postingEnabled && canPost
+
+    /** Posting is on for the forum but not for this account: say why "Novo post" is missing. */
+    val readOnly: Boolean get() = postingEnabled && !canPost
 }
 
 /**

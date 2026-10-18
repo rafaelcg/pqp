@@ -1,0 +1,26 @@
+pqp es un chat de voz y texto de código abierto para tu banda: mira la pantalla que alguien comparte, con el sonido, entra a una watch party y arma tu comunidad con servidores, canales y mensajes directos. Gratis, sin anuncios, hecho por dos hermanos.
+
+Ya hubo una watch party con más de 100 personas viendo juntas en una sola sala, en septiembre de 2026. Todo el código es público en GitHub.
+
+VOZ Y VIDEO
+Entra a un canal de voz y platica con audio limpio: conexión directa entre los participantes para grupos pequeños, o un servidor de medios dedicado para salas más grandes, que la app elige sola. Prende la cámara, mira la pantalla que alguien compartió, ve quién está hablando, silencia tu micrófono o tu audio y califica la llamada al colgar. Llama directo a un amigo para una llamada de ustedes dos.
+
+CHAT DE TEXTO
+Manda mensajes con reacciones, respuestas, hilos, mensajes fijados y GIFs. Pega un enlace y ve la vista previa. Busca en todo el historial de un servidor. Lo que mandas le llega al instante a todos en el canal, en cualquier plataforma.
+
+WATCH PARTY
+Entra a una watch party que ya está en marcha y mira la transmisión compartida junto con el chat de la sala, con el video empezando justo donde va el grupo.
+
+COMUNIDADES
+Explora un directorio público de comunidades y entra a las que te interesen con un toque. Cada comunidad tiene sus propios canales de texto y de voz, igual que un servidor privado.
+
+AMIGOS Y PERFILES
+Agrega amigos por su tag o por su @ público, ve quién está en línea y bloquea a quien prefieras no escuchar. Reclama tu propio @ para tener una página de perfil que puedes compartir.
+
+PRIVACIDAD Y MODERACIÓN
+Reporta un mensaje, una persona o una comunidad en pocos toques. Quienes administran un servidor tienen expulsar, banear, timeout y un registro de auditoría. Borra tu cuenta o exporta tus datos cuando quieras.
+
+CÓDIGO ABIERTO
+pqp es gratis, no tiene anuncios y todo su código es público en GitHub (rafaelcg/pqp) con licencia AGPL. Cualquiera puede leer el código, alojar su propia instancia o contribuir.
+
+Esta app todavía es una beta y por ahora se ve en inglés y portugués. Levantar la mano en una llamada de voz y otras cosas del sitio web aún están llegando a iOS, aunque ya funcionan en el sitio y en la app de escritorio de pqp. Lanzamos mejoras seguido, también en iOS.

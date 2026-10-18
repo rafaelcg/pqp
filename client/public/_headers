@@ -1,5 +1,16 @@
 # Cloudflare Pages response headers.
 #
+# EVERY CLASS OF FILE THE BUILD EMITS HAS A POLICY HERE, ON PURPOSE.
+# `src/lib/pages-headers.test.ts` walks `public/` and `dist/` and fails on a file
+# no rule gives a Cache-Control, and on one that two rules would give two (Pages
+# joins the values of every matching rule). The reason is the zone in front of
+# Pages: its Browser Cache TTL (4 h) rewrites the Cache-Control of cacheable
+# extensions (`.js`, `.css`, `.png`, `.ico`, `.mp3`, ...) whenever the file is not
+# explicit about it, and turning that setting to "Respect Existing Headers" makes
+# a file with no rule here fall back to Pages' `public, max-age=0,
+# must-revalidate`, which is a revalidation on every load. So the setting can only
+# be flipped once everything below is deliberate.
+#
 # Everything that decides WHICH BUILD somebody runs must never be served from a
 # cache: the page that names the bundle, the service worker that serves it, what
 # that worker imports, and the file a running page reads to learn it is out of
@@ -76,12 +87,77 @@
 /icons/*
   Cache-Control: public, max-age=86400, stale-while-revalidate=604800
 
+# Pictures under /blog (the posts' screenshots). By extension, never `/blog/*`:
+# `/blog/<slug>` is a page (the SPA shell) and must stay revalidated.
+/blog/*.webp
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+/blog/*.jpg
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+/blog/*.gif
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+# Sounds and the favicon: not content-hashed, but they change a few times a
+# year at most, and a week is what keeps four mp3 revalidations (and a favicon
+# one) off every single load. A week fresh, a month of stale-while-revalidate.
+# Replace one under the same name and it reaches everybody within a week; a
+# change that must land sooner gets a new name, like the hero sizes.
+/sounds/*
+  Cache-Control: public, max-age=604800, stale-while-revalidate=2592000
+/favicon.ico
+  Cache-Control: public, max-age=604800, stale-while-revalidate=2592000
+
+# What crawlers and agents read, and the markdown twin of the homepage: edited
+# by hand and worth seeing within the hour, not on every request.
+/robots.txt
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+/sitemap.xml
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+/llms.txt
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+/llms-full.txt
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+/index.md
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+# The markdown twins of the blog pages, written by the build
+# (`src/lib/static-pages.ts`): `/blog.md`, `/blog.en.md`, `/blog/<slug>.md`,
+# `.en.md`, `.es.md`. By extension, never `/blog/*`, which is a page.
+/blog.md
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  Content-Type: text/markdown; charset=utf-8
+/blog.*.md
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  Content-Type: text/markdown; charset=utf-8
+/blog/*.md
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  Content-Type: text/markdown; charset=utf-8
+
+# Standalone diagnostic pages (`share-*.html`, served at the extensionless URL
+# too). Pages, not assets: revalidated, like every other page.
+/share-diagnostic*
+  Cache-Control: no-cache
+/share-audio-tone*
+  Cache-Control: no-cache
+
+# What the build writes beside the shell and the worker reads or imports:
+# `edge-config.json` is what the Pages middleware needs and is wrong the minute
+# the next deploy lands; `workbox-*.js` and `sw-build-*.js` are imported by the
+# worker (so the browser's own cache rules apply to them, see `/sw.js` above)
+# and are left revalidated for the same reason `sw-notification-click.js` is.
+/edge-config.json
+  Cache-Control: no-cache
+/workbox-*
+  Cache-Control: no-cache
+/sw-build-*
+  Cache-Control: no-cache
+
 # RFC 9116 security contact must be text/plain, and RFC 9727 wants its media
 # type stated — Pages would otherwise guess from the extension-less filename.
 /.well-known/security.txt
   Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
 /.well-known/api-catalog
   Content-Type: application/linkset+json
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
 
 # Universal links. Apple's CDN fetches this file, not the device, so what it
 # needs is to be JSON at a stable URL over https with no redirect — which is
@@ -120,8 +196,18 @@
 /.well-known/ai-catalog.json
   Content-Type: application/json
   Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
 /.well-known/agent-skills/index.json
   Content-Type: application/json
   Access-Control-Allow-Origin: *
 /.well-known/agent-skills/*
   Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+
+# The blog's words as HTML fragments, written by the build
+# (`pqp-static-pages`, `src/lib/static-pages.ts`) and read ONLY by the Pages
+# middleware through the asset binding. They are not pages: not linked, not in
+# the sitemap, and kept out of an index if a crawler ever guesses one.
+/prerender/*
+  X-Robots-Tag: noindex
+  Cache-Control: no-cache

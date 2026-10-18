@@ -5,6 +5,7 @@ import ptBR from "../locales/pt-BR/translation.json";
 import LLMS from "../../public/llms.txt?raw";
 import LLMS_FULL from "../../public/llms-full.txt?raw";
 import INDEX_MD from "../../public/index.md?raw";
+import { factFor } from "../content/compare-facts";
 /**
  * What the site may say about Android. Every page words it its own way, so
  * this file is the one place the facts live, and every surface is checked
@@ -32,9 +33,10 @@ const get = (locale: Locale, key: string): string => {
 
 /** Every string pqp.gg shows that says where the Android app lives. */
 const STORE_SURFACES = [
-  "landing.more.everywhere.body",
-  "landing.faq.install.a",
-  "landing.cta.android",
+  "home.phone.lede.play",
+  "home.phone.android.play",
+  "home.phone.android.cta.play",
+  "home.faq.phone.a.play",
   "download.mobile.android.play",
   "downloadPage.seo.description",
   "downloadPage.android.body.play",
@@ -51,7 +53,6 @@ const STORE_SURFACES = [
   "tela.option.pqp.limit",
   "tela.faq.download.a",
   "tela.faq.mobile.a",
-  "vsDiscord.row.apps.pqp",
   "vem.proof.platforms",
   "vem.compare.apps.pqp",
   "vem.faq.install.a",
@@ -63,6 +64,10 @@ const STORE_SURFACES = [
  * defaults to the listing, and only a self-host that blanks it gets them.
  */
 const APK_ONLY = [
+  "home.phone.lede",
+  "home.phone.android",
+  "home.phone.android.cta",
+  "home.faq.phone.a",
   "download.mobile.android",
   "downloadPage.android.body",
   "downloadPage.android.cta",
@@ -80,7 +85,7 @@ const APK_ONLY = [
 /** Strings that describe what the Android app can do. */
 const CAPABILITY_SURFACES = [
   "androidPage.notYet",
-  "landing.screen.body",
+  "home.night.share.android",
   "vem.features.share.body",
 ];
 
@@ -107,7 +112,25 @@ describe("Android: where the app lives", () => {
     it(`${locale}: the APK fallback keys still exist for a self-host`, () => {
       for (const key of APK_ONLY) expect(get(locale, key)).toBeTruthy();
     });
+
+    it(`${locale}: the home page's APK wording promises no date and names no store`, () => {
+      // Only a self-host that blanks VITE_PLAY_STORE_URL ever shows these, so
+      // they must not claim a listing, and (like the Play wording) no date.
+      for (const key of APK_ONLY.filter((key) => key.startsWith("home."))) {
+        const value = get(locale, key);
+        expect(value, `${locale} ${key}`).not.toContain(ANDROID.store);
+        expect(value, `${locale} ${key}`).not.toMatch(DATE_PROMISE);
+      }
+    });
   }
+
+  it("the comparison facts name Google Play for pqp's apps, in every language", () => {
+    const fact = factFor("pqp", "apps")!;
+    for (const locale of locales) {
+      expect(fact.value[locale], locale).toMatch(/Google Play/);
+      expect(fact.value[locale], locale).not.toMatch(NOT_IN_STORE_YET);
+    }
+  });
 
   it("pt-BR says na Google Play, everywhere", () => {
     for (const [key, value] of Object.entries(ptBR)) {
@@ -132,7 +155,7 @@ describe("Android: what the app does", () => {
     });
 
     it(`${locale}: the home page and /vem say an Android phone can share too`, () => {
-      expect(get(locale, "landing.screen.body")).toMatch(/Android/);
+      expect(get(locale, "home.night.share.android")).toMatch(/Android/);
       expect(get(locale, "vem.features.share.body")).toMatch(/Android/);
     });
 

@@ -211,6 +211,10 @@ describe("what it leaves alone", () => {
       "/llms.txt",
       "/llms-full.txt",
       "/index.md",
+      "/blog.md",
+      "/blog/pqp-vs-discord-2026.md",
+      "/blog/pqp-vs-discord-2026.en.md",
+      "/blog/servidores-de-voz-miami-e-londres.es.md",
       "/robots.txt",
       "/sitemap.xml",
     ]) {
@@ -221,7 +225,7 @@ describe("what it leaves alone", () => {
 
   it("does answer ordinary app routes, including ones that merely start like a denied word", async () => {
     const t = makeScope({});
-    for (const path of ["/", "/app", "/app/dm", "/@rafa", "/c/valorant", "/tela", "/robots"]) {
+    for (const path of ["/", "/app", "/app/dm", "/@rafa", "/c/valorant", "/tela", "/robots", "/blog", "/blog/pqp-vs-discord-2026"]) {
       expect(await t.navigate(`https://pqp.gg${path}`)).toBeDefined();
     }
   });

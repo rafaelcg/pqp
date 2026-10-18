@@ -386,6 +386,7 @@ import {
   saveServerOrder,
   fetchUnread,
   fetchVoiceBackend,
+  prefetchBootReads,
   hideConversation,
   joinCommunity as joinCommunityApi,
   joinInvite,
@@ -411,6 +412,7 @@ import {
   type ServerMember,
   type ServerRole,
 } from "@/lib/api";
+import { clearBootPrefetch } from "@/lib/boot-prefetch";
 import {
   channelRoutePath,
   forumPostRoutePath,
@@ -511,6 +513,9 @@ import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { BringCrewStrip } from "@/components/onboarding/bring-crew-strip";
 import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
 import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
+import { DiscordImportNotice } from "@/components/onboarding/discord-import-notice";
+import { openDiscordImport } from "@/lib/discord-import-launcher";
+import { useDiscordImportExisting } from "@/lib/use-discord-import-existing";
 import { NudgeButton, useNudgeTrigger } from "@/components/dm/nudge-button";
 import { useNudgeShake } from "@/hooks/use-nudge-shake";
 import {
@@ -551,6 +556,12 @@ import {
   startNewcomerInviteConfig,
   useNewcomerInviteMoment,
 } from "@/lib/newcomer-invite";
+import {
+  discordImportNoticeVisible,
+  startDiscordImportNoticeConfig,
+  useDiscordImportNoticeFlag,
+  useDiscordImportNoticeRecord,
+} from "@/lib/discord-import-notice";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { PublicInvitePreview } from "@pqp/shared";
 import {
@@ -672,7 +683,7 @@ import { useStableCallback } from "@/hooks/use-stable-callback";
 import { useChannelLayoutConfig } from "@/hooks/use-channel-layout-config";
 import type { ApplyLayoutResult } from "@/components/layout/channel-list";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
-import { mergeMemberStatuses } from "@/lib/member-roster";
+import { applyMemberStatuses, mergeMemberStatuses } from "@/lib/member-roster";
 import {
   useChannelNotifications,
   useNotifyOfferReady,
@@ -1571,6 +1582,8 @@ function MainAppContent({
     isNewcomerInviteDismissed(),
   );
   const newcomerInviteMomentOn = useNewcomerInviteMoment();
+  // `discord_import_notice`: the "veio do Discord?" card (`lib/discord-import-notice.ts`).
+  const discordImportNoticeOn = useDiscordImportNoticeFlag();
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Non-null while a caller wants a specific section on open — the user
   // menu's "send feedback", and the Steam / Battle.net / Twitch callback.
@@ -3093,6 +3106,18 @@ function MainAppContent({
     perms.can(Permission.MANAGE_SERVER),
     serverMembers.length,
   );
+  // What this person did with the "veio do Discord?" card on the open server
+  // (close, click), per user and server, in the hints store.
+  const discordImportNoticeHistory = useDiscordImportNoticeRecord(
+    user?.id ?? null,
+    selectedServerId,
+  );
+  // Whether the import can go INTO this server (`discord_import_existing`, per
+  // server). The card waits for the answer so its words and its button agree.
+  const discordImportExisting = useDiscordImportExisting(
+    selectedServerId,
+    discordImportNoticeOn && perms.can(Permission.MANAGE_SERVER),
+  );
   /**
    * Every `watch_party` channel on the open server this viewer may see the
    * history of, that actually has a broadcast to show -- see the long
@@ -3961,8 +3986,15 @@ function MainAppContent({
       fetchMembers(selectedServerId),
       fetchRoles(selectedServerId).catch(() => ({ roles: [] as ServerRole[] })),
     ])
-      .then(([{ members }, { roles }]) => {
+      .then(([{ members, roster }, { roles }]) => {
         if (!cancelled) {
+          // The poll below asks for statuses only while this token still names
+          // the people in the list.
+          rosterHeldRef.current = {
+            serverId: selectedServerId,
+            token: roster ?? null,
+            count: members.length,
+          };
           setServerMembers(members);
           setRosterServerId(selectedServerId);
           setServerRoles(roles);
@@ -3990,11 +4022,23 @@ function MainAppContent({
   const applyRosterPayload = useCallback((incoming: ServerMember[]) => {
     setServerMembers((prev) => mergeMemberStatuses(prev, incoming));
   }, []);
+  const rosterHeldRef = useRef<{
+    serverId: string;
+    token: string | null;
+    count: number;
+  } | null>(null);
+  const applyRosterStatuses = useCallback(
+    (statuses: Parameters<typeof applyMemberStatuses>[1]) => {
+      setServerMembers((prev) => applyMemberStatuses(prev, statuses));
+    },
+    [],
+  );
   const refreshMemberRoster = useMemberRosterRefresh(
     conversationParticipants ? null : selectedServerId,
     memberRosterNudge,
     applyRosterPayload,
     serverMembers.length,
+    { held: rosterHeldRef, onStatuses: applyRosterStatuses },
   );
 
   /**
@@ -5077,6 +5121,35 @@ function MainAppContent({
         // Noted before the read: a look or a find chosen while it is in flight
         // is newer than its answer (`preferenceWrittenSince`).
         const readGeneration = preferenceWriteGeneration();
+        // EVERY READ THAT DOES NOT NEED THE ANSWER FROM `/api/me` STARTS WITH
+        // IT. This function used to ask for them one after another: me, ICE,
+        // the voice backend, the servers, the channels, the messages. Each is
+        // its own round trip (and, to a different origin, behind its own CORS
+        // preflight), so on a 180 ms link the first message appeared about
+        // 2.3 s after `/api/me`, and three of those six hops were waiting for
+        // nothing. They are started here and awaited further down in the same
+        // order as before, so what the code does with each answer, and when, is
+        // unchanged; only the waiting overlaps.
+        //
+        // An account that has not passed the age gate gets 403s for the ones
+        // that follow, and they are simply never read: the gate below still
+        // returns before any of them is used. The rejection is marked handled
+        // here so a never-read failure cannot surface as an unhandled one.
+        const iceRead = fetchIceServers().then(
+          ({ iceServers }) => iceServers,
+          () => [] as Awaited<ReturnType<typeof fetchIceServers>>["iceServers"],
+        );
+        const backendRead = isMeshForced()
+          ? null
+          : fetchVoiceBackend().then(
+              ({ backend }) => backend,
+              () => null,
+            );
+        const serversRead = fetchServers();
+        serversRead.catch(() => {});
+        const homeConfigRead = loadCommunityHomeConfig();
+        // The channels and newest messages the address already names.
+        prefetchBootReads(parseAppRoute(window.location.pathname));
         const me = await fetchMe();
         if (cancelled) {
           return;
@@ -5141,13 +5214,11 @@ function MainAppContent({
         setLocalSettings(merged);
         saveLocalSettings(merged);
 
-        try {
-          const { iceServers } = await fetchIceServers();
-          if (!cancelled && iceServers.length > 0) {
-            voice.setIceServers(iceServers);
-          }
-        } catch {
-          // STUN / VITE_TURN fallbacks still apply
+        // A failed read is an empty list: the STUN / VITE_TURN fallbacks still
+        // apply.
+        const iceServers = await iceRead;
+        if (!cancelled && iceServers.length > 0) {
+          voice.setIceServers(iceServers);
         }
 
         // Declare whether this build can run the SFU media path. This is a
@@ -5158,14 +5229,12 @@ function MainAppContent({
         // fallback for a server too old to state the transport. When it failed
         // this tab used to be pinned to mesh for its whole life, which on an SFU
         // deployment meant sitting in calls nobody could hear.
-        if (!cancelled && !isMeshForced()) {
-          let legacyTransport: VoiceRoomTransport = "mesh";
-          try {
-            const { backend } = await fetchVoiceBackend();
-            legacyTransport = backend === "livekit" ? "livekit" : "mesh";
-          } catch {
-            // Older server without /api/voice/backend, or a blip.
-          }
+        if (!cancelled && backendRead) {
+          // Null when the read failed: an older server without
+          // /api/voice/backend, or a blip.
+          const backend = await backendRead;
+          const legacyTransport: VoiceRoomTransport =
+            backend === "livekit" ? "livekit" : "mesh";
           if (!cancelled) {
             voice.setSessionProvider(
               (voiceChannelId, peerId) =>
@@ -5176,8 +5245,8 @@ function MainAppContent({
         }
 
         const [{ servers: serverList }, homeConfig] = await Promise.all([
-          fetchServers(),
-          loadCommunityHomeConfig(),
+          serversRead,
+          homeConfigRead,
         ]);
         if (cancelled) {
           return;
@@ -6178,6 +6247,8 @@ function MainAppContent({
 
     return () => {
       cancelled = true;
+      // Whatever the boot read ahead of the answer belongs to this session.
+      clearBootPrefetch();
       if (bootstrapTimer !== null) {
         clearTimeout(bootstrapTimer);
       }
@@ -9979,6 +10050,11 @@ function MainAppContent({
     () => (newcomerInviteUserId ? startNewcomerInviteConfig() : undefined),
     [newcomerInviteUserId],
   );
+  // `discord_import_notice`, the same config route and the same gate.
+  useEffect(
+    () => (newcomerInviteUserId ? startDiscordImportNoticeConfig() : undefined),
+    [newcomerInviteUserId],
+  );
   // "Aparecer no diretório" (`community_listing_nudge`, `lib/community-
   // listing-nudge.ts`): asked once per page for an owner whose room has a
   // public address and no listing. The server picks the room (or none) and
@@ -10681,6 +10757,66 @@ function MainAppContent({
   }
 
   /**
+   * `discord_import_notice` (`lib/discord-import-notice.ts`): the invitation
+   * to import a Discord server, in the main text channel of a small, new
+   * server somebody manages. It takes the arrival strip's slot and yields to
+   * every other thing that holds it or the corner (the caller has already
+   * handled the live stream, a live party and the two strips ahead of it).
+   * Off, this is null and nothing differs.
+   */
+  function renderDiscordImportNotice(channelName: string | null) {
+    if (
+      !discordImportNoticeOn ||
+      discordImportExisting === null ||
+      !selectedServer ||
+      selection.kind !== "server" ||
+      activeConversation ||
+      selectedChannel?.kind !== "server" ||
+      channelName === null
+    ) {
+      return null;
+    }
+    const mainText = channels.find((channel) => channel.type === "text");
+    const visible = discordImportNoticeVisible({
+      flagOn: true,
+      canManage: perms.can(Permission.MANAGE_SERVER),
+      serverCreatedAt: selectedServer.createdAt,
+      memberCount: serverMembers.length,
+      channelCount: channels.filter((channel) => channel.type !== "category")
+        .length,
+      imported: bringCrew.arrivals?.imported,
+      onMainTextChannel: mainText?.id === selectedChannel.id,
+      partyLive: Boolean(selectedPartyLive),
+      inCall: voiceState.status !== "idle",
+      // One thing at a time: a corner card (the queue's winner) or an
+      // attached feature hint holds the screen already.
+      otherCardUp:
+        effectiveCornerHint !== null || liveAttachedHint !== null,
+      record: discordImportNoticeHistory.record,
+      recordReadable: discordImportNoticeHistory.readable,
+    });
+    if (!visible) {
+      return null;
+    }
+    return (
+      <DiscordImportNotice
+        serverId={selectedServer.id}
+        // Where `discord_import_existing` is on for this server the import goes
+        // INTO it (additive; the merge dialog); everywhere else it is the
+        // create-new import every server has always had. The words follow.
+        existing={discordImportExisting}
+        onImport={() => {
+          discordImportNoticeHistory.click();
+          openDiscordImport(
+            discordImportExisting ? { serverId: selectedServer.id } : {},
+          );
+        }}
+        onDismiss={discordImportNoticeHistory.close}
+      />
+    );
+  }
+
+  /**
    * The arrival banner for whatever is on screen, or nothing. One builder for
    * the two places it mounts (the channel pane and the community home), so
    * the rule deciding what it says lives in `arrivalVariant` and nowhere else.
@@ -10734,12 +10870,14 @@ function MainAppContent({
         />
       );
     }
+    const discordNotice =
+      surface === "text" ? renderDiscordImportNotice(channelName) : null;
     if (
       !arrivalServerId ||
       arrivalServerId !== selectedServerId ||
       !selectedServer
     ) {
-      return null;
+      return discordNotice;
     }
     const createdHere = createdServerIds.has(arrivalServerId);
     const variant = arrivalVariant({
@@ -10751,7 +10889,7 @@ function MainAppContent({
       inCall,
     });
     if (!variant) {
-      return null;
+      return discordNotice;
     }
     const serverId = arrivalServerId;
     return (
