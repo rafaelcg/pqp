@@ -6716,7 +6716,10 @@ CREATE INDEX IF NOT EXISTS idx_server_apps_app_on
 -- 1.5 times the compact form) and every number written out in full (`1e-300`
 -- prints as 300 digits, up to about 50 times for the widest doubles). A limit
 -- tight to either could refuse a state the application accepted, so it is 1 MiB,
--- above 16384 x 52, and only bounds a row that got past the application.
+-- above 16384 x 52, and only bounds a row that got past the application. That
+-- bound holds for what the application writes: JSON.stringify of a parsed value,
+-- whose numbers are doubles (at most 1.8e308, 309 digits printed), never the raw
+-- text a client sent (`1e100000` is valid numeric to Postgres, Infinity to JS).
 CREATE TABLE IF NOT EXISTS app_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
