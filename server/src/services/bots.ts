@@ -22,7 +22,7 @@ import {
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
 import { getPool, type DbUser } from "../db.js";
-import { isEnabled } from "../lib/flags.js";
+import { flagServerOverrides, isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
 import { deriveHandle, slugifyUsername } from "./users.js";
 import { invalidateServerAudience } from "./servers.js";
@@ -600,6 +600,21 @@ export function saysName(body: string, foldedName: string): boolean {
 }
 
 /**
+ * Whether any server has bots on: the global answer, or a server overridden
+ * on. The background jobs ask this first, so with the feature off everywhere
+ * (the default) they never touch the database.
+ */
+export function customBotsOnAnywhere(): boolean {
+  if (isEnabled("custom_bots")) {
+    return true;
+  }
+  for (const on of flagServerOverrides("custom_bots").values()) {
+    if (on) return true;
+  }
+  return false;
+}
+
+/**
  * The bot's fixed welcome, when somebody joins a server whose bot has it on.
  * No model is called: the text is what staff wrote, with `{membro}` as an
  * @mention of the new member and `{servidor}` as the server's name. Called
@@ -672,7 +687,7 @@ export async function queuePlanDecision(input: {
   planId: string;
   userId: string;
   decision: "yes" | "no";
-}): Promise<"queued" | "missing" | "not-yours" | "decided" | "expired" | "off"> {
+}): Promise<"queued" | "missing" | "not-yours" | "decided" | "expired" | "off" | "refused"> {
   const found = await getPool().query<{
     bot_id: string;
     server_id: string;
@@ -702,6 +717,14 @@ export async function queuePlanDecision(input: {
   }
   if (plan.expired) {
     return "expired";
+  }
+  // A member in timeout cannot confirm by button what they could not confirm
+  // by typing "sim". Cancelling stays open to them.
+  if (input.decision === "yes") {
+    const { findTimeoutForChannel } = await import("./sanctions.js");
+    if ((await findTimeoutForChannel(input.userId, plan.channel_id)) !== null) {
+      return "refused";
+    }
   }
   // Keyed on the plan's message, so the first press wins and a second one,
   // or a Cancel after a Confirm, inserts nothing.
@@ -903,6 +926,13 @@ async function queueCappedRun(input: {
 }): Promise<boolean> {
   const { bot, followUp } = input;
   const channel = { id: input.channelId, server_id: input.serverId };
+  // Most plain messages in a bot's channel are not follow-ups. One indexed
+  // read settles that before the permission read, the transaction and the
+  // lock below, so a busy channel does not hold pooled connections for
+  // messages the bot will never see. The insert checks the window again.
+  if (followUp && !(await followUpWindowOpen(bot.id, input.channelId, input.requesterId))) {
+    return false;
+  }
   // Two open questions per person (the second waits for the first), and a
   // few per hour: a member mashing the mention must not spend the server's
   // day, or flood the channel with answers. The server's owner and admins
@@ -985,6 +1015,21 @@ async function queueCappedRun(input: {
     await sendBotNotice(channel.id, bot, input.requesterId, "member-hour", limit, retryAt);
   }
   return false;
+}
+
+/** The member's latest run here was answered within the follow-up window. */
+async function followUpWindowOpen(botId: string, channelId: string, requesterId: string): Promise<boolean> {
+  const result = await getPool().query(
+    `SELECT 1 FROM (
+       SELECT status, finished_at FROM server_bot_runs
+        WHERE bot_id = $1 AND requester_id = $3 AND channel_id = $2
+          AND created_at > NOW() - INTERVAL '1 hour'
+        ORDER BY created_at DESC LIMIT 1
+     ) latest
+      WHERE latest.status = 'done' AND latest.finished_at > NOW() - make_interval(secs => $4)`,
+    [botId, channelId, requesterId, BOT_FOLLOW_UP_SECONDS],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 /**

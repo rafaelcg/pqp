@@ -11,7 +11,7 @@ import { startAdaptivePoller, type AdaptivePoller } from "../lib/adaptive-poller
 import { isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
 import { broadcastToChannel, postChannelMessage } from "../ws/chat.js";
-import { BOT_RUNS_CHANNEL, botRepliesPerDay, sendBotNotice } from "./bots.js";
+import { BOT_RUNS_CHANNEL, botRepliesPerDay, customBotsOnAnywhere, sendBotNotice } from "./bots.js";
 import { botDay, bumpBotPerson, bumpBotStats, nextBotDayStart, saoPauloNow } from "./bot-stats.js";
 import {
   findMessageByNonce,
@@ -81,7 +81,13 @@ import { confirmationWord, normalizeTools } from "./bots.js";
  */
 
 const CLAIM_BATCH = 4;
-const LEASE_SECONDS = 90;
+/**
+ * Longer than one model turn at its worst: a 60 s call, one retry of 60 s and
+ * the SDK's backoff between them (`bot-llm.ts`). The lease is renewed between
+ * turns, so it only has to outlive one; shorter, and a second worker could take
+ * the run over mid-call and pay the model twice.
+ */
+const LEASE_SECONDS = 180;
 const MAX_ATTEMPTS = 3;
 /** An answer this late reads like a bug, not a reply. */
 const STALE_AFTER_MS = 10 * 60_000;
@@ -631,8 +637,19 @@ export function dropMention(text: string, username: string | null): string {
 }
 
 export function sanitizeBotReply(text: string): string {
+  const trimmed = defuseMentions(text).trim();
+  return trimmed.length > REPLY_MAX_CHARS ? `${trimmed.slice(0, REPLY_MAX_CHARS - 1)}…` : trimmed;
+}
+
+/**
+ * No @everyone or @here, and at most `MAX_USER_MENTIONS` people, across the
+ * whole text. Run once more over every post as it goes out, because a plan or
+ * result card's text names things the model chose (a post's preview, a poll
+ * question, a reason) on top of the model's own sentence.
+ */
+export function defuseMentions(text: string): string {
   const allowed = new Set<string>();
-  const defused = text.replace(/@([A-Za-z0-9_]{2,32})/g, (whole, name: string) => {
+  return text.replace(/@([A-Za-z0-9_]{2,32})/g, (whole, name: string) => {
     const lower = name.toLowerCase();
     if (lower === "everyone" || lower === "here") {
       return `＠${name}`;
@@ -646,8 +663,6 @@ export function sanitizeBotReply(text: string): string {
     }
     return `＠${name}`;
   });
-  const trimmed = defused.trim();
-  return trimmed.length > REPLY_MAX_CHARS ? `${trimmed.slice(0, REPLY_MAX_CHARS - 1)}…` : trimmed;
 }
 
 async function runOne(run: ClaimedRun): Promise<void> {
@@ -691,6 +706,13 @@ async function runOne(run: ClaimedRun): Promise<void> {
     model: ctx.model,
     answerChannelIds: new Set(ctx.channelIds),
   };
+
+  // A bot in timeout here stays quiet: its own post goes through no route, so
+  // the moderation that holds every member back has to be asked here.
+  const { findTimeoutForChannel } = await import("./sanctions.js");
+  if ((await findTimeoutForChannel(ctx.bot.id, run.channel_id)) !== null) {
+    return finishRun(run, "skipped", "bot-timeout");
+  }
 
   if (run.plan_id) {
     return answerConfirmation(run, ctx.trigger.body, actionCtx);
@@ -774,6 +796,7 @@ async function runOne(run: ClaimedRun): Promise<void> {
 
   const session = new ActionSession(actionCtx);
   session.messageRefs = transcript.refs;
+  session.offered = new Set(offered.tools.map((tool) => tool.name));
   const messages: BotMessage[] = [
     { role: "user", text: prompt, ...(transcript.images.length > 0 ? { images: transcript.images } : {}) },
   ];
@@ -1201,7 +1224,7 @@ async function postReply(
   const posted = await postChannelMessage({
     author: bot,
     channelId: run.channel_id,
-    body,
+    body: defuseMentions(body),
     replyToId: run.message_id ?? undefined,
     nonce: run.id,
     ...(botCard ? { botCard } : {}),
@@ -1399,7 +1422,8 @@ async function abandonPlanCard(channelId: string, messageId: string): Promise<vo
 }
 
 export async function runBotRunsTick(): Promise<number> {
-  if (!botProviderConfigured()) {
+  // Off everywhere, or no model: nothing to claim, and no query to find that out.
+  if (!customBotsOnAnywhere() || !botProviderConfigured()) {
     return 0;
   }
   const runs = await claimRuns(CLAIM_BATCH);

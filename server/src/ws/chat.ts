@@ -2742,22 +2742,6 @@ async function postChannelMessageAttempt(
     console.error("[outgoing-webhooks] enqueue failed:", error);
   }
 
-  // A server bot answers a mention or a reply to it (services/bots.ts). After
-  // the commit, like the hook above, and just as unable to fail the send: the
-  // message already landed, so an error here means no answer and nothing else.
-  try {
-    await maybeQueueBotReply({
-      author: input.author,
-      channel: channel ?? null,
-      messageId: dbMessage.id,
-      body: dbMessage.body,
-      repliedToUserId: parent?.author_id ?? null,
-      hasAttachments: (input.attachmentIds?.length ?? 0) > 0,
-    });
-  } catch (error) {
-    console.error("[bots] enqueue failed:", error);
-  }
-
   const message = mapMessage(dbMessage);
   // A forward is its own preview: the fallback line's URL is the card's
   // `url`, and unfurling it would draw the same thing twice under the card.
@@ -2780,6 +2764,24 @@ async function postChannelMessageAttempt(
     },
     input.senderSocket,
   );
+
+  // A server bot answers a mention or a reply to it (services/bots.ts). After
+  // the broadcast, so the people in the channel never wait on the bot, and
+  // just as unable to fail the send: the message already landed, so an error
+  // here means no answer and nothing else. With the flag off for this server
+  // it returns before touching the database.
+  try {
+    await maybeQueueBotReply({
+      author: input.author,
+      channel: channel ?? null,
+      messageId: dbMessage.id,
+      body: dbMessage.body,
+      repliedToUserId: parent?.author_id ?? null,
+      hasAttachments: (input.attachmentIds?.length ?? 0) > 0,
+    });
+  } catch (error) {
+    console.error("[bots] enqueue failed:", error);
+  }
 
   const mentions = extractMentionUsernames(mentionSource);
   const mentionedUserIds = mentionIdsFromDb

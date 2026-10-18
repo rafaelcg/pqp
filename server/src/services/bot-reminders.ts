@@ -144,6 +144,11 @@ export function nextOccurrence(dueAt: Date, repeat: ReminderRepeat, now: number 
  * member is still staff. One that fails that is cancelled, not retried.
  */
 export async function deliverDueReminders(): Promise<number> {
+  // Off everywhere (the default): nothing is due anywhere, and no query asks.
+  const { customBotsOnAnywhere } = await import("./bots.js");
+  if (!customBotsOnAnywhere()) {
+    return 0;
+  }
   const claimed = await getPool().query<ReminderRow>(
     `UPDATE server_bot_reminders r
         SET lease_until = NOW() + make_interval(secs => $1)
@@ -170,7 +175,28 @@ export async function deliverDueReminders(): Promise<number> {
   return claimed.rows.length;
 }
 
+/**
+ * How late a one-off reminder may still go out. Past it, one that waited (the
+ * flag was off for its server, or the jobs were down) is dropped: a reminder
+ * for tonight that arrives tomorrow is noise.
+ */
+const ONE_OFF_GRACE_MS = 6 * 3_600_000;
+/** How long a reminder held while its server's flag is off waits before it is looked at again. */
+const HOLD_SECONDS = 300;
+
 async function deliverOne(reminder: ReminderRow): Promise<void> {
+  // The flag is a rollout switch, so off is not a verdict on the reminder: it
+  // waits for the flag to come back. A repeating one moves on to its next
+  // slot without posting; a one-off is held, and dropped once it is too late.
+  if (!isEnabled("custom_bots", { serverId: reminder.server_id })) {
+    await holdReminder(reminder);
+    return;
+  }
+  if (!reminder.repeat && Date.now() - reminder.due_at.getTime() > ONE_OFF_GRACE_MS) {
+    await cancelReminder(reminder.server_id, reminder.id);
+    logEvent("bots.reminderDropped", { reminderId: reminder.id, reason: "late" });
+    return;
+  }
   const context = await getPool().query<{
     bot_user_id: string;
     enabled: boolean;
@@ -196,13 +222,12 @@ async function deliverOne(reminder: ReminderRow): Promise<void> {
     row.enabled &&
     row.member &&
     !timedOut &&
-    isEnabled("custom_bots", { serverId: reminder.server_id }) &&
     hasPermission(perms, Permission.VIEW_CHANNEL) &&
     hasPermission(perms, Permission.SEND_MESSAGES) &&
     (reminder.kind === "me" || hasPermission(perms, Permission.MANAGE_MESSAGES));
   if (!allowed) {
     await cancelReminder(reminder.server_id, reminder.id);
-    logEvent("bots.reminderDropped", { reminderId: reminder.id });
+    logEvent("bots.reminderDropped", { reminderId: reminder.id, reason: "refused" });
     return;
   }
 
@@ -232,5 +257,24 @@ async function deliverOne(reminder: ReminderRow): Promise<void> {
             SET status = 'sent', sent_count = sent_count + 1, finished_at = NOW(), lease_until = NULL
           WHERE id = $1`,
     reminder.repeat ? [reminder.id, nextOccurrence(reminder.due_at, reminder.repeat)] : [reminder.id],
+  );
+}
+
+async function holdReminder(reminder: ReminderRow): Promise<void> {
+  if (reminder.repeat) {
+    await getPool().query(
+      `UPDATE server_bot_reminders SET due_at = $2, lease_until = NULL WHERE id = $1 AND status = 'pending'`,
+      [reminder.id, nextOccurrence(reminder.due_at, reminder.repeat)],
+    );
+    return;
+  }
+  if (Date.now() - reminder.due_at.getTime() > ONE_OFF_GRACE_MS) {
+    await cancelReminder(reminder.server_id, reminder.id);
+    logEvent("bots.reminderDropped", { reminderId: reminder.id, reason: "late" });
+    return;
+  }
+  await getPool().query(
+    `UPDATE server_bot_reminders SET lease_until = NOW() + make_interval(secs => $2) WHERE id = $1 AND status = 'pending'`,
+    [reminder.id, HOLD_SECONDS],
   );
 }

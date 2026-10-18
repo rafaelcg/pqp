@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Server bot actions on a real Postgres: the tool loop, the two keys, plans
@@ -23,7 +23,7 @@ const { setBotProviderForTests } = await import("./bot-llm.js");
 const { ActionSession, executePlan, handleToolCall, savePlan } = await import("./bot-actions.js");
 const { postChannelMessage, resetChatRateLimits } = await import("../ws/chat.js");
 const { setBotImageLoaderForTests } = await import("./bot-media.js");
-const { maybeQueueBotReply } = await import("./bots.js");
+const { maybeQueueBotReply, queuePlanDecision } = await import("./bots.js");
 
 type Completion = Awaited<ReturnType<import("./bot-llm.js").BotProvider["complete"]>>;
 type Input = Parameters<import("./bot-llm.js").BotProvider["complete"]>[0];
@@ -642,7 +642,7 @@ describeDb("server bot actions", () => {
         serverId: server.id,
         channelId,
         botId: "x",
-        bot: { id: "x" } as never,
+        bot: { id: crypto.randomUUID() } as never,
         requesterId: member.id,
         requesterTag: "@bia",
         enabledTools: new Set<string>(SERVER_BOT_TOOLS),
@@ -1144,5 +1144,197 @@ describeDb("server bot actions", () => {
       expect(await botReplies(bot.userId)).toHaveLength(1);
     });
   });
-});
 
+  describe("the asker's own rights, where the action happens", () => {
+    const timeOut = (serverId: string, userId: string) =>
+      getPool().query(
+        `INSERT INTO member_timeouts (server_id, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '1 hour')`,
+        [serverId, userId],
+      );
+    const botRow = async (userId: string) =>
+      (await getPool().query(`SELECT * FROM users WHERE id = $1`, [userId])).rows[0];
+
+    it("refuses a read the member lacks the permission for, even when the model calls it anyway", async () => {
+      const { member, server, channelId, bot } = await setup();
+      // The bot may read the bans; the member asking may not.
+      const banners = await createRole(server.id, { name: "banners", permissions: Permission.BAN_MEMBERS });
+      await assignRole(server.id, bot.userId, banners.id);
+      const banned = await upsertUser({ clerkId: "banned", displayName: "Zé", avatarUrl: null });
+      await getPool().query(`INSERT INTO server_bans (server_id, user_id, reason) VALUES ($1, $2, 'segredo')`, [
+        server.id,
+        banned.id,
+      ]);
+      script = (_input, turn) => (turn === 0 ? { calls: [{ name: "list_bans", input: {} }] } : { text: "ok" });
+      await postChannelMessage({ author: member, channelId, body: "@caio_bot quem foi banido?" });
+      await runBotRunsTick();
+
+      expect(seen[0]!.tools?.map((tool) => tool.name)).not.toContain("list_bans");
+      const toolTurn = seen[1]!.messages.at(-1);
+      expect(toolTurn?.role === "tool" && toolTurn.results[0]!.isError).toBe(true);
+      expect(toolTurn?.role === "tool" ? toolTurn.results[0]!.content : "").not.toContain("segredo");
+      expect((await botReplies(bot.userId)).join("\n")).not.toContain("segredo");
+      // And on its own, without the offered list in front of it.
+      const direct = await handleToolCall(
+        new ActionSession({
+          serverId: server.id,
+          channelId,
+          botId: bot.id,
+          bot: await botRow(bot.userId),
+          requesterId: member.id,
+          requesterTag: "@bia",
+          enabledTools: new Set<string>(SERVER_BOT_TOOLS),
+        }),
+        "list_bans",
+        {},
+      );
+      expect(direct.isError).toBe(true);
+      expect(direct.content).toContain("Ban Members");
+    });
+
+    it("reads Manage Messages in the message's channel, not server-wide", async () => {
+      const { member, server, channelId, oldId, bot } = await setup();
+      const mods = await createRole(server.id, { name: "mods", permissions: Permission.MANAGE_MESSAGES });
+      await assignRole(server.id, member.id, mods.id);
+      await upsertChannelOverwrite(oldId, server.id, "role", mods.id, 0n, Permission.MANAGE_MESSAGES);
+      const there = await postChannelMessage({ author: member, channelId: oldId, body: "fica" });
+      const here = await postChannelMessage({ author: member, channelId, body: "sai" });
+      if (!there.ok || !here.ok) throw new Error("post");
+      const session = new ActionSession({
+        serverId: server.id,
+        channelId,
+        botId: bot.id,
+        bot: await botRow(bot.userId),
+        requesterId: member.id,
+        requesterTag: "@bia",
+        enabledTools: new Set<string>(SERVER_BOT_TOOLS),
+      });
+      session.messageRefs.set(1, { id: there.message.id, authorName: "Bia", preview: "fica" });
+      session.messageRefs.set(2, { id: here.message.id, authorName: "Bia", preview: "sai" });
+      const refused = await handleToolCall(session, "delete_message", { messageRef: 1 });
+      expect(refused.isError).toBe(true);
+      expect(refused.content).toContain("Manage Messages");
+      expect((await handleToolCall(session, "delete_message", { messageRef: 2 })).isError).toBeFalsy();
+    });
+
+    it("stops a member in timeout from confirming by button, and a step when the bot is in timeout", async () => {
+      const { owner, member, server, channelId, oldId, bot } = await setup();
+      const mods = await createRole(server.id, { name: "mods", permissions: Permission.MANAGE_CHANNELS });
+      await assignRole(server.id, member.id, mods.id);
+      script = (_input, turn) =>
+        turn === 0 ? { calls: [{ name: "delete_channel", input: { channelId: oldId } }] } : { text: "Confirma?" };
+      await postChannelMessage({ author: member, channelId, body: "@caio_bot apaga o #velho" });
+      await runBotRunsTick();
+      const plan = (await getPool().query<{ id: string }>(`SELECT id FROM server_bot_plans`)).rows[0]!;
+
+      await timeOut(server.id, member.id);
+      expect(await queuePlanDecision({ planId: plan.id, userId: member.id, decision: "yes" })).toBe("refused");
+      expect(await queuePlanDecision({ planId: plan.id, userId: member.id, decision: "no" })).toBe("queued");
+
+      // The bot in timeout: a step staged before it runs nothing.
+      await getPool().query(`DELETE FROM member_timeouts`);
+      await timeOut(server.id, bot.userId);
+      const ctx = {
+        serverId: server.id,
+        channelId,
+        botId: bot.id,
+        bot: await botRow(bot.userId),
+        requesterId: owner.id,
+        requesterTag: "@rafa",
+        enabledTools: new Set<string>(SERVER_BOT_TOOLS),
+      };
+      const staged = await savePlan(
+        ctx,
+        crypto.randomUUID(),
+        [{ tool: "create_channel", input: { name: "nova", type: "text" }, label: "Criar canal", destructive: false }],
+        "executing",
+      );
+      const result = await executePlan(staged!, ctx);
+      expect(result.items[0]!.status).not.toBe("ok");
+      expect(await channelNamed(server.id, "nova")).toBe(0);
+    });
+
+    it("stays quiet while the bot is in timeout, without calling the model", async () => {
+      const { owner, server, channelId, bot } = await setup();
+      await timeOut(server.id, bot.userId);
+      await postChannelMessage({ author: owner, channelId, body: "@caio_bot oi" });
+      await runBotRunsTick();
+      expect(seen).toHaveLength(0);
+      expect(await botReplies(bot.userId)).toEqual([]);
+    });
+
+    it("caps the mentions in a card's text, not only in the model's sentence", async () => {
+      const { owner, channelId, bot } = await setup();
+      const names = ["ana", "beto", "caca", "duda", "edu"];
+      for (const name of names) {
+        await upsertUser({ clerkId: name, displayName: name, avatarUrl: null });
+      }
+      const question = names.map((name) => `@${name}`).join(" ");
+      script = (_input, turn) =>
+        turn === 0
+          ? { calls: [{ name: "create_poll", input: { question, options: ["a", "b"] } }] }
+          : { text: "Feito." };
+      await postChannelMessage({ author: owner, channelId, body: "@caio_bot faz uma enquete" });
+      await runBotRunsTick();
+      const card = (await botReplies(bot.userId)).find((body) => body.includes("Feito."))!;
+      expect(card.match(/(^|[^＠\w])@[a-z]/g)?.length ?? 0).toBeLessThanOrEqual(3);
+    });
+  });
+
+  describe("with the flag off", () => {
+    const channelOf = (serverId: string, channelId: string) =>
+      ({ id: channelId, kind: "server", server_id: serverId, type: "text", parent_id: null }) as never;
+
+    it("lets a message in a bot's channel through without a query", async () => {
+      const { member, server, channelId } = await setup();
+      process.env.CUSTOM_BOTS = "false";
+      resetBotTriggerCacheForTests();
+      const query = vi.spyOn(getPool(), "query");
+      const connect = vi.spyOn(getPool(), "connect");
+      try {
+        const queued = await maybeQueueBotReply({
+          author: member,
+          channel: channelOf(server.id, channelId),
+          messageId: crypto.randomUUID(),
+          body: "@caio_bot oi",
+          repliedToUserId: null,
+        });
+        expect(queued).toBe(false);
+        expect(await runBotRunsTick()).toBe(0);
+        expect(query).not.toHaveBeenCalled();
+        expect(connect).not.toHaveBeenCalled();
+      } finally {
+        query.mockRestore();
+        connect.mockRestore();
+      }
+    });
+
+    it("takes no lock, with it on, for a plain message that is not a follow-up", async () => {
+      const { member, server, channelId } = await setup();
+      // Warm the bot cache, which is one read of its own.
+      await maybeQueueBotReply({
+        author: member,
+        channel: channelOf(server.id, channelId),
+        messageId: crypto.randomUUID(),
+        body: "aquecendo",
+        repliedToUserId: null,
+      });
+      // One read and no transaction: `pool.query` borrows and returns its own
+      // connection, so the lock path would show up as more calls.
+      const query = vi.spyOn(getPool(), "query");
+      try {
+        const queued = await maybeQueueBotReply({
+          author: member,
+          channel: channelOf(server.id, channelId),
+          messageId: crypto.randomUUID(),
+          body: "bom dia galera",
+          repliedToUserId: null,
+        });
+        expect(queued).toBe(false);
+        expect(query).toHaveBeenCalledTimes(1);
+        expect(String(query.mock.calls[0]![0])).toContain("finished_at");
+      } finally {
+        query.mockRestore();
+      }
+    });
+  });
+});

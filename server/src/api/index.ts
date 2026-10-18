@@ -4096,6 +4096,15 @@ router.post("/api/servers/:serverId/bots/:botId/intro", async ({ req, user }, { 
   if (!bot.channelIds.includes(body.channelId)) {
     throw new HttpError(400, "The bot does not live in that channel");
   }
+  if (!botsEnabled(serverId!)) {
+    throw new HttpError(403, "bots_disabled");
+  }
+  // The hello is the staff member's words: they post it as the bot only where
+  // they could post it themselves.
+  const introPerms = await computeMemberPermissions(serverId!, user.id, body.channelId);
+  if (!hasPermission(introPerms, Permission.VIEW_CHANNEL) || !hasPermission(introPerms, Permission.SEND_MESSAGES)) {
+    throw new Forbidden("You cannot post in that channel");
+  }
   const author = await getUserById(bot.userId);
   if (!author) {
     throw new NotFound("Bot not found");
@@ -4127,6 +4136,9 @@ router.post("/api/bots/plans/:planId/decision", async ({ req, user }, { planId }
   }
   if (outcome === "not-yours") {
     throw new Forbidden("Only the member who asked can decide");
+  }
+  if (outcome === "refused") {
+    throw new Forbidden("You are in timeout");
   }
   if (outcome === "decided" || outcome === "expired") {
     throw new HttpError(409, outcome);

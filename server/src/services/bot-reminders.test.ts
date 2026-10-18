@@ -210,4 +210,48 @@ describeDb("server bot reminders", () => {
     expect((await tool(member.id, "cancel_reminder", { reminderId: id })).isError).toBeFalsy();
     expect(JSON.parse((await tool(member.id, "list_reminders", {})).content).count).toBe(0);
   });
+
+  it("waits while the flag is off for its server, and goes out once it is back", async () => {
+    const { owner, member, server, otherId, channelId, bot, tool } = await setup();
+    await tool(member.id, "create_reminder", { at: inMinutes(30), text: "água" });
+    await tool(owner.id, "create_reminder", { at: inMinutes(60), text: "Jogatina", repeat: "weekly", channelId: otherId });
+    const weekly = `SELECT due_at, status, sent_count FROM server_bot_reminders WHERE repeat IS NOT NULL`;
+    const before = (await getPool().query<{ due_at: Date }>(weekly)).rows[0]!.due_at;
+    await makeDue();
+
+    // Off everywhere: the job does not even look.
+    process.env.CUSTOM_BOTS = "false";
+    expect(await deliverDueReminders()).toBe(0);
+
+    // Off for this server only: claimed and held, never cancelled.
+    process.env.CUSTOM_BOTS = "true";
+    const { resetFeatureFlagsForTests, setServerFlagOverride } = await import("../lib/flags.js");
+    await setServerFlagOverride("custom_bots", server.id, false, { kind: "dashboard" });
+    try {
+      expect(await deliverDueReminders()).toBe(2);
+      const held = await getPool().query<{ status: string }>(`SELECT status FROM server_bot_reminders`);
+      expect(held.rows.map((row) => row.status)).toEqual(["pending", "pending"]);
+      // The weekly one skipped this slot without posting; the one-off waits.
+      const after = (await getPool().query<{ due_at: Date; sent_count: number }>(weekly)).rows[0]!;
+      expect(after.due_at.getTime() - before.getTime()).toBeGreaterThan(6 * 86_400_000);
+      expect(after.sent_count).toBe(0);
+      expect(await posts(channelId, bot.userId)).toEqual([]);
+    } finally {
+      await setServerFlagOverride("custom_bots", server.id, null, { kind: "dashboard" });
+      resetFeatureFlagsForTests();
+    }
+    await getPool().query(`UPDATE server_bot_reminders SET lease_until = NULL`);
+    await deliverDueReminders();
+    expect(await posts(channelId, bot.userId)).toHaveLength(1);
+  });
+
+  it("drops a one-off reminder that is hours late instead of posting it", async () => {
+    const { member, channelId, bot, tool } = await setup();
+    await tool(member.id, "create_reminder", { at: inMinutes(30), text: "ontem à noite" });
+    await getPool().query(`UPDATE server_bot_reminders SET due_at = NOW() - INTERVAL '7 hours'`);
+    await deliverDueReminders();
+    expect(await posts(channelId, bot.userId)).toEqual([]);
+    const row = await getPool().query<{ status: string }>(`SELECT status FROM server_bot_reminders`);
+    expect(row.rows[0]!.status).toBe("cancelled");
+  });
 });

@@ -37,7 +37,7 @@ import { forumChannelsEnabled } from "../lib/forum-config.js";
 import { describeMedia, loadMessageMedia } from "./bot-media.js";
 import { isCommunityHomeEnabled } from "./community-home.js";
 import { canActOnMember, computeMemberPermissions, getMemberHierarchy } from "./permissions.js";
-import { findTimeoutForRequest } from "./sanctions.js";
+import { findTimeoutForChannel, findTimeoutForRequest } from "./sanctions.js";
 import { listChannels } from "./servers.js";
 import { searchMessages } from "./search.js";
 
@@ -143,6 +143,12 @@ export class ActionSession {
    * a message the member could see in this conversation.
    */
   messageRefs = new Map<number, { id: string; authorName: string; preview: string }>();
+  /**
+   * The tools the model was offered this turn (`toolsFor`). A call to any
+   * other name is refused, whatever the conversation talked the model into.
+   * Null only where no model is involved (tests, a plan run from its card).
+   */
+  offered: ReadonlySet<string> | null = null;
   private channels: Map<string, ChannelInfo> | null = null;
   private serverPerms: bigint | null = null;
 
@@ -180,6 +186,58 @@ async function requireRequesterServerPermission(
 async function requesterSeesChannel(ctx: BotActionContext, channelId: string): Promise<boolean> {
   const perms = await computeMemberPermissions(ctx.serverId, ctx.requesterId, channelId);
   return hasPermission(perms, Permission.VIEW_CHANNEL);
+}
+
+/**
+ * The channel an action acts in, when it names one: the target channel, forum
+ * or post, or the channel of the message it acts on. Null for a server-wide
+ * action (a member, a new channel by `new:N` ref).
+ */
+async function actionChannelId(action: StagedAction): Promise<string | null> {
+  for (const key of ["channelId", "forumId", "postId"] as const) {
+    const value = action.input[key];
+    if (typeof value === "string" && UUID_RE.test(value)) {
+      return value;
+    }
+  }
+  const messageId = action.input.messageId;
+  if (typeof messageId === "string" && UUID_RE.test(messageId)) {
+    const found = await getPool().query<{ channel_id: string }>(`SELECT channel_id FROM messages WHERE id = $1`, [
+      messageId,
+    ]);
+    return found.rows[0]?.channel_id ?? null;
+  }
+  return null;
+}
+
+/**
+ * The asker may do this, where it happens: their permission is read in the
+ * channel the action touches (an overwrite there can take Manage Messages
+ * away), neither they nor the bot may be in timeout there, and a server-wide
+ * action reads their server permissions. Asked when the action is staged and
+ * again when it runs.
+ */
+async function requireRequesterMayDo(session: ActionSession, tool: ToolDef, action: StagedAction): Promise<void> {
+  const { ctx } = session;
+  const channelId = await actionChannelId(action);
+  const where = channelId ?? ctx.channelId;
+  if ((await findTimeoutForChannel(ctx.requesterId, where)) !== null) {
+    throw new ToolRefusal("The member who asked is in timeout, so you may not act for them.");
+  }
+  if ((await findTimeoutForChannel(ctx.bot.id, where)) !== null) {
+    throw new ToolRefusal("You are in timeout there, so you cannot do this.");
+  }
+  if (!tool.permission) {
+    return;
+  }
+  const perms = channelId
+    ? await computeMemberPermissions(ctx.serverId, ctx.requesterId, channelId)
+    : await session.requesterServerPerms();
+  if (!hasPermission(perms, tool.permission)) {
+    throw new ToolRefusal(
+      `The member who asked lacks the "${permissionName(tool.permission)}" permission${channelId ? " there" : ""}, so you may not do this for them.`,
+    );
+  }
 }
 
 /** A published, unlocked forum post of this server that the requester can see. */
@@ -1108,9 +1166,22 @@ const TOOLS: ToolDef[] = [
         requesterId: session.ctx.requesterId,
         withAnnouncements: staff,
       });
+      // Somebody else's announcement shows only in a channel the member can
+      // see, so the list never names a channel kept from them.
+      const sees = new Map<string, boolean>();
+      const visible = [];
+      for (const row of rows) {
+        if (row.requester_id !== session.ctx.requesterId) {
+          if (!sees.has(row.channel_id)) {
+            sees.set(row.channel_id, await requesterSeesChannel(session.ctx, row.channel_id));
+          }
+          if (!sees.get(row.channel_id)) continue;
+        }
+        visible.push(row);
+      }
       return {
-        count: rows.length,
-        reminders: rows.map((row) => ({
+        count: visible.length,
+        reminders: visible.map((row) => ({
           id: row.id,
           when: saoPauloLabel(row.due_at),
           channel: `#${row.channel_name}`,
@@ -1735,7 +1806,9 @@ const TOOLS: ToolDef[] = [
         tool: "create_invite",
         input: { maxUses, expiresInHours: hours },
         label: `Criar um convite${parts.length ? ` (${parts.join(", ")})` : ""}`,
-        destructive: false,
+        // An invite with no use limit and no expiry is a door left open for
+        // good: the member confirms it, like anything hard to take back.
+        destructive: maxUses === null || hours === null,
       };
     },
     async execute(env, action) {
@@ -1767,7 +1840,7 @@ const TOOLS: ToolDef[] = [
     },
     async stage(session, input) {
       const target = await memberTarget(session, input.userId);
-      return { tool: "remove_timeout", input: { userId: target.id }, label: `Tirar o silêncio de ${target.label}`, destructive: false };
+      return { tool: "remove_timeout", input: { userId: target.id }, label: `Tirar o silêncio de ${target.label}`, destructive: true };
     },
     async execute(env, action) {
       return routeResult(
@@ -1838,7 +1911,8 @@ const TOOLS: ToolDef[] = [
         tool: "unban_member",
         input: { bannedUserId: input.userId },
         label: `Desbanir ${row.username ? `@${row.username}` : row.display_name}`,
-        destructive: false,
+        // Undoes a moderator's decision: confirmed, never on the model's word.
+        destructive: true,
       };
     },
     async execute(env, action) {
@@ -1933,20 +2007,30 @@ export async function handleToolCall(
   if (!session.ctx.enabledTools.has(name)) {
     return { content: `${name} is switched off for you by the server's staff.`, isError: true };
   }
+  if (session.offered && !session.offered.has(name)) {
+    return { content: `${name} is not available to you for this request.`, isError: true };
+  }
   try {
+    // Reads too: a read that needs a permission (the ban list) is the asker's
+    // to make, and the bot's, exactly like a write.
+    if (tool.permission) {
+      await requireRequesterServerPermission(session, tool.permission, permissionName(tool.permission));
+      const botPerms = await computeMemberPermissions(session.ctx.serverId, session.ctx.bot.id);
+      if (!hasPermission(botPerms, tool.permission)) {
+        throw new ToolRefusal(`You lack the "${permissionName(tool.permission)}" permission on this server.`);
+      }
+    }
     if (tool.kind === "read") {
       const result = await tool.read!(session, input);
       const json = JSON.stringify(result);
       const max = tool.resultMax ?? 8000;
       return { content: json.length > max ? `${json.slice(0, max)}…(truncated)` : json, isError: false };
     }
-    if (tool.permission) {
-      await requireRequesterServerPermission(session, tool.permission, permissionName(tool.permission));
-    }
     if (session.staged.length >= BOT_ACTIONS_PER_REQUEST) {
       throw new ToolRefusal(`At most ${BOT_ACTIONS_PER_REQUEST} actions per request. Tell the member to ask for the rest separately.`);
     }
     const staged = await tool.stage!(session, input);
+    await requireRequesterMayDo(session, tool, staged);
     session.staged.push(staged);
     return {
       content: JSON.stringify({
@@ -2138,7 +2222,17 @@ export async function executePlan(
     if (!tool?.execute) {
       result = { ok: false, line: `${action.label}: ação desconhecida` };
     } else {
-      result = await runStep(tool, env, session, plan, step, action);
+      // A step that throws (the database went away mid-plan) fails that step,
+      // not the plan: the card still ends, with every row settled.
+      result = await runStep(tool, env, session, plan, step, action).catch((error: unknown) => {
+        logEvent("bots.actionError", {
+          planId: plan.id,
+          step,
+          tool: action.tool,
+          message: error instanceof Error ? error.message.slice(0, 200) : String(error),
+        });
+        return { ok: false, line: `${action.label}: erro` };
+      });
     }
     if (result.createdId && action.ref) refs.set(action.ref, result.createdId);
     lines.push(mark(result));
@@ -2186,9 +2280,15 @@ async function runStep(
     return { ok: false, line: `${action.label}: essa ação foi desligada nas configurações do bot` };
   }
   // Minutes may have passed since staging: the requester's role, their rank
-  // over a target member and their view of a target channel are asked again.
-  if (tool.permission && !hasPermission(await session.requesterServerPerms(), tool.permission)) {
-    return { ok: false, line: `${action.label}: ${ctx.requesterTag} não tem mais a permissão` };
+  // over a target member and their view of a target channel are asked again,
+  // and a timeout since (theirs or the bot's) stops it.
+  try {
+    await requireRequesterMayDo(session, tool, action);
+  } catch (error) {
+    if (error instanceof ToolRefusal) {
+      return { ok: false, line: `${action.label}: ${ctx.requesterTag} não tem mais a permissão` };
+    }
+    throw error;
   }
   try {
     if (typeof action.input.userId === "string") {
