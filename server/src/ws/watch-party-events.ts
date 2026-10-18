@@ -629,6 +629,7 @@ export function readHostPresenceCounters(): { heldElsewhere: number } {
 
 export function resetHostPresenceCountersForTests(): void {
   hostPresence.heldElsewhere = 0;
+  stampedByUs.clear();
   for (const timer of recheckTimers.values()) {
     clearTimeout(timer);
   }
@@ -673,34 +674,76 @@ function hostIsConnectedAnywhere(
   return true;
 }
 
+/** Presence without the log line: the second look at an answer already counted. */
+function hostConnectedQuiet(userId: string): boolean {
+  return userHasAuthenticatedSocket(userId) || hasClusterSocket(userId);
+}
+
 /**
- * Start the grace clock, and take it back if the host turns out to be here.
+ * Reconcile the host's grace stamp with where the host actually is.
  *
  * THE STAMP IS A DATABASE WRITE AND THE PRESENCE CHECK THAT LET IT HAPPEN WAS
  * READ BEFORE IT. On two machines a host's socket that reconnects onto the
  * sibling (the old one closing on A while the new one opens on B) can run its
  * whole `onHostSocketOpened` (the clear) between A's "nobody is connected" and
  * A's UPDATE landing. The stamp then arrives AFTER the clear, and nothing
- * clears it again: the host sits connected with `host_disconnected_at` set,
- * every co-host is offered Assumir (a claim that takes the party from a
- * present host), and five minutes later the sweep ends the party unless a
- * stream is up. So after a stamp that WE wrote, ask again; if the host is
- * connected anywhere now, clear it. Only the instance that wrote the stamp
- * pays for it, and only when a row actually changed.
+ * clears it again: a host sitting connected with `host_disconnected_at` set,
+ * every co-host offered Assumir (a claim that takes the party from a present
+ * host), and five minutes later the sweep ending the party unless a stream is
+ * up.
+ *
+ * `retract` is true only for the instance that WROTE a stamp, so everybody
+ * else's stray closes cost no write. Three things make this more than one
+ * look after the write:
+ *
+ *  - The look is repeated after the bus's propagation window
+ *    (`scheduleHostPresenceRecheck`), because the first one can be a stale
+ *    negative: B's contribution may not have crossed yet.
+ *  - A retraction is itself re-checked. A close that raced it found the stamp
+ *    still set, so its idempotent `markWatchPartyHostGone` wrote nothing and
+ *    was consumed; clearing the stamp then would leave an absent host with no
+ *    clock and nobody left to ask. So after clearing, if the host is gone,
+ *    stamp again, and look once more after the window.
+ *  - A failure of either write is retried (bounded), not swallowed.
  */
-async function startGraceClock(userId: string): Promise<void> {
+async function settleHostClock(
+  userId: string,
+  retract: boolean,
+): Promise<void> {
+  if (hostIsConnectedAnywhere(userId, "recheck")) {
+    if (!retract) {
+      return;
+    }
+    const cleared = await markWatchPartyHostBack(userId);
+    if (cleared.length === 0) {
+      return;
+    }
+    logEvent("watchParty.hostStampRetracted", { userId });
+    await announceChannels(cleared);
+    if (!hostConnectedQuiet(userId)) {
+      // A close slipped in while the stamp was still set.
+      const restamped = await markWatchPartyHostGone(userId);
+      await announceChannels(restamped);
+    }
+    // And once more after the window: this answer can be as stale as the first.
+    stampedByUs.set(userId, 0);
+    scheduleHostPresenceRecheck(userId);
+    return;
+  }
   const stamped = await markWatchPartyHostGone(userId);
   if (stamped.length === 0) {
     return;
   }
-  if (!userHasAuthenticatedSocket(userId) && !hasClusterSocket(userId)) {
-    await announceChannels(stamped);
-    return;
-  }
-  logEvent("watchParty.hostStampRetracted", { userId });
-  const cleared = await markWatchPartyHostBack(userId);
-  await announceChannels(cleared.length > 0 ? cleared : stamped);
+  await announceChannels(stamped);
+  // We wrote a stamp: look again after the window and take it back if the
+  // host turns out to be connected.
+  stampedByUs.set(userId, 0);
+  scheduleHostPresenceRecheck(userId);
 }
+
+/** People this instance stamped (or retracted for) and owes a second look. Value: failed attempts so far. */
+const stampedByUs = new Map<string, number>();
+const MAX_SETTLE_ATTEMPTS = 3;
 
 /**
  * How long after "still connected elsewhere" to ask again.
@@ -733,12 +776,18 @@ function scheduleHostPresenceRecheck(userId: string): void {
   }
   const timer = setTimeout(() => {
     recheckTimers.delete(userId);
-    if (hostIsConnectedAnywhere(userId, "recheck")) {
-      return;
-    }
-    void startGraceClock(userId).catch((error: unknown) => {
-        console.error("[watch-party] host presence re-check failed:", error);
-      });
+    const attempts = stampedByUs.get(userId);
+    stampedByUs.delete(userId);
+    settleHostClock(userId, attempts !== undefined).catch((error: unknown) => {
+      console.error("[watch-party] host presence re-check failed:", error);
+      // A failed write must not be the end of it: the stamp it was about to
+      // clear (or write) is exactly the one nobody else will revisit.
+      const failed = (attempts ?? 0) + 1;
+      if (failed < MAX_SETTLE_ATTEMPTS) {
+        stampedByUs.set(userId, failed);
+        scheduleHostPresenceRecheck(userId);
+      }
+    });
   }, hostPresenceRecheckMs);
   // Never a reason to keep the process alive: a shutdown drops every socket
   // anyway, and the next instance to see this host answers the question.
@@ -760,7 +809,9 @@ export async function onHostSocketClosed(userId: string): Promise<void> {
     scheduleHostPresenceRecheck(userId);
     return;
   }
-  await startGraceClock(userId);
+  // A failure here reaches the close handler's catch (`ws/index.ts`), as it
+  // always did; the bounded retry above only covers the second look.
+  await settleHostClock(userId, false);
 }
 
 async function announceChannels(channelIds: readonly string[]): Promise<void> {

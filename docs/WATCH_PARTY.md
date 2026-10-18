@@ -165,7 +165,7 @@ which is exactly what an invisible object must not do.
   whether the person hosts a party), and it only means "no clock started":
   nothing is demoted, claimed or reset. `phase` is `close` or `recheck`. If the
   stamp itself lands after the host reconnected on the other machine,
-  `startGraceClock` retracts it (`watchParty.hostStampRetracted`).
+  `settleHostClock` retracts it after the bus window (`watchParty.hostStampRetracted`), re-stamps if a close raced the retraction, and retries a failed write.
 - While the clock runs, the party **stays live**. The audience is watching
   either way, and cutting them off to make a point about ownership helps
   nobody. What the clock changes is that a co-host now sees **Assumir**.
