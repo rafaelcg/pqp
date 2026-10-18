@@ -70,25 +70,44 @@ interface ResolvedStill {
   retry?: string;
 }
 
-let manifest: Promise<string | null> | null = null;
-
 /**
- * The manifest's text, fetched once per page and only when a clip first comes
- * near. Null when it is missing or not JSON (a dev server or an SPA fallback
- * can answer a missing file with index.html and a 200).
+ * A manifest reader. It caches a definitive answer only: the manifest's text,
+ * or "no footage" (a 404, or a 200 that is not JSON, which is what a dev server
+ * or an SPA fallback sends for a missing file). Concurrent callers share one
+ * request. A network error, an abort, a 5xx or a body that does not parse is a
+ * blip, not an answer: that caller gets null and the next one tries again,
+ * so one bad moment while the page loads does not leave every clip on its
+ * still for the rest of the visit.
  */
-function loadManifest(): Promise<string | null> {
-  manifest ??= fetch(`${MEDIA_BASE}manifest.json`, { headers: { Accept: "application/json" } })
-    .then(async (res) => {
-      const type = res.headers.get("content-type") ?? "";
-      if (!res.ok || !type.includes("json")) return null;
-      const text = await res.text();
-      JSON.parse(text);
-      return text;
+export function createManifestLoader(): () => Promise<string | null> {
+  let memo: Promise<string | null> | null = null;
+  return () => {
+    if (memo) return memo;
+    const request: Promise<string | null> = fetch(`${MEDIA_BASE}manifest.json`, {
+      headers: { Accept: "application/json" },
     })
-    .catch(() => null);
-  return manifest;
+      .then(async (res) => {
+        if (res.status === 404) return null;
+        if (!res.ok) return retryLater();
+        const type = res.headers.get("content-type") ?? "";
+        if (!type.includes("json")) return null;
+        const text = await res.text();
+        JSON.parse(text);
+        return text;
+      })
+      .catch(retryLater);
+    // Forget this request, so the next caller starts a fresh one.
+    function retryLater(): null {
+      if (memo === request) memo = null;
+      return null;
+    }
+    memo = request;
+    return request;
+  };
 }
+
+/** Shared by every clip on the page; asked only when a clip first comes near. */
+const loadManifest = createManifestLoader();
 
 function mentions(text: string, token: string): boolean {
   const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
