@@ -1,0 +1,79 @@
+{
+  "manifestVersion": 1,
+  "id": "pqp-eco",
+  "version": "1.0",
+  "publisher": "pqp",
+  "platformApi": 1,
+  "name": "name",
+  "description": "description",
+  "icon": "sparkles",
+  "category": "tool",
+  "channelTypes": [
+    "text",
+    "voice"
+  ],
+  "players": {
+    "min": 1,
+    "max": 8,
+    "spectators": true,
+    "maxSpectators": 50
+  },
+  "requires": {
+    "start": "USE_APPS",
+    "join": "VIEW_CHANNEL"
+  },
+  "capabilities": {
+    "identity": "display",
+    "share": "none",
+    "localFiles": {
+      "allowed": false
+    },
+    "peer": "none"
+  },
+  "hostBound": false,
+  "state": {
+    "maxBytes": 4096,
+    "maxWritesPerSecond": 10,
+    "writers": "participants"
+  },
+  "events": {
+    "maxPerSecond": 10,
+    "maxBytes": 256
+  },
+  "presence": {
+    "phrase": "presence.phrase",
+    "short": "presence.short"
+  },
+  "content": {
+    "userText": false,
+    "userImages": false
+  },
+  "entry": {
+    "path": "index.html",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "license": {
+    "spdx": "AGPL-3.0-only",
+    "source": "https://github.com/rafaelcg/pqp"
+  },
+  "i18n": {
+    "pt-BR": {
+      "name": "Eco",
+      "description": "Um app de teste que repete o que tu manda.",
+      "presence.phrase": "{name} tá no Eco",
+      "presence.short": "No Eco"
+    },
+    "en": {
+      "name": "Eco",
+      "description": "A test app that echoes what you send.",
+      "presence.phrase": "{name} is in Eco",
+      "presence.short": "In Eco"
+    },
+    "es": {
+      "name": "Eco",
+      "description": "Una app de prueba que repite lo que mandas.",
+      "presence.phrase": "{name} está en Eco",
+      "presence.short": "En Eco"
+    }
+  }
+}

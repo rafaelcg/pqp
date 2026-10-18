@@ -1,0 +1,291 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pqp.gg/schemas/app-manifest-1.schema.json",
+  "title": "pqp app manifest, version 1",
+  "description": "The BUILT manifest of one version of one pqp app: what the packager writes into dist/<id>/<version>/manifest.json after hashing the bundle. The source manifest an author edits is the same object without entry.sha256 and assets[].sha256/bytes, which the packager fills. The server stores this object verbatim in app_versions.manifest and never trusts a client to supply any of it. Draft 2026-10-18, program apps-program-2026-10-18. The zod schema in packages/shared/src/apps/manifest.ts is the runtime authority; this file is kept in lockstep by a parity test over packages/shared/fixtures/app-manifests/.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifestVersion",
+    "id",
+    "version",
+    "publisher",
+    "platformApi",
+    "name",
+    "description",
+    "icon",
+    "category",
+    "channelTypes",
+    "players",
+    "requires",
+    "capabilities",
+    "hostBound",
+    "state",
+    "events",
+    "presence",
+    "content",
+    "entry",
+    "license",
+    "i18n"
+  ],
+  "properties": {
+    "manifestVersion": {
+      "const": 1,
+      "description": "Version of this manifest format. A breaking change to the format is manifestVersion 2, validated by a second schema; the server keeps reading every version it ever accepted."
+    },
+    "id": {
+      "$ref": "#/$defs/slug",
+      "description": "Globally unique, permanent app id. Never reused after retirement. Ids starting with 'pqp-' are reserved for the first-party publisher."
+    },
+    "version": {
+      "$ref": "#/$defs/semver",
+      "description": "Semantic version of this build. A live session pins it (app_sessions.app_version). Two builds of the same id and version must be byte-identical; the server refuses a second app_versions row with the same (id, version) and a different manifest_sha256."
+    },
+    "publisher": {
+      "$ref": "#/$defs/slug",
+      "description": "app_publishers.id. 'pqp' is the first-party publisher. A third-party publisher may only ship ids it owns."
+    },
+    "platformApi": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1,
+      "description": "The version of the sandbox message API (bridge) the app is written against. The host refuses to frame an app that asks for a version it does not speak."
+    },
+    "name": { "$ref": "#/$defs/i18nKey", "description": "i18n key of the app's display name (for example 'Locadora')." },
+    "description": { "$ref": "#/$defs/i18nKey", "description": "i18n key of the one-line description in the launcher." },
+    "icon": {
+      "type": "string",
+      "enum": ["gamepad", "poll", "pencil", "music", "dice", "cards", "puzzle", "trophy", "sparkles", "flask"],
+      "description": "An icon from the pqp icon set. Never uploaded, never a URL. Extending the set is a pqp change, not a manifest change."
+    },
+    "category": {
+      "type": "string",
+      "enum": ["game", "tool", "emulator"],
+      "description": "'emulator' carries extra review (core license check, the emulator_room legal gate) and is first-party only until the store's policy says otherwise."
+    },
+    "channelTypes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "enum": ["text", "voice"] },
+      "description": "Channel kinds the app may be started in. watch_party, forum and DM conversations are not in v1."
+    },
+    "players": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max", "spectators"],
+      "properties": {
+        "min": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "max": { "type": "integer", "minimum": 1, "maximum": 64, "description": "Participants with the 'player' role. Above it a joiner becomes a spectator when spectators is true, else the join is refused with 'full'. Must be >= min (checked by the validator, not expressible here)." },
+        "spectators": { "type": "boolean" },
+        "maxSpectators": { "type": "integer", "minimum": 0, "maximum": 200, "default": 50 }
+      }
+    },
+    "requires": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "join"],
+      "properties": {
+        "start": { "type": "string", "enum": ["USE_APPS", "MANAGE_CHANNELS"], "description": "Permission to start a session. USE_APPS for almost everything." },
+        "join": { "type": "string", "enum": ["VIEW_CHANNEL", "CONNECT"], "description": "Permission to join. CONNECT is only meaningful in a voice channel." }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What the app asks of the platform. This is the store-facing permission list: the join sheet and the store listing are generated from it, the bridge refuses every call it does not grant, and the review checklist has one line per capability.",
+      "required": ["identity", "share", "localFiles", "peer"],
+      "properties": {
+        "identity": {
+          "type": "string",
+          "enum": ["display", "user-id"],
+          "description": "'display': the app sees each participant's display name, avatar (as a data URL) and a random per-session seat id. 'user-id': additionally a stable per-app derived id (HMAC, never the pqp user id), only for people who ticked the consent box in the join sheet."
+        },
+        "share": {
+          "type": "string",
+          "enum": ["none", "pane"],
+          "description": "'pane': the host may screen-share the app pane through pqp's own share flow (voice channels only). Never offered on phones."
+        },
+        "localFiles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowed"],
+          "properties": {
+            "allowed": { "type": "boolean" },
+            "accept": {
+              "type": "array",
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^\\.[a-z0-9]{1,8}$" },
+              "description": "File extensions the platform picker offers. The pqp page opens the picker, reads the bytes and transfers them into the sandbox. The file NAME never crosses, nothing is uploaded, nothing is stored."
+            },
+            "maxBytes": { "type": "integer", "minimum": 1, "maximum": 67108864 }
+          },
+          "description": "Whether the app may ask the person to open a file from their own device (Locadora). Requires review."
+        },
+        "peer": {
+          "type": "string",
+          "enum": ["none", "datachannel"],
+          "description": "'datachannel': the platform brokers WebRTC DataChannels between participants (signaling over the app-event relay, ICE from /api/ice-servers). Reserved for the multiplayer phase and its legal gate; the v1 validator rejects anything but 'none'."
+        }
+      }
+    },
+    "hostBound": {
+      "type": "boolean",
+      "description": "true: the session's truth lives on the host's machine, so the session ends after the host-gone grace instead of handing the host role to someone else."
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxBytes"],
+      "properties": {
+        "maxBytes": { "type": "integer", "minimum": 0, "maximum": 16384, "description": "Ceiling of the serialized session state the server keeps. 0 means the app keeps no shared state." },
+        "maxWritesPerSecond": { "type": "integer", "minimum": 1, "maximum": 10, "default": 10, "description": "Server-side coalescing ceiling for state.patch across the whole session." },
+        "writers": { "type": "string", "enum": ["host", "participants"], "default": "participants", "description": "Who may patch state. 'host': only the current host; everyone else proposes through events." }
+      }
+    },
+    "events": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxPerSecond", "maxBytes"],
+      "properties": {
+        "maxPerSecond": { "type": "integer", "minimum": 0, "maximum": 20, "description": "Per participant. Ephemeral relay through /ws, never stored, never logged. 0 means the app uses no events." },
+        "maxBytes": { "type": "integer", "minimum": 0, "maximum": 1024 }
+      }
+    },
+    "presence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phrase", "short"],
+      "description": "The status line shown for someone who is in this app. Composed by the client from the person's display name; stored per app and per version, translated in i18n.",
+      "properties": {
+        "phrase": { "$ref": "#/$defs/i18nKey", "description": "i18n key whose value in every locale contains exactly one '{name}' placeholder, for example '{name} tá na Locadora'. Used where the line stands alone (a profile card, a notification)." },
+        "short": { "$ref": "#/$defs/i18nKey", "description": "i18n key whose value contains no placeholder, for example 'Na Locadora'. Used under a name that is already shown (member list, voice roster)." }
+      }
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["userText", "userImages"],
+      "description": "What participants can put into the app that other people then see. Drives the community lock: an app with userText or userImages true stays off listed communities until pqp decides how that content is moderated.",
+      "properties": {
+        "userText": { "type": "boolean" },
+        "userImages": { "type": "boolean" }
+      }
+    },
+    "notice": {
+      "$ref": "#/$defs/i18nKey",
+      "description": "Optional one line shown in the join sheet, for example 'Teu jogo fica no teu computador. O pqp não guarda nem envia jogos.'"
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/bundlePath", "description": "Path of the entry HTML inside the bundle. The server composes the URL as <apps origin>/<id>/<version>/<path>; a client never supplies it." },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "maxItems": 64,
+      "description": "Large files the app needs that the sandbox cannot fetch itself (its CSP has no network). The pqp page fetches each from the apps origin, checks the hash, and transfers the bytes over the bridge on request. Scripts and styles the entry HTML loads directly are not listed here; they carry Subresource Integrity attributes written by the packager.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "path", "sha256", "bytes"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+          "path": { "$ref": "#/$defs/bundlePath" },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "bytes": { "type": "integer", "minimum": 1, "maximum": 33554432 }
+        }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Narrow, reviewed knobs over the fixed CSP. There is deliberately no free-text CSP field. Network access is not a knob.",
+      "properties": {
+        "wasm": { "type": "boolean", "default": false, "description": "Adds 'wasm-unsafe-eval' to script-src." },
+        "blobWorkers": { "type": "boolean", "default": false, "description": "Adds worker-src blob:." },
+        "localBlobs": { "type": "boolean", "default": false, "description": "Adds connect-src blob: data: so the app can read back blobs it created itself from transferred assets. blob: and data: never reach the network." }
+      }
+    },
+    "platforms": {
+      "type": "array",
+      "uniqueItems": true,
+      "minItems": 1,
+      "items": { "type": "string", "enum": ["web", "desktop", "ios", "android"] },
+      "default": ["web", "desktop"],
+      "description": "Where the app can run. v1 hosts on web and desktop only; phones show the card and say where it runs."
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spdx", "source"],
+      "properties": {
+        "spdx": { "type": "string", "pattern": "^[A-Za-z0-9.+ ()-]{2,120}$", "description": "SPDX expression covering the bundle, for example 'AGPL-3.0-only AND GPL-2.0-or-later AND MPL-2.0'. Reviewed against AGPL-3.0 for first-party apps." },
+        "source": { "type": "string", "format": "uri", "pattern": "^https://", "description": "Where the corresponding source is offered." },
+        "notices": { "$ref": "#/$defs/bundlePath", "description": "Path to a third-party notices file inside the bundle." }
+      }
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Listing fields for the curated catalog, and later the store. Optional in v1.",
+      "properties": {
+        "summary": { "$ref": "#/$defs/i18nKey" },
+        "screenshots": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256", "alt"],
+            "properties": {
+              "path": { "$ref": "#/$defs/bundlePath" },
+              "sha256": { "$ref": "#/$defs/sha256" },
+              "alt": { "$ref": "#/$defs/i18nKey" }
+            }
+          }
+        },
+        "homepage": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "support": { "type": "string", "format": "uri", "pattern": "^https://" }
+      }
+    },
+    "i18n": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pt-BR", "en", "es"],
+      "description": "Every key referenced anywhere in the manifest must exist in all three locales (checked by the validator). Values are plain text, no markup.",
+      "properties": {
+        "pt-BR": { "$ref": "#/$defs/strings" },
+        "en": { "$ref": "#/$defs/strings" },
+        "es": { "$ref": "#/$defs/strings" }
+      }
+    }
+  },
+  "$defs": {
+    "slug": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$" },
+    "semver": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "i18nKey": { "type": "string", "pattern": "^[a-z][a-zA-Z0-9]*(\\.[a-z][a-zA-Z0-9]*){0,3}$" },
+    "bundlePath": {
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^(?!/)(?!.*\\.\\.)(?!.*//)[A-Za-z0-9._/-]+$"
+    },
+    "strings": {
+      "type": "object",
+      "maxProperties": 200,
+      "propertyNames": { "$ref": "#/$defs/i18nKey" },
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 240 }
+    }
+  },
+  "$comment": "Checks the validator adds beyond this schema (packages/shared/src/apps/manifest.ts, validateAppManifest): players.max >= players.min; every i18n key referenced (name, description, notice, presence.*, store.summary, store.screenshots[].alt) exists in pt-BR, en and es; presence.phrase values contain exactly one '{name}' and no other '{...}'; presence.short values contain no '{'; no i18n value contains an em dash (U+2014); pt-BR values do not contain the word 'você'/'voce'; ids starting with 'pqp-' require publisher 'pqp'; category 'emulator' requires publisher 'pqp'; capabilities.peer must be 'none' while platformApi is 1; capabilities.localFiles.accept and maxBytes are required when allowed is true and forbidden when false; share 'pane' requires 'voice' in channelTypes; hostBound true requires players.max >= 1 (always true) and is flagged in review; state.writers 'host' with state.maxBytes 0 is rejected (nothing to write)."
+}
