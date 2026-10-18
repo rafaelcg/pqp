@@ -129,6 +129,26 @@ describe("app to host requests", () => {
     );
   });
 
+  it("accepts values that fit exactly, whatever their shape", () => {
+    const exactArray = ["x".repeat(APP_EVENT_MAX_BYTES - 4)];
+    expect(JSON.stringify(exactArray).length).toBe(APP_EVENT_MAX_BYTES);
+    expect(bridgeAppMessageSchema.safeParse(req("events.send", { data: exactArray })).success).toBe(
+      true,
+    );
+    // 511 ones is 1023 bytes with brackets and commas, the last one widened to 11 makes 1024
+    const numbers: number[] = Array.from({ length: 511 }, () => 1);
+    numbers[510] = 11;
+    expect(JSON.stringify(numbers).length).toBe(APP_EVENT_MAX_BYTES);
+    expect(bridgeAppMessageSchema.safeParse(req("events.send", { data: numbers })).success).toBe(
+      true,
+    );
+    const over = [...numbers, 1];
+    expect(JSON.stringify(over).length).toBeGreaterThan(APP_EVENT_MAX_BYTES);
+    expect(bridgeAppMessageSchema.safeParse(req("events.send", { data: over })).success).toBe(
+      false,
+    );
+  });
+
   it("counts UTF-8 bytes, not characters", () => {
     // each "é" is 2 bytes: 8192 of them is 16384 bytes plus framing
     const wide = { a: "é".repeat(APP_STATE_MAX_BYTES / 2) };

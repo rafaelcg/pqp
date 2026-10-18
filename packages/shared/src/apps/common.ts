@@ -71,7 +71,8 @@ export function jsonProblem(value: unknown, depth = 0, budget?: Budget): string 
     if (early) return early;
     for (let i = 0; i < value.length; i += 1) {
       if (!(i in value)) return "arrays must not have holes";
-      const problem = jsonProblem(value[i], depth + 1, budget) ?? over(1);
+      // a comma separates elements: none before the first
+      const problem = (i > 0 ? over(1) : null) ?? jsonProblem(value[i], depth + 1, budget);
       if (problem) return problem;
     }
     return null;
@@ -80,7 +81,9 @@ export function jsonProblem(value: unknown, depth = 0, budget?: Budget): string 
   if (!isPlainObject(object)) return "only plain objects are JSON values";
   const early = over(2);
   if (early) return early;
-  for (const key of Object.keys(object)) {
+  // for...in walks lazily, so an oversize object stops after its budget, not after all its keys
+  for (const key in object) {
+    if (!Object.prototype.hasOwnProperty.call(object, key)) continue;
     const keyProblem = over(key.length + 3);
     if (keyProblem) return keyProblem;
     const problem = jsonProblem((object as Record<string, unknown>)[key], depth + 1, budget);
