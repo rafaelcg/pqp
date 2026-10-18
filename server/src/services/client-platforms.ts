@@ -77,6 +77,8 @@ export interface ClientPlatformRecorder {
 interface Pending {
   userId: string;
   facts: ClientFacts;
+  /** When this process observed it, so a late write cannot beat a later one. */
+  seenAt: number;
 }
 
 function signature(facts: ClientFacts): string {
@@ -98,8 +100,14 @@ export function createClientPlatformRecorder(
 
   /** Noted and not yet stored, keyed `userId|platform`. */
   let pending = new Map<string, Pending>();
-  /** Last stored by this process: signature and when. Oldest first. */
-  const stored = new Map<string, { sig: string; at: number }>();
+  /**
+   * The last fact this process noted for each key, and whether it has landed.
+   * Suppression is judged against THIS and not against what was last stored:
+   * a Firefox note still queued or in flight must not make a later Chrome
+   * note look like "already stored" (it would leave Firefox as the latest
+   * sighting). Oldest first.
+   */
+  const known = new Map<string, { sig: string; at: number; landed: boolean }>();
   let flushing: Promise<number> | null = null;
   let noted = 0;
   let flushes = 0;
@@ -112,11 +120,14 @@ export function createClientPlatformRecorder(
       return;
     }
     const key = `${userId}|${facts.platform}`;
-    const previous = stored.get(key);
+    const sig = signature(facts);
+    const at = now();
+    const previous = known.get(key);
     if (
       previous &&
-      previous.sig === signature(facts) &&
-      now() - previous.at < CLIENT_PLATFORM_REFRESH_MS
+      previous.sig === sig &&
+      // Same as what is queued or in flight (it will land), or landed lately.
+      (!previous.landed || at - previous.at < CLIENT_PLATFORM_REFRESH_MS)
     ) {
       return;
     }
@@ -126,7 +137,18 @@ export function createClientPlatformRecorder(
     }
     noted += 1;
     // The newest fact for this key wins within a batch.
-    pending.set(key, { userId, facts });
+    pending.set(key, { userId, facts, seenAt: at });
+    // Re-inserted so the Map's order is least recently noted first, and
+    // bounded by dropping the oldest: a forgotten key is only ever written
+    // once more than it had to be.
+    known.delete(key);
+    known.set(key, { sig, at, landed: false });
+    if (known.size > MAX_REMEMBERED) {
+      const oldest = known.keys().next().value;
+      if (oldest !== undefined) {
+        known.delete(oldest);
+      }
+    }
   }
 
   function flush(): Promise<number> {
@@ -157,36 +179,40 @@ export function createClientPlatformRecorder(
         // `ON CONFLICT DO UPDATE` requires.
         const result = await pool().query(
           `INSERT INTO user_client_platforms
-             (user_id, platform, app_version, os_family, browser_family)
-           SELECT v.user_id, v.platform, v.app_version, v.os_family, v.browser_family
-             FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[])
-                  AS v(user_id, platform, app_version, os_family, browser_family)
+             (user_id, platform, app_version, os_family, browser_family, last_seen_at)
+           SELECT v.user_id, v.platform, v.app_version, v.os_family, v.browser_family,
+                  v.seen_at
+             FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[],
+                         $6::timestamptz[])
+                  AS v(user_id, platform, app_version, os_family, browser_family, seen_at)
              JOIN users u ON u.id = v.user_id
             WHERE NOT u.is_webhook AND NOT u.is_character AND NOT u.is_bot
            ON CONFLICT (user_id, platform) DO UPDATE
              SET app_version    = EXCLUDED.app_version,
                  os_family      = EXCLUDED.os_family,
                  browser_family = EXCLUDED.browser_family,
-                 last_seen_at   = NOW()`,
+                 last_seen_at   = EXCLUDED.last_seen_at
+             -- Two API processes flush on their own clocks: the observation
+             -- that happened LAST wins, not the flush that ran last.
+             WHERE user_client_platforms.last_seen_at <= EXCLUDED.last_seen_at`,
           [
             slice.map(([, e]) => e.userId),
             slice.map(([, e]) => e.facts.platform),
             slice.map(([, e]) => e.facts.appVersion),
             slice.map(([, e]) => e.facts.osFamily),
             slice.map(([, e]) => e.facts.browserFamily),
+            slice.map(([, e]) => new Date(e.seenAt)),
           ],
         );
         written += result.rowCount ?? 0;
         for (const [key, entry] of slice) {
           batch.delete(key);
-          // Re-inserted so the Map's order is least recently stored first.
-          stored.delete(key);
-          stored.set(key, { sig: signature(entry.facts), at: now() });
-          if (stored.size > MAX_REMEMBERED) {
-            const oldest = stored.keys().next().value;
-            if (oldest !== undefined) {
-              stored.delete(oldest);
-            }
+          // Landed, unless something newer was noted for the key meanwhile
+          // (then `known` already names that one, still queued).
+          const current = known.get(key);
+          if (current && current.sig === signature(entry.facts)) {
+            current.landed = true;
+            current.at = now();
           }
         }
       }
@@ -232,7 +258,7 @@ export function createClientPlatformRecorder(
     start,
     resetForTests() {
       pending = new Map();
-      stored.clear();
+      known.clear();
       flushing = null;
       noted = 0;
       flushes = 0;

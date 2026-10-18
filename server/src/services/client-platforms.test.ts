@@ -140,6 +140,65 @@ describeDb("client platforms", () => {
       expect(recorder.stats().pending).toBe(1);
     });
 
+    it("a queued change does not make the previous fact look already stored", async () => {
+      const ana = await person("ana");
+      const recorder = createClientPlatformRecorder();
+      recorder.note(ana, CHROME_WIN);
+      await recorder.flush();
+
+      // Firefox is queued, then Chrome comes back before the flush: Chrome is
+      // the latest sighting and must be what lands.
+      recorder.note(ana, FIREFOX_WIN);
+      recorder.note(ana, CHROME_WIN);
+      expect(recorder.stats().pending).toBe(1);
+      await recorder.flush();
+      expect((await rows(ana))[0]).toMatchObject({ browser_family: "chrome" });
+    });
+
+    it("nor does one that is in flight", async () => {
+      const ana = await person("ana");
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let hold = false;
+      const recorder = createClientPlatformRecorder({
+        pool: () => ({
+          query: (async (...args: unknown[]) => {
+            if (hold) {
+              await gate;
+            }
+            return (getPool().query as (...a: unknown[]) => unknown)(...args);
+          }) as never,
+        }),
+      });
+      recorder.note(ana, CHROME_WIN);
+      await recorder.flush();
+
+      hold = true;
+      recorder.note(ana, FIREFOX_WIN);
+      const inFlight = recorder.flush();
+      // Chrome again while Firefox's write is on the wire.
+      recorder.note(ana, CHROME_WIN);
+      expect(recorder.stats().pending).toBe(1);
+      release();
+      await inFlight;
+      await recorder.flush();
+      expect((await rows(ana))[0]).toMatchObject({ browser_family: "chrome" });
+    });
+
+    it("lets the later observation win across processes, whichever flushes last", async () => {
+      const ana = await person("ana");
+      const base = Date.now();
+      const early = createClientPlatformRecorder({ now: () => base });
+      const late = createClientPlatformRecorder({ now: () => base + 5_000 });
+      early.note(ana, FIREFOX_WIN);
+      late.note(ana, CHROME_WIN);
+      await late.flush();
+      await early.flush();
+      expect((await rows(ana))[0]).toMatchObject({ browser_family: "chrome" });
+    });
+
     it("keeps the first sighting and moves the last, across processes", async () => {
       const ana = await person("ana");
       const a = createClientPlatformRecorder();
