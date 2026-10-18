@@ -1,4 +1,5 @@
 import {
+  chromium,
   expect,
   test,
   type Browser,
@@ -51,9 +52,27 @@ import { fileURLToPath } from "node:url";
  * whatever is in the output folder at the end of every test.
  *
  * The share test also records raise-hand: an audio-only call has no stage,
- * so the full "Fila pra falar" card only shows with a picture on it.
+ * so the full "Fila pra falar" card only shows with a picture on it. Before
+ * that take the camera moves the call's own divider up with its arrow keys,
+ * so the call chat is tall and its few lines sit at the top of it. The rows
+ * the card grows into, and the rows above them, are then the chat's empty
+ * background in every state of the take. No frame is edited.
  *
- * Needs ffmpeg, ffprobe and cwebp on the PATH. No S3: avatars are letters.
+ * Needs ffmpeg, ffprobe and cwebp on the PATH.
+ *
+ * Pictures. Every sample person gets a pixel-art picture, with no object
+ * storage: `HOME_REELS_AVATARS` names a folder holding `<suffix>.png` for each
+ * person in CAST. The recorder stores `/reels-avatars/<suffix>.png` as each
+ * account's `avatarUrl` (the profile schema accepts any root-relative path) and
+ * fulfils that request itself with `context.route`, so the app draws the same
+ * `<img>` it draws for an uploaded picture in production. Unset, avatars stay
+ * letters, as before.
+ *
+ * Night. The footage is told as one evening, so no clock in it may read an
+ * afternoon. Every context in a test gets one `timezoneId` whose local time is
+ * between 21:50 and 23:30 when the test starts (`pickNightZone`); the run
+ * fails rather than record outside that window. `HOME_REELS_TZ` overrides it.
+ *
  * The Discord import fetches its template from discord.com on the server, so
  * that shot is a still of the paste dialog only.
  */
@@ -85,7 +104,7 @@ test.use({
 
 const SERVER_NAME = "A Mesa";
 const CAST = {
-  rafa: "Rafa",
+  zeca: "Zeca",
   bia: "Bia",
   caio: "Caio",
   nico: "Nico",
@@ -94,6 +113,63 @@ const CAST = {
   lara: "Lara",
 } as const;
 type Suffix = keyof typeof CAST;
+
+// ------------------------------------------------------------ pictures, night
+
+/** Progress line on stdout (this file is a CLI, and `no-console` allows only warn and error). */
+function note(message: string): void {
+  process.stdout.write(`${message}\n`);
+}
+
+const AVATARS = process.env.HOME_REELS_AVATARS;
+const AVATAR_PATH = (suffix: string) => `/reels-avatars/${suffix}.png`;
+
+/**
+ * Zones with no daylight saving time, so a computed local time stays true for
+ * the whole take. Half and quarter hours are there to land the start close to
+ * 21:50 whatever the minute is.
+ */
+const NIGHT_ZONES = [
+  "Pacific/Pago_Pago", "Pacific/Honolulu", "Pacific/Gambier", "Pacific/Pitcairn",
+  "America/Phoenix", "America/Regina", "America/Bogota", "America/Caracas",
+  "America/Sao_Paulo", "America/Noronha", "Atlantic/Cape_Verde", "Atlantic/Reykjavik",
+  "Africa/Lagos", "Africa/Johannesburg", "Europe/Istanbul", "Asia/Tehran",
+  "Asia/Dubai", "Asia/Kabul", "Asia/Karachi", "Asia/Kolkata", "Asia/Kathmandu",
+  "Asia/Dhaka", "Asia/Yangon", "Asia/Bangkok", "Asia/Singapore", "Asia/Tokyo",
+  "Pacific/Port_Moresby", "Pacific/Noumea", "Pacific/Tarawa", "Pacific/Tongatapu",
+] as const;
+/** Local minutes after midnight the zone shows at `at`. */
+function localMinutes(zone: string, at: Date): number {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(at);
+  const get = (type: string) => Number(parts.find((one) => one.type === type)!.value);
+  return get("hour") * 60 + get("minute");
+}
+const NIGHT_FROM = 21 * 60 + 50;
+const NIGHT_TO = 23 * 60 + 30;
+/** The zone that reads closest after 21:50 right now. Throws when none does. */
+function pickNightZone(at = new Date()): string {
+  const forced = process.env.HOME_REELS_TZ;
+  if (forced) {
+    return forced;
+  }
+  const fits = NIGHT_ZONES.map((zone) => ({ zone, minutes: localMinutes(zone, at) }))
+    .filter((one) => one.minutes >= NIGHT_FROM && one.minutes <= NIGHT_TO)
+    .sort((a, b) => a.minutes - b.minutes);
+  if (fits.length === 0) {
+    throw new Error("no night zone fits right now");
+  }
+  return fits[0].zone;
+}
+let nightZone = pickNightZone();
+test.beforeEach(() => {
+  nightZone = pickNightZone();
+  const at = new Intl.DateTimeFormat("en-GB", {
+    timeZone: nightZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).format(new Date());
+  note(`[reels] night zone ${nightZone}, local ${at}`);
+});
 
 // ------------------------------------------------------------------ API seed
 
@@ -145,6 +221,9 @@ async function person(suffix: Suffix): Promise<string> {
       username: suffix,
     });
   }
+  if (AVATARS && me.avatarUrl !== AVATAR_PATH(suffix)) {
+    await call(suffix, "PATCH", "/api/me", { avatarUrl: AVATAR_PATH(suffix) });
+  }
   const now = new Date().toISOString();
   await call(suffix, "PATCH", "/api/me/preferences", {
     onboardedAt: now,
@@ -169,20 +248,20 @@ async function seed(): Promise<Seeded> {
   }
   // The guard the whole brief rests on: this must be OUR flag-free API, never
   // the suite's webServer with communities and Baú switched on.
-  const communities = await call("rafa", "GET", "/api/communities/config");
+  const communities = await call("zeca", "GET", "/api/communities/config");
   expect(communities.enabled, "communities must be off on the reels API").toBe(false);
 
-  const { servers } = await call("rafa", "GET", "/api/servers");
+  const { servers } = await call("zeca", "GET", "/api/servers");
   let server = (servers as { id: string; name: string }[]).find(
     (one) => one.name === SERVER_NAME,
   );
   if (!server) {
-    server = (await call("rafa", "POST", "/api/servers", { name: SERVER_NAME })).server;
+    server = (await call("zeca", "POST", "/api/servers", { name: SERVER_NAME })).server;
   }
   const serverId = server!.id;
 
   const listChannels = async () =>
-    (await call("rafa", "GET", `/api/servers/${serverId}/channels`)).channels as {
+    (await call("zeca", "GET", `/api/servers/${serverId}/channels`)).channels as {
       id: string;
       name: string;
       type: string;
@@ -190,7 +269,7 @@ async function seed(): Promise<Seeded> {
   let channels = await listChannels();
   const general = channels.find((one) => one.type === "text" && one.name === "general");
   if (general) {
-    await call("rafa", "PATCH", `/api/channels/${general.id}`, { name: "geral" });
+    await call("zeca", "PATCH", `/api/channels/${general.id}`, { name: "geral" });
   }
   const wanted: { name: string; type: string; topic?: string }[] = [
     { name: "geral", type: "text" },
@@ -203,7 +282,7 @@ async function seed(): Promise<Seeded> {
   channels = await listChannels();
   for (const one of wanted) {
     if (!channels.some((c) => c.name === one.name && c.type === one.type)) {
-      await call("rafa", "POST", `/api/servers/${serverId}/channels`, {
+      await call("zeca", "POST", `/api/servers/${serverId}/channels`, {
         ...one,
         parentId: null,
       });
@@ -213,7 +292,7 @@ async function seed(): Promise<Seeded> {
   const byName = Object.fromEntries(channels.map((c) => [c.name, c.id]));
 
   // Members.
-  const { invite } = await call("rafa", "POST", `/api/servers/${serverId}/invites`, {});
+  const { invite } = await call("zeca", "POST", `/api/servers/${serverId}/invites`, {});
   for (const suffix of ["bia", "caio", "nico", "duda", "leo", "lara"] as Suffix[]) {
     await call(suffix, "POST", `/api/invites/${invite.code}/join`, undefined, {
       allow: [409],
@@ -222,7 +301,7 @@ async function seed(): Promise<Seeded> {
 
   // Roles: the staff ladder ships with the server; Mestre and Jogadores are ours.
   const roles = async () =>
-    (await call("rafa", "GET", `/api/servers/${serverId}/roles`)).roles as {
+    (await call("zeca", "GET", `/api/servers/${serverId}/roles`)).roles as {
       id: string;
       name: string;
       systemKey: string | null;
@@ -239,9 +318,9 @@ async function seed(): Promise<Seeded> {
   ]) {
     let found = list.find((one) => one.name === role.name);
     if (!found) {
-      found = (await call("rafa", "POST", `/api/servers/${serverId}/roles`, { name: role.name })).role;
+      found = (await call("zeca", "POST", `/api/servers/${serverId}/roles`, { name: role.name })).role;
     }
-    await call("rafa", "PATCH", `/api/roles/${found!.id}`, {
+    await call("zeca", "PATCH", `/api/roles/${found!.id}`, {
       hoist: true,
       color: role.color,
       permissions: role.permissions,
@@ -250,11 +329,11 @@ async function seed(): Promise<Seeded> {
   list = await roles();
   const roleId = (name: string) => list.find((one) => one.name === name || one.systemKey === name)!.id;
   const give = (suffix: Suffix, role: string) =>
-    call("rafa", "PUT", `/api/servers/${serverId}/members/${ids[suffix]}/roles/${roleId(role)}`, undefined, {
+    call("zeca", "PUT", `/api/servers/${serverId}/members/${ids[suffix]}/roles/${roleId(role)}`, undefined, {
       allow: [409],
     });
   // The owner holds no assignable roles; Bia runs the table.
-  await call("rafa", "DELETE", `/api/servers/${serverId}/members/${ids.bia}/roles/${roleId("admin")}`, undefined, {
+  await call("zeca", "DELETE", `/api/servers/${serverId}/members/${ids.bia}/roles/${roleId("admin")}`, undefined, {
     allow: [404, 409],
   });
   await give("bia", "Mestre");
@@ -338,13 +417,13 @@ async function seedHistory(data: Seeded) {
         ["duda", "Eu ainda tô devendo o resumo da última sessão 😅"],
         ["leo", "Alguém lembra quanto ouro sobrou depois da masmorra?"],
         ["nico", "312 peças de ouro. Tá anotado no #fichas"],
-        ["rafa", "Trago mapa novo. Ninguém abre a porta vermelha antes de mim"],
+        ["zeca", "Trago mapa novo. Ninguém abre a porta vermelha antes de mim"],
       ],
     ],
     [
       data.channels.Lobby,
       [
-        ["rafa", "Abri a call, chega aí"],
+        ["zeca", "Abri a call, chega aí"],
         ["caio", "Tô pegando um café e já entro"],
         ["bia", "Vou mostrar a arte nova da taverna"],
       ],
@@ -355,12 +434,12 @@ async function seedHistory(data: Seeded) {
         ["bia", "Antes de começar, olha a arte nova da taverna"],
         ["nico", "Fala que a gente vai pro terraço hoje"],
         ["caio", "Já tô com a ficha aberta aqui"],
-        ["rafa", "Vamos lá. Rolem iniciativa quando eu chamar"],
+        ["zeca", "Vamos lá. Rolem iniciativa quando eu chamar"],
       ],
     ],
   ];
   for (const [channelId, lines] of threads) {
-    const existing = await call("rafa", "GET", `/api/channels/${channelId}/messages`);
+    const existing = await call("zeca", "GET", `/api/channels/${channelId}/messages`);
     if ((existing.messages ?? []).length > 0) {
       continue;
     }
@@ -463,10 +542,28 @@ async function open(
     isMobile: phone,
     hasTouch: phone,
     locale: "pt-BR",
-    timezoneId: "America/Sao_Paulo",
+    timezoneId: nightZone,
     colorScheme: "dark",
     permissions: ["microphone", "camera"],
   });
+  if (AVATARS) {
+    // The picture's address is on the API origin, which has no such route:
+    // answer it here, from the folder, so the app draws a normal <img>.
+    await context.route(/\/reels-avatars\/[a-z0-9_-]+\.png(\?.*)?$/, async (route) => {
+      const name = new URL(route.request().url()).pathname.split("/").pop()!;
+      const file = path.join(AVATARS, name);
+      if (!fs.existsSync(file)) {
+        await route.fulfill({ status: 404 });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "image/png",
+        body: fs.readFileSync(file),
+        headers: { "access-control-allow-origin": "*", "cache-control": "no-store" },
+      });
+    });
+  }
   await context.addInitScript((value) => {
     localStorage.setItem("pqp:dev-user-suffix", value);
     localStorage.setItem("pqp:locale", "pt-BR");
@@ -516,15 +613,6 @@ async function openChannel(who: Person, seededData: Seeded, channel = "geral") {
   await expect(who.page.getByRole("button", { name: PT["composer.send"], exact: true })).toBeVisible({
     timeout: 30_000,
   });
-}
-
-/** In-app navigation (a reload would drop the call). */
-async function _clickChannel(who: Person, name: string) {
-  await who.page
-    .getByRole("button", { name: new RegExp(`^#?\\s*${name}\\b`, "i") })
-    .first()
-    .click();
-  await who.page.waitForTimeout(400);
 }
 
 async function joinVoice(who: Person, channel: string) {
@@ -661,6 +749,13 @@ interface LoopCut {
   crop?: string;
   crf?: number;
   crfSmall?: number;
+  /**
+   * Output files as [name suffix, width]. Default: the page's two sizes,
+   * 1920 wide and `-960`. A take that is not 1920 wide to begin with (a phone
+   * page, 390 CSS px) asks for the one size it really has, or the encode
+   * would only upscale it.
+   */
+  widths?: readonly (readonly [string, number])[];
   description: string;
 }
 
@@ -687,10 +782,12 @@ function encodeLoop(name: string, master: string, cut: LoopCut) {
   fs.mkdirSync(OUT, { recursive: true });
   const crf = cut.crf ?? 23;
   const crfSmall = cut.crfSmall ?? crf;
-  for (const [suffix, width, h264, vp9] of [
-    ["", 1920, crf, 33 + (crf - 23)],
-    ["-960", 960, crfSmall, 33 + (crfSmall - 23)],
-  ] as const) {
+  const sizes = cut.widths ?? ([["", 1920], ["-960", 960]] as const);
+  for (const [suffix, width, h264, vp9] of sizes.map(([one, wide]) => {
+    const small = one !== "";
+    const rate = small ? crfSmall : crf;
+    return [one, wide, rate, 33 + (rate - 23)] as const;
+  })) {
     const scale = `scale=${width}:-2:flags=lanczos`;
     run("ffmpeg", [
       "-y", "-loglevel", "error", "-i", looped, "-vf", scale,
@@ -723,6 +820,44 @@ async function still(
   await page.screenshot({ path: png, ...(clip ? { clip } : {}) });
   run("cwebp", ["-quiet", "-q", "85", png, "-o", path.join(OUT, `still-${name}.webp`)]);
   describe(`still-${name}`, description);
+}
+
+/**
+ * Waits until at least `min` different pictures on screen have loaded and none
+ * of the ones on screen is broken, so frame 0 of a loop (also its poster) never
+ * shows letters. Pictures off screen (a closed drawer, a lazy row) do not
+ * count either way. Returns how many there are. A no-op when avatars are off.
+ */
+async function avatarsReady(page: Page, min = 1): Promise<number> {
+  if (!AVATARS) {
+    return 0;
+  }
+  const state = () =>
+    page.evaluate(() => {
+      const shown = [...document.querySelectorAll<HTMLImageElement>('img[src*="reels-avatars"]')].filter((one) => {
+        const box = one.getBoundingClientRect();
+        const style = getComputedStyle(one);
+        return (
+          box.width > 0 && box.height > 0 &&
+          box.right > 0 && box.bottom > 0 && box.left < innerWidth && box.top < innerHeight &&
+          style.visibility !== "hidden" && style.display !== "none"
+        );
+      });
+      const loaded = shown.filter((one) => one.complete && one.naturalWidth > 0);
+      const failed = shown.filter((one) => one.complete && one.naturalWidth === 0);
+      return {
+        loading: shown.length - loaded.length - failed.length,
+        failed: failed.length,
+        distinct: new Set(loaded.map((one) => one.src.split("?")[0])).size,
+      };
+    });
+  await expect
+    .poll(async () => {
+      const now = await state();
+      return now.failed === 0 && now.loading === 0 ? now.distinct : -1;
+    }, { timeout: 25_000, intervals: [250] })
+    .toBeGreaterThanOrEqual(min);
+  return (await state()).distinct;
 }
 
 /** Debug screenshot into the raw folder, never the output. */
@@ -865,7 +1000,7 @@ async function mute(who: Person) {
 }
 
 /** Where a loop starts and how long it runs, from the moments that matter. */
-function window(posterAt: number, endAt: number, fade = 0.8) {
+function span(posterAt: number, endAt: number, fade = 0.8) {
   const start = Math.max(0, posterAt - fade);
   return { start, length: endAt - start, fade };
 }
@@ -876,46 +1011,48 @@ test("call", async ({ browser }) => {
   test.setTimeout(420_000);
   const data = await seed();
   await seedHistory(data);
-  const rafa = await open(browser, "rafa", { camera: true });
-  const people: Person[] = [rafa];
+  const zeca = await open(browser, "zeca", { camera: true });
+  const people: Person[] = [zeca];
   try {
-    await openChannel(rafa, data);
-    await tidy(rafa.page);
-    await waitLobbyEmpty(rafa.page);
+    await openChannel(zeca, data);
+    await tidy(zeca.page);
+    await waitLobbyEmpty(zeca.page);
     const cast: Record<string, Person> = {};
     for (const suffix of ["bia", "caio", "nico", "duda", "leo"] as Suffix[]) {
       cast[suffix] = await open(browser, suffix);
       people.push(cast[suffix]);
       await openChannel(cast[suffix], data);
     }
-    await joinVoice(rafa, "Lobby");
-    await wait(rafa.page, 2500);
+    await joinVoice(zeca, "Lobby");
+    await wait(zeca.page, 2500);
+    await avatarsReady(zeca.page, 2);
 
     // 1. call-join: the crew drops in one by one.
-    const rec = new Screencast(rafa.page, "call-join");
+    const rec = new Screencast(zeca.page, "call-join");
     await rec.start();
-    await wait(rafa.page, 1200);
+    await wait(zeca.page, 1200);
     const joins: number[] = [];
     for (const suffix of ["bia", "caio", "nico", "duda", "leo"]) {
       joins.push(rec.now());
       await joinVoice(cast[suffix], "Lobby");
-      await wait(rafa.page, 900);
+      await wait(zeca.page, 900);
     }
-    await wait(rafa.page, 2200);
-    await still(rafa.page, "call-join", "Voice channel Lobby in A Mesa with six people in the call, speaking rings lit, Lobby chat in the middle.");
+    await wait(zeca.page, 2200);
+    note(`[reels] call-join pictures: ${await avatarsReady(zeca.page, 6)}`);
+    await still(zeca.page, "call-join", "Voice channel Lobby in A Mesa with six people in the call, speaking rings lit, Lobby chat in the middle.");
     const joinMaster = await rec.stop();
     console.log("[reels] joins at", joins.map((t) => t.toFixed(2)).join(", "));
     encodeLoop("call-join", joinMaster, {
-      ...window(joins[0] - 0.6, joins[joins.length - 1] + 1.9),
+      ...span(joins[0] - 0.6, joins[joins.length - 1] + 1.9),
       description:
         "Hero loop: in the voice channel Lobby, Bia, Caio, Nico, Duda and Leo drop into the call one by one and their speaking rings light up.",
     });
 
     // Stills of the full sidebar voice list and the role-coloured member list.
-    await still(rafa.page, "voice-list", "Channel sidebar of A Mesa: text channels, then Lobby with six people in the call and their speaking rings.", {
+    await still(zeca.page, "voice-list", "Channel sidebar of A Mesa: text channels, then Lobby with six people in the call and their speaking rings.", {
       x: 0, y: 0, width: 328, height: 760,
     });
-    await still(rafa.page, "members", "Member list grouped by role colour: Dono (Rafa), Mestre (Bia), Jogadores, each with 'Na call: Lobby'.", {
+    await still(zeca.page, "members", "Member list grouped by role colour: Dono (Zeca), Mestre (Bia), Jogadores, each with 'Na call: Lobby'.", {
       x: 1200, y: 0, width: 240, height: 640,
     });
 
@@ -932,6 +1069,7 @@ test("call", async ({ browser }) => {
       await joinButton.click();
     }
     await wait(lara.page, 4000);
+    await avatarsReady(lara.page, 1);
     await peek(lara.page, "phone-call");
     await still(lara.page, "phone-call", "Phone (390 wide): Lara's view of the Lobby call in A Mesa.");
   } finally {
@@ -946,7 +1084,7 @@ test("chat", async ({ browser }) => {
   // poll and roll never sit above (or get voted instead of) this one's.
   for (let sweep = 0; sweep < 3; sweep++) {
     const swept = await call<{ deleted: number }>(
-      "rafa", "POST", `/api/channels/${data.channels.geral}/messages/bulk-delete`, { count: 100 },
+      "zeca", "POST", `/api/channels/${data.channels.geral}/messages/bulk-delete`, { count: 100 },
     );
     if (swept.deleted < 100) break;
   }
@@ -957,31 +1095,32 @@ test("chat", async ({ browser }) => {
     actors[suffix] = new Actor(suffix);
     await actors[suffix].connect(channelId);
   }
-  const rafa = await open(browser, "rafa", { camera: true });
-  const people: Person[] = [rafa];
+  const zeca = await open(browser, "zeca", { camera: true });
+  const people: Person[] = [zeca];
   try {
-    await openChannel(rafa, data);
-    await tidy(rafa.page);
-    await wait(rafa.page, 1500);
+    await openChannel(zeca, data);
+    await tidy(zeca.page);
+    await wait(zeca.page, 1500);
+    await avatarsReady(zeca.page, 3);
 
-    const rec = new Screencast(rafa.page, "chat");
+    const rec = new Screencast(zeca.page, "chat");
     await rec.start();
-    await wait(rafa.page, 700);
+    await wait(zeca.page, 700);
     const firstAt = rec.now();
     actors.nico.typing(channelId);
-    await wait(rafa.page, 600);
+    await wait(zeca.page, 600);
     const ask = await actors.nico.say(channelId, "E a noite de jogos de sexta, ainda tá de pé?");
-    await wait(rafa.page, 300);
+    await wait(zeca.page, 300);
     actors.duda.typing(channelId);
-    await wait(rafa.page, 600);
+    await wait(zeca.page, 600);
     const yes = await actors.duda.say(channelId, "Tá sim! Eu levo os salgadinhos 🍿", { replyToId: ask.id });
-    await wait(rafa.page, 400);
+    await wait(zeca.page, 400);
     for (const suffix of ["caio", "leo", "nico"]) {
       actors[suffix].react(channelId, yes.id, "🙌");
-      await wait(rafa.page, 280);
+      await wait(zeca.page, 280);
     }
     actors.bia.react(channelId, ask.id, "❤️");
-    await wait(rafa.page, 450);
+    await wait(zeca.page, 450);
     const poll = (await actors.bia.say(channelId, "", {
       poll: {
         question: "Que horas começa a sessão de sábado?",
@@ -991,33 +1130,34 @@ test("chat", async ({ browser }) => {
       },
     })) as unknown as { id: string; poll: { options: { id: string; label: string }[] } };
     const option = (label: string) => poll.poll.options.find((one) => one.label === label)!.id;
-    await wait(rafa.page, 600);
+    await wait(zeca.page, 600);
     for (const [suffix, label] of [["caio", "20h"], ["leo", "20h"], ["nico", "19h"]] as const) {
       actors[suffix].vote(channelId, poll.id, option(label));
-      await wait(rafa.page, 300);
+      await wait(zeca.page, 300);
     }
     // The camera votes through the real card, then the pointer leaves so no
     // hover toolbar is left standing (blur too: focus keeps it up).
-    await rafa.page
+    await zeca.page
       .locator("[data-poll] li button")
       .filter({ hasText: "20h" })
       .first()
       .click();
-    await rafa.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await rafa.page.mouse.move(1000, 30);
-    await wait(rafa.page, 350);
+    await zeca.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await zeca.page.mouse.move(1000, 30);
+    await wait(zeca.page, 350);
     actors.duda.vote(channelId, poll.id, option("20h"));
-    await wait(rafa.page, 600);
+    await wait(zeca.page, 600);
     await actors.leo.say(channelId, "", { chance: { type: "roll", notation: "1d20", comment: "iniciativa" } });
     // The die spins for about two seconds; hold on the result before the loop.
-    await wait(rafa.page, 3000);
+    await wait(zeca.page, 3000);
     const endAt = rec.now();
-    await still(rafa.page, "chat", "#geral in A Mesa: a reply, 🙌 reactions, a poll with votes for the Saturday session and a 1d20 initiative roll.");
+    note(`[reels] chat pictures: ${await avatarsReady(zeca.page, 5)}`);
+    await still(zeca.page, "chat", "#geral in A Mesa: a reply, 🙌 reactions, a poll with votes for the Saturday session and a 1d20 initiative roll.");
     const master = await rec.stop();
     encodeLoop("chat", master, {
-      ...window(firstAt - 0.3, endAt),
+      ...span(firstAt - 0.3, endAt),
       description:
-        "#geral: messages arrive from the crew, a reply, 🙌 reactions count up, Bia's poll gets votes (Rafa votes 20h) and Leo rolls 1d20 for initiative.",
+        "#geral: messages arrive from the crew, a reply, 🙌 reactions count up, Bia's poll gets votes (Zeca votes 20h) and Leo rolls 1d20 for initiative.",
     });
 
     // Phone stills from Lara's phone: the chat and the server list.
@@ -1032,11 +1172,13 @@ test("chat", async ({ browser }) => {
       await present.click();
       await wait(lara.page, 1200);
     }
+    await avatarsReady(lara.page, 1);
     await still(lara.page, "phone-chat", "Phone (390 wide): #geral in A Mesa with the poll and the roll.");
     await lara.page.getByRole("button", { name: PT["chrome.openNav"] }).first().click();
     await wait(lara.page, 1200);
     await tidy(lara.page);
     await wait(lara.page, 500);
+    await avatarsReady(lara.page, 1);
     await peek(lara.page, "phone-nav");
     await still(lara.page, "phone-servers", "Phone (390 wide): the server rail and A Mesa's channel list.");
   } finally {
@@ -1050,17 +1192,18 @@ test("chat", async ({ browser }) => {
 test("appearance", async ({ browser }) => {
   test.setTimeout(240_000);
   const data = await seed();
-  const rafa = await open(browser, "rafa", { camera: true });
+  const zeca = await open(browser, "zeca", { camera: true });
   try {
-    await openChannel(rafa, data);
-    await tidy(rafa.page);
-    await rafa.page.getByRole("button", { name: PT["userPanel.openSettings"] }).first().click();
-    await expect(rafa.page.getByRole("dialog")).toBeVisible();
-    await rafa.page.getByRole("tab", { name: PT["settings.section.appearance"] }).click();
-    await wait(rafa.page, 1200);
-    await rafa.page.mouse.move(1380, 860);
-    const panel = rafa.page.getByRole("tabpanel");
-    const scroller = rafa.page.locator("[role=tabpanel]").first();
+    await openChannel(zeca, data);
+    await tidy(zeca.page);
+    await zeca.page.getByRole("button", { name: PT["userPanel.openSettings"] }).first().click();
+    await expect(zeca.page.getByRole("dialog")).toBeVisible();
+    await zeca.page.getByRole("tab", { name: PT["settings.section.appearance"] }).click();
+    await wait(zeca.page, 1200);
+    await avatarsReady(zeca.page, 1);
+    await zeca.page.mouse.move(1380, 860);
+    const panel = zeca.page.getByRole("tabpanel");
+    const scroller = zeca.page.locator("[role=tabpanel]").first();
     const radio = (name: string) => panel.getByRole("radio", { name, exact: true }).first();
     const visual = (name: string) => panel.getByRole("radio").filter({ hasText: name }).first();
     const scrollBy = async (dy: number) => {
@@ -1072,43 +1215,43 @@ test("appearance", async ({ browser }) => {
     };
     const click = async (target: ReturnType<typeof radio>, ms: number) => {
       await target.click();
-      await rafa.page.mouse.move(1380, 860);
-      await wait(rafa.page, ms);
+      await zeca.page.mouse.move(1380, 860);
+      await wait(zeca.page, ms);
     };
 
-    const rec = new Screencast(rafa.page, "appearance");
+    const rec = new Screencast(zeca.page, "appearance");
     await rec.start();
-    await wait(rafa.page, 700);
+    await wait(zeca.page, 700);
     const firstAt = rec.now();
     await click(radio("Claro"), 1100);
     await click(radio("Escuro"), 800);
     await click(visual("Lareira"), 950);
     await click(visual("Harmonia"), 750);
     await scrollBy(520);
-    await wait(rafa.page, 650);
+    await wait(zeca.page, 650);
     await click(radio("Roxo"), 800);
     await click(radio("Rosa"), 900);
     await click(radio("Do visual"), 400);
     await scrollBy(-520);
-    await wait(rafa.page, 600);
+    await wait(zeca.page, 600);
     await click(visual("Clássico"), 700);
     const endAt = rec.now();
     const master = await rec.stop();
     encodeLoop("appearance", master, {
-      ...window(firstAt - 0.1, endAt, 0.6),
+      ...span(firstAt - 0.1, endAt, 0.6),
       description:
         "Settings, Aparência e idioma: light then dark mode, the Lareira and Harmonia visuals, purple and pink accents, all applied live, then back to Clássico.",
     });
     // The still, after the take: Harmonia with the pink accent.
     await click(visual("Harmonia"), 500);
     await scrollBy(520);
-    await wait(rafa.page, 700);
+    await wait(zeca.page, 700);
     await click(radio("Rosa"), 800);
-    await still(rafa.page, "appearance", "Settings, Aparência e idioma: the Harmonia visual with a pink accent, applied live to the whole app.");
+    await still(zeca.page, "appearance", "Settings, Aparência e idioma: the Harmonia visual with a pink accent, applied live to the whole app.");
   } finally {
-    await rafa.context.close();
-    // Leave Rafa on the defaults for every later take.
-    await call("rafa", "PATCH", "/api/me/preferences", { theme: "dark", appearance: "signal", accentHue: "default" });
+    await zeca.context.close();
+    // Leave Zeca on the defaults for every later take.
+    await call("zeca", "PATCH", "/api/me/preferences", { theme: "dark", appearance: "signal", accentHue: "default" });
   }
 });
 
@@ -1119,37 +1262,48 @@ async function befriend(a: Suffix, b: Suffix, ids: Record<Suffix, string>) {
   }
 }
 
-test("profile", async ({ browser }) => {
-  test.setTimeout(240_000);
-  const data = await seed();
-  const handle = "rafa";
-  const me = await call("rafa", "GET", "/api/me");
+/**
+ * The sample owner's public page, ready to film: handle claimed, a status line
+ * and two approved depoimentos (from Bia and Caio). Find-or-create, so the
+ * desktop and the phone take share one set of rows. Returns the handle.
+ */
+async function prepareProfile(data: Seeded): Promise<string> {
+  const handle = "zeca";
+  const me = await call("zeca", "GET", "/api/me");
   if (me.handle !== handle) {
-    await call("rafa", "PATCH", "/api/me", { handle });
+    await call("zeca", "PATCH", "/api/me", { handle });
   }
-  await call("rafa", "PATCH", "/api/me", { customStatus: "Mestre de RPG nas horas vagas" });
-  const shown = await call("rafa", "GET", `/api/users/${data.ids.rafa}/depoimentos`);
+  await call("zeca", "PATCH", "/api/me", { customStatus: "Mestre de RPG nas horas vagas" });
+  const shown = await call("zeca", "GET", `/api/users/${data.ids.zeca}/depoimentos`);
   if ((shown.depoimentos ?? []).length < 2) {
     const notes: [Suffix, string][] = [
-      ["bia", "O Rafa prepara cada sessão como se fosse a última. Mapa novo toda semana e ninguém fica de fora da história."],
+      ["bia", "O Zeca prepara cada sessão como se fosse a última. Mapa novo toda semana e ninguém fica de fora da história."],
       ["caio", "Melhor mestre que já tive. Paciente com quem tá começando e sempre com uma reviravolta guardada."],
     ];
     for (const [suffix, body] of notes) {
-      await befriend("rafa", suffix, data.ids);
-      await call(suffix, "POST", `/api/users/${data.ids.rafa}/depoimentos`, { body }, { allow: [409, 429] });
+      await befriend("zeca", suffix, data.ids);
+      await call(suffix, "POST", `/api/users/${data.ids.zeca}/depoimentos`, { body }, { allow: [409, 429] });
     }
-    const pending = await call("rafa", "GET", "/api/me/depoimentos/pending");
+    const pending = await call("zeca", "GET", "/api/me/depoimentos/pending");
     for (const one of pending.depoimentos ?? []) {
-      await call("rafa", "POST", `/api/depoimentos/${one.id}/approve`);
+      await call("zeca", "POST", `/api/depoimentos/${one.id}/approve`);
     }
   }
+  return handle;
+}
+
+test("profile", async ({ browser }) => {
+  test.setTimeout(240_000);
+  const data = await seed();
+  const handle = await prepareProfile(data);
   const lara = await open(browser, "lara", { camera: true });
   try {
     await goto(lara.page, `/@${handle}`);
     await expect(lara.page.getByText(`@${handle}`).first()).toBeVisible({ timeout: 30_000 });
     await wait(lara.page, 2000);
+    note(`[reels] profile pictures: ${await avatarsReady(lara.page, 3)}`);
     await peek(lara.page, "profile-top");
-    await still(lara.page, "profile", "Rafa's public page at pqp.gg/@rafa with two approved depoimentos from Bia and Caio.");
+    await still(lara.page, "profile", "Zeca's public page at pqp.gg/@zeca with two approved depoimentos from Bia and Caio.");
     const height = await lara.page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
     console.log("[reels] profile scrollable px", height);
     const rec = new Screencast(lara.page, "profile");
@@ -1181,32 +1335,127 @@ test("profile", async ({ browser }) => {
     const endAt = rec.now();
     const master = await rec.stop();
     encodeLoop("profile", master, {
-      ...window(firstAt, endAt, 0.5),
-      description: "Rafa's public profile page (/@rafa), scrolling gently down to the approved depoimentos and back.",
+      ...span(firstAt, endAt, 0.5),
+      description: "Zeca's public profile page (/@zeca), scrolling gently down to the approved depoimentos and back.",
     });
   } finally {
     await lara.context.close();
   }
 });
 
+/**
+ * The same public page as a phone draws it (390 wide, one column), for the
+ * homepage's phone frame. The desktop take above is a 1440-wide page, and a
+ * phone frame can only show that at a fraction of its size, which is why this
+ * one exists: the depoimentos are 14 px text in a 390-wide page, and the frame
+ * shows them at close to that.
+ *
+ * The window is page rows 148 to 726 at rest (the avatar down to the first
+ * depoimento, whole) and rows 328 to 906 at the bottom of the travel (both
+ * depoimentos, whole). The site's own strip that reads "GARANTA O SEU @" starts
+ * at row 932, so it never comes into the window. The site menu (rows 0 to 64)
+ * is above the window at every scroll offset in the loop. The loop starts and
+ * ends at rest, so its first frame (also its poster, and the still that
+ * reduced motion shows) has text in it.
+ *
+ * Titled so that `-g profile` does not pick it up; run it with
+ * `-g "arroba on a phone"`.
+ */
+test("arroba on a phone", async () => {
+  test.setTimeout(240_000);
+  const data = await seed();
+  const handle = await prepareProfile(data);
+  // Chrome's screencast frame is the page at 1x unless the browser itself has a
+  // device scale factor (the context's emulated one does not reach it), so this
+  // take launches its own Chrome at 3x: frames come at 1170 by 2532 and the
+  // phone's text stays sharp. The 1x desktop takes are untouched.
+  const sharp = await chromium.launch({
+    args: [...(test.info().project.use.launchOptions?.args ?? []), "--force-device-scale-factor=3"],
+  });
+  const lara = await open(sharp, "lara", { phone: true });
+  const REST = 82;
+  const TRAVEL_TO = 262;
+  // Viewport rows 66 to 619 are the window; the first 66 hold the site menu.
+  const TOP = 66;
+  const ROWS = 578;
+  try {
+    await goto(lara.page, `/@${handle}`);
+    await expect(lara.page.getByText(`@${handle}`).first()).toBeVisible({ timeout: 30_000 });
+    await wait(lara.page, 2000);
+    await lara.page.evaluate((y) => window.scrollTo(0, y), REST);
+    await wait(lara.page, 600);
+    note(`[reels] phone profile pictures: ${await avatarsReady(lara.page, 2)}`);
+    await peek(lara.page, "profile-phone-rest");
+    const metrics = await lara.page.evaluate(() => {
+      const quote = document.querySelector("blockquote");
+      return {
+        pageWidth: document.documentElement.clientWidth,
+        scrollable: document.documentElement.scrollHeight - innerHeight,
+        quoteFont: quote ? getComputedStyle(quote).fontSize : null,
+      };
+    });
+    note(`[reels] phone profile ${JSON.stringify(metrics)}`);
+    const rec = new Screencast(lara.page, "profile-phone", 3);
+    await rec.start();
+    await wait(lara.page, 800);
+    const firstAt = rec.now();
+    await lara.page.evaluate(
+      async ([from, to]) => {
+        const ease = (t: number) => 0.5 - 0.5 * Math.cos(Math.PI * t);
+        const run = (a: number, b: number, ms: number) =>
+          new Promise<void>((resolve) => {
+            const t0 = performance.now();
+            const step = (now: number) => {
+              const t = Math.min(1, (now - t0) / ms);
+              window.scrollTo(0, a + (b - a) * ease(t));
+              if (t < 1) requestAnimationFrame(step);
+              else resolve();
+            };
+            requestAnimationFrame(step);
+          });
+        const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+        await pause(1100);
+        await run(from, to, 2600);
+        await pause(1500);
+        await run(to, from, 2400);
+      },
+      [REST, TRAVEL_TO],
+    );
+    await wait(lara.page, 700);
+    const endAt = rec.now();
+    const master = await rec.stop();
+    encodeLoop("profile-phone", master, {
+      ...span(firstAt, endAt, 0.5),
+      // The window, in master pixels (3x): the first 66 rows are the site menu.
+      crop: `1170:${ROWS * 3}:0:${TOP * 3}`,
+      widths: [["", 960]],
+      description:
+        "Zeca's public profile page (/@zeca) as a phone draws it (390 wide), the avatar and the first depoimento at rest, scrolling down to both depoimentos and back.",
+    });
+  } finally {
+    await lara.context.close();
+    await sharp.close();
+  }
+});
+
 test("import", async ({ browser }) => {
   test.setTimeout(120_000);
   const data = await seed();
-  const rafa = await open(browser, "rafa", { camera: true });
+  const zeca = await open(browser, "zeca", { camera: true });
   try {
-    await openChannel(rafa, data);
-    await tidy(rafa.page);
-    await peek(rafa.page, "import-0");
-    const add = rafa.page.getByRole("button", { name: /Adicionar um servidor|Criar|Novo servidor/i }).first();
+    await openChannel(zeca, data);
+    await tidy(zeca.page);
+    await peek(zeca.page, "import-0");
+    const add = zeca.page.getByRole("button", { name: /Adicionar um servidor|Criar|Novo servidor/i }).first();
     await add.click();
-    await wait(rafa.page, 800);
-    await peek(rafa.page, "import-1");
-    await rafa.page.getByText(PT["importDiscord.mode.discord"]).first().click({ timeout: 10_000 });
-    await wait(rafa.page, 900);
-    await peek(rafa.page, "import-2");
-    await still(rafa.page, "import", "The Discord template import dialog: paste a discord.new link or a template code to copy a server's layout.");
+    await wait(zeca.page, 800);
+    await peek(zeca.page, "import-1");
+    await zeca.page.getByText(PT["importDiscord.mode.discord"]).first().click({ timeout: 10_000 });
+    await wait(zeca.page, 900);
+    await peek(zeca.page, "import-2");
+    await still(zeca.page, "import", "The Discord template import dialog: paste a discord.new link or a template code to copy a server's layout.");
   } finally {
-    await rafa.context.close();
+    await zeca.context.close();
   }
 });
 
@@ -1215,33 +1464,34 @@ test("share", async ({ browser }) => {
   const data = await seed();
   await seedHistory(data);
   const room = "sessao-de-sabado";
-  const rafa = await open(browser, "rafa", { camera: true });
-  const people: Person[] = [rafa];
+  const zeca = await open(browser, "zeca", { camera: true });
+  const people: Person[] = [zeca];
   try {
-    await openChannel(rafa, data);
-    await tidy(rafa.page);
+    await openChannel(zeca, data);
+    await tidy(zeca.page);
     // Nobody in ANY call yet: a seat left by the call test (held 90 s for a
     // resume) would otherwise flicker out of the member list mid-loop.
-    await waitLobbyEmpty(rafa.page);
+    await waitLobbyEmpty(zeca.page);
     const cast: Record<string, Person> = {};
     for (const suffix of ["bia", "caio", "nico"] as Suffix[]) {
       cast[suffix] = await open(browser, suffix, { share: suffix === "bia" });
       people.push(cast[suffix]);
       await openChannel(cast[suffix], data);
     }
-    await joinVoice(rafa, room);
+    await joinVoice(zeca, room);
     for (const suffix of ["bia", "caio", "nico"]) {
       await joinVoice(cast[suffix], room);
     }
     await mute(cast.caio);
     await mute(cast.nico);
-    await rafa.page.mouse.move(760, 24);
-    await wait(rafa.page, 2500);
+    await zeca.page.mouse.move(760, 24);
+    await wait(zeca.page, 2500);
+    note(`[reels] share pictures: ${await avatarsReady(zeca.page, 3)}`);
 
-    const stageVideo = rafa.page.locator('[data-testid="call-stage"] video.object-contain').first();
-    const rec = new Screencast(rafa.page, "share");
+    const stageVideo = zeca.page.locator('[data-testid="call-stage"] video.object-contain').first();
+    const rec = new Screencast(zeca.page, "share");
     await rec.start();
-    await wait(rafa.page, 1200);
+    await wait(zeca.page, 1200);
     const sharedAt = rec.now();
     await cast.bia.page.getByRole("button", { name: PT["voice.control.share"], exact: true }).first().click();
     await expect(stageVideo).toBeVisible({ timeout: 20_000 });
@@ -1250,35 +1500,79 @@ test("share", async ({ browser }) => {
       .toBeGreaterThan(0);
     const visibleAt = rec.now();
     console.log(`[reels] share clicked at ${sharedAt.toFixed(2)}, on stage at ${visibleAt.toFixed(2)}`);
-    await rafa.page.mouse.move(760, 24);
-    await wait(rafa.page, 7000);
+    await zeca.page.mouse.move(760, 24);
+    await wait(zeca.page, 7000);
     const endAt = rec.now();
     const master = await rec.stop();
     encodeLoop("share", master, {
-      ...window(sharedAt - 0.5, Math.min(endAt, sharedAt + 9.2), 0.9),
+      ...span(sharedAt - 0.5, Math.min(endAt, sharedAt + 9.2), 0.9),
       description:
         "Bia starts a screen share in the voice channel sessao-de-sabado: the painted rooftop at dusk fills the stage, with the people in the call and the call chat below it.",
     });
 
     // The picture has had time to sharpen: the hero still.
-    await wait(rafa.page, 4000);
-    await still(rafa.page, "hero", "Hero still: the full app with a voice call on the stage (Bia sharing the painted rooftop) and the call's chat side by side.");
-    await still(rafa.page, "share", "Bia's screen share on the stage of the sessao-de-sabado call, with the listener strip and the call chat.");
+    await wait(zeca.page, 4000);
+    await still(zeca.page, "hero", "Hero still: the full app with a voice call on the stage (Bia sharing the painted rooftop) and the call's chat side by side.");
+    await still(zeca.page, "share", "Bia's screen share on the stage of the sessao-de-sabado call, with the listener strip and the call chat.");
 
     // Raised hands on the stage: the queue card lists them in order.
-    const hands = new Screencast(rafa.page, "raise-hand");
+    //
+    // The card sits on the call bar at the bottom of the call chat and grows
+    // upward, one row per hand, while the chat's message list shrinks above
+    // it. With the stage at its default height that list is a few rows tall,
+    // so its last line shows as a cut sliver on the card's edge. So first the
+    // camera makes room for the chat the way a person does: the divider
+    // between the stage and the chat, moved up with its own arrow keys (Shift
+    // is 64 px a press). The list stacks its lines from the top, so once it
+    // has CHAT_SLACK px to spare under its last line, the rows the card grows
+    // into (about 80 px for two hands) and the rows above them are the chat's
+    // empty background.
+    const CHAT_SLACK = 150;
+    const callLog = zeca.page.getByRole("log", { name: PT["chat.messagesAria"] }).first();
+    // Empty rows between the list's last line and its bottom edge.
+    const slack = () =>
+      callLog.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        const bottoms = [...el.children]
+          .map((child) => child.getBoundingClientRect())
+          .filter((one) => one.height > 0)
+          .map((one) => one.bottom);
+        return box.bottom - Math.max(box.top, ...bottoms);
+      });
+    const overflow = () => callLog.evaluate((el) => el.scrollHeight - el.clientHeight);
+    const divider = zeca.page.getByTestId("call-split-divider");
+    await divider.focus();
+    for (let press = 0; press < 12 && (await slack()) < CHAT_SLACK; press++) {
+      await divider.press("Shift+ArrowUp");
+      await wait(zeca.page, 250);
+    }
+    await divider.blur();
+    await zeca.page.mouse.move(760, 24);
+    await wait(zeca.page, 1500);
+    expect(await slack(), "the call chat has room above the card").toBeGreaterThanOrEqual(CHAT_SLACK);
+    await peek(zeca.page, "raise-hand-0");
+
+    const hands = new Screencast(zeca.page, "raise-hand");
     await hands.start();
-    await wait(rafa.page, 1000);
+    await wait(zeca.page, 1000);
     const raisedAt = hands.now();
     await cast.caio.page.locator("[data-raise-hand]").first().click();
-    await wait(rafa.page, 1700);
+    await wait(zeca.page, 1700);
     await cast.nico.page.locator("[data-raise-hand]").first().click();
-    await wait(rafa.page, 3800);
-    await still(rafa.page, "raise-hand", "Call with a screen share on the stage: Caio and Nico raised their hands and the 'Fila pra falar' card lists them in order.");
+    await wait(zeca.page, 3800);
+    // The take ends here, before the still: a screenshot makes the screencast
+    // deliver its next frames at 2x, which the master then crops to a zoomed
+    // corner (the loop used to end on two of them).
     const handsEnd = hands.now();
+    // Two hands up, the list still fits: nothing scrolled down onto the card.
+    expect(await overflow(), "the call chat never scrolls onto the card").toBeLessThanOrEqual(0);
+    note(`[reels] raise-hand: ${await slack()} px of empty chat above the card with two hands up`);
+    await still(zeca.page, "raise-hand", "Call with a screen share on the stage: Caio and Nico raised their hands and the 'Fila pra falar' card lists them in order.");
     const handsMaster = await hands.stop();
+    // `span` plays to its end point plus the crossfade, so the loop ends 0.2 s
+    // before the take does.
     encodeLoop("raise-hand", handsMaster, {
-      ...window(raisedAt - 0.5, handsEnd - 0.2),
+      ...span(raisedAt - 0.5, handsEnd - 1.0),
       description:
         "In a call with a screen share on the stage, Caio then Nico raise their hands; the 'Fila pra falar' card lists Caio first, Nico second.",
     });
