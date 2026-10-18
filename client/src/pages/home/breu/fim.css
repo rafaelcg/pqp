@@ -1,0 +1,94 @@
+/*
+ * The sleeping Breu after "Acabou a página." in #fim (fim.tsx). Every name
+ * here starts with `breu-`: the home chunk's CSS stays in the document after
+ * an in-app navigation, so nothing here may reuse a class the app owns.
+ *
+ * A slower, deeper sleep breath replaces the vendored 3.2s breathe (these
+ * selectors outrank the vendored ones), the eyes do not blink because they are
+ * closed, and the two z drift up and fade in turn. Under reduced motion it is
+ * still, with both z at their drawn opacity.
+ *
+ * Migration note: the z are paths in this folder's copy of the drawing
+ * (`bot-face-art.ts`, `glyphZ`). When this folder is deleted and `BotFace`
+ * comes from `components/bots/bot-face` (after PR#1188 ships), the z come back
+ * as SVG text: carry the path z over, or the #fim heading's text content gains
+ * two letters and the z shrink to specks again.
+ */
+
+/* The drawing's 3.5 stroke is a hairline at type size. Thickened so the
+   outline holds up beside the bold line it sits in. CSS lengths on SVG
+   shapes are in viewBox units. */
+.breu-asleep .bf-body path {
+  stroke-width: 6px;
+}
+
+/* The drawing's two z are paths (bot-face-art.ts), not text, so the heading
+   they sit in keeps its own words as its text content. They are drawn at 56
+   and 38 units to the em: more than twice the vendored 24 and 16, which came
+   out at 7 and 5px on a desktop and 4 and 3px on a phone, specks. At this size
+   they read as a bold "zz" (17 and 12px beside the desktop line, 10 and 7px on
+   a phone). Grown at their drawn anchors they would collide, so an offset pulls
+   the first down and left over Breu's shoulder and pushes the second up and
+   right. The offset lives in two custom properties so the drift keyframes
+   below can start from it: a plain `transform` (not the `translate` property,
+   which WebKit may not apply to SVG), held under reduced motion too. Units are
+   viewBox units. */
+.breu-asleep .breu-z {
+  --breu-zx: -10px;
+  --breu-zy: 14px;
+  transform: translate(var(--breu-zx), var(--breu-zy));
+}
+
+.breu-asleep .breu-z-2 {
+  --breu-zx: 8px;
+  --breu-zy: -6px;
+}
+
+@keyframes breu-sleep {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  50% {
+    transform: translateY(1.5%) scale(1.04, 0.94);
+  }
+}
+
+/* The drift grows with the z, so it still reads as rising off Breu. It
+   starts from each z's offset above. */
+@keyframes breu-zz {
+  0% {
+    opacity: 0;
+    transform: translate(var(--breu-zx), calc(var(--breu-zy) + 6px));
+  }
+  20% {
+    opacity: 0.7;
+  }
+  80% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(var(--breu-zx) + 10px), calc(var(--breu-zy) - 16px));
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .breu-asleep.bot-face-live[data-variant="full"] .bf-body {
+    animation: breu-sleep 5s ease-in-out infinite;
+  }
+
+  .breu-asleep.bot-face-live .bf-eyes {
+    animation: none;
+  }
+
+  /* Backwards fill: the second z waits out its delay hidden, so it fades in
+     after the first instead of blinking off when its loop starts. */
+  .breu-asleep.bot-face-live .breu-z {
+    animation: breu-zz 3.6s ease-in-out infinite backwards;
+  }
+
+  .breu-asleep.bot-face-live .breu-z-2 {
+    animation-delay: 1.2s;
+  }
+}

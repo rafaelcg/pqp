@@ -15,8 +15,9 @@ import ptBR from "../locales/pt-BR/translation.json";
  *
  * Covered: the watch party surfaces (`watchParty.*`, the scheduling sheet,
  * the waitlist dialog the /streamers button opens), the two public pages that
- * sell it (`watchPartyPage.*`, `streamersPage.*`), the landing, the campaign
- * page's watch party card, the phone's full-screen hint, and the file names
+ * sell it (`watchPartyPage.*`, `streamersPage.*`), the landing (`landing.*`,
+ * and `home.*`, the keys the page at "/" is made of), the campaign page's
+ * watch party card, the phone's full-screen hint, and the file names
  * the dialog's illustration is served under. Key NAMES are code and stay as
  * they are (`watchParty.checklist.filmPlaying`); only values are checked.
  *
@@ -32,6 +33,7 @@ const PREFIXES = [
   "watchPartyPage.",
   "streamersPage.",
   "landing.",
+  "home.",
   "cinemaHint.",
   "vem.features.watch.",
   "voice.notice.voiceTrackNeedsMic",
@@ -53,6 +55,21 @@ describe("watch party copy names nothing a person would need the rights to show"
       expect(hits).toEqual([]);
     });
   }
+
+  it("covers the home page, whose keys are home.*", () => {
+    // Nothing fails when a new namespace is missing from PREFIXES, so a rename
+    // of `home.` would silently stop guarding the page at "/". Pin the prefix
+    // and pin that it matches real keys.
+    expect(PREFIXES).toContain("home.");
+    for (const [locale, catalogue] of [
+      ["en", en],
+      ["pt-BR", ptBR],
+      ["es", es],
+    ] as const) {
+      const matched = Object.keys(catalogue).filter((key) => key.startsWith("home."));
+      expect(matched.length, `${locale} keys under home.`).toBeGreaterThanOrEqual(100);
+    }
+  });
 
   it("covers the waitlist dialog the /streamers button opens", () => {
     // A guard whose prefix list stopped matching would pass by testing nothing.

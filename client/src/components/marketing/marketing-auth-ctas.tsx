@@ -45,7 +45,7 @@ export function MarketingAuthCtas(props: MarketingAuthCtasProps) {
   return <ClerkAuthCtas {...props} />;
 }
 
-function ClerkAuthCtas(props: MarketingAuthCtasProps) {
+function useClerkMarketingAuth(): MarketingAuth {
   const { isSignedIn, isLoaded } = useAuth();
   const clerk = useClerk();
   const navigate = useNavigate();
@@ -66,19 +66,62 @@ function ClerkAuthCtas(props: MarketingAuthCtasProps) {
     }
   };
 
+  return {
+    signedIn: isSignedIn === true,
+    bypass: false,
+    join: () => {
+      noteSignupCta("marketing", "");
+      openOrGo(() => clerk.openSignUp({ forceRedirectUrl: AFTER_AUTH }));
+    },
+    signIn: () =>
+      openOrGo(() => clerk.openSignIn({ forceRedirectUrl: AFTER_AUTH })),
+  };
+}
+
+function ClerkAuthCtas(props: MarketingAuthCtasProps) {
+  const auth = useClerkMarketingAuth();
   return (
     <AuthPair
       {...props}
-      signedIn={isSignedIn === true}
-      onJoin={() => {
-        noteSignupCta("marketing", "");
-        openOrGo(() => clerk.openSignUp({ forceRedirectUrl: AFTER_AUTH }));
-      }}
-      onSignIn={() =>
-        openOrGo(() => clerk.openSignIn({ forceRedirectUrl: AFTER_AUTH }))
-      }
+      signedIn={auth.signedIn}
+      onJoin={auth.join}
+      onSignIn={auth.signIn}
     />
   );
+}
+
+/**
+ * The same Join / Sign in actions for a page that draws its own buttons.
+ * `bypass` and `signedIn` both mean "a link to /app is the right control".
+ */
+export interface MarketingAuth {
+  signedIn: boolean;
+  bypass: boolean;
+  join: () => void;
+  signIn: () => void;
+}
+
+export function MarketingAuthGate({
+  children,
+}: {
+  children: (auth: MarketingAuth) => ReactNode;
+}) {
+  if (isDevAuthBypassEnabled()) {
+    return <BypassAuthGate>{children}</BypassAuthGate>;
+  }
+  return <ClerkAuthGate>{children}</ClerkAuthGate>;
+}
+
+function ClerkAuthGate({ children }: { children: (auth: MarketingAuth) => ReactNode }) {
+  return <>{children(useClerkMarketingAuth())}</>;
+}
+
+function BypassAuthGate({ children }: { children: (auth: MarketingAuth) => ReactNode }) {
+  const navigate = useNavigate();
+  const goApp = () => {
+    void navigate(AFTER_AUTH);
+  };
+  return <>{children({ signedIn: false, bypass: true, join: goApp, signIn: goApp })}</>;
 }
 
 function AuthPair({

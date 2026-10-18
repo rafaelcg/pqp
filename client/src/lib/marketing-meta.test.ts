@@ -7,12 +7,15 @@ import en from "../locales/en/translation.json";
 import ptBR from "../locales/pt-BR/translation.json";
 import es from "../locales/es/translation.json";
 import { PLAY_STORE_LISTING_URL } from "./play-store";
+import { type ServerBotClaims, serverBotClaims } from "./server-bots-launch";
 import {
   injectMarketingHead,
   marketingPageFromMetaPath,
   marketingUrlsFor,
   renderMarketingHead,
+  LANDING_BOT_FAQ,
   LANDING_FAQ,
+  landingFaq,
   SOFTWARE_OPERATING_SYSTEMS,
   STREAMERS_FAQ,
   TELA_FAQ,
@@ -34,6 +37,21 @@ import {
  * duplicates of the JSON catalogues; this file is what makes that duplication
  * unable to drift. Same shape as `profile-meta.test.ts`, one namespace over.
  */
+
+/**
+ * The homepage FAQ in page order: the `FAQ` list in `pages/home/perguntas.tsx`.
+ * The second item is the answer key's tail. The phone answer is the Google
+ * Play wording, because the hosted site links its listing.
+ */
+const HOME_FAQ = [
+  ["friends", "a"],
+  ["history", "a"],
+  ["free", "a"],
+  ["phone", "a.play"],
+  ["install", "a"],
+  ["data", "a"],
+  ["future", "a"],
+] as const;
 
 describe("marketingPageFromMetaPath", () => {
   it("recognises every marketing route", () => {
@@ -240,22 +258,121 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
     });
   });
 
-  it("every homepage FAQ pair matches its landing.faq.* twin, both locales", () => {
-    // Same rule: the page renders LANDING_FAQ_IDS in this order and the
-    // JSON-LD must be the same list.
-    const ids = ["safe", "free", "signin", "install", "capacity", "import", "data"] as const;
-    expect(LANDING_FAQ.en).toHaveLength(ids.length);
-    expect(LANDING_FAQ["pt-BR"]).toHaveLength(ids.length);
-    ids.forEach((id, index) => {
-      expect(LANDING_FAQ.en[index]).toEqual({
-        question: en[`landing.faq.${id}.q`],
-        answer: en[`landing.faq.${id}.a`],
+  it("every homepage FAQ pair matches its home.faq.* twin, in all three languages", () => {
+    // Same rule: the page renders the `FAQ` list in `pages/home/perguntas.tsx`
+    // in this order and the JSON-LD must be the same list.
+    for (const [locale, catalogue] of [
+      ["en", en],
+      ["pt-BR", ptBR],
+      ["es", es],
+    ] as const) {
+      const strings = catalogue as Record<string, string>;
+      expect(LANDING_FAQ[locale], locale).toHaveLength(HOME_FAQ.length);
+      HOME_FAQ.forEach(([id, answerKey], index) => {
+        expect(LANDING_FAQ[locale][index], `${locale} ${id}`).toEqual({
+          question: strings[`home.faq.${id}.q`],
+          answer: strings[`home.faq.${id}.${answerKey}`],
+        });
       });
-      expect(LANDING_FAQ["pt-BR"][index]).toEqual({
-        question: ptBR[`landing.faq.${id}.q`],
-        answer: ptBR[`landing.faq.${id}.a`],
-      });
-    });
+    }
+  });
+
+  it("serves the Google Play wording for the phone question, in all three languages", () => {
+    // The hosted site links its Google Play listing, and the edge middleware
+    // only runs on the hosted site. The APK wording (`home.faq.phone.a`) is
+    // what a self-host without a listing shows, never what the edge serves.
+    const phone = HOME_FAQ.findIndex(([id]) => id === "phone");
+    for (const [locale, catalogue] of [
+      ["en", en],
+      ["pt-BR", ptBR],
+      ["es", es],
+    ] as const) {
+      const served = LANDING_FAQ[locale][phone]!.answer;
+      expect(served, locale).toBe((catalogue as Record<string, string>)["home.faq.phone.a.play"]);
+      expect(served, locale).toMatch(/Google Play/);
+      expect(served, locale).not.toBe((catalogue as Record<string, string>)["home.faq.phone.a"]);
+    }
+  });
+
+  it("keeps the homepage FAQ plain text: no slot, no markup, no dash", () => {
+    // Each answer is one string the page shows and the search snippet quotes.
+    // A link sits on its own line on the page (`home.faq.<id>.link`) and
+    // never inside the answer.
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      for (const { question, answer } of LANDING_FAQ[locale]) {
+        for (const text of [question, answer]) {
+          expect(text, `${locale}: ${text}`).not.toMatch(/[{}<>]|\]\(|https?:/);
+          expect(text, `${locale}: ${text}`).not.toMatch(/[\u2013\u2014]/);
+        }
+      }
+    }
+  });
+
+  it("the server-bot question and its four sentences match their home.faq.bot.* twins", () => {
+    for (const [locale, catalogue] of [
+      ["en", en],
+      ["pt-BR", ptBR],
+      ["es", es],
+    ] as const) {
+      const strings = catalogue as Record<string, string>;
+      const bot = LANDING_BOT_FAQ[locale];
+      expect(bot.question, locale).toBe(strings["home.faq.bot.q"]);
+      expect(Object.keys(bot.answers).sort(), locale).toEqual([
+        "home.faq.bot.a.actions",
+        "home.faq.bot.a.everyone",
+        "home.faq.bot.a.gradual",
+        "home.faq.bot.a.replies",
+      ]);
+      for (const [key, sentence] of Object.entries(bot.answers)) {
+        expect(sentence, `${locale} ${key}`).toBe(strings[key]);
+      }
+      for (const text of [bot.question, ...Object.values(bot.answers)]) {
+        expect(text, `${locale}: ${text}`).not.toMatch(/[{}<>]|\]\(|https?:/);
+        expect(text, `${locale}: ${text}`).not.toMatch(/[\u2013\u2014]/);
+      }
+    }
+  });
+
+  it("serves the server-bot question only while the launch switches are on", () => {
+    const COMBOS: ServerBotClaims[] = [
+      { actions: false, rollout: "aos-poucos" },
+      { actions: false, rollout: "todos" },
+      { actions: true, rollout: "aos-poucos" },
+      { actions: true, rollout: "todos" },
+    ];
+    for (const [locale, catalogue] of [
+      ["en", en],
+      ["pt-BR", ptBR],
+      ["es", es],
+    ] as const) {
+      const strings = catalogue as Record<string, string>;
+      // Off: exactly the seven, with no bot question anywhere.
+      expect(landingFaq(locale, null), locale).toEqual(LANDING_FAQ[locale]);
+      expect(landingFaq(locale, null).map((item) => item.question), locale).not.toContain(
+        strings["home.faq.bot.q"],
+      );
+      // On (the present twin): eight, the bot question right after the data
+      // one, answered with the sentences the switches pick, in that order.
+      for (const claims of COMBOS) {
+        const faq = landingFaq(locale, claims);
+        const label = `${locale} ${JSON.stringify(claims)}`;
+        expect(faq, label).toHaveLength(LANDING_FAQ[locale].length + 1);
+        expect(faq[5]!.question, label).toBe(strings["home.faq.data.q"]);
+        expect(faq[6], label).toEqual({
+          question: strings["home.faq.bot.q"],
+          answer: `${strings[claims.actions ? "home.faq.bot.a.actions" : "home.faq.bot.a.replies"]} ${
+            strings[claims.rollout === "aos-poucos" ? "home.faq.bot.a.gradual" : "home.faq.bot.a.everyone"]
+          }`,
+        });
+        expect(faq.filter((_, i) => i !== 6), label).toEqual(LANDING_FAQ[locale]);
+      }
+    }
+    // The served head follows the real switches, read at call time.
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const head = renderMarketingHead("/", locale);
+      if (serverBotClaims()) expect(head, locale).toContain(LANDING_BOT_FAQ[locale].question);
+      else expect(head, locale).not.toContain(LANDING_BOT_FAQ[locale].question);
+    }
   });
 
   it("every /tela FAQ pair matches its tela.faq.* twin, both locales", () => {
@@ -629,7 +746,6 @@ describe("Spanish", () => {
 
   it("every Spanish FAQ pair matches its catalogue twin", () => {
     const sets = [
-      [LANDING_FAQ.es, "landing", ["safe", "free", "signin", "install", "capacity", "import", "data"]],
       [VS_DISCORD_FAQ.es, "vsDiscord", ["import", "both", "sound", "catch"]],
       [TELA_FAQ.es, "tela", ["sound", "download", "people", "free", "mobile", "data"]],
       [
@@ -882,6 +998,33 @@ describe("structured data", () => {
       (node) => node["@type"] === "SoftwareApplication",
     );
     expect(landing?.operatingSystem).toBe(SOFTWARE_OPERATING_SYSTEMS);
+  });
+
+  it("serves the home page's seven questions in the FAQPage node, in all three languages", () => {
+    // Read from the head the edge actually writes, not from the constant: a
+    // question dropped in `jsonLdFor` would pass the constant's tests.
+    for (const [locale, catalogue] of [
+      ["en", en],
+      ["pt-BR", ptBR],
+      ["es", es],
+    ] as const) {
+      const strings = catalogue as Record<string, string>;
+      const faq = jsonLdGraph(renderMarketingHead("/", locale)).find(
+        (node) => node["@type"] === "FAQPage",
+      ) as
+        | { mainEntity: { name: string; acceptedAnswer: { text: string } }[] }
+        | undefined;
+      expect(faq, locale).toBeDefined();
+      expect(
+        faq!.mainEntity.map((item) => [item.name, item.acceptedAnswer.text]),
+        locale,
+      ).toEqual(
+        HOME_FAQ.map(([id, answerKey]) => [
+          strings[`home.faq.${id}.q`],
+          strings[`home.faq.${id}.${answerKey}`],
+        ]),
+      );
+    }
   });
 
   it("points sameAs only at pages the public can open", () => {

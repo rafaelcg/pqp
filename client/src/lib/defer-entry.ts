@@ -15,12 +15,13 @@
  * script during parsing is fetched immediately). On the home route it waits
  * until the first screen has settled (`first-screen-gate.ts`: the `load` event
  * and every largest-contentful-paint candidate, then 300 ms of quiet, with a
- * three second ceiling), or for the visitor's first touch, click or key press,
- * then requests the bundle.
+ * three second ceiling), or for the visitor's first touch, click, key press or
+ * wheel turn (the same list as `INTERACTIONS` in `boot-gate.ts`), then requests
+ * the bundle.
  *
  * WHAT THIS COSTS. On a slow link the app becomes interactive a little later
  * than it would have (by however long the picture takes), and until then the
- * two calls to action are plain links to `/app`. What it buys is that the
+ * calls to action are plain links to `/app`. What it buys is that the
  * stylesheet, the fonts and the pictures have the pipe to themselves while the
  * first screen is being built.
  *
@@ -44,7 +45,7 @@ export function deferEntryLoader(src: string, appChunk?: string): string {
   const preload = appChunk
     ? `var app=${JSON.stringify(appChunk).replace(/</g, "\\u003c")};if(/^\\/app(\\/|$)/.test(location.pathname)){var link=document.createElement("link");link.rel="modulepreload";link.crossOrigin="";link.href=app;document.head.appendChild(link)}`
     : "";
-  return `<script>(function(){${AFTER_FIRST_SCREEN_JS}${preload}var src=${url};function load(){if(load.d)return;load.d=1;var s=document.createElement("script");s.type="module";s.crossOrigin="";s.src=src;document.head.appendChild(s)}if(document.documentElement.getAttribute("data-route")!=="home"){load();return}afterFirstScreen(load);["pointerdown","keydown","touchstart"].forEach(function(e){addEventListener(e,load,{once:true,passive:true,capture:true})})})();</script>`;
+  return `<script>(function(){${AFTER_FIRST_SCREEN_JS}${preload}var src=${url};function load(){if(load.d)return;load.d=1;var s=document.createElement("script");s.type="module";s.crossOrigin="";s.src=src;document.head.appendChild(s)}if(document.documentElement.getAttribute("data-route")!=="home"){load();return}afterFirstScreen(load);["pointerdown","keydown","touchstart","wheel"].forEach(function(e){addEventListener(e,load,{once:true,passive:true,capture:true})})})();</script>`;
 }
 
 /**
