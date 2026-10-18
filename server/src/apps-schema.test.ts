@@ -358,37 +358,61 @@ describeDb("apps tables", () => {
       ).rejects.toMatchObject({ code: "23503" });
     });
 
-    it("keeps state at 16384 bytes and refuses 16385", async () => {
-      // The CHECK counts the state as Postgres prints jsonb, which puts a space
-      // after a colon: `{"k": ""}` is 9 bytes around the string.
-      const overhead = Buffer.byteLength('{"k": ""}');
-      const at = `{"k": "${"x".repeat(16384 - overhead)}"}`;
-      const over = `{"k": "${"x".repeat(16385 - overhead)}"}`;
-      const id = await startSession(channelId, { state: at });
+    it("is a backstop, not the cap: it never refuses what the 16384 byte compact cap accepts", async () => {
+      // The exact 16 KB cap is the application's job. The CHECK measures the
+      // state as Postgres prints jsonb (a space after each colon and comma), so
+      // it is 24576 = 1.5 x 16384, the worst case of that printing.
+      const compactBytes = (value: string) => Buffer.byteLength(value);
+
+      // Worst case: 8191 one-digit array elements, compact 16384 bytes, which
+      // Postgres prints at 24574.
+      const array = `[${"1,".repeat(8190)}10]`;
+      expect(compactBytes(array)).toBe(16384);
+      const id = await startSession(channelId, { state: array });
+      const printed = await q<{ n: number }>(
+        `SELECT octet_length(state::text) AS n FROM app_sessions WHERE id = $1`,
+        [id],
+      );
+      expect(printed.rows[0]!.n).toBeGreaterThan(16384);
+      expect(printed.rows[0]!.n).toBeLessThanOrEqual(24576);
+
+      // Many short keys, padded to exactly 16384 compact bytes.
+      const entries: Record<string, unknown> = {};
+      for (let i = 0; i < 1500; i += 1) {
+        entries[`k${i}`] = 1;
+      }
+      const base = compactBytes(JSON.stringify({ ...entries, pad: "" }));
+      const keys = JSON.stringify({ ...entries, pad: "x".repeat(16384 - base) });
+      expect(compactBytes(keys)).toBe(16384);
+      await q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, keys]);
+
+      // A single big string: compact 16384 is also fine.
+      const string = JSON.stringify({ k: "x".repeat(16384 - compactBytes('{"k":""}')) });
+      expect(compactBytes(string)).toBe(16384);
+      await q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, string]);
+
+      // The backstop itself: a printed form of 24576 bytes is kept, 24577 is
+      // refused, on update and on insert.
+      const overhead = compactBytes('{"k": ""}');
+      const atLimit = `{"k": "${"x".repeat(24576 - overhead)}"}`;
+      const overLimit = `{"k": "${"x".repeat(24577 - overhead)}"}`;
+      await q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, atLimit]);
       const stored = await q<{ n: number }>(
         `SELECT octet_length(state::text) AS n FROM app_sessions WHERE id = $1`,
         [id],
       );
-      expect(stored.rows[0]!.n).toBe(16384);
+      expect(stored.rows[0]!.n).toBe(24576);
       await expect(
-        q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, over]),
+        q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, overLimit]),
       ).rejects.toMatchObject({ code: "23514" });
-      await expect(startSession(channel2Id, { state: over })).rejects.toMatchObject({
+      await expect(startSession(channel2Id, { state: overLimit })).rejects.toMatchObject({
         code: "23514",
       });
-      // Multi-byte text counts in bytes, not characters: 8200 two-byte
-      // characters is 16400 bytes of text.
-      const wide = JSON.stringify({ k: "é".repeat(8200) });
+      // Multi-byte text counts in bytes, not characters: 12300 two-byte
+      // characters is 24600 bytes of text.
+      const wide = JSON.stringify({ k: "é".repeat(12300) });
       await expect(
         q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, wide]),
-      ).rejects.toMatchObject({ code: "23514" });
-      // The compact form is NOT what is measured: a state that is 16384 bytes
-      // of JSON.stringify output is over once Postgres prints it. Code that
-      // caps state has to count the canonical form.
-      const compact = JSON.stringify({ k: "x".repeat(16384 - Buffer.byteLength('{"k":""}')) });
-      expect(Buffer.byteLength(compact)).toBe(16384);
-      await expect(
-        q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, compact]),
       ).rejects.toMatchObject({ code: "23514" });
     });
 

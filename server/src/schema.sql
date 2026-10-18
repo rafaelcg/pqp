@@ -6709,11 +6709,13 @@ CREATE INDEX IF NOT EXISTS idx_server_apps_app_on
 -- A live app in a channel. One per channel (the partial unique index, the same
 -- shape as channel_sessions). `state` is the app's shared JSON, at most 16 KB,
 -- revisioned; it is set back to '{}' when the session ends. `summary` keeps
--- what the quiet "terminou" card needs once the state is gone. The size CHECK
--- measures the state as Postgres prints jsonb (`{"a": 1, "b": 2}`, a space
--- after each colon and comma), which is longer than JSON.stringify's compact
--- form: code that caps state before writing must count that canonical form, or
--- a state it accepted can still be refused here.
+-- what the quiet "terminou" card needs once the state is gone. The exact 16 KB
+-- cap (16384 bytes of compact JSON) is the application's job. The size CHECK is
+-- only a backstop and is deliberately looser: it measures the state as Postgres
+-- prints jsonb (`{"a": 1, "b": 2}`, one space after each colon and comma),
+-- which is up to 1.5 times the compact form (a long array of one-digit numbers
+-- is the worst case), so 24576 = 1.5 x 16384 can never refuse a state the
+-- application accepted.
 CREATE TABLE IF NOT EXISTS app_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
@@ -6745,7 +6747,7 @@ CREATE TABLE IF NOT EXISTS app_sessions (
   FOREIGN KEY (app_id, app_version) REFERENCES app_versions(app_id, version),
   CHECK ((status = 'ended') = (ended_at IS NOT NULL)),
   CHECK ((status = 'ended') = (end_reason IS NOT NULL)),
-  CHECK (octet_length(state::text) <= 16384)
+  CHECK (octet_length(state::text) <= 24576)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_sessions_one_live_per_channel
   ON app_sessions (channel_id) WHERE status = 'live';
