@@ -7,11 +7,13 @@ import { FRIENDS_FAMILY_TEMPLATE } from "../../packages/shared/src/discord-impor
  * the paste bar talking to Discord).
  *
  * MEDIA. The page's reels and stills live in `public/media/home/`, which is
- * not in git (a CI build has none), so every test here must pass with the
- * folder present and absent. Console errors from those files are filtered by
- * the URL of the failing resource, nothing else is, and one test takes the
- * folder away itself so the absent case is checked on a developer's machine
- * too.
+ * in git, so a CI build serves them. A missing one is a bug (a manifest entry
+ * that names a file that is missing or misnamed), so `watch()` counts a
+ * `/media/home/` request that fails, or that comes back as the app's HTML (the
+ * preview server's answer for a file it does not have), as an error. The page
+ * must still work without the footage, and the one test that takes the folder
+ * away itself covers that case: it is the only caller that allows those
+ * errors.
  *
  * Selectors are ids, attributes and hrefs, not copy: the wording is edited
  * under these tests and the page speaks three languages.
@@ -73,19 +75,32 @@ async function openHome(page: Page, path = "/") {
 }
 
 /**
- * Collects what the page logs. A failed file under `/media/home/` is the one
- * thing allowed: the folder is not in git, and a page that works without it
- * is the point of the media-absent test.
+ * Collects what the page logs. A failed file under `/media/home/` is an error
+ * like any other, because the footage is committed. Only the media-absent
+ * test passes `mediaMayFail`, since it makes every one of those files 404 on
+ * purpose.
  */
-function watch(page: Page) {
+function watch(page: Page, { mediaMayFail = false }: { mediaMayFail?: boolean } = {}) {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() !== "error") return;
-    if (message.location().url.includes("/media/home/")) return;
+    if (mediaMayFail && message.location().url.includes("/media/home/")) return;
     consoleErrors.push(`${message.text()} (${message.location().url})`);
   });
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  if (!mediaMayFail) {
+    // `vite preview` and the dev server answer a missing file with index.html
+    // and a 200, which logs nothing, so the console alone would miss it.
+    page.on("response", (response) => {
+      const url = response.url();
+      if (!url.includes("/media/home/")) return;
+      const type = response.headers()["content-type"] ?? "";
+      if (response.status() >= 400 || type.includes("text/html")) {
+        consoleErrors.push(`media answered ${response.status()} ${type} (${url})`);
+      }
+    });
+  }
   return { consoleErrors, pageErrors };
 }
 
@@ -117,12 +132,13 @@ test.describe("home page", () => {
   });
 
   test("still stands without its footage", async ({ page }) => {
-    // The folder is untracked: a CI build, a fresh clone and a deploy without
-    // the media all look like this. Nothing may throw, and no section may
+    // The footage is in git, so this takes it away on purpose. A deploy that
+    // lost the media, a CDN that has not caught up and a self-host that
+    // strips it all look like this. Nothing may throw, and no section may
     // fail (a section that throws is dropped by its boundary, which logs
     // `[home] section "<name>" failed`).
     await page.route("**/media/home/**", (route) => route.fulfill({ status: 404, body: "" }));
-    const log = watch(page);
+    const log = watch(page, { mediaMayFail: true });
     const sectionFailures: string[] = [];
     page.on("console", (message) => {
       if (message.text().startsWith("[home] section")) sectionFailures.push(message.text());
