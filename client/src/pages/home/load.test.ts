@@ -40,6 +40,23 @@ describe("createHomeLoader", () => {
     expect(importer).toHaveBeenCalledTimes(2);
     expect(loader.loaded()).toBe(mod);
   });
+
+  it("treats an import that resolves to nothing as a failure", async () => {
+    // Vite's preload helper resolves to undefined once main.tsx has started a
+    // reload for a missing chunk.
+    const mod = { default: () => null };
+    const importer = vi
+      .fn<() => Promise<typeof mod>>()
+      .mockResolvedValueOnce(undefined as unknown as typeof mod)
+      .mockResolvedValueOnce(mod);
+    const loader = createHomeLoader(importer);
+
+    await expect(loader.load()).rejects.toBeInstanceOf(Error);
+    expect(loader.loaded()).toBeNull();
+    await expect(loader.load()).resolves.toBe(mod);
+    expect(importer).toHaveBeenCalledTimes(2);
+    expect(loader.loaded()).toBe(mod);
+  });
 });
 
 describe("withCeiling", () => {

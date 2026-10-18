@@ -567,8 +567,9 @@ const prerendered = hasPrerenderedHero();
 
 // The home page is its own chunk (pages/home/load.ts), so on "/" it starts
 // downloading now, beside everything else the boot waits for. The first render
-// below waits on it with a ceiling, and the route then renders the module it
-// already has instead of suspending on it.
+// below waits on it (with a ceiling only when there is no prerendered first
+// screen), and the route then renders the module it already has instead of
+// suspending on it.
 const onHome = window.location.pathname === "/";
 if (onHome) {
   void loadHome().catch(() => {});
@@ -723,7 +724,7 @@ if (prerendered) {
   whenReadyToRender(() => {
     initFaro();
     // Four things before the first render, in parallel, none of them able to
-    // hold it for long or to fail it:
+    // fail it:
     //  - the catalogue. A Portuguese or Spanish reader has the right words on
     //    screen already (the prerendered block), and rendering in English until
     //    the catalogue arrives would swap them for English and back. A failed
@@ -734,23 +735,30 @@ if (prerendered) {
     //    replaces a picture that has not been drawn yet.
     //  - the home page's chunk, so the route renders it at once instead of
     //    the loading shell. A failed chunk renders now and takes the lazy
-    //    route; a slow one renders at the ceiling.
+    //    route. A slow one is waited for with no ceiling: rendering before it
+    //    lands would replace the static block, whose controls are plain links
+    //    that already work, with the loading shell, and a hung chunk would
+    //    hang the lazy route just the same.
     const locale = detectLocale();
-    const focused = rememberFocusInPrerender();
     void Promise.all([
       (locale === "en" ? Promise.resolve() : loadLocale(locale)).catch(() => {}),
       primeDownloadPlan(),
       whenPrerenderPainted(),
-      withCeiling(loadHome().catch(() => {}), HOME_CHUNK_CEILING_MS),
+      loadHome().catch(() => {}),
     ]).then(() => {
+      // Read at the swap, not before the wait: a visitor can move focus while
+      // the chunk loads.
+      const focused = rememberFocusInPrerender();
       renderApp();
       restoreFocus(focused);
     });
   });
 } else {
   // "/" with no static first screen (the dev server, which runs no prerender)
-  // waits for the home chunk the same way, so it does not paint the loading
-  // shell for as long as the chunk takes. Every other route renders at once.
+  // waits for the home chunk too, so it does not paint the loading shell for
+  // as long as the chunk takes. Here the wait has a ceiling, because the page
+  // is blank until the first render and there is no static block to keep
+  // usable. Every other route renders at once.
   const homeReady = onHome
     ? withCeiling(loadHome().catch(() => {}), HOME_CHUNK_CEILING_MS)
     : null;

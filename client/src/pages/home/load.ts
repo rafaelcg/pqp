@@ -6,8 +6,8 @@
  * is the one place that imports it, and it is small enough to be eager:
  *
  * - `loadHome()` starts the import, or returns the one already running. The
- *   boot calls it first thing on "/" and waits on it (with a ceiling) before
- *   the first render, so the route usually finds the module already here.
+ *   boot calls it first thing on "/" and waits on it before the first render,
+ *   so the route usually finds the module already here.
  * - `loadedHome()` is that module once it has arrived, or null. The route
  *   renders it directly when it is there, because `React.lazy` suspends on its
  *   first render even when the import has already resolved, and on the
@@ -17,6 +17,11 @@
  *   a fresh one. A remembered rejection would hand every later caller (the
  *   lazy route, the idle prefetch) the same dead promise, for example after a
  *   deploy deleted the old hashed chunk (CLAUDE.md pitfall 23).
+ * - An import that resolves to nothing counts as a rejection too. When the
+ *   chunk is gone, Vite's preload helper fires `vite:preloadError` first, and
+ *   once `main.tsx` answers it by reloading the page, the helper resolves to
+ *   `undefined` instead of rethrowing. Remembering that would hand
+ *   `React.lazy` an empty module.
  *
  * Nothing here may import the page itself, not even a type from its parts: a
  * static import would pull the page into the entry chunk.
@@ -39,6 +44,10 @@ export function createHomeLoader<T>(importer: () => Promise<T>): HomeLoader<T> {
       if (!pending) {
         pending = importer().then(
           (mod) => {
+            if (!mod) {
+              pending = null;
+              throw new Error("The home page did not load");
+            }
             module = mod;
             return mod;
           },
@@ -61,16 +70,20 @@ const home = createHomeLoader<HomeModule>(() => import("./index"));
 export const loadHome = home.load;
 export const loadedHome = home.loaded;
 
-/** Longest the first render on "/" waits for the home chunk, in ms. */
+/**
+ * Longest the first render on "/" waits for the home chunk, in ms, when there
+ * is no prerendered first screen (the dev server). The prerendered boot waits
+ * with no ceiling: the static block is usable until the chunk lands.
+ */
 export const HOME_CHUNK_CEILING_MS = 3000;
 
 /**
  * Resolves on the first of `promise` settling or `ms` passing, and never
- * rejects. The boot waits on the home chunk through this, so a slow chunk
- * cannot hold the first render for longer than the ceiling and a failed one
- * renders at once (the route then takes the ordinary lazy path). It never
- * rejects because the boot waits on it inside a `Promise.all` whose other
- * members never reject either, and one rejection there would skip the render.
+ * rejects. The boot on "/" without a prerendered first screen waits on the
+ * home chunk through this, so a slow chunk cannot hold the first render for
+ * longer than the ceiling and a failed one renders at once (the route then
+ * takes the ordinary lazy path). It never rejects because the boot renders
+ * in its `then`, and a rejection would skip the render.
  */
 export function withCeiling(promise: Promise<unknown>, ms: number): Promise<void> {
   return new Promise<void>((resolve) => {
