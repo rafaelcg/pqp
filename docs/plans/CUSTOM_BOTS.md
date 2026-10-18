@@ -8,9 +8,9 @@ This replaces Caio's old setup: a normal account that an external Grok service w
 
 | Phase | Scope | State |
 |---|---|---|
-| 1 | Chat bots: create, edit, delete, mention and reply trigger, caps, settings tab | MVP on `feat/custom-bots`, localhost only |
-| 2 | Actions: channels, posts, pins, threads, forum and Baú posts, moderation, with two permission checks and confirmations | Built on `feat/custom-bots`, localhost only |
-| 3 | More triggers (unanswered questions, welcome), slash commands, scheduled posts | Not started |
+| 1 | Chat bots: create, edit, delete, mention and reply trigger, caps, settings tab | Ready to merge behind `custom_bots` (off); rollout below |
+| 2 | Actions: channels, posts, pins, threads, forum and Baú posts, moderation, with two permission checks and confirmations | Ready to merge behind `custom_bots` (off) |
+| 3 | More triggers (unanswered questions, welcome), slash commands, scheduled posts | Welcome, search, catch-up and reminders built; the rest not started |
 | 4 | Bring your own key, paid plan | Parked |
 
 ## Decisions
@@ -64,7 +64,7 @@ The bot acts through tools. Each write tool calls the same API route a member's 
 | `post_message`, `pin_message`, `create_forum_post` | Manage Messages | Only past three actions |
 | `create_thread` | (channel access) | Only past three actions |
 | `create_bau_post` | Manage Server, Baú on | Only past three actions |
-| `create_invite` | Create Invite | Only past three actions |
+| `create_invite` | Create Invite | Always without a use limit or an expiry; otherwise only past three actions |
 | `list_forum_posts` | (read), forums on | No |
 | `read_poll` | (read) | No |
 | `create_poll` | Send Messages here; in another channel also Manage Messages there | Only past three actions |
@@ -78,7 +78,8 @@ Staff switch each tool on or off per bot in Server settings, Bots, "O que ele po
 
 Rules:
 
-1. Two keys. The bot's permission is the route's own check. The requester's permission is checked when the action is staged and again when it runs. A tool is not offered when either key is missing, and the prompt says which.
+1. Two keys. The bot's permission is the route's own check. The requester's permission is checked when the action is staged and again when it runs, in the channel the action touches when it names one (an overwrite there can take Manage Messages away), and server-wide otherwise. A tool is not offered when either key is missing, and the prompt says which. A tool the model was not offered is refused even if it calls it, and a read that needs a permission (`list_bans`) checks both keys like a write.
+   A timeout stops an action too: the requester's (a timed-out member cannot confirm a plan by button either) and the bot's (a timed-out bot does not answer at all).
 2. Reads show only what both the bot and the requester can see.
 3. The model only stages writes. After its last turn, code builds the plan text. Up to three reversible actions run at once. More, or any destructive or moderation action, wait for the requester to reply "sim" within five minutes. "não" cancels. The plan card also has Confirmar and Cancelar buttons, shown only to the requester (`POST /api/bots/plans/:planId/decision`); the first answer wins, and the card then reads Confirmado, Cancelado or Expirou for everybody. Another member's "sim" does nothing.
 4. A plan runs once. Claiming it is a conditional `UPDATE`. Each step writes its row in `server_bot_actions` before it runs, and a worker that takes over never repeats a step.
@@ -120,7 +121,8 @@ Staff can turn on a fixed welcome in the bot's settings: a channel and a text, w
 3. Times are São Paulo wall clock. Each request tells the model the current São Paulo time in the user message, not the system prompt, so the cached prefix does not change every minute.
 4. At least a minute ahead, at most 30 days. At most 5 open per member and 50 per server.
 5. Delivery claims with a lease and `SKIP LOCKED`, and posts with a stored nonce that is checked first, so a retry never posts twice. A repeat moves to its next slot on its own schedule and skips what it missed while the API was down.
-6. A reminder whose member left, lost access, is timed out, or whose bot is off is cancelled when it comes due.
+6. A reminder whose member left, lost access, is timed out, or whose bot is switched off is cancelled when it comes due.
+7. The flag is different: while `custom_bots` is off for its server, a repeating reminder skips its slot without posting and a one-off waits. Once the flag is back, the one-off goes out, unless it is more than six hours late. Any one-off that late is dropped rather than posted, whatever kept it.
 
 ## Images and voice notes
 
@@ -159,6 +161,15 @@ When a limit stops an answer, the member gets a `bot-notice` frame on their own 
 ## Cost
 
 With Haiku 5.5 ($0.10 input, $0.50 output per million tokens), a chat reply of about 3,000 input and 300 output tokens costs about $0.00045. That is about $0.45 per 1,000 replies, before prompt caching.
+
+## Rollout
+
+The flag is off by default, and off costs nothing: a chat message in a bot's channel never reaches the database for bots, and the run and reminder jobs return before they query.
+
+1. Set `ANTHROPIC_API_KEY` in `/opt/pqp/.env`. The API reads it for the config and the practice chat; the `worker` container reads the same file and runs the replies and reminders. Keep `BOTS_MAX_USD_PER_DAY` at its default of 5 or lower.
+2. Turn `custom_bots` on for one server from controles → interruptores (its override). Then `bot_test_chat` for the same server.
+3. Watch "bots · beta" on the dashboard: spend against the ceiling, refused calls, failed runs.
+4. Before a second server: add a per-server dollar cap. The ceiling is shared by the whole deployment, so one busy server can use another's day.
 
 ## Before production
 
