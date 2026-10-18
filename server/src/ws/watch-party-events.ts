@@ -650,7 +650,10 @@ export function resetHostPresenceCountersForTests(): void {
  * wakes somebody's phone. With one machine (or the bus off) it can only see
  * this process's own sockets, so the answer is exactly what it always was.
  */
-function hostIsConnectedAnywhere(userId: string): boolean {
+function hostIsConnectedAnywhere(
+  userId: string,
+  phase: "close" | "recheck" = "close",
+): boolean {
   if (userHasAuthenticatedSocket(userId)) {
     return true;
   }
@@ -658,8 +661,45 @@ function hostIsConnectedAnywhere(userId: string): boolean {
     return false;
   }
   hostPresence.heldElsewhere += 1;
-  logEvent("watchParty.hostSocketElsewhere", { userId });
+  // NOT HOST-SPECIFIC, and the name oversells it: `onHostSocketClosed` runs for
+  // EVERY socket that closes, before it knows whether the person hosts
+  // anything, so this line fires for any account holding a socket on both
+  // machines (a phone and a laptop, or a reconnect that landed on the sibling
+  // before the old socket's close ran). It changes nothing: no seat moves, no
+  // party is demoted or re-claimed; it only means "do not start the grace
+  // clock". `phase` separates the close from its 5 s re-check, which asks
+  // again and would otherwise double every count.
+  logEvent("watchParty.hostSocketElsewhere", { userId, phase });
   return true;
+}
+
+/**
+ * Start the grace clock, and take it back if the host turns out to be here.
+ *
+ * THE STAMP IS A DATABASE WRITE AND THE PRESENCE CHECK THAT LET IT HAPPEN WAS
+ * READ BEFORE IT. On two machines a host's socket that reconnects onto the
+ * sibling (the old one closing on A while the new one opens on B) can run its
+ * whole `onHostSocketOpened` (the clear) between A's "nobody is connected" and
+ * A's UPDATE landing. The stamp then arrives AFTER the clear, and nothing
+ * clears it again: the host sits connected with `host_disconnected_at` set,
+ * every co-host is offered Assumir (a claim that takes the party from a
+ * present host), and five minutes later the sweep ends the party unless a
+ * stream is up. So after a stamp that WE wrote, ask again; if the host is
+ * connected anywhere now, clear it. Only the instance that wrote the stamp
+ * pays for it, and only when a row actually changed.
+ */
+async function startGraceClock(userId: string): Promise<void> {
+  const stamped = await markWatchPartyHostGone(userId);
+  if (stamped.length === 0) {
+    return;
+  }
+  if (!userHasAuthenticatedSocket(userId) && !hasClusterSocket(userId)) {
+    await announceChannels(stamped);
+    return;
+  }
+  logEvent("watchParty.hostStampRetracted", { userId });
+  const cleared = await markWatchPartyHostBack(userId);
+  await announceChannels(cleared.length > 0 ? cleared : stamped);
 }
 
 /**
@@ -693,12 +733,10 @@ function scheduleHostPresenceRecheck(userId: string): void {
   }
   const timer = setTimeout(() => {
     recheckTimers.delete(userId);
-    if (hostIsConnectedAnywhere(userId)) {
+    if (hostIsConnectedAnywhere(userId, "recheck")) {
       return;
     }
-    void markWatchPartyHostGone(userId)
-      .then(announceChannels)
-      .catch((error: unknown) => {
+    void startGraceClock(userId).catch((error: unknown) => {
         console.error("[watch-party] host presence re-check failed:", error);
       });
   }, hostPresenceRecheckMs);
@@ -722,8 +760,7 @@ export async function onHostSocketClosed(userId: string): Promise<void> {
     scheduleHostPresenceRecheck(userId);
     return;
   }
-  const channels = await markWatchPartyHostGone(userId);
-  await announceChannels(channels);
+  await startGraceClock(userId);
 }
 
 async function announceChannels(channelIds: readonly string[]): Promise<void> {

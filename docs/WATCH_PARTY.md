@@ -160,6 +160,12 @@ which is exactly what an invisible object must not do.
   wherever the proxy puts them, and a machine that only ever saw one of them
   would start the clock on a host who is sitting right there. The
   `watchParty.hostSocketElsewhere` log line is that second answer firing.
+  It fires for ANY account that closes a socket while holding another on the
+  sibling machine, not only for hosts (the check runs before anything asks
+  whether the person hosts a party), and it only means "no clock started":
+  nothing is demoted, claimed or reset. `phase` is `close` or `recheck`. If the
+  stamp itself lands after the host reconnected on the other machine,
+  `startGraceClock` retracts it (`watchParty.hostStampRetracted`).
 - While the clock runs, the party **stays live**. The audience is watching
   either way, and cutting them off to make a point about ownership helps
   nobody. What the clock changes is that a co-host now sees **Assumir**.
