@@ -1271,6 +1271,12 @@ export const BOOT_EVERY_TIME_SWEEPS: readonly string[] = [
  WHERE is_everyone
    AND (permissions & 262158) <> 0;`,
   `UPDATE channel_sessions SET host_user_id = created_by WHERE host_user_id IS NULL;`,
+  // The first-party app publisher: apps.publisher_id references it, so a boot
+  // that skips the DDL must still leave it there (a test database that ran
+  // `TRUNCATE users CASCADE` empties app_publishers with it).
+  `INSERT INTO app_publishers (id, display_name, kind)
+VALUES ('pqp', 'pqp', 'first_party')
+ON CONFLICT (id) DO NOTHING;`,
 ];
 
 /** Top-level DML that is a one-time backfill, so running it once is enough. */

@@ -762,6 +762,26 @@ build that hides unknown channel types must be out, or a forum inside a
 category is a dead row there. `server/src/lib/flag-client-contract.test.ts`
 pins the route, the field and the create guard.
 
+## `apps` (per server)
+
+The apps platform: small interactive things (Locadora, a poll) that a person
+starts in a text or voice channel and others join from a live card in the
+timeline. Behind `APPS` (default off, **per server**, born as a flag). It is the
+first of the platform's gates: an app is also released by the operator per server
+(`server_apps.operator_enabled`), and Locadora needs `emulator_room` on top.
+
+**Nothing reads it yet.** The change that registers it only adds the tables
+(`apps`, `app_versions`, `server_apps`, `app_sessions`, and their neighbours in
+`schema.sql`) and the flag; no route, frame or client code consults it. Once the
+platform lands, off means nothing renders and every apps route answers 404, and
+turning it off ends the live sessions of that server. The client will learn it
+from `GET /api/apps/config?serverId=` (`enabled`), which arrives with the
+session routes and is when `clientVia` is added here.
+
+Turn it on for one server with `PUT /api/admin/flag-overrides
+{ key: "apps", serverId, enabled: true }` or from controles → interruptores,
+and only after the rest of the platform is in.
+
 ## `stories` (per server) and `stories_friends` (global)
 
 Stories: a photo, a video of up to 30 s or a text card that lives for 24 h
