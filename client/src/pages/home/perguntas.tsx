@@ -5,6 +5,7 @@ import { type MessageKey, useTranslation } from "@/lib/i18n";
 import { playStoreUrl } from "@/lib/play-store";
 import { isSupportPageEnabled, supportPagePath } from "@/lib/support-links";
 import { cn } from "@/lib/utils";
+import { botFaqAnswer, useServerBotClaims } from "./breu/claims";
 import { rich } from "./rich";
 import { CONTAINER, H3, HEADER_GAP_SUPPORT, Section, SectionHeader } from "./ui";
 
@@ -30,6 +31,11 @@ import { CONTAINER, H3, HEADER_GAP_SUPPORT, Section, SectionHeader } from "./ui"
  * line is where a hosted-only link is gated. `data-faq-question` and
  * `data-faq-answer` mark the two texts a parity test reads; `data-faq-link`
  * marks the line it skips.
+ *
+ * One more question, about what the server bot reads, shows after the data
+ * question only while the bot launch switches are on (`useServerBotClaims`).
+ * The JSON-LD adds the same question then (`landingFaq`), with the answer
+ * built by the same `botFaqAnswer`.
  */
 
 const A =
@@ -38,12 +44,13 @@ const A =
 /** `/#faq`, the anchor the old landing's FAQ had, still lands here. */
 const ALIASES = ["faq"] as const;
 
-type FaqId = "friends" | "history" | "free" | "phone" | "install" | "data" | "future";
+type FaqId = "friends" | "history" | "free" | "phone" | "install" | "data" | "future" | "bot";
 
 /**
  * In page order, which is also the JSON-LD order. `aPlay` is the answer while
  * the build links a Google Play listing (`playStoreUrl()`); without one, `a`
- * is the APK wording.
+ * is the APK wording. The gated bot question is not in this list: it is
+ * added at render, after `data`.
  */
 const FAQ = [
   { id: "friends", q: "home.faq.friends.q", a: "home.faq.friends.a" },
@@ -61,6 +68,19 @@ const REPO_LABEL = SOURCE_REPO_URL.replace(/^https?:\/\//, "");
 export function Perguntas() {
   const { t } = useTranslation();
   const hasPlay = playStoreUrl() !== null;
+  const bots = useServerBotClaims();
+
+  // The questions as a reader gets them, text resolved.
+  const rows: { id: FaqId; q: string; a: string }[] = FAQ.map((item) => ({
+    id: item.id,
+    q: t(item.q),
+    a: t("aPlay" in item && hasPlay ? item.aPlay : item.a),
+  }));
+  // depends on PR#1188 shipping: what the server bot reads, right after the data question.
+  if (bots) {
+    const at = rows.findIndex((row) => row.id === "data") + 1;
+    rows.splice(at, 0, { id: "bot", q: t("home.faq.bot.q"), a: botFaqAnswer(t, bots) });
+  }
 
   return (
     <Section id="perguntas" aliases={ALIASES} labelledBy="perguntas-title" weight="support">
@@ -73,8 +93,8 @@ export function Perguntas() {
         {/* The list and the links read at reading width, on the header's left edge. */}
         <div className={cn("max-w-3xl", HEADER_GAP_SUPPORT)}>
           <ul className="border-t border-white/10">
-            {FAQ.map((item, i) => (
-              <li key={item.id} className="border-b border-white/10">
+            {rows.map((row, i) => (
+              <li key={row.id} className="border-b border-white/10">
                 <details
                   open={i === 0}
                   className={cn(
@@ -85,7 +105,7 @@ export function Perguntas() {
                 >
                   <summary className="-mx-3 flex min-h-11 cursor-pointer list-none items-start gap-4 rounded-xl px-3 py-6 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal sm:gap-6 [&::-webkit-details-marker]:hidden">
                     <H3 className="min-w-0 flex-1 text-paper/85 transition-colors duration-300 ease-out group-hover:text-paper group-open:text-paper text-pretty">
-                      <span data-faq-question="">{t(item.q)}</span>
+                      <span data-faq-question="">{row.q}</span>
                     </H3>
                     <span
                       aria-hidden
@@ -95,8 +115,8 @@ export function Perguntas() {
                     </span>
                   </summary>
                   <div className="max-w-3xl space-y-3 pb-7 pr-2 text-[15px] leading-relaxed text-paper-muted text-pretty sm:pr-14 sm:text-base">
-                    <p data-faq-answer="">{t("aPlay" in item && hasPlay ? item.aPlay : item.a)}</p>
-                    <FaqLinks id={item.id} />
+                    <p data-faq-answer="">{row.a}</p>
+                    <FaqLinks id={row.id} />
                   </div>
                 </details>
               </li>

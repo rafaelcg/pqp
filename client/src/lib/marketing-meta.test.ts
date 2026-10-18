@@ -7,12 +7,15 @@ import en from "../locales/en/translation.json";
 import ptBR from "../locales/pt-BR/translation.json";
 import es from "../locales/es/translation.json";
 import { PLAY_STORE_LISTING_URL } from "./play-store";
+import { type ServerBotClaims, serverBotClaims } from "./server-bots-launch";
 import {
   injectMarketingHead,
   marketingPageFromMetaPath,
   marketingUrlsFor,
   renderMarketingHead,
+  LANDING_BOT_FAQ,
   LANDING_FAQ,
+  landingFaq,
   SOFTWARE_OPERATING_SYSTEMS,
   STREAMERS_FAQ,
   TELA_FAQ,
@@ -296,6 +299,73 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
           expect(text, `${locale}: ${text}`).not.toMatch(/[\u2013\u2014]/);
         }
       }
+    }
+  });
+
+  it("the server-bot question and its four sentences match their home.faq.bot.* twins", () => {
+    for (const [locale, catalogue] of [
+      ["en", en],
+      ["pt-BR", ptBR],
+      ["es", es],
+    ] as const) {
+      const strings = catalogue as Record<string, string>;
+      const bot = LANDING_BOT_FAQ[locale];
+      expect(bot.question, locale).toBe(strings["home.faq.bot.q"]);
+      expect(Object.keys(bot.answers).sort(), locale).toEqual([
+        "home.faq.bot.a.actions",
+        "home.faq.bot.a.everyone",
+        "home.faq.bot.a.gradual",
+        "home.faq.bot.a.replies",
+      ]);
+      for (const [key, sentence] of Object.entries(bot.answers)) {
+        expect(sentence, `${locale} ${key}`).toBe(strings[key]);
+      }
+      for (const text of [bot.question, ...Object.values(bot.answers)]) {
+        expect(text, `${locale}: ${text}`).not.toMatch(/[{}<>]|\]\(|https?:/);
+        expect(text, `${locale}: ${text}`).not.toMatch(/[\u2013\u2014]/);
+      }
+    }
+  });
+
+  it("serves the server-bot question only while the launch switches are on", () => {
+    const COMBOS: ServerBotClaims[] = [
+      { actions: false, rollout: "aos-poucos" },
+      { actions: false, rollout: "todos" },
+      { actions: true, rollout: "aos-poucos" },
+      { actions: true, rollout: "todos" },
+    ];
+    for (const [locale, catalogue] of [
+      ["en", en],
+      ["pt-BR", ptBR],
+      ["es", es],
+    ] as const) {
+      const strings = catalogue as Record<string, string>;
+      // Off: exactly the seven, with no bot question anywhere.
+      expect(landingFaq(locale, null), locale).toEqual(LANDING_FAQ[locale]);
+      expect(landingFaq(locale, null).map((item) => item.question), locale).not.toContain(
+        strings["home.faq.bot.q"],
+      );
+      // On (the present twin): eight, the bot question right after the data
+      // one, answered with the sentences the switches pick, in that order.
+      for (const claims of COMBOS) {
+        const faq = landingFaq(locale, claims);
+        const label = `${locale} ${JSON.stringify(claims)}`;
+        expect(faq, label).toHaveLength(LANDING_FAQ[locale].length + 1);
+        expect(faq[5]!.question, label).toBe(strings["home.faq.data.q"]);
+        expect(faq[6], label).toEqual({
+          question: strings["home.faq.bot.q"],
+          answer: `${strings[claims.actions ? "home.faq.bot.a.actions" : "home.faq.bot.a.replies"]} ${
+            strings[claims.rollout === "aos-poucos" ? "home.faq.bot.a.gradual" : "home.faq.bot.a.everyone"]
+          }`,
+        });
+        expect(faq.filter((_, i) => i !== 6), label).toEqual(LANDING_FAQ[locale]);
+      }
+    }
+    // The served head follows the real switches, read at call time.
+    for (const locale of ["pt-BR", "en", "es"] as const) {
+      const head = renderMarketingHead("/", locale);
+      if (serverBotClaims()) expect(head, locale).toContain(LANDING_BOT_FAQ[locale].question);
+      else expect(head, locale).not.toContain(LANDING_BOT_FAQ[locale].question);
     }
   });
 

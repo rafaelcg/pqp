@@ -831,6 +831,12 @@ function ImportBench({ onCode }: { onCode: (code: string | null) => void }) {
                 {t(DROPPED[reason])}
               </Item>
             ))}
+            {/* A template carries no accounts, and a Discord bot is an account. Page
+                only: the shared NOT_IN_TEMPLATE_REASONS list (and the app's import
+                dialog) does not carry it. True with the bot switches on or off. */}
+            <Item muted name="discordBots">
+              {t("home.move.stays.discordBots")}
+            </Item>
             {real && source.bench.mappedAway.length > 0 && <MappedAway items={source.bench.mappedAway} />}
           </ListBlock>
         </div>

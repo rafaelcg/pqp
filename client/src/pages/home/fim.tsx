@@ -8,6 +8,8 @@ import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 import { JoinButton } from "./shared/auth-buttons";
 import { Avatar, CAST } from "./shared/mock";
+import { BotFace } from "./breu/bot-face";
+import { useOnScreen } from "./breu/use-on-screen";
 import { Reveal, mix, useSceneProgress } from "./cinema";
 import { rich } from "./rich";
 import {
@@ -23,6 +25,7 @@ import {
   SectionHeader,
   useCta,
 } from "./ui";
+import "./breu/fim.css";
 
 /**
  * The book-end to the hero. The hero opens on the painted rooftop at dusk as
@@ -38,9 +41,11 @@ import {
  * Reduced motion shows the settled, lit scene.
  *
  * This is the one place the page spends lime on a headline ("Chama a
- * galera.", in the brand face). Everything else here is still: no glow, no
- * magnetic buttons, and the copy and the buttons are simply there. Only the
- * sample call's pill arrives, since it is a figure.
+ * galera.", in the brand face). The copy and the buttons are simply there:
+ * no glow, no magnetic buttons. Only the sample call's pill arrives, since it
+ * is a figure. Breu, the mascot, sleeps at the end of the title's first line
+ * (FimBreu below), a lime drawing beside the lime line; its sleep is the
+ * only loop here, and reduced motion leaves it still.
  */
 
 const STILL_HERE = [CAST.bia, CAST.caio, CAST.nico];
@@ -62,6 +67,10 @@ export function Fim() {
   }).format(STILL_HERE.map((person) => person.name));
   const ref = useRef<HTMLDivElement>(null);
   useSceneProgress(ref, { mode: "enter", ranges: FIM_RANGES });
+  // Breu sleeps on the lead's last word, held on one line with it ("Acabou a "
+  // + "página."). A value with no space keeps the whole lead together.
+  const lead = t("home.end.titleLead");
+  const cut = lead.lastIndexOf(" ") + 1;
 
   return (
     <Section id="fim" labelledBy="fim-title" divider={false} className="isolate overflow-hidden">
@@ -80,8 +89,14 @@ export function Fim() {
           title={
             <>
               <span className="block font-display text-[clamp(1.75rem,3.6vw,3rem)] font-bold leading-tight tracking-[-0.02em] text-paper-muted">
-                {t("home.end.titleLead")}
+                {lead.slice(0, cut)}
+                <span className="whitespace-nowrap">
+                  {lead.slice(cut)}
+                  <FimBreu />
+                </span>
               </span>
+              {/* A space between the two lines, so the heading's text reads
+                  "Acabou a página. Chama a galera." and not "página.Chama". */}{" "}
               <span className="mt-1 block font-brand text-[clamp(3.1rem,8.2vw,7.5rem)] leading-[0.95] tracking-[-0.02em]">
                 {rich(t("home.end.title"), { accent: <Hi>{t("home.end.titleAccent")}</Hi> })}
               </span>
@@ -139,6 +154,31 @@ export function Fim() {
         </Reveal>
       </div>
     </Section>
+  );
+}
+
+/**
+ * Breu, the mascot, asleep at 02:14 right after "Acabou a página.": the host
+ * who waved in the hero dozed off before the last three in the call. Set in
+ * the type at type size, so it follows the line's clamp (about 62px wide on a
+ * desktop, 36px on a phone), and kept on the line by the nowrap wrapper around
+ * the last word. Shown at every width. Decorative: aria-hidden, so the
+ * heading still reads "Acabou a página. Chama a galera.", and no pointer
+ * events, so it never looks like a control. Its two z are drawn as paths,
+ * never as text, so the heading's text content is exactly its words too. Its
+ * loops (a slow sleep breath, two drifting z) run only while it is on screen;
+ * reduced motion leaves it still.
+ */
+function FimBreu() {
+  const [ref, onScreen] = useOnScreen<HTMLSpanElement>();
+  return (
+    <span
+      ref={ref}
+      aria-hidden
+      className="pointer-events-none -mt-[0.2em] ml-[0.04em] inline-block h-[1.3em] w-[1.3em] align-[-0.18em]"
+    >
+      <BotFace color="lime" face="dormindo" variant="full" live={onScreen} className="breu-asleep h-full w-full" />
+    </span>
   );
 }
 

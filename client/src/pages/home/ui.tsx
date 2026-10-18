@@ -25,6 +25,12 @@ export { CREATE_INTENT, IMPORT_INTENT } from "./shared/auth-buttons";
  *   reveals on scroll in a header, a grid or a list. No tilt, no magnetic
  *   pull, no overshoot. A hover moves transform or opacity for 200 to 300 ms,
  *   ease-out.
+ * - Breu, the mascot (`breu/`), keeps its own motion, chosen by André: the
+ *   hero peek, its blink, breath and waving hand, the closer's sleep, and the
+ *   bot tile's phases. Every drawing is aria-hidden decoration, its loops run
+ *   only on screen and stop under reduced motion, and the hand's wave is the
+ *   character waving, not a tilted card. Its lime is the product's own bot
+ *   face, not a lime headline. Keep it; it is not a tell to strip.
  * - Captions: a figure that shows invented people carries the short example
  *   tag (`Caption example`), and its words say what it shows and when
  *   ("21:40, o Lobby enchendo"), never a disclaimer. The full disclaimer is

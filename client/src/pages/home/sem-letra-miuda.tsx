@@ -3,7 +3,9 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { type MessageKey, useTranslation } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
+import { BOTS_COPY_UPDATED } from "@/lib/server-bots-launch";
 import { cn } from "@/lib/utils";
+import { type ServerBotClaims, useServerBotClaims } from "./breu/claims";
 import { rich } from "./rich";
 import { CONTAINER, Eyebrow, HEADER_GAP_SUPPORT, Section, SectionHeader } from "./ui";
 
@@ -16,7 +18,11 @@ import { CONTAINER, Eyebrow, HEADER_GAP_SUPPORT, Section, SectionHeader } from "
  * Discord does better today.
  */
 
-/** The day this list was last checked against the product. Change it with the list. */
+/**
+ * The day this list was last checked against the product. Change it with the
+ * list. While the server-bot line shows (item `bots`), the date is the day
+ * that line was checked instead (`BOTS_COPY_UPDATED`).
+ */
 const UPDATED_ISO = "2026-10-16";
 
 const INLINE_LINK =
@@ -46,6 +52,15 @@ const NOT_YET = [
   { id: "sound", lead: "home.limits.sound.lead", body: "home.limits.sound.body" },
 ] as const satisfies readonly Item[];
 
+/**
+ * Item `bots`'s body: the webhooks line while the server bot is off, or the
+ * bot's state first once it shipped. depends on PR#1188 shipping
+ */
+function botsBody(claims: ServerBotClaims | null): MessageKey {
+  if (!claims) return "home.limits.bots.body";
+  return claims.rollout === "aos-poucos" ? "home.limits.bots.body.gradual" : "home.limits.bots.body.everyone";
+}
+
 const DISCORD_BETTER = [
   { id: "apps", lead: "home.limits.discord.apps.lead", body: "home.limits.discord.apps.body" },
   { id: "bots", lead: "home.limits.discord.bots.lead", body: "home.limits.discord.bots.body" },
@@ -54,14 +69,18 @@ const DISCORD_BETTER = [
 
 export function SemLetraMiuda() {
   const { t, locale } = useTranslation();
+  const bots = useServerBotClaims();
+  // depends on PR#1188 shipping (the date moves with the bot line)
+  const iso = bots ? BOTS_COPY_UPDATED.iso : UPDATED_ISO;
   // Noon UTC, formatted in UTC: the same calendar day in every time zone.
   const updated = new Intl.DateTimeFormat(locale === "en" ? "en-US" : intlLocale(locale), {
     dateStyle: "long",
     timeZone: "UTC",
-  }).format(new Date(`${UPDATED_ISO}T12:00:00Z`));
+  }).format(new Date(`${iso}T12:00:00Z`));
 
-  const body = ({ body: key, link }: Item): ReactNode =>
-    link
+  const body = ({ id, body: base, link }: Item): ReactNode => {
+    const key = id === "bots" ? botsBody(bots) : base;
+    return link
       ? rich(t(key), {
           link: (
             <Link to={link.to} className={INLINE_LINK}>
@@ -70,6 +89,7 @@ export function SemLetraMiuda() {
           ),
         })
       : t(key);
+  };
 
   return (
     <Section id="limites" labelledBy="limites-title" weight="support">
@@ -82,7 +102,7 @@ export function SemLetraMiuda() {
             <>
               {t("home.limits.lede")}
               <span className="mt-4 block font-mono text-xs text-paper-muted">
-                {rich(t("home.limits.updated"), { date: <time dateTime={UPDATED_ISO}>{updated}</time> })}
+                {rich(t("home.limits.updated"), { date: <time dateTime={iso}>{updated}</time> })}
               </span>
             </>
           }

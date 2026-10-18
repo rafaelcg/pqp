@@ -1,11 +1,14 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
 /**
- * The homepage redesign candidates, reviewed at /preview/home/<id>.
+ * The homepage redesign versions, reviewed at /preview/home/<id>. These routes
+ * exist only in dev builds (`import.meta.env.DEV` in `main.tsx`), so none of
+ * this reaches a production bundle.
  *
- * Each version is its own lazy chunk, so none of them reaches the bundle of
- * the live landing at `/`. Every version speaks first to friend groups
- * leaving Discord; they differ in execution and art direction.
+ * `flagship` is the page that now ships at `/`, with the Breu mascot. The
+ * concepts are the earlier explorations, kept for reference. Every version
+ * speaks first to friend groups leaving Discord; they differ in execution and
+ * art direction.
  */
 export interface HomeVariant {
   id: string;
@@ -20,17 +23,10 @@ export interface HomeVariant {
 export const HOME_VARIANTS: HomeVariant[] = [
   {
     id: "flagship",
-    name: "Principal",
-    idea: "A versão completa: uma noite com a galera, contada pelo próprio app. A call do topo é de verdade, em HTML, e dá pra mexer.",
+    name: "Principal (com o Breu)",
+    idea: "A página que está em pqp.gg: uma noite com a galera, contada pelo próprio app, com o Breu, o mascote do pqp, ao longo dela. A call do topo é de verdade, em HTML, e dá pra mexer.",
     kind: "flagship",
     Page: lazy(() => import("../home")),
-  },
-  {
-    id: "flagship-breu",
-    name: "Principal + Breu",
-    idea: "A principal com o Breu, o mascote do pqp, aparecendo ao longo da página.",
-    kind: "flagship",
-    Page: lazy(() => import("./flagship-breu")),
   },
   {
     id: "c1",

@@ -42,6 +42,25 @@ const slots = (value: string): string[] => (value.match(/\{\w+\}/g) ?? []).sort(
  */
 const FAQ_IDS = ["friends", "history", "free", "phone", "install", "data", "future"] as const;
 
+/**
+ * Questions the catalogue carries but the page asks only behind a launch
+ * switch: `bot` shows (after `data`) only while `serverBotClaims()` in
+ * `lib/server-bots-launch.ts` is not null, and so does its JSON-LD twin
+ * (`landingFaq` in `lib/marketing-meta.ts`). `bots-claims.test.tsx` drives
+ * both states. Its answer is two catalogue sentences joined at render: one of
+ * `.a.actions` / `.a.replies`, then one of `.a.gradual` / `.a.everyone`.
+ */
+const GATED_FAQ_IDS = ["bot"] as const;
+const GATED_FAQ_KEYS: Record<(typeof GATED_FAQ_IDS)[number], string[]> = {
+  bot: [
+    "home.faq.bot.q",
+    "home.faq.bot.a.actions",
+    "home.faq.bot.a.replies",
+    "home.faq.bot.a.gradual",
+    "home.faq.bot.a.everyone",
+  ],
+};
+
 describe("landing search snippet", () => {
   for (const locale of locales) {
     it(`${locale}: title fits a result line and the description is not cut`, () => {
@@ -196,13 +215,13 @@ describe("home keys other code depends on", () => {
     }
   });
 
-  it("has the seven FAQ questions, and only those, in every language", () => {
+  it("has the seven FAQ questions plus the gated ones, and only those, in every language", () => {
     for (const locale of locales) {
       const ids = homeEntries(locale)
         .map(([key]) => /^home\.faq\.([a-z]+)\.q$/.exec(key)?.[1])
         .filter((id): id is string => id !== undefined)
         .sort();
-      expect(ids, locale).toEqual([...FAQ_IDS].sort());
+      expect(ids, locale).toEqual([...FAQ_IDS, ...GATED_FAQ_IDS].sort());
     }
   });
 
@@ -212,13 +231,25 @@ describe("home keys other code depends on", () => {
     // (`home.faq.<id>.link`), not inside the answer.
     const MARKUP = /\{\w+\}|<[a-z/][^>]*>|\]\(|\*\*|`/i;
     for (const locale of locales) {
-      for (const id of FAQ_IDS) {
-        const keys = [`home.faq.${id}.q`, `home.faq.${id}.a`, ...(id === "phone" ? ["home.faq.phone.a.play"] : [])];
-        for (const key of keys) {
-          const value = get(locale, key);
-          expect(value.trim().length, `${locale} ${key}`).toBeGreaterThan(0);
-          expect(value, `${locale} ${key}`).not.toMatch(MARKUP);
-        }
+      const keySets = [
+        ...FAQ_IDS.map((id) => [
+          `home.faq.${id}.q`,
+          `home.faq.${id}.a`,
+          ...(id === "phone" ? ["home.faq.phone.a.play"] : []),
+        ]),
+        ...GATED_FAQ_IDS.map((id) => GATED_FAQ_KEYS[id]),
+      ];
+      for (const key of keySets.flat()) {
+        const value = get(locale, key);
+        expect(value.trim().length, `${locale} ${key}`).toBeGreaterThan(0);
+        expect(value, `${locale} ${key}`).not.toMatch(MARKUP);
+      }
+      // A gated answer's sentences are joined with one space, so each must be
+      // a whole sentence with no padding of its own.
+      for (const key of GATED_FAQ_KEYS.bot.slice(1)) {
+        const value = get(locale, key);
+        expect(value, `${locale} ${key}`).toBe(value.trim());
+        expect(value, `${locale} ${key}`).toMatch(/[.!?]$/);
       }
     }
   });

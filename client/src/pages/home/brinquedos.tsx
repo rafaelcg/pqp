@@ -1,11 +1,20 @@
-import { Check, Eye, EyeOff, Lock, Slash, X } from "lucide-react";
-import { type CSSProperties, type ReactNode, useState } from "react";
+import { Check, Eye, EyeOff, Hash, Lock, Slash, X } from "lucide-react";
+import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
+import { BetaTag } from "@/components/ui/beta-tag";
 import { type MessageKey, useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { BotFace } from "./breu/bot-face";
+import type { BotFace as BotFaceName } from "./breu/bot-face-art";
+import { SAMPLE_BOT, type ServerBotClaims, useServerBotClaims } from "./breu/claims";
+import "./breu/perch.css";
+import "./breu/tile.css";
+import { useOnScreen } from "./breu/use-on-screen";
 import { Clip, type ClipFocus, type ClipSources, stillImg } from "./cinema";
 import "./brinquedos.css";
 import { rich } from "./rich";
-import { CARD, CONTAINER, Caption, Eyebrow, ExampleTag, H3, HEADER_GAP, Section, SectionHeader } from "./ui";
+import { Avatar, CAST, Name, type Person } from "./shared/mock";
+import { useInView, useReducedMotion } from "./shared/motion";
+import { CARD, CONTAINER, Caption, Chip, Eyebrow, ExampleTag, H3, HEADER_GAP, Section, SectionHeader } from "./ui";
 
 /**
  * #brinquedos: the details, as a bento of the real app. Every tile is
@@ -17,6 +26,13 @@ import { CARD, CONTAINER, Caption, Eyebrow, ExampleTag, H3, HEADER_GAP, Section,
  *
  * Nothing in the section reveals on scroll or tilts, and no tile spans the
  * whole row: at xl the rows are 8 + 4, 4 + 8 and 7 + 5.
+ *
+ * While the server-bot launch switches are on (`useServerBotClaims`), one
+ * more tile is drawn, not recorded: the server bot, the page's one
+ * explanation of what Breu is (the face of every server bot). Row 3 is then
+ * the bot 7 + Permissões 5, Permissões gains the bot's chip, and the rest
+ * moves under the grid as a plain list. With the switches off, none of it
+ * renders and the bento is the one above.
  *
  * The section also answers the old anchors `/#features`, `/#chat` and
  * `/#roles` (the shared nav and footer link `/#features`), through
@@ -84,6 +100,7 @@ function lensStyle(l: Lens): CSSProperties {
 
 export function Brinquedos() {
   const { t } = useTranslation();
+  const bots = useServerBotClaims();
   return (
     <Section id="brinquedos" aliases={ALIASES} labelledBy="brinquedos-title" className="pt-16 sm:pt-20">
       <div className={CONTAINER}>
@@ -94,7 +111,8 @@ export function Brinquedos() {
           lede={t("home.toys.lede")}
           aside={
             <Caption example className="mt-0 lg:pb-1.5">
-              {t("home.toys.caption")}
+              {/* depends on PR#1188 shipping */}
+              {t(bots ? "home.toys.caption.bots" : "home.toys.caption")}
             </Caption>
           }
         />
@@ -102,17 +120,25 @@ export function Brinquedos() {
         {/*
           One column on a phone, two from sm, twelve from xl. At xl three rows,
           none of them across the whole row: chat 8 + hand 4, roles 4 +
-          appearance 8, permissions 7 + the rest 5. From sm to below xl the
-          wide tiles take both columns and the two small ones share a row.
+          appearance 8, then permissions 7 + the rest 5 with the bot switches
+          off, or the bot 7 + permissions 5 with them on (the "e também" list
+          then goes under the grid). From sm to below xl the wide tiles take
+          both columns and the two small ones share a row.
         */}
         <div className={cn(HEADER_GAP, "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:gap-5 xl:grid-cols-12")}>
           <ChatTile />
           <HandTile />
           <MembersTile />
           <AppearanceTile />
-          <PermissionTile />
-          <AlsoTile />
+          {/* depends on PR#1188 shipping */}
+          {bots && <BotTile claims={bots} />}
+          <PermissionTile bots={bots !== null} className={bots ? "sm:col-span-2 xl:col-span-5" : "sm:col-span-2 xl:col-span-7"} />
+          {/* depends on PR#1188 shipping (with the bot tile, the list moves under the grid) */}
+          {!bots && <AlsoTile />}
         </div>
+
+        {/* depends on PR#1188 shipping */}
+        {bots && <AlsoList />}
       </div>
     </Section>
   );
@@ -134,6 +160,8 @@ function Tile({
   label,
   title,
   body,
+  tag,
+  note,
   commands,
   className,
   wide = false,
@@ -142,6 +170,10 @@ function Tile({
   label: string;
   title: ReactNode;
   body?: ReactNode;
+  /** A chip beside the eyebrow (the bot tile's rollout state). */
+  tag?: ReactNode;
+  /** A smaller line under the body (the bot tile's fine print). */
+  note?: ReactNode;
   /** Slash commands the tile shows, drawn as small mono chips. */
   commands?: string[];
   /** Grid placement. */
@@ -153,9 +185,17 @@ function Tile({
   return (
     <article className={cn(CARD, "bq-tile relative isolate flex h-full flex-col overflow-hidden", wide && WIDE_TILE, className)}>
       <div className={cn("relative p-5 sm:p-8", wide && WIDE_TEXT)}>
-        <Eyebrow>{label}</Eyebrow>
+        {tag ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <Eyebrow>{label}</Eyebrow>
+            {tag}
+          </div>
+        ) : (
+          <Eyebrow>{label}</Eyebrow>
+        )}
         <H3 className="mt-4 text-paper">{title}</H3>
         {body && <p className="mt-3 max-w-[34rem] text-[15px] leading-relaxed text-paper-muted text-pretty">{body}</p>}
+        {note && <p className="mt-3 max-w-[34rem] text-[13px] leading-relaxed text-paper-muted text-pretty">{note}</p>}
         {commands && (
           <p className="mt-4 flex flex-wrap gap-1.5">
             {commands.map((c) => (
@@ -378,6 +418,245 @@ function AppearanceTile() {
 }
 
 /* ------------------------------------------------------------------ */
+/* The server bot (drawn, not recorded)                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * depends on PR#1188 shipping: everything in this block is a bot claim, and
+ * none of it renders while `useServerBotClaims()` is null. The tile is the
+ * page's one explanation of the server bot; Permissões, Ainda em obra and
+ * Perguntas only carry supporting facts. It shows one exchange the way the app
+ * draws it (the work row, BOT and BETA by the name, the settled one-line
+ * card), with sample people and the sample bot, Bardo. Breu peeks over the
+ * panel's top right edge, never inside it, and its face changes because the
+ * bot is working: `oi` while asked, `focado` while it works, `oi` once it
+ * answered.
+ *
+ * The panel's channel is `geral`, written the same in every language: it is
+ * the same #geral as the recorded chat tile beside it, whose footage is in
+ * Portuguese.
+ */
+
+/**
+ * One exchange, chosen by whether the bot's actions shipped. The work row's
+ * words are the app's own (`chat.botActivity.create_poll` and `.thinking`),
+ * and so is its face: `focado` while a tool runs, `oi` while it thinks.
+ */
+type BotScript = {
+  asker: Person;
+  ask: MessageKey;
+  work: MessageKey;
+  workFace: BotFaceName;
+  /** A tool is running (drawn as the app's activity pill), or it is only thinking. */
+  tool: boolean;
+  reply: MessageKey;
+  card: MessageKey | null;
+  sr: MessageKey;
+};
+
+const BOT_SCRIPT_ACTIONS: BotScript = {
+  asker: CAST.nico,
+  ask: "home.toys.bot.ask.poll",
+  work: "home.toys.bot.work.poll",
+  workFace: "focado",
+  tool: true,
+  reply: "home.toys.bot.reply.poll",
+  card: "home.toys.bot.card.poll",
+  sr: "home.toys.bot.sr.poll",
+};
+
+const BOT_SCRIPT_REPLIES: BotScript = {
+  asker: CAST.duda,
+  ask: "home.toys.bot.ask.time",
+  work: "home.toys.bot.work.thinking",
+  workFace: "oi",
+  tool: false,
+  reply: "home.toys.bot.reply.time",
+  card: null,
+  sr: "home.toys.bot.sr.time",
+};
+
+/** Start of the work row, and of the reply, after the stage first enters view. */
+const BOT_WORK_MS = 600;
+const BOT_DONE_MS = 2000;
+
+/**
+ * Rows 2 and 3 fade and rise in place; under reduced motion they only swap.
+ * Tailwind 4 moves them with the `translate` property, so that is what eases.
+ */
+const BOT_ROW = "col-start-1 row-start-1 motion-safe:transition-[opacity,translate] motion-safe:duration-300";
+const BOT_ROW_SHOWN = "translate-y-0 opacity-100";
+const BOT_ROW_HIDDEN = "translate-y-1 opacity-0";
+
+type BotPhase = "ask" | "work" | "done";
+
+// depends on PR#1188 shipping
+function BotTile({ claims }: { claims: ServerBotClaims }) {
+  const { t } = useTranslation();
+  const reduced = useReducedMotion();
+  const [stageRef, inView] = useInView<HTMLDivElement>({ rootMargin: "0px 0px -25% 0px" });
+  // Loops run only on screen: the avatars' blink while the panel shows, the
+  // big Breu's breath, blink and hands while the perch itself shows. The perch
+  // sits above the panel, so it leaves the viewport first when scrolling down.
+  const [panelRef, onScreen] = useOnScreen<HTMLDivElement>();
+  const [perchRef, perchOnScreen] = useOnScreen<HTMLSpanElement>();
+  const [state, setState] = useState<BotPhase>("ask");
+  // Reduced motion shows the finished exchange from the first render.
+  const phase: BotPhase = reduced ? "done" : state;
+
+  useEffect(() => {
+    if (!inView || reduced) return;
+    // Plays once. Both steps are scheduled together and both cleared, so a
+    // re-run (StrictMode, a motion setting flipped back) lands on "done".
+    const work = window.setTimeout(() => setState((s) => (s === "ask" ? "work" : s)), BOT_WORK_MS);
+    const done = window.setTimeout(() => setState("done"), BOT_DONE_MS);
+    return () => {
+      window.clearTimeout(work);
+      window.clearTimeout(done);
+    };
+  }, [inView, reduced]);
+
+  const bigFace: BotFaceName = phase === "work" ? "focado" : "oi";
+  // depends on PR#1188 shipping with its actions (phase 2)
+  const s = claims.actions ? BOT_SCRIPT_ACTIONS : BOT_SCRIPT_REPLIES;
+
+  return (
+    <Tile
+      label={t("home.toys.bot.label")}
+      tag={<Chip>{t(claims.rollout === "aos-poucos" ? "home.toys.bot.tag.gradual" : "home.toys.bot.tag.everyone")}</Chip>}
+      title={t("home.toys.bot.title")}
+      // depends on PR#1188 shipping with its actions (phase 2)
+      body={t(claims.actions ? "home.toys.bot.body.actions" : "home.toys.bot.body.replies")}
+      note={t("home.toys.bot.note")}
+      className="sm:col-span-2 xl:col-span-7"
+    >
+      {/*
+        The panel comes right after the copy. The stage's top padding adds to
+        the text's own bottom padding to make just the headroom Breu's head
+        and hand need above the panel's edge (the tile clips, and Breu must
+        neither be cut nor reach the text). Where the tile is wider than 44rem
+        the panel stops there and stays at the text's left edge, as the
+        Permissões panel does.
+      */}
+      <div ref={stageRef} data-breu-tile="" className="relative mx-4 mb-4 pt-7 sm:mx-5 sm:mb-5 sm:pt-5 lg:pt-7">
+        <div
+          ref={panelRef}
+          className="bq-panel relative w-full max-w-[44rem] rounded-2xl bg-ink p-4 ring-1 ring-inset ring-white/[0.09] sm:p-5"
+        >
+          <p className="sr-only">{t(s.sr, { bot: SAMPLE_BOT.name })}</p>
+          <div aria-hidden>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <p className="flex min-w-0 items-center gap-1.5 text-sm text-paper">
+                <Hash className="h-3.5 w-3.5 shrink-0 text-paper-muted" />
+                {/* literal-ok: the channel's name, the same #geral as the recorded chat tile beside it */}
+                geral
+              </p>
+              <ExampleTag />
+            </div>
+
+            <div className="flex flex-col gap-4">
+              <div className="flex items-start gap-2.5">
+                <Avatar person={s.asker} size={28} />
+                <div className="min-w-0">
+                  <p className="text-[13px] leading-tight">
+                    <Name person={s.asker} />
+                  </p>
+                  <p className="mt-0.5 text-sm leading-snug text-paper/90">
+                    {/* literal-ok: the sample bot's handle, the same in every language */}
+                    <span className="rounded bg-signal/15 px-0.5 font-medium text-signal">{SAMPLE_BOT.handle}</span>{" "}
+                    {t(s.ask)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Rows 2 and 3 share one cell, so the panel is always as tall as its last state. */}
+              <div className="grid">
+                <div className={cn(BOT_ROW, "flex items-center gap-2.5 self-start", phase === "work" ? BOT_ROW_SHOWN : BOT_ROW_HIDDEN)}>
+                  <BotFace
+                    color="lime"
+                    variant="avatar"
+                    face={s.workFace}
+                    live={onScreen && phase === "work"}
+                    className="pointer-events-none h-7 w-7"
+                  />
+                  <span
+                    className={cn(
+                      "min-w-0 text-[13px] text-paper-muted",
+                      s.tool && "rounded-full bg-white/[0.05] px-2.5 py-1 ring-1 ring-inset ring-white/[0.06]",
+                      phase === "work" && "breu-thinking",
+                    )}
+                  >
+                    {t(s.work, { name: SAMPLE_BOT.name })}
+                  </span>
+                </div>
+
+                <div className={cn(BOT_ROW, "flex items-start gap-2.5", phase === "done" ? BOT_ROW_SHOWN : BOT_ROW_HIDDEN)}>
+                  <BotFace
+                    color="lime"
+                    variant="avatar"
+                    face="oi"
+                    live={onScreen && phase === "done"}
+                    className="pointer-events-none h-7 w-7"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="flex flex-wrap items-center gap-1.5 text-[13px] font-semibold leading-tight text-paper">
+                      {/* literal-ok: the sample bot's name, the same in every language */}
+                      {SAMPLE_BOT.name}
+                      <BotTag />
+                    </p>
+                    <p className="mt-0.5 text-sm leading-snug text-paper/90">{t(s.reply)}</p>
+                    {s.card && (
+                      <div className="mt-2 flex w-fit max-w-full items-center gap-2 rounded-lg bg-white/[0.03] px-2.5 py-2 ring-1 ring-inset ring-white/[0.07]">
+                        <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-success/15 text-success">
+                          <Check className="h-3.5 w-3.5" aria-hidden />
+                        </span>
+                        <span className="min-w-0 text-[13px] font-semibold text-paper">{t(s.card)}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/*
+            Breu peeks over the panel's top right edge (`.breu-perch`): the
+            panel's edge cuts it at about three quarters of its height, so the
+            eyes, the mouth and the hand clear the edge and the lower body
+            stays behind it. Re-keyed on each face so the fade (`breu-pop`)
+            replays once per change.
+          */}
+          <span ref={perchRef} aria-hidden className="breu-perch pointer-events-none">
+            <BotFace
+              key={bigFace}
+              color="lime"
+              face={bigFace}
+              variant="full"
+              live={perchOnScreen}
+              className={cn("h-full w-full", phase !== "ask" && !reduced && "breu-pop")}
+            />
+          </span>
+        </div>
+      </div>
+    </Tile>
+  );
+}
+
+/**
+ * BOT and BETA beside the bot's name, redrawn in page tokens (the app's
+ * `ServerBotTags`). App UI inside a mock-up, so its lime is the app's.
+ */
+function BotTag() {
+  return (
+    <span className="inline-flex items-center gap-1">
+      {/* literal-ok: the app's `chat.botTag`, "Bot" in every language */}
+      <span className="rounded bg-signal/15 px-1 py-px text-[10px] font-bold uppercase tracking-wide text-signal">bot</span>
+      <BetaTag />
+    </span>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Per-channel permission (the one toy)                                */
 /* ------------------------------------------------------------------ */
 
@@ -397,8 +676,12 @@ const TRI: { id: Tri; label: MessageKey; icon: typeof Check; on: string }[] = [
  * a full-width tile below it. In a full-width tile the panel stops growing at
  * 44rem and stays at the text's left edge: wider than that the buttons would
  * stretch, and the empty space beside it is the tile's own.
+ *
+ * With the bot switches on (`bots`), the tile takes 5 columns at xl (about
+ * 430 px, the role groups stacked by the same container query), its body
+ * says the bot follows the same rule, and a third chip shows the sample bot.
  */
-function PermissionTile() {
+function PermissionTile({ bots, className }: { bots: boolean; className: string }) {
   const { t } = useTranslation();
   const [everyone, setEveryone] = useState<Tri>("deny");
   const [vip, setVip] = useState<Tri>("allow");
@@ -406,6 +689,10 @@ function PermissionTile() {
   // channel wins; "inherit" falls through to the level above.
   const memberSees = everyone !== "deny";
   const vipSees = vip === "allow" ? true : vip === "deny" ? false : memberSees;
+  // depends on PR#1188 shipping. The bot's own role has no overwrite on this
+  // channel, so it inherits @everyone: a channel its role cannot see is never
+  // read and never sent to the model.
+  const botSees = everyone !== "deny";
 
   const row = (role: ReactNode, value: Tri, set: (next: Tri) => void, name: string) => (
     <div className="flex flex-col gap-2">
@@ -439,8 +726,9 @@ function PermissionTile() {
     <Tile
       label={t("home.toys.perm.label")}
       title={t("home.toys.perm.title")}
-      body={t("home.toys.perm.body")}
-      className="sm:col-span-2 xl:col-span-7"
+      // depends on PR#1188 shipping (the bot sentence)
+      body={t(bots ? "home.toys.perm.body.bots" : "home.toys.perm.body")}
+      className={className}
     >
       <div className="@container mx-4 mb-4 mt-auto sm:mx-5 sm:mb-5">
         <div className="bq-panel w-full max-w-[44rem] rounded-2xl bg-ink p-4 ring-1 ring-inset ring-white/[0.09] sm:p-5">
@@ -468,6 +756,8 @@ function PermissionTile() {
           <div aria-live="polite" className="mt-5 flex flex-wrap gap-2 border-t border-white/[0.06] pt-5 text-xs">
             <Sees who={t("home.toys.perm.member")} yes={memberSees} />
             <Sees who="VIP" yes={vipSees} />
+            {/* depends on PR#1188 shipping. The sample bot's name, the same in every language. */}
+            {bots && <Sees who={`${SAMPLE_BOT.name} (bot)`} yes={botSees} bot />}
             {/* literal-ok:end */}
           </div>
         </div>
@@ -476,7 +766,16 @@ function PermissionTile() {
   );
 }
 
-function Sees({ who, yes }: { who: string; yes: boolean }) {
+function Sees({
+  who,
+  yes,
+  bot = false,
+}: {
+  who: string;
+  yes: boolean;
+  /** The server bot: its face in place of the eye. */
+  bot?: boolean;
+}) {
   const { t } = useTranslation();
   const Icon = yes ? Eye : EyeOff;
   return (
@@ -486,7 +785,18 @@ function Sees({ who, yes }: { who: string; yes: boolean }) {
         yes ? "bg-success/10 text-paper ring-success/30" : "bg-white/[0.03] text-paper-muted ring-white/10",
       )}
     >
-      <Icon className="h-3.5 w-3.5" aria-hidden />
+      {bot ? (
+        // depends on PR#1188 shipping. Still, and dimmed when it cannot see
+        // (the app's "cannot reach" look). Never `dormindo`: that means offline.
+        <span
+          aria-hidden
+          className={cn("pointer-events-none inline-flex transition-opacity duration-200 ease-out", !yes && "opacity-50")}
+        >
+          <BotFace color="lime" variant="avatar" face="oi" live={false} className="h-4 w-4" />
+        </span>
+      ) : (
+        <Icon className="h-3.5 w-3.5" aria-hidden />
+      )}
       {t(yes ? "home.toys.perm.sees" : "home.toys.perm.blind", { role: who })}
     </span>
   );
@@ -507,12 +817,34 @@ function AlsoTile() {
   return (
     <Tile label={t("home.toys.also.label")} title={t("home.toys.also.title")} className="sm:col-span-2 xl:col-span-5">
       <ul className="mx-5 mb-5 mt-auto grid grid-flow-col grid-cols-2 grid-rows-5 gap-x-4 sm:mx-8 sm:mb-8 sm:gap-x-6 lg:grid-cols-5 lg:grid-rows-2 xl:grid-cols-2 xl:grid-rows-5">
-        {ALSO.map((key) => (
-          <li key={key} className="border-t border-white/[0.06] py-3.5 text-[15px] leading-snug text-paper-muted sm:text-base">
-            {t(key)}
-          </li>
-        ))}
+        <AlsoItems />
       </ul>
     </Tile>
   );
+}
+
+/**
+ * depends on PR#1188 shipping: with the bot tile in row 3, the same list goes
+ * under the grid, as a plain list under its label (no tile, no chips, nothing
+ * revealed on scroll): two columns, five across from lg.
+ */
+function AlsoList() {
+  const { t } = useTranslation();
+  return (
+    <div className="mt-10">
+      <Eyebrow>{t("home.toys.also.label")}</Eyebrow>
+      <ul className="mt-3 grid grid-flow-col grid-cols-2 grid-rows-5 gap-x-4 sm:gap-x-6 lg:grid-cols-5 lg:grid-rows-2">
+        <AlsoItems />
+      </ul>
+    </div>
+  );
+}
+
+function AlsoItems() {
+  const { t } = useTranslation();
+  return ALSO.map((key) => (
+    <li key={key} className="border-t border-white/[0.06] py-3.5 text-[15px] leading-snug text-paper-muted sm:text-base">
+      {t(key)}
+    </li>
+  ));
 }

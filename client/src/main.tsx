@@ -86,9 +86,17 @@ const CookiesPage = lazy(() =>
 const StatusPage = lazy(() =>
   import("./pages/status-page").then((m) => ({ default: m.StatusPage })),
 );
-const HomePreviewRoute = lazy(() =>
-  import("./pages/home-preview").then((m) => ({ default: m.HomePreviewRoute })),
-);
+// Design previews of the homepage live only in dev builds. `import.meta.env.DEV`
+// is replaced with `false` at build time, so the dynamic import below is dead
+// code in production and the preview chunks (the earlier concepts, the
+// switcher bar) are never emitted.
+const HomePreviewRoute = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/home-preview").then((m) => ({
+        default: m.HomePreviewRoute,
+      })),
+    )
+  : null;
 const VsDiscordPage = lazy(() =>
   import("./pages/vs-discord-page").then((m) => ({ default: m.VsDiscordPage })),
 );
@@ -278,10 +286,19 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
           <Route path="/contato" element={<ContactPage />} />
           <Route path="/status" element={<StatusPage />} />
           <Route path="/vs-discord" element={<VsDiscordPage />} />
-          {/* The homepage redesign candidates, for review before one replaces
-              `/`. Two segments, so no handle can collide. Not indexed. */}
-          <Route path="/preview/home" element={<HomePreviewRoute />} />
-          <Route path="/preview/home/:variant" element={<HomePreviewRoute />} />
+          {/* The homepage design previews, dev builds only (see
+              `HomePreviewRoute` above). A production build has no route here,
+              so these paths fall through to the catch-all like any unknown
+              address. Two segments, so no handle can collide. */}
+          {HomePreviewRoute && (
+            <>
+              <Route path="/preview/home" element={<HomePreviewRoute />} />
+              <Route
+                path="/preview/home/:variant"
+                element={<HomePreviewRoute />}
+              />
+            </>
+          )}
           {/* `/tela`: the pt-BR landing for "Discord sem tela no Brasil, o
               que usar". A static single segment, so, as the note on
               `PublicProfileRoute` below explains, the word joins

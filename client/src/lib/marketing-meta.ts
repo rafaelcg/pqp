@@ -35,7 +35,13 @@
  * `streamersPage.faq.*`, `contactPage.seo.*`, and
  * `marketing-meta.test.ts` pins each pair against the JSON catalogues, so the
  * duplication cannot drift without failing the suite.
+ *
+ * Its one import is `./server-bots-launch`, the homepage's bot launch
+ * switches, which has no imports of its own: the bot question joins the "/"
+ * FAQ JSON-LD only while those switches say so (`landingFaq`).
  */
+
+import { botFaqAnswer, type BotFaqAnswerKey, type ServerBotClaims, serverBotClaims } from "./server-bots-launch";
 
 /** One address for the index, wherever the bytes were served from. */
 const CANONICAL_ORIGIN = "https://pqp.gg";
@@ -555,6 +561,76 @@ export const LANDING_FAQ: Record<
 };
 
 /**
+ * The homepage's server-bot question, duplicated from `home.faq.bot.*`: the
+ * question and the four sentences its answer is built from (one of
+ * `.a.actions` / `.a.replies`, then one of `.a.gradual` / `.a.everyone`,
+ * joined by `botFaqAnswer`, the same join the page uses). It is served only
+ * while the launch switches are on (`landingFaq`). Pinned against the
+ * catalogues in `marketing-meta.test.ts`.
+ */
+// depends on PR#1188 shipping
+export const LANDING_BOT_FAQ: Record<
+  MarketingLocale,
+  { question: string; answers: Record<BotFaqAnswerKey, string> }
+> = {
+  "pt-BR": {
+    question: "O bot do servidor lê as nossas conversas?",
+    answers: {
+      "home.faq.bot.a.replies":
+        "Só se quem cuida do servidor criar um bot, e só nos canais onde ele foi colocado. Quando alguém chama, ele lê as mensagens recentes daquele canal. Isso pode incluir imagens e, se a transcrição estiver ligada e quem gravou tiver permitido, mensagens de voz. Canal que o cargo dele não vê fica de fora. Quem processa é a Anthropic (Claude), e nada disso treina modelos.",
+      "home.faq.bot.a.actions":
+        "Só se quem cuida do servidor criar um bot, e só nos canais onde ele foi colocado. Quando alguém chama, ele lê as mensagens recentes daquele canal. Isso pode incluir imagens e, se a transcrição estiver ligada e quem gravou tiver permitido, mensagens de voz. Se você pedir, ele também lê outros canais que você e ele podem ver. Canal que o cargo dele não vê fica de fora. Quem processa é a Anthropic (Claude), e nada disso treina modelos.",
+      "home.faq.bot.a.gradual": "Ele é novo, está em beta e chega servidor por servidor.",
+      "home.faq.bot.a.everyone": "Ele é novo e está em beta.",
+    },
+  },
+  en: {
+    question: "Does the server bot read our chats?",
+    answers: {
+      "home.faq.bot.a.replies":
+        "Only if whoever runs the server creates a bot, and only in the channels where it was added. When someone calls it, it reads that channel's recent messages. That can include images and, if transcription is on and whoever recorded them allowed it, voice messages. A channel its role can't see stays out. Anthropic (Claude) processes it, and none of it trains models.",
+      "home.faq.bot.a.actions":
+        "Only if whoever runs the server creates a bot, and only in the channels where it was added. When someone calls it, it reads that channel's recent messages. That can include images and, if transcription is on and whoever recorded them allowed it, voice messages. If you ask, it also reads other channels that both you and it can see. A channel its role can't see stays out. Anthropic (Claude) processes it, and none of it trains models.",
+      "home.faq.bot.a.gradual": "It's new, in beta, and rolling out server by server.",
+      "home.faq.bot.a.everyone": "It's new and in beta.",
+    },
+  },
+  es: {
+    question: "¿El bot del servidor lee nuestras conversaciones?",
+    answers: {
+      "home.faq.bot.a.replies":
+        "Solo si quien administra el servidor crea un bot, y solo en los canales donde lo agregaron. Cuando alguien lo llama, lee los mensajes recientes de ese canal. Eso puede incluir imágenes y, si la transcripción está activada y quien grabó lo permitió, mensajes de voz. El canal que su rol no ve queda fuera. Lo procesa Anthropic (Claude), y nada de eso entrena modelos.",
+      "home.faq.bot.a.actions":
+        "Solo si quien administra el servidor crea un bot, y solo en los canales donde lo agregaron. Cuando alguien lo llama, lee los mensajes recientes de ese canal. Eso puede incluir imágenes y, si la transcripción está activada y quien grabó lo permitió, mensajes de voz. Si se lo pides, también lee otros canales que tú y él pueden ver. El canal que su rol no ve queda fuera. Lo procesa Anthropic (Claude), y nada de eso entrena modelos.",
+      "home.faq.bot.a.gradual": "Es nuevo, está en beta y llega servidor por servidor.",
+      "home.faq.bot.a.everyone": "Es nuevo y está en beta.",
+    },
+  },
+};
+
+/** Where the bot question goes in `LANDING_FAQ`: right after the data question (index 5). */
+const LANDING_BOT_FAQ_AT = 6;
+
+/**
+ * The "/" FAQ as the JSON-LD serves it: `LANDING_FAQ`, plus the server-bot
+ * question after the data question while the launch switches are on. The
+ * claims are read at call time, so the edge and the tests follow the switch.
+ */
+export function landingFaq(
+  locale: MarketingLocale,
+  claims: ServerBotClaims | null = serverBotClaims(),
+): { question: string; answer: string }[] {
+  const faq = LANDING_FAQ[locale];
+  if (!claims) return faq;
+  const bot = LANDING_BOT_FAQ[locale];
+  return [
+    ...faq.slice(0, LANDING_BOT_FAQ_AT),
+    { question: bot.question, answer: botFaqAnswer((key) => bot.answers[key], claims) },
+    ...faq.slice(LANDING_BOT_FAQ_AT),
+  ];
+}
+
+/**
  * The `/vs-discord` FAQ, duplicated from `vsDiscord.faq.*` in the JSON
  * catalogues and served as FAQPage JSON-LD. Same truth rules as the page:
  * product claims only, no legal advice, no return-date speculation. The test
@@ -1044,8 +1120,9 @@ export function escapeHtml(value: string): string {
  *
  * The home page adds SoftwareApplication (the page is the product), mirroring
  * what the shipped `index.html` says (`applicationCategory`, a zero-price
- * Offer), with the same `sameAs`. It also adds a FAQPage whose seven questions
- * are the ones its FAQ section renders (`LANDING_FAQ`). `/vs-discord` adds
+ * Offer), with the same `sameAs`. It also adds a FAQPage whose questions are
+ * the ones its FAQ section renders (`landingFaq`: the seven of `LANDING_FAQ`,
+ * plus the server-bot question only while the launch switches are on). `/vs-discord` adds
  * FAQPage too, built the same way: the questions are the FAQ section actually
  * rendered on the page. That is schema for copy a visitor can read, never
  * schema alone. `/tela` does the same with its own seven.
@@ -1103,7 +1180,7 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
   }
   const faq =
     page === "/"
-      ? LANDING_FAQ[locale]
+      ? landingFaq(locale)
       : page === "/vs-discord"
         ? VS_DISCORD_FAQ[locale]
         : page === "/tela"

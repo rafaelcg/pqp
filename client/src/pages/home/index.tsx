@@ -60,6 +60,7 @@ import { SemLetraMiuda } from "./sem-letra-miuda";
 import { SeuArroba } from "./seu-arroba";
 import { HERO_CTAS_ID, StickyCta, useStickyCtaShown } from "./sticky-cta";
 import { BTN_PRIMARY, BTN_SECONDARY, CONTAINER, Caption, FreeLine, useCta } from "./ui";
+import { HERO_BREU_FADE, HeroBreu } from "./breu/hero-breu";
 
 /**
  * The homepage at "/" (the review route under /preview/home renders it
@@ -396,6 +397,17 @@ const HERO_RANGES = {
   sky: [0, 0.75],
 } as const;
 
+/**
+ * The raw scroll progress at which the hero's Breu is fully transparent. Its
+ * opacity is `1 - --p-frame * HERO_BREU_FADE`, which hits 0 at `--p-frame`
+ * 1 / HERO_BREU_FADE, and `frame` eases out (`1 - (1 - t) ** 2` over
+ * `[0, HERO_RANGES.frame[1]]`), so the progress is that range's end times
+ * `1 - sqrt(1 - 1 / HERO_BREU_FADE)`: about 0.147 for a fade of 3. Past it
+ * Breu is invisible and its loops pause; before it, hiding it would cut a
+ * visible frame.
+ */
+const HERO_BREU_GONE_AT = HERO_RANGES.frame[1] * (1 - Math.sqrt(1 - 1 / HERO_BREU_FADE));
+
 /** Tailwind's `sm` is 640px: below it the hero's copy is as short as it can be. */
 const PHONE_QUERY = "(max-width: 639px)";
 
@@ -432,6 +444,15 @@ function Hero() {
   const copyRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
+  // Breu mounts one commit after the hero (breu/hero-breu.tsx), so it is
+  // attached through a callback that applies the last progress at once: a
+  // reload restored mid-page must not start it visible with its loops on.
+  const breuRef = useRef<HTMLSpanElement | null>(null);
+  const progressRef = useRef(0);
+  const attachBreu = useCallback((node: HTMLSpanElement | null) => {
+    breuRef.current = node;
+    node?.toggleAttribute("data-gone", pinnedRef.current && progressRef.current >= HERO_BREU_GONE_AT);
+  }, []);
 
   // Built at render, never at import: English is bundled in the entry and
   // pt-BR and es load after it, so an alt read at import would stay English.
@@ -468,8 +489,12 @@ function Hero() {
   // Unpinned the scene rests at 1, which must not fade the copy: it stays
   // where it is and has to keep taking clicks.
   const onProgress = useCallback((p: number) => {
+    progressRef.current = p;
     copyRef.current?.toggleAttribute("data-faded", pinnedRef.current && p > 0.24);
     frameRef.current?.toggleAttribute("data-settled", p >= 0.8);
+    // Breu is fully transparent from here (HERO_BREU_GONE_AT), so hiding it
+    // never cuts a visible frame; it also pauses its loops.
+    breuRef.current?.toggleAttribute("data-gone", pinnedRef.current && p >= HERO_BREU_GONE_AT);
   }, []);
   useEffect(() => {
     if (!pinned) copyRef.current?.removeAttribute("data-faded");
@@ -504,9 +529,18 @@ function Hero() {
       className="pointer-events-auto relative isolate data-settled:transform-none! data-settled:will-change-auto!"
       style={frameStyle}
     >
-      {/* The page's one entrance: the frame rises once, on load. The copy
-          above it is simply there. */}
+      {/* The hero's entrance: the frame rises once, on load, and the copy
+          above it is simply there. With the static first screen up
+          (`html[data-pre]`, production's "/") the rise is off, and Breu's
+          peek is the hero's only entrance. */}
       <div className="animate-rise" style={{ "--stagger": 1 } as CSSProperties}>
+        {/* Breu, the mascot, behind the window bar, lg and up only (below
+            that there is no room above the window). Absolutely placed on
+            the top edge: the containing block is this div while its rise
+            leaves a transform on it, the frame div around it under `data-pre`,
+            and both share the window's top edge and width. Before the
+            window in the DOM, so the window paints over its lower body. */}
+        {wide && <HeroBreu pinned={pinned} ref={attachBreu} />}
         <BrowserFrame
           bodyClassName={cn(!pinned && HERO_BODY_UNPINNED)}
           bodyStyle={pinned ? { aspectRatio: HERO_ASPECT.css } : undefined}
