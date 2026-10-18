@@ -7,10 +7,13 @@
  * what a browser sees, and it costs one branch at the edge because the markdown
  * is a checked-in file, not a rendering of the React tree.
  *
- * DELIBERATELY ONE PAGE. Only `/` has a twin (`/index.md`). A markdown variant
- * that is stale or invented is worse than none, so a page gets one when
- * somebody writes it, not because the route exists. `/llms.txt` and
- * `/llms-full.txt` already carry the rest.
+ * A TWIN IS A FILE THE BUILD WROTE, NEVER A GUESS. `/` has a checked-in one
+ * (`/index.md`). The blog index, every guide and every release note get theirs
+ * from the build (`static-pages.ts`), generated from the same markdown the page
+ * renders, so it cannot be stale or invented; the page registry
+ * (`page-registry.ts`) says which languages exist. A page gets one when
+ * something writes it, not because the route exists. `/llms.txt` and
+ * `/llms-full.txt` carry the rest.
  *
  * The parsing is quality-aware because the header that matters in practice is
  * the browser's, and a browser sends `text/html,...,*\/*;q=0.8`. A `*\/*`
@@ -18,10 +21,28 @@
  * explicit `text/markdown` (or `text/*`) that outranks `text/html` does.
  */
 
-/** The markdown twin of a path, or null if it has none. */
-export function markdownTwinFor(pathname: string): string | null {
+import {
+  markdownTwinPath,
+  pageLocaleFor,
+  registeredBlogPage,
+  type PageLocale,
+} from "./page-registry";
+
+/**
+ * The markdown twin of a path, or null if it has none. `locale` is the
+ * language the reader asked for; a blog page answers in it when it has a body
+ * in it and falls back the way the HTML page does.
+ */
+export function markdownTwinFor(
+  pathname: string,
+  locale: PageLocale = "pt-BR",
+): string | null {
   const normalized = pathname.replace(/\/+$/, "") || "/";
-  return normalized === "/" ? "/index.md" : null;
+  if (normalized === "/") {
+    return "/index.md";
+  }
+  const page = registeredBlogPage(normalized);
+  return page ? markdownTwinPath(page, pageLocaleFor(page, locale)) : null;
 }
 
 interface AcceptEntry {

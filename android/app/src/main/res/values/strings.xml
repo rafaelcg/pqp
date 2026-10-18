@@ -80,6 +80,7 @@
     <string name="chat_reject_rate_limited_wait">You\'re sending too fast. Try again in %1$ds.</string>
     <string name="chat_reject_no_access">You can\'t send in this channel</string>
     <string name="chat_reject_cannot_send">You don\'t have permission to send here</string>
+    <string name="chat_read_only">You can read here, but you can\'t send messages.</string>
     <string name="chat_reject_undeliverable">This message wasn\'t delivered</string>
     <string name="chat_reject_slow_mode">Slow mode is on.</string>
     <string name="chat_reject_automod">AutoMod blocked this message.</string>
@@ -563,9 +564,9 @@
     <string name="watch_party_host_live_label">You\'re live</string>
     <string name="watch_party_host_end">End</string>
     <string name="watch_party_host_retry_share">Share your screen</string>
-    <string name="watch_party_host_go_live_failed">Could not go live. The server never confirmed it — try again.</string>
+    <string name="watch_party_host_go_live_failed">Could not go live. The server never confirmed it, so try again.</string>
     <string name="watch_party_host_join_failed_ended">Couldn\'t start the broadcast; the party was ended. Try again.</string>
-    <string name="watch_party_host_join_failed_not_ended">Couldn\'t start the broadcast, and the party could not be ended either. It may still show as live — try again in a moment.</string>
+    <string name="watch_party_host_join_failed_not_ended">Couldn\'t start the broadcast, and the party could not be ended either. It may still show as live, so try again in a moment.</string>
     <string name="watch_party_host_end_failed">Left the call, but the server did not confirm the party ended. It may still show as live.</string>
     <string name="watch_party_host_generic_error">Something went wrong. Try again.</string>
     <string name="watch_party_host_ack_title">Before you go live</string>
@@ -921,6 +922,7 @@
     <string name="forum_search_empty_post">Post \"%1$s\"</string>
     <string name="forum_mine_empty">Nothing in My posts yet.</string>
     <string name="forum_paused">New posts are paused in this forum.</string>
+    <string name="forum_read_only">You can read this forum, but you can\'t post in it.</string>
     <string name="forum_post_back">Back to list</string>
     <string name="forum_post_menu">More post options</string>
     <string name="forum_post_copy_link">Copy link</string>
@@ -1494,4 +1496,14 @@
     <string name="community_save_failed">Could not save.</string>
     <string name="community_no_access">Only people who manage this server can see this.</string>
     <string name="community_unavailable">Public communities are not available here.</string>
+    <string name="soundboard_open">Soundboard</string>
+    <string name="soundboard_title">Soundboard</string>
+    <string name="soundboard_hint">Everyone in the call hears it.</string>
+    <string name="soundboard_slow">Slow down, try again in a moment</string>
+    <string name="soundboard_builtin_palmas">Applause</string>
+    <string name="soundboard_builtin_risada">Laugh</string>
+    <string name="soundboard_builtin_buzina">Horn</string>
+    <string name="soundboard_builtin_grilo">Crickets</string>
+    <string name="soundboard_builtin_badumtss">Rimshot</string>
+    <string name="soundboard_builtin_trombone">Sad trombone</string>
 </resources>

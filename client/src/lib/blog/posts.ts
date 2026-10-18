@@ -111,6 +111,45 @@ export function postSummary(post: BlogPost, reader: BlogReadLocale): string {
  */
 export const POSTS: readonly BlogPost[] = [
   {
+    slug: "mensagens-de-voz-encaminhar-e-emoji",
+    date: "2026-10-16",
+    title: {
+      "pt-BR": "Mensagens de voz, Encaminhar e emoji do servidor",
+      en: "Voice messages, Forward and server emoji",
+    },
+    summary: {
+      "pt-BR":
+        "Mensagem de voz com texto, Encaminhar, link público de post do Baú, emoji do servidor e soundboard na call. O Auto do compartilhar tela captura a 60 fps.",
+      en: "Voice messages with text, Forward, public links for Baú posts, server emoji and a call soundboard. Screen share on Auto now captures at 60 fps.",
+    },
+  },
+  {
+    slug: "conversas-e-bau-no-chat",
+    date: "2026-10-12",
+    title: {
+      "pt-BR": "Conversas e o Baú no chat",
+      en: "Conversations and the Baú in chat",
+    },
+    summary: {
+      "pt-BR":
+        "A DM foi refeita e virou Conversas. Post do Baú vira card no chat, e o áudio da call se arruma com um toque quando o microfone para.",
+      en: "DMs were rebuilt as Conversations. A Baú post becomes a card in chat, and call audio fixes itself with one tap when the microphone stops sending sound.",
+    },
+  },
+  {
+    slug: "arrastar-arquivo-em-qualquer-lugar",
+    date: "2026-10-08",
+    title: {
+      "pt-BR": "Arrastar arquivo em qualquer lugar",
+      en: "Drag a file anywhere",
+    },
+    summary: {
+      "pt-BR":
+        "Dá pra soltar arquivo no chat de voz, em thread, no Baú e nas imagens do perfil. A call espera 90 minutos sozinho, e as Configurações foram refeitas.",
+      en: "You can drop files on voice chat, threads, the Baú and profile and server pictures. A call waits 90 minutes alone instead of 10, and Settings were rebuilt.",
+    },
+  },
+  {
     slug: "login-com-twitch-e-android-na-play",
     date: "2026-09-29",
     title: {

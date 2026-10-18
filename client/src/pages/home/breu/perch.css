@@ -1,0 +1,60 @@
+/*
+ * Breu peeking over the bot panel's top right edge (brinquedos.tsx, BotTile).
+ * Every name here starts with `breu-`: the home chunk's CSS stays in the
+ * document after an in-app navigation, so nothing here may reuse a class the
+ * app owns.
+ *
+ * The perch is a box of one size on the panel's top edge, sunk so the edge
+ * crosses it at about three quarters of its height: the drawing's eyes, mouth
+ * and floating hand sit above that line, its lower body below it. The clip
+ * cuts the drawing exactly at the edge (the panel's own edge, so the cut reads
+ * as the panel in front) and leaves room on the other three sides for the
+ * breath, the pop and the hand's float. The stage's top padding in
+ * brinquedos.tsx is sized to what shows above the edge (about 0.52 of the box).
+ */
+.breu-perch {
+  --breu-perch-size: 5rem;
+  --breu-perch-hidden: 0.26;
+  position: absolute;
+  right: 1.5rem;
+  bottom: calc(100% - var(--breu-perch-size) * var(--breu-perch-hidden));
+  width: var(--breu-perch-size);
+  height: var(--breu-perch-size);
+  clip-path: inset(-30% -30% calc(var(--breu-perch-hidden) * 100%) -30%);
+}
+
+@media (min-width: 40rem) {
+  .breu-perch {
+    --breu-perch-size: 5.5rem;
+  }
+}
+
+@media (min-width: 64rem) {
+  .breu-perch {
+    --breu-perch-size: 6.5rem;
+  }
+}
+
+/* The perch face's change of expression (`breu-pop` on its BotFace, set by
+   BotTile from the work phase on; each new face is a new svg, so it plays
+   again on every change). A plain fade with a 4px rise and no
+   overshoot, in place of the app's `bot-pop` squash: the page bans overshoot,
+   and a page keyframe named `bot-pop` would collide with the app's once
+   PR#1188 shares the document. Reduced motion skips it (BotTile also leaves
+   the class off then). */
+@keyframes breu-pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .breu-pop > svg {
+    animation: breu-pop 240ms ease-out both;
+  }
+}

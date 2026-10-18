@@ -94,24 +94,24 @@ export const ARTICLES: readonly BlogArticle[] = [
   {
     slug: "pqp-vs-discord-2026",
     date: "2026-09-17",
-    updated: "2026-09-17",
+    updated: "2026-10-16",
     title: {
       "pt-BR": "pqp vs Discord em 2026: comparação honesta",
       en: "pqp vs Discord in 2026: an honest comparison",
     },
     summary: {
       "pt-BR":
-        "O que o pqp já faz melhor que o Discord, o que ainda não faz, e quando faz sentido trocar. Sem número inventado, só o que roda hoje.",
-      en: "What pqp already does better than Discord, what it still does not, and when switching actually makes sense. No invented numbers, only what runs today.",
+        "O que o pqp faz, o que o Discord faz melhor e quando vale a pena trocar. Cada linha do Discord tem fonte e data de verificação.",
+      en: "What pqp does, what Discord does better and when switching is worth a try. Every Discord line has a source and the date it was checked.",
     },
     locales: ["pt-BR", "en"],
     faq: [
       {
-        question: { "pt-BR": "pqp é de graça?", en: "Is pqp free?" },
+        question: { "pt-BR": "O pqp é de graça?", en: "Is pqp free?" },
         answer: {
           "pt-BR":
-            "Sim. Voz, texto, watch party e criar servidor não custam nada, e o código é aberto (AGPL-3.0): dá pra ler, rodar e até hospedar você mesmo.",
-          en: "Yes. Voice, text, watch parties and creating a server cost nothing, and the code is open source under AGPL-3.0: you can read it, run it, and self-host it yourself.",
+            "Sim. Voz, texto, watch party e criar servidor não custam nada, e o código é aberto (AGPL-3.0). Dá pra usar o serviço hospedado no pqp.gg ou rodar a tua cópia, que hoje precisa de Postgres e de uma conta Clerk tua.",
+          en: "Yes. Voice, text, watch parties and creating a server cost nothing, and the code is open source under AGPL-3.0. You can use the hosted service at pqp.gg or run your own copy, which today needs Postgres and your own Clerk account.",
         },
       },
       {
@@ -121,8 +121,8 @@ export const ARTICLES: readonly BlogArticle[] = [
         },
         answer: {
           "pt-BR":
-            "A base é parecida de propósito (servidores, canais, cargos), porque é isso que resolve o problema. O que muda é o que veio depois: watch party com mixer e qualidade ajustável embutidos, screen share com áudio sem plugin, código aberto, e um time que responde rápido.",
-          en: "The base is deliberately similar (servers, channels, roles) because that shape solves the problem. What differs is what came after it: a built-in watch party with a mixer and adjustable quality, screen share with audio and no plugin, open source code, and a team that answers fast.",
+            "A base é parecida de propósito (servidores, canais, cargos), porque é isso que resolve o problema. O que muda é o que veio depois: watch party, tela compartilhada com som no navegador e código aberto.",
+          en: "The base is deliberately similar (servers, channels, roles) because that shape solves the problem. What differs is what came after it: a watch party, screen share with sound in the browser, and open source code.",
         },
       },
       {
@@ -132,8 +132,8 @@ export const ARTICLES: readonly BlogArticle[] = [
         },
         answer: {
           "pt-BR":
-            "Dá pra copiar o layout: categorias, canais e cargos de um Discord Guild Template, colando o link ao criar uma comunidade no pqp. Não copia membros, mensagens nem emoji customizado, porque isso não está no template.",
-          en: "You can copy the layout: categories, channels and roles from a Discord Guild Template, by pasting the link when creating a community in pqp. It does not copy members, messages or custom emoji, because those are not in the template.",
+            "Dá pra copiar o layout: categorias, canais e as permissões principais de um link de template discord.new, colando ao criar uma comunidade no pqp. Não copia membros, mensagens nem emoji customizado.",
+          en: "You can copy the layout: categories, channels and the main permissions from a discord.new template link, by pasting it when creating a community in pqp. It does not copy members, messages or custom emoji.",
         },
       },
       {
@@ -143,8 +143,8 @@ export const ARTICLES: readonly BlogArticle[] = [
         },
         answer: {
           "pt-BR":
-            "Um catálogo de bots de terceiros do tamanho do Discord, canais de fórum, e um diretório público de milhões de servidores. O pqp tem comunidades públicas e o próprio import de layout do Discord, mas o ecossistema de bots de terceiros ainda é menor, porque é mais novo.",
-          en: "A third-party bot ecosystem the size of Discord's, forum channels, and a public directory of millions of servers. pqp has public communities and the Discord layout import itself, but the third-party bot ecosystem is still smaller, simply because it is younger.",
+            "Um diretório de apps e bots bem maior, apps em mais plataformas e anos de estrada. O pqp tem webhooks e comandos nativos, mas ainda não tem loja de bots.",
+          en: "A much bigger directory of apps and bots, apps on more platforms, and years on the road. pqp has webhooks and built-in commands, but no bot store yet.",
         },
       },
     ],

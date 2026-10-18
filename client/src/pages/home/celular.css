@@ -1,0 +1,12 @@
+/*
+ * #celular. No colour literals: tokens and color-mix only. There is no light
+ * behind the phones: the page has no glows (rules in ui.tsx).
+ */
+
+/* The row of phones scrolls sideways on a phone: no scrollbar to draw. */
+.cel-row {
+  scrollbar-width: none;
+}
+.cel-row::-webkit-scrollbar {
+  display: none;
+}

@@ -27,14 +27,22 @@
  *
  * DELIBERATELY DEPENDENCY-FREE, like its two siblings: wrangler's esbuild
  * bundles this outside the pnpm workspace, so it cannot import the i18n
- * JSON. The strings below are duplicates of `landing.seo.*`,
+ * JSON. The strings below are duplicates of `landing.seo.*` (the two keys
+ * the home page keeps for its title and description),
  * `vsDiscord.seo.*`, `tela.seo.*`, `claim.seo.*`, `betaPage.seo.*`,
  * `androidPage.seo.*`, `downloadPage.seo.*`, `vsDiscord.faq.*` and
- * `tela.faq.*`, `landing.faq.*`, `streamersPage.seo.*`,
+ * `tela.faq.*`, `home.faq.*`, `streamersPage.seo.*`,
  * `streamersPage.faq.*`, `contactPage.seo.*`, and
- * `marketing-meta.test.ts` pins each pair against the JSON catalogues — the
+ * `marketing-meta.test.ts` pins each pair against the JSON catalogues, so the
  * duplication cannot drift without failing the suite.
+ *
+ * Its one import is `./server-bots-launch`, the homepage's bot launch
+ * switches, which has no imports of its own: the bot question joins the "/"
+ * FAQ JSON-LD only while those switches say so (`landingFaq`).
  */
+
+import { botFaqAnswer, type BotFaqAnswerKey, type ServerBotClaims, serverBotClaims } from "./server-bots-launch";
+import { FACTS_CHECKED } from "../content/compare-facts";
 
 /** One address for the index, wherever the bytes were served from. */
 const CANONICAL_ORIGIN = "https://pqp.gg";
@@ -42,6 +50,10 @@ const CANONICAL_ORIGIN = "https://pqp.gg";
 export type MarketingPage =
   | "/"
   | "/vs-discord"
+  | "/compare"
+  | "/compare/stoat"
+  | "/compare/teamspeak"
+  | "/compare/slack"
   | "/tela"
   | "/vem"
   | "/beta"
@@ -76,6 +88,10 @@ function pick(text: LocalizedText, locale: MarketingLocale): string {
 const MARKETING_PATHS: ReadonlySet<string> = new Set([
   "/",
   "/vs-discord",
+  "/compare",
+  "/compare/stoat",
+  "/compare/teamspeak",
+  "/compare/slack",
   "/tela",
   "/vem",
   "/beta",
@@ -245,39 +261,131 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/vs-discord": {
     canonicalPath: "/vs-discord",
     title: {
-      "pt-BR": "Alternativa ao Discord em 2026: comparação honesta | pqp",
-      en: "A Discord alternative in 2026: an honest comparison | pqp",
-      es: "Una alternativa a Discord en 2026: comparación honesta | pqp",
+      "pt-BR":
+        "Alternativa ao Discord: pqp vs Discord, recurso por recurso | pqp",
+      en:
+        "A Discord alternative: pqp vs Discord, feature by feature | pqp",
+      es:
+        "Una alternativa a Discord: pqp vs Discord, función por función | pqp",
     },
     description: {
       "pt-BR":
-        "Voz, texto e tela compartilhada funcionam no pqp, no navegador. A Discord suspendeu tela e vídeo no Brasil em 17/08/2026. Comparação linha a linha, de graça.",
-      en: "Voice, text, and screen sharing work on pqp, in the browser. Discord suspended screen share and video in Brazil on 17 Aug 2026. A line-by-line comparison, free.",
-      es: "Voz, texto y pantalla compartida funcionan en pqp, directo en el navegador. Una comparación honesta, punto por punto, y gratis.",
+        "Tela com som, watch party e importação do layout do Discord, de graça e em código aberto. Comparação por recurso, com fonte e data em cada linha.",
+      en:
+        "Screen share with sound, watch party and Discord layout import, free and open source. A feature-by-feature comparison, with a source and a date on every line.",
+      es:
+        "Pantalla compartida con sonido, watch party e importación del layout de Discord, gratis y de código abierto. Comparación función por función, con fuente y fecha en cada línea.",
     },
   },
   "/tela": {
     canonicalPath: "/tela",
     title: {
-      "pt-BR": "Compartilhar tela no navegador | pqp",
-      en: "Share your screen in the browser | pqp",
-      es: "Comparte tu pantalla en el navegador | pqp",
+      "pt-BR":
+        "Compartilhar tela com som no navegador | pqp",
+      en:
+        "Share your screen with sound in the browser | pqp",
+      es:
+        "Comparte tu pantalla con sonido en el navegador | pqp",
     },
     description: {
       "pt-BR":
-        "Compartilhe a tela com som, direto do navegador. Sem instalar. Funciona no Brasil. Manda o link e a galera entra.",
-      en: "Share your screen with sound, straight from the browser. Nothing to install. Works in Brazil. Send the link and people join.",
-      es: "Comparte tu pantalla con sonido, directo desde el navegador. Sin instalar nada. Manda el link y la gente entra.",
+        "Compartilha a tela com som direto do navegador, sem instalar nada. Manda o link e a galera entra. De graça e com código aberto.",
+      en:
+        "Share your screen with sound, straight from the browser. Nothing to install. Send the link and people join. Free and open source.",
+      es:
+        "Comparte tu pantalla con sonido, directo desde el navegador. Sin instalar nada. Manda el link y la gente entra. Gratis y de código abierto.",
     },
     ogTitle: {
-      "pt-BR": "Compartilhar tela agora (funciona no BR)",
-      en: "Share your screen now (works in Brazil)",
-      es: "Comparte tu pantalla ya, en el navegador",
+      "pt-BR":
+        "Compartilhar tela com som, no navegador",
+      en:
+        "Share your screen with sound, in the browser",
+      es:
+        "Comparte tu pantalla con sonido, en el navegador",
     },
     ogDescription: {
-      "pt-BR": "Abre no navegador. Sem instalar. A galera entra pelo link.",
-      en: "Opens in the browser. Nothing to install. People join from the link.",
-      es: "Se abre en el navegador. Sin instalar nada. La gente entra desde el link.",
+      "pt-BR":
+        "Abre no navegador. Sem instalar. A galera entra pelo link.",
+      en:
+        "Opens in the browser. Nothing to install. People join from the link.",
+      es:
+        "Se abre en el navegador. Sin instalar nada. La gente entra desde el link.",
+    },
+  },
+  "/compare": {
+    canonicalPath: "/compare",
+    title: {
+      "pt-BR":
+        "Alternativas ao Discord comparadas: pqp, Stoat, TeamSpeak, Slack | pqp",
+      en:
+        "Discord alternatives compared: pqp, Stoat, TeamSpeak, Slack | pqp",
+      es:
+        "Alternativas a Discord comparadas: pqp, Stoat, TeamSpeak, Slack | pqp",
+    },
+    description: {
+      "pt-BR":
+        "Tabela por recurso com pqp, Discord, Stoat, TeamSpeak 6 e huddles do Slack: tela com som, watch party, código aberto e importação de layout. Com fonte e data.",
+      en:
+        "A feature table for pqp, Discord, Stoat, TeamSpeak 6 and Slack huddles: screen share with sound, watch party, open source and layout import. With sources and dates.",
+      es:
+        "Tabla por función con pqp, Discord, Stoat, TeamSpeak 6 y los huddles de Slack: pantalla con sonido, watch party, código abierto e importación de layout. Con fuente y fecha.",
+    },
+  },
+  "/compare/stoat": {
+    canonicalPath: "/compare/stoat",
+    title: {
+      "pt-BR":
+        "pqp vs Stoat: comparação por recurso | pqp",
+      en:
+        "pqp vs Stoat: feature by feature | pqp",
+      es:
+        "pqp vs Stoat: función por función | pqp",
+    },
+    description: {
+      "pt-BR":
+        "Como o pqp e o Stoat se comparam em tela compartilhada, watch party, código aberto e mais, com fonte e data em cada linha.",
+      en:
+        "How pqp and Stoat compare on screen share, watch party, open source and more, with a source and a date on every line.",
+      es:
+        "Cómo se comparan pqp y Stoat en pantalla compartida, watch party, código abierto y más, con fuente y fecha en cada línea.",
+    },
+  },
+  "/compare/teamspeak": {
+    canonicalPath: "/compare/teamspeak",
+    title: {
+      "pt-BR":
+        "pqp vs TeamSpeak 6: comparação por recurso | pqp",
+      en:
+        "pqp vs TeamSpeak 6: feature by feature | pqp",
+      es:
+        "pqp vs TeamSpeak 6: función por función | pqp",
+    },
+    description: {
+      "pt-BR":
+        "Como o pqp e o TeamSpeak 6 se comparam em tela compartilhada, watch party, código aberto e mais, com fonte e data em cada linha.",
+      en:
+        "How pqp and TeamSpeak 6 compare on screen share, watch party, open source and more, with a source and a date on every line.",
+      es:
+        "Cómo se comparan pqp y TeamSpeak 6 en pantalla compartida, watch party, código abierto y más, con fuente y fecha en cada línea.",
+    },
+  },
+  "/compare/slack": {
+    canonicalPath: "/compare/slack",
+    title: {
+      "pt-BR":
+        "pqp vs Slack huddles: comparação por recurso | pqp",
+      en:
+        "pqp vs Slack huddles: feature by feature | pqp",
+      es:
+        "pqp vs Slack huddles: función por función | pqp",
+    },
+    description: {
+      "pt-BR":
+        "Como o pqp e o Slack huddles se comparam em tela compartilhada, watch party, código aberto e mais, com fonte e data em cada linha.",
+      en:
+        "How pqp and Slack huddles compare on screen share, watch party, open source and more, with a source and a date on every line.",
+      es:
+        "Cómo se comparan pqp y Slack huddles en pantalla compartida, watch party, código abierto y más, con fuente y fecha en cada línea.",
     },
   },
   "/vem": {
@@ -423,12 +531,18 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
 };
 
 /**
- * The homepage FAQ, duplicated from `landing.faq.*` in the JSON catalogues and
- * served as FAQPage JSON-LD, in the page's own order (`LANDING_FAQ_IDS` in
- * `pages/landing-page.tsx`). Same truth rules as the other two: product claims
- * only, the capacity answer says where the number came from, and the Discord
- * import answer says what does not come along. The suite pins every string
- * here against its JSON twin.
+ * The homepage FAQ, duplicated from `home.faq.*` in the JSON catalogues and
+ * served as FAQPage JSON-LD, in the page's own order (the `FAQ` list in
+ * `pages/home/perguntas.tsx`): friends, history, free, phone, install, data,
+ * future. Each answer is the plain text the page shows, so the page and the
+ * search snippet say the same thing. Links sit on their own line under an
+ * answer on the page (`home.faq.<id>.link`) and are not part of it. The phone
+ * answer is `home.faq.phone.a.play`: the hosted site links its Google Play
+ * listing (`playStoreUrl()` has a code default), and this middleware only
+ * runs on the hosted site. Same truth rules as the other FAQs: product claims
+ * only. The suite pins every string here against its JSON twin
+ * (`marketing-meta.test.ts`), and `pages/home/faq-parity.test.tsx` pins it
+ * against the rendered page.
  */
 export const LANDING_FAQ: Record<
   MarketingLocale,
@@ -436,122 +550,192 @@ export const LANDING_FAQ: Record<
 > = {
   "pt-BR": [
     {
-      question: "É seguro criar conta?",
+      question: "E meus amigos que não saem do Discord?",
       answer:
-        "É um site. Não precisa instalar nada. Chamada em DM e em servidor pequeno é direta entre as pessoas; em servidor maior ela passa por um servidor de voz nosso, em São Paulo, Miami ou Londres, o mais perto de onde está a maioria do pessoal daquele servidor. Você apaga a conta de dentro do app. O código é público se um dia você quiser olhar. Não precisa ler pra usar.",
+        "Não precisam sair. Dá pra usar os dois ao mesmo tempo, e o Discord continua igual. Você manda o link do convite no grupo, e quem clicar cria a conta em um minuto e entra pelo navegador, sem instalar nada.",
     },
     {
-      question: "O pqp é de graça mesmo?",
+      question: "Perco o histórico?",
       answer:
-        "É. Código aberto sob AGPL, sem plano pago e sem limite artificial de sala. Dá pra apoiar o projeto com uma doação, e doar não desbloqueia nada.",
+        "O histórico continua no Discord, onde sempre esteve. A importação traz a estrutura do servidor: nome e ícone, categorias, canais na mesma ordem, cargos e permissões. Mensagens, anexos e membros não vêm junto, então a conversa no pqp começa do zero.",
     },
     {
-      question: "Como eu entro?",
+      question: "É grátis mesmo?",
       answer:
-        "Escolhe Google, Apple ou Twitch, autoriza e pronto. Se alguém te mandou um link de convite, abre ele e entra por lá.",
+        "Sim, é de graça, e não tem plano pago.",
     },
     {
-      question: "Preciso instalar alguma coisa?",
+      question: "Funciona no celular?",
       answer:
-        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, o app de Android na Google Play, e um beta de iPhone se preferir.",
+        "Funciona no navegador do celular. No Android, tem app na Google Play. No iPhone, o app está em beta pelo TestFlight.",
     },
     {
-      question: "Quantas pessoas cabem numa call?",
+      question: "Precisa instalar alguma coisa?",
       answer:
-        "Mais de cem numa sala só, com tela compartilhada rodando, já aconteceu no pqp.gg. Uma cópia auto-hospedada sem servidor de mídia fica em torno de oito por canal.",
+        "Não. O pqp roda no navegador. Se preferir um app, tem pra Mac, Windows e Linux.",
     },
     {
-      question: "Dá pra trazer o meu servidor do Discord?",
+      question: "O que o pqp coleta e onde ficam meus dados?",
       answer:
-        "Dá pra trazer o layout: cola um link de template discord.new e o pqp recria as categorias, os canais e as permissões principais. Mensagens e membros não vêm junto.",
+        "O pqp.gg hospedado usa análise de visitas sem cookies (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que usa cookies. Essa tag conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing. No pqp.gg, os dados ficam no nosso banco em São Paulo, com backups na América do Norte. Você exporta os seus quando quiser e apaga a conta de dentro do app.",
     },
     {
-      question: "O que acontece com os meus dados?",
+      question: "E se o pqp acabar?",
       answer:
-        "A sua conta e a sua comunidade ficam no nosso servidor em São Paulo, com backups noturnos na América do Norte. Quando a chamada de voz é repassada, ela passa pelo servidor de mídia mais perto de onde está a maioria do pessoal daquele servidor (São Paulo, Miami ou Londres). Chamada em DM e em servidor pequeno é direta entre as pessoas, sem servidor de mídia no meio. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina. O pqp.gg hospedado também usa analytics sem cookie e relatório de erros, além da tag do Google Ads, que usa cookies; está tudo em pqp.gg/privacy.",
+        "O código é aberto, sob a AGPL, e está público no GitHub. Você pode exportar seus dados e rodar uma cópia do pqp na sua máquina.",
     },
   ],
   en: [
     {
-      question: "Is it safe to create an account?",
+      question: "What about my friends who won't leave Discord?",
       answer:
-        "It's a website. You don't have to install anything. Calls in DMs and small servers go direct between people; bigger servers relay through a voice server we run, in São Paulo, Miami or London, whichever is closest to where most of that server's people are. You can delete the account from inside the app. The code is public if you ever want to look. You don't have to read it to use the site.",
+        "They don't have to leave. You can use both at the same time, and Discord stays exactly as it is. Drop the invite link in the group chat: whoever clicks it makes an account in a minute and joins from the browser, with nothing to install.",
     },
     {
-      question: "Is pqp really free?",
+      question: "Do I lose our chat history?",
       answer:
-        "Yes. Open source under AGPL, no paid plan and no artificial room limit. You can support the project with a donation, and donating unlocks nothing.",
+        "Your history stays on Discord, where it always was. The import brings the server's layout: name and icon, categories, channels in the same order, roles and permissions. Messages, attachments and members don't come along, so the conversation on pqp starts fresh.",
     },
     {
-      question: "How do I sign in?",
+      question: "Is it really free?",
       answer:
-        "Pick Google, Apple or Twitch, authorize, and you're in. If somebody sent you an invite link, open it and sign in from there.",
+        "Yes, it's free, and there's no paid plan.",
     },
     {
-      question: "Do I need to install anything?",
+      question: "Does it work on my phone?",
       answer:
-        "No. It works in the browser, on the computer and on the phone. There is a desktop app for Mac, Windows and Linux, the Android app on Google Play, and an iPhone beta if you prefer.",
+        "It works in your phone's browser. On Android, there's an app on Google Play. On iPhone, the app is in beta on TestFlight.",
     },
     {
-      question: "How many people fit in one call?",
+      question: "Do I have to install anything?",
       answer:
-        "Over a hundred in one room, with a screen share running, has already happened on pqp.gg. A self-hosted copy without a media server stays around eight per channel.",
+        "No. pqp runs in the browser. If you'd rather have an app, there's one for Mac, Windows and Linux.",
     },
     {
-      question: "Can I bring my Discord server?",
+      question: "What does pqp collect, and where does my data live?",
       answer:
-        "You can bring the layout: paste a discord.new template link and pqp recreates the categories, channels and the main permissions. Messages and members do not come along.",
+        "Hosted pqp.gg uses cookie-less visit analytics (Umami and Cloudflare Web Analytics), error reports (Grafana Faro) and the Google Ads tag, which uses cookies. That tag counts sign-ups and reports page views to Google, which can use them for remarketing. On pqp.gg, your data lives in our database in São Paulo, with backups in North America. You can export yours whenever you want, and delete your account from inside the app.",
     },
     {
-      question: "What happens to my data?",
+      question: "What if pqp shuts down?",
       answer:
-        "Your account and community live on our server in São Paulo, with nightly backups in North America. When a voice call is relayed, it goes through the media server closest to where most of that server's people are (São Paulo, Miami or London). DM calls and calls in small servers go direct between people, with no media server in between. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine. Hosted pqp.gg also runs cookie-less analytics and error reporting, plus the Google Ads tag, which does set cookies; all of it is at pqp.gg/privacy.",
+        "The code is open source under the AGPL, and it's public on GitHub. You can export your data and run your own copy of pqp on your machine.",
     },
   ],
-  es: [
+  "es": [
     {
-      question: "¿Es seguro crear una cuenta?",
+      question: "¿Y mis amigos que no quieren salir de Discord?",
       answer:
-        "Es un sitio web. No tienes que instalar nada. Las llamadas de mensajes directos y de servidores chicos son directas entre las personas; en los servidores más grandes pasan por un servidor de voz nuestro, en São Paulo, Miami o Londres, el más cercano a donde está la mayoría de la gente de ese servidor. Puedes eliminar la cuenta desde la app. El código es público por si algún día quieres echarle un ojo. No necesitas leerlo para usar el sitio.",
+        "No tienen que salirse. Pueden usar los dos al mismo tiempo, y Discord sigue igual. Mandas el link de invitación al grupo, y quien le dé clic crea su cuenta en un minuto y entra desde el navegador, sin instalar nada.",
     },
     {
-      question: "¿pqp de verdad es gratis?",
+      question: "¿Pierdo el historial?",
       answer:
-        "Sí. Código abierto bajo AGPL, sin plan de pago y sin límite artificial de salas. Puedes apoyar el proyecto con una donación, y donar no desbloquea nada.",
+        "El historial se queda en Discord, donde siempre estuvo. La importación trae la estructura del servidor: nombre e ícono, categorías, canales en el mismo orden, roles y permisos. Los mensajes, los archivos adjuntos y los miembros no vienen, así que la conversación en pqp empieza de cero.",
     },
     {
-      question: "¿Cómo entro?",
+      question: "¿De verdad es gratis?",
       answer:
-        "Elige Google, Apple o Twitch, autoriza y listo. Si alguien te mandó un link de invitación, ábrelo y entra desde ahí.",
+        "Sí, es gratis, y no hay plan de pago.",
     },
     {
-      question: "¿Tengo que instalar algo?",
+      question: "¿Funciona en el celular?",
       answer:
-        "No. Funciona en el navegador, en la computadora y en el celular. Hay una app de escritorio para Mac, Windows y Linux, la app de Android en Google Play, y una beta para iPhone si lo prefieres.",
+        "Funciona en el navegador del celular. En Android, hay app en Google Play. En iPhone, la app está en beta a través de TestFlight.",
     },
     {
-      question: "¿Cuántas personas caben en una llamada?",
+      question: "¿Hay que instalar algo?",
       answer:
-        "Más de cien en una sola sala, con una pantalla compartida corriendo, ya pasó en pqp.gg. Una copia self-host sin servidor de medios se queda en unas ocho por canal.",
+        "No. pqp corre en el navegador. Si prefieres una app, hay para Mac, Windows y Linux.",
     },
     {
-      question: "¿Puedo traer mi servidor de Discord?",
+      question: "¿Qué recopila pqp y dónde quedan mis datos?",
       answer:
-        "Puedes traer la estructura: pega un link de plantilla de discord.new y pqp recrea las categorías, los canales y los permisos principales. Los mensajes y los miembros no se vienen.",
+        "El pqp.gg alojado usa analítica de visitas sin cookies (Umami y Cloudflare Web Analytics), reportes de errores (Grafana Faro) y la etiqueta de Google Ads, que usa cookies. Esa etiqueta cuenta registros e informa a Google de las páginas vistas, y Google puede usarlas para remarketing. En pqp.gg, tus datos viven en nuestra base de datos en São Paulo, con respaldos en Norteamérica. Puedes exportar los tuyos cuando quieras y eliminar tu cuenta desde la app.",
     },
     {
-      question: "¿Qué pasa con mis datos?",
+      question: "¿Y si pqp se acaba?",
       answer:
-        "Tu cuenta y tu comunidad viven en nuestro servidor en São Paulo, con respaldos nocturnos en Norteamérica. Cuando una llamada de voz se retransmite, pasa por el servidor de medios más cercano a donde está la mayoría de la gente de ese servidor (São Paulo, Miami o Londres). Las llamadas de mensajes directos y de servidores chicos son directas entre las personas, sin servidor de medios en el medio. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina. El pqp.gg alojado también usa analítica sin cookies y reporte de errores, además de la etiqueta de Google Ads, que sí usa cookies; todo está en pqp.gg/privacy.",
+        "El código es abierto, bajo la AGPL, y es público en GitHub. Puedes exportar tus datos y correr una copia de pqp en tu máquina.",
     },
   ],
 };
 
 /**
+ * The homepage's server-bot question, duplicated from `home.faq.bot.*`: the
+ * question and the four sentences its answer is built from (one of
+ * `.a.actions` / `.a.replies`, then one of `.a.gradual` / `.a.everyone`,
+ * joined by `botFaqAnswer`, the same join the page uses). It is served only
+ * while the launch switches are on (`landingFaq`). Pinned against the
+ * catalogues in `marketing-meta.test.ts`.
+ */
+// depends on PR#1188 shipping
+export const LANDING_BOT_FAQ: Record<
+  MarketingLocale,
+  { question: string; answers: Record<BotFaqAnswerKey, string> }
+> = {
+  "pt-BR": {
+    question: "O bot do servidor lê as nossas conversas?",
+    answers: {
+      "home.faq.bot.a.replies":
+        "Só se quem cuida do servidor criar um bot, e só nos canais onde ele foi colocado. Quando alguém chama, ele lê as mensagens recentes daquele canal. Isso pode incluir imagens e, se a transcrição estiver ligada e quem gravou tiver permitido, mensagens de voz. Canal que o cargo dele não vê fica de fora. Quem processa é a Anthropic (Claude), e nada disso treina modelos.",
+      "home.faq.bot.a.actions":
+        "Só se quem cuida do servidor criar um bot, e só nos canais onde ele foi colocado. Quando alguém chama, ele lê as mensagens recentes daquele canal. Isso pode incluir imagens e, se a transcrição estiver ligada e quem gravou tiver permitido, mensagens de voz. Se você pedir, ele também lê outros canais que você e ele podem ver. Canal que o cargo dele não vê fica de fora. Quem processa é a Anthropic (Claude), e nada disso treina modelos.",
+      "home.faq.bot.a.gradual": "Ele é novo, está em beta e chega servidor por servidor.",
+      "home.faq.bot.a.everyone": "Ele é novo e está em beta.",
+    },
+  },
+  en: {
+    question: "Does the server bot read our chats?",
+    answers: {
+      "home.faq.bot.a.replies":
+        "Only if whoever runs the server creates a bot, and only in the channels where it was added. When someone calls it, it reads that channel's recent messages. That can include images and, if transcription is on and whoever recorded them allowed it, voice messages. A channel its role can't see stays out. Anthropic (Claude) processes it, and none of it trains models.",
+      "home.faq.bot.a.actions":
+        "Only if whoever runs the server creates a bot, and only in the channels where it was added. When someone calls it, it reads that channel's recent messages. That can include images and, if transcription is on and whoever recorded them allowed it, voice messages. If you ask, it also reads other channels that both you and it can see. A channel its role can't see stays out. Anthropic (Claude) processes it, and none of it trains models.",
+      "home.faq.bot.a.gradual": "It's new, in beta, and rolling out server by server.",
+      "home.faq.bot.a.everyone": "It's new and in beta.",
+    },
+  },
+  es: {
+    question: "¿El bot del servidor lee nuestras conversaciones?",
+    answers: {
+      "home.faq.bot.a.replies":
+        "Solo si quien administra el servidor crea un bot, y solo en los canales donde lo agregaron. Cuando alguien lo llama, lee los mensajes recientes de ese canal. Eso puede incluir imágenes y, si la transcripción está activada y quien grabó lo permitió, mensajes de voz. El canal que su rol no ve queda fuera. Lo procesa Anthropic (Claude), y nada de eso entrena modelos.",
+      "home.faq.bot.a.actions":
+        "Solo si quien administra el servidor crea un bot, y solo en los canales donde lo agregaron. Cuando alguien lo llama, lee los mensajes recientes de ese canal. Eso puede incluir imágenes y, si la transcripción está activada y quien grabó lo permitió, mensajes de voz. Si se lo pides, también lee otros canales que tú y él pueden ver. El canal que su rol no ve queda fuera. Lo procesa Anthropic (Claude), y nada de eso entrena modelos.",
+      "home.faq.bot.a.gradual": "Es nuevo, está en beta y llega servidor por servidor.",
+      "home.faq.bot.a.everyone": "Es nuevo y está en beta.",
+    },
+  },
+};
+
+/** Where the bot question goes in `LANDING_FAQ`: right after the data question (index 5). */
+const LANDING_BOT_FAQ_AT = 6;
+
+/**
+ * The "/" FAQ as the JSON-LD serves it: `LANDING_FAQ`, plus the server-bot
+ * question after the data question while the launch switches are on. The
+ * claims are read at call time, so the edge and the tests follow the switch.
+ */
+export function landingFaq(
+  locale: MarketingLocale,
+  claims: ServerBotClaims | null = serverBotClaims(),
+): { question: string; answer: string }[] {
+  const faq = LANDING_FAQ[locale];
+  if (!claims) return faq;
+  const bot = LANDING_BOT_FAQ[locale];
+  return [
+    ...faq.slice(0, LANDING_BOT_FAQ_AT),
+    { question: bot.question, answer: botFaqAnswer((key) => bot.answers[key], claims) },
+    ...faq.slice(LANDING_BOT_FAQ_AT),
+  ];
+}
+
+/**
  * The `/vs-discord` FAQ, duplicated from `vsDiscord.faq.*` in the JSON
- * catalogues and served as FAQPage JSON-LD. Same truth rules as the page:
- * product claims only, no legal advice, no return-date speculation. The test
- * suite pins every string here against its JSON twin.
+ * catalogues and served as FAQPage JSON-LD, in the page's own order. Same truth
+ * rules as the page: product claims only, nothing about another company's
+ * conduct. The test suite pins every string here against its JSON twin.
  */
 export const VS_DISCORD_FAQ: Record<
   MarketingLocale,
@@ -559,55 +743,53 @@ export const VS_DISCORD_FAQ: Record<
 > = {
   "pt-BR": [
     {
-      question:
-        "Por que o compartilhamento de tela do Discord está suspenso no Brasil?",
+      question: "Dá pra trazer o meu servidor do Discord?",
       answer:
-        "A Discord comunicou que tela compartilhada, vídeo e Go Live estão suspensos para usuários no Brasil desde 17 de agosto de 2026, cumprindo uma medida preventiva da ANPD, a autoridade brasileira de proteção de dados. É o comunicado da própria Discord, esta página é uma comparação de produto, não conselho jurídico.",
+        "Dá pra trazer o layout: cola um link de template discord.new e o pqp recria categorias, canais e permissões principais. Mensagens, membros e emojis personalizados não vêm junto.",
     },
     {
-      question:
-        "Quando volta o compartilhamento de tela do Discord no Brasil?",
+      question: "Posso usar o pqp e o Discord ao mesmo tempo?",
       answer:
-        "Não há data anunciada. A carta da Discord para a comunidade brasileira diz que estão trabalhando para restaurar os recursos, sem dizer quando.",
+        "Pode. Muita turma fica com os dois: o Discord pro que já era, o pqp pra call e pra tela. Nada do que tu faz no pqp mexe no teu Discord.",
     },
     {
-      question: "Como compartilhar tela com o meu grupo hoje?",
+      question: "Como compartilho a tela com som?",
       answer:
-        "Cria uma comunidade no pqp.gg, manda o link do convite e compartilha a tela direto do navegador, o jogo, o código, os slides. De graça, sem instalar nada; também tem app pra desktop.",
+        "No Chrome ou no Edge, compartilha uma aba e marca a opção de compartilhar o áudio da aba. No Windows a tela inteira também leva o som. Tela inteira no Mac, Firefox e Safari não levam som: é limite do navegador.",
     },
     {
       question: "O pqp é grátis mesmo? Qual é a pegadinha?",
       answer:
-        "Grátis e de código aberto. Usa o serviço hospedado no pqp.gg, ou roda a sua própria cópia nas suas máquinas, o código é público. É um beta aberto: novo, honesto sobre isso, e construído às claras.",
+        "Grátis e de código aberto (AGPL-3.0), sem plano pago. Dá pra usar o serviço hospedado no pqp.gg ou rodar a tua cópia, que hoje precisa de Postgres e de uma conta Clerk tua. A pegadinha é ser beta: vai ter aresta, o ecossistema de bots é pequeno e o app de iPhone ainda está no TestFlight.",
     },
   ],
   en: [
     {
-      question: "Why is Discord screen share suspended in Brazil?",
+      question: "Can I bring my Discord server?",
       answer:
-        "Discord announced that screen share, video, and Go Live are suspended for users in Brazil since 17 August 2026, complying with a preventive order from the ANPD, Brazil's data-protection authority. That is Discord's own announcement, this page is a product comparison, not legal advice.",
+        "You can bring the layout: paste a discord.new template link and pqp recreates categories, channels and the main permissions. Messages, members and custom emoji do not come along.",
     },
     {
-      question: "When does Discord screen share come back in Brazil?",
+      question: "Can I use pqp and Discord at the same time?",
       answer:
-        "No date has been announced. Discord's letter to its Brazilian community says they are working to restore the features, without saying when.",
+        "You can. Plenty of groups keep both: Discord for what it already was, pqp for the call and the screen. Nothing you do on pqp touches your Discord.",
     },
     {
-      question: "How can my group share a screen today?",
+      question: "How do I share a screen with sound?",
       answer:
-        "Create a community on pqp.gg, send the invite link, and share your screen straight from the browser, the game, the code, the slides. Free, nothing to install; there's a desktop app too.",
+        "In Chrome or Edge, share a tab and tick the option to share the tab's audio. On Windows a whole screen carries sound too. A whole screen on a Mac, Firefox and Safari do not carry sound: that is a browser limit.",
     },
     {
       question: "Is pqp really free? What's the catch?",
       answer:
-        "Free and open source. Use the hosted service at pqp.gg, or run your own copy on your own machines, the code is public. It's an open beta: young, honest about it, and built in the open.",
+        "Free and open source (AGPL-3.0), with no paid plan. Use the hosted service at pqp.gg or run your own copy, which today needs Postgres and your own Clerk account. The catch is that it is a beta: expect rough edges, the bot ecosystem is small and the iPhone app is still on TestFlight.",
     },
   ],
   es: [
     {
-      question: "¿pqp reemplaza a Discord?",
+      question: "¿Puedo traer mi servidor de Discord?",
       answer:
-        "Para muchos grupos, sí: voz, pantalla con sonido, chat y watch party, directo en el navegador. Si tu servidor vive de bots o necesitas apps pulidas en las tiendas, Discord sigue ganando ahí, y te puedes quedar con los dos.",
+        "Puedes traer el layout: pega un link de plantilla de discord.new y pqp recrea categorías, canales y permisos principales. Los mensajes, los miembros y los emojis personalizados no se vienen.",
     },
     {
       question: "¿Puedo usar pqp y Discord al mismo tiempo?",
@@ -615,14 +797,14 @@ export const VS_DISCORD_FAQ: Record<
         "Claro. Muchos grupos se quedan con los dos: Discord para lo de siempre, pqp para la llamada y la pantalla. Nada de lo que haces en pqp toca tu Discord.",
     },
     {
-      question: "¿Cómo puede mi grupo compartir pantalla hoy?",
+      question: "¿Cómo comparto la pantalla con sonido?",
       answer:
-        "Crea una comunidad en pqp.gg, manda el enlace de invitación y comparte tu pantalla directo desde el navegador: el juego, el código, las diapositivas. Gratis, sin instalar nada; también hay app de escritorio.",
+        "En Chrome o Edge, comparte una pestaña y activa la opción de compartir el audio de la pestaña. En Windows la pantalla completa también lleva el sonido. La pantalla completa en Mac, Firefox y Safari no llevan sonido: es un límite del navegador.",
     },
     {
       question: "¿pqp de verdad es gratis? ¿Cuál es el truco?",
       answer:
-        "Gratis y de código abierto. Usa el servicio alojado en pqp.gg, o corre tu propia copia en tus propias máquinas, el código es público. Es una beta abierta: joven, honesta al respecto y construida a la vista de todos.",
+        "Gratis y de código abierto (AGPL-3.0), sin plan de pago. Usa el servicio alojado en pqp.gg o corre tu propia copia, que hoy necesita Postgres y tu propia cuenta de Clerk. El truco es que es beta: va a haber detalles, el ecosistema de bots es chico y la app de iPhone sigue en TestFlight.",
     },
   ],
 };
@@ -630,9 +812,8 @@ export const VS_DISCORD_FAQ: Record<
 /**
  * The `/tela` FAQ, duplicated from `tela.faq.*` in the JSON catalogues and
  * served as FAQPage JSON-LD, in the page's own order. Same truth rules as the
- * page: product claims only, no legal advice, no App Store claim, no
- * return-date speculation. The suite pins every string here against its JSON
- * twin.
+ * page: product claims only, no App Store claim. The suite pins every string
+ * here against its JSON twin.
  */
 export const TELA_FAQ: Record<
   MarketingLocale,
@@ -640,14 +821,14 @@ export const TELA_FAQ: Record<
 > = {
   "pt-BR": [
     {
+      question: "O som do que eu compartilho vai junto?",
+      answer:
+        "Vai no Chrome e no Edge: ao compartilhar uma aba, marca a opção de compartilhar o áudio. No Windows a tela inteira também leva o som. Tela inteira no Mac, Firefox e Safari não levam som, é limite do navegador.",
+    },
+    {
       question: "Precisa baixar alguma coisa?",
       answer:
         "Não. O pqp roda no navegador, no computador e no celular. Se quiser app, tem pra desktop, pra Android na Google Play e um beta de iPhone pelo TestFlight. Nenhum é obrigatório.",
-    },
-    {
-      question: "Precisa de VPN?",
-      answer:
-        "Não. Isso não é um jeito de burlar nada: o pqp é outro app, com servidores próprios no Brasil, e compartilhar tela é um recurso que ele tem. Nada aqui mexe no Discord.",
     },
     {
       question: "Quantas pessoas podem compartilhar tela numa sala?",
@@ -657,7 +838,7 @@ export const TELA_FAQ: Record<
     {
       question: "É de graça?",
       answer:
-        "Sim. O pqp é código aberto sob a AGPL (github.com/rafaelcg/pqp). Usa o serviço hospedado no pqp.gg de graça, ou roda a sua própria cópia.",
+        "Sim. O pqp é código aberto sob a AGPL (github.com/rafaelcg/pqp). Usa o serviço hospedado no pqp.gg de graça, ou roda a tua própria cópia.",
     },
     {
       question: "Tem no celular?",
@@ -667,25 +848,19 @@ export const TELA_FAQ: Record<
     {
       question: "O que vocês guardam sobre mim?",
       answer:
-        "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing.",
-    },
-    {
-      question:
-        "Por que o compartilhamento de tela do Discord está suspenso no Brasil?",
-      answer:
-        "A Discord comunicou que tela compartilhada, vídeo e Go Live estão suspensos para usuários no Brasil desde 17 de agosto de 2026, cumprindo uma medida preventiva da ANPD, a autoridade brasileira de proteção de dados. É o comunicado da própria Discord. Esta página é sobre o que dá pra usar agora, não conselho jurídico.",
+        "Menos do que tu imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing.",
     },
   ],
   en: [
     {
+      question: "Does the sound of what I share go along?",
+      answer:
+        "It does in Chrome and Edge: when you share a tab, tick the option to share the audio. On Windows a whole screen carries sound too. A whole screen on a Mac, Firefox and Safari do not carry sound, which is a browser limit.",
+    },
+    {
       question: "Do I need to download anything?",
       answer:
         "No. pqp runs in the browser, on a computer and on a phone. If you want an app, there is one for desktop, Android on Google Play, and an iPhone beta on TestFlight. None of them is required.",
-    },
-    {
-      question: "Do I need a VPN?",
-      answer:
-        "No. This is not a way around anything: pqp is a different app with its own servers in Brazil, and screen share is a feature it has. Nothing here touches Discord.",
     },
     {
       question: "How many people can share a screen in one room?",
@@ -707,22 +882,17 @@ export const TELA_FAQ: Record<
       answer:
         "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami and Cloudflare Web Analytics), error reports (Grafana Faro), and the Google Ads tag, which counts sign-ups and reports page views to Google, which can use them for remarketing.",
     },
-    {
-      question: "Why is Discord screen share suspended in Brazil?",
-      answer:
-        "Discord announced that screen share, video, and Go Live are suspended for users in Brazil since 17 August 2026, complying with a preventive order from the ANPD, Brazil's data-protection authority. That is Discord's own announcement. This page is about what you can use right now, not legal advice.",
-    },
   ],
   es: [
+    {
+      question: "¿Se escucha el sonido de lo que comparto?",
+      answer:
+        "Sí, en Chrome o en Edge: cuando compartes una pestaña, activa la opción de compartir el audio. En Windows la pantalla completa también lleva el sonido. La pantalla completa en Mac, Firefox y Safari no llevan sonido, es un límite del navegador.",
+    },
     {
       question: "¿Tengo que descargar algo?",
       answer:
         "No. pqp corre en el navegador, en la computadora y en el celular. Si quieres una app, hay para escritorio, Android en Google Play y una beta de iPhone en TestFlight. Ninguna es obligatoria.",
-    },
-    {
-      question: "¿Se escucha el sonido de lo que comparto?",
-      answer:
-        "Sí, en Chrome o en Edge: cuando compartes una pestaña, activa la opción de compartir el audio. En la app de escritorio, Windows 11 también lleva el sonido del sistema. Firefox no comparte el audio de una pestaña.",
     },
     {
       question: "¿Cuántas personas pueden compartir pantalla en una sala?",
@@ -744,10 +914,83 @@ export const TELA_FAQ: Record<
       answer:
         "Menos de lo que te imaginas, y todo está explicado en lenguaje sencillo en la política de privacidad en pqp.gg/privacy. El pqp.gg alojado usa analítica sin cookies (Umami y Cloudflare Web Analytics), reportes de errores (Grafana Faro) y la etiqueta de Google Ads, que cuenta registros e informa a Google de las páginas vistas, y Google puede usarlas para remarketing.",
     },
+  ],
+};
+
+/**
+ * The `/compare` FAQ, duplicated from `compare.faq.*` in the JSON catalogues and
+ * served as FAQPage JSON-LD, in the page's own order (`COMPARE_FAQ_IDS` in
+ * `pages/compare-page.tsx`). Features only, with the day the sources were read.
+ * The suite pins every string here against its JSON twin.
+ */
+export const COMPARE_FAQ: Record<
+  MarketingLocale,
+  { question: string; answer: string }[]
+> = {
+  "pt-BR": [
     {
-      question: "¿Por qué compartir pantalla desde el navegador?",
+      question: "Qual é a melhor alternativa ao Discord?",
       answer:
-        "Porque nadie tiene que instalar nada: mandas el link, la gente entra y ve tu pantalla. Si prefieres una app, también hay app de escritorio para Mac, Windows y Linux.",
+        "Depende do que tu precisa. Se é ecossistema de bots e apps em todas as plataformas, o próprio Discord segue na frente. Se é código aberto com foco em auto-hospedagem, olha o Stoat. Se é tela compartilhada com som no navegador, watch party e trazer o layout do Discord, o pqp, que é grátis, de código aberto e ainda é beta. A tabela tem cada recurso com fonte e data.",
+    },
+    {
+      question: "Qual dessas alternativas compartilha a tela com som?",
+      answer:
+        "O pqp leva o som da aba no Chrome e no Edge, e o da tela inteira no Windows. O Stoat tem a opção Compartilhar áudio. O TeamSpeak 6 tem ajuste de áudio no compartilhamento, que está em beta. Os huddles do Slack deixam levar o áudio do sistema no desktop. Do Discord não conseguimos verificar: a central de ajuda não abriu pra gente em 16 de outubro de 2026.",
+    },
+    {
+      question: "Alguma importa o layout de um servidor do Discord?",
+      answer:
+        "O pqp importa: cola um link de template discord.new e ele recria categorias, canais e as permissões principais, sem mensagens nem membros. Para o Stoat só achamos uma ferramenta de terceiros. Outros projetos fora da tabela, como o Armada, também têm importação (post do Soapbox de 4 de agosto de 2026). TeamSpeak e Slack: não verificado.",
+    },
+    {
+      question: "Dá pra rodar o pqp na minha própria máquina?",
+      answer:
+        "Dá, mas hoje precisa de Postgres e de uma conta Clerk tua: ainda não existe um caminho sem Clerk. O serviço hospedado em pqp.gg continua sendo o jeito mais simples.",
+    },
+  ],
+  en: [
+    {
+      question: "What is the best Discord alternative?",
+      answer:
+        "It depends on what you need. For a bot and app ecosystem on every platform, Discord itself stays ahead. For open source focused on self-hosting, look at Stoat. For screen share with sound in the browser, a watch party and bringing your Discord layout, pqp, which is free, open source and still a beta. The table has every feature with a source and a date.",
+    },
+    {
+      question: "Which of these alternatives shares the screen with sound?",
+      answer:
+        "pqp carries tab sound in Chrome and Edge, and whole-screen sound on Windows. Stoat has a Share Audio option. TeamSpeak 6 has an audio setting in its sharing, which is in beta. Slack huddles let you share system audio on desktop. For Discord we could not verify: its help center would not open for us on 16 October 2026.",
+    },
+    {
+      question: "Does any of them import a Discord server's layout?",
+      answer:
+        "pqp does: paste a discord.new template link and it recreates categories, channels and the main permissions, without messages or members. For Stoat we only found a third-party tool. Other projects outside the table, such as Armada, also have an import (Soapbox post of 4 August 2026). TeamSpeak and Slack: not verified.",
+    },
+    {
+      question: "Can I run pqp on my own machine?",
+      answer:
+        "You can, but today it needs Postgres and your own Clerk account: there is no Clerk-free path yet. The hosted service at pqp.gg is still the simplest way.",
+    },
+  ],
+  es: [
+    {
+      question: "¿Cuál es la mejor alternativa a Discord?",
+      answer:
+        "Depende de lo que necesites. Para un ecosistema de bots y apps en todas las plataformas, el propio Discord sigue adelante. Para código abierto enfocado en el autoalojamiento, mira Stoat. Para pantalla con sonido en el navegador, watch party y traer el layout de Discord, pqp, que es gratis, de código abierto y todavía es beta. La tabla tiene cada función con fuente y fecha.",
+    },
+    {
+      question: "¿Cuál de estas alternativas comparte la pantalla con sonido?",
+      answer:
+        "pqp lleva el sonido de la pestaña en Chrome y Edge, y el de la pantalla completa en Windows. Stoat tiene la opción Compartir audio. TeamSpeak 6 tiene un ajuste de audio al compartir, que está en beta. Los huddles de Slack permiten llevar el audio del sistema en el escritorio. De Discord no pudimos verificar: su centro de ayuda no nos abrió el 16 de octubre de 2026.",
+    },
+    {
+      question: "¿Alguna importa el layout de un servidor de Discord?",
+      answer:
+        "pqp sí: pega un link de plantilla de discord.new y recrea categorías, canales y los permisos principales, sin mensajes ni miembros. Para Stoat solo encontramos una herramienta de terceros. Otros proyectos fuera de la tabla, como Armada, también tienen importación (post de Soapbox del 4 de agosto de 2026). TeamSpeak y Slack: no verificado.",
+    },
+    {
+      question: "¿Puedo correr pqp en mi propia máquina?",
+      answer:
+        "Puedes, pero hoy necesita Postgres y tu propia cuenta de Clerk: todavía no hay un camino sin Clerk. El servicio alojado en pqp.gg sigue siendo la forma más simple.",
     },
   ],
 };
@@ -1035,12 +1278,14 @@ export function escapeHtml(value: string): string {
  * `sameAs` is for pages anyone can already land on, so the App Store is
  * absent: TestFlight is a beta enrollment, not a public listing.
  *
- * The landing adds SoftwareApplication — the page is the product — mirroring
+ * The home page adds SoftwareApplication (the page is the product), mirroring
  * what the shipped `index.html` says (`applicationCategory`, a zero-price
- * Offer) and, since the redesign, its own FAQPage, with the same `sameAs`. `/vs-discord`
- * adds FAQPage too, whose questions are the FAQ section actually rendered on
- * the page — schema for copy a visitor can read, never schema alone. `/tela`
- * does the same with its own seven.
+ * Offer), with the same `sameAs`. It also adds a FAQPage whose questions are
+ * the ones its FAQ section renders (`landingFaq`: the seven of `LANDING_FAQ`,
+ * plus the server-bot question only while the launch switches are on). `/vs-discord` adds
+ * FAQPage too, built the same way: the questions are the FAQ section actually
+ * rendered on the page. That is schema for copy a visitor can read, never
+ * schema alone. `/tela` does the same with its own seven.
  */
 const ORGANIZATION_SAME_AS = [
   "https://github.com/rafaelcg/pqp",
@@ -1048,13 +1293,30 @@ const ORGANIZATION_SAME_AS = [
 ];
 
 /**
- * Where pqp runs, for `SoftwareApplication.operatingSystem`. The landing says
- * "Web, desktop, iPhone and Android" (`landing.proof.platforms`): desktop is
- * the Electron builds for all three systems, iPhone the TestFlight beta, and
- * Android the Google Play app. `client/index.html` carries the same string for every page
- * the edge does not rewrite, and `marketing-meta.test.ts` keeps the two equal.
+ * Where pqp runs, for `SoftwareApplication.operatingSystem`. The home page's
+ * install and phone answers (`home.faq.install.a`, `home.faq.phone.a.play`)
+ * name the same set: the browser, the Electron builds for Mac, Windows and
+ * Linux, the iPhone TestFlight beta and the Android app on Google Play.
+ * `client/index.html` carries the same string for every page the edge does
+ * not rewrite, and `marketing-meta.test.ts` keeps the two equal.
  */
 export const SOFTWARE_OPERATING_SYSTEMS = "Web, Windows, macOS, Linux, Android, iOS";
+
+/** `compare.matrix.caption`, duplicated; pinned by `marketing-meta.test.ts`. */
+const COMPARE_TABLE_NAME: LocalizedText = {
+  "pt-BR":
+    "Comparação por recurso entre pqp, Discord, Stoat, TeamSpeak 6 e huddles do Slack, com fonte e data",
+  en: "Feature comparison of pqp, Discord, Stoat, TeamSpeak 6 and Slack huddles, with sources and dates",
+  es: "Comparación por función entre pqp, Discord, Stoat, TeamSpeak 6 y los huddles de Slack, con fuente y fecha",
+};
+
+/** The products each comparison page's table covers, for `Table.about`. */
+const COMPARE_ABOUT: Record<string, string[]> = {
+  "/compare": ["pqp", "Discord", "Stoat", "TeamSpeak 6", "Slack huddles"],
+  "/compare/stoat": ["pqp", "Stoat"],
+  "/compare/teamspeak": ["pqp", "TeamSpeak 6"],
+  "/compare/slack": ["pqp", "Slack huddles"],
+};
 
 function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
   const graph: Record<string, unknown>[] = [
@@ -1092,9 +1354,41 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
       sameAs: ORGANIZATION_SAME_AS,
     });
   }
+  if (page === "/compare" || page.startsWith("/compare/")) {
+    const copy = PAGE_COPY[page];
+    const { canonical } = marketingUrlsFor(page, locale);
+    const tableId = `${canonical}#matrix`;
+    graph.push(
+      {
+        "@type": "WebPage",
+        "@id": `${canonical}#webpage`,
+        url: canonical,
+        name: pick(copy.title, locale),
+        description: pick(copy.description, locale),
+        inLanguage: locale,
+        dateModified: FACTS_CHECKED,
+        isPartOf: { "@type": "WebSite", url: `${CANONICAL_ORIGIN}/` },
+        hasPart: { "@id": tableId },
+      },
+      {
+        "@type": "Table",
+        "@id": tableId,
+        name:
+          page === "/compare"
+            ? pick(COMPARE_TABLE_NAME, locale)
+            : pick(copy.title, locale),
+        about: (COMPARE_ABOUT[page] ?? []).map((name) => ({
+          "@type": "SoftwareApplication",
+          name,
+        })),
+      },
+    );
+  }
   const faq =
     page === "/"
-      ? LANDING_FAQ[locale]
+      ? landingFaq(locale)
+      : page === "/compare"
+        ? COMPARE_FAQ[locale]
       : page === "/vs-discord"
         ? VS_DISCORD_FAQ[locale]
         : page === "/tela"

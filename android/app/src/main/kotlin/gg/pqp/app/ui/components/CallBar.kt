@@ -271,6 +271,10 @@ fun CallBar(
                 }
                 ServerMutedRow(state)
                 WatchScreenRow(state, controller)
+                // The board, only where the room's server has it on.
+                if (state.stage != VoiceStage.Joining) {
+                    gg.pqp.app.soundboard.SoundboardRow(state.channelId)
+                }
                 // Last of the three, and the only one made of pictures. The
                 // two text rows above it stay together; the strip sits against
                 // the divider so the chrome ends on the thing you look at.

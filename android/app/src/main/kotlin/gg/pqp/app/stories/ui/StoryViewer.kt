@@ -75,6 +75,8 @@ import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -331,6 +333,9 @@ private fun DeckPage(
 
     var holding by remember { mutableStateOf(false) }
     var typing by remember { mutableStateOf(false) }
+    // The chrome's measured edges in root pixels, for a text card to keep its words between (see FittedTextCard).
+    var headerBottom by remember { mutableStateOf<Float?>(null) }
+    var footerTop by remember { mutableStateOf<Float?>(null) }
     // The story the viewers sheet was opened FOR. A tap that advanced the deck
     // while a lagging sheet came up must not make the sheet (and its Apagar)
     // belong to the next story.
@@ -511,6 +516,9 @@ private fun DeckPage(
                             onClose()
                         },
                         onOpenMention = { profile = it },
+                        // With the keyboard up the canvas does not shrink, the chrome rides on it: a card of
+                        // words fits between the header and the footer instead of printing behind them.
+                        textAvoid = if (typing) StoryTextAvoid(headerBottom, footerTop) else StoryTextAvoid(),
                     )
                 }
 
@@ -541,6 +549,7 @@ private fun DeckPage(
                     Modifier
                         .fillMaxWidth()
                         .toolsTop(gap)
+                        .onGloballyPositioned { headerBottom = it.boundsInRoot().bottom }
                         .graphicsLayer { alpha = chromeAlpha }
                         .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent)))
                         .padding(horizontal = Spacing.sm, vertical = Spacing.sm),
@@ -592,6 +601,7 @@ private fun DeckPage(
                     Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
+                        .onGloballyPositioned { footerTop = it.boundsInRoot().top }
                         .graphicsLayer { alpha = chromeAlpha }
                         .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f))))
                         // With the keyboard up the reply sits on it; otherwise inside the canvas, not across its edge.

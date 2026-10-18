@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { STABLE_IMAGE_READ, STABLE_IMAGE_WINDOW_SECONDS } from "./stable-image-read.js";
 import {
   copyObject,
   deleteObject,
@@ -254,6 +255,64 @@ describe("key encoding", () => {
     expect(disposition).toBe(
       `attachment; filename="relat_rio _final_.pdf"; filename*=UTF-8''relat%C3%B3rio%20%22final%22.pdf`,
     );
+  });
+});
+
+describe("a stable window (public pictures)", () => {
+  const W = STABLE_IMAGE_WINDOW_SECONDS;
+  const at = (iso: string) => presignGet("avatars/u/a.jpg", { ...STABLE_IMAGE_READ, now: new Date(iso) });
+  const parts = (url: string) => {
+    const q = new URL(url).searchParams;
+    return {
+      date: q.get("X-Amz-Date")!,
+      expires: Number(q.get("X-Amz-Expires")),
+      cache: q.get("response-cache-control"),
+    };
+  };
+
+  it("is the very same address for every request inside one window", () => {
+    // Window 2026-08-01T06:00Z to 12:00Z (a 6 h window starting at midnight UTC).
+    const a = at("2026-08-01T06:00:01.000Z");
+    const b = at("2026-08-01T09:13:59.000Z");
+    const c = at("2026-08-01T11:59:59.999Z");
+    expect(b).toBe(a);
+    expect(c).toBe(a);
+  });
+
+  it("is a different address in the next window", () => {
+    expect(at("2026-08-01T12:00:00.000Z")).not.toBe(at("2026-08-01T11:59:59.999Z"));
+  });
+
+  it("is signed at the start of the window and stays good for a whole window after its last use", () => {
+    const { date, expires } = parts(at("2026-08-01T11:59:59.000Z"));
+    expect(date).toBe("20260801T060000Z");
+    expect(expires).toBe(2 * W);
+    // Signed 06:00, good until 18:00; handed out at 11:59:59, so still 6 h left.
+    const startedAt = Date.parse("2026-08-01T06:00:00Z");
+    const handedOutAt = Date.parse("2026-08-01T11:59:59Z");
+    expect(startedAt + expires * 1000 - handedOutAt).toBeGreaterThanOrEqual(W * 1000 - 1000);
+  });
+
+  it("tells the bucket how long the bytes may be kept, signed into the query", () => {
+    const url = at("2026-08-01T07:00:00.000Z");
+    expect(parts(url).cache).toBe(`public, max-age=${W}`);
+    // It is part of what the signature covers, so it cannot be dropped by a client.
+    const signed = signRequest({
+      method: "GET",
+      key: "avatars/u/a.jpg",
+      ttlSeconds: 2 * W,
+      now: new Date("2026-08-01T06:00:00.000Z"),
+      query: { "response-cache-control": `public, max-age=${W}` },
+    });
+    expect(signed.canonicalRequest).toContain("response-cache-control=public%2C%20max-age%3D21600");
+  });
+
+  it("leaves every other read per-request: no window, no cache override", () => {
+    const url = presignGet("att/x.png", { ttlSeconds: 900, now: new Date("2026-08-01T11:59:59.000Z") });
+    const { date, expires, cache } = parts(url);
+    expect(date).toBe("20260801T115959Z");
+    expect(expires).toBe(900);
+    expect(cache).toBeNull();
   });
 });
 
@@ -528,6 +587,31 @@ describeMinio("round trip against real storage", () => {
     expect(await headObject(key)).toBeNull();
     // Deleting twice is a success, which is what lets the sweeper retry.
     await expect(deleteObject(key)).resolves.toBeUndefined();
+  });
+
+  it("serves a stable-window address, and the bucket sends the signed Cache-Control", async () => {
+    const key = `test/${randomUUID()}/avatar.jpg`;
+    const body = "pretend jpeg";
+    const put = await fetch(presignPut(key, "image/jpeg", Buffer.byteLength(body), 300), {
+      method: "PUT",
+      headers: { "Content-Type": "image/jpeg" },
+      body,
+    });
+    expect(put.status).toBe(200);
+
+    // Signed in the past (the start of the window) and valid for two windows:
+    // the bucket must accept an address whose X-Amz-Date is hours old.
+    const url = presignGet(key, STABLE_IMAGE_READ);
+    const get = await fetch(url);
+    expect(get.status).toBe(200);
+    expect(await get.text()).toBe(body);
+    expect(get.headers.get("cache-control")).toBe(
+      `public, max-age=${STABLE_IMAGE_WINDOW_SECONDS}`,
+    );
+    // And it is the address the next request gets too.
+    expect(presignGet(key, STABLE_IMAGE_READ)).toBe(url);
+
+    await deleteObject(key);
   });
 
   it("copies an object inside the bucket (Salvar no Baú), awkward key and all", async () => {
