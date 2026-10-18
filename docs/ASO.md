@@ -60,13 +60,13 @@ the terms a Brazilian user of a voice app would actually type:
 | chat de voz | Category term, already in the current name |
 | comunidade | Product's own word for a server, already in the current name |
 | servidor | Discord's own vocabulary; users search in Discord's terms even when looking for an alternative |
-| watch party | The product's flagship differentiator. Already proven at scale: `landing.hero.body` in the translation file cites a real watch party with 100+ people on 2026-09-05 |
+| watch party | The product's flagship differentiator. Already proven at scale: `home.night.party.proof` in the translation file cites a real watch party with 100+ people on 2026-09-05. The hero body does not carry the figure. `landing.seo.description` cites it too |
 | assistir junto | Natural-language phrasing of "watch party" a Portuguese speaker would type instead of the English loanword |
 | compartilhar tela / tela compartilhada | The capability people most often search for in a voice app; it is the first thing the iOS and Play copy lead with |
 | chamada em grupo | Group voice call, generic category term |
 | amigos | Friends list, generic but high volume |
 | gamer / jogos | Category, high volume, matches `androidPage.perk.*` copy |
-| twitch | The watch party's actual use case (`landing.proof.watchParty`); Twitch streamers and their communities are close to the target audience |
+| twitch | The watch party's actual use case (`home.night.party.proof`); Twitch streamers and their communities are close to the target audience |
 | live | Very short, high-frequency word for "livestream" in Brazilian Portuguese, used in the current keywords file already |
 | DM | Direct message, short and already product vocabulary |
 | código aberto / open source | Differentiator versus every closed competitor, and genuinely searched by the self-hosting crowd |
@@ -147,7 +147,7 @@ high-value keyword words as read naturally, because only that much is
 visible before an App Store visitor has to tap "more". Everything after that
 is feature sections under all-caps headers, ending with an honest parity note
 for the platform. The social-proof line is the 100+-person watch party in
-September 2026 (`landing.hero.body`, `landing.proof.watchParty`).
+September 2026 (`home.night.party.proof`, `landing.seo.description`).
 
 ## Google Play listing
 
