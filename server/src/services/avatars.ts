@@ -16,6 +16,7 @@ import {
   presignPut,
   type StoredImage,
 } from "../lib/s3.js";
+import { STABLE_IMAGE_READ } from "../lib/stable-image-read.js";
 
 /**
  * Uploaded profile pictures.
@@ -40,17 +41,17 @@ import {
 const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 
 /**
- * How long the presigned GET behind `/api/avatars/:userId` stays valid.
+ * The presigned GET behind `/api/avatars/:userId` and `/api/users/:userId/banner`
+ * is signed with `STABLE_IMAGE_READ` (one address for six hours), not with an
+ * attachment-style per-request hour.
  *
- * Its own constant rather than `attachmentUrlTtlSeconds()`, and not only to
- * avoid an import cycle (attachments.ts already imports this file's neighbour,
- * users.ts). The two are different leak windows: an attachment URL is handed to
- * a client and lives in its state, while this one is a `Location` header the
- * browser follows immediately and never stores. An hour is far more than a
- * redirect needs and keeps a URL scraped out of a cache from being a long-lived
- * read grant on the object.
+ * It used to be an hour signed at the moment of the request, on the argument
+ * that a URL scraped out of a cache should not be a long-lived read grant. The
+ * route is unauthenticated (see `serveAvatarObject`: an avatar is
+ * `publicUserSchema` material), so anyone can mint a fresh URL by asking, and
+ * the short life bought nothing while costing every browser a re-download of
+ * every picture each time the redirect expired.
  */
-const READ_URL_TTL_SECONDS = 60 * 60;
 
 /**
  * Extension per content type, never per anything the client sends.
@@ -256,7 +257,7 @@ export async function readAvatarObject(userId: string): Promise<StoredImage | nu
   if (!key) {
     return null;
   }
-  return { key, signedUrl: presignGet(key, { ttlSeconds: READ_URL_TTL_SECONDS }) };
+  return { key, signedUrl: presignGet(key, STABLE_IMAGE_READ) };
 }
 
 // ------------------------------------------------------------- user banners
@@ -424,7 +425,9 @@ export async function discardBannerObject(key: string): Promise<void> {
  * It is also not a profile change in the sense `updateProfile` means. Nothing
  * about a banner is announced over the socket: no member list, message row,
  * roster or conversation draws one, so `announceProfile` would be a broadcast
- * to every client on the instance carrying a field none of them render.
+ * to every client on the instance carrying a field none of them render. The
+ * profile card does draw it, and reads it fresh each time it opens
+ * (`readUserBannerUrl`), so it never needs the frame either.
  */
 export async function setUserBanner(
   userId: string,
@@ -462,6 +465,22 @@ export async function setUserBanner(
 }
 
 /**
+ * The banner URL the profile card draws, or null for "no banner" and "no such
+ * user" alike.
+ *
+ * The stored root-relative `/api/users/:id/banner?v=…`, exactly what the public
+ * profile carries, so a new upload changes the address and no cache can show
+ * the old picture. Never the key: that names an object in the bucket.
+ */
+export async function readUserBannerUrl(userId: string): Promise<string | null> {
+  const result = await getPool().query<{ banner_url: string | null }>(
+    `SELECT banner_url FROM users WHERE id = $1`,
+    [userId],
+  );
+  return result.rows[0]?.banner_url ?? null;
+}
+
+/**
  * Where the bytes for this account's banner actually are, presigned.
  *
  * Null for "no banner", "no such user" and "storage is unconfigured" alike —
@@ -490,5 +509,5 @@ export async function readUserBannerObject(
   if (!key) {
     return null;
   }
-  return { key, signedUrl: presignGet(key, { ttlSeconds: READ_URL_TTL_SECONDS }) };
+  return { key, signedUrl: presignGet(key, STABLE_IMAGE_READ) };
 }

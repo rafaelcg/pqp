@@ -19,7 +19,7 @@ import {
   UserPen,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   TIMEOUT_PRESET_MINUTES,
   TIMEOUT_REASON_MAX_LENGTH,
@@ -46,6 +46,7 @@ import {
   assignMemberRole,
   banMember,
   disconnectMemberVoice,
+  fetchMemberStatuses,
   fetchMembers,
   kickMember,
   liftTimeout,
@@ -63,6 +64,7 @@ import {
   type ServerMember,
   type ServerRole,
 } from "@/lib/api";
+import { applyMemberStatuses, readMemberStatusesIfSame } from "@/lib/member-roster";
 import { assignableRoleIds, canActOnMemberClient } from "@/lib/role-hierarchy";
 import { displayRoleName } from "@/lib/role-labels";
 import {
@@ -443,6 +445,12 @@ export function MembersPanel({
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
   const [members, setMembers] = useState<ServerMember[]>([]);
+  // What the status poll compares with: the `roster` token and the member count
+  // of the whole list this panel last READ (not how many rows are on screen: a
+  // member who joined since is not added to the panel until it reopens, so the
+  // two differ for as long as it stays open). See `fetchMemberStatuses`.
+  const rosterTokenRef = useRef<string | null>(null);
+  const memberCountRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -561,9 +569,12 @@ export function MembersPanel({
     setError(null);
     setMembers([]);
     setLoading(true);
+    rosterTokenRef.current = null;
     void fetchMembers(serverId)
       .then((res) => {
         if (!cancelled) {
+          rosterTokenRef.current = res.roster ?? null;
+          memberCountRef.current = res.members.length;
           setMembers(res.members);
         }
       })
@@ -627,11 +638,31 @@ export function MembersPanel({
     }
     let cancelled = false;
     const timer = setInterval(() => {
-      void fetchMembers(serverId)
+      // A big roster only needs to know who is online: a few KB instead of the
+      // whole list, as long as nobody joined or left since this panel read it.
+      void readMemberStatusesIfSame(() => fetchMemberStatuses(serverId), {
+        token: rosterTokenRef.current,
+        size: memberCountRef.current,
+      })
+        .then((lean) => {
+          if (lean || cancelled) {
+            if (lean && !cancelled) {
+              setMembers((prev) => applyMemberStatuses(prev, lean));
+            }
+            return null;
+          }
+          return fetchMembers(serverId);
+        })
         .then((res) => {
-          if (cancelled) {
+          if (cancelled || !res) {
             return;
           }
+          // Somebody joined or left since this panel read the list: what the
+          // token and count describe now is the new membership, so the next
+          // tick can be a lean one again instead of reading the whole list on
+          // every tick for as long as the panel stays open.
+          rosterTokenRef.current = res.roster ?? null;
+          memberCountRef.current = res.members.length;
           const statuses = new Map(res.members.map((one) => [one.id, one.status]));
           setMembers((prev) =>
             prev.map((member) =>
@@ -760,7 +791,9 @@ export function MembersPanel({
       } else {
         await unassignMemberRole(serverId, member.id, roleId);
       }
-      const { members: nextMembers } = await fetchMembers(serverId);
+      const { members: nextMembers, roster } = await fetchMembers(serverId);
+      rosterTokenRef.current = roster ?? null;
+      memberCountRef.current = nextMembers.length;
       setMembers(nextMembers);
     } catch (err) {
       setError(messageOf(err, t("member.roleFailed")));

@@ -136,6 +136,8 @@ struct CommunityHomeView: View {
         }
         .communityHomeComposer(server: server, config: config, channels: channels) { Task { await load() } }
         .bauFollowEntry(server: server)
+        // Removed from this server (or it was deleted): the Baú goes with it.
+        .dismissWhenServerRemoved(server.id)
         .forwardSheet($forwardSource)
         .task { forwardsEnabled = await session.api.forwardConfig().enabled }
         .navigationDestination(item: $openedChannel) { channel in

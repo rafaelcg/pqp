@@ -121,7 +121,12 @@ export function serverEmojiLoadFailed(serverId: string): boolean {
   return entries.get(serverId)?.failed ?? false;
 }
 
-/** A message named an emoji id this tab does not know: refetch, at most every 30 s. */
+/**
+ * A message named an emoji id this tab does not know, or an emoji's picture
+ * failed to load (it may have been deleted): refetch, at most every 30 s. The
+ * refresh goes through `loadServerEmoji`, so its answer replaces the list under
+ * the usual write-counter rule. A cached emoji is never evicted on a guess.
+ */
 export function noteUnknownServerEmoji(serverId: string): void {
   const entry = entryFor(serverId);
   const now = Date.now();

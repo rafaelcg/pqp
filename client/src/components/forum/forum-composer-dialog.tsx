@@ -792,14 +792,16 @@ export function ForumComposerDialog({
       >
         {/* ------------------------------------------------------- title */}
         <div>
-          <div className="mb-1.5 flex items-baseline justify-between">
-            <label htmlFor={titleId} className="text-xs font-semibold text-text-secondary">
+          <div className="flex items-baseline justify-between">
+            <label htmlFor={titleId} className="sr-only">
               {t("forum.composer.title")}
             </label>
             <span
+              aria-hidden={title.length < FORUM_TITLE_MAX * 0.8 || undefined}
               className={cn(
-                "text-[11px] tabular-nums",
-                title.length >= FORUM_TITLE_MAX ? "text-warning" : "text-text-tertiary",
+                "ml-auto text-[11px] tabular-nums transition-opacity duration-[var(--duration-fast)]",
+                title.length >= FORUM_TITLE_MAX ? "text-warning" : "text-text-secondary",
+                title.length < FORUM_TITLE_MAX * 0.8 && "opacity-0",
               )}
             >
               {t("forum.composer.titleCount", {
@@ -837,7 +839,7 @@ export function ForumComposerDialog({
             aria-invalid={showErrors && titleMissing ? true : undefined}
             aria-describedby={showErrors && titleMissing ? titleErrorId : undefined}
             className={cn(
-              "text-[15px]",
+              "h-auto border-0 border-b border-border/60 bg-transparent px-0 py-2 font-display text-2xl font-extrabold tracking-[-0.01em] text-text shadow-none placeholder:font-semibold placeholder:text-text-secondary rounded-none focus-visible:border-text focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[26px]",
               showErrors && titleMissing && "border-danger",
             )}
           />
@@ -849,7 +851,7 @@ export function ForumComposerDialog({
           {showSimilar && (
             <div
               className={cn(
-                "mt-2 overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-1 animate-door-reveal transition-opacity duration-[var(--duration-fast)]",
+                "mt-3 overflow-hidden rounded-[var(--radius-card)] bg-surface-2 animate-door-reveal transition-opacity duration-[var(--duration-fast)]",
                 similarLoading && "opacity-60",
               )}
             >
@@ -869,7 +871,7 @@ export function ForumComposerDialog({
                 id={similarId}
                 role="listbox"
                 aria-label={t("forum.composer.similar.sr", { count: similar.length })}
-                className="border-t border-border"
+                className="border-t border-border/60"
               >
                 {similar.map((one, index) => (
                   <li
@@ -885,8 +887,8 @@ export function ForumComposerDialog({
                     }}
                     onMouseEnter={() => setActiveSimilar(index)}
                     className={cn(
-                      "flex cursor-pointer items-center gap-2.5 border-b border-border/60 px-3 py-2 text-[13px] text-text-secondary transition-colors duration-[var(--duration-fast)] last:border-b-0",
-                      index === activeSimilar ? "bg-surface-2" : "hover:bg-surface-2",
+                      "flex cursor-pointer items-center gap-2.5 border-b border-border/60 px-3 py-2.5 text-[13px] text-text transition-colors duration-[var(--duration-fast)] last:border-b-0",
+                      index === activeSimilar ? "bg-surface-3" : "hover:bg-surface-3",
                     )}
                   >
                     {one.resolvedAt ? (
@@ -905,7 +907,7 @@ export function ForumComposerDialog({
                   </li>
                 ))}
               </ul>
-              <p className="border-t border-border px-3 py-2 text-xs text-text-tertiary">
+              <p className="border-t border-border/60 px-3 py-2 text-xs text-text-secondary">
                 {t("forum.composer.similar.footer")}
               </p>
             </div>
@@ -914,9 +916,7 @@ export function ForumComposerDialog({
 
         {/* -------------------------------------------------------- body */}
         <div>
-          <p className="mb-1.5 text-xs font-semibold text-text-secondary">
-            {t("forum.composer.body")}
-          </p>
+          <p className="sr-only">{t("forum.composer.body")}</p>
           <div className="[&_form]:p-0" data-forum-composer-body="">
             <MessageComposer
               key={forumId}
@@ -945,7 +945,7 @@ export function ForumComposerDialog({
         {visibleTags.length > 0 && (
           <div>
             <div className="mb-2 flex items-baseline justify-between">
-              <p id={tagsLabelId} className="text-xs font-semibold text-text-secondary">
+              <p id={tagsLabelId} className="text-[13px] font-semibold text-text">
                 {t("forum.composer.tags")}
                 {requireTag && (
                   <span
@@ -965,7 +965,7 @@ export function ForumComposerDialog({
               <span
                 className={cn(
                   "text-[11px] tabular-nums",
-                  atMax ? "text-text-secondary" : "text-text-tertiary",
+                  "text-text-secondary",
                 )}
               >
                 {t("forum.composer.tagsCount", {
@@ -1008,10 +1008,10 @@ export function ForumComposerDialog({
                       }
                     }}
                     className={cn(
-                      "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-[background-color,border-color,color,transform,opacity] duration-[var(--duration-fast)] ease-[var(--ease-standard)] active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-11",
+                      "inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] transition-[background-color,color,transform,opacity] duration-[var(--duration-fast)] ease-[var(--ease-standard)] active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-11 max-sm:px-4",
                       on
-                        ? "border-transparent bg-accent-soft font-semibold text-on-accent-soft"
-                        : "border-border text-text-secondary hover:bg-surface-2 hover:text-text",
+                        ? "bg-text font-semibold text-surface-0"
+                        : "text-text-secondary ring-1 ring-inset ring-border hover:bg-surface-3 hover:text-text",
                       disabled && "cursor-not-allowed opacity-40",
                     )}
                   >

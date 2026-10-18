@@ -14,7 +14,7 @@ Harness copy lives next to the probe: [`client/e2e/share-audio-echo/README.md`](
 | Branch | `feat/screen-share-echo` |
 | PR | https://github.com/rafaelcg/pqp/pull/537 |
 | Commit | `2bd80623` — Stop the call leaking into screen-share audio |
-| GitHub user | `AndreCamm` (personal). Do not push as `properandre` |
+| GitHub user | `ndre-dev` (personal, formerly `AndreCamm`). Do not push as `properandre` |
 | Staging web | https://staging.pqp-3yr.pages.dev |
 | Staging API | https://pqp-api-staging.fly.dev |
 | Tone page | https://staging.pqp-3yr.pages.dev/share-audio-tone.html |
@@ -67,7 +67,7 @@ git pull
 If `gh` is used, switch to the personal account first:
 
 ```bash
-gh auth switch --user AndreCamm
+gh auth switch --user ndre-dev
 ```
 
 ### 1. Read the OS build
@@ -161,7 +161,7 @@ Comment on https://github.com/rafaelcg/pqp/pull/537. Include:
 - Electron row only if you ran step 6
 
 ```bash
-gh auth switch --user AndreCamm
+gh auth switch --user ndre-dev
 gh pr comment 537 --body "$(cat <<'EOF'
 ## Hearing (gaming PC)
 
@@ -239,7 +239,7 @@ Gates are in `client/src/lib/share-audio-probe.ts`: strip ≤ 6 dB, game ≥ 20 
 4. Only then change code. Redeploy staging after a push:
 
 ```bash
-gh auth switch --user AndreCamm
+gh auth switch --user ndre-dev
 gh workflow run deploy-staging.yml --ref feat/screen-share-echo
 ```
 

@@ -1,6 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import en from "../locales/en/translation.json";
+import es from "../locales/es/translation.json";
+import ptBR from "../locales/pt-BR/translation.json";
 import { ApoiePage, ApoieRoute } from "./apoie-page";
 
 // The marketing nav renders Clerk's sign-in CTAs, which need a ClerkProvider.
@@ -60,6 +63,15 @@ describe("ApoiePage", () => {
     );
     for (const banned of ["—", "–", "―"]) {
       expect(html).not.toContain(banned);
+    }
+  });
+
+  it("never states what hosting costs, in any language", () => {
+    for (const [locale, catalogue] of Object.entries({ en, "pt-BR": ptBR, es })) {
+      for (const [key, value] of Object.entries(catalogue as Record<string, string>)) {
+        if (!key.startsWith("apoie.")) continue;
+        expect(value, `${locale} ${key}`).not.toMatch(/(?:US)?\$\s?\d|R\$\s?\d|\d+\s?(?:dólares|dollars|reais)/i);
+      }
     }
   });
 });

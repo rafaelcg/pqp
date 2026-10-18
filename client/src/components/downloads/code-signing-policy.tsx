@@ -43,7 +43,7 @@ interface Member {
 }
 
 const RAFAEL: Member = { name: "Rafael Cammarano Guglielmi", handle: "rafaelcg" };
-const ANDRE: Member = { name: "André", handle: "AndreCamm" };
+const ANDRE: Member = { name: "André", handle: "ndre-dev" };
 
 export const CODE_SIGNING_COMMITTERS: Member[] = [RAFAEL, ANDRE];
 export const CODE_SIGNING_APPROVERS: Member[] = [RAFAEL];

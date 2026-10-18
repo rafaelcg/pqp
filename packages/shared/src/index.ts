@@ -17,6 +17,7 @@ export * from "./community-home-public.js";
 export * from "./connections.js";
 export * from "./depoimentos.js";
 export * from "./discord-import.js";
+export * from "./discord-import-merge.js";
 export * from "./discord-bring-crew.js";
 export * from "./dm.js";
 export * from "./dm-preview.js";

@@ -137,6 +137,10 @@ import {
 } from "@/lib/utils";
 import { MessageListSkeleton } from "@/components/ui/skeleton";
 import { NudgeLine, NudgeNotice } from "@/components/chat/nudge-line";
+import type {
+  AuthorGoneCheck,
+  MissingAuthor,
+} from "@/hooks/use-confirmed-gone-authors";
 
 /** Consecutive messages from one author within this window render as one block. */
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
@@ -351,6 +355,12 @@ interface MessageListProps {
    * False while it loads, in a conversation, or anywhere the map is partial.
    */
   authorsComplete?: boolean;
+  /**
+   * What makes "saiu" safe to show. A roster up to 15s old lacks somebody who
+   * just joined and posted first, so the tag waits for a fresh read that still
+   * lacks the author (`useConfirmedGoneAuthors`). Without it no tag is drawn.
+   */
+  authorGoneCheck?: AuthorGoneCheck;
   /** Painted roles, for the highest-position colour on a name. */
   roles?: readonly MessageRoleColor[];
   /** True while Mark unread is holding this channel's read cursor. */
@@ -396,6 +406,39 @@ interface MessageListProps {
  * answer's green edge, "Marcar como solução" on replies for whoever may pick
  * one, and the Solução card right under the opening message.
  */
+/**
+ * A forum post's opening message reads as the post's body, not as one more
+ * chat line: a larger size and a looser line, set through the same variables
+ * every message body already reads. `contents`, so the row's layout, its
+ * measuring and its hover are exactly what they were.
+ *
+ * The reader's own chat text size (Appearance) is a floor, never a ceiling:
+ * `max()` keeps a bigger setting. A custom property cannot read itself on the
+ * same element, so the outer wrapper copies the inherited value under another
+ * name and the inner one derives the real variables from the copy.
+ */
+const FORUM_OPENING_BASE_STYLE = {
+  "--forum-user-font-size": "var(--chat-font-size)",
+  "--forum-user-line-height": "var(--chat-line-height)",
+} as CSSProperties;
+const FORUM_OPENING_STYLE = {
+  "--chat-font-size": "max(17px, var(--forum-user-font-size))",
+  "--chat-line-height": "max(27px, var(--forum-user-line-height))",
+} as CSSProperties;
+
+function ForumOpeningScope({ active, children }: { active: boolean; children: ReactNode }) {
+  if (!active) {
+    return <>{children}</>;
+  }
+  return (
+    <div className="contents" style={FORUM_OPENING_BASE_STYLE}>
+      <div className="contents" data-forum-opening="" style={FORUM_OPENING_STYLE}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export interface ForumPostDecor {
   /** The post's author: an OP badge on every one of their rows. */
   authorId: string | null;
@@ -606,6 +649,7 @@ export const MessageList = memo(function MessageList({
   activeThreadId = null,
   authors = EMPTY_AUTHORS,
   authorsComplete = false,
+  authorGoneCheck,
   roles = EMPTY_ROLES,
   unreadHeld = false,
   onForward,
@@ -620,6 +664,36 @@ export const MessageList = memo(function MessageList({
   forumPost = null,
 }: MessageListProps) {
   const { t } = useTranslation();
+  const reportMissingAuthors = authorGoneCheck?.report;
+  // Authors the loaded roster does not hold, for a re-read before any of them
+  // reads "saiu" (a person who just joined is missing until the roster
+  // catches up). Each comes with their newest message here, so one who posts
+  // again is read again. Webhooks and AutoMod were never members.
+  // TODO(PR 1188): a custom bot author is not a server member either; exclude
+  // it here and in the row's `authorGone` when that lands.
+  const missingAuthorKey = useMemo(() => {
+    if (!authorsComplete || !reportMissingAuthors) {
+      return "";
+    }
+    const newest = new Map<string, string>();
+    for (const m of messages) {
+      if (!authors.has(m.authorId) && !m.isWebhook && !m.isAutomod) {
+        newest.set(m.authorId, m.id);
+      }
+    }
+    if (newest.size === 0) {
+      return "";
+    }
+    const missing: MissingAuthor[] = [...newest]
+      .map(([authorId, messageId]) => ({ authorId, messageId }))
+      .sort((a, b) => (a.authorId < b.authorId ? -1 : 1));
+    return JSON.stringify(missing);
+  }, [authorsComplete, reportMissingAuthors, messages, authors]);
+  useEffect(() => {
+    if (missingAuthorKey && reportMissingAuthors) {
+      reportMissingAuthors(JSON.parse(missingAuthorKey) as MissingAuthor[]);
+    }
+  }, [missingAuthorKey, reportMissingAuthors]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1972,6 +2046,7 @@ export const MessageList = memo(function MessageList({
             }
             return (
             <Fragment key={elementKey}>
+            <ForumOpeningScope active={isOpening}>
             <MessageRow
               row={row}
               forumOp={
@@ -2209,7 +2284,10 @@ export const MessageList = memo(function MessageList({
                 },
               )}
               authors={authors}
-              authorsComplete={authorsComplete}
+              authorsComplete={
+                authorsComplete &&
+                !!authorGoneCheck?.confirmed.has(row.message.authorId)
+              }
               roles={roles}
               unreadHeld={unreadHeld}
               onForward={
@@ -2244,6 +2322,7 @@ export const MessageList = memo(function MessageList({
                 rowId === firstUnreadId ? unreadDividerRef : undefined
               }
             />
+            </ForumOpeningScope>
             {isOpening && forumPost?.afterOpening}
             </Fragment>
             );
@@ -3117,8 +3196,10 @@ const MessageRow = memo(function MessageRow({
   // for a bot author: the field is server-written, and this keeps it that way
   // on screen too.
   const botCard = message.botCard && authorInfo?.isCharacter ? message.botCard : null;
-  // Not in a loaded roster: the author left, was removed or banned. Webhooks
-  // and AutoMod were never members, so they are never "gone".
+  // Not in a loaded roster and still not in a fresh read of it (the caller
+  // folds that into `authorsComplete`): the author left, was removed or was
+  // banned. Webhooks and AutoMod were never members, so they are never "gone".
+  // A server bot is drawn as "removido" by its own tags instead.
   const authorGone =
     authorsComplete && !authorInfo && !message.isWebhook && !message.isAutomod;
   const mentionsYou = messageMentionsYou(
@@ -3748,7 +3829,13 @@ const MessageRow = memo(function MessageRow({
                       className="self-center rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-text-tertiary"
                       title={t("chat.authorGoneHint", { name: message.authorName })}
                     >
-                      {t("chat.authorGone")}
+                      {/* `title` reaches neither keyboard nor touch nor a
+                          screen reader: the full sentence is read instead of
+                          the one-word tag. */}
+                      <span aria-hidden="true">{t("chat.authorGone")}</span>
+                      <span className="sr-only">
+                        {t("chat.authorGoneHint", { name: message.authorName })}
+                      </span>
                     </span>
                   )}
                   {message.isAutomod ? (

@@ -4247,7 +4247,29 @@ describeDb("API authorization", () => {
       const { textChannelId } = await makeServer();
       vi.mocked(safeFetch).mockRejectedValueOnce(new Error("connection refused"));
       await send(owner, textChannelId, "dead link https://example.com/dead");
-      await flush();
+      // Wait for the failed row itself, not a fixed 50 ms. The first
+      // message's background fetch writes it after a DB round trip, and a slow
+      // runner can still be mid-write when the second message reads the
+      // cache, which then sees "nothing cached" and fetches again.
+      const { createHash } = await import("node:crypto");
+      const deadHash = createHash("sha256")
+        .update("https://example.com/dead")
+        .digest("hex");
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const row = await getPool().query<{ failed: boolean }>(
+          `SELECT failed FROM link_embeds WHERE url_hash = $1`,
+          [deadHash],
+        );
+        if (row.rows[0]?.failed === true) {
+          break;
+        }
+        if (Date.now() > deadline) {
+          throw new Error("the failed embed row was never written");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(safeFetch).toHaveBeenCalledTimes(1);
 
       await send(owner, textChannelId, "same dead link https://example.com/dead");
       await flush();

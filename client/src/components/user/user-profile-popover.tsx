@@ -22,6 +22,8 @@ import { createPortal } from "react-dom";
 import {
   TIMEOUT_PRESET_MINUTES,
   TIMEOUT_REASON_MAX_LENGTH,
+  USER_BANNER_HEIGHT,
+  USER_BANNER_WIDTH,
   type Depoimento,
   type DmSummary,
   type ProfileAchievement,
@@ -59,6 +61,7 @@ import {
   ApiError,
   assignMemberRole,
   createConversation,
+  fetchUserBannerUrl,
   fetchUserConnections,
   fetchUserAchievements,
   unassignMemberRole,
@@ -74,6 +77,7 @@ import {
   assignableRoleIds,
   canActOnMemberClient,
 } from "@/lib/role-hierarchy";
+import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn, formatRecency } from "@/lib/utils";
 import {
@@ -336,6 +340,57 @@ function ActionTile({ label, className, children, ...rest }: ActionTileProps) {
   );
 }
 
+/**
+ * The band across the top of the card: the person's banner when they uploaded
+ * one, the accent wash when they did not.
+ *
+ * ONE HEIGHT FOR BOTH. The band is the banner's own 3:1 (the rectangle
+ * `uploadUserBanner` crops to), so a banner is drawn whole rather than sliced,
+ * and the empty state is the same box. The card is measured once when it
+ * opens and is not measured again when the banner arrives, so a band that grew
+ * on load could push the bottom of the card off the screen.
+ *
+ * The wash is always painted and the picture sits on top of it. Loading, a
+ * failed load and "no banner" therefore all look like the card always looked,
+ * with no state for any of them beyond "did the image fail". Tokens only, so
+ * every theme tints its own way.
+ */
+function ProfileCardBanner({ bannerUrl, tint }: { bannerUrl: string | null; tint?: string }) {
+  // Root-relative from the API (`userBannerPath`), so it must be resolved
+  // against the API's origin, not the SPA's. Same lesson as the avatar below.
+  const src = resolveUploadedImageUrl(bannerUrl);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const showImage = src !== null && src !== failedSrc;
+  return (
+    <div
+      aria-hidden="true"
+      data-profile-banner={showImage ? "image" : "generated"}
+      className="relative overflow-hidden rounded-t-2xl"
+      style={{
+        aspectRatio: `${USER_BANNER_WIDTH} / ${USER_BANNER_HEIGHT}`,
+        background:
+          tint ??
+          "linear-gradient(150deg, color-mix(in oklab, var(--color-accent) 20%, var(--color-surface-2)) 0%, var(--color-surface-2) 55%, color-mix(in oklab, var(--color-accent) 7%, var(--color-surface-1)) 100%)",
+      }}
+    >
+      {showImage && (
+        <img
+          src={src}
+          alt=""
+          decoding="async"
+          className={cn(
+            "absolute inset-0 h-full w-full object-cover transition-opacity duration-[var(--duration-base)] ease-[var(--ease-standard)] motion-reduce:transition-none",
+            loadedSrc === src ? "opacity-100" : "opacity-0",
+          )}
+          onLoad={() => setLoadedSrc(src)}
+          onError={() => setFailedSrc(src)}
+        />
+      )}
+    </div>
+  );
+}
+
 interface UserProfileCardProps {
   subject: ProfileSubject;
   anchor: HTMLElement;
@@ -436,6 +491,15 @@ function UserProfileCard({
     null,
   );
   const [aboutPick, setAboutPick] = useState<ProfileAboutTab | null>(null);
+  /**
+   * Their banner, once read, with whose it is. The card can be handed another
+   * person while open, and their read can fail: keyed, the last person's
+   * banner is never drawn on the next one.
+   */
+  const [banner, setBanner] = useState<{ userId: string; url: string | null } | null>(
+    null,
+  );
+  const bannerUrl = banner?.userId === subject.id ? banner.url : null;
   /** Open while the composer is up. */
   const [writing, setWriting] = useState(false);
   /** The same fact, readable from listeners registered before it changes. */
@@ -600,6 +664,36 @@ function UserProfileCard({
         }
       }
     })();
+    return () => {
+      alive = false;
+    };
+  }, [subject.id]);
+
+  /**
+   * The banner, in its own read rather than in the four above.
+   *
+   * On its own because those four fail together: a rejected banner read inside
+   * that `Promise.all` would empty the depoimentos, medals, communities and
+   * accounts too. The web client also ships before the API it talks to, so for
+   * a few minutes after a deploy this route can 404 on the old API, and that
+   * must cost the card nothing but the picture. Any failure is "no banner",
+   * recorded for this person, so a picture read on an earlier visit is not
+   * drawn after the read that should have replaced it failed.
+   */
+  useEffect(() => {
+    let alive = true;
+    const userId = subject.id;
+    fetchUserBannerUrl(userId)
+      .then((result) => {
+        if (alive) {
+          setBanner({ userId, url: result.bannerUrl ?? null });
+        }
+      })
+      .catch(() => {
+        if (alive) {
+          setBanner({ userId, url: null });
+        }
+      });
     return () => {
       alive = false;
     };
@@ -1260,20 +1354,12 @@ function UserProfileCard({
             pendingConfirm ? "z-[50]" : "z-[110]",
           )}
         >
-      {/* No banner image exists on the server, so the band is a quiet wash of
-          the accent into the surface — enough depth that the card reads as an
-          object rather than a grey rectangle, without inventing an upload
-          field. Tokens only, so every theme tints its own way. Rounds its own
-          top corners now that the card no longer clips it. */}
-      <div
-        aria-hidden="true"
-        className="h-20 rounded-t-2xl"
-        style={{
-          // A server bot's band is its own colour, the way its face is.
-          background: serverBot
-            ? `var(--color-bot-${serverBot.color})`
-            : "linear-gradient(150deg, color-mix(in oklab, var(--color-accent) 20%, var(--color-surface-2)) 0%, var(--color-surface-2) 55%, color-mix(in oklab, var(--color-accent) 7%, var(--color-surface-1)) 100%)",
-        }}
+      {/* Rounds its own top corners and clips the picture to them, because
+          the card no longer clips its children. A server bot's band is its
+          own colour, the way its face is. */}
+      <ProfileCardBanner
+        bannerUrl={serverBot ? null : bannerUrl}
+        tint={serverBot ? `var(--color-bot-${serverBot.color})` : undefined}
       />
 
       <div className="px-4 pb-4">

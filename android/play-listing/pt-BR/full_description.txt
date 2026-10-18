@@ -1,29 +1,32 @@
-pqp é um app de código aberto pra conversar com a sua turma, no estilo Discord: servidor com canais de texto e voz, mensagem direta (inclusive em grupo, até 10 pessoas) e um jeito rápido de entrar numa comunidade pelo link de convite.
+pqp é chat de voz e texto de código aberto pra tua galera: assiste a tela de quem compartilhou, com o som junto, vê filme, jogo ou live junto num watch party e monta a tua comunidade com servidores, canais e mensagem direta. De graça, sem anúncio, feito por dois irmãos.
 
-De graça, sem anúncio, sem cobrança. O código inteiro é público no GitHub.
+O código inteiro é público no GitHub. Funciona no navegador, no desktop e no celular, tudo na mesma conta.
 
-💬 CHAT DE TEXTO
-Manda mensagem com reação, resposta, GIF e mensagem fixada. A formatação com **negrito**, _itálico_ e `código` funciona direto no texto. O que você manda chega na hora pra todo mundo no canal, em qualquer plataforma: navegador, desktop ou outro celular.
+CHAT DE TEXTO
+Manda mensagem com reação, resposta, GIF e mensagem fixada. A formatação com **negrito**, _itálico_ e `código` funciona direto no texto. O que tu manda chega na hora pra todo mundo no canal, em qualquer plataforma: navegador, desktop ou outro celular.
 
-🎙️ VOZ E CHAMADA
+VOZ E CHAMADA
 Entra num canal de voz e conversa com áudio limpo. Liga direto pra um amigo com uma chamada individual: toca, atende ou recusa, como uma ligação de verdade enquanto o app tá aberto. Silencia o microfone, ativa o viva-voz, e o app avisa quem tá falando.
 
-🖥️ TELA COMPARTILHADA
-Compartilha a sua tela numa chamada direta ou numa sala pequena, com o som junto. Assistir a tela de quem compartilhou funciona em qualquer sala, grande ou pequena.
+TELA COMPARTILHADA
+Compartilha a tua tela numa chamada direta ou numa sala pequena. Assistir a tela de quem compartilhou funciona em qualquer sala, grande ou pequena.
 
-👥 AMIGOS E MENSAGEM DIRETA
+WATCH PARTY
+Assiste a um watch party com o chat da sala ao lado e, se tu tiver permissão no canal, comanda um direto do celular.
+
+AMIGOS E MENSAGEM DIRETA
 Adiciona amigos pela tag deles, vê quem tá online, e manda mensagem direta, inclusive em grupo com até 10 pessoas.
 
-📎 ANEXO
+ANEXO
 Manda qualquer tipo de arquivo, não só imagem: documento, áudio, vídeo. Abre imagem, GIF e vídeo direto no chat.
 
-🔗 CONVITE
-Cria, lista, copia e revoga um link de convite pra qualquer servidor que você administra. Um link pqp.gg/app/invite/... abre direto no app.
+CONVITE
+Cria, lista, copia e revoga um link de convite pra qualquer servidor que tu administra. Um link pqp.gg/app/invite/... abre direto no app.
 
-🔒 PRIVACIDADE
-Denuncia uma mensagem ou uma pessoa em poucos toques. Apaga a sua conta ou exporta os seus dados quando quiser, direto do app.
+PRIVACIDADE
+Denuncia uma mensagem ou uma pessoa em poucos toques. Apaga a tua conta ou exporta os teus dados quando quiser, direto do app.
 
-🌐 CÓDIGO ABERTO
+CÓDIGO ABERTO
 Licença AGPL, repositório público (rafaelcg/pqp). Qualquer pessoa pode ler o código, hospedar a própria instância ou contribuir.
 
-Esse é um beta em teste aberto. O app evolui toda semana: câmera, watch party e o diretório de comunidades ainda estão chegando no Android, embora já funcionem no site e no app de desktop do pqp.
+Esse é um beta em teste aberto. O app evolui toda semana: enviar câmera e o diretório de comunidades ainda estão chegando no Android, embora já funcionem no site e no app de desktop do pqp. Por enquanto o app se vê em português e inglês.

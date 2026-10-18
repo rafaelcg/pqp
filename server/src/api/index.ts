@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import {
@@ -46,6 +47,7 @@ import {
   MAX_SERVER_EMOJI_BYTES,
   SERVER_EMOJI_SIZE,
   type ServerEmojiList,
+  type UserStatus,
   createBlockSchema,
   createChannelMessageSchema,
   createChannelSchema,
@@ -142,6 +144,7 @@ import {
   voiceSessionRequestSchema,
   type Gif,
   discordImportSourceSchema,
+  discordImportMergeApplySchema,
   DiscordImportCapError,
   DiscordImportParseError,
   isDiscordInviteLink,
@@ -412,6 +415,7 @@ import {
   isUserBannerUploadConfigured,
   readAvatarObject,
   readUserBannerObject,
+  readUserBannerUrl,
   setUserBanner,
   userBannerUrlForKey,
   verifyAvatarObject,
@@ -660,6 +664,11 @@ import {
   fetchMappedDiscordTemplate,
   replayImportedServer,
 } from "../services/discord-import.js";
+import {
+  applyDiscordMerge,
+  discordImportExistingEnabled,
+  previewDiscordMerge,
+} from "../services/discord-import-merge.js";
 import {
   bringCrewEnabledFor,
   getDiscordImportArrivals,
@@ -1638,6 +1647,21 @@ async function requireServerChannel(channelId: string) {
 }
 
 /**
+ * `requireServerChannel` for a route that reads or writes something a
+ * channel's members see (a webhook's name and URL, a delivery target). A
+ * manager whose view of the channel is denied gets the same 404 a channel they
+ * cannot see gets everywhere else, so a deny overwrite is not undone by
+ * MANAGE_CHANNELS, and the answer does not say the channel exists.
+ */
+async function requireVisibleServerChannel(channelId: string, userId: string) {
+  const channel = await requireServerChannel(channelId);
+  if (!(await canAccessChannel(channel.id, userId))) {
+    throw new NotFound("Channel not found");
+  }
+  return channel;
+}
+
+/**
  * --- forums --- The generic channel routes rename and delete chat threads,
  * and must not do either to a forum post: the post routes
  * (`/api/forum-posts/:postId`) run AutoMod on a new title, write the forum
@@ -1941,11 +1965,36 @@ router.delete("/api/me/avatar", async ({ user }) => {
 
 // ------------------------------------------------------------- user banners
 //
-// The strip across the top of `pqp.gg/@rafa`. Structurally the avatar routes
-// above with three differences and no fourth: a bigger cap, a different pair of
-// columns, and NO `announceProfile` — nothing in the app draws somebody else's
-// banner, so broadcasting one to every open socket on the instance would be a
-// frame no client has a use for.
+// The strip across the top of `pqp.gg/@rafa` and of the profile card. Structurally
+// the avatar routes above with three differences and no fourth: a bigger cap, a
+// different pair of columns, and NO `announceProfile` — the one in-app surface
+// that draws somebody else's banner is the card, which reads it when it opens
+// (`GET /api/users/:userId/banner-url`), so broadcasting one to every open
+// socket on the instance would be a frame no client has a use for.
+
+/**
+ * Somebody's banner, for the profile card that opens on their name.
+ *
+ * Read when the card opens rather than carried on the member list, the message
+ * author or the voice roster, for the reason the card's depoimentos and medals
+ * are: it is a fact about somebody else that is only wanted while their card is
+ * up, and a field on the member list is paid on every member-list read by every
+ * viewer. Reading it here also means a new banner shows the next time anybody
+ * opens the card, with no socket frame and no cache to invalidate.
+ *
+ * Not a widening of `publicUserSchema`. The bytes are already served to anybody
+ * holding the id (`/api/users/:userId/banner`, unauthenticated), and the
+ * address is on the public profile. This only says whether there is one, so the
+ * card does not ask for an image that 404s for most accounts.
+ *
+ * `null` for "no banner" and "no such user" alike, so this cannot tell anybody
+ * which ids exist. Not `/banner`: that path is the image, matched before the
+ * router runs.
+ */
+router.get("/api/users/:userId/banner-url", async (_ctx, { userId }) => {
+  // The router already answers 404 for a `userId` that is not a uuid.
+  return { bannerUrl: await readUserBannerUrl(userId!) };
+});
 
 /**
  * Mirrors `GET /api/avatars/config`, limits in both states so the picker can
@@ -4963,6 +5012,126 @@ router.post("/api/import/discord/apply", async ({ req, user, res }) => {
 });
 
 /**
+ * A Discord layout into a server that already exists (flag
+ * `discord_import_existing`, read for this server). Owner or Manage Server.
+ * 404 for a non-member and for the flag being off, so a server that has not
+ * been let in cannot be told apart from one that does not exist; 403 for a
+ * member who may not manage it. Strictly additive, see
+ * `services/discord-import-merge.ts`.
+ */
+async function requireDiscordMergeAccess(
+  serverId: string,
+  user: { id: string; is_character?: boolean },
+): Promise<void> {
+  if (user.is_character) {
+    throw new Forbidden("Character accounts cannot import a layout");
+  }
+  await requireServerMember(serverId, user.id);
+  if (!discordImportExistingEnabled(serverId)) {
+    throw new NotFound("Not found");
+  }
+  await requirePermission(serverId, user.id, Permission.MANAGE_SERVER);
+}
+
+/**
+ * What the settings row asks before it draws itself. Never 404s for a member:
+ * `enabled` is simply false for anybody who could not use the door.
+ */
+router.get(
+  "/api/servers/:serverId/discord-import/config",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    const enabled =
+      !user.is_character &&
+      discordImportExistingEnabled(serverId!) &&
+      (await memberHasPermission(serverId!, user.id, Permission.MANAGE_SERVER));
+    return { enabled };
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/discord-import/preview",
+  async ({ req, user, res }, { serverId }) => {
+    await requireDiscordMergeAccess(serverId!, user);
+    const body = discordImportSourceSchema.parse(await readJsonBody(req));
+    requireDiscordTemplateSource(body.source);
+    takeDiscordImportLimiters(user.id, res);
+    try {
+      const { plan } = await fetchMappedDiscordTemplate(body.source, serverId!);
+      const merge = await previewDiscordMerge(serverId!, plan);
+      logEvent("import.discordMergePreview", {
+        outcome: "ok",
+        added: merge.addedChannels.length,
+        skipped: merge.skipped.length,
+      });
+      return {
+        ...merge,
+        canCreateRoles: await memberHasPermission(
+          serverId!,
+          user.id,
+          Permission.MANAGE_ROLES,
+        ),
+      };
+    } catch (error) {
+      logEvent("import.discordMergePreview", {
+        outcome: error instanceof Error ? error.constructor.name : "unknown",
+      });
+      throwDiscordImportHttp(error, res);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/discord-import/apply",
+  async ({ req, user, res }, { serverId }) => {
+    await requireDiscordMergeAccess(serverId!, user);
+    const body = discordImportMergeApplySchema.parse(await readJsonBody(req));
+    requireDiscordTemplateSource(body.source);
+    const createRoles = [...new Set(body.createRoles ?? [])];
+    // Cargos are a second power on top of Manage Server: whoever may not make
+    // one by hand may not make one through here either.
+    if (
+      createRoles.length > 0 &&
+      !(await memberHasPermission(serverId!, user.id, Permission.MANAGE_ROLES))
+    ) {
+      throw new Forbidden("You do not have permission to create roles");
+    }
+    takeDiscordImportLimiters(user.id, res);
+    try {
+      const { code, plan } = await fetchMappedDiscordTemplate(body.source, serverId!);
+      const result = await applyDiscordMerge({
+        serverId: serverId!,
+        actorId: user.id,
+        code,
+        plan,
+        createRoleTemplateIds: createRoles,
+        actorPermissions: await computeMemberPermissions(serverId!, user.id),
+      });
+      logEvent("import.discordMerge", {
+        added: result.plan.addedChannels.length,
+        categories: result.plan.addedCategories.length,
+        skipped: result.plan.skipped.length,
+      });
+      if (result.channels.length > 0 || result.plan.addedCategories.length > 0) {
+        // Every sidebar row is named, so each member who can see any of it
+        // refetches. Fire and forget: the import is committed whatever this does.
+        nudgeWholeList(serverId!);
+      }
+      if (result.rolesCreated.length > 0 || result.channels.some((c) => c.is_private)) {
+        pingPermissions(serverId!);
+      }
+      return {
+        plan: result.plan,
+        channels: result.channels.map(mapChannel),
+        rolesCreated: result.rolesCreated,
+      };
+    } catch (error) {
+      throwDiscordImportHttp(error, res);
+    }
+  },
+);
+
+/**
  * Who came over since this server was copied from Discord, for the owner's
  * "Traz tua galera" strip. Same gate as the invite list it sits beside.
  */
@@ -7002,8 +7171,9 @@ router.get("/api/communities/config", async () => ({
 
 /**
  * First-run switches the client reads once per page and again on every config
- * refresh (`client/src/lib/newcomer-invite.ts`). One field today:
- * `inviteMoment`, the runtime flag `newcomer_invite_moment` (global, off by
+ * refresh (`client/src/lib/newcomer-invite.ts`). Two fields:
+ * `inviteMoment`, the runtime flag `newcomer_invite_moment`, and
+ * `discordImportNotice`, `discord_import_notice` (both global, off by
  * default; docs/FEATURE_FLAGS.md). Client presentation only, read per request,
  * so a flip reaches open tabs on their next refresh. Not behind
  * `COMMUNITIES_ENABLED`: an instance with no communities still has newcomers,
@@ -7011,6 +7181,7 @@ router.get("/api/communities/config", async () => ({
  */
 router.get("/api/onboarding/config", async () => ({
   inviteMoment: isEnabled("newcomer_invite_moment"),
+  discordImportNotice: isEnabled("discord_import_notice"),
 }));
 
 /**
@@ -9553,10 +9724,20 @@ function mapWebhook(w: DbWebhook, forumSettings?: WebhookForumSettings) {
   };
 }
 
+/** A webhook on a channel the caller cannot view does not exist for them. */
+async function requireWebhookChannelVisible(
+  webhook: { channel_id: string },
+  userId: string,
+) {
+  if (!(await canAccessChannel(webhook.channel_id, userId))) {
+    throw new NotFound("Webhook not found");
+  }
+}
+
 router.get(
   "/api/channels/:channelId/webhooks",
   async ({ user }, { channelId }) => {
-    const channel = await requireServerChannel(channelId!);
+    const channel = await requireVisibleServerChannel(channelId!, user.id);
     await requirePermission(
       channel.server_id,
       user.id,
@@ -9583,7 +9764,7 @@ router.get(
 router.post(
   "/api/channels/:channelId/webhooks",
   async ({ req, user }, { channelId }) => {
-    const channel = await requireServerChannel(channelId!);
+    const channel = await requireVisibleServerChannel(channelId!, user.id);
     await requirePermission(
       channel.server_id,
       user.id,
@@ -9637,6 +9818,7 @@ router.put(
     if (!webhook) {
       throw new NotFound("Webhook not found");
     }
+    await requireWebhookChannelVisible(webhook, user.id);
     await requirePermission(
       webhook.server_id,
       user.id,
@@ -9682,6 +9864,7 @@ router.delete("/api/webhooks/:webhookId", async ({ user }, { webhookId }) => {
   if (!webhook) {
     throw new NotFound("Webhook not found");
   }
+  await requireWebhookChannelVisible(webhook, user.id);
   await requirePermission(
     webhook.server_id,
     user.id,
@@ -11015,33 +11198,107 @@ router.get("/api/servers/:serverId/search", async (ctx, { serverId }) => {
 router.get("/api/servers/:serverId/members", async ({ user }, { serverId }) => {
   await requireServerMember(serverId!, user.id);
   const members = await listServerMembers(serverId!);
+  const statuses = await resolveMemberStatuses(serverId!, members);
+  return {
+    // Who is in the list, as one short token. `/members/status` answers with the
+    // same token, so a client holding this roster can tell its copy is still the
+    // whole membership without reading the whole membership again.
+    roster: rosterToken(members),
+    members: members.map((member) => ({
+      ...member,
+      // `offline` is the floor, and it is what an invisible member resolves to.
+      status: statuses.get(member.id) ?? "offline",
+    })),
+  };
+});
+
+/**
+ * A member's status as the member list shows it: the live registry's answer with
+ * the character rule applied. Characters that only POST have no socket, so the
+ * registry calls them offline; they are painted online while the server's
+ * outgoing hook is `active` ("Grok can still be woken", not a stored presence
+ * bit). A live socket still wins (idle / dnd / invisible).
+ */
+async function resolveMemberStatuses(
+  serverId: string,
+  members: ReadonlyArray<{ id: string; isCharacter: boolean }>,
+): Promise<Map<string, UserStatus>> {
   const statuses = resolveStatuses(members.map((member) => member.id));
-  // Characters that only POST have no socket, so the registry calls them
-  // offline. Paint them online on this roster while the server's outgoing
-  // hook is `active` — that is "Grok can still be woken", not a stored
-  // presence bit. A live socket still wins (idle / dnd / invisible).
   const hasCharacter = members.some((member) => member.isCharacter);
   const hookListening = hasCharacter
-    ? await serverHasActiveOutgoingWebhook(serverId!)
+    ? await serverHasActiveOutgoingWebhook(serverId)
     : false;
   // A server bot has no socket either. It is online while it would answer:
   // enabled, the flag on here, and a model to call.
   const answeringBots =
-    hasCharacter && botsEnabled(serverId!)
-      ? await listAnsweringBotUserIds(serverId!)
+    hasCharacter && botsEnabled(serverId)
+      ? await listAnsweringBotUserIds(serverId)
       : new Set<string>();
-  return {
-    members: members.map((member) => ({
-      ...member,
-      // `offline` is the floor, and it is what an invisible member resolves to.
-      status: statusWithCharacterHook(
+  const out = new Map<string, UserStatus>();
+  for (const member of members) {
+    out.set(
+      member.id,
+      statusWithCharacterHook(
         statuses.get(member.id) ?? "offline",
         member.isCharacter,
         hookListening || answeringBots.has(member.id),
       ),
-    })),
-  };
-});
+    );
+  }
+  return out;
+}
+
+/**
+ * Who is in a server's member list, as one token (a hash of the SORTED ids). It
+ * changes when somebody joins or leaves and does not change when a name, avatar,
+ * role or status does, which is the point: it is what a poll compares to know the
+ * membership it already holds is still the membership.
+ *
+ * Sorted because the list is ordered by name: a rename reorders the rows, and a
+ * token over list order would call that a membership change and send every tab
+ * back to the whole 2.4 MB list.
+ */
+function rosterToken(members: ReadonlyArray<{ id: string }>): string {
+  const hash = createHash("sha1");
+  for (const id of members.map((member) => member.id).sort()) {
+    hash.update(id);
+  }
+  return hash.digest("base64url").slice(0, 16);
+}
+
+/**
+ * THE LIVE HALF OF THE MEMBER LIST, ON ITS OWN.
+ *
+ * `GET /members` is a roster plus a status for every row, and the member panel
+ * polls it every 15 s to keep the pips honest. On a community of 6000 people that
+ * is 2.4 MB of JSON (460 KB compressed), built and re-parsed every 15 s by every
+ * open tab, to learn that a handful of people changed from online to away. The
+ * statuses are the part that moves; the roster (names, avatars, roles) is not.
+ *
+ * This answers only the statuses that are NOT `offline` (everybody absent from
+ * `statuses` is offline, the floor, which is also what an invisible member
+ * resolves to, exactly as in `/members`), the member count, and `roster`, the
+ * same token `/members` returned. A client whose copy carries that token knows
+ * nobody joined or left since; any other token means read `/members` again. The
+ * same membership check, the same `resolveStatuses` and the same character rule
+ * as `/members` (one function, `resolveMemberStatuses`), so the two cannot
+ * disagree about who is online.
+ */
+router.get(
+  "/api/servers/:serverId/members/status",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    const members = await listServerMembers(serverId!);
+    const resolved = await resolveMemberStatuses(serverId!, members);
+    const statuses: Record<string, UserStatus> = {};
+    for (const [id, status] of resolved) {
+      if (status !== "offline") {
+        statuses[id] = status;
+      }
+    }
+    return { roster: rosterToken(members), count: members.length, statuses };
+  },
+);
 
 router.get(
   "/api/servers/:serverId/permissions",
@@ -13534,8 +13791,12 @@ async function serveBotFace(
   res.end(req.method === "HEAD" ? undefined : png);
 }
 
-/** How long a redirect, or a served picture, may be cached (the signature behind it lives an hour). */
-const STORED_IMAGE_CACHE = "public, max-age=300";
+/**
+ * How long a redirect, or a served picture, may be cached. The signature behind
+ * a redirect is good for at least `STABLE_IMAGE_WINDOW_SECONDS` (six hours) from
+ * the moment it is handed out, so an hour is well inside it.
+ */
+const STORED_IMAGE_CACHE = "public, max-age=3600";
 
 /**
  * The answer for a profile picture, a banner or a server picture that has been
@@ -13546,7 +13807,7 @@ const STORED_IMAGE_CACHE = "public, max-age=300";
  * this process is the egress bill the presigned design exists to avoid. The
  * redirect is cacheable because the URL carries `?v=<hash of the key>`: a new
  * picture is a new address, so nothing here can serve a stale one, and the
- * window stays under the presigned target's own hour.
+ * window stays under the presigned target's own life.
  *
  * A HEAD, OR A GET THAT ASKS FOR A RANGE, IS SERVED FROM HERE, exactly as the
  * public Baú cover is (`serveCover`: 200 with a type and a length, an ETag,
@@ -13738,11 +13999,12 @@ async function serveServerEmojiObject(
     sendError(res, 404, "Not found", req);
     return;
   }
-  // An emoji's key never changes, and the window stays under the presigned
-  // target's own hour so a cached redirect cannot outlive the URL.
+  // An emoji's key never changes, and the cached redirect stays under the
+  // signed address's own life (`STABLE_IMAGE_WINDOW_SECONDS`), so it cannot
+  // outlive the URL.
   res.writeHead(302, {
     location: url,
-    "cache-control": "public, max-age=300",
+    "cache-control": STORED_IMAGE_CACHE,
   });
   res.end();
 }

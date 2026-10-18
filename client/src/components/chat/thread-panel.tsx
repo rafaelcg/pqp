@@ -1,3 +1,4 @@
+import type { AuthorGoneCheck } from "@/hooks/use-confirmed-gone-authors";
 import {
   THREAD_AUTO_ARCHIVE_DAYS,
   customEmojiTokensAsText,
@@ -116,6 +117,7 @@ interface ThreadPanelProps {
   authors?: ReadonlyMap<string, MessageAuthorInfo>;
   /** `authors` is the server's whole roster: see MessageList. */
   authorsComplete?: boolean;
+  authorGoneCheck?: AuthorGoneCheck;
   roles?: readonly MessageRoleColor[];
   unreadHeld?: boolean;
   unreadSince?: string | null;
@@ -151,6 +153,7 @@ export function ThreadPanel({
   onReportMessage,
   authors,
   authorsComplete,
+  authorGoneCheck,
   roles,
   unreadHeld,
   unreadSince = null,
@@ -452,6 +455,7 @@ export function ThreadPanel({
         showLinkEmbeds={showLinkEmbeds}
         authors={authors}
         authorsComplete={authorsComplete}
+        authorGoneCheck={authorGoneCheck}
         roles={roles}
         unreadHeld={unreadHeld}
         unreadSince={unreadSince}

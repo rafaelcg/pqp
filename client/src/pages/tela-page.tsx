@@ -5,7 +5,13 @@ import { Link } from "react-router-dom";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
+import { SourceLinks } from "@/components/marketing/compare-cells";
 import { Button } from "@/components/ui/button";
+import {
+  FACTS_CHECKED,
+  formatCheckedDate,
+  TELA_SOURCES,
+} from "@/content/compare-facts";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -17,14 +23,13 @@ import { cn } from "@/lib/utils";
  * one job, one button, then the honest options below the fold.
  *
  * Saying out loud that pqp is ours is part of the answer, not a footnote.
- * The Discord suspension lives in the FAQ, dated as Discord announced it,
- * with no opinion on the order, no mockery, no App Store claim, and no
- * "better than Discord". Status lines about the other products are dated on
- * the page (`tela.options.asOf`) so a reader can tell how fresh they are.
+ * The page is about what a product does, never about another company: each
+ * card for another product carries a link to the page its claims came from,
+ * and the section says the day they were checked (`FACTS_CHECKED`).
  */
 
 interface Option {
-  id: "pqp" | "jitsi" | "teamspeak" | "meet";
+  id: "pqp" | "jitsi" | "stoat" | "teamspeak";
   name: MessageKey;
   body: MessageKey;
   good: MessageKey;
@@ -50,18 +55,18 @@ const OPTIONS: Option[] = [
     limit: "tela.option.jitsi.limit",
   },
   {
+    id: "stoat",
+    name: "tela.option.stoat.name",
+    body: "tela.option.stoat.body",
+    good: "tela.option.stoat.good",
+    limit: "tela.option.stoat.limit",
+  },
+  {
     id: "teamspeak",
     name: "tela.option.teamspeak.name",
     body: "tela.option.teamspeak.body",
     good: "tela.option.teamspeak.good",
     limit: "tela.option.teamspeak.limit",
-  },
-  {
-    id: "meet",
-    name: "tela.option.meet.name",
-    body: "tela.option.meet.body",
-    good: "tela.option.meet.good",
-    limit: "tela.option.meet.limit",
   },
 ];
 
@@ -74,17 +79,16 @@ const STEPS: MessageKey[] = ["tela.how.1", "tela.how.2", "tela.how.3"];
  * tests rather than silently drifting.
  */
 const FAQ_ITEMS: { id: string; question: MessageKey; answer: MessageKey }[] = [
+  { id: "sound", question: "tela.faq.sound.q", answer: "tela.faq.sound.a" },
   {
     id: "download",
     question: "tela.faq.download.q",
     answer: "tela.faq.download.a",
   },
-  { id: "vpn", question: "tela.faq.vpn.q", answer: "tela.faq.vpn.a" },
   { id: "people", question: "tela.faq.people.q", answer: "tela.faq.people.a" },
   { id: "free", question: "tela.faq.free.q", answer: "tela.faq.free.a" },
   { id: "mobile", question: "tela.faq.mobile.q", answer: "tela.faq.mobile.a" },
   { id: "data", question: "tela.faq.data.q", answer: "tela.faq.data.a" },
-  { id: "why", question: "tela.faq.why.q", answer: "tela.faq.why.a" },
 ];
 
 function stagger(i: number): CSSProperties {
@@ -123,7 +127,8 @@ function CreateRoomButton({ className }: { className?: string }) {
 }
 
 export function TelaPage() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
+  const checked = formatCheckedDate(FACTS_CHECKED, locale);
 
   return (
     <div className="flex min-h-full flex-col bg-ink text-paper">
@@ -143,7 +148,7 @@ export function TelaPage() {
         />
 
         <div className="relative mx-auto max-w-5xl px-5 pb-24 pt-16 sm:px-8 sm:pt-24">
-          {/* One job, one line, one button. Comparison and ANPD live below. */}
+          {/* One job, one line, one button. The other options live below. */}
           <h1
             className="animate-rise mx-auto max-w-3xl text-balance text-center font-display text-4xl font-bold leading-[1.05] tracking-tight sm:text-6xl"
             style={stagger(0)}
@@ -241,13 +246,14 @@ export function TelaPage() {
                         </dd>
                       </div>
                     </dl>
+                    <SourceLinks urls={TELA_SOURCES[option.id]} />
                     {option.ours && <CreateRoomButton className="mt-6 self-start" />}
                   </div>
                 </li>
               ))}
             </ul>
             <p className="mx-auto mt-4 max-w-2xl text-pretty text-center text-xs leading-relaxed text-paper-muted/80">
-              {t("tela.options.asOf")}
+              {t("tela.options.asOf", { date: checked })}
             </p>
           </section>
 

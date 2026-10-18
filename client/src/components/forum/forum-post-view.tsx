@@ -1,3 +1,4 @@
+import type { AuthorGoneCheck } from "@/hooks/use-confirmed-gone-authors";
 import {
   FORUM_ERRORS,
   FORUM_MAX_PINNED,
@@ -16,6 +17,8 @@ import {
   BellOff,
   Check,
   CheckCircle2,
+  ChevronDown,
+  Circle,
   CircleCheck,
   Link2,
   Lock,
@@ -28,7 +31,6 @@ import {
   Pin,
   PinOff,
   Plus,
-  RotateCcw,
   Tags,
   Trash2,
   X,
@@ -60,10 +62,13 @@ import { useForumTagLabel } from "@/lib/forum-tag-icons";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { backfillForLanding } from "@/lib/forum-landing";
+import {
+  readSolutionNudgeDismissed,
+  writeSolutionNudgeDismissed,
+} from "@/lib/forum-prefs";
 import { forgetCursorRead, readCursorOnce } from "@/lib/forum-visit";
 import { findFirstUnreadMessageId } from "@/lib/unread-divider";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 import { ForumTagList } from "./forum-post-card";
 import { ForumTagIcon } from "./forum-tag-icon";
 
@@ -128,6 +133,7 @@ export interface ForumPostViewProps {
   authors?: ReadonlyMap<string, MessageAuthorInfo>;
   /** `authors` is the server's whole roster: see MessageList. */
   authorsComplete?: boolean;
+  authorGoneCheck?: AuthorGoneCheck;
   roles?: readonly MessageRoleColor[];
   showLinkEmbeds: boolean;
   slashContext?: Omit<
@@ -297,10 +303,10 @@ export function EditTagsDialog({
                 )
               }
               className={cn(
-                "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[13px] transition-[background-color,border-color,color,transform] duration-[var(--duration-fast)] active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11",
+                "inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] transition-[background-color,color,transform] duration-[var(--duration-fast)] active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:px-4",
                 on
-                  ? "border-transparent bg-accent-soft font-semibold text-on-accent-soft"
-                  : "border-border text-text-secondary hover:bg-surface-2",
+                  ? "bg-text font-semibold text-surface-0"
+                  : "text-text-secondary ring-1 ring-inset ring-border hover:bg-surface-3 hover:text-text",
               )}
             >
               <ForumTagIcon tag={tag} className="h-3.5 w-3.5" />
@@ -343,64 +349,66 @@ function SolutionCard({
       : answer.markedByName
         ? t("forum.solution.markedBy", { name: answer.markedByName })
         : null;
+  const heading =
+    answer.deleted || !answer.authorName
+      ? t("forum.solution.title")
+      : t("forum.solution.from", { name: answer.authorName });
   return (
     <section
       aria-label={t("forum.solution.title")}
       data-forum-solution={answer.messageId}
       className={cn(
-        "animate-pop-in rounded-[var(--radius-card)] bg-success-soft text-on-success-soft",
-        compact ? "mx-3 mb-2 mt-2 px-3 py-2 sm:mx-4" : "mx-3 my-2 px-3.5 py-3 sm:mx-5",
+        "animate-pop-in rounded-[var(--radius-panel)] bg-success-soft text-on-success-soft",
+        compact ? "mx-3 mb-2 mt-2 px-3.5 py-2.5 sm:mx-4" : "mx-3 my-3 px-4 py-3.5 sm:mx-5",
       )}
     >
-      <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide">
-        <CircleCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        {t("forum.solution.title")}
+      <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold">
+        <CircleCheck className="h-4 w-4 shrink-0" aria-hidden />
+        <span className="truncate">{heading}</span>
         {markedBy && (
-          <span className="min-w-0 truncate font-normal normal-case tracking-normal opacity-80">
-            · {markedBy}
-          </span>
+          <span className="min-w-0 truncate font-normal opacity-80 max-sm:hidden">· {markedBy}</span>
         )}
-      </p>
+        {!answer.deleted && (
+          <button
+            type="button"
+            onClick={onJump}
+            className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-control)] px-1 text-xs font-semibold underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:hit-44"
+          >
+            {t("forum.solution.jump")}
+            <ArrowDown className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        )}
+      </div>
       {!compact && (
-        <p className="mt-1.5 line-clamp-2 text-sm">
+        <p className="mt-2 line-clamp-3 text-sm leading-[21px] text-text">
           {answer.deleted ? (
-            <span className="italic">{t("forum.solution.deleted")}</span>
+            <span className="italic text-on-success-soft">{t("forum.solution.deleted")}</span>
           ) : (
-            <>
-              <span className="font-semibold">
-                {answer.authorName ?? t("forum.deletedAuthor")}
-              </span>{" "}
-              {answer.excerpt}
-            </>
+            answer.excerpt
           )}
         </p>
-      )}
-      {!answer.deleted && (
-        <button
-          type="button"
-          onClick={onJump}
-          className="mt-1.5 inline-flex items-center gap-1 rounded-[var(--radius-control)] text-xs font-semibold underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-        >
-          {t("forum.solution.jump")}
-          <ArrowDown className="h-3 w-3" aria-hidden />
-        </button>
       )}
     </section>
   );
 }
 
-/** "23 RESPOSTAS" and a rule: where the question ends and the replies begin. */
-function RepliesDivider({ count }: { count: number }) {
+/** "14 respostas · 6 pessoas": where the question ends and the replies begin. */
+function RepliesDivider({ count, people }: { count: number; people: number | null }) {
   const { t } = useTranslation();
   return (
     <div
-      className="mx-4 mb-1 mt-3 flex items-center gap-3 sm:mx-5"
+      className="mx-4 mb-1 mt-5 flex items-baseline gap-2.5 sm:mx-5"
       data-forum-replies-divider=""
     >
-      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.12em] tabular-nums text-text-tertiary">
+      <span className="shrink-0 font-display text-[17px] font-bold leading-[22px] tabular-nums text-text">
         {t("forum.post.repliesDivider", { count })}
       </span>
-      <span aria-hidden className="h-px flex-1 bg-border" />
+      {people !== null && people > 0 && (
+        <span className="text-[13px] tabular-nums text-text-secondary">
+          {t("forum.post.people", { count: people })}
+        </span>
+      )}
+      <span aria-hidden className="h-px flex-1 self-center bg-border/60" />
     </div>
   );
 }
@@ -434,6 +442,7 @@ export function ForumPostView({
   blockedAuthorIds,
   authors,
   authorsComplete,
+  authorGoneCheck,
   roles,
   showLinkEmbeds,
   slashContext,
@@ -895,13 +904,9 @@ export function ForumPostView({
     .filter(Boolean)
     .join(" · ");
 
-  const hasHeaderChips =
-    Boolean(post.resolvedAt || post.lockedAt || post.pinnedAt) ||
-    post.tagIds.length > 0 ||
-    (canEdit && tags.length > 0);
 
   const topBar = (
-      <div className="flex h-12 items-center gap-1 px-2 sm:px-3">
+      <div className="flex h-14 items-center gap-1 px-2 sm:px-3">
         {(layout === "full" || forcedFull) && (
           <PostIconButton label={t("forum.post.back")} onClick={onClose}>
             <ArrowLeft className="h-4 w-4" aria-hidden />
@@ -910,13 +915,13 @@ export function ForumPostView({
         <div className="relative min-w-0 flex-1 self-stretch">
           <p
             className={cn(
-              "absolute inset-0 flex items-center gap-1.5 px-1 text-xs text-text-tertiary transition-[opacity,transform] duration-[var(--duration-base)] ease-[var(--ease-standard)] motion-reduce:transition-none",
+              "absolute inset-0 flex items-center gap-1.5 px-1 text-[13px] text-text-secondary transition-[opacity,transform] duration-[var(--duration-base)] ease-[var(--ease-standard)] motion-reduce:transition-none",
               titleInBar && "pointer-events-none -translate-y-1 opacity-0",
             )}
             aria-hidden={titleInBar || undefined}
           >
             <MessagesSquare className="h-3.5 w-3.5 shrink-0" aria-hidden />
-            <span className="truncate font-semibold text-text-secondary">{forumName}</span>
+            <span className="truncate">{forumName}</span>
             <span className="truncate sm:hidden">· {replyLine}</span>
           </p>
           {isPhone && (
@@ -932,11 +937,6 @@ export function ForumPostView({
             </p>
           )}
         </div>
-        <span className="max-sm:hidden">
-          <PostIconButton label={t("forum.post.copyLink")} onClick={() => void copyLink()}>
-            <Link2 className="h-4 w-4" aria-hidden />
-          </PostIconButton>
-        </span>
         {!forcedFull && (
           <span className="max-sm:hidden">
             <PostIconButton
@@ -972,11 +972,131 @@ export function ForumPostView({
       </div>
   );
 
+  // The author's "did a reply solve it?" nudge: only on their own open post
+  // once somebody else answered (`people` counts the author, so 2 or more),
+  // and gone for good once dismissed.
+  const [nudgeDismissed, setNudgeDismissed] = useState(() =>
+    readSolutionNudgeDismissed(postId),
+  );
+  const showNudge =
+    isAuthor &&
+    !post.resolvedAt &&
+    !post.lockedAt &&
+    post.replyCount > 0 &&
+    people !== null &&
+    people > 1 &&
+    !nudgeDismissed;
+
+  const statusLabel = post.resolvedAt ? t("forum.status.resolved") : t("forum.status.open");
+  // One control for the post's state, where the eye already is. The author
+  // and staff change it; everybody else reads a badge (open says nothing).
+  const statusControl = canEdit ? (
+    <Menu
+      align="start"
+      items={[
+        {
+          id: "status-open",
+          label: t("forum.status.open"),
+          icon: Circle,
+          checked: !post.resolvedAt,
+          onSelect: () => {
+            if (post.resolvedAt) {
+              toggleResolved();
+            }
+          },
+        },
+        {
+          id: "status-resolved",
+          label: t("forum.status.resolved"),
+          icon: CheckCircle2,
+          checked: Boolean(post.resolvedAt),
+          detail: t("forum.status.hint"),
+          onSelect: () => {
+            if (!post.resolvedAt) {
+              toggleResolved();
+            }
+          },
+        },
+      ]}
+    >
+      <button
+        type="button"
+        aria-label={`${t("forum.status.label")}: ${statusLabel}`}
+        data-forum-resolve={post.resolvedAt ? "reopen" : "resolve"}
+        className={cn(
+          "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] pl-2 pr-1.5 text-[13px] font-semibold transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-11",
+          post.resolvedAt
+            ? "bg-success-soft text-on-success-soft"
+            : "bg-surface-1 text-text-secondary hover:bg-surface-2 hover:text-text",
+        )}
+      >
+        {post.resolvedAt ? (
+          <CheckCircle2 className="h-4 w-4" aria-hidden />
+        ) : (
+          <Circle className="h-4 w-4 [stroke-dasharray:3_3]" aria-hidden />
+        )}
+        {statusLabel}
+        <ChevronDown className="h-3.5 w-3.5 opacity-70" aria-hidden />
+      </button>
+    </Menu>
+  ) : post.resolvedAt ? (
+    <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] bg-success-soft px-2 text-[13px] font-semibold text-on-success-soft">
+      <CheckCircle2 className="h-4 w-4" aria-hidden />
+      {t("forum.badge.resolved")}
+    </span>
+  ) : null;
+
+  const wide = layout === "full" && !isPhone;
+
   const titleBlock = (
       <div
         ref={titleBlockRef}
-        className={cn("px-4 pb-3 sm:px-4", isPhone && "border-b border-border/60 pb-4")}
+        className={cn(
+          wide ? "px-5 pb-4 pt-1" : "px-4 pb-3.5 pt-1",
+          isPhone && "border-b border-border/60 pb-4 pt-4",
+        )}
       >
+        <div className="flex flex-wrap items-center gap-1.5">
+          {statusControl}
+          {post.lockedAt && (
+            <span className="inline-flex h-7 items-center gap-1 rounded-[var(--radius-control)] px-1.5 text-[13px] text-text-secondary">
+              <Lock className="h-3.5 w-3.5" aria-hidden />
+              {t("forum.badge.locked")}
+            </span>
+          )}
+          {post.pinnedAt && (
+            <span className="inline-flex h-7 items-center gap-1 rounded-[var(--radius-control)] px-1.5 text-[13px] text-text-secondary">
+              <Pin className="h-3.5 w-3.5" aria-hidden />
+              {t("forum.badge.pinned")}
+            </span>
+          )}
+          <ForumTagList tagIds={post.tagIds} tagsById={tagsById} max={FORUM_MAX_TAGS_PER_POST} />
+          {canEdit && tags.length > 0 && post.tagIds.length === 0 && (
+            // No tags yet: a lone pencil read as "edit the title" or as
+            // nothing at all (forum QA P12). Say what it adds.
+            <button
+              type="button"
+              onClick={() => setEditTagsOpen(true)}
+              data-forum-add-tags=""
+              className="inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-border-strong px-2.5 text-xs text-text-secondary transition-colors duration-[var(--duration-fast)] hover:border-text-tertiary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-9 max-sm:px-3"
+            >
+              <Plus className="h-3 w-3" aria-hidden />
+              {t("forum.post.addTags")}
+            </button>
+          )}
+          {canEdit && tags.length > 0 && post.tagIds.length > 0 && (
+            <Tooltip label={t("forum.editTags")}>
+              <button
+                type="button"
+                onClick={() => setEditTagsOpen(true)}
+                aria-label={t("forum.editTags")}
+                className="grid h-7 w-7 place-items-center rounded-[var(--radius-control)] text-text-secondary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-9 max-sm:w-9"
+              >
+                <Pencil className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            </Tooltip>
+          )}
+        </div>
         {editingTitle ? (
           <input
             ref={titleInputRef}
@@ -996,12 +1116,16 @@ export function ForumPostView({
                 setEditingTitle(false);
               }
             }}
-            className="w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-2 py-1 font-display text-[21px] font-bold leading-7 text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className={cn(
+              "mt-3 w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-2 py-1 font-display font-extrabold text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+              wide ? "text-[30px] leading-[38px]" : "text-[22px] leading-7",
+            )}
           />
         ) : (
           <h2
             className={cn(
-              "group/title font-display text-[21px] font-bold leading-7 text-text",
+              "mt-3 font-display font-extrabold tracking-[-0.015em] text-text [overflow-wrap:anywhere]",
+              wide ? "text-[30px] leading-[38px]" : "text-[22px] leading-7",
               canEdit && "cursor-text",
             )}
             onDoubleClick={() => {
@@ -1014,61 +1138,7 @@ export function ForumPostView({
             {post.title}
           </h2>
         )}
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          {post.resolvedAt && (
-            <Badge variant="success" icon={CheckCircle2}>
-              {t("forum.badge.resolved")}
-            </Badge>
-          )}
-          {post.lockedAt && (
-            <Badge variant="neutral" icon={Lock}>
-              {t("forum.badge.locked")}
-            </Badge>
-          )}
-          {post.pinnedAt && (
-            <Badge variant="accent" icon={Pin}>
-              {t("forum.badge.pinned")}
-            </Badge>
-          )}
-          <ForumTagList tagIds={post.tagIds} tagsById={tagsById} max={FORUM_MAX_TAGS_PER_POST} />
-          {canEdit && tags.length > 0 && post.tagIds.length === 0 && (
-            // No tags yet: a lone pencil read as "edit the title" or as
-            // nothing at all (forum QA P12). Say what it adds.
-            <button
-              type="button"
-              onClick={() => setEditTagsOpen(true)}
-              data-forum-add-tags=""
-              className="inline-flex h-5 items-center gap-1 rounded-full border border-dashed border-border-strong px-2 text-[11px] text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:border-text-tertiary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-9 max-sm:px-3 max-sm:text-xs"
-            >
-              <Plus className="h-3 w-3" aria-hidden />
-              {t("forum.post.addTags")}
-            </button>
-          )}
-          {canEdit && tags.length > 0 && post.tagIds.length > 0 && (
-            <Tooltip label={t("forum.editTags")}>
-              <button
-                type="button"
-                onClick={() => setEditTagsOpen(true)}
-                className="grid h-6 w-6 place-items-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-9 max-sm:w-9"
-              >
-                <Pencil className="h-3.5 w-3.5" aria-hidden />
-              </button>
-            </Tooltip>
-          )}
-          {/* Right after the status and tags, not pushed to the far edge: on
-              a post with no tags, or a pane as wide as the screen, the line
-              floated alone on the right and read as belonging to nothing. */}
-          <span
-            className={cn(
-              "text-xs tabular-nums text-text-tertiary max-sm:hidden",
-              hasHeaderChips &&
-                "before:mr-1.5 before:text-text-tertiary/60 before:content-['·']",
-            )}
-          >
-            {replyLine}
-          </span>
-        </div>
-        <div className="mt-3 flex items-center gap-1.5">
+        <div className="-ml-1 mt-3 flex items-center gap-1">
           {followSupported && following !== null && (
             <Button
               size="sm"
@@ -1076,7 +1146,7 @@ export function ForumPostView({
               onClick={() => void toggleFollow()}
               disabled={followBusy}
               aria-pressed={following}
-              className="gap-1.5 max-sm:h-11"
+              className="gap-1.5 rounded-full max-sm:h-11"
             >
               {following ? (
                 <Bell className="h-3.5 w-3.5" aria-hidden />
@@ -1086,35 +1156,49 @@ export function ForumPostView({
               {following ? t("forum.following") : t("forum.follow")}
             </Button>
           )}
-          {canEdit && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={toggleResolved}
-              className="gap-1.5 max-sm:h-11"
-              data-forum-resolve={post.resolvedAt ? "reopen" : "resolve"}
-            >
-              {post.resolvedAt ? (
-                <RotateCcw className="h-3.5 w-3.5" aria-hidden />
-              ) : (
-                <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-              )}
-              {post.resolvedAt ? t("forum.reopen") : t("forum.resolve")}
-            </Button>
-          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void copyLink()}
+            className="gap-1.5 rounded-full max-sm:h-11"
+          >
+            <Link2 className="h-3.5 w-3.5" aria-hidden />
+            {t("forum.post.copyLink")}
+          </Button>
           <span className="ml-auto max-sm:hidden">
             <Menu items={menuItems} align="end">
               <button
                 type="button"
                 aria-label={t("forum.post.menu")}
                 data-forum-post-menu=""
-                className="grid h-8 w-8 place-items-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                className="grid h-8 w-8 place-items-center rounded-full text-text-secondary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
               >
                 <MoreHorizontal className="h-4 w-4" aria-hidden />
               </button>
             </Menu>
           </span>
         </div>
+        {showNudge && (
+          <div
+            role="status"
+            data-forum-solution-nudge=""
+            className="mt-3 flex items-start gap-2.5 rounded-[var(--radius-card)] bg-surface-1 px-3.5 py-3 text-[13px] leading-[19px] text-text-secondary animate-door-reveal"
+          >
+            <CheckCircle2 className="mt-px h-4 w-4 shrink-0 text-success" aria-hidden />
+            <span className="min-w-0 flex-1">{t("forum.solution.nudge")}</span>
+            <button
+              type="button"
+              aria-label={t("forum.solution.nudgeDismiss")}
+              onClick={() => {
+                setNudgeDismissed(true);
+                writeSolutionNudgeDismissed(postId);
+              }}
+              className="-m-1 grid h-6 w-6 shrink-0 place-items-center rounded-[var(--radius-control)] hover:bg-surface-2 hover:text-text max-sm:hit-44"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          </div>
+        )}
       </div>
   );
 
@@ -1136,7 +1220,7 @@ export function ForumPostView({
       answer || post.replyCount > 0 ? (
         <>
           {answer && <SolutionCard answer={answer} onJump={jumpToAnswer} viewerId={viewerId} />}
-          {post.replyCount > 0 && <RepliesDivider count={post.replyCount} />}
+          {post.replyCount > 0 && <RepliesDivider count={post.replyCount} people={people} />}
         </>
       ) : null,
     onToggleAnswer: canEdit ? toggleAnswer : undefined,
@@ -1211,6 +1295,7 @@ export function ForumPostView({
         onReportMessage={onReportMessage}
         authors={authors}
         authorsComplete={authorsComplete}
+        authorGoneCheck={authorGoneCheck}
         roles={roles}
         unreadSince={unreadSince}
         onForward={onForward}

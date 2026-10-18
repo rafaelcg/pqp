@@ -40,6 +40,70 @@ export function mergeMemberStatuses(
 }
 
 /**
+ * Rosters at most this big are polled with the whole list, exactly as before:
+ * their payload is a few KB, and the lean read buys nothing there. Past it, the
+ * poll reads `/members/status` (see `readMemberStatusesIfSame`).
+ */
+export const LEAN_STATUS_POLL_MIN_MEMBERS = 100;
+
+/**
+ * Apply a `GET /members/status` answer to the roster on screen.
+ *
+ * The answer lists only people who are NOT offline, so everybody it does not
+ * name is offline (the floor, and what an invisible member resolves to). Only
+ * `status` is touched, exactly like `mergeMemberStatuses`, so a name, avatar or
+ * local nickname edit is not wiped by the next poll. Returns `current` itself
+ * when nothing changed, so React does not re-render a 6000-row list for nothing.
+ */
+export function applyMemberStatuses<
+  T extends { id: string; status?: UserStatus },
+>(current: readonly T[], statuses: Readonly<Record<string, UserStatus>>): T[] {
+  let changed = false;
+  const next = current.map((member) => {
+    const status = statuses[member.id] ?? "offline";
+    if (member.status === status) {
+      return member;
+    }
+    changed = true;
+    return { ...member, status };
+  });
+  return changed ? next : (current as T[]);
+}
+
+/**
+ * The lean read, or `null` when it cannot be trusted and the whole list must be
+ * read instead.
+ *
+ * Trusted only when the answer carries the same `roster` token as the list the
+ * caller holds and the same member count: that is "nobody joined or left", and
+ * with the same people the only thing that can have moved is their status. Any
+ * other answer (a different token, a count that disagrees with what is on
+ * screen, an API without the route, a failed read) returns `null`, and the caller
+ * does what it always did: read `/members`.
+ */
+export async function readMemberStatusesIfSame(
+  read: () => Promise<{
+    roster: string;
+    count: number;
+    statuses: Record<string, UserStatus>;
+  }>,
+  held: { token: string | null; size: number },
+): Promise<Record<string, UserStatus> | null> {
+  if (!held.token || held.size <= LEAN_STATUS_POLL_MIN_MEMBERS) {
+    return null;
+  }
+  try {
+    const answer = await read();
+    if (answer.roster !== held.token || answer.count !== held.size) {
+      return null;
+    }
+    return answer.statuses;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Status the transcript pip would draw for this author. Same rule
  * `messageAuthors` uses: a missing field is `null`, not "online".
  */

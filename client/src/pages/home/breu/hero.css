@@ -1,0 +1,50 @@
+/*
+ * The hero greeting (hero-breu.tsx), lg and up only. Every name here starts
+ * with `breu-`: the home chunk's CSS stays in the document after an in-app
+ * navigation, so nothing here may reuse a class the app owns.
+ */
+
+/* Rest pose: the eyes and the waving hand above the window bar, the lower
+   body behind it. */
+.breu-hero-peek {
+  transform: translateY(28%);
+}
+
+.breu-hero[data-gone] {
+  visibility: hidden;
+}
+
+@keyframes breu-peek-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(28%);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Pinned (the only state with motion at lg and up), after the window's own
+     rise on a page with no static first screen. */
+  .breu-hero[data-pinned] .breu-hero-peek {
+    animation: breu-peek-up 0.7s var(--ease-emphasized) 0.9s both;
+  }
+  /* With the static first screen (`html[data-pre]`, production's "/") the
+     window does not rise (index.css), so the peek is the hero's only
+     entrance and waits only a beat after React takes over. */
+  html[data-pre] .breu-hero[data-pinned] .breu-hero-peek {
+    animation-delay: 0.3s;
+  }
+  /* One class more than the vendored loops, so it wins whatever the load order. */
+  .breu-hero[data-gone] .bot-face .bf-eyes,
+  .breu-hero[data-gone] .bot-face .bf-body,
+  .breu-hero[data-gone] .bot-face .bf-hand {
+    animation-play-state: paused;
+  }
+}
+
+/* The eyes glance up and left, toward the hero's CTAs. The `translate`
+   property composes with the blink's `transform`. */
+.breu-glance-cta .bf-eyes {
+  translate: -4px -3px;
+}

@@ -30,6 +30,12 @@ the paste step:
   pre-fills the paste box. `?create=discord` (the spelling `/vem` shipped
   with) is read as the same intent, and `?create=new` opens the name field.
   One stash, one parser: `CreateIntent` in `client/src/lib/handle-intent.ts`.
+- A strip in the main channel of a small, new server the reader manages:
+  "Veio do Discord? Traz teu servidor pra cá" (flag `discord_import_notice`,
+  default off). It calls `openDiscordImport({ serverId })` where
+  `discord_import_existing` is on for the server (the merge dialog) and
+  `openDiscordImport()` otherwise (the create dialog), with wording to match. See `docs/FEATURE_FLAGS.md` for its
+  rules and `docs/ONBOARDING.md` for where it sits among the other surfaces.
 
 ## Counting it
 
@@ -145,6 +151,111 @@ announcement and pins it. Rafael decides whether it exists.
   is a lot of trust to ask of somebody who arrived ten minutes ago. Measure
   `bring_crew_copy` first.
 
+## Into a server that already exists
+
+Behind the runtime flag `discord_import_existing` (per server, default off, env
+`DISCORD_IMPORT_EXISTING`; see [`FEATURE_FLAGS.md`](./FEATURE_FLAGS.md)). Flag
+off, every route below is a 404 and the settings row is not drawn.
+
+For somebody who already has a community (usually a new or small one they
+started) and wants a Discord server's structure in it without losing anything.
+Same paste step as above, a different preview and a different end.
+
+### Rules: strictly additive
+
+Nothing that exists is deleted, renamed, moved, retyped or given other
+permissions. The rules are one pure function, `planDiscordMerge` in
+`packages/shared/src/discord-import-merge.ts`, which the preview, the apply and
+the tests all read.
+
+- **Categories** are matched by name, trimmed and case-insensitive. A match is
+  reused and only its missing channels are added, after its last channel. No
+  match: the category is added after the last existing one, in the template's
+  order. Two template categories that read the same fold into one.
+- **Channels** are matched by name AND type inside the target group (that
+  category, or the loose channels). A match is skipped (`exists`). The same
+  name with another type is a different channel and is added: pqp has no
+  unique channel name. The same name twice in the template is added once
+  (`duplicate`). A same-named channel in a different category is not a clash.
+  Names keep Discord's spelling, as in the create path.
+- **Caps** count what the server already has. `MAX_IMPORT_CHANNELS` (200, categories
+  included) and `MAX_IMPORT_CATEGORIES` (30) are the ceiling a fresh import has,
+  and the merge keeps a community under it. What does not fit is listed, never
+  dropped silently: `channelLimit`, or `categoryLimit` for a category refused at
+  the cap together with its channels. A new category is only made when there is
+  room for it and at least one of its channels. A community already over a cap
+  (the hand-made create path has none) simply gets nothing added.
+- **Cargos** are off by default. The preview offers only names the server does
+  not have, and the person ticks the ones to create. A cargo that exists
+  (case-insensitive) is never touched, never recreated, and is referenced only
+  as the target of a rule on a channel this merge adds. Nobody is given a cargo
+  and `@everyone` and the staff ladder are never altered (the template's
+  `@everyone` bits and the icon are not applied at all). A new cargo takes the
+  lowest rank; creating one slides the rank NUMBER of the others up by the
+  count added, exactly as making one by hand does, and their order among
+  themselves is unchanged. Its permission bits are the template's mapped bits
+  masked to what the caller may grant (`grantablePermissions`), so a manager
+  cannot mint a cargo stronger than themselves. Creating cargos also needs
+  Manage Roles (`403` otherwise); the preview says `canCreateRoles`.
+- **Private channels** follow the create path: `@everyone` denied VIEW, plus
+  the role rules whose cargo exists or was just ticked. A rule whose cargo is
+  neither is not written, and the preview counts those (`overwriteCount`). The
+  person who runs it also gets the access row `POST /channels` gives the maker
+  of a private channel, so a manager who is not an admin can open what they
+  added.
+- **Forums** follow the TARGET server's `forum_channels` flag (a new server has
+  none yet, so the create path asks the global value).
+
+### Who and what
+
+- `GET /api/servers/:id/discord-import/config` answers `{ enabled }`: the flag
+  for that server AND Manage Server. What the settings row asks.
+- `POST /api/servers/:id/discord-import/preview` `{ source }` answers the plan
+  (`addedCategories`, `reusedCategories`, `addedChannels`, `skipped` with a
+  `reason`, `addableRoles`, `reusedRoles`, `usage`, the template's
+  `mappedAway`) plus `canCreateRoles`. No writes.
+- `POST /api/servers/:id/discord-import/apply` `{ source, createRoles? }`
+  (`createRoles` are template ids) re-fetches, re-plans against the rows it
+  then writes beside, and adds everything in ONE transaction.
+
+Owner or Manage Server only. `404` for somebody who is not in the server and
+for the flag being off (so a server not let in cannot be told from one that
+does not exist), `403` for a member who may not manage it and for a character
+account. The paste errors, limiters and error codes are the create path's.
+
+The apply locks the server row first (the same first lock every writer of the
+channel list takes), so two applies at once serialise and the second plans
+against what the first left. Running the same template again adds nothing and
+writes nothing at all: no layout version bump, no audit row, no broadcast.
+Audit action `server.discord_import_merge` (template code, categories added and
+reused, channels added, skipped, cargos added). It is deliberately not
+`server.discord_import`: that one marks a room that started as a copy and feeds
+the "Traz tua galera" window and the import metrics.
+
+After commit: `invalidateServerChannelList`, `bumpPermissionsVersion` when a
+rule or cargo was written, and the same `channels-update` fan-out a reorder
+sends (`nudgeWholeList`), so open clients redraw the sidebar without a reload.
+
+### Web
+
+- **Server settings, Overview**: "Importar do Discord" row for managers, drawn
+  only while the config answers `enabled`.
+- **`openDiscordImport({ serverId?, source? })`**, in
+  `client/src/lib/discord-import-launcher.ts`. The one door for any surface
+  (the settings row, a `discord_import_notice` card). With a `serverId` it opens
+  the merge dialog for that server; without one it opens the create dialog on
+  the paste step. `DiscordImportHost`, mounted once in `App.tsx`, listens. A
+  call made before the host mounted is held for it. The name and the argument
+  shape are a contract, keep them stable.
+- The dialog (`discord-import-merge-dialog.tsx`): paste, preview (what will be
+  added, what is already here and stays, what was left out and why, cargos
+  unticked), confirm ("Add to this community", with the promise that nothing is
+  deleted or changed on every step), done (what was added, and a button to the
+  new channels). No invite step: that belongs to a NEW server, and "Traz tua
+  galera" does not apply to a merge.
+
+Web only, like the create import. A phone user imports from the web.
+
 ## What is copied
 
 - Server name
@@ -252,7 +363,8 @@ Caps: 200 channels, 30 categories, 100 imported custom roles. The 512KB
 body cap can fire first.
 
 Audit action: `server.discord_import` (template code and counts, not the
-snapshot).
+snapshot). The merge into an existing server writes `server.discord_import_merge`
+instead, see above.
 
 ## Operator notes
 

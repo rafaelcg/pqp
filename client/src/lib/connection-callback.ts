@@ -154,6 +154,8 @@ export interface CompleteFailureMessages {
   alreadyLinked: string;
   expired: string;
   cancelled: string;
+  /** The provider refused OUR credentials or was down: nothing the person can fix. */
+  serviceDown: string;
   fallback: string;
 }
 
@@ -162,6 +164,12 @@ export function messageFromCompleteFailure(
   messages: CompleteFailureMessages,
 ): string {
   if (caught instanceof ApiError) {
+    // 502 is the server saying the provider's side broke (a rejected client
+    // secret, an outage), as opposed to the 400s a person caused. Retrying
+    // now cannot help, so it says "later" instead of "try again".
+    if (caught.status === 502) {
+      return messages.serviceDown;
+    }
     if (caught.status === 409) {
       return messages.alreadyLinked;
     }

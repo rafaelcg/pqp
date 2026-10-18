@@ -156,6 +156,15 @@ if fewer than three did. Served as `bringCrew` on `POST /api/import/discord/appl
 (read for the server just made, so the global value decides the last screen)
 and `enabled` on `GET /api/servers/:id/import-arrivals`. Web only. See
 `docs/DISCORD_IMPORT.md` §"Bring your people".
+`DISCORD_IMPORT_EXISTING` (`discord_import_existing`, **per server**, default off,
+born as a flag): importing a Discord layout INTO a community that already exists.
+Strictly additive (new categories, channels and, if ticked, new cargos; nothing
+existing is deleted, renamed, moved or re-permissioned). Read per request for the
+server being imported into: off, `GET /api/servers/:id/discord-import/config`
+answers `enabled: false` and the preview and apply routes are a 404. Served to the
+settings row as `enabled` on that config route; the dashboard override for one
+server is the way to turn it on first. Web only. See `docs/DISCORD_IMPORT.md`
+§"Into a server that already exists".
 `WATCH_PARTY_SERVER_AUDIENCE` (`watch_party_server_audience`, **per server**, default
 off, born as a flag): the in-app watch party count is the server's, distinct
 accounts on the playlist from every API machine, instead of the sockets one
@@ -637,6 +646,54 @@ of their own at 12 to 13%. Half of the QG-only accounts did nothing at all and
 Turn it on from controles → interruptores or `PUT /api/admin/flags
 { key: "newcomer_invite_moment", enabled: true }`. Open tabs follow on the next
 config refresh (focus or 10 min).
+
+## `discord_import_notice` (global, client presentation plus one read-only field)
+
+"Veio do Discord? Traz teu servidor pra cá". Behind `DISCORD_IMPORT_NOTICE`
+(default off, global, born as a flag). A strip in the arrival strip's slot, in
+the **main text channel** (the first text channel) of a small, new server, for
+somebody who can manage it, with one **Importar do Discord** button and an X.
+The copy says nothing is deleted, here or on the Discord, and names only what
+the import really copies (categories and channels, not members or messages).
+Rules (`lib/discord-import-notice.ts`, all pinned by
+`discord-import-notice.test.ts`): owner or Manage Server; the server was not
+made by an import; created under 30 days ago, 20 members or fewer, 8 channels
+or fewer (categories not counted); never in a conversation, in a voice or
+other channel, over a live watch party or a live stream, during a call, or
+while any other strip, corner card or attached hint holds the screen. Closing
+it hides it for 14 days, it may then show **once more**, and a second close
+ends it; pressing the button ends it for good. History is per user and server,
+in the hints store (`pqp:discord-import-notice:<userId>:<serverId>`; nothing
+persists on localhost unless `pqp:hints-persist` is `1`).
+
+How the client learns two things:
+
+- The flag: `GET /api/onboarding/config` as `discordImportNotice`, asked once the
+  age gate has passed and on every config refresh, like `inviteMoment`.
+- "Was this server made by an import?": `imported` on
+  `GET /api/servers/:id/import-arrivals`, which the client already asks for
+  managers. It is answered **only while this flag is on** (absent otherwise, and
+  from an older API), independent of `discord_bring_crew`, and the client shows
+  the strip only on an explicit `false`: an unknown answer shows nothing. With
+  both flags off that route still reads nothing.
+
+What the button opens depends on `discord_import_existing` for THAT server
+(`GET /api/servers/:id/discord-import/config`, read once per server per load by
+`lib/use-discord-import-existing.ts`; the card waits for the answer so it never
+swaps wording). On: `openDiscordImport({ serverId })`, the additive merge dialog,
+and the sentence says "We add your categories and channels here... Nothing
+already here is deleted or changed, and your Discord stays as it is". Off, or a
+failed read: `openDiscordImport()`, the create-new import (the hub's "Trazer do
+Discord"), and the sentence says "We copy your categories and channels...
+Nothing gets deleted, here or on your Discord". Neither sentence promises
+people or messages. Measure with Umami: `discord_import_notice_view`, `_click`,
+`_dismiss` (each with `existing`), against `server.discord_import` rows in
+`audit_log`.
+
+Turn it on from controles → interruptores or `PUT /api/admin/flags
+{ key: "discord_import_notice", enabled: true }`. Open tabs follow on the next
+config refresh (focus or 10 min). Merging this PR restarts the API
+(`restarts-api`): it touches `server/` and `packages/shared`.
 
 
 ## `conversations_home` and `conversations_home_phone_tabs` (global, client presentation only)

@@ -26,6 +26,27 @@
  */
 
 import {
+  FACTS_CHECKED,
+  factFor,
+  formatCheckedDate,
+  MATRIX_FEATURES,
+  sourceLabel,
+  TELA_SOURCES,
+  VS_DISCORD_FEATURES,
+  type CompareFeature,
+  type CompareProduct,
+} from "../content/compare-facts";
+import {
+  comparePath,
+  COMPARE_FAQ_IDS,
+  COMPARE_PAGES,
+  DISCORD_WHAT,
+  MATRIX_PRODUCTS,
+  PRODUCT_NAMES,
+  WRITE_UPS,
+  type DetailProduct,
+} from "../content/compare-products";
+import {
   escapeHtml,
   STREAMERS_FAQ,
   type MarketingLocale,
@@ -33,6 +54,7 @@ import {
 } from "./marketing-meta";
 import {
   CHROME_PRERENDER_COPY,
+  COMPARE_PRERENDER_COPY,
   DOWNLOAD_PRERENDER_COPY,
   TELA_PRERENDER_COPY,
   VS_DISCORD_PRERENDER_COPY,
@@ -329,22 +351,10 @@ export const DOWNLOAD_PRERENDER_WORKFLOW_URL = `${CONTACT_PRERENDER_SOURCE_URL}/
 export const DOWNLOAD_PRERENDER_TEAM = {
   committers: [
     { name: "Rafael Cammarano Guglielmi", handle: "rafaelcg" },
-    { name: "André", handle: "AndreCamm" },
+    { name: "André", handle: "ndre-dev" },
   ],
   approvers: [{ name: "Rafael Cammarano Guglielmi", handle: "rafaelcg" }],
 } as const;
-
-/** The verdicts of the `/vs-discord` table, in the live page's row order. */
-const VS_DISCORD_ROWS = [
-  ["price", "yes", "yes"],
-  ["openSource", "yes", "no"],
-  ["selfHost", "yes", "no"],
-  ["ageGate", "yes", "yes"],
-  ["apps", "partial", "yes"],
-  ["ecosystem", "partial", "yes"],
-  ["maturity", "partial", "yes"],
-  ["region", "yes", "yes"],
-] as const;
 
 /** The element the block is written into, exactly as `index.html` has it. */
 const ROOT_OPEN = '<div id="root">';
@@ -406,35 +416,45 @@ const CLOSE_PAGE = `</main>`;
 const BUTTON =
   "inline-flex rounded-[var(--radius-control)] bg-accent px-6 py-3 font-semibold text-on-accent";
 
+/** "Source: host, host" for a cell or a card, as plain links. */
+function sourcesHtml(label: string, urls: readonly string[]): string {
+  const e = escapeHtml;
+  return `<p class="mt-1 text-xs text-text-tertiary">${e(label)}: ${urls
+    .map((u) => `<a href="${e(u)}" rel="noopener noreferrer" class="underline">${e(sourceLabel(u))}</a>`)
+    .join(", ")}</p>`;
+}
+
 function telaBlock(locale: MarketingLocale): string {
   const c = TELA_PRERENDER_COPY[locale];
+  const v = VS_DISCORD_PRERENDER_COPY[locale];
   const e = escapeHtml;
   const cta = `<p class="mt-6"><a href="${CREATE_ROOM_PRERENDER_HREF}" class="${BUTTON}">${e(c["tela.cta.create"])}</a></p>`;
-  const options = (["pqp", "jitsi", "teamspeak", "meet"] as const)
+  const options = (["pqp", "jitsi", "stoat", "teamspeak"] as const)
     .map((id) => {
       const ours =
         id === "pqp"
           ? ` <span class="text-xs font-semibold uppercase tracking-[0.16em] text-accent">${e(c["tela.options.ours"])}</span>`
           : "";
-      return `<li class="mt-6"><h3 class="font-display text-xl font-bold">${e(c[`tela.option.${id}.name`])}${ours}</h3><p class="mt-1 text-text-secondary">${e(c[`tela.option.${id}.body`])}</p><dl class="mt-2"><dt class="text-xs font-semibold uppercase tracking-[0.16em]">${e(c["tela.options.goodFor"])}</dt><dd class="mt-1">${e(c[`tela.option.${id}.good`])}</dd><dt class="mt-2 text-xs font-semibold uppercase tracking-[0.16em]">${e(c["tela.options.limit"])}</dt><dd class="mt-1 text-text-secondary">${e(c[`tela.option.${id}.limit`])}</dd></dl></li>`;
+      return `<li class="mt-6"><h3 class="font-display text-xl font-bold">${e(c[`tela.option.${id}.name`])}${ours}</h3><p class="mt-1 text-text-secondary">${e(c[`tela.option.${id}.body`])}</p><dl class="mt-2"><dt class="text-xs font-semibold uppercase tracking-[0.16em]">${e(c["tela.options.goodFor"])}</dt><dd class="mt-1">${e(c[`tela.option.${id}.good`])}</dd><dt class="mt-2 text-xs font-semibold uppercase tracking-[0.16em]">${e(c["tela.options.limit"])}</dt><dd class="mt-1 text-text-secondary">${e(c[`tela.option.${id}.limit`])}</dd></dl>${sourcesHtml(v["vsDiscord.table.source"], TELA_SOURCES[id])}</li>`;
     })
     .join("");
   const steps = (["1", "2", "3"] as const)
     .map((n) => `<li class="mt-3">${n}. ${e(c[`tela.how.${n}`])}</li>`)
     .join("");
-  const faq = (["download", "vpn", "people", "free", "mobile", "data", "why"] as const)
+  const faq = (["sound", "download", "people", "free", "mobile", "data"] as const)
     .map(
       (id) =>
         `<div class="mt-4"><dt class="font-display font-bold">${e(c[`tela.faq.${id}.q`])}</dt><dd class="mt-1 text-text-secondary">${e(c[`tela.faq.${id}.a`])}${id === "data" ? ` <a href="/privacy" class="underline">${e(c["tela.faq.data.link"])}</a>` : ""}</dd></div>`,
     )
     .join("");
+  const asOf = c["tela.options.asOf"].replace("{date}", formatCheckedDate(FACTS_CHECKED, locale));
   return [
     OPEN_PAGE("max-w-3xl"),
     `<h1 class="font-display text-4xl font-bold tracking-tight">${e(c["tela.hero.title"])}</h1>`,
     `<p class="mt-5 text-lg text-text-secondary">${e(c["tela.hero.lede"])}</p>`,
     cta,
     `<p class="mt-4 text-sm text-text-tertiary">${e(c["tela.hero.note"])}</p>`,
-    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.options.title"])}</h2><p class="mt-2 text-sm text-text-secondary">${e(c["tela.hero.disclosure"])}</p><ul>${options}</ul><p class="mt-4 text-xs text-text-tertiary">${e(c["tela.options.asOf"])}</p></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.options.title"])}</h2><p class="mt-2 text-sm text-text-secondary">${e(c["tela.hero.disclosure"])}</p><ul>${options}</ul><p class="mt-4 text-xs text-text-tertiary">${e(asOf)}</p></section>`,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.how.title"])}</h2><ol>${steps}</ol></section>`,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.faq.title"])}</h2><dl>${faq}</dl></section>`,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["tela.cta.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["tela.cta.body"])}</p>${cta}<p class="mt-4"><a href="/vs-discord" class="underline">${e(c["tela.cta.compare"])}</a></p></section>`,
@@ -447,38 +467,136 @@ function vsDiscordBlock(locale: MarketingLocale, chrome: MarketingChrome): strin
   const e = escapeHtml;
   const cta = `<a href="${CREATE_ROOM_PRERENDER_HREF}" class="${BUTTON}">${e(c["vsDiscord.cta.create"])}</a>`;
   // The live cell prefixes a visually hidden verdict word when the phrase does
-  // not already start with it (`VerdictCell` in `vs-discord-page.tsx`).
-  const cell = (verdict: "yes" | "no" | "partial", body: string) => {
-    const word = c[`vsDiscord.chip.${verdict}`];
+  // not already start with it (`VerdictCell` in `compare-cells.tsx`).
+  const cell = (
+    status: "yes" | "no" | "partial" | "unknown",
+    body: string,
+    sources?: readonly string[],
+  ) => {
+    const word = c[`vsDiscord.chip.${status}`];
     const prefix = body.toLowerCase().startsWith(word.toLowerCase())
       ? ""
       : `<span class="sr-only">${e(word)}: </span>`;
-    return `${prefix}${e(body)}`;
+    return `${prefix}${e(body)}${sources ? sourcesHtml(c["vsDiscord.table.source"], sources) : ""}`;
   };
-  const rows = VS_DISCORD_ROWS.map(
-    ([id, pqp, discord]) =>
-      `<tr><th scope="row" class="py-2 pr-4 align-top">${e(c[`vsDiscord.row.${id}.label`])}</th><td class="py-2 pr-4 align-top">${cell(pqp, c[`vsDiscord.row.${id}.pqp`])}</td><td class="py-2 align-top text-text-secondary">${cell(discord, c[`vsDiscord.row.${id}.discord`])}</td></tr>`,
-  ).join("");
-  const faq = (["why", "when", "how", "catch"] as const)
+  const rows = VS_DISCORD_FEATURES.map((feature) => {
+    const pqp = factFor("pqp", feature)!;
+    const discord = factFor("discord", feature)!;
+    return `<tr><th scope="row" class="py-2 pr-4 align-top">${e(c[`vsDiscord.row.${feature as "price"}.label`])}</th><td class="py-2 pr-4 align-top">${cell(pqp.status, pqp.value[locale])}</td><td class="py-2 align-top text-text-secondary">${cell(discord.status, discord.value[locale], discord.sources)}</td></tr>`;
+  }).join("");
+  const faq = (["import", "both", "sound", "catch"] as const)
     .map(
       (id) =>
         `<div class="mt-4"><dt class="font-display font-bold">${e(c[`vsDiscord.faq.${id}.q`])}</dt><dd class="mt-1 text-text-secondary">${e(c[`vsDiscord.faq.${id}.a`])}</dd></div>`,
     )
     .join("");
-  // Spanish readers are outside Brazil, and the live page drops the card about
-  // the Brazilian suspension for them.
-  const featured =
-    locale === "es"
-      ? `<p class="mt-8">${cta}</p>`
-      : `<section class="mt-12"><h2 class="text-xs font-semibold uppercase tracking-[0.22em]">${e(c["vsDiscord.row.screen.label"])}</h2><div class="mt-4"><p class="font-display text-lg font-bold">pqp: ${e(c["vsDiscord.chip.works"])}</p><p class="mt-1 text-text-secondary">${e(c["vsDiscord.featured.pqpDetail"])}</p><p class="mt-4">${cta}</p></div><div class="mt-6"><p class="font-display text-lg font-bold">Discord: ${e(c["vsDiscord.chip.suspended"])}</p><p class="mt-1 text-text-secondary">${e(c["vsDiscord.featured.discordDetail"])}</p></div><p class="mt-4 text-xs text-text-tertiary">${e(c["vsDiscord.hero.disclaimer"])}</p></section>`;
+  const does = (["screen", "watch", "import"] as const)
+    .map(
+      (id) =>
+        `<li class="mt-4"><h3 class="font-display text-lg font-bold">${e(c[`vsDiscord.pqp.${id}.title`])}</h3><p class="mt-1 text-text-secondary">${e(c[`vsDiscord.pqp.${id}.body`])}</p></li>`,
+    )
+    .join("");
+  const asOf = c["vsDiscord.hero.asOf"].replace("{date}", formatCheckedDate(FACTS_CHECKED, locale));
   return [
     OPEN_PAGE("max-w-3xl"),
     `<h1 class="font-display text-4xl font-extrabold tracking-tight">pqp vs Discord <span class="mt-3 block text-xl font-bold">${e(c["vsDiscord.hero.tagline"])}</span></h1>`,
     `<p class="mt-5 text-lg text-text-secondary">${e(c["vsDiscord.hero.body"])}</p>`,
-    featured,
-    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.table.title"])}</h2><table class="mt-4 w-full text-left text-sm"><caption class="sr-only">${e(c["vsDiscord.table.caption"])}</caption><thead><tr><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.feature"])}</th><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.pqp"])}</th><th scope="col" class="py-2">${e(c["vsDiscord.table.col.discord"])}</th></tr></thead><tbody>${rows}</tbody></table></section>`,
+    `<p class="mt-3 text-xs text-text-tertiary">${e(asOf)}</p>`,
+    `<p class="mt-6">${cta}</p>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.pqp.title"])}</h2><ul>${does}</ul></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.table.title"])}</h2><table class="mt-4 w-full text-left text-sm"><caption class="sr-only">${e(c["vsDiscord.table.caption"])}</caption><thead><tr><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.feature"])}</th><th scope="col" class="py-2 pr-4">${e(c["vsDiscord.table.col.pqp"])}</th><th scope="col" class="py-2">${e(c["vsDiscord.table.col.discord"])}</th></tr></thead><tbody>${rows}</tbody></table><h3 class="mt-6 font-display text-base font-bold">${e(c["vsDiscord.ahead.title"])}</h3><p class="mt-1 text-text-secondary">${e(c["vsDiscord.ahead.body"])}</p></section>`,
     `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.faq.title"])}</h2><dl>${faq}</dl></section>`,
-    `<section id="ios-beta" class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.closing.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["vsDiscord.closing.body"])}</p><p class="mt-6">${cta} <a href="${e(chrome.iosBetaUrl || IOS_BETA_PRERENDER_HREF)}" rel="noopener noreferrer" class="ml-3 underline">${e(c["vsDiscord.cta.beta"])}</a></p><p class="mt-6 text-sm text-text-secondary">${e(c["vsDiscord.closing.tela.lead"])} <a href="/tela" class="underline">${e(c["vsDiscord.closing.tela.link"])}</a></p></section>`,
+    `<section id="ios-beta" class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["vsDiscord.closing.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["vsDiscord.closing.body"])}</p><p class="mt-6">${cta} <a href="${e(chrome.iosBetaUrl || IOS_BETA_PRERENDER_HREF)}" rel="noopener noreferrer" class="ml-3 underline">${e(c["vsDiscord.cta.beta"])}</a></p><p class="mt-6 text-sm text-text-secondary">${e(c["vsDiscord.closing.tela.lead"])} <a href="/tela" class="underline">${e(c["vsDiscord.closing.tela.link"])}</a></p><p class="mt-2 text-sm text-text-secondary">${e(c["vsDiscord.closing.compare.lead"])} <a href="/compare" class="underline">${e(c["vsDiscord.closing.compare.link"])}</a></p></section>`,
+    CLOSE_PAGE,
+  ].join("");
+}
+
+/** The matrix cell of one fact (or "not applicable"), as plain HTML. */
+function compareCell(
+  product: CompareProduct,
+  feature: CompareFeature,
+  locale: MarketingLocale,
+): string {
+  const v = VS_DISCORD_PRERENDER_COPY[locale];
+  const c = COMPARE_PRERENDER_COPY[locale];
+  const fact = factFor(product, feature);
+  if (!fact) {
+    return escapeHtml(c["compare.matrix.na"]);
+  }
+  const word = v[`vsDiscord.chip.${fact.status}`];
+  const body = fact.value[locale];
+  const prefix = body.toLowerCase().startsWith(word.toLowerCase())
+    ? ""
+    : `<span class="sr-only">${escapeHtml(word)}: </span>`;
+  return `${prefix}${escapeHtml(body)}${sourcesHtml(v["vsDiscord.table.source"], fact.sources)}`;
+}
+
+function compareBlock(locale: MarketingLocale): string {
+  const c = COMPARE_PRERENDER_COPY[locale];
+  const v = VS_DISCORD_PRERENDER_COPY[locale];
+  const e = escapeHtml;
+  const asOf = c["compare.hero.asOf"].replace("{date}", formatCheckedDate(FACTS_CHECKED, locale));
+  const head = MATRIX_PRODUCTS.map(
+    (p) => `<th scope="col" class="py-2 pr-4">${e(PRODUCT_NAMES[p])}</th>`,
+  ).join("");
+  const rows = MATRIX_FEATURES.map(
+    (feature) =>
+      `<tr><th scope="row" class="py-2 pr-4 align-top">${e(v[`vsDiscord.row.${feature as "price"}.label`])}</th>${MATRIX_PRODUCTS.map(
+        (p) => `<td class="py-2 pr-4 align-top">${compareCell(p, feature, locale)}</td>`,
+      ).join("")}</tr>`,
+  ).join("");
+  const honest = (["1", "2", "3", "4"] as const)
+    .map((n) => `<li class="mt-2">${e(c[`compare.honest.${n}`])}</li>`)
+    .join("");
+  const cards = [
+    `<li class="mt-4"><h3 class="font-display text-lg font-bold">Discord</h3><p class="mt-1 text-text-secondary">${e(DISCORD_WHAT[locale])}</p><p class="mt-1"><a href="${comparePath("discord")}" class="underline">${e(c["compare.vs.link"])}</a></p></li>`,
+    ...COMPARE_PAGES.map(
+      (p) =>
+        `<li class="mt-4"><h3 class="font-display text-lg font-bold">${e(PRODUCT_NAMES[p])}</h3><p class="mt-1 text-text-secondary">${e(WRITE_UPS[p].what[locale])}</p><p class="mt-1"><a href="${comparePath(p)}" class="underline">${e(c["compare.products.more"])}</a></p></li>`,
+    ),
+  ].join("");
+  const faq = COMPARE_FAQ_IDS.map(
+    (id) =>
+      `<div class="mt-4"><dt class="font-display font-bold">${e(c[`compare.faq.${id}.q`])}</dt><dd class="mt-1 text-text-secondary">${e(c[`compare.faq.${id}.a`])}</dd></div>`,
+  ).join("");
+  return [
+    OPEN_PAGE("max-w-5xl"),
+    `<h1 class="font-display text-4xl font-bold tracking-tight">${e(c["compare.hero.title"])}</h1>`,
+    `<p class="mt-5 text-lg text-text-secondary">${e(c["compare.hero.body"])}</p>`,
+    `<p class="mt-3 text-xs text-text-tertiary">${e(asOf)}</p>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.answer.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["compare.answer.body"])}</p></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.matrix.title"])}</h2><table class="mt-4 w-full text-left text-sm"><caption class="sr-only">${e(c["compare.matrix.caption"])}</caption><thead><tr><th scope="col" class="py-2 pr-4">${e(c["compare.matrix.col.feature"])}</th>${head}</tr></thead><tbody>${rows}</tbody></table></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.honest.title"])}</h2><ul>${honest}</ul></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.products.title"])}</h2><ul>${cards}</ul></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.method.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["compare.method.body"])}</p></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.faq.title"])}</h2><dl>${faq}</dl></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.cta.title"])}</h2><p class="mt-2 text-text-secondary">${e(c["compare.cta.body"])}</p><p class="mt-6"><a href="${CREATE_ROOM_PRERENDER_HREF}" class="${BUTTON}">${e(c["compare.cta.create"])}</a></p></section>`,
+    CLOSE_PAGE,
+  ].join("");
+}
+
+function compareProductBlock(product: DetailProduct, locale: MarketingLocale): string {
+  const c = COMPARE_PRERENDER_COPY[locale];
+  const v = VS_DISCORD_PRERENDER_COPY[locale];
+  const e = escapeHtml;
+  const name = PRODUCT_NAMES[product];
+  const w = WRITE_UPS[product];
+  const asOf = c["compare.hero.asOf"].replace("{date}", formatCheckedDate(FACTS_CHECKED, locale));
+  const rows = MATRIX_FEATURES.map(
+    (feature) =>
+      `<tr><th scope="row" class="py-2 pr-4 align-top">${e(v[`vsDiscord.row.${feature as "price"}.label`])}</th><td class="py-2 pr-4 align-top">${compareCell("pqp", feature, locale)}</td><td class="py-2 align-top text-text-secondary">${compareCell(product, feature, locale)}</td></tr>`,
+  ).join("");
+  return [
+    OPEN_PAGE("max-w-3xl"),
+    `<p class="text-sm"><a href="/compare" class="underline">${e(c["compare.product.back"])}</a></p>`,
+    `<h1 class="mt-4 font-display text-4xl font-extrabold tracking-tight">pqp vs ${e(name)} <span class="mt-3 block text-xl font-bold">${e(c["compare.product.tagline"])}</span></h1>`,
+    `<p class="mt-3 text-xs text-text-tertiary">${e(asOf)}</p>`,
+    `<section class="mt-10"><h2 class="font-display text-xl font-bold">${e(c["compare.product.what.title"])}</h2><p class="mt-2 text-text-secondary">${e(w.what[locale])}</p></section>`,
+    `<section class="mt-8"><h2 class="font-display text-xl font-bold">${e(c["compare.product.ahead.title"].replace("{name}", name))}</h2><p class="mt-2 text-text-secondary">${e(w.ahead[locale])}</p></section>`,
+    `<section class="mt-8"><h2 class="font-display text-xl font-bold">${e(c["compare.product.different.title"])}</h2><p class="mt-2 text-text-secondary">${e(w.different[locale])}</p></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.product.table.title"])}</h2><table class="mt-4 w-full text-left text-sm"><caption class="sr-only">${e(c["compare.matrix.caption"])}</caption><thead><tr><th scope="col" class="py-2 pr-4">${e(c["compare.matrix.col.feature"])}</th><th scope="col" class="py-2 pr-4">pqp</th><th scope="col" class="py-2">${e(name)}</th></tr></thead><tbody>${rows}</tbody></table></section>`,
+    `<section class="mt-12"><h2 class="font-display text-2xl font-bold">${e(c["compare.product.pick.title"])}</h2><h3 class="mt-3 font-display font-bold">${e(c["compare.product.pickThem"].replace("{name}", name))}</h3><p class="mt-1 text-text-secondary">${e(w.pickThem[locale])}</p><h3 class="mt-3 font-display font-bold">${e(c["compare.product.pickPqp"])}</h3><p class="mt-1 text-text-secondary">${e(w.pickPqp[locale])}</p><p class="mt-6"><a href="${CREATE_ROOM_PRERENDER_HREF}" class="${BUTTON}">${e(c["compare.cta.create"])}</a></p></section>`,
+    `<section class="mt-12"><h2 class="font-display text-base font-bold">${e(c["compare.product.sources.title"])}</h2>${sourcesHtml(v["vsDiscord.table.source"], w.sources)}<p class="mt-4 text-sm text-text-secondary">${e(c["compare.method.body"])}</p></section>`,
     CLOSE_PAGE,
   ].join("");
 }
@@ -537,6 +655,10 @@ const BLOCKS: Partial<
   "/contato": contactBlock,
   "/tela": telaBlock,
   "/vs-discord": vsDiscordBlock,
+  "/compare": compareBlock,
+  "/compare/stoat": (locale) => compareProductBlock("stoat", locale),
+  "/compare/teamspeak": (locale) => compareProductBlock("teamspeak", locale),
+  "/compare/slack": (locale) => compareProductBlock("slack", locale),
   "/download": downloadBlock,
 };
 
@@ -606,6 +728,7 @@ function footerBlock(locale: MarketingLocale, chrome: MarketingChrome): string {
     chrome.communities ? link("/#communities", c["nav.communities"]) : "",
     link("/#hosting", c["nav.selfHost"], selfHostLang),
     link("/vs-discord", c["footer.vsDiscord"]),
+    link("/compare", c["footer.compare"]),
     link("/vem", c["footer.vem"]),
     link("/tela", c["footer.tela"]),
     link("/streamers", c["footer.streamers"]),
@@ -639,6 +762,47 @@ function footerBlock(locale: MarketingLocale, chrome: MarketingChrome): string {
 }
 
 /**
+ * `html` with `main` (a page's `<main>`, as HTML) written into `#root` between
+ * the site's plain nav and footer, in the language `locale`. Shared by the
+ * marketing pages below and the blog, whose `<main>` the build renders
+ * (`static-pages.ts`). Unchanged for a document with no `#root`, or a `#root`
+ * that already has something in it (a second run must not write a second copy).
+ * `contentLang` is the language of `main` when it differs from the chrome's
+ * (a guide with no Spanish body, read by a Spanish reader).
+ */
+export function injectPreBody(
+  html: string,
+  locale: MarketingLocale,
+  main: string,
+  chrome: MarketingChrome = NO_MARKETING_CHROME,
+  contentLang: MarketingLocale = locale,
+): string {
+  const at = html.indexOf(ROOT_OPEN);
+  if (at === -1 || html.includes('id="pre-page"')) {
+    return html;
+  }
+  const insertAt = at + ROOT_OPEN.length;
+  const body = [
+    `<div id="pre-page" lang="${contentLang}" class="min-h-full bg-surface-0 px-4 py-12 text-text">`,
+    navBlock(locale, chrome),
+    main,
+    footerBlock(locale, chrome),
+    `</div>`,
+  ].join("");
+  return html.slice(0, insertAt) + body + html.slice(insertAt);
+}
+
+/** A marketing page's `<main>`, or null for a page with no no-JS body. */
+export function marketingMain(
+  page: MarketingPage,
+  locale: MarketingLocale,
+  chrome: MarketingChrome = NO_MARKETING_CHROME,
+): string | null {
+  const block = BLOCKS[page];
+  return block ? block(locale, chrome) : null;
+}
+
+/**
  * `html` with the page's no-JS body written into `#root`, or `html` unchanged
  * for a page that has none, a document with no `#root`, or a `#root` that
  * already has something in it (a second run must not write a second copy).
@@ -651,21 +815,6 @@ export function injectMarketingBody(
   locale: MarketingLocale,
   chrome: MarketingChrome = NO_MARKETING_CHROME,
 ): string {
-  const block = BLOCKS[page];
-  if (!block) {
-    return html;
-  }
-  const at = html.indexOf(ROOT_OPEN);
-  if (at === -1 || html.includes('id="pre-page"')) {
-    return html;
-  }
-  const insertAt = at + ROOT_OPEN.length;
-  const body = [
-    `<div id="pre-page" lang="${locale}" class="min-h-full bg-surface-0 px-4 py-12 text-text">`,
-    navBlock(locale, chrome),
-    block(locale, chrome),
-    footerBlock(locale, chrome),
-    `</div>`,
-  ].join("");
-  return html.slice(0, insertAt) + body + html.slice(insertAt);
+  const main = marketingMain(page, locale, chrome);
+  return main === null ? html : injectPreBody(html, locale, main, chrome);
 }

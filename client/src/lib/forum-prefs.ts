@@ -76,6 +76,31 @@ export function writeForumView(forumId: string, view: StoredForumView): void {
   write(`${forumId}:view`, JSON.stringify(view));
 }
 
+/**
+ * How this reader draws one forum's list: cards (the default), compact rows,
+ * or a gallery of pictures. Per forum, because a showcase forum and a support
+ * forum want different ones.
+ */
+export type ForumLayout = "card" | "compact" | "gallery";
+
+export function readForumLayout(forumId: string): ForumLayout {
+  const stored = read(`${forumId}:layout`);
+  return stored === "compact" || stored === "gallery" ? stored : "card";
+}
+
+export function writeForumLayout(forumId: string, layout: ForumLayout): void {
+  write(`${forumId}:layout`, layout === "card" ? null : layout);
+}
+
+/** The author's "did an answer solve it?" nudge, dismissed for one post. */
+export function readSolutionNudgeDismissed(postId: string): boolean {
+  return read(`nudge:${postId}`) === "1";
+}
+
+export function writeSolutionNudgeDismissed(postId: string): void {
+  write(`nudge:${postId}`, "1");
+}
+
 export function readRulesHidden(forumId: string): boolean {
   return read(`${forumId}:rules-hidden`) === "1";
 }

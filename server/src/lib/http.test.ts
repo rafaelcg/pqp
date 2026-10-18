@@ -1,6 +1,12 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { clampLimit, corsHeaders, isUuid, resolveCorsOrigin } from "./http.js";
+import {
+  clampLimit,
+  corsHeaders,
+  isUuid,
+  PREFLIGHT_MAX_AGE_SECONDS,
+  resolveCorsOrigin,
+} from "./http.js";
 
 const originalOrigins = process.env.CORS_ALLOWED_ORIGINS;
 
@@ -74,6 +80,15 @@ describe("corsHeaders", () => {
   it("allows PUT so channel overwrites can preflight from the SPA origin", () => {
     const headers = corsHeaders({ headers: {} } as IncomingMessage);
     expect(headers["Access-Control-Allow-Methods"]).toContain("PUT");
+  });
+
+  it("lets a browser keep a preflight answer for two hours (Chrome's ceiling), not ten minutes", () => {
+    // Every authenticated call from pqp.gg to api.pqp.gg is preflighted once per
+    // distinct URL; a round trip each. 7200 is the most Chrome will honour.
+    expect(PREFLIGHT_MAX_AGE_SECONDS).toBe(7200);
+    expect(corsHeaders({ headers: {} } as IncomingMessage)["Access-Control-Max-Age"]).toBe(
+      "7200",
+    );
   });
 
   it("allows Idempotency-Key, or a cross-origin create silently fails the preflight", () => {

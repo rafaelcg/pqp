@@ -7,6 +7,7 @@ import {
   MAX_SERVER_ICON_BYTES,
   parseDiscordTemplateCode,
   type DiscordImportPlan,
+  type MappedImportForumTag,
   type ServerImageContentType,
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
@@ -93,6 +94,13 @@ function parseRetryAfter(value: unknown): number | null {
 
 export async function fetchMappedDiscordTemplate(
   source: string,
+  /**
+   * The server the layout is going INTO, when there is one: forums then follow
+   * that server's own `forum_channels` answer, so what the preview shows is
+   * what a hand-made channel there could be. A new server has no override
+   * yet, so the create path keeps asking the global value (null).
+   */
+  intoServerId: string | null = null,
 ): Promise<{ code: string; plan: DiscordImportPlan }> {
   const code = parseDiscordTemplateCode(source);
   if (!code) {
@@ -144,7 +152,7 @@ export async function fetchMappedDiscordTemplate(
     return {
       code,
       plan: mapGuildTemplate(payload, {
-        forumChannels: forumChannelsEnabled(null),
+        forumChannels: forumChannelsEnabled(intoServerId),
       }),
     };
   } catch (error) {
@@ -227,9 +235,15 @@ async function insertChannelRows(
  * lower-case name), so this is one INSERT and no conflict handling. A plan
  * has forums only when the mapper was told forums are on.
  */
-async function insertForumTags(
+export async function insertForumTags(
   client: PoolClient,
-  plan: DiscordImportPlan,
+  plan: {
+    channels: {
+      templateId: number;
+      type: string;
+      tags?: MappedImportForumTag[];
+    }[];
+  },
   idByTemplate: Map<number, string>,
 ): Promise<void> {
   const params: unknown[] = [];

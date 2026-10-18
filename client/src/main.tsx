@@ -48,7 +48,13 @@ import {
 import { I18nProvider, loadLocale, useTranslation } from "./lib/i18n";
 import { detectLocale, type Locale } from "./lib/locale";
 import { forceTheme } from "./lib/theme";
-import { LandingPage } from "./pages/landing-page";
+import { HomeRoute } from "./pages/home/home-page";
+import {
+  HOME_CHUNK_CEILING_MS,
+  loadHome,
+  prefetchHomeWhenIdle,
+  withCeiling,
+} from "./pages/home/load";
 import { BuildWatcher } from "./components/layout/build-watcher";
 import { ForcedUpdateScreen } from "./components/layout/forced-update-screen";
 import { UpdatePrompt } from "./components/layout/update-prompt";
@@ -80,8 +86,27 @@ const CookiesPage = lazy(() =>
 const StatusPage = lazy(() =>
   import("./pages/status-page").then((m) => ({ default: m.StatusPage })),
 );
+// Design previews of the homepage live only in dev builds. `import.meta.env.DEV`
+// is replaced with `false` at build time, so the dynamic import below is dead
+// code in production and the preview chunks (the earlier concepts, the
+// switcher bar) are never emitted.
+const HomePreviewRoute = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/home-preview").then((m) => ({
+        default: m.HomePreviewRoute,
+      })),
+    )
+  : null;
 const VsDiscordPage = lazy(() =>
   import("./pages/vs-discord-page").then((m) => ({ default: m.VsDiscordPage })),
+);
+const ComparePage = lazy(() =>
+  import("./pages/compare-page").then((m) => ({ default: m.ComparePage })),
+);
+const CompareProductPage = lazy(() =>
+  import("./pages/compare-product-page").then((m) => ({
+    default: m.CompareProductPage,
+  })),
 );
 const BetaPage = lazy(() =>
   import("./pages/beta-page").then((m) => ({ default: m.BetaPage })),
@@ -175,6 +200,13 @@ const publishableKey = isUsableClerkPublishableKey(
  */
 function DarkRoutes() {
   useLayoutEffect(() => forceTheme("dark"), []);
+  // The home page is a lazy chunk, and the other marketing pages link "/"
+  // through the router (the nav logo), so fetch it while the browser is idle
+  // and that click finds it instead of suspending on it. "/" started it at boot.
+  useEffect(() => {
+    if (window.location.pathname === "/") return;
+    return prefetchHomeWhenIdle();
+  }, []);
   return <Outlet />;
 }
 
@@ -253,7 +285,7 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
       <StandaloneUpdateIndicator />
       <Routes>
         <Route element={<DarkRoutes />}>
-          <Route path="/" element={<LandingPage />} />
+          <Route path="/" element={<HomeRoute />} />
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/cookies" element={<CookiesPage />} />
@@ -265,6 +297,37 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
           <Route path="/contato" element={<ContactPage />} />
           <Route path="/status" element={<StatusPage />} />
           <Route path="/vs-discord" element={<VsDiscordPage />} />
+          {/* `/compare`: the dated, sourced matrix of pqp and the alternatives,
+              with one short page per product (Discord's is `/vs-discord`).
+              One explicit route per product rather than a `:product`
+              parameter, so an unknown product is a real 404 at the edge
+              (`spa-routes.ts` knows exactly these paths). */}
+          <Route path="/compare" element={<ComparePage />} />
+          <Route
+            path="/compare/stoat"
+            element={<CompareProductPage product="stoat" />}
+          />
+          <Route
+            path="/compare/teamspeak"
+            element={<CompareProductPage product="teamspeak" />}
+          />
+          <Route
+            path="/compare/slack"
+            element={<CompareProductPage product="slack" />}
+          />
+          {/* The homepage design previews, dev builds only (see
+              `HomePreviewRoute` above). A production build has no route here,
+              so these paths fall through to the catch-all like any unknown
+              address. Two segments, so no handle can collide. */}
+          {HomePreviewRoute && (
+            <>
+              <Route path="/preview/home" element={<HomePreviewRoute />} />
+              <Route
+                path="/preview/home/:variant"
+                element={<HomePreviewRoute />}
+              />
+            </>
+          )}
           {/* `/tela`: the pt-BR landing for "Discord sem tela no Brasil, o
               que usar". A static single segment, so, as the note on
               `PublicProfileRoute` below explains, the word joins
@@ -507,6 +570,16 @@ function DesktopShell({ children }: { children: ReactNode }) {
 // there is nothing on screen to protect and the render is immediate, as ever.
 const prerendered = hasPrerenderedHero();
 
+// The home page is its own chunk (pages/home/load.ts), so on "/" it starts
+// downloading now, beside everything else the boot waits for. The first render
+// below waits on it (with a ceiling only when there is no prerendered first
+// screen), and the route then renders the module it already has instead of
+// suspending on it.
+const onHome = window.location.pathname === "/";
+if (onHome) {
+  void loadHome().catch(() => {});
+}
+
 // An update that had to go round a stale cache navigated to this page with a
 // `?_pqp=` query (`lib/update-ladder.ts`). It has done its job; take it off the
 // address before the router reads the location, so it is never bookmarked.
@@ -655,8 +728,8 @@ if (prerendered) {
   document.documentElement.setAttribute("data-pre", "");
   whenReadyToRender(() => {
     initFaro();
-    // Three things before the first render, in parallel, none of them able to
-    // hold it for long or to fail it:
+    // Four things before the first render, in parallel, none of them able to
+    // fail it:
     //  - the catalogue. A Portuguese or Spanish reader has the right words on
     //    screen already (the prerendered block), and rendering in English until
     //    the catalogue arrives would swap them for English and back. A failed
@@ -665,21 +738,47 @@ if (prerendered) {
     //    first frame and does not push the screenshot down when it settles.
     //  - the prerendered block's pictures painted, so the live page never
     //    replaces a picture that has not been drawn yet.
+    //  - the home page's chunk, so the route renders it at once instead of
+    //    the loading shell. A failed chunk renders now and takes the lazy
+    //    route. A slow one is waited for with no ceiling: rendering before it
+    //    lands would replace the static block, whose controls are plain links
+    //    that already work, with the loading shell, and a hung chunk would
+    //    hang the lazy route just the same.
     const locale = detectLocale();
-    const focused = rememberFocusInPrerender();
     void Promise.all([
       (locale === "en" ? Promise.resolve() : loadLocale(locale)).catch(() => {}),
       primeDownloadPlan(),
       whenPrerenderPainted(),
+      loadHome().catch(() => {}),
     ]).then(() => {
+      // Read at the swap, not before the wait: a visitor can move focus while
+      // the chunk loads.
+      const focused = rememberFocusInPrerender();
       renderApp();
       restoreFocus(focused);
     });
   });
-} else if (document.readyState === "loading") {
-  // The entry script is injected, and an injected module script is async: it
-  // can run before the parser has reached #root.
-  document.addEventListener("DOMContentLoaded", renderApp, { once: true });
 } else {
-  renderApp();
+  // "/" with no static first screen (the dev server, which runs no prerender)
+  // waits for the home chunk too, so it does not paint the loading shell for
+  // as long as the chunk takes. Here the wait has a ceiling, because the page
+  // is blank until the first render and there is no static block to keep
+  // usable. Every other route renders at once.
+  const homeReady = onHome
+    ? withCeiling(loadHome().catch(() => {}), HOME_CHUNK_CEILING_MS)
+    : null;
+  const start = () => {
+    if (homeReady) {
+      void homeReady.then(renderApp);
+    } else {
+      renderApp();
+    }
+  };
+  if (document.readyState === "loading") {
+    // The entry script is injected, and an injected module script is async: it
+    // can run before the parser has reached #root.
+    document.addEventListener("DOMContentLoaded", start, { once: true });
+  } else {
+    start();
+  }
 }

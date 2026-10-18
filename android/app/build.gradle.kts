@@ -130,8 +130,8 @@ android {
         // Bump this for every upload, forever. A version code is not a version,
         // it is a monotonic upload counter, and the day it stops moving is the
         // day a fix silently cannot ship.
-        versionCode = 31
-        versionName = "0.4.24"
+        versionCode = 32
+        versionName = "0.4.25"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
