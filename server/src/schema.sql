@@ -6712,10 +6712,11 @@ CREATE INDEX IF NOT EXISTS idx_server_apps_app_on
 -- what the quiet "terminou" card needs once the state is gone. The exact 16 KB
 -- cap (16384 bytes of compact JSON) is the application's job. The size CHECK is
 -- only a backstop and is deliberately looser: it measures the state as Postgres
--- prints jsonb (`{"a": 1, "b": 2}`, one space after each colon and comma),
--- which is up to 1.5 times the compact form (a long array of one-digit numbers
--- is the worst case), so 24576 = 1.5 x 16384 can never refuse a state the
--- application accepted.
+-- prints jsonb: one space after each colon and comma (`{"a": 1, "b": 2}`, up to
+-- 1.5 times the compact form) and every number written out in full (`1e-300`
+-- prints as 300 digits, up to about 50 times for the widest doubles). A limit
+-- tight to either could refuse a state the application accepted, so it is 1 MiB,
+-- above 16384 x 52, and only bounds a row that got past the application.
 CREATE TABLE IF NOT EXISTS app_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
@@ -6747,7 +6748,7 @@ CREATE TABLE IF NOT EXISTS app_sessions (
   FOREIGN KEY (app_id, app_version) REFERENCES app_versions(app_id, version),
   CHECK ((status = 'ended') = (ended_at IS NOT NULL)),
   CHECK ((status = 'ended') = (end_reason IS NOT NULL)),
-  CHECK (octet_length(state::text) <= 24576)
+  CHECK (octet_length(state::text) <= 1048576)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_sessions_one_live_per_channel
   ON app_sessions (channel_id) WHERE status = 'live';

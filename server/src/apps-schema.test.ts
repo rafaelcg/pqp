@@ -360,8 +360,10 @@ describeDb("apps tables", () => {
 
     it("is a backstop, not the cap: it never refuses what the 16384 byte compact cap accepts", async () => {
       // The exact 16 KB cap is the application's job. The CHECK measures the
-      // state as Postgres prints jsonb (a space after each colon and comma), so
-      // it is 24576 = 1.5 x 16384, the worst case of that printing.
+      // state as Postgres prints jsonb: a space after each colon and comma
+      // (up to 1.5x) and numbers written out in full (1e-300 becomes 300
+      // digits, up to about 50x for a double). It is 1 MiB, above both.
+      const LIMIT = 1048576;
       const compactBytes = (value: string) => Buffer.byteLength(value);
 
       // Worst case: 8191 one-digit array elements, compact 16384 bytes, which
@@ -374,7 +376,27 @@ describeDb("apps tables", () => {
         [id],
       );
       expect(printed.rows[0]!.n).toBeGreaterThan(16384);
-      expect(printed.rows[0]!.n).toBeLessThanOrEqual(24576);
+      expect(printed.rows[0]!.n).toBeLessThanOrEqual(LIMIT);
+
+      // Scientific notation: Postgres prints a numeric in full, so a compact
+      // state well under the cap prints over 24576 bytes. The widest doubles
+      // ("5e-324", "1e308") expand about 50x, and 16384 compact bytes of
+      // either still prints under the limit.
+      for (const [literal, count] of [
+        ["1e-300", 2000],
+        ["5e-324", 2340],
+        ["1e308", 2730],
+      ] as const) {
+        const numbers = `[${Array(count).fill(literal).join(",")}]`;
+        expect(compactBytes(numbers), literal).toBeLessThanOrEqual(16384);
+        await q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, numbers]);
+        const wide = await q<{ n: number }>(
+          `SELECT octet_length(state::text) AS n FROM app_sessions WHERE id = $1`,
+          [id],
+        );
+        expect(wide.rows[0]!.n, literal).toBeGreaterThan(24576);
+        expect(wide.rows[0]!.n, literal).toBeLessThanOrEqual(LIMIT);
+      }
 
       // Many short keys, padded to exactly 16384 compact bytes.
       const entries: Record<string, unknown> = {};
@@ -391,28 +413,28 @@ describeDb("apps tables", () => {
       expect(compactBytes(string)).toBe(16384);
       await q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, string]);
 
-      // The backstop itself: a printed form of 24576 bytes is kept, 24577 is
+      // The backstop itself: a printed form of 1 MiB is kept, one byte more is
       // refused, on update and on insert.
       const overhead = compactBytes('{"k": ""}');
-      const atLimit = `{"k": "${"x".repeat(24576 - overhead)}"}`;
-      const overLimit = `{"k": "${"x".repeat(24577 - overhead)}"}`;
+      const atLimit = `{"k": "${"x".repeat(LIMIT - overhead)}"}`;
+      const overLimit = `{"k": "${"x".repeat(LIMIT + 1 - overhead)}"}`;
       await q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, atLimit]);
       const stored = await q<{ n: number }>(
         `SELECT octet_length(state::text) AS n FROM app_sessions WHERE id = $1`,
         [id],
       );
-      expect(stored.rows[0]!.n).toBe(24576);
+      expect(stored.rows[0]!.n).toBe(LIMIT);
       await expect(
         q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, overLimit]),
       ).rejects.toMatchObject({ code: "23514" });
       await expect(startSession(channel2Id, { state: overLimit })).rejects.toMatchObject({
         code: "23514",
       });
-      // Multi-byte text counts in bytes, not characters: 12300 two-byte
-      // characters is 24600 bytes of text.
-      const wide = JSON.stringify({ k: "é".repeat(12300) });
+      // Multi-byte text counts in bytes, not characters: 524300 two-byte
+      // characters is over a MiB of text.
+      const multibyte = JSON.stringify({ k: "é".repeat(524300) });
       await expect(
-        q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, wide]),
+        q(`UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`, [id, multibyte]),
       ).rejects.toMatchObject({ code: "23514" });
     });
 
