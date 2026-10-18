@@ -790,14 +790,23 @@ function IntroPreview({
   const [editing, setEditing] = useState(false);
   const [state, setState] = useState<"idle" | "posting" | "posted" | "failed">("idle");
   // One nonce per wording: a retry after a lost answer finds the first post
-  // instead of making a second one. A changed text is a new hello.
-  const [nonce, setNonce] = useState(() => crypto.randomUUID());
+  // instead of making a second one, even after the text was edited away and
+  // back. A different text is a new hello.
+  const nonces = useRef(new Map<string, string>());
+  function nonceFor(body: string) {
+    let nonce = nonces.current.get(body);
+    if (!nonce) {
+      nonce = crypto.randomUUID();
+      nonces.current.set(body, nonce);
+    }
+    return nonce;
+  }
   if (!home) return null;
   async function postIt() {
     setState("posting");
     setEditing(false);
     try {
-      await postBotIntro(serverId, bot.id, { channelId: home!.id, body: text, nonce });
+      await postBotIntro(serverId, bot.id, { channelId: home!.id, body: text, nonce: nonceFor(text) });
       setState("posted");
     } catch {
       setState("failed");
@@ -821,10 +830,7 @@ function IntroPreview({
               className="mt-1"
               value={text}
               maxLength={1900}
-              onChange={(e) => {
-                setText(e.target.value);
-                setNonce(crypto.randomUUID());
-              }}
+              onChange={(e) => setText(e.target.value)}
             />
           ) : (
             <p className="mt-0.5 whitespace-pre-wrap text-sm text-text-secondary">{text}</p>

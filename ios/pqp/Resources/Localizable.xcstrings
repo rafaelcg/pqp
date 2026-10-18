@@ -14078,7 +14078,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ não respondeu: você chegou no limite de %lld perguntas por hora."
+            "value" : "%@ não respondeu: tu chegou no limite de %lld perguntas por hora."
           }
         }
       }
@@ -14088,7 +14088,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ não respondeu: você chegou no limite de %lld perguntas por hora. Ele volta a te responder às %@."
+            "value" : "%@ não respondeu: tu chegou no limite de %lld perguntas por hora. Ele volta a te responder às %@."
           }
         }
       }
@@ -14338,7 +14338,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ ainda está respondendo suas perguntas anteriores. Manda essa de novo quando ele responder."
+            "value" : "%@ ainda tá respondendo tuas perguntas anteriores. Manda essa de novo quando ele responder."
           }
         }
       }
@@ -14418,7 +14418,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Só você está vendo isto."
+            "value" : "Só tu tá vendo isto."
           }
         }
       }
