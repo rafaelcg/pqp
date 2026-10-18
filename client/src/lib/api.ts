@@ -110,6 +110,7 @@ import type {
   ThreadSummary,
   User,
   UserBannerConfig,
+  UserBannerUrlResponse,
   UserPreferences,
   UserSearchResponse,
   UserStatus,
@@ -849,6 +850,15 @@ export const claimUserBanner = (key: string, signal?: AbortSignal) =>
 /** Back to the generated gradient; the object is dropped from the bucket. */
 export const deleteUserBanner = () =>
   apiFetch<{ user: User }>("/api/me/banner", { method: "DELETE" });
+
+/**
+ * Somebody else's banner, for their profile card. Root-relative like an
+ * avatar, so it goes through `resolveUploadedImageUrl` before it is an `src`.
+ */
+export const fetchUserBannerUrl = (userId: string) =>
+  apiFetch<UserBannerUrlResponse>(
+    `/api/users/${encodeURIComponent(userId)}/banner-url`,
+  );
 
 // ------------------------------------------------------- server identity
 //
