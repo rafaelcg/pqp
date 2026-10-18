@@ -5344,6 +5344,32 @@ CREATE TABLE IF NOT EXISTS user_activity_days (
 CREATE INDEX IF NOT EXISTS idx_user_activity_days_day
   ON user_activity_days (day);
 
+-- Which app an account last connected from, for support ("I can't hear",
+-- "my share has no sound"). One row per (account, platform), so a person on
+-- the web and on a phone has two. Written when a WebSocket authenticates,
+-- batched once a minute, from the connection's user agent REDUCED to families
+-- at the door: platform (web / desktop / ios / android), our app version where
+-- the client says it, the OS family and the browser family. No user agent
+-- string, no IP, no device model, no browser version is ever stored.
+--
+-- Readable only by instance moderators and the operator token
+-- (`services/client-platforms.ts`); never on a profile, never to a member.
+-- Rows not seen for 90 days are deleted by a daily job, and the cascade
+-- removes the rest with an art. 18 account deletion. A few dozen bytes a row.
+CREATE TABLE IF NOT EXISTS user_client_platforms (
+  user_id        UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  platform       TEXT NOT NULL,
+  app_version    TEXT,
+  os_family      TEXT,
+  browser_family TEXT,
+  first_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, platform)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_client_platforms_last_seen
+  ON user_client_platforms (last_seen_at);
+
 -- Per person, per São Paulo day: what the Retrospectiva needs and nothing
 -- else kept. Counts only. No room, no channel, no other person: who was in a
 -- call with whom is never recorded. `voice_seconds` and `share_seconds` come

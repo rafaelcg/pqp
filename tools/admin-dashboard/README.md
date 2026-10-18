@@ -626,6 +626,55 @@ This is the first route on the machine token that names a person. That is why
 it is its own read, fetched when **moderação** is opened, and not a field on
 `/metrics`.
 
+### Which app a user is on
+
+For "I can't hear" and "my share has no sound" reports: the latest platform
+and app a named person connected from. Two ways in, one payload:
+
+- `GET /api/admin/users/:userId/client`, for an **instance moderator**
+  (`INSTANCE_MODERATOR_CLERK_IDS`). Anybody else, including the person asked
+  about, gets the same 404 as the rest of `/api/admin` (the deployment's
+  operators are not a fact to confirm), and a signed-out caller a 401.
+- `GET /api/admin/user-client?userId=` (or `handle=`, or `tag=name#1234`), for
+  the **machine token**; the Worker proxies it as `GET /operator/user-client`.
+  A GET and nothing else: there is no write. No page draws it yet; use it
+  from the command line:
+
+  ```bash
+  curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" \
+    "https://api.pqp.gg/api/admin/user-client?handle=rafa" | jq .
+  ```
+
+The answer is `latest` (the most recently seen client), `clients` (one per
+platform seen in the last 90 days, newest first) and `notRecorded`. Each
+client carries `platform` (`web`, `desktop`, `ios` or `android`), `appVersion`,
+`osFamily` (`windows`, `macos`, `linux`, `ios`, `android`, `chromeos`),
+`browserFamily` (`chrome`, `edge`, `firefox`, `safari`, `opera`, `samsung`,
+`electron`), `firstSeenAt` and `lastSeenAt`.
+
+What is stored, and what is not:
+
+- One row per (account, platform) in `user_client_platforms`, written when a
+  WebSocket authenticates, batched once a minute per process. `lastSeenAt` is
+  accurate to about an hour (a fact already written is not written again for
+  an hour), so it says "was on this recently", not "is online now".
+- It is the families parsed from the upgrade request's `User-Agent`
+  (`server/src/lib/client-agent.ts`). The string itself, the IP address, a
+  device model and browser or OS versions are never stored. Rows not seen for
+  90 days are deleted daily; deleting the account deletes the rest.
+- **What the apps do not tell us today.** No app sends its version on the
+  socket, so the version is only what the server can already see. The desktop
+  shell's version comes from Electron's user agent (`pqp/0.2.7`). The iOS app
+  gives its **build number** (URLSession's user agent), not the marketing
+  version. The Android app (OkHttp's default agent) gives its platform and
+  **no version**, and the web client gives no build id: for the web the
+  question "which deploy was that tab on" is still not answerable from here.
+  The `auth` frame accepts an optional `client: { platform, version }`, so an
+  app can start declaring both with no server release; nothing sends it yet.
+- Never on a public profile, in `/api/me`, or visible to a member or a server
+  owner. Disclosed in the privacy policy ("Which app you use").
+- Server side: `server/src/services/client-platforms.ts`.
+
 Live, from `GET /api/admin/servers` and `GET /api/admin/server-channels`
 (proxied as `/operator/servers` and `/operator/channels`, same machine token),
 and written back through `PUT /operator/server-live-hls`,
