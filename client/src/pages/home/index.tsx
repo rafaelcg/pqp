@@ -396,8 +396,13 @@ function Hero() {
     // never cuts a visible frame; it also pauses its loops.
     breuRef.current?.toggleAttribute("data-gone", pinnedRef.current && p >= HERO_BREU_GONE_AT);
   }, []);
+  // Switching reduced motion on while open reports progress 1 before React
+  // re-renders, so both flags can still be set here. Clear them: unpinned, the
+  // copy must take clicks and Breu rests in its peek pose.
   useEffect(() => {
-    if (!pinned) copyRef.current?.removeAttribute("data-faded");
+    if (pinned) return;
+    copyRef.current?.removeAttribute("data-faded");
+    breuRef.current?.removeAttribute("data-gone");
   }, [pinned]);
 
   // Tabbing into the copy after it stepped back brings the top of the page
