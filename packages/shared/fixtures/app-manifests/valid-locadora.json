@@ -76,7 +76,6 @@
   ],
   "sandbox": {
     "wasm": true,
-    "blobWorkers": true,
     "localBlobs": true
   },
   "platforms": [

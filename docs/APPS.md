@@ -32,7 +32,7 @@ Fields, in the order they appear:
 | `notice` | Optional i18n key of one line shown in the join sheet. |
 | `entry` | `path` of the entry HTML in the bundle, plus `sha256` in the built shape. |
 | `assets` | Optional big files the page hands to the sandbox on request: `name`, `path`, and in the built shape `sha256` and `bytes`. |
-| `sandbox` | Optional narrow knobs over the fixed CSP: `wasm`, `blobWorkers`, `localBlobs`. There is no free-text CSP and no network knob. |
+| `sandbox` | Optional narrow knobs over the fixed CSP: `wasm` (adds `wasm-unsafe-eval`), `blobWorkers` (adds `worker-src blob:`; not needed by Locadora, kept for apps that run their own workers, reviewed) and `localBlobs` (adds `connect-src blob:` only, never the network). There is no free-text CSP and no network knob. |
 | `platforms` | Where it runs: `web`, `desktop`, `ios`, `android`. Default `web` and `desktop`. |
 | `license` | `spdx` expression, `source` URL (https) and an optional `notices` path. |
 | `store` | Optional listing fields: `summary`, `screenshots` (path, alt, and a hash in the built shape), `homepage`, `support`. |

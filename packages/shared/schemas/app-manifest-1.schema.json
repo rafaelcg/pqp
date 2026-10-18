@@ -208,8 +208,8 @@
       "description": "Narrow, reviewed knobs over the fixed CSP. There is deliberately no free-text CSP field. Network access is not a knob.",
       "properties": {
         "wasm": { "type": "boolean", "default": false, "description": "Adds 'wasm-unsafe-eval' to script-src." },
-        "blobWorkers": { "type": "boolean", "default": false, "description": "Adds worker-src blob:." },
-        "localBlobs": { "type": "boolean", "default": false, "description": "Adds connect-src blob: data: so the app can read back blobs it created itself from transferred assets. blob: and data: never reach the network." }
+        "blobWorkers": { "type": "boolean", "default": false, "description": "Adds worker-src blob:. Not needed by Locadora (S0 spike); kept for apps that run their own workers, reviewed." },
+        "localBlobs": { "type": "boolean", "default": false, "description": "Adds connect-src blob: so the app can read back blobs it created itself from transferred assets. blob: never reaches the network (S0 spike: data: is not needed)." }
       }
     },
     "platforms": {
