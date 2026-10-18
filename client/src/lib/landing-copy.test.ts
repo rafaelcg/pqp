@@ -181,8 +181,10 @@ describe("home claims", () => {
   it("names no sample person after one of the brothers", () => {
     // André, October 17, 2026: nobody may mistake a sample person for Rafael
     // or André. Their own names belong to the brothers block alone
-    // (`home.code.makers.*`, filled from slots).
-    const BROTHERS = /\bRafa\b|\bRafael\b|\bAndr[eé]\b/;
+    // (`home.code.makers.*`, filled from slots). `\b` is ASCII-only in
+    // JavaScript, so it cannot see the edge of "André"; the boundaries are
+    // Unicode letter lookarounds instead.
+    const BROTHERS = /(?<!\p{L})(?:Rafa|Rafael|Andr[eé])(?!\p{L})/u;
     for (const locale of locales) {
       const hits = homeEntries(locale)
         .filter(([key]) => !key.startsWith("home.code.makers."))
