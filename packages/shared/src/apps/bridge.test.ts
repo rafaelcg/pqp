@@ -42,9 +42,6 @@ describe("handshake", () => {
     expect(
       bridgeAppHelloSchema.safeParse({ pqp: "app-hello", platformApi: 1, x: 1 }).success,
     ).toBe(false);
-    expect(bridgeAppPortSchema.safeParse({ pqp: "app-port", platformApi: 1, x: 1 }).success).toBe(
-      false,
-    );
     expect(bridgeAppPortSchema.safeParse({ pqp: "app-port", platformApi: 2 }).success).toBe(false);
     expect(bridgeAppHelloSchema.safeParse({ pqp: "app-hello", platformApi: 0 }).success).toBe(
       false,
@@ -276,6 +273,7 @@ const participant = (extra: Record<string, unknown> = {}) => ({
   avatar: AVATAR,
   role: "player",
   isHost: true,
+  connection: "present",
   ...extra,
 });
 
@@ -289,7 +287,7 @@ const hostMessages: Record<string, unknown> = {
     ok: true,
     result: { participants: [participant()] },
   },
-  "response ok (events.send)": { id: "r1", ok: true, result: {} },
+  "response ok (events.send)": { id: "r1", ok: true, result: null },
   "response ok (assets.get)": {
     id: "r1",
     ok: true,
@@ -325,13 +323,13 @@ describe("host to app messages", () => {
       "participants.get": { participants: [] },
       "state.get": { rev: 1, value: null },
       "state.patch": { rev: 2 },
-      "events.send": {},
+      "events.send": null,
       "assets.get": { name: "core.wasm", bytes: new ArrayBuffer(1) },
       "files.pickLocal": { bytes: new ArrayBuffer(1) },
       "ui.resize": { height: 300 },
       "ui.fullscreen": { on: true },
       "share.request": { on: true },
-      "session.end": {},
+      "session.end": null,
     };
     expect(Object.keys(results).sort()).toEqual(Object.keys(requests).sort());
     for (const [type, result] of Object.entries(results)) {
@@ -387,9 +385,51 @@ describe("host to app messages", () => {
     expect(bridgeHostMessageSchema.safeParse({ type: "navigate", url: "x" }).success).toBe(false);
   });
 
-  it.each(Object.keys(hostMessages))("rejects an unknown extra key on %s", (name) => {
+  // The direction rule: strict toward the app (it is untrusted), tolerant of a newer host.
+  it.each(Object.keys(hostMessages))("strips an unknown extra key on %s", (name) => {
     const message = { ...(hostMessages[name] as object), extra: 1 };
-    expect(bridgeHostMessageSchema.safeParse(message).success).toBe(false);
+    const result = bridgeHostMessageSchema.safeParse(message);
+    expect(result.success, JSON.stringify(result)).toBe(true);
+    expect(result.success && "extra" in result.data).toBe(false);
+  });
+
+  it("strips an unknown key nested in a participant, a result and a hello", () => {
+    const participants = bridgeHostMessageSchema.parse({
+      type: "participants",
+      participants: [participant({ futureField: 1, userId: "pqp-user-1" })],
+    });
+    expect(participants).toEqual({ type: "participants", participants: [participant()] });
+    const state = bridgeHostMessageSchema.parse({
+      id: "r",
+      ok: true,
+      result: { rev: 1, value: { a: 1 }, futureField: true },
+    });
+    expect(state).toEqual({ id: "r", ok: true, result: { rev: 1, value: { a: 1 } } });
+    const hello = bridgeHostMessageSchema.parse({
+      ...(hostMessages.hello as object),
+      app: { id: "eco", version: "1.0.0", serverId: "s" },
+      self: { seatId: SEAT, role: "player", isHost: true, userId: "u" },
+    });
+    expect(hello).toMatchObject({
+      app: { id: "eco", version: "1.0.0" },
+      self: { seatId: SEAT, role: "player", isHost: true },
+    });
+    expect(JSON.stringify(hello)).not.toMatch(/serverId|userId/);
+  });
+
+  it("accepts a participant that is reconnecting and rejects any other connection", () => {
+    const push = (connection: unknown) => ({
+      type: "participants",
+      participants: [participant({ connection })],
+    });
+    expect(bridgeHostMessageSchema.safeParse(push("reconnecting")).success).toBe(true);
+    expect(bridgeHostMessageSchema.safeParse(push("gone")).success).toBe(false);
+    expect(bridgeHostMessageSchema.safeParse(push(undefined)).success).toBe(false);
+    expect(
+      bridgeResultSchemas["participants.get"].safeParse({
+        participants: [participant({ connection: "reconnecting" })],
+      }).success,
+    ).toBe(true);
   });
 
   it("rejects a seat id outside the 16 to 32 character alphabet", () => {
@@ -467,14 +507,13 @@ describe("host to app messages", () => {
     ).toBe(false);
   });
 
-  it("rejects a participant carrying a pqp identity", () => {
+  it("never lets a pqp identity through a participant, it is stripped", () => {
     for (const key of ["userId", "user_id", "email", "token"]) {
-      expect(
-        bridgeHostMessageSchema.safeParse({
-          type: "participants",
-          participants: [participant({ [key]: "x" })],
-        }).success,
-      ).toBe(false);
+      const parsed = bridgeHostMessageSchema.parse({
+        type: "participants",
+        participants: [participant({ [key]: "x" })],
+      });
+      expect(JSON.stringify(parsed)).not.toContain(`"${key}"`);
     }
   });
 
@@ -519,13 +558,7 @@ describe("host to app messages", () => {
     expect(bridgeHostMessageSchema.safeParse({ ...hello, platformApi: 2 }).success).toBe(false);
     expect(bridgeHostMessageSchema.safeParse({ ...hello, connection: "gone" }).success).toBe(false);
     expect(
-      bridgeHostMessageSchema.safeParse({
-        ...hello,
-        self: { seatId: SEAT, role: "player", isHost: true, userId: "x" },
-      }).success,
-    ).toBe(false);
-    expect(
-      bridgeHostMessageSchema.safeParse({ ...hello, app: { id: "eco", version: "1", serverId: "x" } })
+      bridgeHostMessageSchema.safeParse({ ...hello, self: { seatId: "short", role: "player", isHost: true } })
         .success,
     ).toBe(false);
   });

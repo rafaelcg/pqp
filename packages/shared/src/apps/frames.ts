@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   appEndReasonSchema,
+  appParticipantConnectionSchema,
   appRoleSchema,
   appUserIdSchema,
   eventDataSchema,
@@ -24,7 +25,11 @@ import { APP_MAX_PARTICIPANTS } from "./limits.js";
  * `chat.ts`: Phase 2 of the apps program adds them there. Until then these
  * schemas are the contract and nothing sends them.
  *
- * Every object is strict, so an unknown key is a rejection.
+ * Strict toward the less trusted side, tolerant toward a newer peer: client to
+ * server frames are strict (an unknown key is a rejection, the server validates
+ * untrusted input), server to client frames use zod's default strip (an unknown
+ * key is dropped, never passed through), so a field added to a server frame
+ * later does not make an older client reject the whole frame.
  */
 
 const uuid = z.string().uuid();
@@ -78,8 +83,13 @@ export type AppClientFrame = z.infer<typeof appClientFrameSchema>;
 
 /** One person in a session, as the whole channel's viewers may see it. */
 export const appSessionSummaryParticipantSchema = z
-  .object({ userId: uuid, role: appRoleSchema, joinedAt: isoDate })
-  .strict();
+  .object({
+    userId: uuid,
+    role: appRoleSchema,
+    joinedAt: isoDate,
+    connection: appParticipantConnectionSchema,
+  })
+  .strip();
 
 /**
  * What everyone who can view the channel knows about its live session: enough
@@ -99,10 +109,10 @@ export const appSessionSummarySchema = z
     /** Set while a host handoff is counting down. */
     handoff: z
       .object({ toUserId: uuid.nullable(), at: isoDate })
-      .strict()
+      .strip()
       .nullable(),
   })
-  .strict();
+  .strip();
 export type AppSessionSummary = z.infer<typeof appSessionSummarySchema>;
 
 /** To everyone who can view the channel. `session: null` means none is live. */
@@ -112,7 +122,7 @@ export const channelAppSchema = z
     channelId: uuid,
     session: appSessionSummarySchema.nullable(),
   })
-  .strict();
+  .strip();
 
 /** One person in a session, as its participants see it. */
 export const appSessionParticipantSchema = z
@@ -121,10 +131,11 @@ export const appSessionParticipantSchema = z
     userId: uuid,
     role: appRoleSchema,
     isHost: z.boolean(),
+    connection: appParticipantConnectionSchema,
     /** Per-app derived id, only for people who consented. */
     appUserId: appUserIdSchema.optional(),
   })
-  .strict();
+  .strip();
 
 /** Snapshot sent to a participant when they join or resume. */
 export const appSessionSchema = z
@@ -137,7 +148,7 @@ export const appSessionSchema = z
     state: stateSnapshotSchema,
     participants: z.array(appSessionParticipantSchema).max(APP_MAX_PARTICIPANTS),
   })
-  .strict();
+  .strip();
 
 export const appStateSchema = z
   .object({
@@ -146,7 +157,7 @@ export const appStateSchema = z
     rev: stateRevSchema,
     value: stateValueSchema,
   })
-  .strict();
+  .strip();
 
 export const appEventSchema = z
   .object({
@@ -156,7 +167,7 @@ export const appEventSchema = z
     name: eventNameSchema,
     data: eventDataSchema,
   })
-  .strict();
+  .strip();
 
 export const appEndedSchema = z
   .object({
@@ -169,9 +180,9 @@ export const appEndedSchema = z
         participants: z.number().int().min(0),
         durationSeconds: z.number().int().min(0),
       })
-      .strict(),
+      .strip(),
   })
-  .strict();
+  .strip();
 
 export const APP_ERROR_OPS = ["join", "leave", "state", "event"] as const;
 export const APP_ERROR_CODES = [
@@ -191,7 +202,7 @@ export const appErrorSchema = z
     op: z.enum(APP_ERROR_OPS),
     code: z.enum(APP_ERROR_CODES),
   })
-  .strict();
+  .strip();
 
 export const appServerFrameSchema = z.discriminatedUnion("type", [
   channelAppSchema,

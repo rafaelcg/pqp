@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
+  type AppParticipantConnection,
   appEndReasonSchema,
+  appParticipantConnectionSchema,
   appRoleSchema,
   appUserIdSchema,
   eventDataSchema,
@@ -42,8 +44,14 @@ import {
  *    (`bridgeAppMessageSchema`), and responses and pushes from the host
  *    (`bridgeHostMessageSchema`).
  *
- * Every object is strict: an unknown key is a rejection, so a later field can
- * never reach an app by riding along on an old message.
+ * Strict toward the less trusted side, tolerant toward a newer peer
+ * -------------------------------------------------------------------
+ * Messages FROM the app (`app-hello`, every request) are strict: an unknown
+ * key is a rejection, because the app is untrusted and must not smuggle
+ * anything past the host. Messages TO the app (`app-port`, responses, pushes)
+ * use zod's default strip: an unknown key is dropped, never passed through, so
+ * a field added later does not make an app pinned to platform API 1 reject the
+ * whole message, and an unknown key can never reach the app either.
  */
 
 // ---------------------------------------------------------------------------
@@ -67,7 +75,7 @@ export const bridgeAppPortSchema = z
     pqp: z.literal("app-port"),
     platformApi: z.literal(APP_PLATFORM_API),
   })
-  .strict();
+  .strip();
 export type BridgeAppPort = z.infer<typeof bridgeAppPortSchema>;
 
 // ---------------------------------------------------------------------------
@@ -128,6 +136,9 @@ export type BridgeRequestType = BridgeAppMessage["type"];
 // ---------------------------------------------------------------------------
 // Host to app: shared pieces
 
+export const bridgeParticipantConnectionSchema = appParticipantConnectionSchema;
+export type BridgeParticipantConnection = AppParticipantConnection;
+
 /** What an app may be told about one person in the session. */
 export const bridgeParticipantSchema = z
   .object({
@@ -141,10 +152,12 @@ export const bridgeParticipantSchema = z
       .nullable(),
     role: appRoleSchema,
     isHost: z.boolean(),
+    /** `reconnecting` while the seat is held for its 90 second resume window. */
+    connection: bridgeParticipantConnectionSchema,
     /** Per-app derived id. Present only for people who ticked the consent box. */
     appUserId: appUserIdSchema.optional(),
   })
-  .strict();
+  .strip();
 export type BridgeParticipant = z.infer<typeof bridgeParticipantSchema>;
 
 export const bridgeParticipantListSchema = z
@@ -202,20 +215,24 @@ const arrayBufferSchema = z.custom<ArrayBuffer>(isArrayBuffer, {
   message: "expected an ArrayBuffer",
 });
 
-/** The `result` of a successful call, per request type. */
+/**
+ * The `result` of a successful call, per request type. Calls with nothing to
+ * return answer `null`, so no result shape is an empty object that would
+ * swallow a malformed one in the response union.
+ */
 export const bridgeResultSchemas = {
-  "participants.get": z.object({ participants: bridgeParticipantListSchema }).strict(),
+  "participants.get": z.object({ participants: bridgeParticipantListSchema }).strip(),
   "state.get": stateSnapshotSchema,
-  "state.patch": z.object({ rev: stateRevSchema }).strict(),
-  "events.send": z.object({}).strict(),
+  "state.patch": z.object({ rev: stateRevSchema }).strip(),
+  "events.send": z.null(),
   "assets.get": z
     .object({ name: z.string().min(1).max(64), bytes: arrayBufferSchema })
-    .strict(),
-  "files.pickLocal": z.object({ bytes: arrayBufferSchema }).strict(),
-  "ui.resize": z.object({ height: z.number().int() }).strict(),
-  "ui.fullscreen": z.object({ on: z.boolean() }).strict(),
-  "share.request": z.object({ on: z.boolean() }).strict(),
-  "session.end": z.object({}).strict(),
+    .strip(),
+  "files.pickLocal": z.object({ bytes: arrayBufferSchema }).strip(),
+  "ui.resize": z.object({ height: z.number().int() }).strip(),
+  "ui.fullscreen": z.object({ on: z.boolean() }).strip(),
+  "share.request": z.object({ on: z.boolean() }).strip(),
+  "session.end": z.null(),
 } as const satisfies Record<BridgeRequestType, z.ZodTypeAny>;
 
 const bridgeResultSchema = z.union([
@@ -237,14 +254,14 @@ export const bridgeResponseOkSchema = z
     ok: z.literal(true),
     result: bridgeResultSchema,
   })
-  .strict();
+  .strip();
 export const bridgeResponseErrorSchema = z
   .object({
     id: bridgeRequestIdSchema,
     ok: z.literal(false),
     error: bridgeErrorCodeSchema,
   })
-  .strict();
+  .strip();
 export const bridgeResponseSchema = z.union([
   bridgeResponseOkSchema,
   bridgeResponseErrorSchema,
@@ -255,7 +272,7 @@ export type BridgeResponse = z.infer<typeof bridgeResponseSchema>;
 // Host to app: pushes (no id)
 
 function push<T extends string, S extends z.ZodRawShape>(type: T, fields: S) {
-  return z.object({ type: z.literal(type), ...fields }).strict();
+  return z.object({ type: z.literal(type), ...fields }).strip();
 }
 
 /** Sent once, right after the port is handed over. */
@@ -266,13 +283,13 @@ export const bridgeHelloPushSchema = push("hello", {
       id: z.string().regex(/^[a-z][a-z0-9-]{1,30}[a-z0-9]$/),
       version: z.string().max(64),
     })
-    .strict(),
+    .strip(),
   locale: z.string().regex(/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$/),
   theme: bridgeThemeSchema,
   reducedMotion: z.boolean(),
   self: z
     .object({ seatId: seatIdSchema, role: appRoleSchema, isHost: z.boolean() })
-    .strict(),
+    .strip(),
   connection: bridgeConnectionStatusSchema,
 });
 export const bridgeParticipantsPushSchema = push("participants", {

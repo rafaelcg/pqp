@@ -26,7 +26,7 @@ const summary = (extra: Record<string, unknown> = {}) => ({
   startedBy: USER,
   hostUserId: USER,
   startedAt: NOW,
-  participants: [{ userId: USER, role: "player", joinedAt: NOW }],
+  participants: [{ userId: USER, role: "player", joinedAt: NOW, connection: "present" }],
   players: 1,
   spectators: 0,
   handoff: null,
@@ -51,7 +51,7 @@ const serverFrames: Record<string, Record<string, unknown>> = {
     role: "player",
     isHost: true,
     state: { rev: 0, value: {} },
-    participants: [{ seatId: SEAT, userId: USER, role: "player", isHost: true }],
+    participants: [{ seatId: SEAT, userId: USER, role: "player", isHost: true, connection: "present" }],
   },
   "app-state": { type: "app-state", sessionId: SESSION, rev: 3, value: { n: 1 } },
   "app-event": { type: "app-event", sessionId: SESSION, fromSeatId: SEAT, name: "ping", data: [] },
@@ -198,7 +198,7 @@ describe("server to client frames", () => {
       ...serverFrames["app-session"],
       participants: [participant],
     });
-    const base = { seatId: SEAT, userId: USER, role: "player", isHost: true };
+    const base = { seatId: SEAT, userId: USER, role: "player", isHost: true, connection: "present" };
     expect(
       appServerFrameSchema.safeParse(frame({ ...base, appUserId: "A".repeat(43) })).success,
     ).toBe(true);
@@ -211,30 +211,57 @@ describe("server to client frames", () => {
     );
   });
 
-  it.each(Object.keys(serverFrames))("rejects an unknown extra key on %s", (type) => {
-    expect(appServerFrameSchema.safeParse({ ...serverFrames[type], extra: 1 }).success).toBe(false);
+  // The direction rule: strict toward the server (untrusted input), tolerant of a newer server.
+  it.each(Object.keys(serverFrames))("strips an unknown extra key on %s", (type) => {
+    const result = appServerFrameSchema.safeParse({ ...serverFrames[type], extra: 1 });
+    expect(result.success, JSON.stringify(result)).toBe(true);
+    expect(result.success && "extra" in result.data).toBe(false);
   });
 
-  it("rejects an unknown extra key inside nested objects", () => {
-    expect(
-      appServerFrameSchema.safeParse({
-        type: "channel-app",
-        channelId: CHANNEL,
-        session: summary({ participants: [{ userId: USER, role: "player", joinedAt: NOW, seatId: SEAT }] }),
-      }).success,
-    ).toBe(false);
-    expect(
-      appServerFrameSchema.safeParse({
-        ...serverFrames["app-ended"],
-        summary: { participants: 1, durationSeconds: 1, x: 1 },
-      }).success,
-    ).toBe(false);
-    expect(
-      appServerFrameSchema.safeParse({
-        ...serverFrames["app-session"],
-        state: { rev: 0, value: {}, x: 1 },
-      }).success,
-    ).toBe(false);
+  it("strips an unknown key inside nested objects instead of rejecting the frame", () => {
+    const channelApp = appServerFrameSchema.parse({
+      type: "channel-app",
+      channelId: CHANNEL,
+      session: summary({
+        futureField: 1,
+        participants: [
+          { userId: USER, role: "player", joinedAt: NOW, connection: "present", seatId: SEAT },
+        ],
+        handoff: { toUserId: null, at: NOW, reason: "x" },
+      }),
+    });
+    expect(JSON.stringify(channelApp)).not.toMatch(/futureField|seatId|reason/);
+    const ended = appServerFrameSchema.parse({
+      ...serverFrames["app-ended"],
+      summary: { participants: 1, durationSeconds: 1, x: 1 },
+    });
+    expect(ended).toMatchObject({ summary: { participants: 1, durationSeconds: 1 } });
+    expect(JSON.stringify(ended)).not.toContain('"x"');
+    const session = appServerFrameSchema.parse({
+      ...serverFrames["app-session"],
+      state: { rev: 0, value: {}, x: 1 },
+    });
+    expect(JSON.stringify(session)).not.toContain('"x"');
+  });
+
+  it("carries a per-participant connection state in the summary and the snapshot", () => {
+    const summaryWith = (connection: unknown) => ({
+      type: "channel-app",
+      channelId: CHANNEL,
+      session: summary({
+        participants: [{ userId: USER, role: "player", joinedAt: NOW, connection }],
+      }),
+    });
+    const snapshotWith = (connection: unknown) => ({
+      ...serverFrames["app-session"],
+      participants: [{ seatId: SEAT, userId: USER, role: "player", isHost: true, connection }],
+    });
+    expect(appServerFrameSchema.safeParse(summaryWith("reconnecting")).success).toBe(true);
+    expect(appServerFrameSchema.safeParse(snapshotWith("reconnecting")).success).toBe(true);
+    for (const bad of ["gone", undefined, true]) {
+      expect(appServerFrameSchema.safeParse(summaryWith(bad)).success).toBe(false);
+      expect(appServerFrameSchema.safeParse(snapshotWith(bad)).success).toBe(false);
+    }
   });
 
   it("rejects a bad seat id", () => {
@@ -244,7 +271,7 @@ describe("server to client frames", () => {
       expect(
         appServerFrameSchema.safeParse({
           ...serverFrames["app-session"],
-          participants: [{ seatId, userId: USER, role: "player", isHost: false }],
+          participants: [{ seatId, userId: USER, role: "player", isHost: false, connection: "present" }],
         }).success,
       ).toBe(false);
     }
@@ -260,6 +287,7 @@ describe("server to client frames", () => {
           userId: uuidAt(i),
           role: "spectator",
           joinedAt: NOW,
+          connection: "present",
         })),
       }),
     });
@@ -270,6 +298,7 @@ describe("server to client frames", () => {
         userId: uuidAt(i),
         role: "spectator",
         isHost: false,
+        connection: "present",
       })),
     });
     expect(appServerFrameSchema.safeParse(summaryOf(APP_MAX_PARTICIPANTS)).success).toBe(true);

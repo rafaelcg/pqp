@@ -11,7 +11,9 @@ Two messages travel on `window.postMessage`, nothing else does:
 1. The app posts `{ pqp: "app-hello", platformApi: 1 }` to its parent.
 2. The host answers `{ pqp: "app-port", platformApi: 1 }` and transfers one end of a `MessageChannel`.
 
-The frame is an opaque origin, so there is no origin to compare. The host checks `event.source === iframe.contentWindow` and ignores every other message. The app checks that the port message came from `window.parent`. Everything after that is on the port, and every object is strict: an unknown key is a rejection.
+The frame is an opaque origin, so there is no origin to compare. The host checks `event.source === iframe.contentWindow` and ignores every other message. The app checks that the port message came from `window.parent`. Everything after that is on the port.
+
+**Strict toward the less trusted side, tolerant toward a newer peer.** Messages from the app (`app-hello`, every request) and client to server frames are strict: an unknown key is a rejection. Messages to the app (`app-port`, responses, pushes) and server to client frames use zod's default strip: an unknown key is dropped, never passed through. A field added later therefore does not make an app pinned to platform API 1, or an older client, reject the whole message, and a stripped key can never reach the app.
 
 ### App to host (requests, `{ id, type, ...params }`, `id` 1 to 32 characters)
 
@@ -28,12 +30,12 @@ The frame is an opaque origin, so there is no origin to compare. The host checks
 
 ### Host to app
 
-Responses carry the request `id`: `{ id, ok: true, result }` or `{ id, ok: false, error }`, with `error` one of `not-allowed`, `not-host`, `too-large`, `rate-limited`, `stale-rev`, `cancelled`, `unavailable`, `ended`, `invalid`.
+Responses carry the request `id`. A call with nothing to return (`events.send`, `session.end`) answers `result: null`: `{ id, ok: true, result }` or `{ id, ok: false, error }`, with `error` one of `not-allowed`, `not-host`, `too-large`, `rate-limited`, `stale-rev`, `cancelled`, `unavailable`, `ended`, `invalid`.
 
 Pushes have no id:
 
 - `hello`: platform version, app id and version, locale, theme, reduced motion, `self` (seat, role, host), connection. Sent once after the port is handed over.
-- `participants`: seat id, display name, avatar as a data URL (or null), role, host flag, and `appUserId` only for people who consented.
+- `participants`: seat id, display name, avatar as a data URL (or null), role, host flag, `connection` (`present`, or `reconnecting` while the seat is held for its 90 second resume window), and `appUserId` only for people who consented. The same `connection` field is on the participants of `participants.get`, of the `app-session` frame and of the `channel-app` summary.
 - `state { rev, value }`
 - `event { fromSeatId, name, data }`
 - `connection { status }`: `online` or `reconnecting`.

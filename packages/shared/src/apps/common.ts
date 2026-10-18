@@ -138,6 +138,10 @@ export const seatIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,32}$/);
 /** Derived per-app identity, present only for people who consented. */
 export const appUserIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
 
+/** Whether a seated person's socket is up, or the seat is held for their 90 second resume window. */
+export const appParticipantConnectionSchema = z.enum(["present", "reconnecting"]);
+export type AppParticipantConnection = z.infer<typeof appParticipantConnectionSchema>;
+
 export const appRoleSchema = z.enum(["player", "spectator"]);
 export type AppRole = z.infer<typeof appRoleSchema>;
 
@@ -163,5 +167,5 @@ export const stateRevSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGE
 /** State as it travels: the revision and the value it belongs to. */
 export const stateSnapshotSchema = z
   .object({ rev: stateRevSchema, value: stateValueSchema })
-  .strict();
+  .strip();
 export type AppStateSnapshot = z.infer<typeof stateSnapshotSchema>;
