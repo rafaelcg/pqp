@@ -5530,6 +5530,53 @@ BEGIN
 
   INSERT INTO data_migrations (name) VALUES ('soundboard_bits_2026_10b');
 END $$;
+
+-- USE_APPS (bit 29 = 536870912): start an app in a channel (the apps
+-- platform, behind the per-server `apps` flag; docs/APPS.md). One-shot, like
+-- soundboard_bits_2026_10b. It goes onto @everyone of servers that are NOT
+-- communities (a community only gets it when its owner grants it, so the bit
+-- is deliberately absent from PERMISSION_DEFAULT_EVERYONE and P2-A adds it at
+-- creation of a non-community server), and onto the manager, admin and
+-- moderator system roles everywhere. Owner already resolves to every bit in
+-- application code. Every server touched gets its permissions_version bumped
+-- so cached resolutions drop. The bit does nothing while `apps` is off.
+DO $$
+DECLARE
+  use_apps CONSTANT BIGINT := 536870912;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'use_apps_bit_2026_10'
+  ) THEN
+    RETURN;
+  END IF;
+
+  WITH changed AS (
+    UPDATE roles r
+       SET permissions = r.permissions | use_apps
+      FROM servers s
+     WHERE r.server_id = s.id
+       AND r.is_everyone
+       AND NOT COALESCE(s.is_community, FALSE)
+       AND (r.permissions & use_apps) = 0
+    RETURNING r.server_id
+  ),
+  staff AS (
+    UPDATE roles
+       SET permissions = permissions | use_apps
+     WHERE system_key IN ('manager', 'admin', 'moderator')
+       AND (permissions & use_apps) = 0
+    RETURNING server_id
+  )
+  UPDATE servers
+     SET permissions_version = permissions_version + 1
+   WHERE id IN (
+     SELECT server_id FROM changed
+     UNION
+     SELECT server_id FROM staff
+   );
+
+  INSERT INTO data_migrations (name) VALUES ('use_apps_bit_2026_10');
+END $$;
 -- THE ONE ROW THAT MAKES A START-OF-STREAM NOTICE HAPPEN ONCE. One row per
 -- channel: when a share has been stable long enough, every API machine that saw
 -- it races one upsert on this row, and only the one that finds
