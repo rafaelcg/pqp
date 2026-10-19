@@ -180,21 +180,22 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
   const model = liveModel ?? endedModel;
 
   // The ended strip collapses on its own after 8 s, never moving focus.
+  const endedId = endedModel?.sessionId ?? null;
+  const endedAt = endedRecord?.endedAt ?? null;
   useEffect(() => {
-    if (!endedModel) {
+    if (endedId === null) {
       setCollapseEnded(null);
-      return;
+      return undefined;
     }
-    const sessionId = endedModel.sessionId;
-    const age = endedRecord ? Date.now() - endedRecord.endedAt : 0;
+    const age = endedAt === null ? 0 : Date.now() - endedAt;
     const wait = Math.max(0, ENDED_STRIP_MS - age);
-    const collapse = window.setTimeout(() => setCollapseEnded(sessionId), wait);
-    const drop = window.setTimeout(() => setDismissedEnded(sessionId), wait + 200);
+    const collapse = window.setTimeout(() => setCollapseEnded(endedId), wait);
+    const drop = window.setTimeout(() => setDismissedEnded(endedId), wait + 200);
     return () => {
       window.clearTimeout(collapse);
       window.clearTimeout(drop);
     };
-  }, [endedModel?.sessionId, endedRecord?.endedAt]);
+  }, [endedId, endedAt]);
 
   // A session that ends while focus is inside the pane moves focus to Fechar,
   // because the frame (and the focus with it) is about to disappear.

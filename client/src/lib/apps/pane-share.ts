@@ -33,8 +33,12 @@ function cropTargetClass(): CropTargetStatic | null {
 
 /** Whether this browser can crop a tab capture to an element. */
 export function supportsRegionCapture(): boolean {
-  if (typeof MediaStreamTrack === "undefined") return false;
-  return cropTargetClass() !== null && "cropTo" in MediaStreamTrack.prototype;
+  // `cropTo` lives on `BrowserCaptureMediaStreamTrack`, the class a tab
+  // capture's video track is, and not on the plain `MediaStreamTrack` (looking
+  // there says "no" in the very browsers that can do it).
+  const captureTrack = (globalThis as { BrowserCaptureMediaStreamTrack?: { prototype: object } })
+    .BrowserCaptureMediaStreamTrack;
+  return cropTargetClass() !== null && captureTrack !== undefined && "cropTo" in captureTrack.prototype;
 }
 
 export interface PaneCaptureOptions {

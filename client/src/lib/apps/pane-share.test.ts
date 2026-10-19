@@ -11,7 +11,13 @@ afterEach(() => {
 
 describe("supportsRegionCapture", () => {
   it("is false without CropTarget (Safari, Firefox)", () => {
+    vi.stubGlobal("BrowserCaptureMediaStreamTrack", class {});
+    expect(supportsRegionCapture()).toBe(false);
+  });
+
+  it("is false when only a plain MediaStreamTrack is known, whatever it says", () => {
     vi.stubGlobal("MediaStreamTrack", class {});
+    vi.stubGlobal("CropTarget", { fromElement: async () => ({}) });
     expect(supportsRegionCapture()).toBe(false);
   });
 
@@ -19,7 +25,7 @@ describe("supportsRegionCapture", () => {
     class Track {
       cropTo() {}
     }
-    vi.stubGlobal("MediaStreamTrack", Track);
+    vi.stubGlobal("BrowserCaptureMediaStreamTrack", Track);
     vi.stubGlobal("CropTarget", { fromElement: async () => ({}) });
     expect(supportsRegionCapture()).toBe(true);
   });

@@ -381,7 +381,10 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
       data-testid="app-session-strip"
       data-state={model.phase}
       className={cn(
-        "flex min-h-[52px] shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b py-1.5 pl-4 pr-3",
+        "@container/strip flex min-h-[52px] shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b py-1.5 pl-4 pr-3",
+        // Under 1100 px of strip the share switch keeps its name for assistive
+        // tech and drops the printed label (mock 03), so the row does not wrap.
+        "@max-[1099px]/strip:[&_[role=switch]>span:first-child]:sr-only",
         stripShell(model),
         entering && "app-strip-in",
       )}
