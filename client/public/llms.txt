@@ -1,24 +1,38 @@
 # pqp
 
-> pqp (pqp.gg) is an open-source voice and text chat for groups of friends, in the shape of Discord: servers with text and voice channels, DMs, friends, screen share and watch parties. It is written in Brazilian Portuguese first, runs in the browser, on desktop (Electron), on iOS (TestFlight beta) and on Android (Google Play, with the APK also available), and the whole thing is AGPL on GitHub so anyone can run their own instance.
+> pqp (pqp.gg) is an open-source voice and text chat for groups of friends, in the shape of Discord: servers with text and voice channels, DMs, friends, screen share with sound and watch parties. It runs in the browser, on desktop (Electron), on iOS (TestFlight beta) and on Android (Google Play, with the APK also available). The interface is in Brazilian Portuguese, English and Spanish. The whole thing is AGPL on GitHub, so anyone can run their own instance (today that needs Postgres and your own Clerk account).
 
-pqp is a small, independently run product. There is no public or agent-facing API: every endpoint on api.pqp.gg needs a signed-in user session, and the only things on this host an agent can read without one are the pages listed below. Public profile pages (`/@handle`) and community pages (`/c/slug`) exist, but they are not enumerable from here: a person or a community is found because somebody shares the link.
+pqp is a small, independently run product, made by two brothers. There is no public or agent-facing API: every endpoint on api.pqp.gg needs a signed-in user session, and the only things on this host an agent can read without one are the pages listed below. Public profile pages (`/@handle`) and community pages (`/c/slug`) exist, but they are not enumerable from here: a person or a community is found because somebody shares the link.
 
 ## Public pages
 
 - [Home](https://pqp.gg/): what pqp is and how to start
-- [pqp vs Discord](https://pqp.gg/vs-discord): the comparison page
-- [Screen share](https://pqp.gg/tela): sharing a screen from the browser (sound comes with a Chrome or Edge tab)
+- [Compare](https://pqp.gg/compare): pqp, Discord, Stoat, TeamSpeak 6 and Slack huddles in one feature table, with a source and the date checked on every cell, and what pqp does not have yet
+- [pqp vs Discord](https://pqp.gg/vs-discord): feature by feature, with sources and dates, including what Discord does better
+- [pqp vs Stoat](https://pqp.gg/compare/stoat), [pqp vs TeamSpeak 6](https://pqp.gg/compare/teamspeak), [pqp vs Slack huddles](https://pqp.gg/compare/slack): one short page per product
+- [Screen share](https://pqp.gg/tela): sharing a screen from the browser (sound comes with a Chrome or Edge tab), and four ways to do it
+- [Come to pqp](https://pqp.gg/vem): bring a Discord server's layout over with a template link
 - [Claim your @](https://pqp.gg/garanta): how a public handle works
-- [Watch party](https://pqp.gg/watch-party): streaming to hundreds in the browser; early access waitlist
+- [Watch party](https://pqp.gg/watch-party): streaming to hundreds in the browser; early access, switched on one server at a time
 - [For streamers](https://pqp.gg/streamers): a room where a streamer's community watches their shared screen in the browser; asks for watch party access
-- [Blog and release notes](https://pqp.gg/blog): what shipped, week by week
+- [Blog and release notes](https://pqp.gg/blog): what shipped, and the guides below
 - [iOS beta](https://pqp.gg/beta): TestFlight
 - [Android](https://pqp.gg/android): Google Play, and the direct APK still available
 - [Desktop download](https://pqp.gg/download): Electron builds, and the code signing policy (https://pqp.gg/download#code-signing)
 - [Status](https://pqp.gg/status): live service status
 - [Support the project](https://pqp.gg/apoie): donations; nothing is unlocked by donating
 - [About and contact](https://pqp.gg/contact): who makes pqp (two brothers), the contact address, and the independence statement
+
+## Guides
+
+The guides are written in Portuguese; two also have an English version.
+
+- [pqp vs Discord: an honest comparison](https://pqp.gg/blog/pqp-vs-discord-2026): what pqp does, what Discord does better, with sources and the date checked
+- [How to watch a film together online](https://pqp.gg/blog/watch-party-assistir-filme-com-amigos): watch party, step by step
+- [Screen share with audio](https://pqp.gg/blog/compartilhar-tela-com-audio): what carries sound on Windows, Mac, browsers and phones
+- [Moving a Discord server to pqp](https://pqp.gg/blog/migrar-servidor-discord-para-pqp): the layout import and what does not come along
+- [Voice chat for a streamer's community](https://pqp.gg/blog/chat-de-voz-para-comunidade-de-streamer): why a server beside the live
+- [Installing pqp on Android, iPhone and PC](https://pqp.gg/blog/instalar-pqp-android-iphone-pc)
 
 ## Policies
 
@@ -32,6 +46,10 @@ pqp is a small, independently run product. There is no public or agent-facing AP
 - [Source code (AGPL)](https://github.com/rafaelcg/pqp): the whole product, with self-hosting docs
 - [Agent skills index](https://pqp.gg/.well-known/agent-skills/index.json): what an agent can honestly do with this site
 - [API catalog](https://pqp.gg/.well-known/api-catalog): where the API lives and where its status is published
+
+## Limits
+
+pqp is a beta. It has a far smaller community and no bot ecosystem next to Discord's (only webhooks and built-in commands), the iPhone app is a TestFlight beta, and a self-hosted copy needs its own Clerk account. The comparison pages say so, and say "not verified" where a claim about another product could not be checked.
 
 ## Optional
 

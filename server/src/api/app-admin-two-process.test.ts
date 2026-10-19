@@ -279,19 +279,24 @@ describeDb("an apps write on one API process, seen from the other and on the bus
 
     const list = await call<{
       apps: { id: string; status: string; globalEnabled: boolean; serversOn: number }[];
-      audit: { action: string; actorKind: string }[];
+      audit: { action: string; actorKind: string; appId: string }[];
     }>(b!, "GET", "/api/admin/apps", TOKEN);
     expect(list.status).toBe(200);
-    expect(list.body.apps).toEqual([
+    // Only this test's app: the committed catalog (server/src/apps/catalog.json)
+    // is loaded at boot too, so a first-party app such as Eco is on the list with
+    // its own `catalog-load` audit row.
+    const enquete = list.body.apps.filter((app) => app.id === "enquete");
+    const enqueteAudit = list.body.audit.filter((row) => row.appId === "enquete");
+    expect(enquete).toEqual([
       expect.objectContaining({ id: "enquete", status: "live", globalEnabled: true, serversOn: 1 }),
     ]);
-    expect(list.body.audit.map((row) => row.action)).toEqual([
+    expect(enqueteAudit.map((row) => row.action)).toEqual([
       "operator-server",
       "global",
       "status",
       "review",
     ]);
-    expect(list.body.audit.every((row) => row.actorKind === "dashboard")).toBe(true);
+    expect(enqueteAudit.every((row) => row.actorKind === "dashboard")).toBe(true);
   }, 30_000);
 
   it("Desligar em todos on A ends the session for the whole cluster: the bus carries the end, B reads it ended", async () => {

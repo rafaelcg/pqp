@@ -95,6 +95,8 @@ export async function appsConfigForServer(serverId: string): Promise<AppsConfig>
       channelTypes: manifest.channelTypes,
       players: manifest.players,
       requires: manifest.requires,
+      state: manifest.state,
+      events: manifest.events,
       capabilities: manifest.capabilities,
       content: manifest.content,
       hostBound: manifest.hostBound,
