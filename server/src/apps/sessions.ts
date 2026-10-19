@@ -236,9 +236,11 @@ export async function startAppSession(
   invalidateLatestMessages(channelId);
   // The card's broadcast is tried once inline, so in the usual case it reaches
   // the channel before the `channel-app` frame. A read that fails (a pool blip,
-  // or the database gone for a minute) hands it to `retryAfterCommit`, which
-  // keeps trying in the background for about two minutes without holding this
-  // answer, so the channel is not left without the card until somebody reloads.
+  // or the database gone for a while) hands it to `retryAfterCommit`, which
+  // keeps trying in the background without holding this answer, waits out an
+  // open database breaker instead of spending attempts on it, and gives up only
+  // past its horizon, so the channel is not left without the card until
+  // somebody reloads.
   const announceCard = async () => {
     const hydrated = await getHydratedMessage(messageId);
     if (hydrated) {
@@ -251,6 +253,7 @@ export async function startAppSession(
     logEvent("apps.timelineAnnounceFailed", { sessionId, attempt: 0, error: String(error) });
     void retryAfterCommit(announceCard, {
       event: "apps.timelineAnnounceFailed",
+      key: `card:${sessionId}`,
       fields: { sessionId },
     });
   }

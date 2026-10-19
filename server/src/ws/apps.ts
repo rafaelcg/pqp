@@ -193,8 +193,9 @@ async function deliverEndedLocally(frame: AppEnded): Promise<void> {
   // Seated sockets already have the frame. The rest of the channel's viewers
   // need the audience, and a lookup that fails must not leave every viewer's
   // card live: it is tried once here and, when that fails (a pool blip, or the
-  // database gone for a minute), kept trying in the background for about two
-  // minutes by `retryAfterCommit` instead of being read as an empty audience.
+  // database gone for a while), kept trying in the background by
+  // `retryAfterCommit`, past an open breaker, instead of being read as an
+  // empty audience.
   const fanOut = async () => {
     // a failed read throws and is retried; null means the channel no longer exists,
     // so there is nobody left to tell
@@ -214,6 +215,7 @@ async function deliverEndedLocally(frame: AppEnded): Promise<void> {
     logEvent("apps.endedAudienceFailed", { sessionId: frame.sessionId, attempt: 0, error: String(error) });
     void retryAfterCommit(fanOut, {
       event: "apps.endedAudienceFailed",
+      key: `ended:${frame.sessionId}`,
       fields: { sessionId: frame.sessionId },
     });
   }

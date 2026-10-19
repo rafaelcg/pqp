@@ -12,6 +12,7 @@ vi.mock("./sockets.js", () => ({
 }));
 
 const { announceAppEnded, resetAppsWsForTests } = await import("./apps.js");
+const { resetPostCommitRetriesForTests } = await import("../apps/post-commit-retry.js");
 
 function fakeSocket() {
   return { readyState: 1, send: vi.fn() };
@@ -29,6 +30,7 @@ describe("app-ended to the channel's viewers", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     resetAppsWsForTests();
+    resetPostCommitRetriesForTests();
     audience.getChannelAudience.mockReset();
   });
   afterEach(() => {
