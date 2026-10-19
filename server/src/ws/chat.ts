@@ -1,4 +1,5 @@
 import type { WebSocket } from "ws";
+import { handleAppFrame, isAppClientFrame } from "./apps.js";
 import { z } from "zod";
 import {
   channelsUpdateSchema,
@@ -1858,9 +1859,11 @@ async function notifyChannelActivity(
     /**
      * The message is a system message (`nudge`). Rides the frame so a client
      * not looking at the conversation can say who called for its attention,
-     * and the push so the lock screen says so too.
+     * and the push so the lock screen says so too. Only a nudge is spoken
+     * of here; the other system kinds (an app's timeline card) are ordinary
+     * activity as far as this frame and the push are concerned.
      */
-    systemKind?: MessageSystemKind | null;
+    systemKind?: "nudge" | null;
   },
 ): Promise<void> {
   const [audience, blockers] = await Promise.all([
@@ -2784,7 +2787,7 @@ async function postChannelMessageAttempt(
       mentionHereUserIds: hereUserIds,
       mentionedUserIds,
       preview,
-      systemKind: message.systemKind,
+      systemKind: message.systemKind === "nudge" ? "nudge" : null,
     },
   );
 
@@ -2819,6 +2822,13 @@ export async function handleChatMessage(
 
   const conn = ensureConnection(session.socket, session.user);
   const payload = message.data;
+
+  // Apps in channels: join, leave, state, events. Their own module, their own
+  // rules (the platform's flag, the session's seat); nothing below applies.
+  if (isAppClientFrame(payload)) {
+    await handleAppFrame(session.socket, session.user, payload);
+    return;
+  }
 
   // ------------------------------------------------------ the timeout gate
   //

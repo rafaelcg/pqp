@@ -6067,6 +6067,22 @@ function MainAppContent({
             return;
           }
 
+          // Apps in channels (behind the per-server `apps` flag): a channel's
+          // live summary, and a session's snapshot, state, events, end and
+          // refusals. Nothing in the app draws them yet, and they are chat
+          // frames, not voice ones, so they stop here rather than reach the
+          // voice controller.
+          if (
+            message.type === "channel-app" ||
+            message.type === "app-ended" ||
+            message.type === "app-session" ||
+            message.type === "app-state" ||
+            message.type === "app-event" ||
+            message.type === "app-error"
+          ) {
+            return;
+          }
+
           // --- voice state ---
           // Record each room's transport as rosters pass through (the frame
           // still falls through to the controller). Powers the members

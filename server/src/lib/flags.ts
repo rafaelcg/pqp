@@ -874,9 +874,24 @@ export const FEATURE_FLAGS = {
     // session belongs to a channel that belongs to a server, and the admin
     // routes name one.
     perServer: true,
-    // No `clientVia` yet: `GET /api/apps/config?serverId=` (enabled) arrives
-    // with the session routes. Adding it earlier would fail the contract test
-    // that every served field is read by the client.
+    clientVia: "GET /api/apps/config?serverId= (enabled)",
+  },
+  locadora_share: {
+    description:
+      "Locadora compartilhando a tela do jogo: deixa o Locadora (e qualquer app de emulador) compartilhar o painel do jogo e deixa a galera assistir. Fica desligado até a resposta do advogado (Portão Legal L1b). Desligado, o servidor recusa o compartilhamento e a entrada como plateia nesses apps.",
+    env: "LOCADORA_SHARE",
+    parseEnv: exactTrue,
+    // Off: showing a running game to other people is an open legal question
+    // (docs/EMULATOR_ROOM.md item 6), so this waits for the lawyer's written
+    // answer. Only `true` turns it on. It acts on apps of `category:
+    // "emulator"` only; every other app shares through the ordinary path.
+    codeDefault: false,
+    // Every reader knows the server: a session belongs to a channel that
+    // belongs to a server, and `appShareAllowed` takes the server id.
+    perServer: true,
+    // No `clientVia` field yet: the config carries it as `shareAllowed` per
+    // app, and the client that reads it arrives with the product UI. Naming a
+    // field here before a client mentions it fails the contract test.
   },
 } as const satisfies Record<string, FlagDefinition>;
 

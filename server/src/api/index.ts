@@ -369,6 +369,8 @@ import {
   handleLivePreviewRoute,
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
+import { registerAppRoutes } from "./app-routes.js";
+import { Created, HttpErrorWithDetail } from "../lib/route-results.js";
 import {
   livePreviewChannelAvailable,
   livePreviewOnFor,
@@ -1464,11 +1466,6 @@ class Forbidden extends HttpError {
   }
 }
 
-/** Wrap a handler result to answer 201 instead of 200. */
-class Created {
-  constructor(readonly body: unknown) {}
-}
-
 function created(body: unknown): Created {
   return new Created(body);
 }
@@ -1510,24 +1507,9 @@ class NotFound extends HttpError {
   }
 }
 
-/**
- * An error whose body carries structured fields alongside `error`, for the one
- * refusal a client has to *act* on rather than merely display: account deletion
- * blocked by owned servers needs the list of servers, or the user is told to go
- * fix something without being told which thing.
- *
- * `detail` is merged into the error envelope, so `error` stays exactly where
- * every existing client already looks for it.
- */
-class HttpErrorWithDetail extends HttpError {
-  constructor(
-    status: number,
-    message: string,
-    readonly detail: Record<string, unknown>,
-  ) {
-    super(status, message);
-  }
-}
+// `HttpErrorWithDetail` (an error body with structured fields beside `error`,
+// used where a client must act on the refusal) and `Created` live in
+// `lib/route-results.ts`, shared with the route modules outside this file.
 
 async function requireServerMember(serverId: string, userId: string) {
   const role = await getMemberRole(serverId, userId);
@@ -1674,6 +1656,9 @@ async function refuseForumPost(channel: { id: string; type: string }) {
 }
 
 const router = createRouter();
+
+// The apps platform's routes (`app-routes.ts`), behind the `apps` flag.
+registerAppRoutes(router);
 
 /**
  * The two account-lifecycle routes a character must not reach.

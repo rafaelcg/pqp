@@ -85,6 +85,8 @@ import { userActivity } from "./services/user-activity.js";
 import { userStats } from "./services/user-stats.js";
 import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js";
 import { startFeatureFlags } from "./lib/flags.js";
+import { startAppCatalogLoad } from "./apps/catalog.js";
+import { startAppParticipantSweep } from "./ws/apps.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
   READY_PATH,
@@ -712,6 +714,7 @@ let stopVoiceHeartbeat: (() => Promise<void>) | null = null;
 let stopHlsViewerCounter: (() => Promise<void>) | null = null;
 let stopUserActivity: (() => Promise<void>) | null = null;
 let stopUserStats: (() => Promise<void>) | null = null;
+let stopAppParticipantSweep: (() => void) | null = null;
 
 async function main() {
   // `WORKER_MODE=worker` on this entry point means "be the worker": hand off
@@ -750,6 +753,12 @@ async function main() {
   // lands during boot is already a reload). A failed load is not fatal: the
   // environment answers until a later read gets through.
   await startFeatureFlags();
+
+  // The apps catalog (`apps/catalog.ts`): first-party apps merged INSERT-ONLY
+  // into `apps` / `app_versions`. Never fatal: a load that fails (the database
+  // was down) is retried in the background with a bounded backoff, and until
+  // then the platform has the apps it already had.
+  await startAppCatalogLoad();
 
   // Live HLS: a restart does not stop the media box, so before anything else
   // this process ADOPTS the egresses still running for sessions it owns (a
@@ -807,6 +816,10 @@ async function main() {
   // Tracks queued in calls, for the Retrospectiva: noted where a music write
   // is accepted, flushed once a minute. Wherever the sockets are.
   stopUserStats = userStats.start();
+  // App sessions: this process's own participant rows, every 15 s (ghosts
+  // held for the resume window, held seats past it released). Wherever the
+  // sockets are, never the worker.
+  stopAppParticipantSweep = startAppParticipantSweep();
 
   if (runsColdJobs(role)) {
     coldJobs = startColdJobs();
@@ -921,6 +934,7 @@ async function shutdown(signal: string) {
   await stopHlsViewerCounter?.();
   await stopUserActivity?.();
   await stopUserStats?.();
+  stopAppParticipantSweep?.();
   // Last, so the presence withdrawals that closing those sockets produces still
   // have a bus to travel on. Best-effort — anything that misses the window is
   // covered by the contribution TTL on the other instances.
