@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { appsConfigForServer, DISABLED_APPS_CONFIG } from "../apps/config.js";
 import { endAppSessionAs, startAppSession } from "../apps/sessions.js";
-import { readLiveSummariesForServer, readLiveSummary } from "../apps/summary.js";
+import {
+  readLiveChannelIdsForServer,
+  readLiveSummariesForServer,
+  readLiveSummary,
+} from "../apps/summary.js";
 import { isEnabled } from "../lib/flags.js";
 import { HttpError, readJsonBody } from "../lib/http.js";
 import { Created } from "../lib/route-results.js";
@@ -85,15 +89,13 @@ export function registerAppRoutes(router: Router): void {
     if (!(await getMemberRole(serverId!, user.id)) || !isEnabled("apps", { serverId })) {
       throw new HttpError(404, "Server not found");
     }
-    const live = await readLiveSummariesForServer(serverId!);
-    const visible = await accessibleChannelIds(
-      live.map((entry) => entry.channelId),
-      user.id,
-    );
+    // Who may see which channel is decided BEFORE any summary is built, so a
+    // server full of private sessions costs a caller who sees none of them
+    // one cheap read and one access statement, not every participant list.
+    const visible = await accessibleChannelIds(await readLiveChannelIdsForServer(serverId!), user.id);
+    const live = await readLiveSummariesForServer(serverId!, { channelIds: [...visible] });
     return {
-      sessions: live
-        .filter((entry) => visible.has(entry.channelId))
-        .map((entry) => ({ channelId: entry.channelId, session: entry.summary })),
+      sessions: live.map((entry) => ({ channelId: entry.channelId, session: entry.summary })),
     };
   });
 }

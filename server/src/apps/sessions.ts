@@ -25,7 +25,7 @@ import {
   readServerFacts,
 } from "./availability.js";
 import { recordAppEnd, recordAppStart, recordAppStartRefused } from "./metrics.js";
-import { readLiveSummary } from "./summary.js";
+import { readLiveSummary, readLiveSummaryById } from "./summary.js";
 
 /**
  * THE SESSION LIFECYCLE: start, end. (Joining, state and events are the
@@ -164,16 +164,18 @@ export async function startAppSession(
   const client = await getPool().connect();
   let sessionId: string;
   let messageId: string;
+  let pinnedVersion: string;
+  let startedAt: Date;
   try {
     await client.query("BEGIN");
     // The version is whatever `current_version` is at this instant, and the row
     // takes its `server_id` from the channel loaded above.
-    const inserted = await client.query<{ id: string }>(
+    const inserted = await client.query<{ id: string; app_version: string; started_at: Date }>(
       `INSERT INTO app_sessions (server_id, channel_id, app_id, app_version, started_by, host_user_id)
        SELECT $1, $2, a.id, a.current_version, $3, $3
          FROM apps a
         WHERE a.id = $4 AND a.status = 'live' AND a.current_version IS NOT NULL
-       RETURNING id`,
+       RETURNING id, app_version, started_at`,
       [serverId, channelId, user.id, appId],
     );
     if (!inserted.rows[0]) {
@@ -182,6 +184,8 @@ export async function startAppSession(
       throw new HttpErrorWithDetail(403, "app_unavailable", { reason: "not-live" });
     }
     sessionId = inserted.rows[0].id;
+    pinnedVersion = inserted.rows[0].app_version;
+    startedAt = inserted.rows[0].started_at;
     const displayName = (await nicknameIn(client, serverId, user.id)) ?? user.display_name;
     const message = await client.query<{ id: string }>(
       `INSERT INTO messages (channel_id, author_id, body, system_kind)
@@ -222,12 +226,36 @@ export async function startAppSession(
   }
   void announceChannelApp(channelId, { immediate: true });
 
-  const summary = await readLiveSummary(channelId);
-  if (!summary) {
-    // Ended between the commit and this read; the end already told everyone.
-    throw new HttpErrorWithDetail(409, "session_ended", { session: null });
+  // The answer is THIS session's: read by its id, never by channel (another
+  // start could have won the channel since). The session and its card already
+  // exist, so a database that cannot be read now must not turn a committed
+  // start into a failed one: the answer is then built from what the insert
+  // returned, which is exactly what a session nobody has joined looks like.
+  try {
+    const read = await readLiveSummaryById(sessionId);
+    if (!read) {
+      // Ended between the commit and this read; the end already told everyone.
+      throw new HttpErrorWithDetail(409, "session_ended", { session: null });
+    }
+    return read.summary;
+  } catch (error) {
+    if (error instanceof HttpErrorWithDetail) {
+      throw error;
+    }
+    logEvent("apps.startSummaryUnread", { sessionId, error: String(error) });
+    return {
+      id: sessionId,
+      appId,
+      appVersion: pinnedVersion,
+      startedBy: user.id,
+      hostUserId: user.id,
+      startedAt: startedAt.toISOString(),
+      participants: [],
+      players: 0,
+      spectators: 0,
+      handoff: null,
+    };
   }
-  return summary;
 }
 
 export interface EndedSession {
