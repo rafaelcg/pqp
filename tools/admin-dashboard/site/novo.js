@@ -1291,7 +1291,7 @@
   // Nothing re-reads while a dialog is open, a write is in flight or an app is
   // open, so a poll never rebuilds a form somebody is typing in.
   var A = {
-    list: null, err: null, seq: 0, open: null, busy: false, pending: 0, chain: Promise.resolve(), dialog: false, retry: null, savedTimer: null,
+    list: null, err: null, seq: 0, open: null, busy: false, pending: 0, chain: Promise.resolve(), dirty: false, needServers: false, dialog: false, retry: null, savedTimer: null,
     drafts: {},
     srv: { q: "", on: false, rows: [], matched: 0, enabledCount: 0, offset: 0, limit: 25, loading: false, err: null, communityUnlocked: false, seq: 0, timer: null }
   };
@@ -1611,7 +1611,24 @@
     A.pending += 1; A.busy = true;
     var run = A.chain.then(fn);
     A.chain = run.catch(function () {});
-    return run.catch(function () {}).then(function () { A.pending -= 1; A.busy = A.pending > 0; });
+    return run.catch(function () {}).then(function () {
+      A.pending -= 1; A.busy = A.pending > 0;
+      // Re-read ONCE, when the last queued write is done, not after each: a run
+      // of switches is N writes and one refresh, not three requests apiece.
+      if (A.pending === 0 && A.dirty) return reconcile();
+    });
+  }
+  /**
+   * After writes: read the list (and the servers of the opened app) again, and
+   * say so when the read fails, so a screen that may be stale is never left
+   * under a "Salvo".
+   */
+  function reconcile() {
+    A.dirty = false;
+    return loadApps(true).then(function (ok) {
+      if (!ok) { showAlert("Salvo, mas não deu pra reler a lista agora. Confere antes de seguir.", function () { hideAlert(); A.dirty = true; reconcile(); }); return; }
+      if (A.open && A.needServers) { A.needServers = false; loadAppServers(true); }
+    });
   }
   /** The app that came back from a write replaces the one on screen. */
   function mergeApp(res) {
@@ -1635,10 +1652,8 @@
         if (o.done) o.done(res);
         mergeApp(res);
         savedNote();
-        return loadApps(true).then(function (ok) {
-          if (!ok) showAlert("Salvo, mas não deu pra reler a lista agora. Confere antes de seguir.", function () { hideAlert(); loadApps(false); });
-          else if (A.open && o.reloadServers) loadAppServers(true);
-        });
+        A.dirty = true;
+        if (o.reloadServers) A.needServers = true;
       }, function (e) {
         if (revert) revert();
         renderApps();
@@ -1719,7 +1734,7 @@
           var n = res && typeof res.sessionsEnded === "number" ? res.sessionsEnded : 0;
           toast(app.name + " desligado em todos os servidores" + (n ? ", " + n + (n === 1 ? " sessão encerrada" : " sessões encerradas") : ""));
           savedNote();
-          return loadApps(true).then(function () { if (A.open) loadAppServers(true); });
+          A.dirty = true; A.needServers = true;
         }, function (e) {
           // "Nada mudou" only where the API answered no. A lost answer or a
           // 5xx may have come after sessions ended, so it says that, re-reads,
@@ -1730,8 +1745,14 @@
           else if (status === 401) msg = "A API recusou o acesso do painel (401). Nada mudou.";
           else if (status && status < 500) msg = "Não deu pra desligar. Nada mudou.";
           else {
-            msg = "Não deu pra confirmar se desligou. Reli a lista: confere as sessões antes de tentar de novo.";
-            loadApps(true).then(function () { if (A.open) loadAppServers(true); });
+            // Say what is known only after the list was read again.
+            loadApps(true).then(function (ok) {
+              if (ok && A.open) loadAppServers(true);
+              showAlert(ok
+                ? "Não deu pra confirmar se desligou. Reli a lista: confere as sessões antes de tentar de novo."
+                : "Não deu pra confirmar se desligou, e a lista também não carregou. Confere antes de tentar de novo.", null);
+            });
+            return;
           }
           showAlert(msg, null);
         });
