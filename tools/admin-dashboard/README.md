@@ -20,8 +20,10 @@ Under it, one line of provenance: which account kinds the numbers exclude, the
 server's cache window (and that the capacity card sits outside it), and the
 page's own refresh interval.
 
-Then a **rail** on the left with six sections. The whole payload still arrives
-in one read, so choosing a section is a pane toggle and never a request; the
+Then a **rail** on the left with seven sections. The whole payload still arrives
+in one read, so choosing a section is a pane toggle and never a request (the
+exceptions are the ones that carry a memory or a write, each with a read of its
+own: **ao longo do tempo**, **bots · beta**, **controles** and **moderação**); the
 choice lives in the URL hash, so a reload or a link to yourself opens where you
 left off, and arrow keys move between them.
 
@@ -40,6 +42,7 @@ one screen.
 | **ao longo do tempo** | What has been changing (the only part of the page with a memory) |
 | **controles** | What can I turn on and off, right now, without a deploy |
 | **pessoas e conteúdo** | Who showed up, who came back, what they wrote |
+| **bots · beta** | Are the server bots used, answering, and affordable |
 | **moderação** | What is queued |
 | **infra** | What is deployed, where, and how available it has been |
 
@@ -132,6 +135,7 @@ read as nine equals.
 | **agora** | the three verdicts and the raw-numbers note, the health table (24 h latency per component, its own p50, uptime, with `/ready` and the host in the footer), **capacity right now** (open WebSockets and the Postgres pool, see below), **voz / sfu** (the media server, see below), and the rooms open *right now* with each one's media path, who is sharing a screen, and how long it has been open |
 | **ao longo do tempo** | the six headline metrics with sparklines, the two 24-hour charts, and **quantas pessoas em chamada**, the one chart on this page with a memory (see below) |
 | **pessoas e conteúdo** | who is actually active (24h and 7d), the returning-writer share, what people filled in (handle / avatar / banner / game account / age check), first-touch acquisition, game connections, text-vs-voice composition, the busiest text channels, the shape of the instance (direct and group conversations, private channels, channels that never received a message), the community directory (off by default, and it says so), the five most active servers, the full call-quality distribution with notes, and **apps e produto** (Android APK clicks + GitHub downloads, friendships, attachments, invites, push), and **mensagens de voz** (see below) |
+| **bots · beta** | the server bots: a verdict (healthy, spending fast or failing a lot), adoption, use and spend per day, the funnel from call to action, what the bots are asked to do, cost against the day's ceiling, and what the limits held back (see "Server bots" below). This is the `/` view; `/novo` does not carry the section yet |
 | **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the full feedback queue (see "The feedback queue" below). The rail carries a count badge when anything is open |
 | **infra** | the deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
 
@@ -625,6 +629,75 @@ Live, from `GET https://api.pqp.gg/api/admin/user-activity` (proxied as
   it scans months of messages.
 - Server side: `server/src/services/user-activity.ts`.
 
+### Server bots
+
+Live, from `GET https://api.pqp.gg/api/admin/bots` (proxied as `/bots`, same
+machine token, no query forwarded). It is a read, and counts and money only:
+no persona, no knowledge text, no message, no user id and no bot id. Server
+names are the one label, as in "most active servers". Nothing in the payload
+says who asked what.
+
+The window is the 30 São Paulo days before today plus today, 31 days, every one
+present (a day with nothing is a row of zeroes). Those are the same days the
+daily reply cap and the dollar ceiling reset on. Every "window" total covers
+all 31. Distinct people and servers are counted once over the window, never as
+a sum of daily counts.
+
+The section shows:
+
+1. **A verdict**, from `botsHealth` in `site/insights.js` (tested in
+   `test/bots-health.test.js`). Failing a lot needs at least 10 runs and a 10%
+   failure rate (25% is bad), for the last seven days and for today on its own.
+   Spending fast is against the ceiling: 70% of it spent, a projection past it
+   (only after four hours of the day and a quarter of the ceiling), or three
+   times the previous seven days' average. A refused call or a spent ceiling is
+   bad. No bots, or no runs in seven days, is "off", not "healthy".
+2. **Adoption**: bots that exist now, how many are on, servers with a bot,
+   bots created in the window, and bots that ran in the window and no longer
+   exist. Two honest limits: a bot deleted before it ever ran leaves nothing
+   to count, and "created" counts only bots that still exist.
+3. **Use per day**: runs, replies and failures as lines, distinct people and
+   servers per day, and today's distinct counts.
+4. **The funnel**, today and over the window: called (runs), answered,
+   staged a plan, confirmed, actions done. The stages do not nest. A small
+   reversible plan runs without a "sim", so "confirmed" is smaller than
+   "staged". "Actions done" counts steps, and one plan has several. A "sim" is
+   itself a run.
+5. **What it is used for**: plan steps by tool (window) and runs by trigger
+   (mention, reply, name, follow-up, decision; last seven days).
+6. **Cost**: spend per day against the ceiling (`BOTS_MAX_USD_PER_DAY`), today
+   as a bar with the time until it resets, dollars per 1,000 replies, cost by
+   model for the last seven days, and the ten servers that cost the most.
+7. **Limits**: replies the per-server cap refused (`BOTS_REPLIES_PER_SERVER_DAY`)
+   and calls the dollar ceiling refused. The notice a member sees when a limit
+   holds an answer is sent to their sockets and stored nowhere, so there is no
+   count of notices, and none is invented.
+
+Where each number comes from decides what a deleted bot does to it:
+
+- History is the rollups with no foreign key (`server_bot_stats_daily`,
+  `server_bot_tools_daily`, `server_bot_people_daily`) and the usage and spend
+  tables. A deleted bot or server keeps its past there. A deleted server shows
+  as "servidor apagado" in the cost table.
+- The trigger mix and the cost by model read `server_bot_runs`, which goes
+  away with its bot. A bot deleted last week is in last week's usage and not
+  in this week's mix.
+- Spend per day is `server_bot_spend_daily.reserved_micros`: what the instance
+  reserved and then settled to the real cost of each call, on the same books as
+  the ceiling. Dollars per 1,000 replies divide it by replies posted, so a call
+  that ended in a skip, a question or a failure costs money and adds no reply.
+  Cost by model and cost by server come from two different tables, so their
+  totals need not match.
+- The people rows are pruned after 90 days. The window is shorter.
+
+Read when the tab opens, then at most once a minute while it has been opened,
+and on **atualizar**. The API caches the report for 30 seconds. An API that
+predates the route answers 401 or 404 and the section says so instead of
+drawing zeroes.
+
+Server side: `server/src/services/bot-admin.ts`. The plan is
+`docs/plans/CUSTOM_BOTS.md`.
+
 ### The feedback queue
 
 Live, from `GET /api/admin/feedback` (proxied as `/operator/feedback`, only
@@ -889,7 +962,7 @@ wrote**, and the feedback queue names **who wrote each item** (tag and handle)
 and the device they used.
 All of that is more than the public status page is ever allowed to say, and
 since the **controles** section landed the password also guards two writes. So
-the Worker gates the page, `/metrics`, `/occupancy`, `/activity`, `/health` and every
+the Worker gates the page, `/metrics`, `/occupancy`, `/activity`, `/bots`, `/health` and every
 `/operator/*` route behind HTTP Basic Auth, compared in constant time, and
 refuses to serve anything at all (503) while the password is unset. The
 `/operator/*` routes are an exact (method, path) table in `src/index.ts`, not a
@@ -914,7 +987,7 @@ Nothing secret lives in this directory, in `wrangler.jsonc`, or in the HTML.
 |---|---|---|---|
 | Worker | `ADMIN_DASH_PASSWORD` | secret | Basic Auth password. Unset: the Worker serves nothing. |
 | Worker | `ADMIN_DASH_USER` | var (in `wrangler.jsonc`) | Basic Auth username, default `operador`. |
-| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy`, `/activity` and the `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
+| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy`, `/activity`, `/bots` and the `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
 | Worker | `API_ORIGIN` | var (in `wrangler.jsonc`) | `https://api.pqp.gg` |
 | Worker | `MONTHLY_COST_USD` | secret | What the hosted instance costs a month, in US dollars, for "custo por ativo". A secret only because the repo is public. Unset: the card asks for it. |
 | Worker | `APK_CLICKS` | KV | Click counter for `POST /apk-click`. Binding in `wrangler.jsonc`. |

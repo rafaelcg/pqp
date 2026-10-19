@@ -87,6 +87,20 @@ describe("groupMembers", () => {
     expect(sections[2]!.members.map((m) => m.displayName)).toEqual(["Zed"]);
   });
 
+  it("lists bots under their own heading, after hoisted roles", () => {
+    const sections = groupMembers(
+      [
+        person("1", "Zed", "member", "online"),
+        { ...person("2", "Julius", "member", "online"), isCharacter: true },
+        { ...person("3", "Lito", "member", "offline"), isCharacter: true },
+        person("4", "Rafa", "owner", "online", ["owner-role"]),
+      ],
+      [OWNER],
+    );
+    expect(sections.map((s) => s.id)).toEqual(["role:owner-role", "bots", "online"]);
+    expect(sections[1]!.members.map((m) => m.displayName)).toEqual(["Julius", "Lito"]);
+  });
+
   it("keeps an offline admin in their hoisted role, dimmed by status", () => {
     const sections = groupMembers(
       [

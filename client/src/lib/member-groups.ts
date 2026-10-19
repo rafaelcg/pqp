@@ -58,6 +58,8 @@ export interface GroupableMember {
    * one (a conversation's participants). Read as "not around" — see `isAround`.
    */
   status?: UserStatus | null;
+  /** A bot (a server bot or a house character): listed in its own section. */
+  isCharacter?: boolean;
 }
 
 /**
@@ -66,7 +68,7 @@ export interface GroupableMember {
  * participant list carries no status at all, so claiming they are online would
  * be inventing the fact the split is supposed to report.
  */
-export type MemberSectionKind = "role" | "friends" | "online" | "offline" | "all";
+export type MemberSectionKind = "role" | "bots" | "friends" | "online" | "offline" | "all";
 
 export interface MemberSection<T> {
   /** Stable across renders: React keys and the collapse state hang off it. */
@@ -165,6 +167,7 @@ export function groupMembers<T extends GroupableMember>(
   const byHoisted = new Map<string, T[]>(
     hoistedRoles.map((role) => [role.id, []]),
   );
+  const bots: T[] = [];
   const friends: T[] = [];
   const online: T[] = [];
   const offline: T[] = [];
@@ -174,6 +177,10 @@ export function groupMembers<T extends GroupableMember>(
     const match = hoistedRoles.find((role) => held.has(role.id));
     if (match) {
       byHoisted.get(match.id)!.push(member);
+    } else if (member.isCharacter) {
+      // Bots get their own heading, the way an app's role groups them
+      // elsewhere, instead of mixing into the people who are online.
+      bots.push(member);
     } else if (friendIds?.has(member.id) && isAround(member.status)) {
       friends.push(member);
     } else if (isAround(member.status)) {
@@ -194,6 +201,13 @@ export function groupMembers<T extends GroupableMember>(
         members: bucket.sort(compareHoistedMembers),
       });
     }
+  }
+  if (bots.length > 0) {
+    sections.push({
+      id: "bots",
+      kind: "bots",
+      members: bots.sort(compareHoistedMembers),
+    });
   }
   if (friends.length > 0) {
     sections.push({
