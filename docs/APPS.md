@@ -191,6 +191,15 @@ Residual: an allowed origin is also a place a hostile frame can send a query str
 
 Run the browser suite with `pnpm --filter @pqp/client e2e:app-frame` (CI runs Chromium and Firefox; add `--project=webkit` locally).
 
+## In the client
+
+Nothing here draws or requests anything while `GET /api/apps/config?serverId=` answers `enabled: false`, or has not answered yet (`hooks/use-apps-config.ts`, re-asked by `lib/config-refresh.ts` like the other feature configs).
+
+- **The live store** (`client/src/lib/apps/app-sessions-store.ts`) is the one source of truth for "an app is running in this channel": the card, the strip and the presence line all read it. It is fed by `GET /api/servers/:id/app-sessions` on server open and after every reconnect (`hooks/use-apps-sessions-sync.ts`, jittered like the other reconnect reads) and by the `channel-app` and `app-ended` frames. A frame that lands while a read is in flight wins over that read, so a slow answer cannot bring back a session that ended meanwhile.
+- **The timeline card** (`components/apps/app-session-card.tsx`, wired by `app-session-timeline-row.tsx` from `message-list.tsx`) draws a message of kind `app_session`. The message does not carry its session id, so the link is the instant both rows share: the session and its message are written in one transaction and both default to `NOW()`, so `app_sessions.started_at` equals the message's `created_at`. `lib/apps/card-model.ts` decides which of the states (open, inside, full, reconnecting, host left, ended, switched off, unknown) a card is in from data alone.
+- **A session this tab never saw end** has no summary and no reason (`app-ended` goes only to the people who were seated, and a reload forgets what a tab heard), so its card is the generic "Terminou." with who started it. The card names the app and counts the people only for sessions the tab saw live.
+- **Joining** goes through `requestAppJoin(sessionId, options)`: whoever registered with `registerAppJoinInterceptor` (the join sheet) first, otherwise `joinAppSession`, which sends `app-join` through the transport the shell registered and waits for the summary to seat the viewer, an `app-error`, or eight seconds.
+
 ## Where things live
 
 - The frame host: `client/src/lib/apps/` (`bridge-host.ts`, `frame-controller.ts`, `frame-policy.ts`, `types.ts` for the transport interface), `client/src/components/apps/app-frame.tsx`; browser suite `client/e2e/app-frame/`.
