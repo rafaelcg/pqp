@@ -94,6 +94,9 @@ async function startApi(name: string): Promise<Api> {
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
+  // A process that never became healthy is still a process: stop it before
+  // failing, or the test run is left holding a port and a database connection.
+  child.kill("SIGKILL");
   throw new Error(`${name} never became healthy:\n${log.join("")}`);
 }
 

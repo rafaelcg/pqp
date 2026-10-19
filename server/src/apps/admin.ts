@@ -482,15 +482,25 @@ export async function listAppServersForOperator(
 
   const [rows, matched, enabled] = await Promise.all([
     pool.query(
-      `SELECT s.id, s.name, s.is_community, s.is_community_listed,
+      // The member counts are ONE grouped pass, joined: the order needs every
+      // server's count before it can pick a page, and a correlated subquery
+      // there would count memberships once per server per request.
+      `WITH members AS (
+         SELECT server_id, COUNT(*)::int AS n FROM server_members GROUP BY server_id
+       ), live AS (
+         SELECT server_id, COUNT(*)::int AS n FROM app_sessions
+          WHERE app_id = $1 AND status = 'live' GROUP BY server_id
+       )
+       SELECT s.id, s.name, s.is_community, s.is_community_listed,
               sa.operator_enabled, sa.owner_enabled,
-              (SELECT COUNT(*) FROM server_members m WHERE m.server_id = s.id)::int AS member_count,
-              (SELECT COUNT(*) FROM app_sessions x
-                WHERE x.server_id = s.id AND x.app_id = $1 AND x.status = 'live')::int AS live_sessions
+              COALESCE(mc.n, 0) AS member_count,
+              COALESCE(lv.n, 0) AS live_sessions
          FROM servers s ${join}
+         LEFT JOIN members mc ON mc.server_id = s.id
+         LEFT JOIN live lv ON lv.server_id = s.id
          ${filter}
         ORDER BY (sa.operator_enabled IS TRUE) DESC,
-                 (SELECT COUNT(*) FROM server_members m WHERE m.server_id = s.id) DESC,
+                 COALESCE(mc.n, 0) DESC,
                  s.name ASC, s.id ASC
         LIMIT ${query.limit} OFFSET ${query.offset}`,
       params,
@@ -592,7 +602,8 @@ export async function inAppsTransaction<T>(
 }
 
 export interface AppWriteResult {
-  app: AppAdminView;
+  /** `null` only when the change committed and the read back after it failed. */
+  app: AppAdminView | null;
   /** The audit rows this write added: 0 when nothing changed. */
   changed: number;
 }
@@ -921,10 +932,23 @@ export async function operatorSetServerApp(
   };
 }
 
-async function loadOne(appId: string): Promise<AppAdminView> {
-  const [app] = await loadApps(getPool(), appId);
-  if (!app) {
-    throw new HttpError(404, "App not found");
+/**
+ * The app as it stands after a write that has already COMMITTED. A failure to
+ * read it back must not turn the answer into an error: the change is durable
+ * and audited, and a retry would find nothing to change, so the operator would
+ * be told it failed and never learn it worked. It answers `null` instead, the
+ * way a flag write falls back when its follow-up read fails, and the dashboard
+ * re-reads the list anyway.
+ */
+async function loadOne(appId: string): Promise<AppAdminView | null> {
+  try {
+    const [app] = await loadApps(getPool(), appId);
+    return app ?? null;
+  } catch (error) {
+    logEvent("apps.admin.readBackFailed", {
+      appId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
   }
-  return app;
 }
