@@ -4,7 +4,6 @@ import {
   type AppFrameController,
   type AppFrameStatus,
 } from "@/lib/apps/frame-controller";
-import { clerkFrontendOrigin } from "@/lib/apps/frame-policy";
 import type {
   AppRuntimeConfig,
   AppSessionTransport,
@@ -68,7 +67,6 @@ export const AppFrame = forwardRef<AppFrameHandle, AppFrameProps>(function AppFr
     const node = container.current;
     if (!node) return undefined;
     setStatus("loading");
-    const clerk = clerkFrontendOrigin(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
     const mounted = mountAppFrame({
       container: node,
       app,
@@ -79,7 +77,6 @@ export const AppFrame = forwardRef<AppFrameHandle, AppFrameProps>(function AppFr
       locale: () => latest.current.locale,
       asSpectator,
       initialHeight,
-      extraFrameOrigins: clerk ? [clerk] : [],
       onShare: (on) =>
         latest.current.onShare ? latest.current.onShare(on) : Promise.reject(new Error("no share flow")),
       onStatus: (next) => {

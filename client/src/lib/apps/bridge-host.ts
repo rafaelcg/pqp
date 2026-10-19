@@ -491,7 +491,11 @@ export class BridgeHost {
 
     switch (message.type) {
       case "participants.get": {
-        await this.rosterReady;
+        // a newer snapshot replaces `rosterReady` while this waits: wait again until it is the latest
+        for (let ready = this.rosterReady; ; ready = this.rosterReady) {
+          await ready;
+          if (ready === this.rosterReady) break;
+        }
         return this.succeed(id, message.type, { participants: this.roster });
       }
       case "state.get":

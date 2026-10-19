@@ -12,7 +12,6 @@ import {
   FRAME_POLICY_ATTRIBUTE,
   FRAME_SRC_ORIGINS,
   buildFramePolicy,
-  clerkFrontendOrigin,
   ensureAppFramePolicy,
 } from "./frame-policy";
 
@@ -35,10 +34,16 @@ describe("buildFramePolicy", () => {
     expect(sources(policy)).toEqual(expect.arrayContaining(["'self'", "blob:", APPS]));
   });
 
+  it("does not list an origin with a redirect-capable sign-in flow: an app frame could hand it data", () => {
+    const list = sources(buildFramePolicy({ appsOrigin: APPS }));
+    expect(list).not.toContain("https://accounts.google.com");
+    expect(list.some((origin) => /clerk/i.test(origin))).toBe(false);
+  });
+
   it("lists the apps origin, every built-in embed origin and the extras once each", () => {
-    const list = sources(buildFramePolicy({ appsOrigin: APPS, extraOrigins: ["https://clerk.pqp.gg", APPS] }));
+    const list = sources(buildFramePolicy({ appsOrigin: APPS, extraOrigins: ["https://embed.example.com", APPS] }));
     for (const origin of FRAME_SRC_ORIGINS) expect(list).toContain(origin);
-    expect(list).toContain("https://clerk.pqp.gg");
+    expect(list).toContain("https://embed.example.com");
     expect(new Set(list).size).toBe(list.length);
   });
 
@@ -119,22 +124,5 @@ describe("ensureAppFramePolicy", () => {
     expect(ensureAppFramePolicy({ appsOrigin: APPS })).toBe(false);
     expect(ensureAppFramePolicy({ appsOrigin: "http://localhost:5175" })).toBe(false);
     expect(document.head.querySelectorAll("meta[http-equiv]")).toHaveLength(1);
-  });
-});
-
-describe("clerkFrontendOrigin", () => {
-  it("reads the frontend host out of a publishable key", () => {
-    expect(clerkFrontendOrigin(`pk_live_${btoa("clerk.pqp.gg$")}`)).toBe("https://clerk.pqp.gg");
-    expect(clerkFrontendOrigin(`pk_test_${btoa("fancy-owl-12.clerk.accounts.dev$")}`)).toBe(
-      "https://fancy-owl-12.clerk.accounts.dev",
-    );
-  });
-
-  it("is null for nothing, a key without a host, or garbage", () => {
-    expect(clerkFrontendOrigin(undefined)).toBeNull();
-    expect(clerkFrontendOrigin("")).toBeNull();
-    expect(clerkFrontendOrigin("pk_test_")).toBeNull();
-    expect(clerkFrontendOrigin("pk_test_!!!")).toBeNull();
-    expect(clerkFrontendOrigin(`pk_test_${btoa("not a host$")}`)).toBeNull();
   });
 });

@@ -18,6 +18,28 @@ function toBase64(bytes: Uint8Array): string {
 }
 
 /**
+ * Where an avatar may finally come from after a redirect. The first hop was
+ * checked against the allow list; a redirect from there (`/api/avatars/:id`
+ * answers 302 to the storage URL) is our own server's choice, and the final
+ * answer must be https, or the very origin that was asked, and never a literal
+ * address (loopback, private ranges, IPv6) or `localhost` for a page that is not.
+ */
+export function acceptableFinalUrl(finalUrl: string, requestedUrl: string): boolean {
+  try {
+    const final = new URL(finalUrl);
+    const requested = new URL(requestedUrl);
+    if (final.origin === requested.origin) return true;
+    if (final.protocol !== "https:") return false;
+    const host = final.hostname;
+    if (host === "localhost" || host.endsWith(".localhost") || host.includes(":")) return false;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Fetches a user's avatar from the page and returns it as a data URL, so the
  * app never gets a link it could load or track. Anything that is not a small
  * png, jpeg, webp or gif (an SVG, a redirect to an error page, a 404, a
@@ -38,6 +60,7 @@ export async function fetchAvatarDataUrl(
       signal: controller.signal,
     });
     if (!response.ok) return null;
+    if (response.redirected && !acceptableFinalUrl(response.url, url)) return null;
     const type = (response.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
     if (!IMAGE_TYPES.has(type)) return null;
     const bytes = await readLimited(response, MAX_AVATAR_BYTES);
@@ -51,9 +74,14 @@ export async function fetchAvatarDataUrl(
   }
 }
 
+/** Most distinct avatar URLs held at once: a roster is at most 264 people, so this is about one roster. */
+const CACHE_LIMIT = 300;
+
 /**
- * One fetch per URL for the life of the host; a failure is cached too, so a
- * broken avatar is not retried on every roster push.
+ * One fetch per URL while it is among the most recent `CACHE_LIMIT`; a failure
+ * is cached too, so a broken avatar is not retried on every roster push. The
+ * oldest entries are dropped, so people who came and went do not pile up in
+ * memory for the life of the host.
  *
  * `allowedOrigins` is who an avatar URL may point at (the page itself and the
  * API). A user can set their avatar URL to anything, and the host must not
@@ -83,9 +111,17 @@ export class AvatarCache {
   get(url: string | null): Promise<string | null> {
     if (url === null || !this.allowed(url)) return Promise.resolve(null);
     let hit = this.cache.get(url);
-    if (!hit) {
+    if (hit) {
+      // most recently used goes last
+      this.cache.delete(url);
+    } else {
       hit = fetchAvatarDataUrl(url, this.fetchImpl);
-      this.cache.set(url, hit);
+    }
+    this.cache.set(url, hit);
+    while (this.cache.size > CACHE_LIMIT) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.cache.delete(oldest);
     }
     return hit;
   }

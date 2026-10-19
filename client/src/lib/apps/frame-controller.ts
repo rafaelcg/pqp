@@ -43,7 +43,7 @@ export interface AppFrameControllerOptions {
   initialHeight?: number;
   /** Where avatar URLs may point (the page's own origin and the API's). Default: the page's own. */
   avatarOrigins?: readonly string[];
-  /** Origins this deployment frames besides the built-in list (Clerk's frontend host). */
+  /** Origins this deployment frames besides the built-in list (a self-host's embeds). */
   extraFrameOrigins?: readonly string[];
   /** How long the frame has to say hello. Default 20 s. */
   helloTimeoutMs?: number;
@@ -209,7 +209,9 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
   // document. The listeners, the policy and every attribute are in place already.
   element.setAttribute("src", app.entry.url);
   container.append(element);
-  // the seat is taken while the frame loads
+  // the seat is taken while the frame loads. If the frame is removed before the join lands, `host.start`
+  // sees the host detached and releases the seat it just got (bridge-host.ts), so `remove` and `destroy`
+  // need no separate cancellation.
   started = (async () => {
     try {
       await host.start({ asSpectator: options.asSpectator });

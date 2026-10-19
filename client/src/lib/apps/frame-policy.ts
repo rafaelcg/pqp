@@ -18,6 +18,13 @@
  * It cannot be removed again once inserted (an inserted policy sticks to the
  * document), which is the point.
  *
+ * RESIDUAL, STATED PLAINLY. The policy is page-wide, so an origin that is listed is also
+ * somewhere an app frame can navigate itself, with whatever the app knows in the query
+ * string. The listed origins are embed hosts that have no redirect to a destination the
+ * sender picks, so the data goes to a vendor's logs and not to the app's author; Google
+ * and Clerk are deliberately absent for that reason. A structural fix (the app frame in a
+ * wrapper document whose `frame-src` is the apps origin alone) is a follow-up decision.
+ *
  * WHAT IT LISTS: every origin the client legitimately frames today. A missing
  * origin here breaks that embed on a page that has also shown an app, so the
  * list is pinned by `frame-policy.test.ts` against the embed URL builders the
@@ -39,9 +46,12 @@ export const FRAME_SRC_ORIGINS = [
   // community home media
   "https://www.tiktok.com",
   "https://www.instagram.com",
-  // Clerk's bot protection (Cloudflare Turnstile) and Google sign-in
+  // Clerk's bot protection (Cloudflare Turnstile). Not Google sign-in (One Tap) and not
+  // Clerk's own host: both run OAuth-style flows that carry a `state` or redirect parameter
+  // to a destination somebody else registered, which would turn a navigating app frame into
+  // a way to hand data to that destination. Sign-in with Google is a full-page redirect and
+  // needs no frame; a deployment that frames more passes it as an extra origin.
   "https://challenges.cloudflare.com",
-  "https://accounts.google.com",
 ] as const;
 
 export const FRAME_POLICY_ATTRIBUTE = "data-pqp-app-frame-policy";
@@ -49,21 +59,8 @@ export const FRAME_POLICY_ATTRIBUTE = "data-pqp-app-frame-policy";
 export interface FramePolicyOptions {
   /** The apps origin from `GET /api/apps/config`. */
   appsOrigin: string;
-  /** More origins this deployment frames: Clerk's frontend host, a self-host's embeds. */
+  /** More origins this deployment frames (a self-host's embeds). Each one is also a place an app frame can navigate to. */
   extraOrigins?: readonly string[];
-}
-
-/** `https://clerk.example.com` from a Clerk publishable key (`pk_live_<base64 of "clerk.example.com$">`). */
-export function clerkFrontendOrigin(publishableKey: string | undefined): string | null {
-  if (!publishableKey) return null;
-  const encoded = publishableKey.split("_").slice(2).join("_");
-  if (encoded === "") return null;
-  try {
-    const host = atob(encoded.replace(/-/g, "+").replace(/_/g, "/")).replace(/\$$/, "");
-    return /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host) ? `https://${host}` : null;
-  } catch {
-    return null;
-  }
 }
 
 /** A source expression is an origin or a keyword; anything that could widen the policy is refused. */
