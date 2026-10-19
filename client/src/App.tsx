@@ -6067,11 +6067,19 @@ function MainAppContent({
             return;
           }
 
-          // Apps in channels (behind the per-server `apps` flag): the live
-          // summary of a channel's app, and the end of a session. Nothing in
-          // the app draws them yet, and they are chat frames, not voice ones,
-          // so they stop here rather than reach the voice controller.
-          if (message.type === "channel-app" || message.type === "app-ended") {
+          // Apps in channels (behind the per-server `apps` flag): a channel's
+          // live summary, and a session's snapshot, state, events, end and
+          // refusals. Nothing in the app draws them yet, and they are chat
+          // frames, not voice ones, so they stop here rather than reach the
+          // voice controller.
+          if (
+            message.type === "channel-app" ||
+            message.type === "app-ended" ||
+            message.type === "app-session" ||
+            message.type === "app-state" ||
+            message.type === "app-event" ||
+            message.type === "app-error"
+          ) {
             return;
           }
 

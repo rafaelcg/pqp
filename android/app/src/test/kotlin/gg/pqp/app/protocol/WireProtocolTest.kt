@@ -320,6 +320,12 @@ class WireProtocolTest {
         // also writes.
         "channel-app" to "apps run on web and desktop first; the phone shows the plain-text system message",
         "app-ended" to "apps run on web and desktop first; the phone never joins a session",
+        // The rest of an app session's traffic, all of it addressed to the
+        // sockets seated in a session, which a phone never is.
+        "app-session" to "the phone never joins an app session",
+        "app-state" to "the phone never joins an app session",
+        "app-event" to "the phone never joins an app session",
+        "app-error" to "the phone never sends an app frame, so it has nothing to be refused",
     )
 
     /**
