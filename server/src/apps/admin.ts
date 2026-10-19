@@ -483,27 +483,26 @@ export async function listAppServersForOperator(
 
   const [rows, matched, enabled] = await Promise.all([
     pool.query(
-      // The member counts are ONE grouped pass, joined: the order needs every
-      // server's count before it can pick a page, and a correlated subquery
-      // there would count memberships once per server per request.
-      `WITH members AS (
-         SELECT server_id, COUNT(*)::int AS n FROM server_members GROUP BY server_id
-       ), live AS (
-         SELECT server_id, COUNT(*)::int AS n FROM app_sessions
-          WHERE app_id = $1 AND status = 'live' GROUP BY server_id
+      // THE PAGE IS PICKED FIRST, from `servers` and this app's switch alone,
+      // ordered by what is on and then by name; only the rows of that page are
+      // then counted (members, live sessions of this app). Ordering by size
+      // would need every server's member count before a page could be cut, which
+      // is work proportional to the whole instance on every request for a
+      // 25-row answer.
+      `WITH page AS (
+         SELECT s.id, s.name, s.is_community, s.is_community_listed,
+                sa.operator_enabled, sa.owner_enabled
+           FROM servers s ${join}
+           ${filter}
+          ORDER BY (sa.operator_enabled IS TRUE) DESC, s.name ASC, s.id ASC
+          LIMIT ${query.limit} OFFSET ${query.offset}
        )
-       SELECT s.id, s.name, s.is_community, s.is_community_listed,
-              sa.operator_enabled, sa.owner_enabled,
-              COALESCE(mc.n, 0) AS member_count,
-              COALESCE(lv.n, 0) AS live_sessions
-         FROM servers s ${join}
-         LEFT JOIN members mc ON mc.server_id = s.id
-         LEFT JOIN live lv ON lv.server_id = s.id
-         ${filter}
-        ORDER BY (sa.operator_enabled IS TRUE) DESC,
-                 COALESCE(mc.n, 0) DESC,
-                 s.name ASC, s.id ASC
-        LIMIT ${query.limit} OFFSET ${query.offset}`,
+       SELECT page.*,
+              (SELECT COUNT(*)::int FROM server_members m WHERE m.server_id = page.id) AS member_count,
+              (SELECT COUNT(*)::int FROM app_sessions x
+                WHERE x.server_id = page.id AND x.app_id = $1 AND x.status = 'live') AS live_sessions
+         FROM page
+        ORDER BY (page.operator_enabled IS TRUE) DESC, page.name ASC, page.id ASC`,
       params,
     ),
     pool.query<{ n: string }>(
