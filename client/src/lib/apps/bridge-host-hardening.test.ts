@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { APP_AVATAR_MAX_CHARS, APP_PARTICIPANTS_AVATAR_BUDGET_CHARS } from "@pqp/shared";
 import { BridgeHost } from "./bridge-host";
-import { fetchAvatarDataUrl } from "./avatar";
+import { AvatarCache, fetchAvatarDataUrl } from "./avatar";
 import { ASSET_HEADERS_TIMEOUT_MS, ASSET_IDLE_TIMEOUT_MS, fetchAsset } from "./asset-fetch";
 import { readLimited } from "./limited-body";
 import {
@@ -95,16 +95,33 @@ describe("avatars", () => {
     expect(await fetchAvatarDataUrl("https://pqp.example/a", declared)).toBeNull();
   });
 
-  it("follow a redirect only on pqp's own avatar route; any other URL may not redirect at all", async () => {
+  it("follow a redirect only on pqp's own avatar route on the API's origin; any other URL may not redirect at all", async () => {
     const seen: Array<RequestInit | undefined> = [];
     const png = (async (_url: string, init?: RequestInit) => {
       seen.push(init);
       return new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } });
     }) as unknown as typeof fetch;
-    await fetchAvatarDataUrl("https://api.pqp.example/api/avatars/00000000-0000-4000-8000-000000000001?v=ab12", png);
-    await fetchAvatarDataUrl("https://api.pqp.example/api/connections/steam/start?next=https://evil.example", png);
-    await fetchAvatarDataUrl("https://api.pqp.example/api/avatars/x/../../redirect", png);
-    expect(seen.map((init) => init?.redirect)).toEqual(["follow", "error", "error"]);
+    const api = { apiOrigin: "https://api.pqp.example" };
+    const route = "/api/avatars/00000000-0000-4000-8000-000000000001?v=ab12";
+    await fetchAvatarDataUrl(`https://api.pqp.example${route}`, png, api);
+    // the same path on another allowed origin (the page's) is a URL somebody typed
+    await fetchAvatarDataUrl(`https://pqp.example${route}`, png, api);
+    // and with no API origin configured nothing follows a redirect
+    await fetchAvatarDataUrl(`https://api.pqp.example${route}`, png);
+    await fetchAvatarDataUrl("https://api.pqp.example/api/connections/steam/start?next=https://evil.example", png, api);
+    await fetchAvatarDataUrl("https://api.pqp.example/api/avatars/x/../../redirect", png, api);
+    expect(seen.map((init) => init?.redirect)).toEqual(["follow", "error", "error", "error", "error"]);
+
+    // the cache passes its API origin through: the page's copy of the path does not follow
+    const viaCache: Array<RequestInit | undefined> = [];
+    const cachePng = (async (_url: string, init?: RequestInit) => {
+      viaCache.push(init);
+      return new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } });
+    }) as unknown as typeof fetch;
+    const cache = new AvatarCache(cachePng, ["https://pqp.example", "https://api.pqp.example"], "https://api.pqp.example");
+    await cache.get(`https://api.pqp.example${route}`);
+    await cache.get(`https://pqp.example${route}`);
+    expect(viaCache.map((init) => init?.redirect)).toEqual(["follow", "error"]);
 
     // and a response that was redirected anyway is refused when the URL was not the avatar route
     const cancelled = vi.fn();
@@ -136,7 +153,7 @@ describe("avatars", () => {
         return r;
       }) as unknown as typeof fetch;
       const url = "https://api.pqp.example/api/avatars/00000000-0000-4000-8000-000000000001";
-      expect(await fetchAvatarDataUrl(url, fetchImpl), JSON.stringify(c)).toBeNull();
+      expect(await fetchAvatarDataUrl(url, fetchImpl, { apiOrigin: "https://api.pqp.example" }), JSON.stringify(c)).toBeNull();
       expect(cancelled, JSON.stringify(c)).toHaveBeenCalled();
     }
   });

@@ -74,8 +74,9 @@ describe("where an avatar may finally come from", () => {
       })) as unknown as typeof fetch;
     // only pqp's own avatar route follows a redirect (see the redirect tests in bridge-host-hardening)
     const route = "https://api.pqp.example/api/avatars/00000000-0000-4000-8000-000000000001?v=1";
-    expect(await fetchAvatarDataUrl(route, redirectedTo("http://192.168.0.2/x.png"))).toBeNull();
-    expect(await fetchAvatarDataUrl(route, redirectedTo("https://bucket.example/x.png"))).toMatch(/^data:image\/png/);
+    const api = { apiOrigin: "https://api.pqp.example" };
+    expect(await fetchAvatarDataUrl(route, redirectedTo("http://192.168.0.2/x.png"), api)).toBeNull();
+    expect(await fetchAvatarDataUrl(route, redirectedTo("https://bucket.example/x.png"), api)).toMatch(/^data:image\/png/);
   });
 });
 

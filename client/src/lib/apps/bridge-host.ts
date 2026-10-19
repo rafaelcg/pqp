@@ -90,6 +90,13 @@ export interface BridgeHostOptions {
    * Default: the page's own origin.
    */
   avatarOrigins?: readonly string[];
+  /**
+   * The API's origin, the one place whose avatar route (`/api/avatars/<user>`)
+   * may redirect: there the API answers 302 to the uploaded object in our own
+   * bucket. Every other avatar URL, the same path on any other origin included,
+   * is fetched with `redirect: "error"`. Unset, no avatar redirect is followed.
+   */
+  apiOrigin?: string;
   now?: () => number;
   /** Called with a reason when the app behaves in a way that should end the frame. */
   onViolation?: (reason: BridgeViolation) => void;
@@ -218,6 +225,7 @@ export class BridgeHost {
     this.avatars = new AvatarCache(
       options.fetchImpl,
       options.avatarOrigins ?? (typeof location === "undefined" ? [] : [location.origin]),
+      options.apiOrigin ?? null,
     );
     this.now = options.now ?? (() => Date.now());
     this.log = options.log ?? ((message, detail) => console.warn(`[apps] ${message}`, detail ?? ""));

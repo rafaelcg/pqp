@@ -43,6 +43,8 @@ export interface AppFrameControllerOptions {
   initialHeight?: number;
   /** Where avatar URLs may point (the page's own origin and the API's). Default: the page's own. */
   avatarOrigins?: readonly string[];
+  /** The API's origin: the only one whose avatar route may redirect (see `BridgeHostOptions.apiOrigin`). */
+  apiOrigin?: string;
   /** Origins this deployment frames besides the built-in list (a self-host's embeds). */
   extraFrameOrigins?: readonly string[];
   /** How long the frame has to say hello. Default 20 s. */
@@ -122,6 +124,7 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
     locale: options.locale,
     appsOrigin: options.appsOrigin,
     avatarOrigins: options.avatarOrigins,
+    apiOrigin: options.apiOrigin,
     ...options.host,
     ui: {
       resize: (height) => {

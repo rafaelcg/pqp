@@ -40,14 +40,18 @@ export function acceptableFinalUrl(finalUrl: string, requestedUrl: string): bool
 }
 
 /**
- * Is this URL pqp's own avatar route, `/api/avatars/<user>`? That route is the
- * only one whose redirect is followed: it answers 302 to the uploaded object in
- * our own bucket, and the path names a user, never a destination, so where it
- * sends the browser is the server's choice (`serveAvatarObject` in the API).
+ * Is this URL pqp's own avatar route, `/api/avatars/<user>` ON THE API's ORIGIN?
+ * That is the only URL whose redirect is followed: the API answers 302 to the
+ * uploaded object in our own bucket, and the path names a user, never a
+ * destination, so where it sends the browser is the server's choice
+ * (`serveAvatarObject` in the API). The same path on any other origin (the
+ * page's, say) is just a URL somebody typed. No `apiOrigin`, no exception.
  */
-export function isAvatarRoute(url: string): boolean {
+export function isAvatarRoute(url: string, apiOrigin: string | null | undefined): boolean {
+  if (!apiOrigin) return false;
   try {
-    return /^\/api\/avatars\/[^/]+$/.test(new URL(url).pathname);
+    const parsed = new URL(url);
+    return parsed.origin === apiOrigin && /^\/api\/avatars\/[^/]+$/.test(parsed.pathname);
   } catch {
     return false;
   }
@@ -65,16 +69,18 @@ export function isAvatarRoute(url: string): boolean {
  * Redirects: a browser follows one before the page can look at it, so checking
  * the final URL afterwards cannot stop the request. A URL somebody typed (any
  * path on an allowed origin) is therefore fetched with `redirect: "error"` and
- * cannot bounce the browser anywhere; only pqp's own avatar route
- * (`isAvatarRoute`) follows its redirect, and the final URL is checked as well.
+ * cannot bounce the browser anywhere; only pqp's own avatar route on the API's
+ * origin (`isAvatarRoute`) follows its redirect, and the final URL is checked
+ * as well.
  */
 export async function fetchAvatarDataUrl(
   url: string,
   fetchImpl: typeof fetch = (...args) => fetch(...args),
+  options: { apiOrigin?: string | null } = {},
 ): Promise<string | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  const followRedirect = isAvatarRoute(url);
+  const followRedirect = isAvatarRoute(url, options.apiOrigin);
   try {
     const response = await fetchImpl(url, {
       credentials: "omit",
@@ -113,11 +119,11 @@ const CACHE_LIMIT = 300;
  * `allowedOrigins` is who an avatar URL may point at (the page itself and the
  * API). A user can set their avatar URL to anything, and the host must not
  * become a way to make somebody's browser call an address a stranger chose, so
- * a URL outside the list is `null` without a request. Only the avatar route's
- * redirect is followed (`/api/avatars/:id` answers 302 to the storage URL, which
- * is our own server's choice); any other URL on an allowed origin may not
- * redirect at all (`fetchAvatarDataUrl`). What finally arrives must still be a
- * small image.
+ * a URL outside the list is `null` without a request. Only the avatar route on
+ * `apiOrigin` follows its redirect (`/api/avatars/:id` answers 302 to the
+ * storage URL, which is our own server's choice); any other URL on an allowed
+ * origin may not redirect at all (`fetchAvatarDataUrl`). What finally arrives
+ * must still be a small image.
  */
 export class AvatarCache {
   private readonly cache = new Map<string, Promise<string | null>>();
@@ -125,6 +131,7 @@ export class AvatarCache {
   constructor(
     private readonly fetchImpl: typeof fetch = (...args) => fetch(...args),
     private readonly allowedOrigins: readonly string[] = [],
+    private readonly apiOrigin: string | null = null,
   ) {}
 
   private allowed(url: string): boolean {
@@ -144,7 +151,7 @@ export class AvatarCache {
       // most recently used goes last
       this.cache.delete(url);
     } else {
-      hit = fetchAvatarDataUrl(url, this.fetchImpl);
+      hit = fetchAvatarDataUrl(url, this.fetchImpl, { apiOrigin: this.apiOrigin });
     }
     this.cache.set(url, hit);
     while (this.cache.size > CACHE_LIMIT) {
