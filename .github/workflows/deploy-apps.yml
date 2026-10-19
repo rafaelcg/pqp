@@ -34,6 +34,12 @@ jobs:
     # Only the protected main branch deploys: a manual dispatch from any other ref
     # would otherwise check that ref out and publish it as the production branch.
     if: github.ref == 'refs/heads/main'
+    # The guard above only binds this file as it is on main. A branch can carry its
+    # own copy of a workflow, so the Cloudflare credentials belong to this environment
+    # with a deployment branch policy of `main` (Settings > Environments): then no
+    # other ref can read them, whatever its workflow file says. Until the secrets are
+    # moved there, the repository secrets of the same name are used, as today.
+    environment: apps-production
     permissions:
       contents: read
       deployments: write
@@ -56,6 +62,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: main
+          # no GITHUB_TOKEN left in .git/config for the install scripts below to read;
+          # the repository is public, so the later fetch of main needs no credential
+          persist-credentials: false
 
       - name: Setup pnpm
         if: steps.gate.outputs.go == 'true'

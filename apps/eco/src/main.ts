@@ -2,6 +2,7 @@ import type { JsonValue } from "@pqp/shared";
 import { applyTheme, connect, PqpAppError, type Participant, type PqpApp } from "@pqp/app-sdk";
 import { formatPing, pickLocale, STRINGS, type Strings } from "./i18n";
 import { incrementPatch, initialOf, readCount } from "./model";
+import { createSessionView, loadInitial, type UiState } from "./session";
 
 const FLASH_MS = 1800;
 const PING_COOLDOWN_MS = 250;
@@ -27,7 +28,7 @@ function label(id: string, text: string) {
   el(id).textContent = text;
 }
 
-function setUi(state: "connecting" | "online" | "reconnecting" | "ended" | "outside") {
+function setUi(state: UiState) {
   root.dataset.state = state;
   const interactive = state === "online";
   plusButton.disabled = !interactive;
@@ -82,11 +83,17 @@ async function main() {
   let rev = 0;
   let count = 0;
 
+  // an ended session stays ended: the view refuses every connection event after `ended`,
+  // and `ended` is listened for before `connection`, so no ordering can turn the buttons back on
+  const view = createSessionView(setUi);
+  app.on("ended", () => {
+    view.end();
+    statusLine.textContent = "";
+    ended.textContent = t.ended;
+    ended.hidden = false;
+  });
   const showConnection = (status: "online" | "reconnecting") => {
-    // an ended session stays ended: a connection event that arrives after it must not enable the buttons
-    if (root.dataset.state === "ended") return;
-    statusLine.textContent = status === "online" ? t.online : t.reconnecting;
-    setUi(status);
+    if (view.connection(status)) statusLine.textContent = status === "online" ? t.online : t.reconnecting;
   };
   showConnection(app.connection);
   app.on("connection", showConnection);
@@ -168,20 +175,16 @@ async function main() {
     if (fromSeatId === selfSeat) return;
     showPing(nameOf(fromSeatId));
   });
-  app.on("ended", () => {
-    setUi("ended");
-    statusLine.textContent = "";
-    ended.textContent = t.ended;
-    ended.hidden = false;
-  });
   // the handlers below are installed whatever these reads do: a host that is slow to answer
-  // must not leave the buttons dead, and a later push still brings the values in
-  try {
-    setRoster(await app.participants.get());
-    applyState(await app.state.get());
-  } catch {
-    statusLine.textContent = t.failed;
-  }
+  // must not leave the buttons dead, and a later push still brings the values in. Each read
+  // stands alone, so a failed roster read does not skip the counter's.
+  await loadInitial(
+    [async () => setRoster(await app.participants.get()), async () => applyState(await app.state.get())],
+    () => view.ended,
+    () => {
+      statusLine.textContent = t.failed;
+    },
+  );
 
   let busy = false;
   plusButton.addEventListener("click", async () => {
