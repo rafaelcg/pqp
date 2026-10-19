@@ -167,7 +167,7 @@ export async function joinSession(options: JoinOptions): Promise<JoinOutcome> {
  * Start the empty clock when the last seat is gone. Seats that are only held
  * (orphaned) still count, so a session whose people all reloaded is not empty.
  */
-async function touchEmpty(sessionIds: readonly string[]): Promise<void> {
+export async function touchEmpty(sessionIds: readonly string[]): Promise<void> {
   if (sessionIds.length === 0) {
     return;
   }
@@ -180,6 +180,25 @@ async function touchEmpty(sessionIds: readonly string[]): Promise<void> {
            WHERE p.session_id = s.id AND p.left_at IS NULL)`,
     [[...sessionIds]],
   );
+}
+
+/**
+ * A deployment with no cluster topology (no `VOICE_REGISTRY`, no
+ * `CLUSTER_BUS`) is one process, so every seat that names another instance
+ * belongs to an earlier run of it that exited without closing its sockets. At
+ * boot they become this process's own held seats: a person whose page
+ * reconnects resumes the seat inside the window, and the 15 s sweep releases
+ * the rest. With a cluster this must NOT run (a sibling's seats are not ours);
+ * the dead-instance pass of `apps/sweeps.ts` covers it, from the heartbeats.
+ */
+export async function adoptPreviousRunSeats(instanceId: string): Promise<number> {
+  const result = await getPool().query(
+    `UPDATE app_session_participants
+        SET instance_id = $1, orphaned_at = COALESCE(orphaned_at, NOW())
+      WHERE left_at IS NULL AND instance_id IS DISTINCT FROM $1`,
+    [instanceId],
+  );
+  return result.rowCount ?? 0;
 }
 
 /** `app-leave`: the person left on purpose. Not held. True when a seat was released. */

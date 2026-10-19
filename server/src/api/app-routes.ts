@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { appsConfigForServer, DISABLED_APPS_CONFIG } from "../apps/config.js";
+import { takeHostAs } from "../apps/host.js";
 import { endAppSessionAs, startAppSession } from "../apps/sessions.js";
 import { readLiveSummariesForServer, readLiveSummary } from "../apps/summary.js";
 import { isEnabled } from "../lib/flags.js";
@@ -24,6 +25,7 @@ import { accessibleChannelIds, canAccessChannel, getMemberRole } from "../servic
  *  - `GET  /api/channels/:channelId/app-session`    `AppSessionSummary` or `null`
  *  - `POST /api/app-sessions/:sessionId/end`        -> 200 `{ ended }`
  *  - `GET  /api/servers/:serverId/app-sessions`     `{ sessions: [{ channelId, session }] }`
+ *  - `POST /api/app-sessions/:sessionId/take-host`  -> 200 `{ host: true }`
  *
  * The summaries are the `channel-app` frame's, so a client keeps one shape.
  */
@@ -76,6 +78,14 @@ export function registerAppRoutes(router: Router): void {
   // End a session. Idempotent: ending one that is over answers 200 `{ ended: false }`.
   router.post("/api/app-sessions/:sessionId/end", async ({ user }, { sessionId }) => {
     return { ended: (await endAppSessionAs(user, sessionId!)).ended };
+  });
+
+  // "Assumir agora": the person the host countdown named takes the role before
+  // the two minutes are up. 404 if the caller cannot see the session or the
+  // flag is off; 409 `host_present` / `host_bound` / `host_changed`; 403
+  // `not_next_host` for anybody else. See `apps/host.ts`.
+  router.post("/api/app-sessions/:sessionId/take-host", async ({ user }, { sessionId }) => {
+    return takeHostAs(user, sessionId!);
   });
 
   // Every live app on a server, for the channels the caller can VIEW. The

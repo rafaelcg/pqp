@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import type { AppRole, AppSessionSummary } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { handoffCountdown } from "./next-host.js";
 
 /**
  * What everyone who can view a channel knows about its live app: the card, the
@@ -8,9 +9,8 @@ import { getPool } from "../db.js";
  * state, no seat ids). Always read from the rows, never from an in-process
  * mirror: the row is the truth and any instance can answer for any session.
  *
- * `handoff` is the host's countdown while the host is gone; the sweep that
- * starts it (`apps/sweeps.ts`) supplies the target through `handoffFor`, and
- * a reader with no such source reports none.
+ * `handoff` is the host's countdown while the host is gone: who is next and
+ * when the role moves (`apps/next-host.ts`), null while the host is here.
  */
 
 type Queryable = Pick<Pool | PoolClient, "query">;
@@ -38,30 +38,29 @@ export type HandoffFor = (session: {
   id: string;
   hostUserId: string | null;
   hostGoneAt: Date;
-}) => { toUserId: string | null; at: string } | null;
+}) => Promise<{ toUserId: string | null; at: string } | null>;
 
 const SESSION_COLUMNS = `id, channel_id, app_id, app_version, started_by, host_user_id,
        started_at, host_gone_at`;
 
-function build(
+async function build(
   session: SessionRow,
   rows: ParticipantRow[],
-  handoffFor?: HandoffFor,
-): AppSessionSummary {
+  handoffFor: HandoffFor = handoffCountdown,
+): Promise<AppSessionSummary> {
   const participants = rows.map((row) => ({
     userId: row.user_id,
     role: row.role,
     joinedAt: row.joined_at.toISOString(),
     connection: row.orphaned_at === null ? ("present" as const) : ("reconnecting" as const),
   }));
-  const handoff =
-    session.host_gone_at && handoffFor
-      ? handoffFor({
-          id: session.id,
-          hostUserId: session.host_user_id,
-          hostGoneAt: session.host_gone_at,
-        })
-      : null;
+  const handoff = session.host_gone_at
+    ? await handoffFor({
+        id: session.id,
+        hostUserId: session.host_user_id,
+        hostGoneAt: session.host_gone_at,
+      })
+    : null;
   return {
     id: session.id,
     appId: session.app_id,
@@ -135,7 +134,7 @@ export async function readLiveSummaryById(
   const participants = await participantsOf(db, [session.id]);
   return {
     channelId: session.channel_id,
-    summary: build(session, participants.get(session.id) ?? [], options.handoffFor),
+    summary: await build(session, participants.get(session.id) ?? [], options.handoffFor),
   };
 }
 
@@ -155,8 +154,10 @@ export async function readLiveSummariesForServer(
     db,
     result.rows.map((row) => row.id),
   );
-  return result.rows.map((row) => ({
-    channelId: row.channel_id,
-    summary: build(row, participants.get(row.id) ?? [], options.handoffFor),
-  }));
+  return Promise.all(
+    result.rows.map(async (row) => ({
+      channelId: row.channel_id,
+      summary: await build(row, participants.get(row.id) ?? [], options.handoffFor),
+    })),
+  );
 }
