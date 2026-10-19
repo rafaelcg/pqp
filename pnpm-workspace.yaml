@@ -3,6 +3,7 @@ packages:
   - client
   - electron
   - packages/shared
+  - packages/app-sdk
   - tools/watch-party-load
 
 allowBuilds:

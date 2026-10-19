@@ -95,7 +95,7 @@ The frame is an opaque origin, so there is no origin to compare. The host checks
 - `state.patch { patch, baseRev? }`: a JSON Merge Patch (RFC 7396) over the state. `baseRev` makes it conditional.
 - `events.send { name, data }`: an ephemeral event for the others. `name` matches `/^[a-z][a-z0-9.-]{0,31}$/`.
 - `assets.get { name }`: the bytes of one of the manifest's `assets[]`, checked by the host.
-- `files.pickLocal`: the host opens the picker (the manifest decides accept list and size cap) and transfers the bytes. The file name never crosses.
+- `files.pickLocal`: the host opens the picker (the manifest decides accept list and size cap) and transfers the bytes. The file name never crosses: the answer is `{ bytes, ext }`, where `ext` is the lower-cased extension with its dot, taken from the manifest's accept list.
 - `ui.resize { height }`: 120 to 2000 pixels.
 - `ui.fullscreen { on }`
 - `share.request { on }`: share the app pane through pqp's own flow (apps whose manifest allows it).
@@ -135,8 +135,48 @@ JSON values must survive `JSON.stringify` unchanged: no `undefined`, functions, 
 
 A pqp user id, an email, a token, a server id or a channel id. It gets a display name, an avatar as a data URL, a random per-session seat id (16 to 32 characters of `A-Za-z0-9_-`), and, for people who ticked the consent box only, a per-app derived id. `bridge.test.ts` walks every bridge schema and fails if a key named `userId`, `user_id`, `email`, `token`, `serverId` or `channelId` appears on it. The WebSocket frames may carry user ids, because the page needs them to draw avatars; the page strips them before anything reaches the app.
 
+## Writing an app
+
+An app is a small web bundle that runs in a sandboxed frame (no network, no storage, an opaque origin) and talks to the pqp page through `@pqp/app-sdk`. The SDK has no runtime dependencies and does the handshake for you.
+
+```ts
+import { applyTheme, connect, PqpAppError } from "@pqp/app-sdk";
+
+const app = await connect(); // app-hello / app-port, then the host's hello
+applyTheme(app.hello.theme);
+app.on("theme", applyTheme);
+
+const label = document.querySelector("#count")!;
+const render = ({ value }: { value: unknown }) => {
+  label.textContent = String((value as { count?: number } | null)?.count ?? 0);
+};
+app.state.on(render); // register right after connect...
+render(await app.state.get()); // ...and read the current value with get()
+
+document.querySelector("#plus")!.addEventListener("click", async () => {
+  const { rev, value } = await app.state.get();
+  try {
+    await app.state.patch({ count: ((value as { count?: number } | null)?.count ?? 0) + 1 }, { baseRev: rev });
+  } catch (error) {
+    if (!(error instanceof PqpAppError) || error.code !== "stale-rev") throw error; // somebody was faster: ignore
+  }
+});
+app.events.on("ping", ({ data }) => console.log("ping from", data));
+await app.events.send("ping", { hello: true });
+```
+
+What to know:
+
+- `connect()` resolves with the app once the host's `hello` arrived (`app.hello`: platform version, app id and version, locale, theme, `self`). It rejects with `unavailable` when pqp does not answer in 15 seconds, and at once when the page is not inside a pqp frame. Call it once; a second call returns the same promise.
+- Listeners (`participants.on`, `state.on`, `events.on(name, cb)`, `app.on("connection" | "theme" | "ended", cb)`) return an unsubscribe function. Register them right after `connect()` and use the `get` calls for the value from before. A push that arrives before a listener exists is not replayed.
+- Every call returns a promise and rejects with a `PqpAppError` whose `code` is one of the bridge's codes (`not-allowed`, `not-host`, `too-large`, `rate-limited`, `stale-rev`, `cancelled`, `unavailable`, `ended`, `invalid`). A call the host does not answer within 15 seconds rejects with `unavailable`. After `ended` every call rejects with `ended`.
+- `events.send` and `end` resolve to `null`. `files.pickLocal()` resolves to `{ bytes, ext }`, or `null` when the person cancels. `assets.get(name)` resolves to an `ArrayBuffer` the host already checked against the manifest's hash.
+- The app sees seat ids, display names and avatar data URLs, never pqp user ids. State is a JSON Merge Patch over one JSON value of at most 16 KB, events are at most 1 KB, and the manifest can lower both caps.
+- Theme: the host sends up to 64 CSS custom properties. `applyTheme(theme)` writes them on the document element through the CSSOM, which the frame's `style-src 'self'` allows.
+
 ## Where things live
 
+- The SDK: `packages/app-sdk/` (`@pqp/app-sdk`). `connect()` in `connect.ts`, the request and push plumbing in `client.ts`, the public object in `app.ts`. Tests use a fake host on a real `MessageChannel` (`fake-host.fixture.ts`).
 - Zod schemas, validator and constants: `packages/shared/src/apps/manifest.ts`
 - Presence formatter: `packages/shared/src/apps/presence.ts`
 - Bridge contract: `packages/shared/src/apps/bridge.ts`; WebSocket frames: `packages/shared/src/apps/frames.ts`; shared JSON, seat id and end reason pieces: `common.ts`; roster and JSON caps beyond the manifest's: `limits.ts`
