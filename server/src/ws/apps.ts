@@ -40,6 +40,8 @@ import {
   type StatePatchItem,
   type StateWriter,
 } from "../apps/state.js";
+import { usersGrantingIdentity } from "../apps/consents.js";
+import { deriveAppUserId } from "../apps/identity.js";
 import { readLiveSummary } from "../apps/summary.js";
 import {
   INSTANCE_ID,
@@ -325,10 +327,39 @@ subscribeToCluster(SESSION_ENDED_TOPIC, (data) => {
 
 // ------------------------------------------------------------- the roster
 
+/**
+ * The derived per-app id of every seated person who let this app see it, and
+ * nobody else (D11). Only an app whose manifest asks for `identity: "user-id"`
+ * is ever sent one; for any other app the map is empty without a query. The
+ * id is computed here for the frame and never stored (`apps/identity.ts`).
+ */
+async function appUserIdsFor(
+  sessionId: string,
+  rows: SessionSnapshotRows,
+): Promise<ReadonlyMap<string, string>> {
+  const meta = sessionMeta.get(sessionId);
+  if (!meta || meta.manifest.capabilities.identity !== "user-id") {
+    return new Map();
+  }
+  const granted = await usersGrantingIdentity(
+    meta.appId,
+    rows.participants.map((p) => p.userId),
+  );
+  const out = new Map<string, string>();
+  for (const userId of granted) {
+    const derived = deriveAppUserId(meta.appId, userId);
+    if (derived) {
+      out.set(userId, derived);
+    }
+  }
+  return out;
+}
+
 function toSnapshot(
   rows: SessionSnapshotRows,
   seat: { seatId: string; role: AppRole; userId: string },
   liveUsers: ReadonlySet<string>,
+  appUserIds: ReadonlyMap<string, string>,
 ): AppSession {
   return {
     type: "app-session",
@@ -346,6 +377,7 @@ function toSnapshot(
         p.orphanedAt === null || liveUsers.has(p.userId)
           ? ("present" as const)
           : ("reconnecting" as const),
+      ...(appUserIds.has(p.userId) ? { appUserId: appUserIds.get(p.userId)! } : {}),
     })),
   };
 }
@@ -357,6 +389,7 @@ function sendSnapshot(
   rows: SessionSnapshotRows,
   seat: SeatInfo,
   liveUsers: ReadonlySet<string>,
+  appUserIds: ReadonlyMap<string, string>,
   droppable = false,
 ): void {
   const mine = rows.participants.find((p) => p.userId === seat.userId);
@@ -367,6 +400,7 @@ function sendSnapshot(
     rows,
     { seatId: mine.seatId, role: mine.role, userId: seat.userId },
     liveUsers,
+    appUserIds,
   );
   frame.sessionId = sessionId;
   (droppable ? sendEncodedDroppable : sendEncoded)(socket, encodeFrame(frame));
@@ -401,8 +435,9 @@ async function deliverRosterNow(sessionId: string): Promise<void> {
       await reclaimLiveSeat(sessionId, seat.userId, INSTANCE_ID).catch(() => false);
     }
   }
+  const appUserIds = await appUserIdsFor(sessionId, rows);
   for (const [socket, seat] of sessionSockets.get(sessionId) ?? []) {
-    sendSnapshot(socket, sessionId, rows, seat, liveUsers, true);
+    sendSnapshot(socket, sessionId, rows, seat, liveUsers, appUserIds, true);
   }
 }
 
@@ -717,7 +752,14 @@ async function handleJoin(
   // coalesced roster, and the channel's viewers in the coalesced summary.
   const rows = await readSessionSnapshotRows(sessionId);
   if (rows) {
-    sendSnapshot(socket, sessionId, rows, seatOf(sessionId, socket)!, new Set([user.id]));
+    sendSnapshot(
+      socket,
+      sessionId,
+      rows,
+      seatOf(sessionId, socket)!,
+      new Set([user.id]),
+      await appUserIdsFor(sessionId, rows),
+    );
   }
   announceRoster(sessionId, ctx.channelId);
 }
