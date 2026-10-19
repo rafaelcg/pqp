@@ -9,6 +9,11 @@
   var W = +q.get("w") || 640;
   var H = +q.get("h") || 560;
 
+  // ?share=on: the platform says this server may share (D14's `shareAllowed`); anything else: it may not
+  var shareAllowed = q.get("share") === "on";
+  // ?role=spectator: the frame is a watcher's
+  var role = q.get("role") === "spectator" ? "spectator" : "player";
+
   var H_ = (window.__h = {
     /** every request the frame sent over the port, as text, so a test can search it for a file name */
     requests: [],
@@ -16,6 +21,8 @@
     frameLoads: 0,
     wrongSource: 0,
     fullscreen: [],
+    /** every share.request the frame made, and what the stand-in answered */
+    shares: [],
     assetsServed: [],
   });
 
@@ -64,7 +71,11 @@
     try {
       switch (m.type) {
         case "participants.get":
-          return reply(m.id, true, { participants: [{ seatId: spec.self.seatId, displayName: "Ana", avatar: null, role: "player", isHost: true, connection: "present" }] });
+          return reply(m.id, true, { participants: [
+            { seatId: "seat-ana-aaaaaaaaaaaaaaaaa", displayName: "Ana", avatar: null, role: "player", isHost: true, connection: "present" },
+            { seatId: "seat-bia-aaaaaaaaaaaaaaaaa", displayName: "Bia", avatar: null, role: "player", isHost: false, connection: "present" },
+            { seatId: spec.self.seatId, displayName: "Eu", avatar: null, role: role, isHost: role === "player", connection: "present" },
+          ] });
         case "state.get":
           return reply(m.id, true, { rev: 0, value: {} });
         case "files.pickLocal": {
@@ -83,6 +94,10 @@
           var data = await fetchAsset(m.name);
           return reply(m.id, true, { bytes: data }, [data]);
         }
+        case "share.request":
+          H_.shares.push({ on: m.on, allowed: shareAllowed });
+          if (!shareAllowed) return reply(m.id, false, "not-allowed");
+          return reply(m.id, true, { on: m.on });
         case "ui.fullscreen":
           H_.fullscreen.push(m.on);
           return reply(m.id, true, { on: m.on });
@@ -113,7 +128,7 @@
         locale: locale,
         theme: { "--color-accent": "#c8f55a", "--color-surface-0": "#14161c" },
         reducedMotion: reduced,
-        self: spec.self,
+        self: { seatId: spec.self.seatId, role: role, isHost: role === "player" },
         connection: "online",
       });
     }

@@ -1,0 +1,69 @@
+import { PqpAppError } from "@pqp/app-sdk";
+
+/**
+ * Sharing the pane, and watching it. BUILT DARK: nothing here does anything
+ * while the server's `locadora_share` flag is off (D14, `docs/APPS.md`), and
+ * that flag stays off until Legal Gate L1b is answered in writing
+ * (`docs/EMULATOR_ROOM.md`, item 7).
+ *
+ * How the app learns the flag is off: it does not read it. The host answers
+ * `share.request` with `not-allowed` unless the manifest declares `share:
+ * "pane"` AND the platform says the server may (`shareAllowed`, served by
+ * `GET /api/apps/config`), so a single `share.request(false)` at the start (a
+ * request to STOP sharing, which changes nothing when nothing is shared) is a
+ * probe: an answer means the control may be drawn, anything else means it is
+ * not drawn. The platform refuses the real request and the spectator joins
+ * server side as well; hiding the control is the courtesy, not the lock.
+ *
+ * The pane is shared through pqp's own screen share flow, so the person
+ * watching sees the existing share viewer, not something this app draws. What
+ * this app adds for a watcher is only the line that says what they are looking
+ * at (`spectatorNames`). Nothing here says or implies where a game came from.
+ */
+
+/** The slice of the SDK this uses, so a test can stand in for the host. */
+export interface ShareHost {
+  share: { request(on: boolean): Promise<boolean> };
+}
+
+/** Whether the control may be drawn, from one probe. */
+export async function probeShare(host: ShareHost): Promise<boolean> {
+  try {
+    await host.share.request(false);
+    return true;
+  } catch {
+    // not-allowed (the flag is off, or this is not a voice channel), unavailable (no share flow here),
+    // anything else: either way there is nothing to offer
+    return false;
+  }
+}
+
+export type ShareOutcome = { kind: "shared"; on: boolean } | { kind: "refused" } | { kind: "failed" };
+
+/** Asks to start or stop sharing. `refused` is the platform's no, `failed` is "not now, try again". */
+export async function setShared(host: ShareHost, on: boolean): Promise<ShareOutcome> {
+  try {
+    return { kind: "shared", on: await host.share.request(on) };
+  } catch (error) {
+    if (error instanceof PqpAppError && error.code === "not-allowed") return { kind: "refused" };
+    return { kind: "failed" };
+  }
+}
+
+export interface Seat {
+  displayName: string;
+  role: string;
+}
+
+/** How many names the watcher's line spells out before "and N more". */
+export const WATCHER_NAMES_SHOWN = 3;
+
+/**
+ * The people whose game a watcher is looking at: the players in the room
+ * (a watcher is a spectator, so they are not in it). The names are what
+ * strangers typed, so this only splits and counts, never builds markup.
+ */
+export function spectatorNames(participants: readonly Seat[]): { shown: string[]; more: number } {
+  const players = participants.filter((person) => person.role === "player").map((person) => person.displayName);
+  return { shown: players.slice(0, WATCHER_NAMES_SHOWN), more: Math.max(0, players.length - WATCHER_NAMES_SHOWN) };
+}

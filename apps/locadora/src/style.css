@@ -250,6 +250,30 @@ body {
   font-size: 0.875rem;
 }
 
+.loc-watch {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  background: var(--loc-card);
+  border: 1px solid var(--loc-border);
+  border-radius: var(--loc-radius);
+}
+
+.loc-watch-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.loc-sharing {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--loc-raised);
+  border-left: 3px solid var(--loc-accent);
+  border-radius: var(--loc-control);
+  font-size: 0.875rem;
+}
+
 .loc-notices {
   display: grid;
   gap: 8px;

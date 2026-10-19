@@ -71,7 +71,7 @@ async function open(browser: Browser, query = ""): Promise<Opened> {
   await page.goto(`${rig.hostOrigin}/?src=${encodeURIComponent(rig.frameUrl)}${query}`);
   const handle = await page.waitForSelector("iframe#app");
   const frame = (await handle.contentFrame())!;
-  await frame.locator("#v-shelf").waitFor({ state: "visible" });
+  await frame.locator("#loc:not([data-view=connecting])").waitFor();
   holder.opened = { context, page, frame, requests, problems, csp: () => csp };
   return holder.opened;
 }
@@ -306,6 +306,70 @@ test("another game can be picked in the same frame", async ({ browser }) => {
   await expectPaints(opened, GBA_GREEN);
   expect(await appViolations(opened)).toEqual([]);
   expect(rig.canaryHits).toEqual([]);
+  await opened.context.close();
+});
+
+/*
+ * Sharing the pane and watching it are built DARK (D14, Legal Gate L1b): the host stand-in answers `share.request`
+ * with `not-allowed` unless the test says `?share=on`, the way the real host does while `locadora_share` is off.
+ * The platform side (the flag, `shareAllowed` on the config, the spectator refusal) is tested with the platform's
+ * own PRs; these are the app's two states.
+ */
+test("sharing, flag off: no control, one refused probe, and no share is ever asked for", async ({ browser }) => {
+  const opened = await open(browser);
+  const { frame, page } = opened;
+  await pickFile(opened, randomName(".nes"), nesPattern());
+  await startGame(frame);
+  await expectPaints(opened, NES_GREEN);
+  await expect(frame.locator("#share")).toBeHidden();
+  await expect(frame.locator("#sharing")).toBeHidden();
+  const shares = await page.evaluate(() => (window as unknown as { __h: { shares: unknown[] } }).__h.shares);
+  // the only call is the probe, a request to STOP sharing, and it was refused
+  expect(shares).toEqual([{ on: false, allowed: false }]);
+  await opened.context.close();
+});
+
+test("sharing, flag on: the control shares the pane and stops it", async ({ browser }) => {
+  const opened = await open(browser, "&share=on");
+  const { frame, page } = opened;
+  // no control before there is a game on screen
+  await expect(frame.locator("#share")).toBeHidden();
+  await pickFile(opened, randomName(".gba"), gbaPattern());
+  await startGame(frame);
+  await expectPaints(opened, GBA_GREEN);
+  const share = frame.locator("#share");
+  await expect(share).toBeVisible();
+  await expect(share).toHaveText("Compartilhar");
+  await expect(share).toHaveAttribute("aria-pressed", "false");
+  await share.click();
+  await expect(share).toHaveText("Parar de compartilhar");
+  await expect(share).toHaveAttribute("aria-pressed", "true");
+  await expect(frame.locator("#sharing")).toContainText("compartilhada");
+  await share.click();
+  await expect(share).toHaveText("Compartilhar");
+  await expect(frame.locator("#sharing")).toBeHidden();
+  const shares = await page.evaluate(() => (window as unknown as { __h: { shares: Array<{ on: boolean }> } }).__h.shares);
+  expect(shares.map((s) => s.on)).toEqual([false, true, false]);
+  expect(await appViolations(opened)).toEqual([]);
+  expect(opened.problems).toEqual([]);
+  await opened.context.close();
+});
+
+test("a watcher sees whose game is on screen and has nothing to pick", async ({ browser }) => {
+  const opened = await open(browser, "&role=spectator&share=on");
+  const { frame, page } = opened;
+  await expect(frame.locator("#v-watch")).toBeVisible();
+  await expect(frame.locator("#watching-title")).toHaveText("Tu tá assistindo");
+  await expect(frame.locator("#watching-line")).toHaveText("Aparece a tela do jogo de Ana, Bia.");
+  await expect(frame.locator("#watching-how")).toContainText("O pqp só passa a imagem");
+  await expect(frame.locator("#v-shelf")).toBeHidden();
+  await expect(frame.locator("#choose")).toBeHidden();
+  await expect(frame.locator("#share")).toBeHidden();
+  // a watcher never asks to share
+  expect(await page.evaluate(() => (window as unknown as { __h: { shares: unknown[] } }).__h.shares)).toEqual([]);
+  const text = await frame.locator("main").innerText();
+  expect(text).not.toMatch(/voc[eê]/i);
+  expect(opened.problems).toEqual([]);
   await opened.context.close();
 });
 

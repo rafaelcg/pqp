@@ -29,6 +29,18 @@ export interface Strings {
   noticesIntro: string;
   noticesLoading: string;
   noticesFailed: string;
+  share: string;
+  shareStop: string;
+  sharing: string;
+  shareRefused: string;
+  shareFailed: string;
+  watchingTitle: string;
+  /** `{names}` is the players' names, joined. */
+  watchingLine: string;
+  /** Appended after the names, `{n}` more people. */
+  watchingMore: string;
+  watchingEmpty: string;
+  watchingHow: string;
   controlDpad: string;
   controlA: string;
   controlB: string;
@@ -71,6 +83,16 @@ export const STRINGS = {
       "Software de terceiros que a Locadora usa, com a licença de cada um e o link do código-fonte.",
     noticesLoading: "Carregando as licenças...",
     noticesFailed: "Não deu pra carregar as licenças. Tenta de novo.",
+    share: "Compartilhar",
+    shareStop: "Parar de compartilhar",
+    sharing: "A tela da Locadora tá sendo compartilhada. Quem entrar pra assistir vê o que tu vê aqui.",
+    shareRefused: "Compartilhar tá desligado aqui.",
+    shareFailed: "Não deu pra compartilhar agora. Tenta de novo.",
+    watchingTitle: "Tu tá assistindo",
+    watchingLine: "Aparece a tela do jogo de {names}.",
+    watchingMore: " e mais {n}",
+    watchingEmpty: "Ainda não tem ninguém jogando.",
+    watchingHow: "Cada jogo roda no computador de quem joga. O pqp só passa a imagem.",
     controlDpad: "Setas: direcional",
     controlA: "Z: botão A",
     controlB: "X: botão B",
@@ -111,6 +133,16 @@ export const STRINGS = {
       "Third-party software Locadora uses, with each one's license and a link to its source code.",
     noticesLoading: "Loading the licenses...",
     noticesFailed: "The licenses could not be loaded. Try again.",
+    share: "Share",
+    shareStop: "Stop sharing",
+    sharing: "The Locadora screen is being shared. People who come to watch see what you see here.",
+    shareRefused: "Sharing is off here.",
+    shareFailed: "Sharing did not work right now. Try again.",
+    watchingTitle: "You are watching",
+    watchingLine: "You are seeing the game screen of {names}.",
+    watchingMore: " and {n} more",
+    watchingEmpty: "Nobody is playing yet.",
+    watchingHow: "Each game runs on the player's own computer. pqp only passes the picture along.",
     controlDpad: "Arrow keys: directional pad",
     controlA: "Z: A button",
     controlB: "X: B button",
@@ -151,6 +183,16 @@ export const STRINGS = {
       "Software de terceros que usa Locadora, con la licencia de cada uno y el enlace a su código fuente.",
     noticesLoading: "Cargando las licencias...",
     noticesFailed: "No se pudieron cargar las licencias. Prueba otra vez.",
+    share: "Compartir",
+    shareStop: "Dejar de compartir",
+    sharing: "La pantalla de Locadora se está compartiendo. Quien entre a mirar ve lo que tú ves aquí.",
+    shareRefused: "Compartir está desactivado aquí.",
+    shareFailed: "No se pudo compartir ahora. Prueba otra vez.",
+    watchingTitle: "Estás mirando",
+    watchingLine: "Ves la pantalla del juego de {names}.",
+    watchingMore: " y {n} más",
+    watchingEmpty: "Todavía no juega nadie.",
+    watchingHow: "Cada juego corre en la computadora de quien juega. pqp solo pasa la imagen.",
     controlDpad: "Flechas: cruceta",
     controlA: "Z: botón A",
     controlB: "X: botón B",

@@ -4,6 +4,7 @@ import "./style.css";
 import { applyTheme, connect, type PqpApp } from "@pqp/app-sdk";
 import { EMULATOR_LANGUAGE, pickLocale, STRINGS, type Strings } from "./i18n";
 import { startEmulator, stopEmulator } from "./emulator";
+import { probeShare, setShared, spectatorNames } from "./share";
 import { chooseTape, loadNotices, type TapeProblem } from "./tape";
 
 function el<T extends HTMLElement>(id: string): T {
@@ -23,6 +24,9 @@ const chooseAnother = el<HTMLButtonElement>("choose-another");
 const fullscreenButton = el<HTMLButtonElement>("fullscreen");
 const controlsToggle = el<HTMLButtonElement>("controls-toggle");
 const controlsPanel = el<HTMLElement>("controls");
+const watchView = el<HTMLElement>("v-watch");
+const shareButton = el<HTMLButtonElement>("share");
+const sharingLine = el<HTMLElement>("sharing");
 const noticesToggle = el<HTMLButtonElement>("notices-toggle");
 const noticesPanel = el<HTMLElement>("notices");
 const noticesText = el<HTMLElement>("notices-text");
@@ -30,16 +34,22 @@ const problemLine = el<HTMLElement>("problem");
 const startHint = el<HTMLElement>("start-hint");
 const endedLine = el<HTMLElement>("ended");
 
-type Screen = "connecting" | "shelf" | "loading" | "playing" | "outside";
+type Screen = "connecting" | "shelf" | "loading" | "playing" | "watching" | "outside";
 
 function show(screen: Screen) {
   root.dataset.view = screen;
   shelf.hidden = screen !== "shelf";
   loading.hidden = screen !== "loading";
   play.hidden = screen !== "playing";
+  watchView.hidden = screen !== "watching";
   bar.hidden = screen === "connecting" || screen === "outside";
   chooseAnother.hidden = screen !== "playing";
   fullscreenButton.hidden = screen !== "playing";
+  if (screen !== "playing") {
+    // the share control and its line belong to the game on screen (`syncShare` brings them back)
+    shareButton.hidden = true;
+    sharingLine.hidden = true;
+  }
 }
 
 function setText(id: string, text: string) {
@@ -91,6 +101,9 @@ async function main() {
     setText("control-shoulders", t.controlShoulders);
     setText("control-gamepad", t.controlGamepad);
     setText("notices-intro", t.noticesIntro);
+    setText("watching-title", t.watchingTitle);
+    setText("watching-how", t.watchingHow);
+    syncShare();
     el("game").setAttribute("aria-label", t.frameTitle);
     syncControls();
     syncNotices();
@@ -107,6 +120,48 @@ async function main() {
     controlsOpen = !controlsOpen;
     syncControls();
   });
+
+  // ---- sharing the pane and watching it: built dark behind `locadora_share` (src/share.ts) ----
+  const isWatcher = app.hello.self.role === "spectator";
+  let shareAvailable = false;
+  let sharing = false;
+  function syncShare() {
+    const playing = root.dataset.view === "playing";
+    shareButton.hidden = !(shareAvailable && playing);
+    shareButton.textContent = sharing ? t.shareStop : t.share;
+    shareButton.setAttribute("aria-pressed", String(sharing));
+    sharingLine.hidden = !(sharing && playing);
+    sharingLine.textContent = sharing ? t.sharing : "";
+  }
+  shareButton.addEventListener("click", async () => {
+    shareButton.disabled = true;
+    const outcome = await setShared(app, !sharing);
+    shareButton.disabled = false;
+    if (outcome.kind === "shared") {
+      sharing = outcome.on;
+      showProblem(null);
+    } else {
+      showShareProblem(outcome.kind === "refused" ? t.shareRefused : t.shareFailed);
+      if (outcome.kind === "refused") shareAvailable = false;
+    }
+    syncShare();
+  });
+  function showShareProblem(text: string) {
+    sharingLine.hidden = false;
+    sharingLine.textContent = text;
+  }
+
+  /** The line a watcher reads: whose game is on the screen they are looking at. */
+  function renderWatching(roster: Awaited<ReturnType<PqpApp["participants"]["get"]>>) {
+    const { shown, more } = spectatorNames(roster);
+    const line = el("watching-line");
+    if (shown.length === 0) {
+      line.textContent = t.watchingEmpty;
+      return;
+    }
+    const moreText = more > 0 ? t.watchingMore.split("{n}").join(String(more)) : "";
+    line.textContent = t.watchingLine.split("{names}").join(shown.join(", ") + moreText);
+  }
 
   // The third-party notices, from the bundle (an asset: the frame cannot fetch, and cannot open a link).
   let noticesOpen = false;
@@ -171,6 +226,7 @@ async function main() {
       if (playing) stopEmulator();
       // the emulator draws into #game, and a hidden element has no size to draw into
       show("playing");
+      syncShare();
       playing = true;
       startHint.hidden = false;
       startEmulator({
@@ -214,6 +270,10 @@ async function main() {
     ended = true;
     stopEmulator();
     playing = false;
+    sharing = false;
+    shareButton.hidden = true;
+    sharingLine.hidden = true;
+    watchView.hidden = true;
     statusLine.textContent = "";
     endedLine.textContent = t.ended;
     endedLine.hidden = false;
@@ -226,7 +286,17 @@ async function main() {
   });
 
   applyLabels();
-  show("shelf");
+  if (isWatcher) {
+    // a watcher has no game of their own to pick: they see the share, and this line says whose it is
+    app.participants.on(renderWatching);
+    renderWatching(await app.participants.get());
+    show("watching");
+  } else {
+    show("shelf");
+    // one stop request tells whether the platform offers sharing here (see src/share.ts)
+    shareAvailable = await probeShare(app);
+    syncShare();
+  }
 }
 
 void main();
