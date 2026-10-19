@@ -17,6 +17,7 @@ import {
   voiceNoteListenedSchema,
   voiceNoteTranscriptSchema,
 } from "./attachments.js";
+import { appEndedSchema, channelAppSchema } from "./apps/frames.js";
 import { embedSchema } from "./embeds.js";
 import { messageForwardFieldSchema } from "./forward.js";
 import { friendActivitySchema } from "./friends.js";
@@ -736,6 +737,12 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // Addressed to the sender only, like `message-rejected`: a nudge that did
   // not land, and why. See `nudge.ts`, and its absence from the list below.
   nudgeRefusedSchema,
+  // Apps in channels (`apps/frames.ts`, docs/APPS.md). `channel-app` goes to
+  // every socket whose account can VIEW the channel, which is wider than the
+  // sockets looking at it, so it is delivered per socket and is absent from
+  // the channel relay below. `app-ended` goes to the session's participants.
+  channelAppSchema,
+  appEndedSchema,
 ]);
 
 /**
