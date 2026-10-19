@@ -187,6 +187,9 @@ class SoundboardController(
     private val catalogAt = Freshness(now, CATALOG_REFRESH_MS, FRESHNESS_CAP)
     private val catalogReads = HashMap<String, Deferred<List<CustomSound>?>>()
 
+    /** Channels whose cached clip link failed to download: the next play reads the catalog instead of retrying it. */
+    private val suspectLinks = SuspectLinks(FRESHNESS_CAP)
+
     /** Which refresh is the current one: an older one that finishes late writes nothing. */
     private var refreshGeneration = 0
     private var refreshJob: Job? = null
@@ -235,13 +238,16 @@ class SoundboardController(
             ?.sounds?.firstOrNull { it.id == soundId }
 
     private suspend fun customSound(channelId: String, soundId: String): CustomSound? {
-        known(channelId, soundId)?.let { return it }
-        // Not known: the catalog may be older than the clip. One read at a time; every waiting play resolves against it.
+        val cached = known(channelId, soundId)
+        // A link that just failed to download is not trusted again: look the clip up in a fresh catalog instead.
+        if (cached != null && !synchronized(catalogAt) { suspectLinks.contains(channelId) }) return cached
+        // Not known (or its link is suspect): the catalog may be older than the clip. One read at a time; every
+        // waiting play resolves against it.
         val read = synchronized(catalogAt) {
             val running = catalogReads[channelId]
             when {
                 running != null && running.isActive -> running
-                catalogAt.isFresh(channelId) -> return null
+                catalogAt.isFresh(channelId) -> return cached
                 else -> scope.async { readCatalog(channelId) }.also { flight ->
                     catalogReads[channelId] = flight
                     // Callers hold their own reference; the map keeps a read only while it runs.
@@ -251,7 +257,8 @@ class SoundboardController(
                 }
             }
         }
-        val sounds = read.await() ?: return null
+        // A catalog that could not be read leaves the cached clip to try its old link once more.
+        val sounds = read.await() ?: return cached
         return sounds.firstOrNull { it.id == soundId }
     }
 
@@ -259,7 +266,10 @@ class SoundboardController(
     private suspend fun readCatalog(channelId: String): List<CustomSound>? {
         val serverId = (serverOf(channelId) as? ChannelOwners.Lookup.Found)?.serverId ?: return null
         val page = runSuspendCatching { session.api.soundboard(serverId) }.getOrNull() ?: return null
-        synchronized(catalogAt) { catalogAt.mark(channelId) }
+        synchronized(catalogAt) {
+            catalogAt.mark(channelId)
+            suspectLinks.clear(channelId)
+        }
         if (channelId == seatedChannelId()) _available.value = Availability.On(channelId, serverId, page.sounds)
         return page.sounds
     }
@@ -319,7 +329,7 @@ class SoundboardController(
     private suspend fun clipFile(channelId: String, sound: CustomSound): File? {
         val url = Backend.absolute(sound.url)
         if (url == null) {
-            synchronized(catalogAt) { catalogAt.forget(channelId) }
+            distrustLinks(channelId)
             return null
         }
         val dir = File(context.cacheDir, "soundboard").apply { mkdirs() }
@@ -329,8 +339,16 @@ class SoundboardController(
         val got = downloads.run(file.name) {
             withContext(Dispatchers.IO) { download(url, dir, file) }
         }
-        if (!got) synchronized(catalogAt) { catalogAt.forget(channelId) }
+        if (!got) distrustLinks(channelId)
         return file.takeIf { got }
+    }
+
+    /** The next play of any clip in [channelId] reads a fresh catalog, even for one it already holds a link for. */
+    private fun distrustLinks(channelId: String) {
+        synchronized(catalogAt) {
+            catalogAt.forget(channelId)
+            suspectLinks.add(channelId)
+        }
     }
 
     private val downloads = SingleFlight<String, Boolean>(scope)
@@ -413,7 +431,10 @@ class SoundboardController(
         val config = runSuspendCatching { session.api.voiceConfig(serverId) }.getOrNull() ?: return null
         if (!config.soundboard) return Availability.Off
         val page = runSuspendCatching { session.api.soundboard(serverId) }.getOrNull() ?: return null
-        synchronized(catalogAt) { catalogAt.mark(channelId) }
+        synchronized(catalogAt) {
+            catalogAt.mark(channelId)
+            suspectLinks.clear(channelId)
+        }
         return Availability.On(channelId, serverId, page.sounds)
     }
 
@@ -547,5 +568,28 @@ class Freshness(
 
     fun forget(key: String) {
         synchronized(at) { at.remove(key) }
+    }
+}
+
+/**
+ * The channels whose cached clip links are not to be trusted (one failed to download, so the catalog's URLs may
+ * have expired), bounded at [cap] with the oldest dropped, so it cannot grow over a long session. Callers hold
+ * their own lock, as [Freshness]'s owner does.
+ */
+class SuspectLinks(private val cap: Int) {
+    private val channels = LinkedHashSet<String>()
+
+    val size: Int get() = channels.size
+
+    fun contains(channelId: String): Boolean = channelId in channels
+
+    fun add(channelId: String) {
+        channels.remove(channelId)
+        channels.add(channelId)
+        while (channels.size > cap) channels.remove(channels.first())
+    }
+
+    fun clear(channelId: String) {
+        channels.remove(channelId)
     }
 }

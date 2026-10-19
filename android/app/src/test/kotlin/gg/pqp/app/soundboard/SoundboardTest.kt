@@ -198,6 +198,21 @@ class SoundboardTest {
         assertEquals(1, fresh.size)
     }
 
+    @Test
+    fun `a channel whose link failed is distrusted until its catalog is read again, and the list is bounded`() {
+        val suspect = SuspectLinks(cap = 2)
+        assertFalse(suspect.contains("a"))
+        suspect.add("a")
+        assertTrue(suspect.contains("a"))
+        suspect.clear("a")
+        assertFalse(suspect.contains("a"))
+        // Past the cap the oldest is dropped.
+        listOf("a", "b", "c").forEach { suspect.add(it) }
+        assertEquals(2, suspect.size)
+        assertFalse(suspect.contains("a"))
+        assertTrue(suspect.contains("c"))
+    }
+
     // --- one download per clip ---
 
     @Test
