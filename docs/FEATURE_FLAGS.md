@@ -770,17 +770,27 @@ timeline. Behind `APPS` (default off, **per server**, born as a flag). It is the
 first of the platform's gates: an app is also released by the operator per server
 (`server_apps.operator_enabled`), and Locadora needs `emulator_room` on top.
 
-**Nothing reads it yet.** The change that registers it only adds the tables
-(`apps`, `app_versions`, `server_apps`, `app_sessions`, and their neighbours in
-`schema.sql`) and the flag; no route, frame or client code consults it. Once the
-platform lands, off means nothing renders and every apps route answers 404, and
-turning it off ends the live sessions of that server. The client will learn it
-from `GET /api/apps/config?serverId=` (`enabled`), which arrives with the
-session routes and is when `clientVia` is added here.
+Off means nothing renders and every apps route answers 404, except
+`GET /api/apps/config?serverId=` (`enabled`), which answers `{ enabled: false }`
+so a client hides the launcher without a 404 storm. See `docs/APPS.md`
+§"Availability" for the full list of gates and the reason each one gives.
+Turning it off for a server ends that server's live sessions on the next
+sweep (the session engine).
 
 Turn it on for one server with `PUT /api/admin/flag-overrides
 { key: "apps", serverId, enabled: true }` or from controles → interruptores,
 and only after the rest of the platform is in.
+
+## `locadora_share` (per server)
+
+Whether an app of `category: "emulator"` (Locadora) may share its game pane and
+admit spectators, so people can watch a game that is running (`LOCADORA_SHARE`,
+default **off**, per server). A running game shown to other people is an open
+legal question (`docs/EMULATOR_ROOM.md` item 6), so this stays off until the
+lawyer's written answer (Legal Gate L1b). Every other app shares through the
+ordinary path and never reads it. Read by `appShareAllowed` in
+`server/src/apps/availability.ts`, served per app as `shareAllowed` on
+`GET /api/apps/config`. It does nothing while `apps` is off.
 
 ## `stories` (per server) and `stories_friends` (global)
 

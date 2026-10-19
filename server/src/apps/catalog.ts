@@ -1,0 +1,385 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { PoolClient } from "pg";
+import { z } from "zod";
+import { validateAppManifest, type AppManifest } from "@pqp/shared";
+import { getPool } from "../db.js";
+import { logEvent } from "../lib/log.js";
+
+/**
+ * THE CATALOG LOADER: how first-party apps get into the database.
+ *
+ * `catalog.json` is written by the packager (`tools/apps-build/`, Track R) and
+ * committed. Each entry is a BUILT manifest plus the sha256 of its canonical
+ * text. At boot, on the API and on the worker, every entry is validated with
+ * `validateAppManifest` and merged into `apps` and `app_versions`, and the
+ * merge is INSERT-ONLY:
+ *
+ *  - an unknown app id inserts `apps` as `draft`, off everywhere
+ *    (`global_enabled` false, nothing in `server_apps`), under the manifest's
+ *    publisher, which must already exist and not be suspended;
+ *  - an unknown (id, version) inserts `app_versions` as `pending` review with
+ *    source `repo`;
+ *  - a known (id, version) with the SAME hash is a no-op, and with a DIFFERENT
+ *    hash is refused with a loud log and not written: a version is immutable,
+ *    and a changed bundle under an old number is exactly what pinning a version
+ *    on a session exists to rule out;
+ *  - nothing ever changes the status, the switches, the review fields or the
+ *    `current_version` of an existing row, with one exception: an app whose
+ *    `current_version` is still NULL gets the newest version this load inserted
+ *    (so the first load of a new app is usable once the operator approves it).
+ *
+ * Every insert writes one `app_admin_audit` row (`catalog-load`, actor `boot`).
+ * The whole load is one transaction under an advisory lock, so `api-a`,
+ * `api-b` and the worker booting together produce one set of rows and one set
+ * of audit lines, and a second run of the same catalog writes nothing.
+ *
+ * THE DEV CONVENIENCE. With `DEV_AUTH_BYPASS=true` and `NODE_ENV` not
+ * `production`, apps of the `pqp` publisher are made `live`, `global_enabled`
+ * and `community_unlocked` on every load, and the dev seed releases them on its
+ * Sandbox server (`enableDevAppsForServer`), so a local checkout can run an app
+ * without the dashboard. Production never does this: the guard is the same
+ * pair of conditions the dev auth bypass itself needs.
+ */
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+const entrySchema = z.object({
+  manifest: z.unknown(),
+  manifestSha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
+export type CatalogEntry = z.infer<typeof entrySchema>;
+
+export interface CatalogRefusal {
+  appId: string | null;
+  version: string | null;
+  reason:
+    | "invalid-entry"
+    | "invalid-manifest"
+    | "unknown-publisher"
+    | "publisher-mismatch"
+    | "hash-changed";
+}
+
+export interface CatalogLoadResult {
+  appsInserted: number;
+  versionsInserted: number;
+  currentVersionsSet: number;
+  refused: CatalogRefusal[];
+  /** Apps made live by the dev convenience. 0 anywhere but a dev box. */
+  devEnabled: number;
+}
+
+/** Whether the dev convenience applies: the dev auth bypass, never production. */
+export function devAppsConvenienceEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.DEV_AUTH_BYPASS === "true" && env.NODE_ENV !== "production";
+}
+
+/** The committed catalog. A missing or unreadable file is an empty catalog, logged. */
+export function readCatalogFile(path = join(here, "catalog.json")): unknown[] {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    logEvent("apps.catalog.unreadable", { path, error: String(error) });
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(text) as { apps?: unknown };
+    return Array.isArray(parsed.apps) ? parsed.apps : [];
+  } catch (error) {
+    logEvent("apps.catalog.unreadable", { path, error: String(error) });
+    return [];
+  }
+}
+
+interface ParsedSemver {
+  core: [number, number, number];
+  pre: string[];
+}
+
+function parseSemver(version: string): ParsedSemver {
+  const [core = "", pre] = version.split("-", 2);
+  const [major = "0", minor = "0", patch = "0"] = core.split(".");
+  return {
+    core: [Number(major), Number(minor), Number(patch)],
+    pre: pre === undefined ? [] : version.slice(core.length + 1).split("."),
+  };
+}
+
+/** SemVer 2.0.0 precedence: a prerelease sorts before its release. */
+export function compareSemver(a: string, b: string): number {
+  const left = parseSemver(a);
+  const right = parseSemver(b);
+  for (let i = 0; i < 3; i += 1) {
+    if (left.core[i] !== right.core[i]) {
+      return left.core[i]! < right.core[i]! ? -1 : 1;
+    }
+  }
+  if (left.pre.length === 0 && right.pre.length === 0) {
+    return 0;
+  }
+  if (left.pre.length === 0) {
+    return 1;
+  }
+  if (right.pre.length === 0) {
+    return -1;
+  }
+  const length = Math.max(left.pre.length, right.pre.length);
+  for (let i = 0; i < length; i += 1) {
+    const x = left.pre[i];
+    const y = right.pre[i];
+    if (x === undefined) {
+      return -1;
+    }
+    if (y === undefined) {
+      return 1;
+    }
+    const xNumeric = /^\d+$/.test(x);
+    const yNumeric = /^\d+$/.test(y);
+    if (xNumeric && yNumeric) {
+      if (Number(x) !== Number(y)) {
+        return Number(x) < Number(y) ? -1 : 1;
+      }
+    } else if (xNumeric !== yNumeric) {
+      return xNumeric ? -1 : 1;
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+async function audit(
+  client: PoolClient,
+  appId: string,
+  version: string | null,
+  after: Record<string, unknown>,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO app_admin_audit (actor_kind, action, app_id, app_version, before, after)
+     VALUES ('boot', 'catalog-load', $1, $2, NULL, $3::jsonb)`,
+    [appId, version, JSON.stringify(after)],
+  );
+}
+
+function refuse(
+  result: CatalogLoadResult,
+  refusal: CatalogRefusal,
+  detail: Record<string, unknown> = {},
+): void {
+  result.refused.push(refusal);
+  // Loud on purpose: a refused entry means the repository and the database
+  // disagree about what a published version contains.
+  console.error(
+    `[apps] catalog entry refused: ${refusal.reason} ` +
+      `(${refusal.appId ?? "?"}@${refusal.version ?? "?"})`,
+  );
+  logEvent("apps.catalog.refused", { ...refusal, ...detail });
+}
+
+export async function loadAppCatalog(
+  options: { entries?: unknown[]; dev?: boolean } = {},
+): Promise<CatalogLoadResult> {
+  const result: CatalogLoadResult = {
+    appsInserted: 0,
+    versionsInserted: 0,
+    currentVersionsSet: 0,
+    refused: [],
+    devEnabled: 0,
+  };
+  const raw = options.entries ?? readCatalogFile();
+  const dev = options.dev ?? devAppsConvenienceEnabled();
+  if (raw.length === 0 && !dev) {
+    // An empty catalog costs a boot nothing at all, not even a connection.
+    return result;
+  }
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    // One loader at a time across `api-a`, `api-b` and the worker.
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('pqp.apps.catalog-load'))`,
+    );
+
+    const insertedByApp = new Map<string, string[]>();
+    for (const item of raw) {
+      const entry = entrySchema.safeParse(item);
+      if (!entry.success) {
+        refuse(result, { appId: null, version: null, reason: "invalid-entry" });
+        continue;
+      }
+      const checked = validateAppManifest(entry.data.manifest);
+      if (!checked.ok) {
+        const candidate = entry.data.manifest as { id?: unknown; version?: unknown };
+        refuse(
+          result,
+          {
+            appId: typeof candidate?.id === "string" ? candidate.id : null,
+            version: typeof candidate?.version === "string" ? candidate.version : null,
+            reason: "invalid-manifest",
+          },
+          { issues: checked.issues.slice(0, 5) },
+        );
+        continue;
+      }
+      await mergeEntry(
+        client,
+        checked.manifest,
+        entry.data.manifestSha256,
+        result,
+        insertedByApp,
+      );
+    }
+
+    // First version of an app that has none yet: the newest this load brought.
+    for (const [appId, versions] of insertedByApp) {
+      const newest = [...versions].sort(compareSemver).at(-1)!;
+      const set = await client.query(
+        `UPDATE apps SET current_version = $2, updated_at = NOW()
+          WHERE id = $1 AND current_version IS NULL`,
+        [appId, newest],
+      );
+      result.currentVersionsSet += set.rowCount ?? 0;
+    }
+
+    if (dev) {
+      const live = await client.query(
+        `UPDATE apps
+            SET status = 'live', global_enabled = TRUE, community_unlocked = TRUE,
+                updated_at = NOW()
+          WHERE publisher_id = 'pqp'
+            AND current_version IS NOT NULL
+            AND (status <> 'live' OR NOT global_enabled OR NOT community_unlocked)`,
+      );
+      result.devEnabled = live.rowCount ?? 0;
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  if (result.appsInserted || result.versionsInserted || result.refused.length) {
+    logEvent("apps.catalog.loaded", {
+      appsInserted: result.appsInserted,
+      versionsInserted: result.versionsInserted,
+      currentVersionsSet: result.currentVersionsSet,
+      refused: result.refused.length,
+    });
+  }
+  return result;
+}
+
+async function mergeEntry(
+  client: PoolClient,
+  manifest: AppManifest,
+  manifestSha256: string,
+  result: CatalogLoadResult,
+  insertedByApp: Map<string, string[]>,
+): Promise<void> {
+  const ref = { appId: manifest.id, version: manifest.version };
+
+  const publisher = await client.query<{ suspended_at: Date | null }>(
+    `SELECT suspended_at FROM app_publishers WHERE id = $1`,
+    [manifest.publisher],
+  );
+  if (!publisher.rows[0] || publisher.rows[0].suspended_at) {
+    refuse(result, { ...ref, reason: "unknown-publisher" });
+    return;
+  }
+
+  const existingApp = await client.query<{ publisher_id: string }>(
+    `SELECT publisher_id FROM apps WHERE id = $1`,
+    [manifest.id],
+  );
+  if (existingApp.rows[0] && existingApp.rows[0].publisher_id !== manifest.publisher) {
+    // An id belongs to the publisher that first brought it.
+    refuse(result, { ...ref, reason: "publisher-mismatch" });
+    return;
+  }
+
+  const existingVersion = await client.query<{ manifest_sha256: string }>(
+    `SELECT manifest_sha256 FROM app_versions WHERE app_id = $1 AND version = $2`,
+    [manifest.id, manifest.version],
+  );
+  if (existingVersion.rows[0]) {
+    if (existingVersion.rows[0].manifest_sha256 !== manifestSha256) {
+      refuse(result, { ...ref, reason: "hash-changed" }, {
+        stored: existingVersion.rows[0].manifest_sha256,
+        offered: manifestSha256,
+      });
+    }
+    return;
+  }
+
+  if (!existingApp.rows[0]) {
+    const created = await client.query(
+      `INSERT INTO apps (id, publisher_id) VALUES ($1, $2)
+       ON CONFLICT (id) DO NOTHING`,
+      [manifest.id, manifest.publisher],
+    );
+    if (created.rowCount) {
+      result.appsInserted += 1;
+      await audit(client, manifest.id, null, {
+        status: "draft",
+        publisher: manifest.publisher,
+      });
+    }
+  }
+
+  const inserted = await client.query(
+    `INSERT INTO app_versions (app_id, version, manifest, manifest_sha256, entry_sha256, source)
+     VALUES ($1, $2, $3::jsonb, $4, $5, 'repo')
+     ON CONFLICT (app_id, version) DO NOTHING`,
+    [
+      manifest.id,
+      manifest.version,
+      JSON.stringify(manifest),
+      manifestSha256,
+      manifest.entry.sha256,
+    ],
+  );
+  if (inserted.rowCount) {
+    result.versionsInserted += 1;
+    const versions = insertedByApp.get(manifest.id) ?? [];
+    versions.push(manifest.version);
+    insertedByApp.set(manifest.id, versions);
+    await audit(client, manifest.id, manifest.version, {
+      reviewStatus: "pending",
+      source: "repo",
+      manifestSha256,
+    });
+  }
+}
+
+/**
+ * The dev convenience's second half: release every `pqp` app on one server
+ * (the dev seed's Sandbox). Never called outside a dev box, and refuses to run
+ * anywhere else even if it is.
+ */
+export async function enableDevAppsForServer(
+  serverId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<number> {
+  if (!devAppsConvenienceEnabled(env)) {
+    return 0;
+  }
+  const result = await getPool().query(
+    `INSERT INTO server_apps (server_id, app_id, operator_enabled)
+     SELECT $1, id, TRUE FROM apps WHERE publisher_id = 'pqp'
+     ON CONFLICT (server_id, app_id)
+     DO UPDATE SET operator_enabled = TRUE, updated_at = NOW()
+       WHERE server_apps.operator_enabled IS DISTINCT FROM TRUE`,
+    [serverId],
+  );
+  return result.rowCount ?? 0;
+}
