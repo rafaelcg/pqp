@@ -833,7 +833,7 @@ The classic page at `/` is unchanged and stays while both exist.
    the section (`#tempo` opens `#crescimento`).
 3. `/?classico=1` always opens the classic page and saves "classico".
 
-### Five screens
+### Six screens
 
 | Screen | Leads with | Details layer (closed rows) |
 |---|---|---|
@@ -841,6 +841,7 @@ The classic page at `/` is unchanged and stays while both exist.
 | **Crescimento** | actives (DAU, WAU, MAU) with a 30/90/180-day chart, the activation funnel, cohort retention, sources with the share that stays | the base, the last 24 hours by hour, signups by day, campaigns, landing pages, 7-day returning |
 | **Produto** | call rating and its distribution, low-rating notes, profile completeness rings, top text channels | top servers, communities, game accounts, instance shape, apps and product, calls and rings, Discord imports |
 | **Fila** | the feedback inbox: list on the left, the whole item with author and context on the right, confirm and close | report counts, with a link to the full report queue in the app |
+| **Apps** | the apps catalog: every app with its state, the global switch, "N de M servidores" and the review; an app opens into its servers (search, only the ones on, a switch each), its review checklist, the public-community unlock and its history | the confirmation of "Desligar em todos" (it says how many sessions end), the reason a switch is locked, written under it |
 | **Sistema** | services with 24-hour latency lines and uptime, capacity (pool, WebSockets, SFU), the feature switches | infra, who changed which switch, watch party transmission, and a link to the per-server controls |
 
 ### What is real
@@ -859,6 +860,17 @@ illustrative.
   Hoje opens).
 - **Before actives are tracked**, the actives cards show who wrote, and say
   when actives start.
+- **Apps** (`/novo#apps`, nothing in the classic page): the catalog and its
+  writes go through the Worker's `/operator/apps`, `/operator/app-review`,
+  `/operator/app-servers`, `/operator/server-apps`,
+  `/operator/app-disable-everywhere` and `/operator/app-session-end` routes,
+  which forward to the apps routes of the API. A switch changes at once and
+  goes back, with the reason in an alert, when the API refuses (a 409 says why:
+  `not-reviewed`, `community-locked`, `checklist-incomplete`,
+  `version-in-use`). "Desligar em todos" and the community unlock ask first in
+  an alertdialog (Cancelar has the first focus, Esc cancels, Enter does not
+  confirm). The sentences and switch states are in `novo-model.js` and pinned
+  by `test/apps-model.test.js`.
 - **Writes**: confirm or close a feedback item, and turn a feature switch on
   or off globally. Per-server watch party, low latency, the waitlist and
   channel pins stay on the classic page for now, and the new page links there.

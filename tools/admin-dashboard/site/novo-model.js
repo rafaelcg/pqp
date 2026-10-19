@@ -444,11 +444,211 @@
     return { text: c.listed ? "comunidade" : "comunidade · só pelo link", tone: "accent", href: c.slug ? "https://pqp.gg/c/" + c.slug : null };
   }
 
+  // ------------------------------------------------------------------ apps
+  //
+  // The Apps screen's sentences and switch states. Everything the operator is
+  // told about WHY a switch will not move is decided here, once, so the page
+  // never invents a reason and the tests can pin each one.
+
+  var APP_STATUS = {
+    draft: { label: "Rascunho", tone: "neutral" },
+    review: { label: "Em revisão", tone: "warn" },
+    live: { label: "No ar", tone: "ok" },
+    retired: { label: "Aposentado", tone: "neutral" }
+  };
+
+  /** The state badge: never breaks, never says anything the row does not know. */
+  function appStatus(status) {
+    return APP_STATUS[status] || { label: String(status || "desconhecido"), tone: "neutral" };
+  }
+
+  /** The review checklist, in the order the reviewer reads it. */
+  var CHECKLIST = [
+    { key: "sandbox", label: "Caixa isolada" },
+    { key: "noNetwork", label: "Sem rede" },
+    { key: "license", label: "Licença" },
+    { key: "romPolicy", label: "Política de ROM", only: "emulator" },
+    { key: "i18n", label: "Textos em pt-BR, en e es" },
+    { key: "presence", label: "Linha de presença" }
+  ];
+
+  /** The lines that apply to an app: the ROM policy only for an emulator. */
+  function checklistItems(category) {
+    return CHECKLIST.filter(function (item) { return !item.only || item.only === category; });
+  }
+
+  /** Whether an approval would be accepted, the same rule the API applies. */
+  function checklistComplete(checklist, category) {
+    var c = checklist || {};
+    return checklistItems(category).every(function (item) { return c[item.key] === true; });
+  }
+
+  function currentVersionOf(app) {
+    var list = (app && app.versions) || [];
+    for (var i = 0; i < list.length; i++) if (list[i].isCurrent) return list[i];
+    return null;
+  }
+
+  /** The line under the name: version and publisher. */
+  function appSubtitle(app) {
+    var by = app.publisher && app.publisher.displayName ? ", por " + app.publisher.displayName : "";
+    return app.currentVersion ? "v" + app.currentVersion + by : "sem versão" + by;
+  }
+
+  /** The review column: ok lines for an approved version, what is missing otherwise. */
+  function reviewSummary(app) {
+    var v = currentVersionOf(app);
+    if (!v) return { tone: "warn", text: "Sem versão para revisar", chips: [] };
+    var category = v.manifest && v.manifest.category;
+    if (v.reviewStatus === "approved") {
+      var cl = v.reviewChecklist || {};
+      var chips = checklistItems(category).filter(function (i) { return cl[i.key] === true; })
+        .map(function (i) { return { label: i.label + " ok", ok: true }; });
+      return { tone: "ok", text: "Aprovada", chips: chips };
+    }
+    if (v.reviewStatus === "rejected") return { tone: "bad", text: "Reprovada na revisão" + (v.reviewNote ? ": " + v.reviewNote : ""), chips: [] };
+    if (v.reviewStatus === "withdrawn") return { tone: "warn", text: "Revisão retirada", chips: [] };
+    return { tone: "warn", text: "Falta revisar o manifesto v" + v.version, chips: [] };
+  }
+
+  /**
+   * The global switch. A switch that cannot move says why in words under it,
+   * not in a tooltip (mock 05, state 3): the reason is returned here and the
+   * page puts it in the row.
+   */
+  function globalSwitch(app) {
+    var checked = !!app.globalEnabled;
+    if (checked || !app.goLiveBlocker) {
+      var offAir = checked && app.status !== "live";
+      return { checked: checked, disabled: false, reason: null, note: offAir ? "Ligado, mas só aparece com o estado No ar." : null };
+    }
+    var reason = app.status === "review"
+      ? "Em revisão: só liga depois que a caixa isolada e o manifesto passarem."
+      : appStatus(app.status).label + ": só liga depois que a revisão for aprovada.";
+    return { checked: false, disabled: true, reason: reason, note: null };
+  }
+
+  /** "0 de 412": the servers where the operator switched the app on. */
+  function serversText(app, serverCount) {
+    return fmt(app.serversOn || 0) + " de " + fmt(serverCount || 0);
+  }
+
+  /** The line under the title: how many sessions are live, and what the button will say. */
+  function sessionsLine(total) {
+    var n = num(total);
+    if (n === 0) return "0 sessões ativas agora. Quando houver, o botão “Desligar em todos” avisa quantas vão terminar.";
+    return fmt(n) + (n === 1 ? " sessão ativa agora." : " sessões ativas agora.");
+  }
+
+  function plural(n, one, many) { return fmt(n) + " " + (n === 1 ? one : many); }
+
+  /** The confirmation for "Desligar em todos": the count is the point of it. */
+  function disableConfirm(app, sessions, serversOn) {
+    var s = num(sessions), on = num(serversOn);
+    return {
+      title: "Desligar " + (app.name || app.id) + " em todos os servidores?",
+      lines: [
+        s === 0 ? "Nenhuma sessão ativa agora."
+          : (s === 1 ? "1 sessão ativa vai terminar agora" : fmt(s) + " sessões ativas vão terminar agora") + ", com um aviso pra quem está dentro.",
+        on === 0 ? "O app não está ligado em nenhum servidor."
+          : on === 1 ? "O app some do 1 servidor onde estava ligado."
+          : "O app some dos " + fmt(on) + " servidores onde estava ligado.",
+        "Pra voltar, liga o interruptor global de novo: os servidores escolhidos continuam como estão. O que mudou fica guardado no histórico."
+      ],
+      confirm: "Desligar tudo",
+      cancel: "Cancelar"
+    };
+  }
+
+  /** The confirmation for letting public communities have an app, or taking it back. */
+  function communityConfirm(app, unlock) {
+    var name = app.name || app.id;
+    return unlock ? {
+      title: "Liberar " + name + " para comunidades públicas?",
+      lines: [
+        "Liberar um app em comunidade muda o tipo de risco da instância (docs/CONTENT_SAFETY.md). Só liga numa comunidade depois, servidor por servidor.",
+        "Tu pode travar de novo a qualquer momento. Quem já está ligado continua ligado até tu desligar."
+      ],
+      confirm: "Liberar comunidades", cancel: "Cancelar"
+    } : {
+      title: "Travar " + name + " nas comunidades públicas?",
+      lines: [
+        "Nenhuma comunidade pública consegue ligar o app de novo. Quem já está ligado continua ligado até tu desligar."
+      ],
+      confirm: "Travar comunidades", cancel: "Cancelar"
+    };
+  }
+
+  function initials(name) {
+    var words = String(name || "?").trim().split(/\s+/).filter(Boolean);
+    if (words.length > 1) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+    return String(words[0] || "?").slice(0, 2).toUpperCase();
+  }
+
+  /** One server row in an app: subtitle, badge, whether its switch is locked, and chips. */
+  function serverRow(row) {
+    var chips = [];
+    if (row.operatorEnabled && row.ownerEnabled === false) chips.push({ text: "o dono desligou", tone: "warn" });
+    if (row.operatorEnabled && row.appsFlag === false) chips.push({ text: "flag apps desligada aqui", tone: "warn" });
+    if (row.liveSessions > 0) chips.push({ text: plural(row.liveSessions, "sessão ativa", "sessões ativas"), tone: "accent" });
+    return {
+      initials: initials(row.name),
+      subtitle: (row.isCommunity ? "Comunidade" : "Privado") + ", " + plural(row.memberCount || 0, "membro", "membros"),
+      badge: row.isCommunity ? { text: "Comunidade", tone: "accent" } : null,
+      // A server already on can always be switched off, whatever the lock says.
+      locked: !!row.locked && !row.operatorEnabled,
+      chips: chips
+    };
+  }
+
+  /** The line under an opened app's title: what it is, and where it stands. */
+  function appSummary(app, serverCount) {
+    var name = app.name || app.id;
+    var v = app.currentVersion ? " v" + app.currentVersion : "";
+    var st = appStatus(app.status).label.toLowerCase();
+    if (app.globalEnabled) return name + v + ", " + st + ". Global: ligado, " + serversText(app, serverCount) + " servidores escolhidos.";
+    return name + v + ", " + st + ". Global: desligado, não aparece em servidor nenhum.";
+  }
+
+  var LOCK_NOTE = "Comunidades públicas ficam travadas: ligar um app lá muda o tipo de risco da instância (docs/CONTENT_SAFETY.md). O interruptor só destrava depois de uma decisão explícita, no controle “Comunidades” do app. Servidores privados ligam livremente. O padrão por servidor é desligado. O dono do servidor ainda pode desligar um app que o operador ligou, nunca o contrário.";
+
+  /** What a refused or failed write says, by the code the API answered with. */
+  function appsWriteError(code) {
+    switch (code) {
+      case "not-reviewed": return "Em revisão: só liga depois que a caixa isolada e o manifesto passarem.";
+      case "community-locked": return "Comunidade pública: o app ainda não foi liberado pra comunidades.";
+      case "checklist-incomplete": return "Falta marcar algum item da lista pra aprovar.";
+      case "version-in-use": return "Essa versão está no ar. Tira o app do ar ou muda a versão atual antes.";
+      default: return "Não deu pra salvar. O interruptor voltou pro que estava.";
+    }
+  }
+
+  /** The history line for one audit row, before and after. */
+  function auditText(row) {
+    var b = row.before || {}, a = row.after || {};
+    var onOff = function (v) { return v === true ? "ligado" : v === false ? "desligado" : "sem decisão"; };
+    switch (row.action) {
+      case "status": return "Estado: " + appStatus(b.status).label + " para " + appStatus(a.status).label;
+      case "global": return "Global: " + onOff(b.globalEnabled) + " para " + onOff(a.globalEnabled);
+      case "community-unlock": return "Comunidades: " + (b.communityUnlocked ? "liberadas" : "travadas") + " para " + (a.communityUnlocked ? "liberadas" : "travadas");
+      case "current-version": return "Versão atual: " + (b.currentVersion || "nenhuma") + " para " + (a.currentVersion || "nenhuma");
+      case "review": return "Revisão da v" + (row.appVersion || "?") + ": " + (a.reviewStatus || "?");
+      case "operator-server": return (row.serverName || "Servidor") + ": " + onOff(b.operatorEnabled) + " para " + onOff(a.operatorEnabled);
+      case "owner-server": return (row.serverName || "Servidor") + ", o dono: " + onOff(b.ownerEnabled) + " para " + onOff(a.ownerEnabled);
+      case "disable-everywhere": return "Desligado em todos, " + plural(row.sessionsEnded || 0, "sessão encerrada", "sessões encerradas");
+      default: return String(row.action);
+    }
+  }
+
   var api = {
     fmt: fmt, dec: dec, pct: pct, fmtPct: fmtPct, deltaLabel: deltaLabel, shortDay: shortDay,
     hojeKpis: hojeKpis, activityHeadline: activityHeadline, costPerActive: costPerActive,
     attention: attention, systemStatus: systemStatus, groupFeedback: groupFeedback, feedDiff: feedDiff, heatmap: heatmap, funnel: funnel, sources: sources,
-    activitySeries: activitySeries, adoption: adoption, ratingDistribution: ratingDistribution, liveNow: liveNow, communityBadge: communityBadge
+    activitySeries: activitySeries, adoption: adoption, ratingDistribution: ratingDistribution, liveNow: liveNow, communityBadge: communityBadge,
+    appStatus: appStatus, checklistItems: checklistItems, checklistComplete: checklistComplete, currentVersionOf: currentVersionOf,
+    appSubtitle: appSubtitle, reviewSummary: reviewSummary, globalSwitch: globalSwitch, serversText: serversText, sessionsLine: sessionsLine,
+    disableConfirm: disableConfirm, communityConfirm: communityConfirm, serverRow: serverRow, initials: initials, appsWriteError: appsWriteError,
+    auditText: auditText, appSummary: appSummary, LOCK_NOTE: LOCK_NOTE
   };
   root.PQPNovo = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

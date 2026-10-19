@@ -19,6 +19,7 @@
     <a href="#crescimento" data-tab="crescimento">Crescimento</a>
     <a href="#produto" data-tab="produto">Produto</a>
     <a href="#fila" data-tab="fila">Fila<span class="count num" id="tabCount" hidden>0</span></a>
+    <a href="#apps" data-tab="apps">Apps</a>
     <a href="#sistema" data-tab="sistema">Sistema</a>
   </nav>
   <div class="spacer"></div>
@@ -178,6 +179,23 @@
       </aside>
       <div class="detail-pane" id="fPane" aria-live="polite"></div>
     </div>
+  </section>
+
+  <!-- ====================== APPS ====================== -->
+  <section class="screen" id="screen-apps" data-screen="apps" hidden aria-labelledby="aHeadline">
+    <div class="rise">
+      <div class="eyebrow">apps</div>
+      <h1 class="headline" id="aHeadline" tabindex="-1">Apps</h1>
+      <p class="lede" id="aLede">Quais apps existem no pqp e em quais servidores aparecem. Tudo começa desligado: nenhum app aparece em servidor nenhum até tu ligar.</p>
+      <p class="foot" id="aSessions" aria-live="polite" style="margin-top:10px;font-size:13px"></p>
+    </div>
+    <div class="alertbar" id="aAlert" role="alert" hidden>
+      <span id="aAlertText"></span>
+      <button type="button" class="btn" id="aAlertRetry">Tentar de novo</button>
+      <button type="button" class="ghost" id="aAlertClose">Fechar</button>
+    </div>
+    <p class="foot" id="aSaved" role="status" aria-live="polite"></p>
+    <div id="aBody"></div>
   </section>
 
   <!-- ====================== SISTEMA ====================== -->
