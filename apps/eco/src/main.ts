@@ -163,8 +163,14 @@ async function main() {
     ended.textContent = t.ended;
     ended.hidden = false;
   });
-  setRoster(await app.participants.get());
-  applyState(await app.state.get());
+  // the handlers below are installed whatever these reads do: a host that is slow to answer
+  // must not leave the buttons dead, and a later push still brings the values in
+  try {
+    setRoster(await app.participants.get());
+    applyState(await app.state.get());
+  } catch {
+    statusLine.textContent = t.failed;
+  }
 
   let busy = false;
   plusButton.addEventListener("click", async () => {
@@ -174,11 +180,16 @@ async function main() {
       // a merge patch is not an atomic increment, so write against the revision we read
       for (let attempt = 0; attempt <= STALE_RETRIES; attempt += 1) {
         try {
+          const next = count + 1;
           const written = await app.state.patch(incrementPatch(count), { baseRev: rev });
-          rev = Math.max(rev, written.rev);
-          count += 1;
-          countOut.value = String(count);
-          countOut.textContent = String(count);
+          // the host may have pushed this very write's state before the call resolved; then the
+          // authoritative value is already shown, and adding one again would put it a step ahead
+          if (rev < written.rev) {
+            rev = written.rev;
+            count = next;
+            countOut.value = String(count);
+            countOut.textContent = String(count);
+          }
           return;
         } catch (error) {
           if (error instanceof PqpAppError && error.code === "stale-rev" && attempt < STALE_RETRIES) {
@@ -204,11 +215,12 @@ async function main() {
     setTimeout(() => {
       cooling = false;
     }, PING_COOLDOWN_MS);
-    showPing(nameOf(selfSeat));
     try {
       await app.events.send("ping", {});
+      // shown once the host took it, so a refused ping is never shown as sent
+      showPing(nameOf(selfSeat));
     } catch (error) {
-      if (!(error instanceof PqpAppError) || error.code !== "rate-limited") statusLine.textContent = t.failed;
+      statusLine.textContent = error instanceof PqpAppError && error.code === "rate-limited" ? t.slowDown : t.failed;
     }
   });
 }

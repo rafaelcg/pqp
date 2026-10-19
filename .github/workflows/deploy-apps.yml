@@ -27,6 +27,9 @@ jobs:
     name: Build & deploy the apps origin
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Only the protected main branch deploys: a manual dispatch from any other ref
+    # would otherwise check that ref out and publish it as the production branch.
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
       deployments: write
@@ -47,6 +50,8 @@ jobs:
       - name: Checkout
         if: steps.gate.outputs.go == 'true'
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Setup pnpm
         if: steps.gate.outputs.go == 'true'
@@ -77,9 +82,17 @@ jobs:
           git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main || true
           pnpm apps:build
 
-      # Install wrangler outside the pnpm workspace (npm + workspace:* fails),
-      # the same way deploy-web.yml does.
+      # Install wrangler outside the pnpm workspace (npm + workspace:* fails), the
+      # way deploy-web.yml does. No credentials in this step: npm runs the install
+      # scripts of everything it fetches, so the token must not be in its environment.
       - name: Install wrangler
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          TMP="$(mktemp -d)"
+          (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4 --ignore-scripts --no-fund --no-audit)
+          echo "WRANGLER=$TMP/node_modules/.bin/wrangler" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloudflare Pages
         if: steps.gate.outputs.go == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -93,16 +106,6 @@ jobs:
             echo "::error::Missing secret CLOUDFLARE_ACCOUNT_ID"
             exit 1
           fi
-          TMP="$(mktemp -d)"
-          (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4 --no-fund --no-audit)
-          echo "WRANGLER=$TMP/node_modules/.bin/wrangler" >> "$GITHUB_ENV"
-
-      - name: Deploy to Cloudflare Pages
-        if: steps.gate.outputs.go == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
           "$WRANGLER" pages deploy dist-apps \
             --project-name "$APPS_PAGES_PROJECT" \
             --branch main \

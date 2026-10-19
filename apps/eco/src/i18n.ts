@@ -16,6 +16,7 @@ export interface Strings {
   ended: string;
   outside: string;
   failed: string;
+  slowDown: string;
 }
 
 export const STRINGS = {
@@ -35,6 +36,7 @@ export const STRINGS = {
     ended: "A sessão acabou.",
     outside: "Abre o Eco dentro do pqp.",
     failed: "Não deu certo. Tenta de novo.",
+    slowDown: "Calma, tá mandando rápido demais.",
   },
   en: {
     counter: "Shared counter",
@@ -52,6 +54,7 @@ export const STRINGS = {
     ended: "The session ended.",
     outside: "Open Eco inside pqp.",
     failed: "That did not work. Try again.",
+    slowDown: "Slow down, that was too fast.",
   },
   es: {
     counter: "Contador compartido",
@@ -69,6 +72,7 @@ export const STRINGS = {
     ended: "La sesión terminó.",
     outside: "Abre Eco dentro de pqp.",
     failed: "No funcionó. Prueba otra vez.",
+    slowDown: "Más despacio, vas muy rápido.",
   },
 } as const satisfies Record<string, Strings>;
 
