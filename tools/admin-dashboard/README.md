@@ -189,6 +189,34 @@ Above them, **o que está no ar**: how many transcodes this process is running
 been decided either way (from `/operator/servers`), and the waitlist headline
 (see below).
 
+### apps: the catalog, the review and the per-server release
+
+The apps platform (`docs/APPS.md`, the program plan) is dark everywhere until
+somebody here releases an app, server by server. The API side is five routes on
+the same machine token (and the same instance-moderator session) as the levers
+above, in `server/src/api/app-admin-routes.ts` and `server/src/apps/admin.ts`.
+Like every other route on that token they are **exact pathnames**: the app id
+travels in the body or the query (`PUT /api/admin/apps {appId, ...}`, the way a
+flag key does), never as `/api/admin/apps/:id`.
+
+| Route | What it does |
+|---|---|
+| `GET /api/admin/apps` | every app: publisher, status, `globalEnabled`, `communityUnlocked`, `currentVersion`, its versions (manifest summary, review status, checklist, reviewer, date, note), how many servers have it on, how many live sessions, and the last 20 audit rows |
+| `PUT /api/admin/apps` `{appId, status?, globalEnabled?, communityUnlocked?, currentVersion?}` | the app's own switches. `status: "live"` and `globalEnabled: true` need an approved current version, otherwise **409 `not-reviewed`** (the switch disabled with the reason written) |
+| `PUT /api/admin/app-review` `{appId, version, reviewStatus, checklist, note?}` | a version's review. `approved` needs every checklist line (`sandbox`, `noNetwork`, `license`, `i18n`, `presence`, plus `romPolicy` for an emulator app), otherwise **409 `checklist-incomplete`**. The approval of the version a live app stands on cannot be taken away (**409 `version-in-use`**) |
+| `GET /api/admin/app-servers?appId=&q=&on=1&limit=&offset=` | one app's servers: search by name or id, only the ones switched on, paged (what is on first, then by name, so a page is cut before anything is counted). Each row has member count, `isCommunity`, the operator and owner switches and `locked` |
+| `PUT /api/admin/server-apps` `{serverId, appId, operatorEnabled: true \| false \| null}` | the operator's switch for one server. A public community (`servers.is_community`) needs the app's `communityUnlocked` first, otherwise **409 `community-locked`** |
+
+Every write adds one `app_admin_audit` row per field that actually changed, in
+the same transaction as the write: who (`dashboard` with a NULL user for the
+token, `moderator` and the user id for a session), what, before and after. A
+write that changes nothing adds none. After the commit an `apps.changed` frame
+goes out on the cluster bus so a sibling process drops anything it cached about
+availability (`server/src/apps/changed.ts`). Turning an app on for one server,
+as an operator does tomorrow: review the version (`app-review`, `approved`), set
+the app `live` and `globalEnabled`, then `server-apps` for the server, and turn
+the `apps` flag on for that server (`PUT /api/admin/flag-overrides`).
+
 ### lista de espera: turning "somebody asked" into "somebody can now stream"
 
 First section in the pane, because opening **controles** during a launch is,
