@@ -564,7 +564,7 @@ describe("join", () => {
     const { FakeTransport, users } = await import("./bridge-host.fixture");
     const transport = new FakeTransport();
     transport.joinError = new AppTransportError("full");
-    const host = new BridgeHost({ app: baseApp(), transport, users, locale: () => "en" });
+    const host = new BridgeHost({ app: baseApp(), transport, users, locale: () => "en", appsOrigin: "http://localhost:5175" });
     await expect(host.start()).rejects.toMatchObject({ code: "full" });
     expect(transport.handlers).toBeNull();
     host.detach();
@@ -573,7 +573,7 @@ describe("join", () => {
   it("does not send hello before the seat exists", async () => {
     const { BridgeHost } = await import("./bridge-host");
     const { FakeTransport, FakeTheme, users } = await import("./bridge-host.fixture");
-    const host = new BridgeHost({ app: baseApp(), transport: new FakeTransport(), users, locale: () => "en", theme: new FakeTheme() });
+    const host = new BridgeHost({ app: baseApp(), transport: new FakeTransport(), users, locale: () => "en", theme: new FakeTheme(), appsOrigin: "http://localhost:5175" });
     const channel = new MessageChannel();
     const received: unknown[] = [];
     channel.port2.onmessage = (event: MessageEvent) => received.push(event.data);

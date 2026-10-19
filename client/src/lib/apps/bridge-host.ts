@@ -23,7 +23,7 @@ import {
   type JsonValue,
 } from "@pqp/shared";
 import { AvatarCache } from "./avatar";
-import { fetchAsset, type AssetRef } from "./asset-fetch";
+import { fetchAsset, type AssetRef, type AssetResult } from "./asset-fetch";
 import { pickLocalFile, type PickOptions, type PickResult } from "./file-pick";
 import { TokenBucket } from "./limiter";
 import { stateBytesAfter } from "./merge-patch";
@@ -82,6 +82,14 @@ export interface BridgeHostOptions {
   /** Defaults to the page's own picker. Tests stand in. */
   pickFile?: (options: PickOptions) => Promise<PickResult>;
   fetchImpl?: typeof fetch;
+  /** The apps origin: an asset URL anywhere else is refused, and a redirect off it fails. */
+  appsOrigin: string;
+  /**
+   * Origins an avatar URL may point at (the page's own and the API's). A user can
+   * set their avatar URL to anything, so one outside this list is not fetched.
+   * Default: the page's own origin.
+   */
+  avatarOrigins?: readonly string[];
   now?: () => number;
   /** Called with a reason when the app behaves in a way that should end the frame. */
   onViolation?: (reason: BridgeViolation) => void;
@@ -94,6 +102,7 @@ export interface BridgeHostOptions {
 type Failure = { error: BridgeErrorCode };
 
 const LOCALE_PATTERN = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$/;
+const AVATAR_FETCH_CONCURRENCY = 6;
 const FLOOD_RATE_PER_SECOND = 100;
 const FLOOD_BURST = 200;
 const FLOOD_STRIKES_BEFORE_VIOLATION = 500;
@@ -199,12 +208,17 @@ export class BridgeHost {
   private detached = false;
   private readonly assetCache = new Map<string, ArrayBuffer>();
   private readonly assetFailed = new Set<string>();
+  /** One fetch per asset however many requests arrive while it runs. */
+  private readonly assetInFlight = new Map<string, Promise<AssetResult>>();
 
   constructor(private readonly options: BridgeHostOptions) {
     this.app = options.app;
     this.transport = options.transport;
     this.themeSource = options.theme ?? domThemeSource();
-    this.avatars = new AvatarCache(options.fetchImpl);
+    this.avatars = new AvatarCache(
+      options.fetchImpl,
+      options.avatarOrigins ?? (typeof location === "undefined" ? [] : [location.origin]),
+    );
     this.now = options.now ?? (() => Date.now());
     this.log = options.log ?? ((message, detail) => console.warn(`[apps] ${message}`, detail ?? ""));
 
@@ -244,7 +258,13 @@ export class BridgeHost {
       onEnded: (reason) => this.setEnded(reason),
     });
     try {
-      this.applySnapshot(await this.transport.join(join));
+      const snapshot = await this.transport.join(join);
+      if (this.detached) {
+        // the frame was removed while the join was in flight: the seat it just got has no owner
+        this.transport.leave();
+        return;
+      }
+      this.applySnapshot(snapshot);
     } catch (error) {
       this.unsubscribe();
       this.unsubscribe = null;
@@ -329,10 +349,23 @@ export class BridgeHost {
 
   private async refreshRoster(snapshot: SessionSnapshot): Promise<void> {
     const seq = (this.rosterSeq += 1);
-    const mapped = await Promise.all(
-      snapshot.participants.map(async (participant): Promise<BridgeParticipant | null> => {
+    // avatars are fetched a few at a time and no more once the roster's budget is
+    // spent: a snapshot of hundreds of people costs a bounded number of fetches
+    // and a bounded amount of memory, not every avatar in full
+    let retained = 0;
+    const slots: Array<BridgeParticipant | null> = new Array(snapshot.participants.length).fill(null);
+    let next = 0;
+    const worker = async () => {
+      for (;;) {
+        const index = next++;
+        if (index >= snapshot.participants.length) return;
+        const participant = snapshot.participants[index]!;
         const info = this.options.users.resolve(participant.userId);
-        const avatar = await this.avatars.get(info?.avatarUrl ?? null);
+        const avatar =
+          retained >= APP_PARTICIPANTS_AVATAR_BUDGET_CHARS || this.detached
+            ? null
+            : await this.avatars.get(info?.avatarUrl ?? null);
+        retained += avatar?.length ?? 0;
         // built from scratch: the pqp user id is read above and goes no further
         const entry = bridgeParticipantSchema.safeParse({
           seatId: participant.seatId,
@@ -343,14 +376,15 @@ export class BridgeHost {
           connection: participant.connection,
           ...(participant.appUserId ? { appUserId: participant.appUserId } : {}),
         });
-        return entry.success ? entry.data : null;
-      }),
-    );
+        slots[index] = entry.success ? entry.data : null;
+      }
+    };
+    await Promise.all(Array.from({ length: AVATAR_FETCH_CONCURRENCY }, worker));
     if (seq !== this.rosterSeq || this.detached) return; // a newer snapshot superseded this one
-    const next = fitAvatarBudget(mapped.filter((entry): entry is BridgeParticipant => entry !== null));
-    if (sameParticipants(this.roster, next)) return;
-    this.roster = next;
-    this.pushToApp({ type: "participants", participants: next });
+    const mapped = fitAvatarBudget(slots.filter((entry): entry is BridgeParticipant => entry !== null));
+    if (sameParticipants(this.roster, mapped)) return;
+    this.roster = mapped;
+    this.pushToApp({ type: "participants", participants: mapped });
   }
 
   private setConnection(status: BridgeConnectionStatus): void {
@@ -553,7 +587,14 @@ export class BridgeHost {
     if (!asset) return this.fail(id, "invalid");
     let bytes = this.assetCache.get(name);
     if (!bytes) {
-      const result = await fetchAsset(asset, this.options.fetchImpl);
+      let pending = this.assetInFlight.get(name);
+      if (!pending) {
+        pending = fetchAsset(asset, this.options.appsOrigin, this.options.fetchImpl).finally(() => {
+          this.assetInFlight.delete(name);
+        });
+        this.assetInFlight.set(name, pending);
+      }
+      const result = await pending;
       if (!result.ok) {
         if (!this.assetFailed.has(name)) {
           this.assetFailed.add(name);

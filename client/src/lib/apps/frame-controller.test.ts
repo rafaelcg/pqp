@@ -166,6 +166,29 @@ describe("the handshake", () => {
   });
 });
 
+describe("a join that never settles", () => {
+  it("still ends in a timeout after an early hello, and releases the seat if the join lands later", async () => {
+    vi.useFakeTimers();
+    const transport = new FakeTransport();
+    let release!: () => void;
+    transport.join = () =>
+      new Promise((resolve) => {
+        release = () => resolve(transport.snapshot);
+      });
+    const { iframe, controller } = mount({ transport, helloTimeoutMs: 5000 });
+    const target = iframe!.contentWindow!;
+    const spy = vi.spyOn(target, "postMessage").mockImplementation(() => {});
+    post(target, HELLO); // the frame is quick, the session is not
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(controller.status).toEqual({ kind: "error", reason: "timeout" });
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+    release();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(transport.left).toBe(1);
+  });
+});
+
 describe("a frame that navigates itself", () => {
   it("is removed on its second load event, and the seat is released", async () => {
     const { iframe, controller, transport, statuses } = mount();

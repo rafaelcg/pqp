@@ -41,6 +41,8 @@ export interface AppFrameControllerOptions {
   locale: () => string;
   asSpectator?: boolean;
   initialHeight?: number;
+  /** Where avatar URLs may point (the page's own origin and the API's). Default: the page's own. */
+  avatarOrigins?: readonly string[];
   /** Origins this deployment frames besides the built-in list (Clerk's frontend host). */
   extraFrameOrigins?: readonly string[];
   /** How long the frame has to say hello. Default 20 s. */
@@ -118,6 +120,8 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
     transport: options.transport,
     users: options.users,
     locale: options.locale,
+    appsOrigin: options.appsOrigin,
+    avatarOrigins: options.avatarOrigins,
     ...options.host,
     ui: {
       resize: (height) => {
@@ -157,9 +161,11 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
     if (answered) return;
     if (!bridgeAppHelloSchema.safeParse(event.data).success) return;
     answered = true;
-    clearTimeout(timers.hello);
+    // the hello deadline stays armed until the port is handed over: a join that never
+    // settles must end in a timeout, not in a frame that loads forever
     void started.then((joined) => {
       if (!joined || destroyed || iframe !== frame || !frame.contentWindow) return;
+      clearTimeout(timers.hello);
       const channel = new MessageChannel();
       host.attach(channel.port1);
       // an opaque origin cannot be named as a target, so '*' (the receiver

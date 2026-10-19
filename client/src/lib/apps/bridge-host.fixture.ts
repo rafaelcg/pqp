@@ -193,6 +193,8 @@ export async function rig(
     locale: () => "pt-BR",
     theme,
     fetchImpl: pngFetch(),
+    appsOrigin: "http://localhost:5175",
+    avatarOrigins: ["https://pqp.example"],
     log: (message, detail) => logs.push({ message, detail }),
     onViolation: (reason) => violations.push(reason),
     onEnded: (reason) => ended.push(reason),
