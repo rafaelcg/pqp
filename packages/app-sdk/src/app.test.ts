@@ -203,6 +203,54 @@ describe("requests", () => {
     expect(error.code).toBe("unavailable");
   });
 
+  it("refuses a success that echoes another call's type, or none, and a null-result call answered with a value", async () => {
+    const wrongType = await rejection(
+      exchange(
+        () => app.state.patch({ n: 1 }),
+        (r) => host.respond(r.id, { rev: 3, value: null }, [], "state.get"),
+      ),
+    );
+    expect(wrongType.code).toBe("unavailable");
+    const noType = await rejection(
+      exchange(
+        () => app.state.patch({ n: 1 }),
+        (r) => host.respond(r.id, { rev: 3 }, [], null),
+      ),
+    );
+    expect(noType.code).toBe("unavailable");
+    const sendWithValue = await rejection(
+      exchange(
+        () => app.events.send("ping", 1),
+        (r) => host.respond(r.id, { ok: 1 }),
+      ),
+    );
+    expect(sendWithValue.code).toBe("unavailable");
+    const endWithValue = await rejection(
+      exchange(
+        () => app.end(),
+        (r) => host.respond(r.id, {}),
+      ),
+    );
+    expect(endWithValue.code).toBe("unavailable");
+  });
+
+  it("refuses a field of the wrong kind", async () => {
+    const error = await rejection(
+      exchange(
+        () => app.state.patch({ n: 1 }),
+        (r) => host.respond(r.id, { rev: "3" }),
+      ),
+    );
+    expect(error.code).toBe("unavailable");
+    const flag = await rejection(
+      exchange(
+        () => app.ui.fullscreen(true),
+        (r) => host.respond(r.id, { on: "yes" }),
+      ),
+    );
+    expect(flag.code).toBe("unavailable");
+  });
+
   it("gives every request its own id of at most 32 characters", async () => {
     const a = app.state.get();
     const b = app.state.get();

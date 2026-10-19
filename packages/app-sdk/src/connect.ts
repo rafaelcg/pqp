@@ -25,16 +25,26 @@ export interface ConnectOptions {
 
 const inFlight = new WeakMap<object, Promise<PqpApp>>();
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The hello the host must send: every field an app reads, in the kind it is read as. */
 function isHello(data: unknown): data is BridgeHello {
-  if (typeof data !== "object" || data === null) return false;
-  const message = data as Record<string, unknown>;
+  if (!isRecord(data) || data.type !== "hello" || data.platformApi !== PLATFORM_API) return false;
+  const { app, self } = data;
   return (
-    message.type === "hello" &&
-    message.platformApi === PLATFORM_API &&
-    typeof message.app === "object" &&
-    message.app !== null &&
-    typeof message.self === "object" &&
-    message.self !== null
+    isRecord(app) &&
+    typeof app.id === "string" &&
+    typeof app.version === "string" &&
+    typeof data.locale === "string" &&
+    isRecord(data.theme) &&
+    typeof data.reducedMotion === "boolean" &&
+    isRecord(self) &&
+    typeof self.seatId === "string" &&
+    (self.role === "player" || self.role === "spectator") &&
+    typeof self.isHost === "boolean" &&
+    (data.connection === "online" || data.connection === "reconnecting")
   );
 }
 

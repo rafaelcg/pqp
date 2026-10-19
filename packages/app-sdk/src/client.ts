@@ -7,6 +7,8 @@ export const REQUEST_TIMEOUT_MS = 15_000;
 export type Unsubscribe = () => void;
 
 interface Pending {
+  /** The request type, so a success that answers another call is refused. */
+  type: string;
   resolve: (result: unknown) => void;
   reject: (error: PqpAppError) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -52,7 +54,7 @@ export class PortClient {
         this.pending.delete(id);
         reject(new PqpAppError("unavailable", `pqp app call ${type} timed out`));
       }, this.timeoutMs);
-      this.pending.set(id, { resolve: resolve as (r: unknown) => void, reject, timer });
+      this.pending.set(id, { type, resolve: resolve as (r: unknown) => void, reject, timer });
       try {
         this.port.postMessage({ ...params, id, type });
       } catch {
@@ -84,7 +86,13 @@ export class PortClient {
       this.pending.delete(data.id);
       clearTimeout(entry.timer);
       if (data.ok) {
-        entry.resolve(data.result);
+        // a success echoes the request type; one that names another call, or none, is not an answer to this one
+        const expectsNull = entry.type === "events.send" || entry.type === "session.end";
+        if (data.type !== entry.type || (expectsNull && data.result !== null)) {
+          entry.reject(new PqpAppError("unavailable", `pqp host answered ${entry.type} with a reply that does not match it`));
+        } else {
+          entry.resolve(data.result);
+        }
       } else {
         const code: BridgeErrorCode = isErrorCode(data.error) ? data.error : "unavailable";
         entry.reject(new PqpAppError(code));

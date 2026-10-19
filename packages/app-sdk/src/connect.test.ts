@@ -112,6 +112,24 @@ describe("connect", () => {
     expect((await failure).code).toBe("unavailable");
   });
 
+  it("rejects a hello that is missing what an app reads", async () => {
+    for (const broken of [
+      { ...HELLO, theme: undefined },
+      { ...HELLO, locale: 5 },
+      { ...HELLO, self: { seatId: "seat-aaaaaaaaaaaaaaaa", role: "boss", isHost: true } },
+      { ...HELLO, self: { seatId: "seat-aaaaaaaaaaaaaaaa", role: "player" } },
+      { ...HELLO, reducedMotion: "no" },
+      { ...HELLO, connection: "away" },
+      { ...HELLO, app: { id: "eco" } },
+    ]) {
+      const other = new FakeHost();
+      const failure = rejection(connect({ window: other.window }));
+      other.accept(broken as never);
+      expect((await failure).code, JSON.stringify(broken)).toBe("unavailable");
+      other.close();
+    }
+  });
+
   it("rejects at once when the page is not inside a frame", async () => {
     const self: Record<string, unknown> = {
       addEventListener() {},
