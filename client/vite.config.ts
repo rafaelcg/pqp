@@ -311,6 +311,9 @@ function emulatorRoom(): Plugin {
         }
         res.setHeader("Content-Type", asset.type);
         res.setHeader("Cache-Control", "no-cache");
+        // The frame is sandboxed into an opaque origin, so it fetches these
+        // public files with CORS (the `_headers` rule does the same in prod).
+        res.setHeader("Access-Control-Allow-Origin", "*");
         res.end(emulatorAssetBytes(asset));
       });
     },

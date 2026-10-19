@@ -3,12 +3,22 @@
  * served as a static file next to frame.html, whose policy forbids inline code.
  *
  * WHAT IT DOES WITH THE GAME FILE: receives a `File` from the page that opened
- * the frame (a same-origin postMessage; the bytes stay in this browser's
- * memory), hands that very object to the emulator, and never does anything else
- * with it. No fetch, no XHR, no upload, no storage, no log of its name. The
- * emulator's databases are switched off below so it keeps nothing either.
+ * the frame (a postMessage; the bytes stay in this browser's memory), hands that
+ * very object to the emulator, and never does anything else with it. No fetch,
+ * no XHR, no upload, no storage, no log of its name. The emulator's databases
+ * are switched off below so it keeps nothing either.
  *
- * It trusts one sender only: the window that embedded it, from its own origin.
+ * It trusts one sender only: the window that embedded it, from the origin that
+ * embedded it (the page passes that origin as `?o=`).
+ *
+ * THE PAGE RUNS IN AN OPAQUE ORIGIN. The embedding iframe is
+ * `sandbox="allow-scripts"` with no `allow-same-origin`, so whatever runs here,
+ * the third-party emulator and whatever a hostile game file might make it do,
+ * cannot read the app's cookies or storage, cannot touch the parent page, and
+ * cannot make a credentialed request to the app. Its own files are fetched with
+ * CORS (the `/emulator/ejs/*` files are public and carry
+ * `Access-Control-Allow-Origin: *`), and a sandboxed page has no web storage at
+ * all, which is what we want.
  */
 (function () {
   "use strict";
@@ -32,6 +42,31 @@
 
   var started = false;
 
+  /** The origin of the page that embedded us, or "" when it did not say. */
+  var parentOrigin = (function () {
+    try {
+      var raw = new URLSearchParams(window.location.search).get("o") || "";
+      return new URL(raw).origin === raw ? raw : "";
+    } catch (e) {
+      return "";
+    }
+  })();
+
+  // A sandboxed page may not touch web storage: the getter throws, and the
+  // emulator reads it before it checks its own "no storage" setting. Say
+  // plainly that there is none.
+  try {
+    Object.defineProperty(window, "localStorage", { value: null, configurable: true });
+  } catch (e) {
+    /* nothing to hide, nothing to fix */
+  }
+
+  function tell(message) {
+    if (parentOrigin) {
+      window.parent.postMessage(message, parentOrigin);
+    }
+  }
+
   function boot(file, language) {
     if (started) {
       return;
@@ -41,7 +76,7 @@
     var extension = dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
     var core = CORE_BY_EXTENSION[extension];
     if (!core) {
-      window.parent.postMessage({ type: "pqp-emulator-error", reason: "unsupported" }, window.location.origin);
+      tell({ type: "pqp-emulator-error", reason: "unsupported" });
       return;
     }
     started = true;
@@ -82,14 +117,14 @@
     var script = document.createElement("script");
     script.src = DATA_PATH + "loader.js";
     script.onerror = function () {
-      window.parent.postMessage({ type: "pqp-emulator-error", reason: "load" }, window.location.origin);
+      tell({ type: "pqp-emulator-error", reason: "load" });
     };
     document.head.appendChild(script);
-    window.parent.postMessage({ type: "pqp-emulator-started" }, window.location.origin);
+    tell({ type: "pqp-emulator-started" });
   }
 
   window.addEventListener("message", function (event) {
-    if (event.origin !== window.location.origin || event.source !== window.parent) {
+    if (!parentOrigin || event.origin !== parentOrigin || event.source !== window.parent) {
       return;
     }
     var data = event.data;
@@ -100,5 +135,5 @@
   });
 
   // Tell the page that opened us we can take a file now.
-  window.parent.postMessage({ type: "pqp-emulator-ready" }, window.location.origin);
+  tell({ type: "pqp-emulator-ready" });
 })();

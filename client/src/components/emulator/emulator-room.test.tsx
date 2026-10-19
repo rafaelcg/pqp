@@ -4,11 +4,12 @@ import path from "node:path";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { requestConfigRefresh } from "@/lib/config-refresh";
 import { EmulatorRoom } from "./emulator-room";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const configAnswer = vi.hoisted(() => ({ enabled: false }));
+const configAnswer = vi.hoisted(() => ({ enabled: false, fail: false }));
 const configCalls = vi.hoisted(() => ({ ids: [] as string[] }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -17,6 +18,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     fetchEmulatorConfig: vi.fn(async (serverId: string) => {
       configCalls.ids.push(serverId);
+      if (configAnswer.fail) {
+        throw new Error("network");
+      }
       return { enabled: configAnswer.enabled };
     }),
   };
@@ -32,6 +36,7 @@ const beaconSpy = vi.fn();
 
 beforeEach(() => {
   configAnswer.enabled = false;
+  configAnswer.fail = false;
   configCalls.ids = [];
   fetchSpy.mockReset();
   xhrOpenSpy.mockReset();
@@ -85,7 +90,8 @@ function frameReady() {
     window.dispatchEvent(
       new MessageEvent("message", {
         data: { type: "pqp-emulator-ready" },
-        origin: window.location.origin,
+        // A sandboxed frame has an opaque origin, which a receiver sees as "null".
+        origin: "null",
         source: target,
       }),
     );
@@ -142,16 +148,20 @@ describe("the emulator room with the flag on", () => {
     const file = new File([new Uint8Array([1, 2, 3, 4])], "my-own-game.gba");
     pickFile(file);
 
-    // The frame is a fixed same-origin page: the file's name is nowhere in it.
+    // The frame is a fixed page: the file's name is nowhere in it, and it is
+    // sandboxed into an opaque origin (scripts only, never `allow-same-origin`).
     const src = frame()!.getAttribute("src")!;
-    expect(src).toBe("/emulator/frame.html");
+    expect(src).toBe(`/emulator/frame.html?o=${encodeURIComponent(window.location.origin)}`);
     expect(src).not.toContain("my-own-game");
+    expect(frame()!.getAttribute("sandbox")).toBe("allow-scripts");
     expect(frame()!.getAttribute("referrerpolicy")).toBe("no-referrer");
 
     const postMessage = frameReady();
     expect(postMessage).toHaveBeenCalledTimes(1);
     const [message, targetOrigin] = postMessage.mock.calls[0]!;
-    expect(targetOrigin).toBe(window.location.origin);
+    // An opaque-origin frame cannot be named as a target; the target is its
+    // window object, which only this page holds.
+    expect(targetOrigin).toBe("*");
     expect((message as { type: string }).type).toBe("pqp-emulator-load");
     expect((message as { file: File }).file).toBe(file);
 
@@ -179,15 +189,72 @@ describe("the emulator room with the flag on", () => {
           source: target,
         }),
       );
+      // The app's own origin is NOT the frame's: a frame that somehow shared it
+      // would be the isolation failing.
       window.dispatchEvent(
         new MessageEvent("message", {
           data: { type: "pqp-emulator-ready" },
           origin: window.location.origin,
+          source: target,
+        }),
+      );
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: "pqp-emulator-ready" },
+          origin: "null",
           source: window,
         }),
       );
     });
     expect(postMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("a frame that never answers, and a flag that stops answering", () => {
+  it("gives up on a frame that never says ready: drops the file and shows the load error", async () => {
+    vi.useFakeTimers();
+    try {
+      configAnswer.enabled = true;
+      await mount(true);
+      pickFile(new File([new Uint8Array(4)], "x.nes"));
+      expect(frame()).not.toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(10_001);
+      });
+      expect(frame()).toBeNull();
+      expect(document.querySelector('[role="alert"]')!.textContent).toContain(
+        "could not start",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not give up on a frame that did say ready", async () => {
+    vi.useFakeTimers();
+    try {
+      configAnswer.enabled = true;
+      await mount(true);
+      pickFile(new File([new Uint8Array(4)], "x.nes"));
+      frameReady();
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(frame()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes when the flag read fails after it was on (a failed read is off)", async () => {
+    configAnswer.enabled = true;
+    await mount(true);
+    expect(dialogRoot()).not.toBeNull();
+    configAnswer.fail = true;
+    await act(async () => {
+      requestConfigRefresh({ force: true });
+    });
+    expect(dialogRoot()).toBeNull();
   });
 });
 
@@ -224,6 +291,14 @@ describe("the emulator room's source", () => {
         expect(text, `${path.basename(file)} must not use ${forbidden}`).not.toMatch(forbidden);
       }
     }
+  });
+
+  it("sandboxes the frame without same-origin and names no same-origin allowance", () => {
+    const text = readFileSync(sources[0]!, "utf8");
+    expect(text).toContain('sandbox="allow-scripts"');
+    const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toContain("allow-same-origin");
+    expect(code).not.toMatch(/allow-(top-navigation|popups|forms|modals|downloads)/);
   });
 
   it("never reads the picked file's name into anything but the extension check", () => {

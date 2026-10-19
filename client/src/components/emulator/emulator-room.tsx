@@ -29,6 +29,12 @@ import type { Locale } from "@/lib/locale";
 
 const FRAME_SRC = "/emulator/frame.html";
 
+/** What `event.origin` is for a message from a sandboxed (opaque-origin) frame. */
+const FRAME_ORIGIN = "null";
+
+/** How long a frame has to say it is ready before the room gives up on it. */
+const FRAME_READY_TIMEOUT_MS = 10_000;
+
 /** What the page tells the emulator's language to be; the rest stay English. */
 const FRAME_LANGUAGE: Record<Locale, string> = {
   en: "en-US",
@@ -72,22 +78,31 @@ function EmulatorRoomDialog({ onClose }: { onClose: () => void }) {
   // while the frame is loading must not drop the pending file.
   const localeRef = useRef(locale);
   localeRef.current = locale;
+  // Whether the current frame has said it can take a file.
+  const readyRef = useRef(false);
 
+  // This dialog's listener is installed when the dialog mounts, long before the
+  // first file can be picked, so the frame (which only exists after a pick)
+  // cannot say "ready" before anybody is listening.
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const frame = frameRef.current?.contentWindow;
-      if (!frame || event.source !== frame || event.origin !== window.location.origin) {
+      // The frame is sandboxed into an opaque origin, which is "null" here.
+      if (!frame || event.source !== frame || event.origin !== FRAME_ORIGIN) {
         return;
       }
       const type = (event.data as { type?: unknown } | null)?.type;
       if (type === "pqp-emulator-ready" && fileRef.current) {
+        readyRef.current = true;
         frame.postMessage(
           {
             type: "pqp-emulator-load",
             file: fileRef.current,
             language: FRAME_LANGUAGE[localeRef.current],
           },
-          window.location.origin,
+          // The frame's origin is opaque and cannot be named; the target is
+          // the one window object, which only this page holds.
+          "*",
         );
         // The frame has its own copy of the reference now.
         fileRef.current = null;
@@ -103,6 +118,24 @@ function EmulatorRoomDialog({ onClose }: { onClose: () => void }) {
       fileRef.current = null;
     };
   }, []);
+
+  // A frame that never says "ready" (its script failed to load) must not leave
+  // the room blank forever holding the file: give it a bounded time, then drop
+  // the file and say the emulator could not start.
+  useEffect(() => {
+    if (!playing) {
+      return;
+    }
+    readyRef.current = false;
+    const timer = window.setTimeout(() => {
+      if (!readyRef.current) {
+        fileRef.current = null;
+        setPlaying(false);
+        setProblem("load");
+      }
+    }, FRAME_READY_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [playing, frameKey]);
 
   const pick = useCallback((file: File | undefined) => {
     if (!file) {
@@ -168,7 +201,12 @@ function EmulatorRoomDialog({ onClose }: { onClose: () => void }) {
           <iframe
             key={frameKey}
             ref={frameRef}
-            src={FRAME_SRC}
+            // Scripts only, NO `allow-same-origin`: the emulator and any game
+            // file that tries to attack it run in an opaque origin, with no
+            // access to this page, the app's cookies or storage, or the app's
+            // API as the signed-in person.
+            sandbox="allow-scripts"
+            src={`${FRAME_SRC}?o=${encodeURIComponent(window.location.origin)}`}
             title={t("emulator.frameTitle")}
             allow="autoplay; fullscreen; gamepad"
             referrerPolicy="no-referrer"

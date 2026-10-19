@@ -48,7 +48,6 @@ describe("frame.js", () => {
       /\bsendBeacon\b/,
       /\bWebSocket\b/,
       /\bFormData\b/,
-      /\blocalStorage\b/,
       /\bsessionStorage\b/,
       /\bindexedDB\b/,
       /\bconsole\b/,
@@ -58,8 +57,20 @@ describe("frame.js", () => {
     }
   });
 
-  it("answers only the window that embedded it, from its own origin", () => {
-    expect(code).toMatch(/event\.origin !== window\.location\.origin \|\| event\.source !== window\.parent/);
+  it("touches web storage only to say there is none (a sandboxed page has none)", () => {
+    const uses = code.split("\n").filter((line) => /localStorage/.test(line));
+    expect(uses).toHaveLength(1);
+    expect(uses[0]).toContain("Object.defineProperty(window");
+    expect(uses[0]).toContain("value: null");
+  });
+
+  it("answers only the window that embedded it, from the origin it was told (the page runs in an opaque origin)", () => {
+    expect(code).toMatch(
+      /!parentOrigin \|\| event\.origin !== parentOrigin \|\| event\.source !== window\.parent/,
+    );
+    // It talks back only to that origin, never to "*".
+    expect(code).toMatch(/window\.parent\.postMessage\(message, parentOrigin\)/);
+    expect(code).not.toMatch(/postMessage\([^)]*"\*"/);
   });
 
   it("switches the emulator's databases and settings storage off, and hides what would write", () => {

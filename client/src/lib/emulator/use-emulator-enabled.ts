@@ -36,7 +36,14 @@ export function useEmulatorEnabledFor(serverId: string | null): boolean {
           }
         })
         .catch(() => {
-          // Keep the last answer: a blip must not flip the room off and on.
+          // A failed read is OFF, as documented above. This flag is gated on a
+          // legal review and its off switch is a kill switch, so when the
+          // newest ask cannot be answered the room does not stay on on the
+          // strength of an old answer. (Only the newest ask: a stale failure
+          // must not undo a newer success.)
+          if (!cancelled && mine === asked.current) {
+            setAnswer({ serverId, enabled: false });
+          }
         });
     };
     ask();

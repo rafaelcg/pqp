@@ -50,9 +50,22 @@ feature and needs its own review.
   (`connect-src 'self' blob: data:`), no form submission and no remote host of
   any kind. That is why "the file cannot leave" is a property the browser
   enforces and not only a promise in our code. `frame.js` takes the `File` from
-  the embedding page with a same-origin `postMessage`, gives it to the emulator
-  as an in-memory object (no URL, no fetch) under a fixed name (`rom.<ext>`),
-  and does nothing else with it. It answers only the window that embedded it.
+  the embedding page with a `postMessage`, gives it to the emulator as an
+  in-memory object (no URL, no fetch) under a fixed name (`rom.<ext>`), and does
+  nothing else with it. It answers only the window that embedded it, from the
+  origin it was told.
+- **The frame is sandboxed into an opaque origin**: `sandbox="allow-scripts"`,
+  never `allow-same-origin`. The emulator is a third party runtime and a game
+  file is untrusted input, so if a hostile file ever got code running in it, that
+  code still could not read the app's cookies or storage, touch the parent page
+  or call the API as the signed-in person. The cost: the frame fetches its own
+  files with CORS, so `/emulator/ejs/*` (public static files) carries
+  `Access-Control-Allow-Origin: *` in `_headers` and in the dev middleware, and
+  the frame has no web storage at all. A test fails if the sandbox ever gains
+  `allow-same-origin`.
+- A frame that never says it is ready (its script failed to load) is given 10
+  seconds, then the file is dropped and the room says the emulator could not
+  start. A failed read of the flag counts as off, like an old API.
 - The files come from npm and are copied to `/emulator/ejs/` by the `pqp-emulator-room`
   plugin in `client/vite.config.ts` (served by middleware in dev, emitted as
   assets in a build). They are not precached by the service worker.
@@ -64,8 +77,9 @@ feature and needs its own review.
 
 What it is verified against: the two cores were run in a real browser behind the
 policy with two tiny test images written from scratch (not games, never
-committed): an NES image that paints the screen, and a GBA image that loops. No
-request other than same-origin static files was made. Real games were not used.
+committed): an NES image that paints the screen, and a GBA image that loops,
+both again inside the sandboxed frame. No request other than the emulator's own
+static files was made. Real games were not used.
 
 ## The cores, and the license check
 
