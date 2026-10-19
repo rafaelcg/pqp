@@ -7,7 +7,7 @@ import {
   validateAppManifest,
 } from "@pqp/shared";
 import { readFileSync } from "node:fs";
-import { fill, pickLocale, STRINGS, votersLine, votesLine } from "./i18n";
+import { fill, pickLocale, resultTextFor, STRINGS, votersLine, votesLine } from "./i18n";
 import {
   bit,
   buildResult,
@@ -20,6 +20,7 @@ import {
   QUESTION_MAX_LENGTH,
   readState,
   RESULT_MAX_BYTES,
+  RESULT_TEXT_MAX_CHARS,
   shownTally,
   tally,
   validateDraft,
@@ -142,6 +143,7 @@ describe("counting", () => {
 describe("the result line", () => {
   it("is the question, the winners, their votes and the voters", () => {
     expect(buildResult(poll(), [4, 1, 0], 5)).toEqual({
+      text: "Pizza (4)",
       question: "O que a gente pede?",
       winners: ["Pizza"],
       votes: 4,
@@ -159,6 +161,31 @@ describe("the result line", () => {
     expect(bytes(result)).toBeLessThanOrEqual(RESULT_MAX_BYTES);
     expect(result.winners.length).toBeGreaterThan(0);
     expect(result.voters).toBe(10);
+  });
+
+  it("writes the quiet card's closing line in the host's language, one winner, a tie, or nobody", () => {
+    const line = (locale: keyof typeof STRINGS, counts: number[]) =>
+      buildResult(poll(), counts, counts.reduce((a, b) => a + b, 0), resultTextFor(STRINGS[locale], locale)).text;
+    expect(line("pt-BR", [5, 1, 0])).toBe("Ganhou: Pizza, 5 votos");
+    expect(line("pt-BR", [1, 0, 0])).toBe("Ganhou: Pizza, 1 voto");
+    expect(line("en", [5, 1, 0])).toBe("Winner: Pizza, 5 votes");
+    expect(line("es", [5, 1, 0])).toBe("Ganó: Pizza, 5 votos");
+    expect(line("pt-BR", [3, 3, 0])).toBe("Empate: Pizza, Sushi, 3 votos cada");
+    expect(line("en", [2, 2, 2])).toBe("Tie: Pizza, Sushi, Tacos, 2 votes each");
+    expect(line("es", [0, 0, 0])).toBe("Nadie votó");
+  });
+
+  it("names three tied options and an ellipsis for the rest, and never passes 200 characters or 512 bytes", () => {
+    const names = ["A", "B", "C", "D", "E"];
+    const p: Poll = { question: "q", options: names, multi: true };
+    expect(buildResult(p, [1, 1, 1, 1, 1], 5, resultTextFor(STRINGS.en, "en")).text).toBe("Tie: A, B, C, \u2026, 1 vote each");
+    const wide = "\u{1F355}";
+    const options = Array.from({ length: MAX_OPTIONS }, (_, i) => `${wide.repeat(OPTION_MAX_LENGTH - 2)}${i}`);
+    const big: Poll = { question: wide.repeat(QUESTION_MAX_LENGTH), options, multi: true };
+    const result = buildResult(big, options.map(() => 1), 10, resultTextFor(STRINGS["pt-BR"], "pt-BR"));
+    expect(Array.from(result.text).length).toBeLessThanOrEqual(RESULT_TEXT_MAX_CHARS);
+    expect(bytes(result)).toBeLessThanOrEqual(RESULT_MAX_BYTES);
+    expect(result.text.length).toBeGreaterThan(0);
   });
 
   it("shrinks only as much as it has to", () => {

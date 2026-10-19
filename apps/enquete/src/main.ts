@@ -1,6 +1,6 @@
 import { applyTheme, connect, type PqpApp } from "@pqp/app-sdk";
 import { PollController, type View } from "./controller";
-import { fill, pickLocale, STRINGS, votersLine, votesLine, type Strings } from "./i18n";
+import { fill, pickLocale, STRINGS, resultTextFor, votersLine, votesLine, type Strings } from "./i18n";
 import {
   bit,
   hasBit,
@@ -225,7 +225,9 @@ async function main() {
   let lastClosed = false;
   let starting = false;
 
-  const controller = new PollController(app, app.hello.self.seatId, (view) => render(view));
+  const controller = new PollController(app, app.hello.self.seatId, (view) => render(view), {
+    resultText: resultTextFor(t, lang),
+  });
 
   function buildRows(poll: Poll) {
     optionList.replaceChildren();

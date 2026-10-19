@@ -140,7 +140,7 @@
         "notice": "notice",
         "entry": {
           "path": "index.html",
-          "sha256": "375974d294487e8b849b5b82be1618f967b34976e864b786287ffa978490fcb9"
+          "sha256": "d9539a619b29282bea0d1aa812a1d8e9938ccfbc7bfdbbd2e7467c0b58573024"
         },
         "platforms": [
           "web",
@@ -174,7 +174,7 @@
           }
         }
       },
-      "manifestSha256": "c8b146b07d7a7f8f1ca533138bb9123a1bd9a7b4e1373817622096a53efe1869"
+      "manifestSha256": "120d4c0dfab6bd980d57436ba584ddb93094af4b3ccce69a48326d22f0bedcc3"
     }
   ]
 }

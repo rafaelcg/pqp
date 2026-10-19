@@ -52,6 +52,10 @@ export interface Strings {
   hostOnlyClose: string;
   hostOnlyEnd: string;
   yourVote: string;
+  /** The closing line the quiet card shows: `{names}` the winner(s), `{votes}` the votes each got. */
+  resultWinner: string;
+  resultTie: string;
+  resultNone: string;
 }
 
 export const STRINGS = {
@@ -104,6 +108,9 @@ export const STRINGS = {
     hostOnlyClose: "Só o host encerra a votação.",
     hostOnlyEnd: "O host encerra a enquete quando quiser.",
     yourVote: "teu voto",
+    resultWinner: "Ganhou: {names}, {votes}",
+    resultTie: "Empate: {names}, {votes} cada",
+    resultNone: "Ninguém votou",
   },
   en: {
     title: "Poll",
@@ -154,6 +161,9 @@ export const STRINGS = {
     hostOnlyClose: "Only the host closes the vote.",
     hostOnlyEnd: "The host ends the poll when they want.",
     yourVote: "your vote",
+    resultWinner: "Winner: {names}, {votes}",
+    resultTie: "Tie: {names}, {votes} each",
+    resultNone: "Nobody voted",
   },
   es: {
     title: "Encuesta",
@@ -204,6 +214,9 @@ export const STRINGS = {
     hostOnlyClose: "Solo el host cierra la votación.",
     hostOnlyEnd: "El host termina la encuesta cuando quiera.",
     yourVote: "tu voto",
+    resultWinner: "Ganó: {names}, {votes}",
+    resultTie: "Empate: {names}, {votes} cada uno",
+    resultNone: "Nadie votó",
   },
 } as const satisfies Record<string, Strings>;
 
@@ -232,4 +245,16 @@ export function votersLine(t: Strings, locale: string, n: number): string {
 export function votesLine(t: Strings, locale: string, n: number): string {
   const one = new Intl.PluralRules(locale).select(n) === "one";
   return fill(one ? t.votesOne : t.votesOther, "n", String(n));
+}
+
+/**
+ * The closing line for the quiet card (`state.result.text`), in the language the
+ * host is in: "Ganhou: Pizza, 5 votos", "Tie: Pizza, Sushi, 3 votes each".
+ */
+export function resultTextFor(t: Strings, locale: string): (winners: readonly string[], votes: number) => string {
+  return (winners, votes) => {
+    if (winners.length === 0) return t.resultNone;
+    const template = winners.length > 1 ? t.resultTie : t.resultWinner;
+    return fill(fill(template, "names", winners.join(", ")), "votes", votesLine(t, locale, votes));
+  };
 }

@@ -45,7 +45,20 @@ export interface Closed {
   voters: number;
 }
 
+/** The closing line in the host's language: the winner(s) and the votes each got, or that nobody voted. */
+export type ResultText = (winners: readonly string[], votes: number) => string;
+
+/** The longest closing line the quiet card shows (the card renders `summary.result.text`, at most this many characters). */
+export const RESULT_TEXT_MAX_CHARS = 200;
+/** Names spelled out in the closing line; a tie of more ends in an ellipsis. */
+const RESULT_TEXT_NAMES = 3;
+
+const defaultResultText: ResultText = (winners, votes) =>
+  winners.length === 0 ? "" : `${winners.join(", ")} (${votes})`;
+
 export interface PollResult {
+  /** What the card shows (plain text, at most 200 characters). The other fields are the poll's own record. */
+  text: string;
   question: string;
   winners: string[];
   votes: number;
@@ -132,7 +145,8 @@ function readResult(value: unknown): PollResult | null {
   const winners = value.winners.filter((w): w is string => typeof w === "string");
   const votes = typeof value.votes === "number" ? value.votes : 0;
   const voters = typeof value.voters === "number" ? value.voters : 0;
-  return { question: value.question, winners, votes, voters };
+  const text = typeof value.text === "string" ? value.text : "";
+  return { text, question: value.question, winners, votes, voters };
 }
 
 /** The state value the host handed over, read defensively: anything off becomes "no poll yet". */
@@ -229,11 +243,22 @@ function clip(text: string, max: number): string {
  * its compact JSON fits `RESULT_MAX_BYTES` (a 300 character question in a
  * language that takes four bytes a character does not on its own).
  */
-export function buildResult(poll: Poll, counts: number[], voters: number): PollResult {
+export function buildResult(
+  poll: Poll,
+  counts: number[],
+  voters: number,
+  resultText: ResultText = defaultResultText,
+): PollResult {
   const indexes = winnerIndexes(counts);
   const votes = indexes.length > 0 ? (counts[indexes[0]!] ?? 0) : 0;
   const winnerLabels = indexes.map((i) => poll.options[i] ?? "");
+  const textFor = (labelMax: number): string => {
+    const names = winnerLabels.slice(0, RESULT_TEXT_NAMES).map((label) => clip(label, labelMax));
+    if (winnerLabels.length > RESULT_TEXT_NAMES) names.push("\u2026");
+    return clip(resultText(names, votes), RESULT_TEXT_MAX_CHARS);
+  };
   const make = (questionMax: number, labelMax: number, winnerMax: number): PollResult => ({
+    text: textFor(labelMax),
     question: clip(poll.question, questionMax),
     winners: winnerLabels.slice(0, winnerMax).map((label) => clip(label, labelMax)),
     votes,
@@ -249,7 +274,11 @@ export function buildResult(poll: Poll, counts: number[], voters: number): PollR
     const result = make(questionMax, labelMax, winnerMax);
     if (bytesOf(result) <= RESULT_MAX_BYTES) return result;
   }
-  return make(20, 10, 1);
+  // last resort, for names of four-byte characters: the card's line first, then the rest, until it fits
+  const last = make(20, 10, 1);
+  last.question = "";
+  while (bytesOf(last) > RESULT_MAX_BYTES && last.text.length > 1) last.text = clip(last.text, Math.max(1, Array.from(last.text).length - 8));
+  return last;
 }
 
 /** The merge patch that starts the poll. */
@@ -263,9 +292,9 @@ export function votePatch(seatId: string, mask: number): JsonValue {
 }
 
 /** The merge patch that closes the vote: the frozen counts and the line for the card. */
-export function closePatch(poll: Poll, votes: Record<string, number>): JsonValue {
+export function closePatch(poll: Poll, votes: Record<string, number>, resultText?: ResultText): JsonValue {
   const { counts, voters } = tally(poll, votes);
-  const result = buildResult(poll, counts, voters);
+  const result = buildResult(poll, counts, voters, resultText);
   return { closed: { counts, voters }, result: { ...result } };
 }
 

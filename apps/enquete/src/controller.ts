@@ -2,6 +2,7 @@ import type { JsonValue } from "@pqp/shared";
 import { PqpAppError, type Participant, type StateSnapshot, type Unsubscribe } from "@pqp/app-sdk";
 import {
   closePatch,
+  type ResultText,
   EMPTY_STATE,
   normalizeMask,
   readState,
@@ -42,6 +43,8 @@ export interface View {
 }
 
 export interface ControllerOptions {
+  /** The closing line for the quiet card, in the host's language (`resultTextFor`). */
+  resultText?: ResultText;
   /** Resolves after `ms`. Tests pass an instant one. */
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
@@ -72,6 +75,7 @@ export class PollController {
 
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
+  private readonly resultText: ResultText | undefined;
 
   constructor(
     private readonly app: PollHost,
@@ -81,6 +85,7 @@ export class PollController {
   ) {
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.random = options.random ?? Math.random;
+    this.resultText = options.resultText;
   }
 
   /** Listeners first, then the values from before the listeners existed. */
@@ -268,7 +273,7 @@ export class PollController {
       if (!current || this.closed()) return false;
       try {
         // the stored votes, not the ones with this seat's pending write laid over them
-        const { rev } = await this.app.state.patch(closePatch(current, this.state.votes), { baseRev: this.rev });
+        const { rev } = await this.app.state.patch(closePatch(current, this.state.votes, this.resultText), { baseRev: this.rev });
         this.rev = Math.max(this.rev, rev);
         this.apply(await this.app.state.get());
         return true;
