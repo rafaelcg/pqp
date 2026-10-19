@@ -1705,6 +1705,21 @@ rule holds off while media is still being appended (up to twice its
 threshold). The element's `stalled` event no longer counts as a stall unless
 the element really cannot play on.
 
+**Reading `medianLatencyMs` on an LL batch (2026-10-18).** The number is
+encode-to-paint (`encodeToPaintLatencyMs`): the painted frame's
+`#EXT-X-PROGRAM-DATE-TIME`, which the remux derives from media time on one
+session anchor, against the viewer's clock. It starts at the remux, not at
+the presenter's glass, so it understates glass-to-glass by the capture,
+encode and SFU leg (a second or less), and it is not inflated by playlist age.
+On segments it should sit at the governor's target: 8 s at the lowest, the
+manifest's `EXT-X-TARGETDURATION` + 3 s (up to 20 s) once the remux has
+closed a long segment, and that floor never comes back down while
+`LIVE_HLS_LL_SEGMENT_CADENCE_DECAY` is off. A 2.5 hour party at 8 to 21 s is
+therefore the documented LL-lite behaviour, not a fault. The log line carries
+`medianTargetLatencyMs` and `medianLatencyOverTargetMs` since this date: near
+zero means the viewer holds where it was told to sit, a large positive value
+means it has drifted behind its own target.
+
 ## What the stream carries, and what it does not
 
 **The two audiences are not watching the same event, and the host cannot tell.**
