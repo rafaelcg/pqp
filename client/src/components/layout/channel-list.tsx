@@ -523,7 +523,7 @@ interface ChannelListProps {
   /** "Postar story" in the server menu, for someone who may post here. */
   onPostStory?: () => void;
   /**
-   * "Sala de emulador" in the server menu, passed only while the
+   * "Locadora" in the server menu (the emulator, see docs/EMULATOR_ROOM.md), passed only while the
    * `emulator_room` flag is on for this server. Absent: no entry.
    */
   onOpenEmulator?: () => void;

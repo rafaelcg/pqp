@@ -24,6 +24,11 @@ export interface Strings {
   startHint: string;
   controlsTitle: string;
   controlsHide: string;
+  noticesTitle: string;
+  noticesHide: string;
+  noticesIntro: string;
+  noticesLoading: string;
+  noticesFailed: string;
   controlDpad: string;
   controlA: string;
   controlB: string;
@@ -60,6 +65,12 @@ export const STRINGS = {
     startHint: "Clica em Iniciar jogo pra começar. O som só liga depois desse clique.",
     controlsTitle: "Controles",
     controlsHide: "Esconder controles",
+    noticesTitle: "Licenças",
+    noticesHide: "Esconder licenças",
+    noticesIntro:
+      "Software de terceiros que a Locadora usa, com a licença de cada um e o link do código-fonte.",
+    noticesLoading: "Carregando as licenças...",
+    noticesFailed: "Não deu pra carregar as licenças. Tenta de novo.",
     controlDpad: "Setas: direcional",
     controlA: "Z: botão A",
     controlB: "X: botão B",
@@ -94,6 +105,12 @@ export const STRINGS = {
     startHint: "Click Start Game to begin. Sound only turns on after that click.",
     controlsTitle: "Controls",
     controlsHide: "Hide controls",
+    noticesTitle: "Licenses",
+    noticesHide: "Hide licenses",
+    noticesIntro:
+      "Third-party software Locadora uses, with each one's license and a link to its source code.",
+    noticesLoading: "Loading the licenses...",
+    noticesFailed: "The licenses could not be loaded. Try again.",
     controlDpad: "Arrow keys: directional pad",
     controlA: "Z: A button",
     controlB: "X: B button",
@@ -128,6 +145,12 @@ export const STRINGS = {
     startHint: "Haz clic en Iniciar juego para empezar. El sonido solo se activa después de ese clic.",
     controlsTitle: "Controles",
     controlsHide: "Ocultar controles",
+    noticesTitle: "Licencias",
+    noticesHide: "Ocultar licencias",
+    noticesIntro:
+      "Software de terceros que usa Locadora, con la licencia de cada uno y el enlace a su código fuente.",
+    noticesLoading: "Cargando las licencias...",
+    noticesFailed: "No se pudieron cargar las licencias. Prueba otra vez.",
     controlDpad: "Flechas: cruceta",
     controlA: "Z: botón A",
     controlB: "X: botón B",

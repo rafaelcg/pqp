@@ -55,7 +55,8 @@
     { "name": "fceumm-core.pqpc", "path": "cores/fceumm-core.pqpc" },
     { "name": "fceumm.json", "path": "cores/fceumm.json" },
     { "name": "mgba-core.pqpc", "path": "cores/mgba-core.pqpc" },
-    { "name": "mgba.json", "path": "cores/mgba.json" }
+    { "name": "mgba.json", "path": "cores/mgba.json" },
+    { "name": "notices.txt", "path": "notices.txt" }
   ],
   "sandbox": {
     "wasm": true,

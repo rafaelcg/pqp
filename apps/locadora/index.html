@@ -43,6 +43,7 @@
 
       <div class="loc-bar" id="bar" hidden>
         <button class="loc-button loc-button-quiet" id="controls-toggle" type="button" aria-expanded="false" aria-controls="controls"></button>
+        <button class="loc-button loc-button-quiet" id="notices-toggle" type="button" aria-expanded="false" aria-controls="notices"></button>
         <button class="loc-button loc-button-quiet" id="fullscreen" type="button" hidden></button>
         <button class="loc-button loc-button-quiet" id="choose-another" type="button" hidden></button>
       </div>
@@ -56,6 +57,11 @@
         <li id="control-shoulders"></li>
         <li id="control-gamepad"></li>
       </ul>
+
+      <section class="loc-notices" id="notices" aria-labelledby="notices-toggle" hidden>
+        <p class="loc-muted" id="notices-intro"></p>
+        <pre class="loc-notices-text" id="notices-text" tabindex="0"></pre>
+      </section>
 
       <p class="loc-ended" id="ended" role="status" hidden></p>
     </main>

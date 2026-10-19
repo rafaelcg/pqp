@@ -195,6 +195,32 @@ test("the shelf says what it is, in pt-BR, and offers one thing", async ({ brows
   await opened.context.close();
 });
 
+test("the licenses are in the app: the third-party notices open from the bundle, with the source links", async ({ browser }) => {
+  const opened = await open(browser);
+  const { frame, page } = opened;
+  await expect(frame.locator("#notices")).toBeHidden();
+  await frame.locator("#notices-toggle").click();
+  await expect(frame.locator("#notices")).toBeVisible();
+  await expect(frame.locator("#notices-toggle")).toHaveAttribute("aria-expanded", "true");
+  const text = frame.locator("#notices-text");
+  await expect(text).toContainText("EmulatorJS 4.2.3");
+  for (const needle of [
+    "GPL-3.0-only",
+    "GPL-2.0-or-later",
+    "MPL-2.0",
+    "https://github.com/EmulatorJS/EmulatorJS",
+    "https://github.com/libretro/libretro-fceumm",
+    "https://github.com/mgba-emu/mgba",
+  ]) {
+    await expect(text).toContainText(needle);
+  }
+  expect(await page.evaluate(() => (window as unknown as { __h: { assetsServed: string[] } }).__h.assetsServed)).toEqual(["notices.txt"]);
+  await frame.locator("#notices-toggle").click();
+  await expect(frame.locator("#notices")).toBeHidden();
+  expect(opened.problems).toEqual([]);
+  await opened.context.close();
+});
+
 test("a Game Boy Advance pattern runs: it paints, the sound starts after the click, nothing leaves", async ({ browser }) => {
   const opened = await open(browser);
   const { frame, page } = opened;

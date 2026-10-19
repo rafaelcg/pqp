@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { validateAppManifest, type AppManifestSource } from "@pqp/shared";
 import { BUTTONS, buildFilePaths, hexAccent } from "./emulator";
 import { EMULATOR_LANGUAGE, pickLocale, STRINGS } from "./i18n";
-import { ACCEPTED_EXTENSIONS, CORE_ASSETS, CORE_BY_EXTENSION, FRONTEND_FILE_NAMES, coreForExtension } from "./systems";
+import { ACCEPTED_EXTENSIONS, CORE_ASSETS, CORE_BY_EXTENSION, FRONTEND_FILE_NAMES, NOTICES_ASSET, coreForExtension } from "./systems";
 
 const EM_DASH = String.fromCharCode(0x2014);
 const source = JSON.parse(readFileSync(new URL("../manifest.source.json", import.meta.url), "utf8")) as AppManifestSource;
@@ -81,10 +81,13 @@ describe("Locadora's systems and its manifest", () => {
     expect(["gb", "gbc", "gba"].every((e) => coreForExtension(`.${e}`) === "mgba")).toBe(true);
   });
 
-  it("declares every file a core needs as an asset of the manifest, and nothing else", () => {
+  it("declares every file a core needs, and the notices the app shows, as assets of the manifest, and nothing else", () => {
     const declared = new Set((source.assets ?? []).map((asset) => asset.name));
-    const needed = new Set(Object.values(CORE_ASSETS).flatMap((names) => [names.data, names.report]));
+    const needed = new Set([...Object.values(CORE_ASSETS).flatMap((names) => [names.data, names.report]), NOTICES_ASSET]);
     expect(declared).toEqual(needed);
+    // the notices asset is the file the manifest's `license.notices` names
+    expect(source.license.notices).toBe(NOTICES_ASSET);
+    expect((source.assets ?? []).find((asset) => asset.name === NOTICES_ASSET)?.path).toBe(NOTICES_ASSET);
   });
 
   it("answers the file names the frontend asks for with the legacy build, by basename", () => {

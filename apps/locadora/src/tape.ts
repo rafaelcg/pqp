@@ -1,5 +1,5 @@
 import { PqpAppError, type PickedFile } from "@pqp/app-sdk";
-import { CORE_ASSETS, coreForExtension, type CoreName } from "./systems";
+import { CORE_ASSETS, coreForExtension, NOTICES_ASSET, type CoreName } from "./systems";
 
 /**
  * "Pick a game": the step between the person's click and the emulator.
@@ -15,6 +15,15 @@ import { CORE_ASSETS, coreForExtension, type CoreName } from "./systems";
 export interface TapeHost {
   files: { pickLocal(): Promise<PickedFile | null> };
   assets: { get(name: string): Promise<ArrayBuffer> };
+}
+
+/** The text of the third-party notices (`notices.txt`), or null when the host cannot hand it over. */
+export async function loadNotices(host: Pick<TapeHost, "assets">): Promise<string | null> {
+  try {
+    return new TextDecoder().decode(await host.assets.get(NOTICES_ASSET));
+  } catch {
+    return null;
+  }
 }
 
 export type TapeProblem = "unsupported" | "too-big" | "load";

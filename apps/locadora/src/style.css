@@ -250,6 +250,41 @@ body {
   font-size: 0.875rem;
 }
 
+.loc-notices {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--loc-card);
+  border: 1px solid var(--loc-border);
+  border-radius: var(--loc-radius);
+}
+
+.loc-muted {
+  margin: 0;
+  color: var(--loc-text-3);
+  font-size: 0.8125rem;
+}
+
+.loc-notices-text {
+  max-height: 50vh;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  background: var(--loc-bg);
+  border-radius: var(--loc-control);
+  color: var(--loc-text-2);
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.loc-notices-text:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
 .loc-ended {
   margin: 0;
   padding: 12px 14px;

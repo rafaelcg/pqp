@@ -4,7 +4,7 @@ import "./style.css";
 import { applyTheme, connect, type PqpApp } from "@pqp/app-sdk";
 import { EMULATOR_LANGUAGE, pickLocale, STRINGS, type Strings } from "./i18n";
 import { startEmulator, stopEmulator } from "./emulator";
-import { chooseTape, type TapeProblem } from "./tape";
+import { chooseTape, loadNotices, type TapeProblem } from "./tape";
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -23,6 +23,9 @@ const chooseAnother = el<HTMLButtonElement>("choose-another");
 const fullscreenButton = el<HTMLButtonElement>("fullscreen");
 const controlsToggle = el<HTMLButtonElement>("controls-toggle");
 const controlsPanel = el<HTMLElement>("controls");
+const noticesToggle = el<HTMLButtonElement>("notices-toggle");
+const noticesPanel = el<HTMLElement>("notices");
+const noticesText = el<HTMLElement>("notices-text");
 const problemLine = el<HTMLElement>("problem");
 const startHint = el<HTMLElement>("start-hint");
 const endedLine = el<HTMLElement>("ended");
@@ -87,8 +90,10 @@ async function main() {
     setText("control-select", t.controlSelect);
     setText("control-shoulders", t.controlShoulders);
     setText("control-gamepad", t.controlGamepad);
+    setText("notices-intro", t.noticesIntro);
     el("game").setAttribute("aria-label", t.frameTitle);
     syncControls();
+    syncNotices();
     syncFullscreen();
   }
 
@@ -101,6 +106,24 @@ async function main() {
   controlsToggle.addEventListener("click", () => {
     controlsOpen = !controlsOpen;
     syncControls();
+  });
+
+  // The third-party notices, from the bundle (an asset: the frame cannot fetch, and cannot open a link).
+  let noticesOpen = false;
+  let noticesLoaded = false;
+  function syncNotices() {
+    noticesPanel.hidden = !noticesOpen;
+    noticesToggle.setAttribute("aria-expanded", String(noticesOpen));
+    noticesToggle.textContent = noticesOpen ? t.noticesHide : t.noticesTitle;
+  }
+  noticesToggle.addEventListener("click", async () => {
+    noticesOpen = !noticesOpen;
+    syncNotices();
+    if (!noticesOpen || noticesLoaded) return;
+    noticesText.textContent = t.noticesLoading;
+    const text = await loadNotices(app);
+    noticesLoaded = text !== null;
+    noticesText.textContent = text ?? t.noticesFailed;
   });
 
   // The host fullscreens the iframe element, not us: the emulator's own button cannot (allow="").
@@ -199,6 +222,7 @@ async function main() {
     play.hidden = true;
     bar.hidden = true;
     controlsPanel.hidden = true;
+    noticesPanel.hidden = true;
   });
 
   applyLabels();

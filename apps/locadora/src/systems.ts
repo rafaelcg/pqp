@@ -25,6 +25,9 @@ export const CORE_ASSETS: Readonly<Record<CoreName, { data: string; report: stri
   mgba: { data: "mgba-core.pqpc", report: "mgba.json" },
 };
 
+/** The third-party notices, shipped as an asset so the app can show them (`license.notices` names the same file). */
+export const NOTICES_ASSET = "notices.txt";
+
 /** The file names the frontend asks for, which `EJS_paths` answers with blob URLs (it matches by basename). */
 export const FRONTEND_FILE_NAMES: Readonly<Record<CoreName, { data: string; report: string }>> = {
   fceumm: { data: "fceumm-legacy-wasm.data", report: "fceumm.json" },

@@ -237,7 +237,7 @@
         "notice": "notice",
         "entry": {
           "path": "index.html",
-          "sha256": "b4875fe879786a42a68e8f116919bba509ce9336d2c3fe4b5ffe83bfcc80c09c"
+          "sha256": "82e833d882ef610ebed43af2e600e6814f3aa5ddc78bbf39b77fceab7c233269"
         },
         "assets": [
           {
@@ -263,6 +263,12 @@
             "path": "cores/mgba.json",
             "sha256": "08219f6c855a9d996f04ed21169bb0c5ac64d469a8a536468b9876205b5c268d",
             "bytes": 118
+          },
+          {
+            "name": "notices.txt",
+            "path": "notices.txt",
+            "sha256": "fee9cc55d80f5e65bfe93c3b0a70fd491b4e0fb9298f4a6f42ed07373fb5636a",
+            "bytes": 72028
           }
         ],
         "sandbox": {
@@ -303,7 +309,7 @@
           }
         }
       },
-      "manifestSha256": "962c47c328a25de8083f57a2e50105c49dccff7b8ab2d7170518495f948be853"
+      "manifestSha256": "47f726fa9ce86fe457c16d1435738aa9ce87477f714c67ddfe82b302260a87f5"
     }
   ]
 }

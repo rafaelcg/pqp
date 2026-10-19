@@ -40,8 +40,9 @@ feature and needs its own review.
 
 ## How it works
 
-- Entry: the server menu (the header of the channel list) shows "Sala de
-  emulador" only when the flag answers yes for the open server
+- Entry: the server menu (the header of the channel list) shows "Locadora" (the
+  product's name in every language; it was "Sala de emulador" before the apps
+  platform) only when the flag answers yes for the open server
   (`useEmulatorEnabledFor`). Off, no entry and no emulator code is asked for.
 - The room (`components/emulator/emulator-room.tsx`) is a dialog with a file
   input (`.nes .gb .gbc .gba`). The system is chosen by the extension.
@@ -95,6 +96,43 @@ committed): an NES image that paints the screen, and a GBA image that loops,
 both again inside the sandboxed frame. No request other than the emulator's own
 static files was made. Real games were not used.
 
+## Locadora, the same emulator as an app of the apps platform
+
+`apps/locadora/` runs the same two cores and the same frontend as an app
+(`docs/APPS.md` has the platform and the build in full). Every rule above holds
+for it, and the sandbox is stricter than the dialog's:
+
+- **No network at all.** The frame's policy is `default-src 'none'; script-src
+  'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src blob:` and nothing
+  more: no `'self'` in `connect-src` (the dialog's frame may still fetch its own
+  origin), no `'unsafe-eval'`, no `script-src blob:`, no workers, no storage, no
+  forms. `blob:` is what lets the frame read the bytes the page handed over;
+  it reaches nothing outside the browser. The file name never enters the frame:
+  the page's picker sends the bytes and the extension from the closed list.
+- **Four patches** to the vendored EmulatorJS 4.2.3 make it run under that
+  policy (`apps/locadora/build/patch.mts`): the core archive is unpacked with the
+  browser's own inflate instead of a worker that evals, the core's JS glue loads
+  from the bundle under Subresource Integrity instead of from a blob script,
+  inline style writes become CSSOM writes, and the update check is dropped. Each
+  patch throws unless its needle is found exactly as often as expected, so an
+  EmulatorJS upgrade breaks the build and is re-audited, never shipped
+  half-patched. The cores themselves are still unmodified; only their archive is
+  repacked.
+- **The test is a canary.** `apps/locadora/e2e` runs the real build in the real
+  frame with two generated test patterns (never games) and a server on another
+  port that must record nothing, with the escape probes of the S0 spike failing
+  inside the frame, in Chromium, WebKit and Firefox.
+- **Sharing is built and off.** The app declares `share: pane` and spectators,
+  and the platform refuses both for an `emulator` app until the flag
+  `locadora_share` is on for the server (D14, `docs/APPS.md`). It waits for the
+  answer to item 7 below. Nothing about anyone's game reaches anyone else today.
+- **Notices.** The third-party notices (item 4) are generated into the bundle as
+  `notices.txt` from what is installed (every component, its version, its
+  license text and the source links of the next section). The app has a
+  "Licenças" panel that shows them, since a sandboxed frame cannot open a link,
+  and the file is a public file of the apps origin (`license.notices` in the
+  manifest names it).
+
 ## The cores, and the license check
 
 AGPL-3.0 is this repository's license. GPL-3.0 and AGPL-3.0 code, MIT/BSD and
@@ -130,8 +168,11 @@ source: FCEUmm at https://github.com/EmulatorJS/libretro-fceumm (upstream
 https://github.com/libretro/libretro-fceumm) and mGBA at
 https://github.com/EmulatorJS/mgba (upstream https://github.com/mgba-emu/mgba),
 at the versions in `pnpm-lock.yaml` (`@emulatorjs/core-*` 4.2.3). The frontend:
-https://github.com/EmulatorJS/EmulatorJS. A notices page for the web client is
-still to do before the flag goes on (item 4 below).
+https://github.com/EmulatorJS/EmulatorJS (served with the four build-time edits
+of `apps/locadora/build/patch.mts` in the app; the dialog serves it as it is).
+The notices file with every license text and these links is in the Locadora
+bundle and in its "Licenças" panel (item 4 below). The old dialog has no panel of its
+own: it is what the menu entry opens only while the apps platform is off.
 
 ### SNES and Mega Drive: what could replace the refused cores
 
@@ -153,13 +194,29 @@ so each is a separate piece of work (build from source, license re-read):
 3. **The "only open games you have the right to play" line.** Is it enough, or
    should it be a click-through? (Rule 6 keeps it from implying anything about
    where a file came from.)
-4. **License obligations of shipping GPL-2.0+/MPL-2.0 binaries**: the notices page
-   and the source offer (links above) before the flag is on. The binaries are
-   unmodified.
+4. **License obligations of shipping GPL-2.0+/MPL-2.0 binaries**: the notices
+   and the source offer (links above) before the flag is on. The notices file
+   exists now (in the Locadora bundle and its "Licenças" panel); is it enough, or
+   does the web client need a page of its own? The cores are unmodified (only
+   repacked); the frontend carries four small build-time edits, and the
+   corresponding source is upstream plus `apps/locadora/build/patch.mts`.
 5. **Before any allowlist entry**: how each entry is verified, and who signs it.
    That is a separate review per entry, after this one.
 6. **Before anything shared** (netplay, watching somebody play, a streamed
-   screen): out of scope here by decision, and a screen share of a running game
-   is a different legal question. Do not build it on this change.
+   screen): a screen share of a running game is a different legal question from
+   everything above. Netplay and any relay of game data stay out of scope. The
+   share of the app's pane is built dark behind its own flag, see item 7.
+7. **Legal Gate L1b: sharing a running game to viewers ("Assistir")**, before
+   `locadora_share` is turned on anywhere. Is a pane share of a game the person
+   opened from their own disk acceptable to show to others in a private server?
+   Does it change if the viewers are in a community? What has to be said on
+   screen? Does it change for allowlisted homebrew titles?
+8. **Legal Gate L2: playing together (multiplayer)**, before any code of it is
+   built past a prototype. Is relaying controller input between players
+   (peer to peer, only for reviewed titles) acceptable? Is a hash allowlist with
+   a rights record per entry sufficient? Who signs each entry? (The design is in
+   the apps program plan, Phase 9; Rafael's written confirmation that his
+   go-ahead covers it is also still open.)
 
 Until 1 to 4 are answered in writing, `emulator_room` stays off everywhere.
+`locadora_share` also waits for 7 and the multiplayer flag for 8.

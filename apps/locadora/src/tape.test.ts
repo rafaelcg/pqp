@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PqpAppError } from "@pqp/app-sdk";
-import { chooseTape, type TapeHost } from "./tape";
+import { chooseTape, loadNotices, type TapeHost } from "./tape";
 
 const bytes = (n: number) => new Uint8Array(n).buffer;
 
@@ -72,5 +72,25 @@ describe("choosing a game", () => {
     if (outcome.kind !== "ready") throw new Error("expected ready");
     expect(outcome.rom).toBe(rom);
     expect(Object.keys(outcome).sort()).toEqual(["core", "coreData", "ext", "kind", "report", "rom"]);
+  });
+});
+
+describe("the third-party notices", () => {
+  it("reads notices.txt from the host's assets as text", async () => {
+    const asked: string[] = [];
+    const text = await loadNotices({
+      assets: {
+        get: async (name) => {
+          asked.push(name);
+          return new TextEncoder().encode("EmulatorJS 4.2.3 (GPL-3.0-only)").buffer as ArrayBuffer;
+        },
+      },
+    });
+    expect(asked).toEqual(["notices.txt"]);
+    expect(text).toBe("EmulatorJS 4.2.3 (GPL-3.0-only)");
+  });
+
+  it("is null when the host cannot hand them over", async () => {
+    expect(await loadNotices({ assets: { get: async () => { throw new PqpAppError("unavailable"); } } })).toBeNull();
   });
 });
