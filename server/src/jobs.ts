@@ -43,6 +43,7 @@ import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.j
 import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
+import { sweepClientPlatforms } from "./services/client-platforms.js";
 import { sweepForumPostShells } from "./services/forums.js";
 import { sweepSoundboardUploads } from "./services/soundboard.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
@@ -397,6 +398,10 @@ export function startColdJobs(): ColdJobs {
     // inert, because enforcement compares it against the channel's current
     // interval. Rows, not disk pages, is the point.
     every(DAILY_MS, "slow-mode", sweepSlowModeClocks),
+    // Which app a person connected from, for support: a row not seen for 90
+    // days goes. Nothing depends on this running (the read filters on the
+    // same window); it is the retention promise made in the privacy policy.
+    every(DAILY_MS, "client-platforms", sweepClientPlatforms),
     every(FORUM_SHELL_SWEEP_INTERVAL_MS, "forum-shells", sweepForumPostShells),
     every(SOUNDBOARD_UPLOAD_SWEEP_INTERVAL_MS, "soundboard-uploads", sweepSoundboardUploads),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),

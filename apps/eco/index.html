@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Eco</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <main class="eco" id="eco" data-state="connecting">
+      <header class="eco-head">
+        <h1 class="eco-title" id="title">Eco</h1>
+        <p class="eco-status" id="status" role="status"></p>
+      </header>
+
+      <section class="eco-card" aria-labelledby="counter-label">
+        <h2 class="eco-label" id="counter-label"></h2>
+        <output class="eco-count" id="count" aria-labelledby="counter-label">0</output>
+        <button class="eco-button" id="plus" type="button">+1</button>
+      </section>
+
+      <section class="eco-card" aria-labelledby="ping-label">
+        <h2 class="eco-label" id="ping-label"></h2>
+        <button class="eco-button" id="ping" type="button"></button>
+        <p class="eco-flash" id="flash" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="eco-card" aria-labelledby="people-label">
+        <h2 class="eco-label" id="people-label"></h2>
+        <ul class="eco-people" id="people"></ul>
+      </section>
+
+      <p class="eco-ended" id="ended" role="alert" hidden></p>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

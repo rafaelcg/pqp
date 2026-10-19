@@ -22,9 +22,10 @@
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
  *
- *     Twelve `/operator/*` routes join them, and they are this Worker's FIRST
- *     WRITES. Five reads (find a server, list its voice channels, the watch
- *     party waitlist, the runtime feature flags, the feedback queue) and
+ *     Thirteen `/operator/*` routes join them, and they are this Worker's FIRST
+ *     WRITES. Six reads (find a server, list its voice channels, the watch
+ *     party waitlist, the runtime feature flags, the feedback queue, which
+ *     app one named person is on) and
  *     seven PUTs (watch party availability and low latency per server, a
  *     channel's transport pin, a channel's SFU region, declining a server's
  *     waitlist, a feature flag globally, a feature flag for one server,
@@ -390,6 +391,22 @@ const OPERATOR_ROUTES: {
     method: "PUT",
     path: "/operator/feedback-resolve",
     forward: (_url, origin) => `${origin}/api/admin/feedback/resolve`,
+  },
+  // Which app one named person is on (platform, app version, OS and browser
+  // family, last seen), for support. A read about a person, so one target
+  // parameter at a time is forwarded and nothing else. No page draws it yet:
+  // it is `GET /operator/user-client?handle=` behind the same Basic password.
+  {
+    method: "GET",
+    path: "/operator/user-client",
+    forward: (url, origin) => {
+      const upstream = new URL(`${origin}/api/admin/user-client`);
+      for (const name of ["userId", "handle", "tag"]) {
+        const value = url.searchParams.get(name);
+        if (value) upstream.searchParams.set(name, value);
+      }
+      return upstream.toString();
+    },
   },
   // Runtime feature flags ("interruptores"): the list with effective values,
   // overrides and the audit trail; a global decision; a per-server override.
