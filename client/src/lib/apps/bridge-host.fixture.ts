@@ -94,7 +94,7 @@ export class FakeTransport implements AppSessionTransport {
 }
 
 export class FakeTheme implements ThemeSource {
-  theme: Record<string, string> = { "--color-text": "#eee", "--pqp-color-scheme": "dark" };
+  theme: Record<string, string> = { "--color-text": "paper", "--pqp-color-scheme": "dark" };
   motion = false;
   listener: (() => void) | null = null;
   read() {
