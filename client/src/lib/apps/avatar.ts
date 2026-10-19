@@ -1,5 +1,5 @@
 import { APP_AVATAR_MAX_CHARS } from "@pqp/shared";
-import { readLimited } from "./limited-body";
+import { discardBody, readLimited } from "./limited-body";
 
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const FETCH_TIMEOUT_MS = 4000;
@@ -40,12 +40,33 @@ export function acceptableFinalUrl(finalUrl: string, requestedUrl: string): bool
 }
 
 /**
+ * Is this URL pqp's own avatar route, `/api/avatars/<user>`? That route is the
+ * only one whose redirect is followed: it answers 302 to the uploaded object in
+ * our own bucket, and the path names a user, never a destination, so where it
+ * sends the browser is the server's choice (`serveAvatarObject` in the API).
+ */
+export function isAvatarRoute(url: string): boolean {
+  try {
+    return /^\/api\/avatars\/[^/]+$/.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Fetches a user's avatar from the page and returns it as a data URL, so the
  * app never gets a link it could load or track. Anything that is not a small
  * png, jpeg, webp or gif (an SVG, a redirect to an error page, a 404, a
  * timeout, a body past the cap) is `null`: the app draws its own fallback. The
- * body is read with a byte limit, never buffered whole first. The result is at
- * most `APP_AVATAR_MAX_CHARS` characters, which is what the bridge allows.
+ * body is read with a byte limit, never buffered whole first, and a body that is
+ * refused is cancelled, not left open. The result is at most
+ * `APP_AVATAR_MAX_CHARS` characters, which is what the bridge allows.
+ *
+ * Redirects: a browser follows one before the page can look at it, so checking
+ * the final URL afterwards cannot stop the request. A URL somebody typed (any
+ * path on an allowed origin) is therefore fetched with `redirect: "error"` and
+ * cannot bounce the browser anywhere; only pqp's own avatar route
+ * (`isAvatarRoute`) follows its redirect, and the final URL is checked as well.
  */
 export async function fetchAvatarDataUrl(
   url: string,
@@ -53,16 +74,22 @@ export async function fetchAvatarDataUrl(
 ): Promise<string | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const followRedirect = isAvatarRoute(url);
   try {
     const response = await fetchImpl(url, {
       credentials: "omit",
       referrerPolicy: "no-referrer",
+      redirect: followRedirect ? "follow" : "error",
       signal: controller.signal,
     });
-    if (!response.ok) return null;
-    if (response.redirected && !acceptableFinalUrl(response.url, url)) return null;
+    const refuse = () => {
+      discardBody(response);
+      return null;
+    };
+    if (!response.ok) return refuse();
+    if (response.redirected && (!followRedirect || !acceptableFinalUrl(response.url, url))) return refuse();
     const type = (response.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-    if (!IMAGE_TYPES.has(type)) return null;
+    if (!IMAGE_TYPES.has(type)) return refuse();
     const bytes = await readLimited(response, MAX_AVATAR_BYTES);
     if (!bytes) return null;
     const dataUrl = `data:${type};base64,${toBase64(bytes)}`;
@@ -86,9 +113,11 @@ const CACHE_LIMIT = 300;
  * `allowedOrigins` is who an avatar URL may point at (the page itself and the
  * API). A user can set their avatar URL to anything, and the host must not
  * become a way to make somebody's browser call an address a stranger chose, so
- * a URL outside the list is `null` without a request. A redirect FROM an allowed
- * origin is followed (`/api/avatars/:id` answers 302 to the storage URL, which
- * is our own server's choice); what finally arrives must still be a small image.
+ * a URL outside the list is `null` without a request. Only the avatar route's
+ * redirect is followed (`/api/avatars/:id` answers 302 to the storage URL, which
+ * is our own server's choice); any other URL on an allowed origin may not
+ * redirect at all (`fetchAvatarDataUrl`). What finally arrives must still be a
+ * small image.
  */
 export class AvatarCache {
   private readonly cache = new Map<string, Promise<string | null>>();

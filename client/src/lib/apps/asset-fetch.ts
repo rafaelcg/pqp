@@ -1,4 +1,9 @@
-import { readLimited } from "./limited-body";
+import { discardBody, readLimited } from "./limited-body";
+
+/** How long the apps origin may take to start answering an asset request. */
+export const ASSET_HEADERS_TIMEOUT_MS = 15_000;
+/** How long an asset body may send nothing before the read is given up. */
+export const ASSET_IDLE_TIMEOUT_MS = 15_000;
 
 export interface AssetRef {
   name: string;
@@ -40,17 +45,32 @@ export async function fetchAsset(
     return { ok: false, reason: "origin" };
   }
   let body: Uint8Array | null;
+  // Bounded both ways: the answer must start within ASSET_HEADERS_TIMEOUT_MS and
+  // the body may not go quiet for longer than ASSET_IDLE_TIMEOUT_MS, so a stalled
+  // origin ends in `fetch` instead of an asset request that never answers. A big
+  // asset on a slow link that keeps moving is not cut off.
+  const controller = new AbortController();
+  const headersTimer = setTimeout(() => controller.abort(), ASSET_HEADERS_TIMEOUT_MS);
   try {
     const response = await fetchImpl(asset.url, {
       cache: "force-cache",
       credentials: "omit",
       redirect: "error",
       referrerPolicy: "no-referrer",
+      signal: controller.signal,
     });
-    if (!response.ok) return { ok: false, reason: "fetch" };
-    body = await readLimited(response, asset.bytes);
+    clearTimeout(headersTimer);
+    if (!response.ok) {
+      // an error page is not read, and its stream is let go at once
+      discardBody(response);
+      return { ok: false, reason: "fetch" };
+    }
+    body = await readLimited(response, asset.bytes, { idleMs: ASSET_IDLE_TIMEOUT_MS });
   } catch {
+    controller.abort();
     return { ok: false, reason: "fetch" };
+  } finally {
+    clearTimeout(headersTimer);
   }
   if (!body || body.length !== asset.bytes) return { ok: false, reason: "size" };
   const buffer = body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer;

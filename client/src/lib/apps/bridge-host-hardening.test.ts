@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { APP_AVATAR_MAX_CHARS, APP_PARTICIPANTS_AVATAR_BUDGET_CHARS } from "@pqp/shared";
 import { BridgeHost } from "./bridge-host";
 import { fetchAvatarDataUrl } from "./avatar";
-import { fetchAsset } from "./asset-fetch";
+import { ASSET_HEADERS_TIMEOUT_MS, ASSET_IDLE_TIMEOUT_MS, fetchAsset } from "./asset-fetch";
 import { readLimited } from "./limited-body";
 import {
   FakeTheme,
@@ -94,6 +94,52 @@ describe("avatars", () => {
       new Response(new Uint8Array(10), { headers: { "content-type": "image/png", "content-length": String(APP_AVATAR_MAX_CHARS * 2) } })) as typeof fetch;
     expect(await fetchAvatarDataUrl("https://pqp.example/a", declared)).toBeNull();
   });
+
+  it("follow a redirect only on pqp's own avatar route; any other URL may not redirect at all", async () => {
+    const seen: Array<RequestInit | undefined> = [];
+    const png = (async (_url: string, init?: RequestInit) => {
+      seen.push(init);
+      return new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } });
+    }) as unknown as typeof fetch;
+    await fetchAvatarDataUrl("https://api.pqp.example/api/avatars/00000000-0000-4000-8000-000000000001?v=ab12", png);
+    await fetchAvatarDataUrl("https://api.pqp.example/api/connections/steam/start?next=https://evil.example", png);
+    await fetchAvatarDataUrl("https://api.pqp.example/api/avatars/x/../../redirect", png);
+    expect(seen.map((init) => init?.redirect)).toEqual(["follow", "error", "error"]);
+
+    // and a response that was redirected anyway is refused when the URL was not the avatar route
+    const cancelled = vi.fn();
+    const bounced = (async () => {
+      const r = streamed([new Uint8Array(4)], cancelled, { "content-type": "image/png" });
+      Object.defineProperty(r, "redirected", { value: true });
+      Object.defineProperty(r, "url", { value: "https://bucket.example/x.png" });
+      return r;
+    }) as unknown as typeof fetch;
+    expect(await fetchAvatarDataUrl("https://api.pqp.example/somewhere", bounced)).toBeNull();
+    expect(cancelled).toHaveBeenCalled();
+  });
+
+  it("let go of the body of every response they refuse", async () => {
+    const cases: Array<{ status?: number; type: string; redirectedTo?: string }> = [
+      { status: 404, type: "image/png" },
+      { type: "image/svg+xml" },
+      { type: "image/png", redirectedTo: "http://192.168.0.2/x.png" },
+    ];
+    for (const c of cases) {
+      const cancelled = vi.fn();
+      const fetchImpl = (async () => {
+        const s = streamed([new Uint8Array(4)], cancelled, { "content-type": c.type });
+        const r = new Response(s.body, { status: c.status ?? 200, headers: { "content-type": c.type } });
+        if (c.redirectedTo) {
+          Object.defineProperty(r, "redirected", { value: true });
+          Object.defineProperty(r, "url", { value: c.redirectedTo });
+        }
+        return r;
+      }) as unknown as typeof fetch;
+      const url = "https://api.pqp.example/api/avatars/00000000-0000-4000-8000-000000000001";
+      expect(await fetchAvatarDataUrl(url, fetchImpl), JSON.stringify(c)).toBeNull();
+      expect(cancelled, JSON.stringify(c)).toHaveBeenCalled();
+    }
+  });
 });
 
 describe("a roster of many people", () => {
@@ -174,6 +220,61 @@ describe("assets", () => {
       )) as typeof fetch;
     expect(await fetchAsset(await ref(), "http://localhost:5175", long)).toEqual({ ok: false, reason: "size" });
     expect(cancelled).toHaveBeenCalled();
+  });
+
+  it("lets go of an error page's body instead of leaving its stream open", async () => {
+    const cancelled = vi.fn();
+    const failing = (async () => {
+      const r = streamed([new Uint8Array(10)], cancelled);
+      return new Response(r.body, { status: 503 });
+    }) as typeof fetch;
+    expect(await fetchAsset(await ref(), "http://localhost:5175", failing)).toEqual({ ok: false, reason: "fetch" });
+    expect(cancelled).toHaveBeenCalled();
+  });
+
+  it("gives up on a body that stops half way, and answers fetch", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancelled = vi.fn();
+      let init: RequestInit | undefined;
+      const stalls = (async (_url: string, i?: RequestInit) => {
+        init = i;
+        let sent = false;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              // two of the four declared bytes, then nothing ever again
+              if (!sent) controller.enqueue(new Uint8Array([10, 20]));
+              sent = true;
+              return new Promise(() => {});
+            },
+            cancel: cancelled,
+          }),
+        );
+      }) as unknown as typeof fetch;
+      const pending = fetchAsset(await ref(), "http://localhost:5175", stalls);
+      await vi.advanceTimersByTimeAsync(ASSET_IDLE_TIMEOUT_MS + 1);
+      expect(await pending).toEqual({ ok: false, reason: "fetch" });
+      expect(cancelled).toHaveBeenCalled();
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up on an origin that never starts answering", async () => {
+    vi.useFakeTimers();
+    try {
+      const never = ((_url: string, i?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          i?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        })) as unknown as typeof fetch;
+      const pending = fetchAsset(await ref(), "http://localhost:5175", never);
+      await vi.advanceTimersByTimeAsync(ASSET_HEADERS_TIMEOUT_MS + 1);
+      expect(await pending).toEqual({ ok: false, reason: "fetch" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fetches one asset once however many requests arrive while it runs", async () => {
