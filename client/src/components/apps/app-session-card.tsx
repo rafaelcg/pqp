@@ -167,7 +167,7 @@ function endedLine(
   return t(game ? "apps.card.endedGame" : "apps.card.endedOther", { count, duration });
 }
 
-function countText(
+export function countText(
   count: CardCount,
   t: (key: MessageKey, vars?: Record<string, string | number>) => string,
 ): string {
@@ -242,7 +242,7 @@ function CardHead({ model }: { model: CardModel }) {
   );
 }
 
-function Avatars({
+export function Avatars({
   people,
   more,
   ended,
