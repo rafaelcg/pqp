@@ -121,6 +121,34 @@
     };
     document.head.appendChild(script);
     tell({ type: "pqp-emulator-started" });
+    watchStartup();
+  }
+
+  /**
+   * Tells the page how startup went, from what the emulator draws: its own error
+   * text means the core or the game failed to load (the page then shows its own
+   * message), and its start button means core and game are both in and it is
+   * waiting for the player. Reads the emulator's elements only, never the file.
+   */
+  function watchStartup() {
+    var done = false;
+    function check() {
+      if (done) {
+        return;
+      }
+      if (document.querySelector(".ejs_error_text")) {
+        done = true;
+        observer.disconnect();
+        tell({ type: "pqp-emulator-error", reason: "load" });
+      } else if (document.querySelector(".ejs_start_button")) {
+        done = true;
+        observer.disconnect();
+        tell({ type: "pqp-emulator-initialized" });
+      }
+    }
+    var observer = new MutationObserver(check);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+    check();
   }
 
   window.addEventListener("message", function (event) {

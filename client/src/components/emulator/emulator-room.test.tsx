@@ -127,7 +127,7 @@ describe("the emulator room with the flag on", () => {
     await mount(true);
     expect(dialogRoot()).not.toBeNull();
     expect(dialogRoot()!.textContent).toContain("pqp does not provide games");
-    expect(dialogRoot()!.textContent).toContain("never uploaded");
+    expect(dialogRoot()!.textContent).toContain("never uploads it");
     // No game list of any kind, only the picker.
     expect(frame()).toBeNull();
     expect(fileInput()!.accept).toBe(".nes,.gb,.gbc,.gba");
@@ -228,6 +228,59 @@ describe("a frame that never answers, and a flag that stops answering", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("gives up on a frame that said ready but never finishes starting, and not on one that does", async () => {
+    vi.useFakeTimers();
+    try {
+      configAnswer.enabled = true;
+      await mount(true);
+      pickFile(new File([new Uint8Array(4)], "x.nes"));
+      frameReady();
+      act(() => {
+        vi.advanceTimersByTime(89_000);
+      });
+      expect(frame()).not.toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(frame()).toBeNull();
+      expect(document.querySelector('[role="alert"]')!.textContent).toContain("could not start");
+
+      // Again, this time the emulator reports it is up.
+      pickFile(new File([new Uint8Array(4)], "x.nes"));
+      frameReady();
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            data: { type: "pqp-emulator-initialized" },
+            origin: "null",
+            source: frame()!.contentWindow,
+          }),
+        );
+        vi.advanceTimersByTime(120_000);
+      });
+      expect(frame()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the load error when the frame reports the emulator failed", async () => {
+    configAnswer.enabled = true;
+    await mount(true);
+    pickFile(new File([new Uint8Array(4)], "x.gba"));
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: "pqp-emulator-error", reason: "load" },
+          origin: "null",
+          source: frame()!.contentWindow,
+        }),
+      );
+    });
+    expect(frame()).toBeNull();
+    expect(document.querySelector('[role="alert"]')!.textContent).toContain("could not start");
   });
 
   it("does not give up on a frame that did say ready", async () => {

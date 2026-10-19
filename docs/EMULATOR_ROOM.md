@@ -64,8 +64,22 @@ feature and needs its own review.
   the frame has no web storage at all. A test fails if the sandbox ever gains
   `allow-same-origin`.
 - A frame that never says it is ready (its script failed to load) is given 10
-  seconds, then the file is dropped and the room says the emulator could not
-  start. A failed read of the flag counts as off, like an old API.
+  seconds, and one that is ready but never finishes starting (core or game
+  failed to download) 90 seconds; the frame also reports the emulator's own
+  error text. Either way the file is dropped and the room says the emulator
+  could not start. A failed read of the flag counts as off, like an old API.
+- **A residual risk, stated plainly.** The policy blocks every request the page
+  could make (fetch, XHR, sockets, forms, images, fonts), and the sandbox keeps a
+  compromised emulator away from the app. It does not stop a document from
+  navigating itself: the one control for that (`navigate-to`) was removed from
+  browsers, and there is no supported replacement. So the guarantee "the file
+  cannot leave the browser" holds against pqp's own code and against ordinary
+  requests; it is not a proof against a hypothetical code-execution flaw in the
+  emulator triggered by a hostile file, which could navigate its own frame to
+  somewhere with the bytes of the very file the player chose from their own
+  disk. The asset that sandbox protects (the signed-in session, the app's data)
+  is the one that matters, and it is out of reach. Counts as a point for the
+  lawyer and for the privacy copy: do not promise more than this.
 - The files come from npm and are copied to `/emulator/ejs/` by the `pqp-emulator-room`
   plugin in `client/vite.config.ts` (served by middleware in dev, emitted as
   assets in a build). They are not precached by the service worker.

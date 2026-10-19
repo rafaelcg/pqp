@@ -35,6 +35,13 @@ const FRAME_ORIGIN = "null";
 /** How long a frame has to say it is ready before the room gives up on it. */
 const FRAME_READY_TIMEOUT_MS = 10_000;
 
+/**
+ * How long the emulator has, from opening the frame, to finish loading its core
+ * and the game (about a megabyte of core on a slow connection) before the room
+ * gives up on it.
+ */
+const FRAME_INIT_TIMEOUT_MS = 90_000;
+
 /** What the page tells the emulator's language to be; the rest stay English. */
 const FRAME_LANGUAGE: Record<Locale, string> = {
   en: "en-US",
@@ -80,6 +87,8 @@ function EmulatorRoomDialog({ onClose }: { onClose: () => void }) {
   localeRef.current = locale;
   // Whether the current frame has said it can take a file.
   const readyRef = useRef(false);
+  // Whether the emulator inside it has finished starting (core and game loaded).
+  const initializedRef = useRef(false);
 
   // This dialog's listener is installed when the dialog mounts, long before the
   // first file can be picked, so the frame (which only exists after a pick)
@@ -106,6 +115,8 @@ function EmulatorRoomDialog({ onClose }: { onClose: () => void }) {
         );
         // The frame has its own copy of the reference now.
         fileRef.current = null;
+      } else if (type === "pqp-emulator-initialized") {
+        initializedRef.current = true;
       } else if (type === "pqp-emulator-error") {
         fileRef.current = null;
         setPlaying(false);
@@ -119,22 +130,36 @@ function EmulatorRoomDialog({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  // A frame that never says "ready" (its script failed to load) must not leave
-  // the room blank forever holding the file: give it a bounded time, then drop
-  // the file and say the emulator could not start.
+  // Two watchdogs per frame, so the room can never sit blank holding the file:
+  // the frame must say "ready" soon (its script may have failed to load), and
+  // after the file is handed over it must say the emulator is up (its core or
+  // data may have failed to download). Either miss drops the file and says the
+  // emulator could not start.
   useEffect(() => {
     if (!playing) {
       return;
     }
     readyRef.current = false;
-    const timer = window.setTimeout(() => {
+    initializedRef.current = false;
+    const giveUp = () => {
+      fileRef.current = null;
+      setPlaying(false);
+      setProblem("load");
+    };
+    const readyTimer = window.setTimeout(() => {
       if (!readyRef.current) {
-        fileRef.current = null;
-        setPlaying(false);
-        setProblem("load");
+        giveUp();
       }
     }, FRAME_READY_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
+    const initTimer = window.setTimeout(() => {
+      if (!initializedRef.current) {
+        giveUp();
+      }
+    }, FRAME_INIT_TIMEOUT_MS);
+    return () => {
+      window.clearTimeout(readyTimer);
+      window.clearTimeout(initTimer);
+    };
   }, [playing, frameKey]);
 
   const pick = useCallback((file: File | undefined) => {

@@ -6384,7 +6384,7 @@
   "emulator.menu": "Sala de emulador",
   "emulator.title": "Sala de emulador",
   "emulator.intro": "Isso aqui é só um emulador. O pqp não fornece jogo nenhum. Traz um jogo que tu tem: escolhe o arquivo no teu computador e ele roda aqui mesmo.",
-  "emulator.privacy": "O arquivo fica no teu navegador. Ele nunca é enviado, nem pro pqp nem pra lugar nenhum, nem salvo, e some quando tu fechar essa janela.",
+  "emulator.privacy": "O arquivo fica no teu navegador. O pqp nunca envia nem salva ele, e ele some quando tu fechar essa janela.",
   "emulator.rights": "Abre só jogo que tu tem direito de jogar, tipo um que tu comprou ou um homebrew.",
   "emulator.systems": "Roda arquivos de NES, Game Boy, Game Boy Color e Game Boy Advance (.nes, .gb, .gbc, .gba).",
   "emulator.solo": "Por enquanto é só tu: não tem sala compartilhada.",
