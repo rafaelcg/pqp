@@ -177,6 +177,15 @@ export async function startAppSession(
        SELECT $1, $2, a.id, a.current_version, $3, $3
          FROM apps a
         WHERE a.id = $4 AND a.status = 'live' AND a.current_version IS NOT NULL
+          -- The gates are asked again INSIDE the write, not only before it: an
+          -- operator or owner switch, or a community lock, that moved while the
+          -- checks above ran stops this insert.
+          AND a.global_enabled
+          AND EXISTS (SELECT 1 FROM server_apps sa
+                       WHERE sa.server_id = $1 AND sa.app_id = a.id
+                         AND sa.operator_enabled IS TRUE AND sa.owner_enabled IS NOT FALSE)
+          AND (a.community_unlocked
+               OR NOT COALESCE((SELECT is_community FROM servers WHERE id = $1), FALSE))
        RETURNING id, app_version, started_at`,
       [serverId, channelId, user.id, appId],
     );
@@ -200,6 +209,12 @@ export async function startAppSession(
       sessionId,
       messageId,
     ]);
+    // The runtime flag last, in memory, as close to the commit as it gets: a
+    // server switched off while this ran gets nothing.
+    if (!isEnabled("apps", { serverId })) {
+      await client.query("ROLLBACK");
+      throw notFoundChannel();
+    }
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
@@ -218,13 +233,21 @@ export async function startAppSession(
   // After the commit, and each leg on its own: a failure to tell people is
   // logged and never undoes (or re-answers) a session that exists.
   invalidateLatestMessages(channelId);
-  try {
-    const hydrated = await getHydratedMessage(messageId);
-    if (hydrated) {
-      await announceServiceMessage(mapMessage(hydrated));
+  // The card's broadcast is tried three times: a read that failed once (a pool
+  // blip) must not leave the channel without the card until somebody reloads.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const hydrated = await getHydratedMessage(messageId);
+      if (hydrated) {
+        await announceServiceMessage(mapMessage(hydrated));
+      }
+      break;
+    } catch (error) {
+      logEvent("apps.timelineAnnounceFailed", { sessionId, attempt, error: String(error) });
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+      }
     }
-  } catch (error) {
-    logEvent("apps.timelineAnnounceFailed", { sessionId, error: String(error) });
   }
   void announceChannelApp(channelId, { immediate: true }).catch(() => {});
 

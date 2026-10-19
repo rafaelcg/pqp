@@ -189,12 +189,24 @@ async function deliverEndedLocally(frame: AppEnded): Promise<void> {
   if (!hasAuthenticatedSockets()) {
     return;
   }
-  const audience = await getChannelAudience(frame.channelId).catch(() => null);
+  // The audience is asked for up to three times: a lookup that failed once must
+  // not leave every viewer's card live. Seated sockets already have the frame.
+  let audience: Awaited<ReturnType<typeof getChannelAudience>> = null;
+  for (let attempt = 0; attempt < 3 && !audience; attempt += 1) {
+    audience = await getChannelAudience(frame.channelId).catch((error: unknown) => {
+      logEvent("apps.endedAudienceFailed", { sessionId: frame.sessionId, attempt, error: String(error) });
+      return null;
+    });
+    if (!audience && attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+    }
+  }
   if (!audience) {
     return;
   }
+  const viewers = audience;
   forEachAuthenticatedSocket((socket, user) => {
-    if (!seated.has(socket) && audience.has(user.id)) {
+    if (!seated.has(socket) && viewers.has(user.id)) {
       sendEncoded(socket, payload);
     }
   });

@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { appSessionSummarySchema, channelAppSchema, appEndedSchema } from "@pqp/shared";
 
@@ -523,6 +523,17 @@ describeDb("app sessions: start and end", () => {
       const { getHydratedMessage, mapMessage } = await import("../services/messages.js");
       const again = await getHydratedMessage(broadcast.id);
       expect(mapMessage(again!).appSession).toMatchObject({ id: started.body.id });
+    });
+
+    it("a failed session lookup degrades the cards and never fails the read of the page", async () => {
+      const { listAppSessionsForMessages } = await import("./message-sessions.js");
+      const spy = vi.spyOn(db.getPool(), "query").mockRejectedValueOnce(new Error("pool blip"));
+      try {
+        const out = await listAppSessionsForMessages([{ id: "x", system_kind: "app_session" }]);
+        expect(out.size).toBe(0);
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it("never appears on an ordinary message, and costs a page with no card no extra read", async () => {
