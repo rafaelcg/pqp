@@ -20,6 +20,7 @@ function app(over: Partial<AppConfigEntry> & { id?: string } = {}): AppConfigEnt
     description: "description",
     channelTypes: ["text", "voice"],
     players: { min: 1, max: 4, spectators: true, maxSpectators: 50 },
+    requires: { start: "USE_APPS", join: "VIEW_CHANNEL" },
     capabilities: {
       identity: "display",
       share: "none",
@@ -93,6 +94,23 @@ describe("why a tile is dimmed", () => {
   });
 });
 
+describe("an app that asks MANAGE_CHANNELS to start", () => {
+  const strict = app({ requires: { start: "MANAGE_CHANNELS", join: "VIEW_CHANNEL" } });
+
+  it("is dimmed with its reason for somebody who cannot manage channels, usable for somebody who can", () => {
+    expect(appTileReason(strict, "text", false)).toBe("needs-manage");
+    expect(appTileReason(strict, "text", true)).toBeNull();
+    expect(appTileReason(strict, "text")).toBeNull();
+    // An ordinary app never asks.
+    expect(appTileReason(app(), "text", false)).toBeNull();
+  });
+
+  it("loses to the channel type and to the server's gate, which a person cannot fix", () => {
+    expect(appTileReason({ ...strict, channelTypes: ["voice"] }, "text", false)).toBe("voice-only");
+    expect(appTileReason({ ...strict, available: false, reason: "owner-off" }, "text", false)).toBe("off-here");
+  });
+});
+
 describe("the tiles", () => {
   const base = {
     apps: [app(), app({ id: "pqp-voz", channelTypes: ["voice"] })],
@@ -100,6 +118,7 @@ describe("the tiles", () => {
     locale: "pt-BR",
     inCallHere: false,
     watchPartyAvailable: false,
+    canManageChannels: true,
   };
 
   it("lists the apps, then Música as a shortcut that only works in a voice call", () => {
@@ -138,7 +157,7 @@ describe("what starts selected", () => {
       app({ id: "b-ok" }),
       app({ id: "c-ok" }),
     ];
-    const input = { apps, channelType: "text" as const, locale: "pt-BR", inCallHere: false, watchPartyAvailable: false };
+    const input = { apps, channelType: "text" as const, locale: "pt-BR", inCallHere: false, watchPartyAvailable: false, canManageChannels: true };
     expect(initialSelection(buildLauncherTiles(input))).toBe("b-ok");
     expect(initialSelection(buildLauncherTiles({ ...input, live: live("c-ok") }))).toBe("c-ok");
     const allOff = buildLauncherTiles({

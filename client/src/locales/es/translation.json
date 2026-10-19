@@ -6089,6 +6089,7 @@
   "apps.launcher.reason.community": "No disponible en comunidades",
   "apps.launcher.reason.unavailable": "No disponible ahora",
   "apps.launcher.reason.joinCall": "Entra a la llamada primero",
+  "apps.launcher.reason.needsManage": "Solo quien gestiona canales puede empezarla",
   "apps.launcher.factPlayersWatch": "{range}, más gente mirando",
   "apps.launcher.where.both": "Texto y voz",
   "apps.launcher.where.text": "Solo texto",

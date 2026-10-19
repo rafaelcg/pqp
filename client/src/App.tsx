@@ -12924,6 +12924,10 @@ function MainAppContent({
                     perms.serverBits === 0n ||
                     perms.can(Permission.USE_APPS, selectedChannel.id)
                   }
+                  canManageChannels={
+                    perms.serverBits === 0n ||
+                    perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id)
+                  }
                   canManageServer={canManageServer}
                   people={messageAuthors}
                   buttonClassName={buttonClassName}

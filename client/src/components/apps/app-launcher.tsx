@@ -85,6 +85,8 @@ export interface AppLauncherProps {
   viewerId: string | null;
   /** Holds USE_APPS in this channel. */
   canStart: boolean;
+  /** Holds MANAGE_CHANNELS in this channel (an app's `requires.start` may ask for it). */
+  canManageChannels?: boolean;
   /** Holds MANAGE_SERVER: the one person the empty panel is for. */
   canManageServer: boolean;
   builtIns?: AppLauncherBuiltIns;
@@ -114,6 +116,7 @@ export function AppLauncher({
   channelType,
   viewerId,
   canStart,
+  canManageChannels = false,
   canManageServer,
   builtIns,
   people,
@@ -187,6 +190,7 @@ export function AppLauncher({
           channelType={channelType}
           viewerId={viewerId}
           canStart={canStart}
+          canManageChannels={canManageChannels}
           apps={config.apps}
           builtIns={builtIns}
           people={people}
@@ -215,6 +219,7 @@ interface PanelProps {
   channelType: LauncherChannelType;
   viewerId: string | null;
   canStart: boolean;
+  canManageChannels: boolean;
   apps: ReturnType<typeof useAppsConfig>["apps"];
   builtIns?: AppLauncherBuiltIns;
   people?: AppLauncherProps["people"];
@@ -233,6 +238,7 @@ function LauncherPanel(props: PanelProps) {
     channelType,
     viewerId,
     canStart,
+    canManageChannels,
     apps,
     builtIns,
     people,
@@ -257,8 +263,9 @@ function LauncherPanel(props: PanelProps) {
         live,
         inCallHere: builtIns?.music?.inCallHere ?? false,
         watchPartyAvailable: Boolean(builtIns?.watchParty),
+        canManageChannels,
       }).filter((tile) => tile.kind !== "builtin" || tile.id !== "music" || builtIns?.music),
-    [apps, channelType, locale, live, builtIns],
+    [apps, channelType, locale, live, builtIns, canManageChannels],
   );
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     initialSelection(tiles),
@@ -625,6 +632,8 @@ function reasonText(
       return t("apps.launcher.reason.community");
     case "join-call":
       return t("apps.launcher.reason.joinCall");
+    case "needs-manage":
+      return t("apps.launcher.reason.needsManage");
     case "unavailable":
       return t("apps.launcher.reason.unavailable");
     default:

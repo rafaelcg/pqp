@@ -6020,6 +6020,7 @@
   "apps.launcher.reason.community": "Not available in communities",
   "apps.launcher.reason.unavailable": "Not available right now",
   "apps.launcher.reason.joinCall": "Join the call first",
+  "apps.launcher.reason.needsManage": "Only people who manage channels can start it",
   "apps.launcher.factPlayersWatch": "{range}, plus people watching",
   "apps.launcher.where.both": "Text and voice",
   "apps.launcher.where.text": "Text only",

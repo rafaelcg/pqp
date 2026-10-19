@@ -16,7 +16,8 @@ export type TileReason =
   | "off-here"
   | "community"
   | "unavailable"
-  | "join-call";
+  | "join-call"
+  | "needs-manage";
 
 export interface AppTile {
   kind: "app";
@@ -58,6 +59,8 @@ export interface LauncherInput {
   inCallHere: boolean;
   /** Watch party: the server has the channels on, and there is somewhere to go. */
   watchPartyAvailable: boolean;
+  /** Holds MANAGE_CHANNELS here: some manifests ask it of whoever starts them. */
+  canManageChannels: boolean;
 }
 
 export function sizeOf(app: AppConfigEntry): TileSize {
@@ -76,14 +79,20 @@ export function sizeOf(app: AppConfigEntry): TileSize {
 export function appTileReason(
   app: AppConfigEntry,
   channelType: LauncherChannelType,
+  canManageChannels = true,
 ): TileReason | null {
   if (!app.channelTypes.includes(channelType)) {
     return channelType === "text" ? "voice-only" : "text-only";
   }
-  if (app.available) {
-    return null;
+  if (!app.available) {
+    return reasonOf(app.reason);
   }
-  return reasonOf(app.reason);
+  // `requires.start`: USE_APPS always (the panel says so for the whole list),
+  // and MANAGE_CHANNELS on top when the manifest asks it.
+  if (app.requires.start === "MANAGE_CHANNELS" && !canManageChannels) {
+    return "needs-manage";
+  }
+  return null;
 }
 
 function reasonOf(reason: AppUnavailableReason | null): TileReason {
@@ -106,7 +115,7 @@ export function buildLauncherTiles(input: LauncherInput): LauncherTile[] {
     name: appText(app, input.locale, app.name),
     icon: app.icon,
     size: sizeOf(app),
-    reason: appTileReason(app, input.channelType),
+    reason: appTileReason(app, input.channelType, input.canManageChannels),
     running: input.live?.appId === app.id,
   }));
   tiles.push({

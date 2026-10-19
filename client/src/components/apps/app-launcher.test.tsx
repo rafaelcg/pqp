@@ -46,6 +46,7 @@ function entry(over: Partial<AppConfigEntry> = {}): AppConfigEntry {
     notice: "notice",
     channelTypes: ["text", "voice"],
     players: { min: 1, max: 4, spectators: true, maxSpectators: 50 },
+    requires: { start: "USE_APPS", join: "VIEW_CHANNEL" },
     capabilities: {
       identity: "display",
       share: "pane",
@@ -367,6 +368,31 @@ describe("estado 3: sem permissao", () => {
     await flush();
     expect(panel()!.textContent).toContain("You cannot start apps in this channel.");
     expect(panel()!.querySelector('[role="alert"]')).toBeNull();
+  });
+});
+
+describe("an app that asks MANAGE_CHANNELS to start (requires.start)", () => {
+  const strict = () => entry({ requires: { start: "MANAGE_CHANNELS", join: "VIEW_CHANNEL" } });
+
+  it("is dimmed with its reason, and Começar sends nothing, for somebody who cannot manage channels", async () => {
+    await mount([strict()], { canManageChannels: false });
+    await openPanel();
+    const tile = tiles()[0]!;
+    expect(tile.getAttribute("aria-disabled")).toBe("true");
+    expect(tile.textContent).toContain("Only people who manage channels can start it");
+    expect(footerButton().getAttribute("aria-disabled")).toBe("true");
+    await act(async () => footerButton().click());
+    expect(api.startAppSessionRequest).not.toHaveBeenCalled();
+  });
+
+  it("starts as usual for somebody who can", async () => {
+    api.startAppSessionRequest.mockResolvedValueOnce(summary());
+    await mount([strict()], { canManageChannels: true });
+    await openPanel();
+    expect(tiles()[0]!.getAttribute("aria-disabled")).toBeNull();
+    await act(async () => footerButton().click());
+    await flush();
+    expect(api.startAppSessionRequest).toHaveBeenCalledTimes(1);
   });
 });
 
