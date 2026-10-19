@@ -17,3 +17,25 @@ allowBuilds:
   # (win/mac/linux). Its "install" script only verifies the right one is
   # present, never compiles. See electron/README.md "Global push-to-talk".
   uiohook-napi: true
+
+# `@emulatorjs/emulatorjs` lists `@emulatorjs/cores` as an optional dependency,
+# which pulls EVERY core, and several of those (Snes9x, Genesis Plus GX,
+# PicoDrive) are licensed non-commercial-only, which AGPL-3.0 cannot carry. The
+# emulator room names its two cores one by one in client/package.json instead.
+# See docs/EMULATOR_ROOM.md.
+ignoredOptionalDependencies:
+  - "@emulatorjs/cores"
+
+# The same package also declares its own build tooling (a minifier, a static
+# file server, a socket.io server for its demo netplay) as hard dependencies.
+# The client only copies its prebuilt `data/` folder, so none of that is
+# installed; "-" removes the dependency edge.
+overrides:
+  "@emulatorjs/emulatorjs>@node-minify/clean-css": "-"
+  "@emulatorjs/emulatorjs>@node-minify/core": "-"
+  "@emulatorjs/emulatorjs>@node-minify/terser": "-"
+  "@emulatorjs/emulatorjs>http-server": "-"
+  "@emulatorjs/emulatorjs>node-7z": "-"
+  "@emulatorjs/emulatorjs>node-fetch": "-"
+  "@emulatorjs/emulatorjs>nipplejs": "-"
+  "@emulatorjs/emulatorjs>socket.io": "-"

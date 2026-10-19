@@ -84,6 +84,9 @@ export const NAVIGATE_DENYLIST: RegExp[] = [
   // Standalone diagnostic pages in client/public (share-*.html).
   /^\/share-diagnostic/,
   /^\/share-audio-tone/,
+  // The emulator room's page and files (client/public/emulator, and the
+  // `/emulator/ejs/` tree the build copies from npm): files, not routes.
+  /^\/emulator\//,
 ];
 
 export interface SwBuildScriptOptions {

@@ -6,6 +6,7 @@ import {
   CheckCheck,
   ChevronDown,
   CirclePlus,
+  Gamepad2,
   Copy,
   Eraser,
   ExternalLink,
@@ -522,6 +523,11 @@ interface ChannelListProps {
   /** "Postar story" in the server menu, for someone who may post here. */
   onPostStory?: () => void;
   /**
+   * "Sala de emulador" in the server menu, passed only while the
+   * `emulator_room` flag is on for this server. Absent: no entry.
+   */
+  onOpenEmulator?: () => void;
+  /**
    * Current server roster, so a seated person with a claimed handle can get
    * Ver perfil / pqp.gg/@handle on right-click. Absent handle: no link.
    */
@@ -634,6 +640,7 @@ export const ChannelList = memo(function ChannelList({
   onSelectCommunityHome,
   storiesSlot = null,
   onPostStory,
+  onOpenEmulator,
   members = [],
   iconsOnly = false,
   onExpand,
@@ -2193,6 +2200,16 @@ export const ChannelList = memo(function ChannelList({
                 label: t("stories.strip.post"),
                 icon: CirclePlus,
                 onSelect: onPostStory,
+              },
+            ]
+          : []),
+        ...(onOpenEmulator
+          ? [
+              {
+                id: "emulator-room",
+                label: t("emulator.menu"),
+                icon: Gamepad2,
+                onSelect: onOpenEmulator,
               },
             ]
           : []),

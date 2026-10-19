@@ -54,6 +54,9 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@emulatorjs/core-fceumm": "4.2.3",
+    "@emulatorjs/core-mgba": "4.2.3",
+    "@emulatorjs/emulatorjs": "4.2.3",
     "@grafana/faro-rollup-plugin": "0.12.0",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.0.0",

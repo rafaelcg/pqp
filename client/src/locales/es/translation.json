@@ -6449,5 +6449,19 @@
   "importDiscordMerge.error.forbidden": "Necesitas el permiso Gestionar servidor para importar una estructura aquí.",
   "importDiscordMerge.error.gone": "Esta comunidad no puede importar una estructura ahora.",
   "serverSettings.audit.action.server.discord_import_merge": "añadió una estructura de Discord al servidor",
-  "importDiscordMerge.error.openFailed": "Añadido, pero no se pudieron abrir los canales nuevos. Elige uno de la lista."
+  "importDiscordMerge.error.openFailed": "Añadido, pero no se pudieron abrir los canales nuevos. Elige uno de la lista.",
+  "emulator.menu": "Sala de emulador",
+  "emulator.title": "Sala de emulador",
+  "emulator.intro": "Esto es solo un emulador. pqp no ofrece juegos. Trae un juego que tengas: elige el archivo de tu computadora y se juega aquí mismo.",
+  "emulator.privacy": "El archivo se queda en tu navegador. pqp nunca lo sube, lo envía ni lo guarda, y desaparece al cerrar esta ventana.",
+  "emulator.rights": "Abre solo juegos que tengas derecho a jugar, como uno que compraste o un homebrew.",
+  "emulator.systems": "Funciona con archivos de NES, Game Boy, Game Boy Color y Game Boy Advance (.nes, .gb, .gbc, .gba).",
+  "emulator.solo": "Por ahora juegas solo tú: no hay salas compartidas.",
+  "emulator.choose": "Elegir un archivo de juego",
+  "emulator.chooseAnother": "Elegir otro archivo",
+  "emulator.close": "Cerrar",
+  "emulator.frameTitle": "Emulador",
+  "emulator.problem.unsupported": "No se puede abrir ese archivo. Elige un .nes, .gb, .gbc o .gba.",
+  "emulator.problem.tooBig": "Ese archivo es demasiado grande para estas consolas.",
+  "emulator.problem.load": "El emulador no pudo iniciar. Inténtalo de nuevo."
 }
