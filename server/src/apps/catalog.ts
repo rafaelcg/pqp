@@ -373,13 +373,26 @@ async function mergeEntry(
        ON CONFLICT (id) DO NOTHING`,
       [manifest.id, manifest.publisher],
     );
-    known.apps.set(manifest.id, manifest.publisher);
     if (created.rowCount) {
+      known.apps.set(manifest.id, manifest.publisher);
       result.appsInserted += 1;
       await audit(client, manifest.id, null, {
         status: "draft",
         publisher: manifest.publisher,
       });
+    } else {
+      // The id appeared after the known state was read: whoever owns it is
+      // whoever inserted it, and an entry under another publisher is refused.
+      const owner = await client.query<{ publisher_id: string }>(
+        `SELECT publisher_id FROM apps WHERE id = $1`,
+        [manifest.id],
+      );
+      const actual = owner.rows[0]?.publisher_id;
+      if (actual !== undefined && actual !== manifest.publisher) {
+        refuse(result, { ...ref, reason: "publisher-mismatch" });
+        return;
+      }
+      known.apps.set(manifest.id, manifest.publisher);
     }
   }
 
