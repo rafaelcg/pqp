@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "12 October 2026",
+  updated: "18 October 2026",
   sections: [
     {
       id: "intro",
@@ -239,6 +239,20 @@ export const privacyEn: LegalDocument = {
             way to us. We never store your IP address or your
             city for this. It is used only to choose where a server&apos;s voice
             calls run: see &quot;Voice calls&quot;.
+          </p>
+          <p>
+            <strong>Which app you use.</strong> When the app connects, we read
+            your browser&apos;s user agent and keep only a short summary on your
+            account: whether you are on the web, the desktop app, the iPhone app
+            or the Android app, the version of our app when it tells us, your
+            operating system family (for example Windows or macOS) and your
+            browser family (for example Chrome or Firefox), and when we last
+            saw it. We do not keep the user agent itself, your IP address, your
+            device model or version numbers of your browser or system. Only
+            this instance&apos;s operators can read it, to work out why a call
+            or a screen share is not working for you. It is not shown to other
+            members or on your profile. We delete it 90 days after we last saw
+            that app, and when you delete your account.
           </p>
           <p>
             <strong>Push notifications.</strong> If you turn on push
