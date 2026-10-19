@@ -902,6 +902,53 @@ export const deleteServerImage = (serverId: string, kind: ServerImageKind) =>
 // The server-icon dance again: mint, PUT straight to storage, claim. Reading
 // needs membership; every write needs Manage Server.
 
+// ---------------------------------------------------------------- apps
+// The apps platform's owner side (docs/APPS.md). `GET /api/apps/config` answers
+// a quiet `{ enabled: false }` while the `apps` flag is off for the server, and
+// the owner's two routes are a 404 then, so the settings section is drawn only
+// when the config says enabled. The write takes `false` or `null` and nothing
+// else: an owner switches off what the operator released, never on.
+
+/** One app the operator released for a server, with the owner's own switch. */
+export interface ServerAppDto {
+  id: string;
+  icon: string | null;
+  category: string | null;
+  /** The name and description by language (`pt-BR`, `en`, `es`). */
+  names: Record<string, string>;
+  descriptions: Record<string, string>;
+  /** The owner has not switched it off. */
+  enabled: boolean;
+  /** The operator's master switch is off for everybody. */
+  paused: boolean;
+  liveSessions: number;
+}
+
+export interface ServerAppWriteResponse {
+  appId: string;
+  enabled: boolean;
+  changed: boolean;
+  sessionsEnded: number;
+}
+
+export const fetchAppsEnabled = (serverId: string) =>
+  apiFetch<{ enabled: boolean }>(
+    `/api/apps/config?serverId=${encodeURIComponent(serverId)}`,
+  );
+
+export const fetchServerApps = (serverId: string) =>
+  apiFetch<{ apps: ServerAppDto[] }>(`/api/servers/${serverId}/apps`);
+
+export const setServerAppOwnerSwitch = (
+  serverId: string,
+  appId: string,
+  ownerEnabled: false | null,
+) =>
+  apiFetch<ServerAppWriteResponse>(`/api/servers/${serverId}/apps`, {
+    method: "PUT",
+    body: JSON.stringify({ appId, ownerEnabled }),
+  });
+
 export const fetchServerEmoji = (serverId: string) =>
   apiFetch<ServerEmojiList>(`/api/servers/${serverId}/emoji`);
 

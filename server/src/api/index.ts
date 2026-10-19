@@ -370,6 +370,7 @@ import {
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
 import { registerAppRoutes } from "./app-routes.js";
+import { registerAppOwnerRoutes } from "./app-owner-routes.js";
 import { Created, HttpErrorWithDetail } from "../lib/route-results.js";
 import {
   ADMIN_APP_REVIEW_PATH,
@@ -1674,6 +1675,8 @@ const router = createRouter();
 
 // The apps platform's routes (`app-routes.ts`), behind the `apps` flag.
 registerAppRoutes(router);
+// The owner's switches for the apps the operator released (`app-owner-routes.ts`).
+registerAppOwnerRoutes(router);
 
 /**
  * The two account-lifecycle routes a character must not reach.
