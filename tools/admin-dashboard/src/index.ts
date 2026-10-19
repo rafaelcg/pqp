@@ -16,7 +16,9 @@
  *     `/occupancy` is `${API_ORIGIN}/api/admin/voice-occupancy` with the same
  *     token and only the `days` and `day` parameters forwarded;
  *     `/activity` is `${API_ORIGIN}/api/admin/user-activity` the same way
- *     (`days`, `weeks`), plus the operator's `MONTHLY_COST_USD`; `/health`
+ *     (`days`, `weeks`), plus the operator's `MONTHLY_COST_USD`; `/bots` is
+ *     `${API_ORIGIN}/api/admin/bots` (server bots: counts and money, no
+ *     query forwarded); `/health`
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
  *
@@ -555,6 +557,17 @@ export default {
       return json(200, {
         ...report,
         operatingCost: { monthlyUsd: parseMonthlyCost(env.MONTHLY_COST_USD) },
+      });
+    }
+
+    // Server bots (`/api/admin/bots`), fetched when "bots · beta" opens.
+    // Counts and money, no query forwarded: the window is fixed on the API.
+    if (path === "/bots") {
+      if (!origin || !env.ADMIN_METRICS_TOKEN) {
+        return json(503, { error: "bots not configured" });
+      }
+      return proxyJson(`${origin}/api/admin/bots`, {
+        Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}`,
       });
     }
 

@@ -117,11 +117,12 @@ async function asUser<T = Record<string, unknown>>(
 }
 
 describe("matchAdminMachineRoute", () => {
-  it("is exactly the seventeen routes, and account deletion is not one of them", () => {
+  it("is exactly the twenty-three routes, and account deletion is not one of them", () => {
     const reachable = [
       ["GET", "/api/admin/metrics"],
       ["GET", "/api/admin/voice-occupancy"],
       ["GET", "/api/admin/user-activity"],
+      ["GET", "/api/admin/bots"],
       ["GET", "/api/admin/user-client"],
       ["GET", "/api/admin/feedback"],
       ["PUT", "/api/admin/feedback/resolve"],
@@ -136,6 +137,11 @@ describe("matchAdminMachineRoute", () => {
       ["PUT", "/api/admin/flags"],
       ["PUT", "/api/admin/flag-overrides"],
       ["POST", "/api/admin/channel-layout"],
+      ["GET", "/api/admin/apps"],
+      ["PUT", "/api/admin/apps"],
+      ["PUT", "/api/admin/app-review"],
+      ["GET", "/api/admin/app-servers"],
+      ["PUT", "/api/admin/server-apps"],
     ] as const;
     for (const [method, path] of reachable) {
       expect(matchAdminMachineRoute(method, path)).not.toBeNull();
@@ -155,6 +161,8 @@ describe("matchAdminMachineRoute", () => {
       ["DELETE", "/api/admin/server-live-hls"],
       ["GET", "/api/admin/server-live-hls"],
       ["PUT", "/api/admin/metrics"],
+      ["PUT", "/api/admin/bots"],
+      ["GET", "/api/admin/bots/"],
       ["GET", "/api/admin/servers/"],
       ["GET", "/api/servers"],
       ["POST", "/api/admin/watch-party-waitlist"],
@@ -718,6 +726,28 @@ describeDb("the operator's two levers", () => {
       // which is how the two are told apart from the outside.
       const { status } = await asMachine("GET", "/api/admin/servers");
       expect(status).toBe(404);
+    });
+  });
+
+  describe("the bots read", () => {
+    it("answers the machine token and a moderator, and nobody else", async () => {
+      const { resetBotsAdminReportCache } = await import("../services/bot-admin.js");
+      resetBotsAdminReportCache();
+      const machine = await asMachine<{
+        adoption: { bots: number };
+        usage: { days: unknown[] };
+      }>("GET", "/api/admin/bots");
+      expect(machine.status).toBe(200);
+      expect(machine.body.adoption.bots).toBe(0);
+      expect(machine.body.usage.days).toHaveLength(31);
+
+      const session = await asUser(operator, "GET", "/api/admin/bots");
+      expect(session.status).toBe(200);
+
+      expect((await asUser(ana, "GET", "/api/admin/bots")).status).toBe(404);
+      expect((await asMachine("GET", "/api/admin/bots", undefined, WRONG_TOKEN)).status).toBe(404);
+      // A read, not a lever: the token cannot write to it.
+      expect((await asMachine("PUT", "/api/admin/bots", {})).status).toBe(401);
     });
   });
 

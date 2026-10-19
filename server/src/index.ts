@@ -86,6 +86,7 @@ import { clientPlatforms, noteSocketClient } from "./services/client-platforms.j
 import { userStats } from "./services/user-stats.js";
 import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js";
 import { startFeatureFlags } from "./lib/flags.js";
+import { startAppCatalogLoad } from "./apps/catalog.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
   READY_PATH,
@@ -756,6 +757,12 @@ async function main() {
   // lands during boot is already a reload). A failed load is not fatal: the
   // environment answers until a later read gets through.
   await startFeatureFlags();
+
+  // The apps catalog (`apps/catalog.ts`): first-party apps merged INSERT-ONLY
+  // into `apps` / `app_versions`. Never fatal: a load that fails (the database
+  // was down) is retried in the background with a bounded backoff, and until
+  // then the platform has the apps it already had.
+  await startAppCatalogLoad();
 
   // Live HLS: a restart does not stop the media box, so before anything else
   // this process ADOPTS the egresses still running for sessions it owns (a

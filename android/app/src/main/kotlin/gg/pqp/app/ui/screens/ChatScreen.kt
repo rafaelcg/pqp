@@ -571,6 +571,9 @@ fun ChatScreen(
     val firstUnreadId = remember(state.messages, unreadSince, me?.id) {
         gg.pqp.app.forum.ForumLanding.firstUnread(state.messages, unreadSince, me?.id)?.id
     }
+    // Who is still a member, for the "removido" mark on a bot's messages: one
+    // set per roster, so each message is a lookup and not a scan.
+    val memberIds = remember(state.members) { state.members.mapTo(HashSet()) { it.id } }
     val unreadCount = remember(state.messages, unreadSince, me?.id) {
         gg.pqp.app.forum.ForumLanding.unreadCount(state.messages, unreadSince, me?.id)
     }
@@ -673,6 +676,8 @@ fun ChatScreen(
                     onExpired = model::clearNudgeRefusal,
                 )
                 TypingStrip(state.typing)
+                gg.pqp.app.bots.ui.BotActivityStrip(state.botWork.values)
+                gg.pqp.app.bots.ui.BotNoticeStrip(state.botNotice, onDismiss = model::dismissBotNotice)
                 // A locked post, for somebody who may not reply: the reason in
                 // place of the box, never a box that refuses on send.
                 val replacement = extras?.composerReplacement
@@ -888,6 +893,13 @@ fun ChatScreen(
                                         api = session.api,
                                         badge = extras?.authorBadge?.invoke(message),
                                         highlighted = message.id == extras?.highlightedMessageId,
+                                        serverBot = gg.pqp.app.bots.ServerBots.isServerBot(message),
+                                        // "removido" only once the member list has
+                                        // actually loaded: an empty list is not a
+                                        // roster, and would mark every bot gone.
+                                        botGone = state.membersLoaded &&
+                                            gg.pqp.app.bots.ServerBots.isServerBot(message) &&
+                                            message.authorId !in memberIds,
                                         flash = message.id == flashId,
                                     )
                                     if (message.id == extras?.belowMessageId) {
@@ -1297,6 +1309,10 @@ private fun MessageRow(
     badge: String? = null,
     /** The success edge: the reply a forum post marked as its answer. */
     highlighted: Boolean = false,
+    /** Written by a server bot: BOT and BETA ride beside the name. */
+    serverBot: Boolean = false,
+    /** A server bot that is no longer a member: "removido" in place of BETA. */
+    botGone: Boolean = false,
     /** A jump link just landed here: a wash of the signal colour that fades out. */
     flash: Boolean = false,
 ) {
@@ -1366,6 +1382,10 @@ private fun MessageRow(
                         text = message.authorName,
                         style = MaterialTheme.typography.titleSmall,
                     )
+                    if (serverBot) {
+                        Spacer(Modifier.width(Spacing.xs + 2.dp))
+                        gg.pqp.app.bots.ui.ServerBotTags(gone = botGone)
+                    }
                     if (badge != null) {
                         Spacer(Modifier.width(Spacing.xs + 2.dp))
                         Text(

@@ -135,6 +135,15 @@ vi.mock("./ws/chat.js", () => ({ notifyChannelsUpdate: vi.fn(async () => {}) }))
 vi.mock("./services/server-emoji-scan.js", () => ({
   sweepQuarantinedServerEmoji: vi.fn(async () => 0),
 }));
+// `bot-foundations.test.ts` pins what the bot tables hold; here only the
+// cadence of the per-person prune.
+vi.mock("./services/bot-reminders.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./services/bot-reminders.js")>()),
+  deliverDueReminders: vi.fn(async () => 0),
+}));
+vi.mock("./services/bot-stats.js", () => ({
+  pruneBotPeopleDaily: vi.fn(async () => 0),
+}));
 
 import {
   sweepOrphanedAttachments,
@@ -160,6 +169,8 @@ import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { processStoryVideos, sweepStories } from "./services/story-media.js";
 import { runBauFollowTick } from "./services/bau-follow-delivery.js";
 import { runChannelLayoutMigrations } from "./services/channel-layout.js";
+import { pruneBotPeopleDaily } from "./services/bot-stats.js";
+import { deliverDueReminders } from "./services/bot-reminders.js";
 import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
@@ -254,12 +265,14 @@ describe("cold jobs", () => {
     // 27 with the custom emoji quarantine sweep (hourly, asserted below); 29
     // with the Retrospectiva's seat sampler (a minute) and watched-party copy
     // (15 minutes), both asserted below; 30 with the Seguir delivery tick (10 s,
-    // asserted below); 31 with the client-platform retention sweep (daily,
-    // asserted below).
+    // asserted below); 31 with the server bot run poller (adaptive, like the
+    // speech poller); 32 with the bot people prune (six hours, asserted
+    // below); 33 with the bot reminders (30 s, below); 34 with the client-platform
+    // retention sweep (daily, asserted below).
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(31);
+    expect(jobs.count).toBe(34);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -298,6 +311,8 @@ describe("cold jobs", () => {
     expect(runBauFollowTick).toHaveBeenCalledTimes(24);
     // The soundboard upload sweep: a minute, so four, and none at boot.
     expect(sweepSoundboardUploads).toHaveBeenCalledTimes(4);
+    // The bot reminders: every 30 s, no boot run, so eight in four minutes.
+    expect(deliverDueReminders).toHaveBeenCalledTimes(8);
 
     await vi.advanceTimersByTimeAsync(PENDING_DELETION_SWEEP_INTERVAL_MS);
     expect(sweepPendingAccountDeletions).toHaveBeenCalledTimes(1);
@@ -311,8 +326,11 @@ describe("cold jobs", () => {
     // The emoji quarantine sweep: hourly, no boot run.
     expect(sweepQuarantinedServerEmoji).toHaveBeenCalledTimes(1);
     expect(pruneAuditLog).not.toHaveBeenCalled();
+    // The bot people prune: every six hours, no boot run.
+    expect(pruneBotPeopleDaily).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(DAILY_MS);
+    expect(pruneBotPeopleDaily).toHaveBeenCalledTimes(4);
     expect(pruneAuditLog).toHaveBeenCalledTimes(1);
     expect(sweepMessageRetention).toHaveBeenCalledTimes(1);
     expect(sweepSlowModeClocks).toHaveBeenCalledTimes(1);

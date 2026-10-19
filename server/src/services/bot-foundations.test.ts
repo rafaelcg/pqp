@@ -1,0 +1,587 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+/**
+ * The parts of server bots the operator and the bot's own powers rest on: the
+ * role it acts through, what each run cost, and the history that outlives a
+ * deleted bot. Real Postgres, stub model.
+ */
+
+const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+const describeDb = DATABASE_URL ? describe : describe.skip;
+
+if (DATABASE_URL) {
+  process.env.DATABASE_URL = DATABASE_URL;
+}
+
+const { getPool, initDb, closePool } = await import("../db.js");
+const { upsertUser } = await import("./users.js");
+const { createServer: createPqpServer } = await import("./servers.js");
+const { assignRole, createRole, getRole, parsePermissions } = await import("./roles.js");
+const { Permission, SERVER_BOT_DEFAULT_TOOLS, SERVER_BOT_TOOLS } = await import("@pqp/shared");
+const { createServerBot, deleteServerBot, resetBotTriggerCacheForTests, updateServerBot, welcomeNewMember } =
+  await import("./bots.js");
+const { createInviteWith, redeemInvite } = await import("./invites.js");
+const { SERVER_BOT_WELCOMES_PER_HOUR } = await import("@pqp/shared");
+const { botToolPermissions } = await import("./bot-actions.js");
+const { deleteBotRole, renameBotRole, syncBotRole } = await import("./bot-role.js");
+const { botDay, bumpBotStats, nextBotDayStart, readBotOverview } = await import("./bot-stats.js");
+const { runBotRunsTick } = await import("./bot-runner.js");
+const { setBotProviderForTests, toAnthropicMessages } = await import("./bot-llm.js");
+const { postChannelMessage, resetChatRateLimits } = await import("../ws/chat.js");
+const { readBotFacePng } = await import("./bot-faces.js");
+const { runBotTestTurn } = await import("./bot-test.js");
+const { botFaceAvatarPath } = await import("@pqp/shared");
+
+describe("the bot day", () => {
+  it("is São Paulo's date, and turns at its midnight", () => {
+    expect(botDay(Date.parse("2026-10-14T02:30:00Z"))).toBe("2026-10-13");
+    expect(botDay(Date.parse("2026-10-14T03:00:00Z"))).toBe("2026-10-14");
+    expect(nextBotDayStart(Date.parse("2026-10-13T12:00:00Z")).toISOString()).toBe(
+      "2026-10-14T03:00:00.000Z",
+    );
+    expect(nextBotDayStart(Date.parse("2026-10-14T02:59:00Z")).toISOString()).toBe(
+      "2026-10-14T03:00:00.000Z",
+    );
+  });
+});
+
+describe("the prompt cache", () => {
+  type Block = { type: string; cache_control?: unknown };
+  const marked = (messages: ReturnType<typeof toAnthropicMessages>) =>
+    messages.flatMap((message, index) =>
+      (message.content as Block[]).flatMap((block, at) => (block.cache_control ? [`${index}.${at}`] : [])),
+    );
+
+  it("marks the conversation, so a tool turn reads it instead of paying for it again", () => {
+    expect(marked(toAnthropicMessages([{ role: "user", text: "oi" }]))).toEqual(["0.0"]);
+  });
+
+  it("marks the last two user-side messages of a tool loop, and the end of each", () => {
+    const messages = toAnthropicMessages([
+      {
+        role: "user",
+        text: "cria um canal",
+        images: [{ mediaType: "image/png", data: "AAAA" }],
+      },
+      { role: "assistant", text: null, toolCalls: [], raw: [{ type: "text", text: "..." }] },
+      {
+        role: "tool",
+        results: [
+          { id: "a", content: "{}", isError: false },
+          { id: "b", content: "{}", isError: false },
+        ],
+      },
+      { role: "assistant", text: null, toolCalls: [], raw: [{ type: "text", text: "..." }] },
+      { role: "tool", results: [{ id: "c", content: "{}", isError: false }] },
+    ]);
+    // Only the newest two user-side messages, each on its last block.
+    expect(marked(messages)).toEqual(["2.1", "4.0"]);
+  });
+});
+
+describeDb("server bot foundations", () => {
+  let savedFlag: string | undefined;
+
+  beforeAll(async () => {
+    await initDb();
+  });
+
+  afterAll(async () => {
+    setBotProviderForTests(null);
+    await closePool();
+  });
+
+  beforeEach(async () => {
+    savedFlag = process.env.CUSTOM_BOTS;
+    process.env.CUSTOM_BOTS = "true";
+    setBotProviderForTests({
+      name: "fixture",
+      model: "claude-haiku-5-5",
+      async complete() {
+        return {
+          text: "Oi!",
+          toolCalls: [],
+          message: { role: "assistant", text: "Oi!", toolCalls: [], raw: [] },
+          reportedCostMicros: null,
+          // 1,000 tokens of input in all, most of it from the prompt cache.
+          inputTokens: 200,
+          outputTokens: 20,
+          cacheReadTokens: 700,
+          cacheWriteTokens: 100,
+          model: "claude-haiku-5-5",
+          stopReason: "end_turn",
+        };
+      },
+    });
+    resetBotTriggerCacheForTests();
+    resetChatRateLimits();
+    await getPool().query(
+      `TRUNCATE users, user_preferences, servers, channels, messages, server_members,
+                server_bots, server_bot_runs, server_bot_usage_daily, server_bot_spend_daily,
+                server_bot_stats_daily, server_bot_people_daily, server_bot_tools_daily, server_bot_test_usage, audit_log
+       RESTART IDENTITY CASCADE`,
+    );
+  });
+
+  afterEach(() => {
+    if (savedFlag === undefined) delete process.env.CUSTOM_BOTS;
+    else process.env.CUSTOM_BOTS = savedFlag;
+  });
+
+  async function setup() {
+    const owner = await upsertUser({ clerkId: "owner", displayName: "Rafa", avatarUrl: null });
+    const { server, channels } = await createPqpServer("QG", owner.id);
+    const channelId = channels.find((c) => c.type === "text")!.id;
+    const bot = await createServerBot({
+      serverId: server.id,
+      createdBy: owner.id,
+      name: "Caio",
+      persona: "",
+      knowledge: "",
+      channelIds: [channelId],
+    });
+    return { owner, server, channelId, bot };
+  }
+
+  /** A member whose only power is a role with these bits. */
+  async function memberWith(serverId: string, clerkId: string, permissions: bigint) {
+    const user = await upsertUser({ clerkId, displayName: clerkId, avatarUrl: null });
+    await getPool().query(
+      `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`,
+      [serverId, user.id],
+    );
+    const role = await createRole(serverId, { name: `${clerkId}_role`, permissions });
+    await assignRole(serverId, user.id, role.id);
+    return user;
+  }
+
+  const roleBits = async (roleId: string) => parsePermissions((await getRole(roleId))!.permissions);
+
+  it("gives a new bot its own role with exactly what its tools need", async () => {
+    const { owner, server, bot } = await setup();
+    const synced = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    expect(synced?.roleId).toBeTruthy();
+    expect(synced?.missing).toBe(0n);
+    const role = (await getRole(synced!.roleId!))!;
+    expect(role.name).toBe("caio_bot");
+    expect(parsePermissions(role.permissions)).toBe(botToolPermissions(SERVER_BOT_DEFAULT_TOOLS));
+    expect(role.position).toBe(1);
+    const held = await getPool().query(
+      `SELECT 1 FROM member_roles WHERE server_id = $1 AND user_id = $2 AND role_id = $3`,
+      [server.id, bot.userId, role.id],
+    );
+    expect(held.rowCount).toBe(1);
+    const stored = await getPool().query<{ role_id: string }>(
+      `SELECT role_id FROM server_bots WHERE id = $1`,
+      [bot.id],
+    );
+    expect(stored.rows[0]!.role_id).toBe(role.id);
+    const audit = await getPool().query<{ action: string; actor_id: string }>(
+      `SELECT action, actor_id FROM audit_log WHERE server_id = $1 ORDER BY created_at`,
+      [server.id],
+    );
+    expect(audit.rows.map((row) => row.action)).toEqual(["role.create", "member.roles_update"]);
+    expect(audit.rows.every((row) => row.actor_id === owner.id)).toBe(true);
+  });
+
+  it("never grants a bit the person saving does not hold", async () => {
+    const { server, bot } = await setup();
+    const staff = await memberWith(
+      server.id,
+      "staff",
+      Permission.MANAGE_ROLES | Permission.MANAGE_CHANNELS,
+    );
+    await updateServerBot({ serverId: server.id, botId: bot.id, tools: [...SERVER_BOT_TOOLS] });
+    const synced = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: staff.id });
+    const needed = botToolPermissions(SERVER_BOT_TOOLS);
+    // Theirs: the role's bits and @everyone's (Create Invite among them).
+    const held = Permission.MANAGE_CHANNELS | Permission.CREATE_INVITE;
+    expect(await roleBits(synced!.roleId!)).toBe(needed & held);
+    expect(synced!.missing).toBe(needed & ~held);
+    expect(synced!.missing & Permission.BAN_MEMBERS).toBe(Permission.BAN_MEMBERS);
+  });
+
+  it("makes no role for somebody who may not manage roles", async () => {
+    const { server, bot } = await setup();
+    const staff = await memberWith(server.id, "manager", Permission.MANAGE_SERVER);
+    const synced = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: staff.id });
+    expect(synced).toEqual({
+      roleId: null,
+      changed: false,
+      missing: botToolPermissions(SERVER_BOT_DEFAULT_TOOLS),
+    });
+    const roles = await getPool().query(`SELECT 1 FROM roles WHERE name = 'caio_bot'`);
+    expect(roles.rowCount).toBe(0);
+  });
+
+  it("follows the tool switches: off removes the bit, on adds it back", async () => {
+    const { owner, server, bot } = await setup();
+    const first = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    const withoutChannels = SERVER_BOT_DEFAULT_TOOLS.filter(
+      (tool) => !["create_channel", "edit_channel", "move_channel", "delete_channel"].includes(tool),
+    );
+    await updateServerBot({ serverId: server.id, botId: bot.id, tools: withoutChannels });
+    const second = await syncBotRole({
+      serverId: server.id,
+      botId: bot.id,
+      actorId: owner.id,
+      previousTools: SERVER_BOT_DEFAULT_TOOLS,
+    });
+    expect(second!.roleId).toBe(first!.roleId);
+    expect(second!.changed).toBe(true);
+    expect((await roleBits(second!.roleId!)) & Permission.MANAGE_CHANNELS).toBe(0n);
+
+    await updateServerBot({ serverId: server.id, botId: bot.id, tools: [...SERVER_BOT_DEFAULT_TOOLS] });
+    await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id, previousTools: withoutChannels });
+    expect((await roleBits(first!.roleId!)) & Permission.MANAGE_CHANNELS).toBe(
+      Permission.MANAGE_CHANNELS,
+    );
+  });
+
+  it("keeps a bit a more powerful staff member granted while its tool stays on", async () => {
+    const { owner, server, bot } = await setup();
+    const synced = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    const staff = await memberWith(server.id, "helper", Permission.MANAGE_ROLES);
+    // Nothing changed in the tools: a weaker staff member's save removes nothing.
+    const again = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: staff.id });
+    expect(again!.changed).toBe(false);
+    expect(await roleBits(synced!.roleId!)).toBe(botToolPermissions(SERVER_BOT_DEFAULT_TOOLS));
+  });
+
+  it("never strips a bit staff added by hand, nor one the saver does not hold", async () => {
+    const { owner, server, bot } = await setup();
+    const synced = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    const role = (await getRole(synced!.roleId!))!;
+    // Staff give the role something no tool needs.
+    const extra = Permission.MUTE_MEMBERS;
+    await getPool().query(`UPDATE roles SET permissions = $2 WHERE id = $1`, [
+      role.id,
+      (parsePermissions(role.permissions) | extra).toString(),
+    ]);
+    // A face change re-saves the same tools: nothing moves.
+    const same = await syncBotRole({
+      serverId: server.id,
+      botId: bot.id,
+      actorId: owner.id,
+      previousTools: SERVER_BOT_DEFAULT_TOOLS,
+    });
+    expect(same!.changed).toBe(false);
+    expect((await roleBits(role.id)) & extra).toBe(extra);
+
+    // A weaker staffer turns the channel tools off: they hold no Manage
+    // Channels, so they cannot take it away.
+    const weak = await memberWith(server.id, "weak", Permission.MANAGE_ROLES);
+    const noChannels = SERVER_BOT_DEFAULT_TOOLS.filter((tool) => !tool.includes("channel"));
+    await updateServerBot({ serverId: server.id, botId: bot.id, tools: noChannels });
+    await syncBotRole({ serverId: server.id, botId: bot.id, actorId: weak.id, previousTools: SERVER_BOT_DEFAULT_TOOLS });
+    expect((await roleBits(role.id)) & Permission.MANAGE_CHANNELS).toBe(Permission.MANAGE_CHANNELS);
+  });
+
+  it("leaves the role alone when people hold it too", async () => {
+    const { owner, server, bot } = await setup();
+    const synced = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    const person = await memberWith(server.id, "person", 0n);
+    await assignRole(server.id, person.id, synced!.roleId!);
+    expect(await deleteBotRole({ serverId: server.id, roleId: synced!.roleId!, actorId: owner.id })).toBe(false);
+    expect(await getRole(synced!.roleId!)).not.toBeNull();
+  });
+
+  it("makes a new role when somebody deleted the old one", async () => {
+    const { owner, server, bot } = await setup();
+    const first = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    await getPool().query(`DELETE FROM roles WHERE id = $1`, [first!.roleId]);
+    const second = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    expect(second!.roleId).not.toBe(first!.roleId);
+    expect(second!.changed).toBe(true);
+  });
+
+  it("ends with one role when two saves race", async () => {
+    const { owner, server, bot } = await setup();
+    const [a, b] = await Promise.all([
+      syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id }),
+      syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id }),
+    ]);
+    expect(a!.roleId).toBe(b!.roleId);
+    const roles = await getPool().query(
+      `SELECT id FROM roles WHERE server_id = $1 AND name LIKE 'caio_bot%'`,
+      [server.id],
+    );
+    expect(roles.rows.map((row) => row.id)).toEqual([a!.roleId]);
+  });
+
+  it("renames the role with the bot", async () => {
+    const { owner, server, bot } = await setup();
+    const synced = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    expect(
+      await renameBotRole({
+        serverId: server.id,
+        roleId: synced!.roleId!,
+        oldUsername: "caio_bot",
+        newUsername: "julius_bot",
+        actorId: owner.id,
+      }),
+    ).toBe(true);
+    expect((await getRole(synced!.roleId!))!.name).toBe("julius_bot");
+  });
+
+  it("keeps a member's runs when they delete their question, so the caps hold", async () => {
+    const { owner, server, channelId } = await setup();
+    const member = await memberWith(server.id, "asker", 0n);
+    const sent = await postChannelMessage({ author: member, channelId, body: "@caio_bot oi" });
+    expect(sent.ok).toBe(true);
+    await runBotRunsTick();
+    await getPool().query(`DELETE FROM messages WHERE id = $1`, [sent.ok ? sent.message.id : null]);
+    const runs = await getPool().query(`SELECT 1 FROM server_bot_runs WHERE requester_id = $1`, [member.id]);
+    expect(runs.rowCount).toBe(1);
+    void owner;
+  });
+
+  it("does not take a 'sim' said to somebody else as the answer to a plan", async () => {
+    const { confirmationWord } = await import("./bots.js");
+    expect(confirmationWord("sim")).toBe("yes");
+    // The word alone matches; the trigger is what checks who it was said to.
+    const { owner, server, channelId, bot } = await setup();
+    const friend = await memberWith(server.id, "friend", 0n);
+    const theirs = await postChannelMessage({ author: friend, channelId, body: "vamos jogar?" });
+    await getPool().query(
+      `INSERT INTO server_bot_plans (bot_id, server_id, channel_id, requester_id, run_id, actions, status, expires_at)
+       VALUES ($1, $2, $3, $4, gen_random_uuid(), '[]', 'pending', NOW() + INTERVAL '5 minutes')`,
+      [bot.id, server.id, channelId, owner.id],
+    );
+    await postChannelMessage({
+      author: owner,
+      channelId,
+      body: "sim",
+      replyToId: theirs.ok ? theirs.message.id : undefined,
+    });
+    const decisions = await getPool().query(`SELECT 1 FROM server_bot_runs WHERE trigger = 'decision'`);
+    expect(decisions.rowCount).toBe(0);
+  });
+
+  it("reads the settings overview: creator, today's actions and what it did last", async () => {
+    const { owner, server, channelId, bot } = await setup();
+    const plan = await getPool().query<{ id: string }>(
+      `INSERT INTO server_bot_plans (bot_id, server_id, channel_id, requester_id, run_id, actions, status, expires_at)
+       VALUES ($1, $2, $3, $4, gen_random_uuid(), $5, 'done', NOW())
+       RETURNING id`,
+      [
+        bot.id,
+        server.id,
+        channelId,
+        owner.id,
+        JSON.stringify([{ tool: "create_channel", label: "Criar #torneio em Jogos", input: {}, destructive: false }]),
+      ],
+    );
+    await getPool().query(
+      `INSERT INTO server_bot_actions (plan_id, step, bot_id, tool, status) VALUES ($1, 0, $2, 'create_channel', 'done')`,
+      [plan.rows[0]!.id, bot.id],
+    );
+    await bumpBotStats(bot.id, { actionsDone: 1, plansConfirmed: 1 });
+    const overview = await readBotOverview(bot.id);
+    expect(overview).toMatchObject({ creatorName: "Rafa", actionsToday: 1, confirmedToday: 1 });
+    expect(overview!.recent[0]).toMatchObject({
+      kind: "action",
+      tool: "create_channel",
+      label: "Criar #torneio em Jogos",
+      status: "done",
+      requesterName: "Rafa",
+    });
+  });
+
+  it("answers a practice turn without tools, and stops at the daily cap", async () => {
+    process.env.BOTS_TEST_TURNS_PER_MEMBER_DAY = "2";
+    try {
+      const owner = await upsertUser({ clerkId: "tester", displayName: "Rafa", avatarUrl: null });
+      const turn = () =>
+        runBotTestTurn({
+          userId: owner.id,
+          serverName: "QG",
+          name: "Tico",
+          persona: "",
+          knowledge: "",
+          model: null,
+          messages: [{ from: "member", text: "oi" }],
+        });
+      expect(await turn()).toMatchObject({ ok: true, reply: "Oi!", turnsLeft: 1 });
+      expect(await turn()).toMatchObject({ ok: true, turnsLeft: 0 });
+      expect(await turn()).toEqual({ ok: false, reason: "limit" });
+    } finally {
+      delete process.env.BOTS_TEST_TURNS_PER_MEMBER_DAY;
+    }
+  });
+
+  it("names the role around a taken name", async () => {
+    const { owner, server, bot } = await setup();
+    await createRole(server.id, { name: "caio_bot", permissions: 0n });
+    const synced = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    expect((await getRole(synced!.roleId!))!.name).toBe("caio_bot_2");
+  });
+
+  it("takes the role away with the bot", async () => {
+    const { owner, server, bot } = await setup();
+    const synced = await syncBotRole({ serverId: server.id, botId: bot.id, actorId: owner.id });
+    const removed = await deleteServerBot(server.id, bot.id);
+    expect(removed!.roleId).toBe(synced!.roleId);
+    expect(
+      await deleteBotRole({ serverId: server.id, roleId: synced!.roleId!, actorId: owner.id }),
+    ).toBe(true);
+    expect(await getRole(synced!.roleId!)).toBeNull();
+  });
+
+  it("draws the bot as its Breu: colour, face and the line under its name", async () => {
+    const { server, bot } = await setup();
+    expect(bot.color).toBe("lime");
+    expect(bot.face).toBe("oi");
+    expect(bot.avatarUrl).toBe(botFaceAvatarPath("lime", "oi"));
+
+    const updated = await updateServerBot({
+      serverId: server.id,
+      botId: bot.id,
+      color: "grape",
+      face: "kkkk",
+      tagline: "Pergunte qualquer coisa",
+    });
+    expect(updated!.restyled).toBe(true);
+    expect(updated!.bot).toMatchObject({
+      color: "grape",
+      face: "kkkk",
+      tagline: "Pergunte qualquer coisa",
+      avatarUrl: botFaceAvatarPath("grape", "kkkk"),
+    });
+    const account = await getPool().query<{ avatar_url: string; custom_status: string }>(
+      `SELECT avatar_url, custom_status FROM users WHERE id = $1`,
+      [bot.userId],
+    );
+    expect(account.rows[0]).toEqual({
+      avatar_url: botFaceAvatarPath("grape", "kkkk"),
+      custom_status: "Pergunte qualquer coisa",
+    });
+
+    const untouched = await updateServerBot({ serverId: server.id, botId: bot.id, persona: "Zoeiro" });
+    expect(untouched!.restyled).toBe(false);
+    expect(untouched!.bot.tagline).toBe("Pergunte qualquer coisa");
+  });
+
+  describe("the welcome", () => {
+    const welcomes = async (channelId: string, botUserId: string) =>
+      (
+        await getPool().query<{ body: string }>(
+          `SELECT body FROM messages WHERE channel_id = $1 AND author_id = $2 ORDER BY created_at`,
+          [channelId, botUserId],
+        )
+      ).rows.map((row) => row.body);
+
+    it("greets a new member once, with staff's text, and never for a bot that has it off", async () => {
+      const { owner, server, channelId, bot } = await setup();
+      const ana = await upsertUser({ clerkId: "ana", displayName: "Ana", avatarUrl: null });
+      const invite = await createInviteWith(getPool(), server.id, owner.id);
+
+      // Off by default: joining posts nothing.
+      await redeemInvite(invite.code, ana.id);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(await welcomes(channelId, bot.userId)).toEqual([]);
+
+      await updateServerBot({
+        serverId: server.id,
+        botId: bot.id,
+        welcomeEnabled: true,
+        welcomeChannelId: channelId,
+        welcomeMessage: "Chegou {membro} no {servidor}! Avisa @everyone",
+      });
+      const bia = await upsertUser({ clerkId: "bia", displayName: "Bia", avatarUrl: null });
+      await redeemInvite(invite.code, bia.id);
+      await expect.poll(() => welcomes(channelId, bot.userId)).toHaveLength(1);
+      const [body] = await welcomes(channelId, bot.userId);
+      expect(body).toMatch(/^Chegou @\S+ no QG! Avisa ＠everyone$/);
+
+      // Leaving and joining again is not a second welcome.
+      await getPool().query(`DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`, [server.id, bia.id]);
+      await welcomeNewMember(server.id, bia.id);
+      expect(await welcomes(channelId, bot.userId)).toHaveLength(1);
+    });
+
+    it("stops after a few an hour, so a raid is not a flood", async () => {
+      const { server, channelId, bot } = await setup();
+      await updateServerBot({ serverId: server.id, botId: bot.id, welcomeEnabled: true, welcomeChannelId: channelId });
+      for (let i = 0; i < SERVER_BOT_WELCOMES_PER_HOUR + 3; i += 1) {
+        const user = await upsertUser({ clerkId: `raid${i}`, displayName: `Raid ${i}`, avatarUrl: null });
+        await getPool().query(`INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`, [
+          server.id,
+          user.id,
+        ]);
+        await welcomeNewMember(server.id, user.id);
+      }
+      const posted = await welcomes(channelId, bot.userId);
+      expect(posted).toHaveLength(SERVER_BOT_WELCOMES_PER_HOUR);
+      expect(posted[0]).toMatch(/^Bem-vindo\(a\), @\S+! 👋$/);
+    });
+  });
+
+  it("serves the face PNGs and nothing else", async () => {
+    const png = await readBotFacePng("lime", "oi");
+    expect(png?.subarray(1, 4).toString()).toBe("PNG");
+    expect(await readBotFacePng("lime", "dormindo")).toBeNull();
+    expect(await readBotFacePng("..", "oi")).toBeNull();
+  });
+
+  it("records what started a run and what it cost, and keeps the history after the bot goes", async () => {
+    const { owner, server, channelId, bot } = await setup();
+    await postChannelMessage({ author: owner, channelId, body: "@caio_bot oi" });
+    await runBotRunsTick();
+
+    const run = await getPool().query<{
+      trigger: string;
+      model: string;
+      turns: number;
+      input_tokens: string;
+      output_tokens: string;
+      cost_micros: string;
+      cache_read_tokens: string;
+      cache_write_tokens: string;
+    }>(
+      `SELECT trigger, model, turns, input_tokens, output_tokens, cost_micros, cache_read_tokens, cache_write_tokens
+         FROM server_bot_runs`,
+    );
+    expect(run.rows[0]).toMatchObject({
+      trigger: "mention",
+      model: "claude-haiku-5-5",
+      turns: 1,
+      input_tokens: "1000",
+      output_tokens: "20",
+      cache_read_tokens: "700",
+      cache_write_tokens: "100",
+    });
+    expect(Number(run.rows[0]!.cost_micros)).toBeGreaterThan(0);
+
+    await deleteServerBot(server.id, bot.id);
+    const stats = await getPool().query<{
+      day: string;
+      bot_user_id: string;
+      runs: number;
+      replies: number;
+      cost_micros: string;
+    }>(
+      `SELECT to_char(day, 'YYYY-MM-DD') AS day, bot_user_id, runs, replies, cost_micros
+         FROM server_bot_stats_daily WHERE server_id = $1`,
+      [server.id],
+    );
+    expect(stats.rows).toHaveLength(1);
+    expect(stats.rows[0]).toMatchObject({
+      day: botDay(),
+      bot_user_id: bot.userId,
+      runs: 1,
+      replies: 1,
+      cost_micros: run.rows[0]!.cost_micros,
+    });
+    const people = await getPool().query<{ user_id: string; runs: number }>(
+      `SELECT user_id, runs FROM server_bot_people_daily WHERE server_id = $1`,
+      [server.id],
+    );
+    expect(people.rows).toEqual([{ user_id: owner.id, runs: 1 }]);
+    const usage = await getPool().query<{ day: string }>(
+      `SELECT to_char(day, 'YYYY-MM-DD') AS day FROM server_bot_usage_daily WHERE server_id = $1`,
+      [server.id],
+    );
+    expect(usage.rows[0]!.day).toBe(botDay());
+  });
+});

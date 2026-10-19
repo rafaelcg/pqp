@@ -160,6 +160,12 @@ which is exactly what an invisible object must not do.
   wherever the proxy puts them, and a machine that only ever saw one of them
   would start the clock on a host who is sitting right there. The
   `watchParty.hostSocketElsewhere` log line is that second answer firing.
+  It fires for ANY account that closes a socket while holding another on the
+  sibling machine, not only for hosts (the check runs before anything asks
+  whether the person hosts a party), and it only means "no clock started":
+  nothing is demoted, claimed or reset. `phase` is `close` or `recheck`. If the
+  stamp itself lands after the host reconnected on the other machine,
+  `settleHostClock` retracts it after the bus window (`watchParty.hostStampRetracted`), re-stamps if a close raced the retraction, and retries a failed write.
 - While the clock runs, the party **stays live**. The audience is watching
   either way, and cutting them off to make a point about ownership helps
   nobody. What the clock changes is that a co-host now sees **Assumir**.
@@ -1877,6 +1883,17 @@ new peer. Each is `voice.hlsMicArchiveRestartedInPlace` with its `reason`
 The row's `runs` records when each run started (`base`, ms after `startedAt`;
 nothing renders a `mic` row as a playlist). An inherited session still never
 starts a FIRST archive mid-film, and the flag going off stops it for good.
+
+**A presenter who is away when the retry runs is waited for (2026-10-17).**
+The presenter's page went away, its LiveKit participant with it, and the
+archive's egress ended (`hlsMicArchiveDied retryInMs=3000`). The 3 s retry
+found no track, and used to give up for good: the window that makes the
+monitor look had been closed by the stop, and a returning page publishes
+`mic-archive` after its share, so no reconcile saw it either. The retry now
+leaves the monitor looking for three minutes (`MIC_ARCHIVE_REJOIN_WAIT_MS`),
+and the next run starts as `mic-track-returned`. `voice.hlsSharerVanished`
+also says `effectiveGraceMs` now: `graceMs` is the base 5 s, but for a known
+presenter the return window (60 s) is what applies.
 
 **Nor does the presenter moving machines** (since 2026-09-25, after rehearsal D
 lost its whole voice file). A page reload that lands on the other API replica

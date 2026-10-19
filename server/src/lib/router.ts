@@ -58,6 +58,9 @@ function compile(path: string): { regex: RegExp; keys: string[] } {
   return { regex: new RegExp(`^${pattern}$`), keys };
 }
 
+/** The router `createRouter` returns, for a module that registers its own routes. */
+export type Router = ReturnType<typeof createRouter>;
+
 export function createRouter() {
   const routes: CompiledRoute[] = [];
 

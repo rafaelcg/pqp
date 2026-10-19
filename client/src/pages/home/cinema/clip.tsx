@@ -18,8 +18,10 @@ import { smallStill, srcSetFor } from "./stills";
  * 960-wide `<name>-960.webm` / `<name>-960.mp4` for phones, and the
  * `<name>.webp` / `<name>-960.webp` poster (the loop's first frame).
  * `manifest.json` there is the presence gate: a clip plays only once the
- * manifest lists it. Until then (and if any file fails) the still shows, so a
- * page never draws a broken video.
+ * manifest lists it. Until then (and if every file fails) the still shows, so
+ * a page never draws a broken video. A WebM the browser cannot decode (Chrome's
+ * hardware VP9 decoder gives up on some, with several playing at once) is
+ * dropped for its MP4, since a decode error never moves on to the next source.
  *
  * Stills from /media/home/ get their smaller copies on their own (see
  * `stills.ts`): a srcset on wide screens, and on phones the small copy at
@@ -58,6 +60,8 @@ export interface ClipSources {
 }
 
 const MEDIA_BASE = "/media/home/";
+/** `MediaError.MEDIA_ERR_DECODE`, spelled out: the page also renders where there is no DOM. */
+const MEDIA_ERR_DECODE = 3;
 // Phones and tablets get the small files: `SMALL_QUERY` in hero-media.ts,
 // shared with the static first screen.
 
@@ -253,6 +257,7 @@ export function Clip({
   const [playing, setPlaying] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
+  const [webmFailed, setWebmFailed] = useState(false);
   const [posterLoaded, setPosterLoaded] = useState(false);
   const [posterFailed, setPosterFailed] = useState(false);
   const [baseRetried, setBaseRetried] = useState(false);
@@ -307,10 +312,10 @@ export function Clip({
     const webm = smallFiles ? (files.webmSmall ?? files.webm) : (files.webm ?? files.webmSmall);
     const mp4 = smallFiles ? (files.mp4Small ?? files.mp4) : (files.mp4 ?? files.mp4Small);
     const list: { src: string; type: string }[] = [];
-    if (webm) list.push({ src: webm, type: "video/webm" });
+    if (webm && !webmFailed) list.push({ src: webm, type: "video/webm" });
     if (mp4) list.push({ src: mp4, type: "video/mp4" });
     return list;
-  }, [files, smallFiles]);
+  }, [files, smallFiles, webmFailed]);
   const videoKey = video.map((v) => v.src).join("|");
   const hasVideo = video.length > 0 && !videoFailed;
 
@@ -394,6 +399,22 @@ export function Clip({
     else v.pause();
   }, [wantPlay, elementKey]);
 
+  // A decode error comes after the browser picked a source, so it never tries
+  // the next one by itself. From a WebM, drop it: the list without it is a new
+  // key, and the MP4 gets a fresh element. Anything else (the MP4 failing too,
+  // a network error) keeps the still.
+  const onVideoError = (el: HTMLVideoElement) => {
+    const webm = video.find((s) => s.type === "video/webm");
+    const fromWebm = Boolean(webm && el.currentSrc && el.currentSrc.endsWith(webm.src));
+    if (el.error?.code === MEDIA_ERR_DECODE && fromWebm) {
+      setPlaying(false);
+      setVideoReady(false);
+      setWebmFailed(true);
+    } else {
+      setVideoFailed(true);
+    }
+  };
+
   const toggle = () => {
     if (playing) {
       setUserPaused(true);
@@ -476,7 +497,7 @@ export function Clip({
               setVideoReady(true);
             }}
             onPause={() => setPlaying(false)}
-            onError={() => setVideoFailed(true)}
+            onError={(e) => onVideoError(e.currentTarget)}
             className={cn(objectClass, "cin-clip-layer")}
             style={{ opacity: videoReady ? 1 : 0 }}
           >
@@ -487,7 +508,7 @@ export function Clip({
                   key={s.src}
                   src={s.src}
                   type={s.type}
-                  // The last source failing means none could play: keep the still.
+                  // The last source failing to load means none could play: keep the still.
                   onError={i === video.length - 1 ? () => setVideoFailed(true) : undefined}
                 />
               ))}

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { AuditAction, AuditChange, AuditLogEntry } from "@pqp/shared";
 import type { PoolClient } from "pg";
 import { getPool } from "../db.js";
@@ -26,11 +27,26 @@ interface LogAuditInput {
  * inside it). Accepts a `PoolClient` anyway so a future caller that genuinely
  * needs the entry to roll back with its transaction still can.
  */
+/**
+ * Set while a server bot runs an action somebody asked for, so the route's own
+ * audit row says who asked ("pedido por @x") beside the bot as the actor.
+ */
+const botRequester = new AsyncLocalStorage<string>();
+
+export function runWithBotRequester<T>(requesterTag: string, fn: () => Promise<T>): Promise<T> {
+  return botRequester.run(requesterTag, fn);
+}
+
 export async function logAudit(
   input: LogAuditInput,
   client?: PoolClient,
 ): Promise<void> {
   const runner = client ?? getPool();
+  const askedBy = botRequester.getStore();
+  if (askedBy) {
+    const note = `pedido por ${askedBy}`;
+    input = { ...input, reason: input.reason ? `${input.reason} (${note})` : note };
+  }
   await runner.query(
     `INSERT INTO audit_log (server_id, actor_id, action, target_type, target_id, reason, changes)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
