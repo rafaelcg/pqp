@@ -134,13 +134,14 @@ object RepoSources {
      * loudly (in [serverFrameTypes]) rather than quietly on one that does not.
      */
     val sharedFrameSchemas: Map<String, String> by lazy {
-        File(root, "packages/shared/src")
-            .listFiles()
-            .orEmpty()
+        val shared = File(root, "packages/shared/src")
+        // The apps platform keeps its frames one folder down (`apps/frames.ts`),
+        // and writes `z\n  .object({`, so the pattern allows whitespace there.
+        (shared.listFiles().orEmpty().toList() + File(shared, "apps").listFiles().orEmpty().toList())
             .filter { it.isFile && it.name.endsWith(".ts") && !it.name.endsWith(".test.ts") }
-            .sortedBy { it.name }
+            .sortedBy { it.path }
             .flatMap { file ->
-                Regex("""const\s+(\w+)\s*=\s*z\.object\(\{\s*type:\s*z\.literal\("([^"]+)"\)""")
+                Regex("""const\s+(\w+)\s*=\s*z\s*\.object\(\{\s*type:\s*z\.literal\("([^"]+)"\)""")
                     .findAll(stripComments(file.readText()))
                     .map { it.groupValues[1] to it.groupValues[2] }
                     .toList()

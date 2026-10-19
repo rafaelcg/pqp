@@ -17,6 +17,7 @@ import {
   voiceNoteListenedSchema,
   voiceNoteTranscriptSchema,
 } from "./attachments.js";
+import { appEndedSchema, channelAppSchema } from "./apps/frames.js";
 import { embedSchema } from "./embeds.js";
 import { botActionCardSchema, botNoticeSchema } from "./bots.js";
 import { messageForwardFieldSchema } from "./forward.js";
@@ -746,6 +747,12 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   nudgeRefusedSchema,
   // Per person: why a server bot did not answer them. See `bots.ts`.
   botNoticeSchema,
+  // Apps in channels (`apps/frames.ts`, docs/APPS.md). `channel-app` goes to
+  // every socket whose account can VIEW the channel, which is wider than the
+  // sockets looking at it, so it is delivered per socket and is absent from
+  // the channel relay below. `app-ended` goes to the session's participants.
+  channelAppSchema,
+  appEndedSchema,
 ]);
 
 /**

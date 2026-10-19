@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   appEndReasonSchema,
+  appResultSchema,
   appParticipantConnectionSchema,
   appRoleSchema,
   appUserIdSchema,
@@ -21,9 +22,10 @@ import { APP_MAX_PARTICIPANTS } from "./limits.js";
  * draw avatars and the presence line), and the page strips every one before
  * anything reaches the sandboxed app (see `bridge.ts`, which has no user id).
  *
- * Not yet part of `chatClientMessageSchema` / `chatServerMessageSchema` in
- * `chat.ts`: Phase 2 of the apps program adds them there. Until then these
- * schemas are the contract and nothing sends them.
+ * `chat.ts` lists them in `chatClientMessageSchema` / `chatServerMessageSchema`
+ * as the session engine ships: `channel-app` and `app-ended` first, the join,
+ * state and event frames with the socket handlers after. A frame not listed
+ * there yet is only a contract and nothing sends it.
  *
  * Strict toward the less trusted side, tolerant toward a newer peer: client to
  * server frames are strict (an unknown key is a rejection, the server validates
@@ -179,6 +181,8 @@ export const appEndedSchema = z
       .object({
         participants: z.number().int().min(0),
         durationSeconds: z.number().int().min(0),
+        /** What the app left in `state.result`, copied at the end (at most 512 bytes). */
+        result: appResultSchema,
       })
       .strip(),
   })
