@@ -228,6 +228,15 @@ function CardHead({ model }: { model: CardModel }) {
         >
           {subtitle}
         </p>
+        {ended && !model.disabled && model.resultText ? (
+          <p
+            className="truncate text-xs leading-4 text-text-secondary"
+            title={model.resultText}
+            data-testid="app-card-result"
+          >
+            {model.resultText}
+          </p>
+        ) : null}
       </div>
     </div>
   );

@@ -4,6 +4,8 @@ import type { EndedAppSession } from "./app-sessions-store";
 import {
   APP_UNBOUNDED_PLAYERS,
   buildCardModel,
+  closingLineOf,
+  CARD_RESULT_MAX_CHARS,
   formatCountdown,
   formatSessionDuration,
   type CardInput,
@@ -454,5 +456,69 @@ describe("a card that the message alone describes", () => {
   it("is the generic card for a session retained away", () => {
     const model = asEnded(build({ live: undefined, session: null }));
     expect(model.gone).toBe(true);
+  });
+});
+
+describe("the closing line an app leaves (state.result.text)", () => {
+  it("is the string, as plain text", () => {
+    expect(closingLineOf({ text: "Ganhou: Pizza, 5 votos" })).toBe("Ganhou: Pizza, 5 votos");
+    expect(closingLineOf({ text: "<i>x</i> **a**" })).toBe("<i>x</i> **a**");
+  });
+
+  it("ignores every other shape", () => {
+    const others: unknown[] = [
+      undefined,
+      null,
+      "Pizza",
+      3,
+      ["Pizza"],
+      {},
+      { text: 3 },
+      { text: null },
+      { text: ["a"] },
+      { text: "  \n " },
+      { winner: "a" },
+    ];
+    for (const result of others) {
+      expect(closingLineOf(result)).toBeNull();
+    }
+  });
+
+  it("folds whitespace and drops control and bidi characters", () => {
+    expect(closingLineOf({ text: "a\n\n  b\tc" })).toBe("a b c");
+    expect(closingLineOf({ text: "x\u202Ey\u0007z\u2028w" })).toBe("x y z w");
+  });
+
+  it("clamps to 200 characters with an ellipsis, counting characters not bytes", () => {
+    const line = closingLineOf({ text: "a".repeat(500) })!;
+    expect(Array.from(line)).toHaveLength(CARD_RESULT_MAX_CHARS);
+    expect(line.endsWith("\u2026")).toBe(true);
+    expect(closingLineOf({ text: "a".repeat(200) })).toBe("a".repeat(200));
+    const emoji = closingLineOf({ text: "\u{1F600}".repeat(300) })!;
+    expect(Array.from(emoji)).toHaveLength(CARD_RESULT_MAX_CHARS);
+  });
+
+  it("reaches the quiet card from the message", () => {
+    const withLine = asEnded(
+      build({
+        live: undefined,
+        session: carried({
+          status: "ended",
+          endReason: "host",
+          summary: { participants: 5, durationSeconds: 300, result: { text: "Ganhou: Pizza, 5 votos" } },
+        }),
+      }),
+    );
+    expect(withLine.resultText).toBe("Ganhou: Pizza, 5 votos");
+    const other = asEnded(
+      build({
+        live: undefined,
+        session: carried({
+          status: "ended",
+          summary: { participants: 5, durationSeconds: 300, result: { winner: "a" } },
+        }),
+      }),
+    );
+    expect(other.resultText).toBeNull();
   });
 });

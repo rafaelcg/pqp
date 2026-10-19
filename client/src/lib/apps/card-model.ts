@@ -105,6 +105,12 @@ export interface EndedCardModel {
   disabled: boolean;
   /** How it went, with the app's own small `result` when it left one. */
   summary: AppEndSummary | null;
+  /**
+   * The closing line an app leaves for its card: `state.result.text`, when it is
+   * a string (the convention for every app, "Ganhou: Pizza, 5 votos"). Plain
+   * text, cleaned and clamped by `closingLineOf`; any other shape is no line.
+   */
+  resultText: string | null;
   starterName: string;
   startedAt: string;
   people: readonly CardPerson[];
@@ -168,6 +174,40 @@ function peopleOf(
     people: known.slice(0, CARD_AVATARS_SHOWN),
     more: Math.max(0, known.length - CARD_AVATARS_SHOWN),
   };
+}
+
+/** The longest closing line a card shows, in characters. */
+export const CARD_RESULT_MAX_CHARS = 200;
+
+// Control characters, the Unicode line and paragraph separators and the bidi
+// overrides and isolates: text an app wrote lands inside our sentence, so it
+// must not be able to reorder it or break the line.
+// eslint-disable-next-line no-control-regex
+const UNSAFE_TEXT = /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u202A-\u202E\u2066-\u2069]/g;
+
+/**
+ * `state.result.text` as a closing line: only a string, whitespace folded to
+ * single spaces, unsafe characters removed, at most 200 characters (the last
+ * replaced by an ellipsis when it was longer), never markup (the card draws it
+ * as a text node). Any other shape, an empty string included, is no line.
+ */
+export function closingLineOf(result: unknown): string | null {
+  if (typeof result !== "object" || result === null || Array.isArray(result)) {
+    return null;
+  }
+  const text = (result as { text?: unknown }).text;
+  if (typeof text !== "string") {
+    return null;
+  }
+  const cleaned = text.replace(UNSAFE_TEXT, " ").replace(/\s+/g, " ").trim();
+  if (cleaned.length === 0) {
+    return null;
+  }
+  const chars = Array.from(cleaned);
+  if (chars.length <= CARD_RESULT_MAX_CHARS) {
+    return cleaned;
+  }
+  return `${chars.slice(0, CARD_RESULT_MAX_CHARS - 1).join("").trimEnd()}…`;
 }
 
 /** Reasons the card reads as "the pqp turned it off", not "it ended". */
@@ -242,6 +282,7 @@ function goneModel(input: CardInput): EndedCardModel {
     gone: true,
     disabled: false,
     summary: null,
+    resultText: null,
     starterName: input.message.authorName,
     startedAt: input.message.createdAt,
     people: [],
@@ -268,6 +309,7 @@ function endedModel(
     gone: false,
     disabled: extra.disabled,
     summary: extra.summary,
+    resultText: closingLineOf(extra.summary?.result),
     starterName: starter ?? input.message.authorName,
     startedAt,
     people,

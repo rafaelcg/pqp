@@ -49,6 +49,7 @@ function endedModel(over: Partial<EndedCardModel> = {}): EndedCardModel {
     gone: false,
     disabled: false,
     summary: { participants: 4, durationSeconds: 1380 },
+    resultText: null,
     starterName: "bia",
     startedAt: "2026-10-19T19:40:00.000Z",
     people: people(["bia", "leo"]),
@@ -230,6 +231,22 @@ describe("estados 8 e 9: o registro quieto", () => {
     expect(text()).toContain("pqp turned this app off. The session ended.");
     expect(text()).toContain("Off");
     expect(buttons()).toHaveLength(0);
+  });
+
+  it("writes the app's closing line under the summary as plain text, on one line", () => {
+    mount(endedModel({ resultText: "Ganhou: Pizza, 5 votos <b>x</b>" }));
+    const line = host!.querySelector('[data-testid="app-card-result"]')!;
+    expect(line.textContent).toBe("Ganhou: Pizza, 5 votos <b>x</b>");
+    expect(line.querySelector("b")).toBeNull();
+    expect(line.className).toContain("truncate");
+    expect(text()).toContain("It ended. 4 played for 23 min.");
+  });
+
+  it("draws no closing line when there is none, or on a switched-off card", () => {
+    mount(endedModel());
+    expect(host!.querySelector('[data-testid="app-card-result"]')).toBeNull();
+    render(endedModel({ disabled: true, resultText: "x" }));
+    expect(host!.querySelector('[data-testid="app-card-result"]')).toBeNull();
   });
 
   it("is the generic card, titled App, for a session nobody saw", () => {
