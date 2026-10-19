@@ -10,7 +10,7 @@ import { AppIconTile } from "@/components/apps/app-icon";
 import "@/components/apps/apps-strip.css";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { Dialog } from "@/components/ui/dialog";
+import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Menu } from "@/components/ui/menu";
 import { Switch } from "@/components/ui/switch";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -301,7 +301,8 @@ function PeopleDialog({
       size="sm"
       onClose={onClose}
     >
-      <ul className="flex flex-col gap-1 px-5 py-4">
+      <DialogBody>
+      <ul className="flex flex-col gap-1">
         {model.roster.map((person) => (
           <li key={person.userId} className="flex items-center gap-3 py-1.5">
             <UserAvatar
@@ -324,6 +325,7 @@ function PeopleDialog({
           </li>
         ))}
       </ul>
+      </DialogBody>
     </Dialog>
   );
 }
@@ -765,7 +767,7 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
           </div>
         }
       >
-        <div className="flex flex-col gap-3 px-5 py-4">
+        <DialogBody className="flex flex-col gap-3">
           <p className="text-[13px] text-text-tertiary">{lineText(model.line, t)}</p>
           <p className="text-[15px] text-text">{countText(model.count, t)}</p>
           <ul className="flex flex-col">
@@ -791,7 +793,7 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
               </li>
             ))}
           </ul>
-        </div>
+        </DialogBody>
       </Dialog>
       <EndConfirm
         open={actions.confirmEnd}
