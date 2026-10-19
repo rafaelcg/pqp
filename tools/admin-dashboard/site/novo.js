@@ -1324,19 +1324,26 @@
     st.loading = true; st.err = null;
     renderServerRows();
     var qs = "?appId=" + encodeURIComponent(a) + (st.q ? "&q=" + encodeURIComponent(st.q) : "") + (st.on ? "&on=1" : "") + "&limit=" + APPS_PAGE + "&offset=" + st.offset;
-    return fetchJson("/operator/app-servers" + qs).then(function (r) {
-      if (seq !== st.seq || A.open !== a) return true;
+    var read = fetchJson("/operator/app-servers" + qs).then(function (r) {
+      // A read that another one replaced is not an answer: it takes the outcome
+      // of the one that did, so a refresh is never reported done on the strength
+      // of a response nobody used.
+      if (A.open !== a) return true;
+      if (seq !== st.seq) return st.current;
       st.rows = st.offset === 0 ? r.servers : st.rows.concat(r.servers);
       st.matched = r.matched; st.enabledCount = r.enabledCount; st.communityUnlocked = r.communityUnlocked;
       st.loading = false;
       renderServerRows();
       return true;
     }).catch(function (e) {
-      if (seq !== st.seq) return true;
+      if (A.open !== a) return true;
+      if (seq !== st.seq) return st.current;
       st.loading = false; st.err = e && e.message ? e.message : "erro";
       renderServerRows();
       return false;
     });
+    st.current = read;
+    return read;
   }
 
   function renderApps() { withFocus(renderAppsNow); }
