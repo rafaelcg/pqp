@@ -2,7 +2,7 @@
 
 An app is a small interactive thing, a poll or a game room, that someone starts in a text or voice channel and others join. The platform owns everything around it (launcher, card, presence line, permissions, moderation); the app itself is a sandboxed bundle that talks to the page through a narrow message API.
 
-This page covers the part that exists so far: the manifest every app ships, its validator, and the presence line.
+This page covers the part that exists so far: the manifest every app ships, its validator, the presence line, and the bridge contract.
 
 ## The manifest
 
@@ -73,10 +73,72 @@ Schema failures use `schema-unknown-key`, `schema-required`, `schema-type`, `sch
 
 `formatAppPresence(template, displayName)` puts a person's name into the app's translated phrase ("Raf tá na Locadora"). The name is untrusted text a stranger typed, so control characters and bidi override and isolate characters are removed, it is trimmed and capped at 32 characters, and the substitution is a plain splice: `$&` stays literal and a name containing `{name}` is not expanded. An empty name becomes `?`. `resolveAppPresence(manifest, locale, displayName)` picks the locale (exact, then base language, then English) and returns the `phrase` for places where the line stands alone and the `short` for places under a name that is already shown.
 
+## The bridge
+
+The bridge is the message API (v1, `APP_PLATFORM_API = 1`) between the pqp page, the host, and a sandboxed app frame. The app is untrusted. Contract: `packages/shared/src/apps/bridge.ts`. The WebSocket frames between the pqp client and the API are in `packages/shared/src/apps/frames.ts` and are not part of the chat unions yet.
+
+### Handshake
+
+Two messages travel on `window.postMessage`, nothing else does:
+
+1. The app posts `{ pqp: "app-hello", platformApi: 1 }` to its parent.
+2. The host answers `{ pqp: "app-port", platformApi: 1 }` and transfers one end of a `MessageChannel`.
+
+The frame is an opaque origin, so there is no origin to compare. The host checks `event.source === iframe.contentWindow` and ignores every other message. The app checks that the port message came from `window.parent`. Everything after that is on the port.
+
+**Strict toward the less trusted side, tolerant toward a newer peer.** Messages from the app (`app-hello`, every request) and client to server frames are strict: an unknown key is a rejection. Messages to the app (`app-port`, responses, pushes) and server to client frames use zod's default strip: an unknown key is dropped, never passed through. A field added later therefore does not make an app pinned to platform API 1, or an older client, reject the whole message, and a stripped key can never reach the app.
+
+### App to host (requests, `{ id, type, ...params }`, `id` 1 to 32 characters)
+
+- `participants.get`: the current participant list.
+- `state.get`: the session state and its revision.
+- `state.patch { patch, baseRev? }`: a JSON Merge Patch (RFC 7396) over the state. `baseRev` makes it conditional.
+- `events.send { name, data }`: an ephemeral event for the others. `name` matches `/^[a-z][a-z0-9.-]{0,31}$/`.
+- `assets.get { name }`: the bytes of one of the manifest's `assets[]`, checked by the host.
+- `files.pickLocal`: the host opens the picker (the manifest decides accept list and size cap) and transfers the bytes. The file name never crosses.
+- `ui.resize { height }`: 120 to 2000 pixels.
+- `ui.fullscreen { on }`
+- `share.request { on }`: share the app pane through pqp's own flow (apps whose manifest allows it).
+- `session.end`: host only.
+
+### Host to app
+
+Responses carry the request `id`. A call with nothing to return (`events.send`, `session.end`) answers `result: null`: `{ id, ok: true, result }` or `{ id, ok: false, error }`, with `error` one of `not-allowed`, `not-host`, `too-large`, `rate-limited`, `stale-rev`, `cancelled`, `unavailable`, `ended`, `invalid`.
+
+Pushes have no id:
+
+- `hello`: platform version, app id and version, locale, theme, reduced motion, `self` (seat, role, host), connection. Sent once after the port is handed over.
+- `participants`: seat id, display name, avatar as a data URL (or null), role, host flag, `connection` (`present`, or `reconnecting` while the seat is held for its 90 second resume window), and `appUserId` only for people who consented. The same `connection` field is on the participants of `participants.get`, of the `app-session` frame and of the `channel-app` summary.
+- `state { rev, value }`
+- `event { fromSeatId, name, data }`
+- `connection { status }`: `online` or `reconnecting`.
+- `session.ended { reason }`: one of the `end_reason` values of the data model.
+- `theme { theme }`: up to 64 CSS custom properties.
+
+### Caps
+
+| What | Cap |
+|---|---|
+| State patch and state value | 16384 bytes serialized (`APP_STATE_MAX_BYTES`) |
+| Event payload | 1024 bytes serialized (`APP_EVENT_MAX_BYTES`) |
+| Events per participant | 20 per second (`APP_EVENT_MAX_PER_SECOND`) |
+| State writes per session | 10 per second, coalesced (`APP_STATE_MAX_WRITES_PER_SECOND`) |
+| JSON nesting | 32 levels |
+| Participants in one push | 264 |
+| Avatar data URL | 65536 characters |
+| Display name | 64 characters |
+
+JSON values must survive `JSON.stringify` unchanged: no `undefined`, functions, `NaN`, `Infinity`, class instances or holes in arrays. Sizes are UTF-8 bytes of the serialized value, enforced by the schemas themselves.
+
+### What the app never sees
+
+A pqp user id, an email, a token, a server id or a channel id. It gets a display name, an avatar as a data URL, a random per-session seat id (16 to 32 characters of `A-Za-z0-9_-`), and, for people who ticked the consent box only, a per-app derived id. `bridge.test.ts` walks every bridge schema and fails if a key named `userId`, `user_id`, `email`, `token`, `serverId` or `channelId` appears on it. The WebSocket frames may carry user ids, because the page needs them to draw avatars; the page strips them before anything reaches the app.
+
 ## Where things live
 
 - Zod schemas, validator and constants: `packages/shared/src/apps/manifest.ts`
 - Presence formatter: `packages/shared/src/apps/presence.ts`
+- Bridge contract: `packages/shared/src/apps/bridge.ts`; WebSocket frames: `packages/shared/src/apps/frames.ts`; shared JSON, seat id and end reason pieces: `common.ts`; roster and JSON caps beyond the manifest's: `limits.ts`
 - JSON Schema for third parties: `packages/shared/schemas/app-manifest-1.schema.json`
 - Fixtures: `packages/shared/fixtures/app-manifests/` (`valid-*`, `invalid-schema-*` rejected by both schemas, `invalid-rule-*` accepted by the JSON Schema and rejected by the validator)
 - Tests: `packages/shared/src/apps/*.test.ts`. The parity test runs both schemas over every fixture, so the JSON file and the zod schema cannot drift apart. Change one, change the other, add a fixture.
