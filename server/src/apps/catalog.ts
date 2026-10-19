@@ -11,10 +11,11 @@ import { logEvent } from "../lib/log.js";
  * THE CATALOG LOADER: how first-party apps get into the database.
  *
  * `catalog.json` is written by the packager (`tools/apps-build/`, Track R) and
- * committed. Each entry is a BUILT manifest plus the sha256 of its canonical
- * text. At boot, on the API and on the worker, every entry is validated with
- * `validateAppManifest` and merged into `apps` and `app_versions`, and the
- * merge is INSERT-ONLY:
+ * committed. Each entry is a BUILT manifest plus `manifestSha256`, the identity
+ * the packager gives that exact build (the loader compares it, it does not
+ * recompute it: the canonical form belongs to the packager). At boot, on the
+ * API and on the worker, every entry is validated with `validateAppManifest`
+ * and merged into `apps` and `app_versions`, and the merge is INSERT-ONLY:
  *
  *  - an unknown app id inserts `apps` as `draft`, off everywhere
  *    (`global_enabled` false, nothing in `server_apps`), under the manifest's
@@ -33,7 +34,13 @@ import { logEvent } from "../lib/log.js";
  * Every insert writes one `app_admin_audit` row (`catalog-load`, actor `boot`).
  * The whole load is one transaction under an advisory lock, so `api-a`,
  * `api-b` and the worker booting together produce one set of rows and one set
- * of audit lines, and a second run of the same catalog writes nothing.
+ * of audit lines, and a second run of the same catalog writes nothing. What
+ * already exists is read in three statements for the whole catalog, not three
+ * per entry, so a populated catalog costs a boot a handful of round trips.
+ *
+ * A load that fails (the database was down at boot) is retried with a bounded
+ * backoff by `startAppCatalogLoad`; it is idempotent, so a retry that races a
+ * sibling's success writes nothing.
  *
  * THE DEV CONVENIENCE. With `DEV_AUTH_BYPASS=true` and `NODE_ENV` not
  * `production`, apps of the `pqp` publisher are made `live`, `global_enabled`
@@ -98,16 +105,19 @@ export function readCatalogFile(path = join(here, "catalog.json")): unknown[] {
 }
 
 interface ParsedSemver {
-  core: [number, number, number];
+  core: [bigint, bigint, bigint];
   pre: string[];
 }
 
 function parseSemver(version: string): ParsedSemver {
-  const [core = "", pre] = version.split("-", 2);
+  const dash = version.indexOf("-");
+  const core = dash === -1 ? version : version.slice(0, dash);
   const [major = "0", minor = "0", patch = "0"] = core.split(".");
   return {
-    core: [Number(major), Number(minor), Number(patch)],
-    pre: pre === undefined ? [] : version.slice(core.length + 1).split("."),
+    // BigInt: the manifest's version pattern allows numbers of any length, and
+    // a double would call two long ones equal.
+    core: [BigInt(major), BigInt(minor), BigInt(patch)],
+    pre: dash === -1 ? [] : version.slice(dash + 1).split("."),
   };
 }
 
@@ -142,8 +152,8 @@ export function compareSemver(a: string, b: string): number {
     const xNumeric = /^\d+$/.test(x);
     const yNumeric = /^\d+$/.test(y);
     if (xNumeric && yNumeric) {
-      if (Number(x) !== Number(y)) {
-        return Number(x) < Number(y) ? -1 : 1;
+      if (BigInt(x) !== BigInt(y)) {
+        return BigInt(x) < BigInt(y) ? -1 : 1;
       }
     } else if (xNumeric !== yNumeric) {
       return xNumeric ? -1 : 1;
@@ -182,6 +192,46 @@ function refuse(
   logEvent("apps.catalog.refused", { ...refusal, ...detail });
 }
 
+/** What the database already holds for the apps and publishers a catalog names. */
+interface KnownState {
+  /** publisher id to whether it is suspended. */
+  publishers: Map<string, boolean>;
+  /** app id to its publisher id. */
+  apps: Map<string, string>;
+  /** `app id` + NUL + `version` to its stored manifest hash. */
+  versions: Map<string, string>;
+}
+
+const versionKey = (appId: string, version: string) => `${appId}\u0000${version}`;
+
+async function readKnownState(
+  client: PoolClient,
+  publisherIds: readonly string[],
+  appIds: readonly string[],
+): Promise<KnownState> {
+  const [publishers, apps, versions] = await Promise.all([
+    client.query<{ id: string; suspended_at: Date | null }>(
+      `SELECT id, suspended_at FROM app_publishers WHERE id = ANY($1::text[])`,
+      [[...publisherIds]],
+    ),
+    client.query<{ id: string; publisher_id: string }>(
+      `SELECT id, publisher_id FROM apps WHERE id = ANY($1::text[])`,
+      [[...appIds]],
+    ),
+    client.query<{ app_id: string; version: string; manifest_sha256: string }>(
+      `SELECT app_id, version, manifest_sha256 FROM app_versions WHERE app_id = ANY($1::text[])`,
+      [[...appIds]],
+    ),
+  ]);
+  return {
+    publishers: new Map(publishers.rows.map((row) => [row.id, row.suspended_at !== null])),
+    apps: new Map(apps.rows.map((row) => [row.id, row.publisher_id])),
+    versions: new Map(
+      versions.rows.map((row) => [versionKey(row.app_id, row.version), row.manifest_sha256]),
+    ),
+  };
+}
+
 export async function loadAppCatalog(
   options: { entries?: unknown[]; dev?: boolean } = {},
 ): Promise<CatalogLoadResult> {
@@ -199,42 +249,46 @@ export async function loadAppCatalog(
     return result;
   }
 
+  // Validation needs no database: settle every entry first, so the transaction
+  // only holds the entries that can be written.
+  const valid: Array<{ manifest: AppManifest; manifestSha256: string }> = [];
+  for (const item of raw) {
+    const entry = entrySchema.safeParse(item);
+    if (!entry.success) {
+      refuse(result, { appId: null, version: null, reason: "invalid-entry" });
+      continue;
+    }
+    const checked = validateAppManifest(entry.data.manifest);
+    if (!checked.ok) {
+      const candidate = entry.data.manifest as { id?: unknown; version?: unknown } | null;
+      refuse(
+        result,
+        {
+          appId: typeof candidate?.id === "string" ? candidate.id : null,
+          version: typeof candidate?.version === "string" ? candidate.version : null,
+          reason: "invalid-manifest",
+        },
+        { issues: checked.issues.slice(0, 5) },
+      );
+      continue;
+    }
+    valid.push({ manifest: checked.manifest, manifestSha256: entry.data.manifestSha256 });
+  }
+
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
     // One loader at a time across `api-a`, `api-b` and the worker.
-    await client.query(
-      `SELECT pg_advisory_xact_lock(hashtext('pqp.apps.catalog-load'))`,
-    );
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('pqp.apps.catalog-load'))`);
 
+    const known = await readKnownState(
+      client,
+      [...new Set(valid.map((item) => item.manifest.publisher))],
+      [...new Set(valid.map((item) => item.manifest.id))],
+    );
     const insertedByApp = new Map<string, string[]>();
-    for (const item of raw) {
-      const entry = entrySchema.safeParse(item);
-      if (!entry.success) {
-        refuse(result, { appId: null, version: null, reason: "invalid-entry" });
-        continue;
-      }
-      const checked = validateAppManifest(entry.data.manifest);
-      if (!checked.ok) {
-        const candidate = entry.data.manifest as { id?: unknown; version?: unknown };
-        refuse(
-          result,
-          {
-            appId: typeof candidate?.id === "string" ? candidate.id : null,
-            version: typeof candidate?.version === "string" ? candidate.version : null,
-            reason: "invalid-manifest",
-          },
-          { issues: checked.issues.slice(0, 5) },
-        );
-        continue;
-      }
-      await mergeEntry(
-        client,
-        checked.manifest,
-        entry.data.manifestSha256,
-        result,
-        insertedByApp,
-      );
+    for (const item of valid) {
+      await mergeEntry(client, item.manifest, item.manifestSha256, known, result, insertedByApp);
     }
 
     // First version of an app that has none yet: the newest this load brought.
@@ -283,50 +337,43 @@ async function mergeEntry(
   client: PoolClient,
   manifest: AppManifest,
   manifestSha256: string,
+  known: KnownState,
   result: CatalogLoadResult,
   insertedByApp: Map<string, string[]>,
 ): Promise<void> {
   const ref = { appId: manifest.id, version: manifest.version };
 
-  const publisher = await client.query<{ suspended_at: Date | null }>(
-    `SELECT suspended_at FROM app_publishers WHERE id = $1`,
-    [manifest.publisher],
-  );
-  if (!publisher.rows[0] || publisher.rows[0].suspended_at) {
+  const suspended = known.publishers.get(manifest.publisher);
+  if (suspended === undefined || suspended) {
     refuse(result, { ...ref, reason: "unknown-publisher" });
     return;
   }
 
-  const existingApp = await client.query<{ publisher_id: string }>(
-    `SELECT publisher_id FROM apps WHERE id = $1`,
-    [manifest.id],
-  );
-  if (existingApp.rows[0] && existingApp.rows[0].publisher_id !== manifest.publisher) {
+  const knownPublisher = known.apps.get(manifest.id);
+  if (knownPublisher !== undefined && knownPublisher !== manifest.publisher) {
     // An id belongs to the publisher that first brought it.
     refuse(result, { ...ref, reason: "publisher-mismatch" });
     return;
   }
 
-  const existingVersion = await client.query<{ manifest_sha256: string }>(
-    `SELECT manifest_sha256 FROM app_versions WHERE app_id = $1 AND version = $2`,
-    [manifest.id, manifest.version],
-  );
-  if (existingVersion.rows[0]) {
-    if (existingVersion.rows[0].manifest_sha256 !== manifestSha256) {
+  const storedHash = known.versions.get(versionKey(manifest.id, manifest.version));
+  if (storedHash !== undefined) {
+    if (storedHash !== manifestSha256) {
       refuse(result, { ...ref, reason: "hash-changed" }, {
-        stored: existingVersion.rows[0].manifest_sha256,
+        stored: storedHash,
         offered: manifestSha256,
       });
     }
     return;
   }
 
-  if (!existingApp.rows[0]) {
+  if (knownPublisher === undefined) {
     const created = await client.query(
       `INSERT INTO apps (id, publisher_id) VALUES ($1, $2)
        ON CONFLICT (id) DO NOTHING`,
       [manifest.id, manifest.publisher],
     );
+    known.apps.set(manifest.id, manifest.publisher);
     if (created.rowCount) {
       result.appsInserted += 1;
       await audit(client, manifest.id, null, {
@@ -348,6 +395,7 @@ async function mergeEntry(
       manifest.entry.sha256,
     ],
   );
+  known.versions.set(versionKey(manifest.id, manifest.version), manifestSha256);
   if (inserted.rowCount) {
     result.versionsInserted += 1;
     const versions = insertedByApp.get(manifest.id) ?? [];
@@ -359,6 +407,50 @@ async function mergeEntry(
       manifestSha256,
     });
   }
+}
+
+/** Seconds before each retry of a failed boot load: bounded, a handful of tries. */
+export const CATALOG_RETRY_DELAYS_MS = [5_000, 15_000, 45_000, 120_000, 300_000] as const;
+
+/**
+ * The boot step: try the load once (awaited, so the rows exist before the first
+ * request when the database is up) and, if it fails, keep trying in the
+ * background with a bounded backoff, so a database that was down at boot still
+ * ends up with its apps without a restart. Never throws, and never holds the
+ * process open (timers are unref'd). The load is idempotent, so a retry that
+ * races a sibling's success writes nothing.
+ */
+export async function startAppCatalogLoad(
+  options: {
+    load?: () => Promise<unknown>;
+    delaysMs?: readonly number[];
+    schedule?: (run: () => void, delayMs: number) => void;
+  } = {},
+): Promise<void> {
+  const load = options.load ?? (() => loadAppCatalog());
+  const delays = options.delaysMs ?? CATALOG_RETRY_DELAYS_MS;
+  const schedule =
+    options.schedule ??
+    ((run: () => void, delayMs: number) => {
+      setTimeout(run, delayMs).unref();
+    });
+
+  const attempt = async (index: number): Promise<void> => {
+    try {
+      await load();
+    } catch (error) {
+      const delay = delays[index];
+      console.error(
+        `[apps] catalog load failed (attempt ${index + 1}):`,
+        error,
+        delay === undefined ? "giving up until the next restart" : `retrying in ${delay} ms`,
+      );
+      if (delay !== undefined) {
+        schedule(() => void attempt(index + 1), delay);
+      }
+    }
+  };
+  await attempt(0);
 }
 
 /**

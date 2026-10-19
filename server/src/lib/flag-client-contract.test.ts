@@ -525,7 +525,7 @@ describe("apps and locadora_share against the config the client reads", () => {
     const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
     expect(api).toMatch(/registerAppRoutes\(router\)/);
     const routes = readFileSync(path.join(serverSrc, "api/app-routes.ts"), "utf8");
-    const route = /router\.get\("\/api\/apps\/config"[\s\S]*?\n  \}\);/.exec(routes)?.[0];
+    const route = /router\.get\("\/api\/apps\/config"[\s\S]*?\n {2}\}\);/.exec(routes)?.[0];
     expect(route, "GET /api/apps/config is not mounted").toBeTruthy();
     expect(route).toContain('searchParams.get("serverId")');
     expect(route).toContain("appsConfigForServer(");

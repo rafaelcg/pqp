@@ -85,7 +85,7 @@ import { userActivity } from "./services/user-activity.js";
 import { userStats } from "./services/user-stats.js";
 import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js";
 import { startFeatureFlags } from "./lib/flags.js";
-import { loadAppCatalog } from "./apps/catalog.js";
+import { startAppCatalogLoad } from "./apps/catalog.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
   READY_PATH,
@@ -753,11 +753,10 @@ async function main() {
   await startFeatureFlags();
 
   // The apps catalog (`apps/catalog.ts`): first-party apps merged INSERT-ONLY
-  // into `apps` / `app_versions`. Not fatal and not awaited by anything else:
-  // a failure leaves the platform with the apps it already had.
-  await loadAppCatalog().catch((error: unknown) => {
-    console.error("[apps] catalog load failed:", error);
-  });
+  // into `apps` / `app_versions`. Never fatal: a load that fails (the database
+  // was down) is retried in the background with a bounded backoff, and until
+  // then the platform has the apps it already had.
+  await startAppCatalogLoad();
 
   // Live HLS: a restart does not stop the media box, so before anything else
   // this process ADOPTS the egresses still running for sessions it owns (a
