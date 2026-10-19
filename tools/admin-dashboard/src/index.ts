@@ -22,14 +22,16 @@
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
  *
- *     Thirteen `/operator/*` routes join them, and they are this Worker's FIRST
- *     WRITES. Six reads (find a server, list its voice channels, the watch
+ *     Twenty `/operator/*` routes join them, and they are this Worker's FIRST
+ *     WRITES. Eight reads (find a server, list its voice channels, the watch
  *     party waitlist, the runtime feature flags, the feedback queue, which
- *     app one named person is on) and
- *     seven PUTs (watch party availability and low latency per server, a
+ *     app one named person is on, the apps catalog, one app's servers) and
+ *     twelve writes (watch party availability and low latency per server, a
  *     channel's transport pin, a channel's SFU region, declining a server's
  *     waitlist, a feature flag globally, a feature flag for one server,
- *     confirming or closing a feedback item). They are in `OPERATOR_ROUTES` below, an
+ *     confirming or closing a feedback item, and for apps: an app's switches,
+ *     a version's review, a server's switch, and the two POSTs that end
+ *     sessions). They are in `OPERATOR_ROUTES` below, an
  *     exact (method, path) table for the same reason the API keeps one: the
  *     blast radius of the password plus the machine token should be readable
  *     in one glance, and a prefix is a thing somebody widens by accident.
@@ -61,6 +63,7 @@ import {
   isAllowedClickOrigin,
   type ApkClickState,
 } from "./distribution.js";
+import { writeRefusal } from "./write-guard.js";
 
 export interface Env {
   ASSETS: Fetcher;
@@ -318,7 +321,7 @@ async function proxyJson(
  * the page shows that answer.
  */
 const OPERATOR_ROUTES: {
-  method: "GET" | "PUT";
+  method: "GET" | "PUT" | "POST";
   path: string;
   forward: (url: URL, origin: string) => string;
 }[] = [
@@ -426,6 +429,55 @@ const OPERATOR_ROUTES: {
     path: "/operator/flag-overrides",
     forward: (_url, origin) => `${origin}/api/admin/flag-overrides`,
   },
+  // The apps catalog ("Apps"): the list with versions and the last changes,
+  // one app's switches, a version's review, one app's servers and a server's
+  // operator switch. The app id is in the body or the query, never in the
+  // path, because the API's token table has no path patterns either.
+  {
+    method: "GET",
+    path: "/operator/apps",
+    forward: (_url, origin) => `${origin}/api/admin/apps`,
+  },
+  {
+    method: "PUT",
+    path: "/operator/apps",
+    forward: (_url, origin) => `${origin}/api/admin/apps`,
+  },
+  {
+    method: "PUT",
+    path: "/operator/app-review",
+    forward: (_url, origin) => `${origin}/api/admin/app-review`,
+  },
+  {
+    method: "GET",
+    path: "/operator/app-servers",
+    forward: (url, origin) => {
+      const upstream = new URL(`${origin}/api/admin/app-servers`);
+      for (const name of ["appId", "q", "on", "limit", "offset"]) {
+        const value = url.searchParams.get(name);
+        if (value) upstream.searchParams.set(name, value);
+      }
+      return upstream.toString();
+    },
+  },
+  {
+    method: "PUT",
+    path: "/operator/server-apps",
+    forward: (_url, origin) => `${origin}/api/admin/server-apps`,
+  },
+  // "Desligar em todos" and an operator ending one session. The two writes
+  // that END something people are in the middle of, so each is confirmed in
+  // the page with the count first.
+  {
+    method: "POST",
+    path: "/operator/app-disable-everywhere",
+    forward: (_url, origin) => `${origin}/api/admin/app-disable-everywhere`,
+  },
+  {
+    method: "POST",
+    path: "/operator/app-session-end",
+    forward: (_url, origin) => `${origin}/api/admin/app-session-end`,
+  },
 ];
 
 /** A positive number of dollars, or null for unset and anything else. */
@@ -473,6 +525,13 @@ export default {
     // forwarded on the same machine token; the page never holds either.
     const operatorRoute = matchOperatorRoute(request.method, path);
     if (operatorRoute) {
+      // Every write, before it is forwarded: see `write-guard.js`.
+      if (operatorRoute.method !== "GET") {
+        const refusal = writeRefusal(request.headers, url.origin);
+        if (refusal) {
+          return json(refusal.status, { error: refusal.error });
+        }
+      }
       if (!origin || !env.ADMIN_METRICS_TOKEN) {
         return json(503, { error: "operator controls not configured" });
       }
@@ -482,7 +541,7 @@ export default {
         {
           method: operatorRoute.method,
           body:
-            operatorRoute.method === "PUT"
+            operatorRoute.method === "PUT" || operatorRoute.method === "POST"
               ? await request.text()
               : undefined,
         },

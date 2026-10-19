@@ -5776,7 +5776,7 @@
       method: "PUT",
       cache: "no-store",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" },
       body: JSON.stringify({ id: String(id), status: status })
     }).then(function (r) {
       if (!r.ok) throw new Error("http " + r.status);
@@ -6414,7 +6414,7 @@
       method: "PUT",
       cache: "no-store",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" },
       body: JSON.stringify({ serverId: serverId, enabled: enabled })
     }).then(function (r) {
       if (!r.ok) throw new Error("http " + r.status);
@@ -6451,7 +6451,7 @@
       method: "PUT",
       cache: "no-store",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" },
       body: JSON.stringify({ serverId: serverId, lowLatency: lowLatency })
     }).then(function (r) {
       if (!r.ok) throw new Error("http " + r.status);
@@ -6551,7 +6551,7 @@
       method: "PUT",
       cache: "no-store",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" },
       body: JSON.stringify({ channelId: channelId, region: region })
     }).then(function (r) {
       if (!r.ok) throw new Error("http " + r.status);
@@ -6593,7 +6593,7 @@
       method: "PUT",
       cache: "no-store",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" },
       body: JSON.stringify({ channelId: channelId, transport: transport })
     }).then(function (r) {
       if (!r.ok) throw new Error("http " + r.status);
@@ -6746,7 +6746,7 @@
       method: "PUT",
       cache: "no-store",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" },
       body: JSON.stringify({ serverId: serverId, enabled: true, lowLatency: true })
     }).then(function (r) {
       if (!r.ok) throw new Error("http " + r.status);
@@ -6776,7 +6776,7 @@
       method: "PUT",
       cache: "no-store",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" },
       body: JSON.stringify({ serverId: serverId })
     }).then(function (r) {
       if (!r.ok) throw new Error("http " + r.status);
@@ -7029,7 +7029,7 @@
       method: "PUT",
       cache: "no-store",
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" },
       body: JSON.stringify(body)
     }).then(function (r) {
       if (!r.ok) {
