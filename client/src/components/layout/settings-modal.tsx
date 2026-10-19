@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Gamepad2, Bell, Bug, CircleHelp, Database, Keyboard, Mic, Palette, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
+import { Gamepad2, Bell, Bug, CircleHelp, Database, Keyboard, Mic, Palette, Puzzle, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
 import {
   type BlockedUser,
   type User,
@@ -38,7 +38,9 @@ import { VoiceSection } from "@/components/settings/voice-section";
 import { KeyboardSection } from "@/components/settings/keyboard-section";
 import { AppearanceSection } from "@/components/settings/appearance-section";
 import { NotificationsSection } from "@/components/settings/notifications-section";
+import { AppsSection } from "@/components/settings/apps-section";
 import { PrivacySection } from "@/components/settings/privacy-section";
+import { useAppConsents } from "@/lib/apps/consents";
 import { DeleteAccountDialog, YourDataSection } from "@/components/settings/your-data-section";
 import { ProfileSection, type HandleAvailability } from "@/components/settings/profile-section";
 import { endFeedbackVisit, FeedbackSection } from "@/components/settings/feedback-section";
@@ -151,6 +153,13 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.connections",
     description: "settings.connections.description",
     icon: Gamepad2,
+    group: "account",
+  },
+  {
+    id: "apps",
+    label: "settings.section.apps",
+    description: "settings.apps.description",
+    icon: Puzzle,
     group: "account",
   },
   {
@@ -421,6 +430,14 @@ export function SettingsModal({
   // "shortcuts only work with a keyboard connected", and cost a swipe on a
   // strip that already shows three of ten tabs at a time.
   const touchOnly = useTouchOnly();
+  // Once Apps has shown it stays for as long as the dialog is open, so taking
+  // back the last app does not pull the page out from under the person.
+  const hasAppConsentsNow = (useAppConsents().consents?.length ?? 0) > 0;
+  const [sawAppConsents, setSawAppConsents] = useState(false);
+  useEffect(() => {
+    if (hasAppConsentsNow) setSawAppConsents(true);
+  }, [hasAppConsentsNow]);
+  const hasAppConsents = hasAppConsentsNow || sawAppConsents;
 
   // The whole nav, minus the moderation door for every account it did not
   // open for, and minus Atalhos on a touch-only device. Derived per render
@@ -431,9 +448,12 @@ export function SettingsModal({
       SECTIONS.filter(
         (entry) =>
           (canModerateInstance || entry.id !== "moderation") &&
+          // Apps shows only for somebody who has accepted one: the list is
+          // read where apps are on, so this asks for nothing when they are off.
+          (hasAppConsents || entry.id !== "apps") &&
           !(touchOnly && entry.id === "keyboard"),
       ),
-    [canModerateInstance, touchOnly],
+    [canModerateInstance, touchOnly, hasAppConsents],
   );
 
   // A caller (or a stale sticky section from a previous session) pointing at
@@ -1387,6 +1407,8 @@ export function SettingsModal({
                             }
                           />
                         )}
+
+                        {active.id === "apps" && <AppsSection />}
 
                         {active.id === "privacy" && (
                           <PrivacySection

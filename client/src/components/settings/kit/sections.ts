@@ -11,6 +11,7 @@ import { createContext, useContext } from "react";
 export type SettingsSectionId =
   | "profile"
   | "connections"
+  | "apps"
   | "voice"
   | "keyboard"
   | "notifications"

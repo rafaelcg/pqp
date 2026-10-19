@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Navigate } from "react-router-dom";
+import { AppJoinSheet, type AppJoinSheetProps } from "@/components/apps/app-join-sheet";
 import { AppSessionStrip, type StripShareState } from "@/components/apps/app-session-strip";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { CardPerson } from "@/lib/apps/card-model";
@@ -226,6 +227,65 @@ const CASES: Case[] = [
   },
 ];
 
+const SHEET_FACES: Array<{ id: string; label: string; props: Partial<AppJoinSheetProps> }> = [
+  { id: "ask", label: "Estado 1: primeira vez", props: { face: "ask" } },
+  { id: "ask-id", label: "Estado 2: o app pede o id", props: { face: "ask", asksForId: true } },
+  { id: "entering", label: "Estado 3: entrando", props: { face: "entering" } },
+  { id: "failed", label: "Estado 4: falhou por conexão", props: { face: "failed" } },
+  { id: "full", label: "Estado 5: a sala encheu", props: { face: "full" } },
+  { id: "ended", label: "Estado 6: já terminou", props: { face: "ended" } },
+  { id: "disabled", label: "Estado 7: desligado", props: { face: "disabled" } },
+];
+
+function SheetCases() {
+  const [open, setOpen] = useState<string | null>(null);
+  const [identity, setIdentity] = useState(false);
+  const chosen = SHEET_FACES.find((one) => one.id === open);
+  return (
+    <section data-case="join-sheet" className="flex flex-col gap-2">
+      <h2 className="text-sm font-semibold">Diálogo de entrada (mock 04)</h2>
+      <div className="flex flex-wrap gap-2">
+        {SHEET_FACES.map((one) => (
+          <button
+            key={one.id}
+            type="button"
+            data-sheet={one.id}
+            className="rounded-[var(--radius-control)] border border-border px-3 py-1 text-xs"
+            onClick={() => setOpen(one.id)}
+          >
+            {one.label}
+          </button>
+        ))}
+      </div>
+      {chosen ? (
+        <AppJoinSheet
+          open
+          face="ask"
+          app={{
+            name: "Sala de jogos",
+            icon: "gamepad",
+            notice: "Teu jogo fica no teu computador. O pqp não guarda nem envia jogos.",
+          }}
+          starterName="bia"
+          countLine="3 dentro, cabem 4"
+          viewer={{ name: "rafa", avatarUrl: null }}
+          asksForId={false}
+          identityChecked={identity}
+          onIdentityChange={setIdentity}
+          failure="connection"
+          canWatch
+          fullLine="4 de 4 jogando. 2 assistindo."
+          endedLine="bia encerrou Sala de jogos há 1 min."
+          onEnter={() => {}}
+          onWatch={() => {}}
+          onClose={() => setOpen(null)}
+          {...chosen.props}
+        />
+      ) : null}
+    </section>
+  );
+}
+
 function Frame({ children, width }: { children: ReactNode; width: number }) {
   return (
     <div
@@ -261,6 +321,7 @@ export function QaAppsPage() {
             {compact ? "Celular 390" : "Desktop"}
           </button>
         </header>
+        <SheetCases />
         {cases.map((one) => (
           <section key={one.id} data-case={one.id} className="flex flex-col gap-2">
             <h2 className="text-sm font-semibold">{one.title}</h2>

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { appConsentBodySchema } from "@pqp/shared";
 import { appsConfigForServer, DISABLED_APPS_CONFIG } from "../apps/config.js";
 import { listConsents, recordConsent, revokeConsent } from "../apps/consents.js";
 import { takeHostAs } from "../apps/host.js";
@@ -45,7 +46,6 @@ const startBodySchema = z.object({
 });
 
 const appIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,30}[a-z0-9]$/);
-const consentBodySchema = z.object({ identityGranted: z.boolean().optional() }).strict();
 
 const notFoundChannel = () => new HttpError(404, "Channel not found");
 
@@ -116,7 +116,7 @@ export function registerAppRoutes(router: Router): void {
     if (!id.success) {
       throw new HttpError(404, "App not found");
     }
-    const body = consentBodySchema.parse(await readJsonBody(req));
+    const body = appConsentBodySchema.parse(await readJsonBody(req));
     const result = await recordConsent(user.id, id.data, body.identityGranted === true);
     if (!result.ok) {
       throw new HttpError(404, "App not found");

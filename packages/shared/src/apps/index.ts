@@ -5,3 +5,4 @@ export * from "./limits.js";
 export * from "./manifest.js";
 export * from "./presence.js";
 export * from "./config.js";
+export * from "./consents.js";

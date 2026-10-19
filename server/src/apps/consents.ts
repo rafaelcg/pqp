@@ -1,4 +1,4 @@
-import { APP_REQUIRED_LOCALES, appString, type AppManifest } from "@pqp/shared";
+import { APP_REQUIRED_LOCALES, appString, type AppConsent, type AppManifest } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { loadPinnedManifest } from "./manifests.js";
 
@@ -19,20 +19,7 @@ import { loadPinnedManifest } from "./manifests.js";
  * same capabilities, keeps the consent.
  */
 
-export interface ConsentRow {
-  appId: string;
-  acceptedVersion: string;
-  identityGranted: boolean;
-  consentedAt: string;
-  /** The capabilities of the version the person accepted, or this app's now. */
-  identity: "display" | "user-id";
-  /** The app's name in each locale, for the list in Configurações. */
-  names: Record<string, string>;
-  /** The app's one-line notice in each locale, when it has one. */
-  notices: Record<string, string>;
-  /** The current version asks for something the accepted one did not. */
-  stale: boolean;
-}
+export type ConsentRow = AppConsent;
 
 interface DbRow {
   app_id: string;

@@ -244,6 +244,7 @@ import type { AudienceModeHostControls } from "@/components/voice/audience-mode"
 import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { useForumConfig } from "@/hooks/use-forum-config";
 import { useAppsSessionsSync } from "@/hooks/use-apps-sessions-sync";
+import { AppJoinHost } from "@/components/apps/app-join-host";
 import {
   AppSessionLayout,
   type AppSessionPeople,
@@ -12277,6 +12278,11 @@ function MainAppContent({
           }}
         />
       )}
+      <AppJoinHost
+        serverId={selectedServerId}
+        viewerId={user?.id ?? null}
+        people={appPeople}
+      />
       <AppSessionLayout
         serverId={selectedServerId}
         channelId={
