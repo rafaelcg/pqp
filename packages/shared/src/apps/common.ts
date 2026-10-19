@@ -1,0 +1,168 @@
+import { z } from "zod";
+import { APP_JSON_MAX_DEPTH } from "./limits.js";
+import { APP_EVENT_MAX_BYTES, APP_STATE_MAX_BYTES } from "./manifest.js";
+
+/** A value that survives `JSON.stringify` and `JSON.parse` unchanged. */
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+const textEncoder = new TextEncoder();
+
+/** Serialized size in UTF-8 bytes. Only call it on a value `jsonProblem` accepted. */
+export function jsonByteLength(value: JsonValue): number {
+  return textEncoder.encode(JSON.stringify(value)).length;
+}
+
+function isPlainObject(value: object): boolean {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/** A running lower bound of the serialized size, so an oversize value stops the walk early. */
+interface Budget {
+  /** Lower bound of serialized UTF-8 bytes seen so far (a UTF-16 unit is at least one byte). */
+  used: number;
+  max: number;
+}
+
+/**
+ * Why a value is not plain JSON, or null when it is. Rejects undefined (also
+ * inside arrays and holes), functions, symbols, bigints, NaN, Infinity,
+ * class instances (Date, Map, typed arrays, ...) and nesting past
+ * `APP_JSON_MAX_DEPTH`. A cycle is caught by the depth limit.
+ *
+ * With a `budget` the walk also stops as soon as the value cannot fit, so a
+ * huge value is refused after reading about `max` bytes of it, not all of it.
+ */
+export function jsonProblem(value: unknown, depth = 0, budget?: Budget): string | null {
+  const over = (bytes: number): string | null => {
+    if (!budget) return null;
+    budget.used += bytes;
+    return budget.used > budget.max
+      ? `serialized value is larger than ${budget.max} bytes`
+      : null;
+  };
+  if (value === null) return over(4);
+  switch (typeof value) {
+    case "boolean":
+      return over(4);
+    case "string":
+      return over(value.length + 2);
+    case "number":
+      return Number.isFinite(value) ? over(1) : "numbers must be finite";
+    case "object":
+      break;
+    default:
+      return `${typeof value} is not a JSON value`;
+  }
+  if (depth >= APP_JSON_MAX_DEPTH) {
+    return `nesting is deeper than ${APP_JSON_MAX_DEPTH}`;
+  }
+  if (Array.isArray(value)) {
+    const early = over(2);
+    if (early) return early;
+    for (let i = 0; i < value.length; i += 1) {
+      if (!(i in value)) return "arrays must not have holes";
+      // a comma separates elements: none before the first
+      const problem = (i > 0 ? over(1) : null) ?? jsonProblem(value[i], depth + 1, budget);
+      if (problem) return problem;
+    }
+    return null;
+  }
+  const object = value as object;
+  if (!isPlainObject(object)) return "only plain objects are JSON values";
+  const early = over(2);
+  if (early) return early;
+  // for...in walks lazily, so an oversize object stops after its budget, not after all its keys
+  for (const key in object) {
+    if (!Object.prototype.hasOwnProperty.call(object, key)) continue;
+    const keyProblem = over(key.length + 3);
+    if (keyProblem) return keyProblem;
+    const problem = jsonProblem((object as Record<string, unknown>)[key], depth + 1, budget);
+    if (problem) return problem;
+  }
+  return null;
+}
+
+/**
+ * A JSON value, optionally capped at `maxBytes` of serialized UTF-8. The size
+ * check runs inside the schema, so every consumer gets it for free. The walk
+ * keeps a running lower bound and stops early; the exact byte count is taken
+ * only for a value that passed it.
+ */
+export function jsonValueSchema(
+  maxBytes?: number,
+): z.ZodType<JsonValue, z.ZodTypeDef, JsonValue> {
+  return z.unknown().superRefine((value, ctx) => {
+    const budget = maxBytes === undefined ? undefined : { used: 0, max: maxBytes };
+    const problem = jsonProblem(value, 0, budget);
+    if (problem) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+      return;
+    }
+    if (maxBytes !== undefined && jsonByteLength(value as JsonValue) > maxBytes) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `serialized value is larger than ${maxBytes} bytes`,
+      });
+    }
+  }) as unknown as z.ZodType<JsonValue, z.ZodTypeDef, JsonValue>;
+}
+
+/** Any JSON value, no size cap (use the bounded ones at the edges). */
+export const jsonSchema = jsonValueSchema();
+
+/** A JSON Merge Patch (RFC 7396) document: any JSON value, `null` deletes a key. */
+export const statePatchSchema = jsonValueSchema(APP_STATE_MAX_BYTES);
+
+/** The full session state value as the server keeps it. */
+export const stateValueSchema = jsonValueSchema(APP_STATE_MAX_BYTES);
+
+/** Payload of one ephemeral event. */
+export const eventDataSchema = jsonValueSchema(APP_EVENT_MAX_BYTES);
+
+/** Event names an app invents: lowercase, dots and dashes, 1 to 32 characters. */
+export const eventNameSchema = z.string().regex(/^[a-z][a-z0-9.-]{0,31}$/);
+
+/** Random per-session seat id. Never derived from a pqp user id. */
+export const seatIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,32}$/);
+
+/** Derived per-app identity, present only for people who consented. */
+export const appUserIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
+
+/** Whether a seated person's socket is up, or the seat is held for their 90 second resume window. */
+export const appParticipantConnectionSchema = z.enum(["present", "reconnecting"]);
+export type AppParticipantConnection = z.infer<typeof appParticipantConnectionSchema>;
+
+export const appRoleSchema = z.enum(["player", "spectator"]);
+export type AppRole = z.infer<typeof appRoleSchema>;
+
+/** `app_sessions.end_reason` in data-model.sql. */
+export const APP_END_REASONS = [
+  "host",
+  "moderator",
+  "operator",
+  "idle",
+  "host-gone",
+  "app-disabled",
+  "empty",
+  "max-duration",
+  "channel-gone",
+  "flag-off",
+] as const;
+export const appEndReasonSchema = z.enum(APP_END_REASONS);
+export type AppEndReason = z.infer<typeof appEndReasonSchema>;
+
+/** Revision counter of the session state. */
+export const stateRevSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+
+/** State as it travels: the revision and the value it belongs to. */
+export const stateSnapshotSchema = z
+  .object({ rev: stateRevSchema, value: stateValueSchema })
+  .strip();
+export type AppStateSnapshot = z.infer<typeof stateSnapshotSchema>;
