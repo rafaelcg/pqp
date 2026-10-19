@@ -1,6 +1,8 @@
 import {
+  APP_RESULT_MAX_BYTES,
   hasPermission,
   Permission,
+  type AppEnded,
   type AppEndReason,
   type AppSessionSummary,
 } from "@pqp/shared";
@@ -224,7 +226,7 @@ export async function startAppSession(
   } catch (error) {
     logEvent("apps.timelineAnnounceFailed", { sessionId, error: String(error) });
   }
-  void announceChannelApp(channelId, { immediate: true });
+  void announceChannelApp(channelId, { immediate: true }).catch(() => {});
 
   // The answer is THIS session's: read by its id, never by channel (another
   // start could have won the channel since). The session and its card already
@@ -258,6 +260,23 @@ export async function startAppSession(
   }
 }
 
+/**
+ * The result an ending app may keep: a plain JSON object of at most
+ * `APP_RESULT_MAX_BYTES` compact bytes, without a character Postgres cannot
+ * store. Anything else is dropped (null), never an error: an ending is not the
+ * place to refuse.
+ */
+export function keptResult(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const text = JSON.stringify(value);
+  if (Buffer.byteLength(text, "utf8") > APP_RESULT_MAX_BYTES || text.includes("\\u0000")) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
 export interface EndedSession {
   /** False when it was already over: nothing was written and nobody was told. */
   ended: boolean;
@@ -282,13 +301,23 @@ export async function endSessionRow(
   const client = await getPool().connect();
   let ended: {
     channel_id: string;
-    summary: { participants: number; durationSeconds: number };
+    summary: { participants: number; durationSeconds: number; result?: unknown };
   } | null = null;
   try {
     await client.query("BEGIN");
+    // What the app left in `state.result` (a closed vote's tally) outlives the
+    // state: copied into the summary when it is a small JSON object, dropped
+    // when it is anything else. Read under the row's lock so a write that lands
+    // while the session ends is either in it or after the end refuses it.
+    const locked = await client.query<{ result: unknown }>(
+      `SELECT state->'result' AS result FROM app_sessions
+        WHERE id = $1 AND status = 'live' FOR UPDATE`,
+      [sessionId],
+    );
+    const kept = keptResult(locked.rows[0]?.result);
     const result = await client.query<{
       channel_id: string;
-      summary: { participants: number; durationSeconds: number };
+      summary: { participants: number; durationSeconds: number; result?: unknown };
     }>(
       `UPDATE app_sessions s
           SET status = 'ended', ended_at = NOW(), end_reason = $2, ended_by = $3,
@@ -298,9 +327,11 @@ export async function endSessionRow(
                 (SELECT count(*)::int FROM app_session_participants p WHERE p.session_id = s.id),
                 'durationSeconds',
                 GREATEST(0, floor(extract(epoch FROM (NOW() - s.started_at)))::int))
+              || CASE WHEN $4::jsonb IS NULL THEN '{}'::jsonb
+                      ELSE jsonb_build_object('result', $4::jsonb) END
         WHERE s.id = $1 AND s.status = 'live'
         RETURNING s.channel_id, s.summary`,
-      [sessionId, reason, endedBy],
+      [sessionId, reason, endedBy, kept === null ? null : JSON.stringify(kept)],
     );
     ended = result.rows[0] ?? null;
     if (ended) {
@@ -323,14 +354,14 @@ export async function endSessionRow(
   }
   recordAppEnd(reason);
   logEvent("apps.session.ended", { sessionId, reason, channelId: ended.channel_id });
-  announceAppEnded({
+  await announceAppEnded({
     type: "app-ended",
     sessionId,
     channelId: ended.channel_id,
     reason,
-    summary: ended.summary,
+    summary: ended.summary as AppEnded["summary"],
   });
-  void announceChannelApp(ended.channel_id, { immediate: true });
+  void announceChannelApp(ended.channel_id, { immediate: true }).catch(() => {});
   return { ended: true, channelId: ended.channel_id };
 }
 

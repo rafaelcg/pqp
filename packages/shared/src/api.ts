@@ -12,6 +12,7 @@ import { chanceResultSchema } from "./chance.js";
 import { voiceRoomTransportSchema } from "./signaling.js";
 import { pollSchema } from "./polls.js";
 import { customEmojiTokensAsText } from "./server-emoji.js";
+import { messageAppSessionSchema } from "./apps/message.js";
 import { messageSystemKindSchema } from "./nudge.js";
 import { messageForwardFieldSchema } from "./forward.js";
 
@@ -998,6 +999,13 @@ export const messageSchema = z.object({
    * renders as its plaintext `body`. Defaulted so an older API still parses.
    */
   systemKind: messageSystemKindSchema,
+  /**
+   * The app session behind a timeline card (`systemKind: "app_session"`):
+   * its status, how it ended and the quiet record's summary, or null once the
+   * session row is retained away. Absent on every other message and from an
+   * API that predates apps; old clients ignore it.
+   */
+  appSession: messageAppSessionSchema.nullable().optional().catch(undefined),
   /**
    * The story this message replies to (`POST /api/stories/:storyId/reply`),
    * or null. The quote is drawn from `GET /api/stories/:storyId/card`, which

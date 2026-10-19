@@ -151,7 +151,7 @@ describeDb("app sessions across two instances on the Postgres bus", () => {
       const last = channelAppSchema.parse(rec.ofType("channel-app").at(-1));
       expect(last.session).toBeNull();
     }
-    for (const rec of [seatedOnA, seatedOnB]) {
+    for (const rec of [seatedOnA, seatedOnB, viewerOnA, viewerOnB]) {
       const ended = appEndedSchema.parse(rec.ofType("app-ended")[0]);
       expect(ended).toMatchObject({ sessionId, reason: "host" });
       expect(rec.ofType("app-ended")).toHaveLength(1);
