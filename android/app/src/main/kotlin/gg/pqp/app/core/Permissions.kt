@@ -24,7 +24,7 @@ import kotlinx.serialization.Serializable
  * BITFIELDS ARE DECIMAL STRINGS ON THE WIRE, because the server holds them as
  * Postgres `BIGINT` and computes them as a JS `bigint` (`permissions.ts`'s own
  * doc: "Never do this math in JS number"). The highest bit defined today is
- * 28 (`MANAGE_EMOJI`), so a signed 64-bit [Long] carries every bit in use
+ * 29 (`USE_APPS`), so a signed 64-bit [Long] carries every bit in use
  * with headroom to spare -- no need for `java.math.BigInteger` unless the bit
  * count ever approaches 63.
  *
@@ -93,6 +93,13 @@ object Permission {
      * the composer's audience rows and tests.
      */
     const val POST_STORIES: Long = 1L shl 25
+
+    /**
+     * Start an app in a channel (the apps platform, behind the per-server
+     * `apps` flag). No screen asks for it yet; the constant keeps this file's
+     * table in step with `Permission.USE_APPS` (bit 29).
+     */
+    const val USE_APPS: Long = 1L shl 29
 }
 
 /**
