@@ -58,7 +58,11 @@ async function startApi(name: string): Promise<Api> {
     DATABASE_URL,
     CLUSTER_BUS: "postgres",
     VOICE_REGISTRY: "postgres",
-    DEV_AUTH_BYPASS: "true",
+    // Off on purpose: with the bypass on, the catalog loader's dev convenience
+    // makes every `pqp` app live, global and community-unlocked at boot, which
+    // is exactly the review gate this test exercises. The machine token needs
+    // no dev account.
+    DEV_AUTH_BYPASS: "false",
     DEV_SEED: "false",
     NODE_ENV: "development",
     ADMIN_METRICS_TOKEN: TOKEN,
@@ -166,6 +170,8 @@ describeDb("an apps write on one API process, seen from the other and on the bus
     await db.initDb();
     const pool = db.getPool();
     await pool.query(`DELETE FROM apps`);
+    // The audit trail names an app by id and outlives it, so a rerun starts clean.
+    await pool.query(`DELETE FROM app_admin_audit`);
     await pool.query(
       `INSERT INTO app_publishers (id, display_name, kind)
        VALUES ('pqp', 'pqp', 'first_party') ON CONFLICT (id) DO NOTHING`,
