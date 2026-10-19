@@ -41,7 +41,8 @@ import { pruneAuditLog } from "./services/audit.js";
 import { pruneResolvedReports } from "./services/reports.js";
 import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.js";
 import { pruneExpiredTimeouts } from "./services/sanctions.js";
-import { sweepMessageRetention } from "./services/retention.js";
+import { sweepAppSessionRetention, sweepMessageRetention } from "./services/retention.js";
+import { APP_SWEEP_INTERVAL_MS, runAppSweepJob } from "./apps/sweeps.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { sweepForumPostShells } from "./services/forums.js";
 import { sweepSoundboardUploads } from "./services/soundboard.js";
@@ -387,6 +388,13 @@ export function startColdJobs(): ColdJobs {
       pruneExpiredServerIdempotencyKeys,
     ),
     every(DAILY_MS, "retention", sweepMessageRetention),
+    // Ended app sessions past 30 days, in batches. Rows only: nothing reads one
+    // that old but a report, and the timeline card outlives it.
+    every(DAILY_MS, "app-sessions", sweepAppSessionRetention),
+    // Live app sessions: flag off, app disabled, 12 hours, seats lost, seats of
+    // dead instances, host gone and the handoff, empty. One process per tick
+    // (a lease inside), every 15 s. See apps/sweeps.ts.
+    every(APP_SWEEP_INTERVAL_MS, "apps", () => runAppSweepJob()),
     // Spent slow-mode clocks. Nothing depends on this running: a stale row is
     // inert, because enforcement compares it against the channel's current
     // interval. Rows, not disk pages, is the point.
