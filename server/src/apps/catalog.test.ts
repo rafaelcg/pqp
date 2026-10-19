@@ -38,6 +38,75 @@ describe("compareSemver", () => {
   });
 });
 
+describe("compareSemver beyond a double's precision", () => {
+  it("tells two long numeric identifiers apart", () => {
+    expect(compareSemver("1.0.9007199254740993", "1.0.9007199254740992")).toBe(1);
+    expect(compareSemver("1.0.0-9007199254740993", "1.0.0-9007199254740992")).toBe(1);
+    expect(compareSemver("1.0.0", "1.0.0")).toBe(0);
+  });
+});
+
+describe("startAppCatalogLoad", () => {
+  it("retries a failed load with the given backoff and then stops", async () => {
+    const { startAppCatalogLoad } = await import("./catalog.js");
+    const scheduled: Array<{ run: () => void; delayMs: number }> = [];
+    let calls = 0;
+    const spy = console.error;
+    console.error = () => {};
+    try {
+      await startAppCatalogLoad({
+        load: async () => {
+          calls += 1;
+          if (calls < 3) {
+            throw new Error("database down");
+          }
+        },
+        delaysMs: [10, 20, 30],
+        schedule: (run, delayMs) => scheduled.push({ run, delayMs }),
+      });
+      expect(calls).toBe(1);
+      expect(scheduled.map((item) => item.delayMs)).toEqual([10]);
+      scheduled.shift()!.run();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(calls).toBe(2);
+      expect(scheduled.map((item) => item.delayMs)).toEqual([20]);
+      scheduled.shift()!.run();
+      await new Promise((resolve) => setImmediate(resolve));
+      // Succeeded on the third: nothing more is scheduled.
+      expect(calls).toBe(3);
+      expect(scheduled).toEqual([]);
+    } finally {
+      console.error = spy;
+    }
+  });
+
+  it("gives up after the last delay, never throws", async () => {
+    const { startAppCatalogLoad } = await import("./catalog.js");
+    const scheduled: Array<() => void> = [];
+    let calls = 0;
+    const spy = console.error;
+    console.error = () => {};
+    try {
+      await expect(
+        startAppCatalogLoad({
+          load: async () => {
+            calls += 1;
+            throw new Error("still down");
+          },
+          delaysMs: [1],
+          schedule: (run) => scheduled.push(run),
+        }),
+      ).resolves.toBeUndefined();
+      scheduled.shift()!();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(calls).toBe(2);
+      expect(scheduled).toEqual([]);
+    } finally {
+      console.error = spy;
+    }
+  });
+});
+
 describeDb("the app catalog loader", () => {
   beforeAll(async () => {
     await initDb();
@@ -201,11 +270,12 @@ describeDb("the app catalog loader", () => {
     } finally {
       console.error = spy;
     }
+    // Validation settles first (no database), then the publishers are checked.
     expect(result.refused.map((r) => r.reason)).toEqual([
-      "unknown-publisher",
-      "unknown-publisher",
       "invalid-manifest",
       "invalid-entry",
+      "unknown-publisher",
+      "unknown-publisher",
     ]);
     expect(await apps()).toHaveLength(0);
   });
